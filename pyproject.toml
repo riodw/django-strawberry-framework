@@ -1,0 +1,129 @@
+# https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
+[project]
+name = "django-strawberry-framework"
+version = "0.0.1"
+description = "A DRF-inspired Django integration framework for Strawberry GraphQL — filtering, ordering, aggregation, and permissions"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10,<4.0"
+authors = [
+    { name = "Rio Weber", email = "riodweber@gmail.com" },
+]
+maintainers = [
+    { name = "Rio Weber", email = "riodweber@gmail.com" },
+]
+keywords = ["django", "strawberry", "graphql", "filters", "framework", "drf"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.0",
+]
+dependencies = [
+    "Django>=5.2",
+    "strawberry-graphql>=0.262.0",
+    "django-filter>=25.2",
+    "wrapt>=2.0.1",
+]
+
+[project.urls]
+Homepage = "https://pypi.org/project/django-strawberry-framework"
+Repository = "https://github.com/riodw/django-strawberry-framework"
+Issues = "https://github.com/riodw/django-strawberry-framework/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "pytest-django>=4.5.2",
+    "ruff>=0.15.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["django_strawberry_framework"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+exclude = [
+    ".git",
+    "__pycache__",
+    "docs/source/conf.py",
+    "old",
+    "build",
+    "dist",
+    "venv",
+    ".venv",
+    "env",
+    ".pytest_cache",
+    ".coverage",
+    "htmlcov",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "ANN",    # flake8-annotations
+    "A",      # flake8-builtins
+    "N",      # pep8-naming
+    "C4",     # flake8-comprehensions
+    "COM812", # flake8-commas: missing-trailing-comma (pairs with magic trailing comma in formatter)
+    "D",      # pydocstyle
+    "ERA",    # eradicate
+    "Q",      # flake8-quotes
+    "SIM",    # flake8-simplify
+    "UP",     # pyupgrade
+]
+ignore = [
+    "ANN002", # Missing type annotation for *args
+    "ANN003", # Missing type annotation for **kwargs
+    "ANN401", # Any type annotation
+    "D107",   # Missing docstring in __init__
+    "D417",   # Missing argument description in docstring
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "N802", "N806"]
+"examples/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "UP031", "N806"]
+"**/migrations/*.py" = ["D100", "D101", "D104"]
+"**/views.py" = ["D101"]
+"**/urls.py" = ["D100"]
+"**/admin.py" = ["D101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["django_strawberry_framework"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-quotes]
+inline-quotes = "double"
+multiline-quotes = "double"
+
+[tool.coverage.run]
+source = ["django_strawberry_framework"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+

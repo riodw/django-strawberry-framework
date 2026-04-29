@@ -1,0 +1,90 @@
+name: Django CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    name: Lint & Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync
+      - name: Ruff Check
+        run: uv run ruff check .
+      - name: Ruff Format Check
+        run: uv run ruff format --check .
+
+  test:
+    name: Python ${{ matrix.python }} - Django ${{ matrix.django }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      # If one version fails, don't stop the others
+      fail-fast: false
+      matrix:
+        # Manual dispatch runs the full matrix; push/PR runs only the
+        # minimum-support combo and the latest combo (covers both ends).
+        include: >-
+          ${{ github.event_name == 'workflow_dispatch' && fromJSON('[
+            {"django": "5.2.*", "python": "3.10"},
+            {"django": "5.2.*", "python": "3.11"},
+            {"django": "5.2.*", "python": "3.12"},
+            {"django": "5.2.*", "python": "3.13"},
+            {"django": "6.0.*", "python": "3.12"},
+            {"django": "6.0.*", "python": "3.13"},
+            {"django": "6.0.*", "python": "3.14"},
+            {"django": "latest", "python": "3.14"}
+          ]') || fromJSON('[
+            {"django": "5.2.*", "python": "3.10"},
+            {"django": "latest", "python": "3.14"}
+          ]') }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python }}
+        run: uv python install ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: uv sync --python ${{ matrix.python }}
+
+      - name: Install Django ${{ matrix.django }}
+        run: |
+          if [ "${{ matrix.django }}" == "latest" ]; then
+            uv pip install "Django" --upgrade
+          else
+            uv pip install "Django==${{ matrix.django }}"
+          fi
+          uv run django-admin --version
+
+      - name: Run Tests
+        # pytest.ini wires `--cov`, and pyproject.toml enforces fail_under=100,
+        # so this step both tests and gates coverage.
+        run: uv run pytest
+
+      - name: Upload Coverage to Coveralls
+        # Only upload from the primary matrix node to avoid duplicate builds.
+        if: github.ref == 'refs/heads/main' && matrix.python == '3.14' && matrix.django == 'latest'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          uv pip install coveralls
+          uv run coveralls

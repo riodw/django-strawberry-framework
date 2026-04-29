@@ -111,7 +111,7 @@ TEMPLATES = [
 #     uv run pytest                                                 # single-DB
 #     FAKESHOP_SHARDED=1 uv run pytest                              # sharded
 #     FAKESHOP_SHARDED=1 uv run python manage.py seed_shards        # populate shards
-if os.environ.get("FAKESHOP_SHARDED") == "1":
+if os.environ.get("FAKESHOP_SHARDED") == "1":  # pragma: no cover
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",

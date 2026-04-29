@@ -39,6 +39,7 @@ Issues = "https://github.com/riodw/django-strawberry-framework/issues"
 
 [dependency-groups]
 dev = [
+    "faker>=33.0.0",
     "pytest>=9.0.2",
     "pytest-cov>=7.0.0",
     "pytest-django>=4.5.2",

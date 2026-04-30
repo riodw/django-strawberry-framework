@@ -8,9 +8,10 @@ The intention is to give Django developers the same `Meta`-class-driven, "batter
 
 Concretely, the package aims to provide:
 
-- A `DjangoType` (or similarly named) class that generates a Strawberry type from a Django model with a familiar `Meta` configuration block.
+- A `DjangoType` base class that generates a Strawberry type from a Django model via a familiar nested `Meta` configuration block.
 - Declarative filtering, ordering, aggregation, and permission rules — all configured in `Meta`, all composable, all introspectable from a single class definition.
-- A migration path that feels natural for teams coming from `django-filter`, `DRF`, or `graphene-django`.
+- A built-in N+1 optimizer that respects per-type `get_queryset` overrides (downgrading `select_related` to `Prefetch` so visibility filters are honored across joins). Borrowed behaviorally from `strawberry-graphql-django`'s optimizer; we ship it in the foundation, not as an opt-in afterthought.
+- A migration path that feels natural for teams coming from `django-filter`, DRF, or `graphene-django`.
 - Zero dependency on `strawberry-graphql-django`. We build directly on `strawberry-graphql` so we control the API surface end-to-end.
 
 ## Why this will be better than the existing options
@@ -35,6 +36,10 @@ By targeting Strawberry while keeping a Django-shaped API, this package gives gr
 - **Manual wiring for filters/aggregations**: Out of the box, `strawberry-graphql-django` covers the basics, but advanced filter trees (and/or/not), aggregation pipelines, and cascade permissions still require custom plumbing. This package aims to make those first-class, declared in `Meta`, consistent across types.
 
 In short: `strawberry-graphql-django` gives you Strawberry on Django; this package aims to give you **DRF on Django on Strawberry**.
+
+## Design docs
+
+Feature-by-feature design documents live as plan documents alongside this repo. The first is the `DjangoType` foundation spec, which covers Meta-driven model-to-type generation, scalar and relation field conversion, the type registry, the `get_queryset` hook, and the built-in N+1 optimizer (including the load-bearing `select_related` → `Prefetch` downgrade rule). Subsequent specs will layer `FilterSet`, `OrderSet`, `AggregateSet`, `FieldSet`, and the connection field on top of that foundation.
 
 ## Status
 

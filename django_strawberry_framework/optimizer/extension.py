@@ -27,6 +27,7 @@ root-gate pattern, same ``ContextVar`` lifecycle, same recursive
 type-tracing through graphql-core wrappers.
 """
 
+import inspect
 import logging
 from contextvars import ContextVar
 from typing import Any
@@ -112,10 +113,22 @@ class DjangoOptimizerExtension(SchemaExtension):
         the optimization pass. All other resolvers pass through
         unchanged — the prefetch chain applied at the root handles
         nested relations via Django's ``__``-chain support.
+
+        Handles both sync and async resolvers: when ``_next`` returns a
+        coroutine (async resolver), returns an async wrapper that awaits
+        the result before running ``_optimize``. Strawberry's
+        ``SchemaExtension.resolve`` returns ``AwaitableOrValue`` for
+        exactly this reason.
         """
         result = _next(root, info, *args, **kwargs)
         if info.path.prev is not None:
             return result
+        if inspect.isawaitable(result):
+
+            async def _async_optimize() -> Any:
+                return self._optimize(await result, info)
+
+            return _async_optimize()
         return self._optimize(result, info)
 
     def _optimize(self, result: Any, info: Any) -> Any:

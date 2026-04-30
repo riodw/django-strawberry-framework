@@ -309,6 +309,74 @@ def test_resolve_model_returns_none_when_type_not_in_schema():
 
 
 # ---------------------------------------------------------------------------
+# O3: root-field gate
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_passes_through_non_root_resolvers():
+    """Non-root resolvers (info.path.prev is not None) bypass _optimize entirely."""
+    ext = DjangoOptimizerExtension()
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    # Simulate a non-root resolver: path.prev is not None.
+    qs = Category.objects.all()
+    called_with = {}
+
+    def fake_next(root, info, *args, **kwargs):
+        called_with["fired"] = True
+        return qs
+
+    info = SimpleNamespace(
+        path=SimpleNamespace(prev=SimpleNamespace(key="parent", prev=None, typename="Query")),
+    )
+    result = ext.resolve(fake_next, None, info)
+    # _next was called and result passed through unchanged (no _optimize).
+    assert called_with["fired"] is True
+    assert result is qs
+
+
+# ---------------------------------------------------------------------------
+# O3: async resolver parity
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_handles_async_root_resolver():
+    """An async root resolver's coroutine is awaited before optimization."""
+    import asyncio
+
+    ext = DjangoOptimizerExtension()
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    qs = Category.objects.all()
+
+    async def fake_next(root, info, *args, **kwargs):
+        return qs
+
+    # Root resolver: path.prev is None.
+    info = SimpleNamespace(
+        path=SimpleNamespace(prev=None, key="allCategories", typename="Query"),
+        return_type=SimpleNamespace(),  # no name -> _resolve_model returns None
+        schema=None,
+        field_name="allCategories",
+        field_nodes=[],
+    )
+    result = ext.resolve(fake_next, None, info)
+    # result should be a coroutine (async wrapper)
+    assert asyncio.iscoroutine(result)
+    # Await it — _optimize will pass through because return_type has no name.
+    resolved = asyncio.run(result)
+    assert resolved is qs
+
+
+# ---------------------------------------------------------------------------
 # O3: defensive branches in _optimize
 # ---------------------------------------------------------------------------
 

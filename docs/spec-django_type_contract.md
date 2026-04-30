@@ -50,7 +50,14 @@ The constraint is real friction. DRF projects routinely define multiple Serializ
 
 **Decision for 0.0.3.** Keep the current "one model, one type, collision raises" behavior. Document it as a temporary alpha constraint in `docs/README.md` "Current surface" with a status marker and a back-reference to this spec.
 
-**Future direction.** Introduce `Meta.primary: bool = False`. Multiple `DjangoType`s may register the same model, but at most one may declare `Meta.primary = True`. The primary-or-first-registered type wins for `model_for_type` and `convert_relation` reverse lookups. Two types both claiming primary raises. This work belongs to its own future spec (`spec-meta_primary.md` or similar) which will need to address:
+**Future direction.** Introduce `Meta.primary: bool = False`. The rule is strict and import-order-free:
+
+- A single type per model continues to register without declaring `Meta.primary` — the new key only matters when more than one type wants the same model.
+- When two or more types register the same model, **exactly one** must declare `Meta.primary = True`. That primary type wins for `model_for_type` and `convert_relation` reverse lookups; siblings are still registered (and importable) but never selected by reverse lookups.
+- Two or more types claim primary -> registration raises (ambiguous primary).
+- Two or more types and none claims primary -> registration raises (ambiguous primary by omission). This is the explicit rejection of "first-registered wins": import order will not be part of the API contract under any path.
+
+This work belongs to its own future spec (`spec-meta_primary.md` or similar) which will need to address:
 
 - Migration from current strict-collision behavior (probably opt-in via a new setting or implicit relaxation when any `Meta.primary` is declared).
 - Per-type relation routing (does `Item.category` -> `CategoryType` always pick the primary, or does the relation field declare a target?).

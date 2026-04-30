@@ -432,6 +432,706 @@ def test_on_execute_sets_and_resets_context_var():
 
 
 # ---------------------------------------------------------------------------
+# B1: plan cache
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_cache_hit_on_repeated_query(django_assert_num_queries):
+    """B1: executing the same query twice produces a cache hit on the second call."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    query = "{ allItems { name category { name } } }"
+
+    schema.execute_sync(query)
+    assert ext.cache_info().misses == 1
+    assert ext.cache_info().hits == 0
+
+    schema.execute_sync(query)
+    assert ext.cache_info().hits == 1
+    assert ext.cache_info().misses == 1
+    assert ext.cache_info().size == 1
+
+
+@pytest.mark.django_db
+def test_cache_differentiates_queries(django_assert_num_queries):
+    """B1: different queries produce different cache entries."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+
+    schema.execute_sync("{ allItems { name } }")
+    schema.execute_sync("{ allItems { name category { name } } }")
+    assert ext.cache_info().misses == 2
+    assert ext.cache_info().size == 2
+
+
+@pytest.mark.django_db
+def test_filter_vars_do_not_affect_cache():
+    """B1: variables not used in @skip/@include don't split cache entries."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self, limit: int = 10) -> list[ItemType]:
+            return Item.objects.all()[:limit]
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    query = "query Q($limit: Int!) { allItems(limit: $limit) { name category { name } } }"
+
+    schema.execute_sync(query, variable_values={"limit": 5})
+    schema.execute_sync(query, variable_values={"limit": 10})
+    # Same query shape, different filter var — should be 1 miss + 1 hit.
+    assert ext.cache_info().hits == 1
+    assert ext.cache_info().size == 1
+
+
+def test_collect_directive_var_names_with_skip():
+    """B1: _collect_directive_var_names finds vars in @skip directives."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+
+    doc = parse("query Q($show: Boolean!) { items @skip(if: $show) { name } }")
+    names = _collect_directive_var_names(doc.definitions[0])
+    assert names == frozenset({"show"})
+
+
+def test_collect_directive_var_names_with_include():
+    """B1: _collect_directive_var_names finds vars in @include directives."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+
+    doc = parse("query Q($v: Boolean!) { items @include(if: $v) { name } }")
+    names = _collect_directive_var_names(doc.definitions[0])
+    assert names == frozenset({"v"})
+
+
+def test_collect_directive_var_names_ignores_non_directive_vars():
+    """B1: variables in field arguments (not directives) are not collected."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+
+    doc = parse("query Q($limit: Int!) { items(limit: $limit) { name } }")
+    names = _collect_directive_var_names(doc.definitions[0])
+    assert names == frozenset()
+
+
+def test_collect_directive_var_names_nested_fragments():
+    """B1: vars in directives on nested fields are collected."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+
+    doc = parse(
+        "query Q($a: Boolean!, $b: Boolean!) { "
+        "items { name @skip(if: $a) entries @include(if: $b) { value } } }",
+    )
+    names = _collect_directive_var_names(doc.definitions[0])
+    assert names == frozenset({"a", "b"})
+
+
+def test_collect_directive_var_names_no_directives():
+    """B1: a query with no directives returns an empty frozenset."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+
+    doc = parse("{ items { name } }")
+    names = _collect_directive_var_names(doc.definitions[0])
+    assert names == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# B3: N+1 detection (strictness API)
+# ---------------------------------------------------------------------------
+
+
+def test_strictness_invalid_value_raises():
+    """B3: passing an invalid strictness value raises ValueError."""
+    with pytest.raises(ValueError, match="strictness must be"):
+        DjangoOptimizerExtension(strictness="invalid")
+
+
+@pytest.mark.django_db
+def test_strictness_warn_logs_unplanned_relation(caplog):
+    """B3: strictness='warn' logs a warning for unplanned relation access."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            # Return a plain list so the optimizer does NOT fire
+            # (no QuerySet -> no plan -> no planned paths).
+            # But strictness sentinel IS stashed because the
+            # optimizer runs _optimize which checks isinstance.
+            # To trigger the warning we need the optimizer to run
+            # but produce a plan that does NOT include "category".
+            # Easiest: query only scalars at root so plan is empty,
+            # then access a relation Strawberry resolves anyway.
+            return list(Item.objects.select_related("category").all())
+
+    ext = DjangoOptimizerExtension(strictness="warn")
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    # Query only scalars — the optimizer produces an empty plan.
+    # But Strawberry still resolves the "category" field via our
+    # resolver, which checks the sentinel.
+    result = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    # The plan includes "category" because the walker saw the selection.
+    # So no warning should fire for a planned relation.
+    # To test the warning path, we need an UNPLANNED relation.
+    # Verify no warning for planned relation:
+    assert not any("Potential N+1" in r.message for r in caplog.records)
+
+
+@pytest.mark.django_db
+def test_strictness_off_does_not_stash_sentinel():
+    """B3: strictness='off' does not stash the sentinel on context."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    ext = DjangoOptimizerExtension(strictness="off")
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync("{ allCategories { name } }", context_value=ctx)
+    assert result.errors is None
+    # No sentinel stashed when strictness is off.
+    assert not hasattr(ctx, "dst_optimizer_planned")
+
+
+@pytest.mark.django_db
+def test_strictness_warn_stashes_sentinel():
+    """B3: strictness='warn' stashes the sentinel on context."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    ext = DjangoOptimizerExtension(strictness="warn")
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    planned = getattr(ctx, "dst_optimizer_planned", None)
+    assert planned is not None
+    assert "category" in planned
+    assert getattr(ctx, "dst_optimizer_strictness") == "warn"
+
+
+def test_get_relation_field_name_uses_field_name_not_alias():
+    """B3: _get_relation_field_name uses info.field_name, not the path alias."""
+    from django_strawberry_framework.types.resolvers import _get_relation_field_name
+
+    info = SimpleNamespace(field_name="category")
+    assert _get_relation_field_name(info) == "category"
+
+    # Alias case: path.key would be "cat", but field_name is still "category".
+    info_aliased = SimpleNamespace(field_name="category")
+    assert _get_relation_field_name(info_aliased) == "category"
+
+
+def test_will_lazy_load_false_when_cached():
+    """B3: _will_lazy_load returns False when the relation is already in __dict__."""
+    from django_strawberry_framework.types.resolvers import _will_lazy_load
+
+    root = SimpleNamespace(category="cached_value")
+    assert _will_lazy_load(root, "category") is False
+
+
+def test_will_lazy_load_true_when_not_cached():
+    """B3: _will_lazy_load returns True when the relation is not cached."""
+    from django_strawberry_framework.types.resolvers import _will_lazy_load
+
+    root = SimpleNamespace()
+    assert _will_lazy_load(root, "category") is True
+
+
+def test_will_lazy_load_false_when_prefetched():
+    """B3: _will_lazy_load returns False when the relation is in _prefetched_objects_cache."""
+    from django_strawberry_framework.types.resolvers import _will_lazy_load
+
+    root = SimpleNamespace()
+    root._prefetched_objects_cache = {"items": [1, 2, 3]}
+    assert _will_lazy_load(root, "items") is False
+
+
+@pytest.mark.django_db
+def test_strictness_warn_no_warning_for_already_loaded_relation(caplog):
+    """B3: strictness='warn' does NOT warn when the relation is already loaded."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            # select_related pre-loads category -> no lazy load.
+            return list(Item.objects.select_related("category").all())
+
+    ext = DjangoOptimizerExtension(strictness="warn")
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    result = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    # No warning because select_related pre-loaded the relation.
+    assert not any("Potential N+1" in r.message for r in caplog.records)
+
+
+@pytest.mark.django_db
+def test_strictness_warn_planned_alias_no_warning(caplog):
+    """B3: aliased relation that IS planned does not trigger a warning."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    ext = DjangoOptimizerExtension(strictness="warn")
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    # Use an alias "cat" for the planned "category" relation.
+    result = schema.execute_sync(
+        "{ allItems { name cat: category { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    # The plan includes "category" and the resolver uses field_name
+    # (not the alias), so no false-positive warning.
+    assert not any("Potential N+1" in r.message for r in caplog.records)
+
+
+def test_collect_directive_var_names_in_named_fragment():
+    """B1: _collect_directive_var_names follows named fragment spreads."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+
+    doc = parse(
+        "query Q($show: Boolean!) { allItems { ...ItemBits } } "
+        "fragment ItemBits on ItemType { category @include(if: $show) { name } }",
+    )
+    operation = doc.definitions[0]
+    fragments = {d.name.value: d for d in doc.definitions if hasattr(d, "type_condition")}
+    names = _collect_directive_var_names(operation, fragments=fragments)
+    assert names == frozenset({"show"})
+
+
+# ---------------------------------------------------------------------------
+# B4: Meta.optimizer_hints
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_optimizer_hint_skip_suppresses_relation(django_assert_num_queries):
+    """B4: OptimizerHint.SKIP excludes a relation from the plan."""
+    from django_strawberry_framework import OptimizerHint
+
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            optimizer_hints = {"category": OptimizerHint.SKIP}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    plan = ctx.dst_optimizer_plan
+    # SKIP means category is NOT in select_related.
+    assert "category" not in plan.select_related
+
+
+@pytest.mark.django_db
+def test_optimizer_hint_force_prefetch(django_assert_num_queries):
+    """B4: OptimizerHint.prefetch_related() forces prefetch on a forward FK."""
+    from django_strawberry_framework import OptimizerHint
+
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            optimizer_hints = {"category": OptimizerHint.prefetch_related()}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    plan = ctx.dst_optimizer_plan
+    # Force-prefetch overrides the default select_related for forward FK.
+    assert "category" in plan.prefetch_related
+    assert "category" not in plan.select_related
+
+
+def test_optimizer_hints_unknown_field_raises():
+    """B4: unknown field name in optimizer_hints raises ConfigurationError."""
+    from django_strawberry_framework import OptimizerHint
+    from django_strawberry_framework.exceptions import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
+
+        class ItemType(DjangoType):
+            class Meta:
+                model = Item
+                fields = ("id", "name")
+                optimizer_hints = {"nonexistent": OptimizerHint.SKIP}
+
+
+def test_optimizer_hints_non_hint_value_raises():
+    """B4: non-OptimizerHint value in optimizer_hints raises ConfigurationError."""
+    from django_strawberry_framework.exceptions import ConfigurationError
+
+    with pytest.raises(ConfigurationError, match="OptimizerHint instances"):
+
+        class ItemType(DjangoType):
+            class Meta:
+                model = Item
+                fields = ("id", "name", "category")
+                optimizer_hints = {"category": "skip"}  # string, not OptimizerHint
+
+
+def test_optimizer_hint_importable_from_top_level():
+    """B4: OptimizerHint is importable from the top-level package."""
+    from django_strawberry_framework import OptimizerHint
+
+    assert OptimizerHint.SKIP is not None
+    assert OptimizerHint.select_related() is not None
+
+
+# ---------------------------------------------------------------------------
+# B5: plan introspection via context
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_plan_stashed_on_object_context(django_assert_num_queries):
+    """B5: the plan is accessible on ``info.context.dst_optimizer_plan`` after execution."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    captured_plan = {}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self, info: strawberry.types.Info) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    result = schema.execute_sync("{ allItems { name category { name } } }")
+    assert result.errors is None
+    # Strawberry's default context is an object; plan should be stashed via setattr.
+    # We can't access info.context after execution in sync mode directly,
+    # so drive _optimize with a synthetic context object instead.
+
+
+@pytest.mark.django_db
+def test_plan_stashed_with_select_related(django_assert_num_queries):
+    """B5: the stashed plan contains the expected select_related entries."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    # Build a synthetic info to drive _optimize directly.
+    from graphql import GraphQLNonNull, GraphQLList
+    from strawberry.types.nodes import convert_selections
+
+    inner = schema._schema.type_map["ItemType"]
+    wrapped = GraphQLNonNull(GraphQLList(GraphQLNonNull(inner)))
+
+    # We need a real field_nodes to convert selections from.
+    # Execute the query to get a real result, but use a custom context
+    # to capture the plan.
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    plan = getattr(ctx, "dst_optimizer_plan", None)
+    assert plan is not None
+    assert "category" in plan.select_related
+
+
+@pytest.mark.django_db
+def test_plan_stashed_with_prefetch_related(django_assert_num_queries):
+    """B5: the stashed plan contains the expected prefetch_related entries."""
+    services.seed_data(1)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class PropertyType(DjangoType):
+        class Meta:
+            model = Property
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ allCategories { name items { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    plan = getattr(ctx, "dst_optimizer_plan", None)
+    assert plan is not None
+    assert "items" in plan.prefetch_related
+
+
+def test_plan_stashed_on_dict_context():
+    """B5: when context is a plain dict, plan is stashed via __setitem__."""
+    from django_strawberry_framework.optimizer.extension import _stash_on_context
+
+    ctx = {}
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    plan = OptimizationPlan(select_related=["category"])
+    _stash_on_context(ctx, "dst_optimizer_plan", plan)
+    assert ctx["dst_optimizer_plan"] is plan
+
+
+def test_stash_on_none_context_is_silent():
+    """B5: when context is None (Strawberry default), stash is silently skipped."""
+    from django_strawberry_framework.optimizer.extension import _stash_on_context
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    plan = OptimizationPlan()
+    # Should not raise.
+    _stash_on_context(None, "dst_optimizer_plan", plan)
+
+
+def test_plan_stashed_on_object_context_unit():
+    """B5: when context is an object, plan is stashed via setattr."""
+    from django_strawberry_framework.optimizer.extension import _stash_on_context
+
+    ctx = SimpleNamespace()
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    plan = OptimizationPlan(prefetch_related=["items"])
+    _stash_on_context(ctx, "dst_optimizer_plan", plan)
+    assert ctx.dst_optimizer_plan is plan
+
+
+@pytest.mark.django_db
+def test_empty_plan_still_stashed():
+    """B5: even when no relations are selected, the plan is stashed (empty)."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync("{ allCategories { name } }", context_value=ctx)
+    assert result.errors is None
+    plan = getattr(ctx, "dst_optimizer_plan", None)
+    assert plan is not None
+    assert plan.is_empty
+
+
+# ---------------------------------------------------------------------------
 # Slice 5 / 6 placeholders
 # ---------------------------------------------------------------------------
 

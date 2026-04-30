@@ -13,6 +13,7 @@ is via the ``clear()`` helper, typically wired into a ``pytest`` autouse
 fixture.
 """
 
+from collections.abc import Iterator
 from enum import Enum
 from typing import Any
 
@@ -64,6 +65,16 @@ class TypeRegistry:
         if type_cls is None:
             return None
         return self._models.get(type_cls)
+
+    def iter_types(self) -> Iterator[tuple[type[models.Model], type]]:
+        """Yield ``(model, type_cls)`` pairs for every registered ``DjangoType``.
+
+        Public iterator so consumers (B6 schema audit, B7 walker) do not
+        reach into ``_types`` directly. Keeps the internal dict shape
+        private and provides a clean extension point for future filtering
+        (e.g., schema-scoped registries).
+        """
+        yield from self._types.items()
 
     def lazy_ref(self, model: type[models.Model]) -> Any:
         """Return a forward reference resolved at schema build.

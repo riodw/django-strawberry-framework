@@ -1,75 +1,58 @@
-# Review Feedback: Optimizer Beyond Diff
+# Review Feedback: `spec-optimizer_beyond.md`
 
 ## Scope reviewed
 
 - `docs/spec-optimizer_beyond.md`
-- `django_strawberry_framework/optimizer/extension.py`
-- `django_strawberry_framework/optimizer/walker.py`
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/types/resolvers.py`
 
-This feedback only covers the current diff.
+This feedback only covers the current spec text.
 
 ## Findings
 
-### 1. `extension.py`'s B6 pseudo-code still points at the old audit design
+### 1. B6's audit target is still too broad and will produce false positives on valid hidden relations
 
 Priority: P1
 
-`docs/spec-optimizer_beyond.md` now settles B6 on a schema-reachable audit plus a public `registry.iter_types()` helper. But the source-site TODO in `django_strawberry_framework/optimizer/extension.py` still sketches the superseded version:
-
-- iterating `registry._types.items()` directly
-- auditing every registered type instead of only schema-reachable ones
-- describing a generic “strict mode” instead of the settled `strictness` API
-
-Since these TODO blocks exist to anchor future implementation, this one is now actively misleading. If someone implements B6 from the source comment instead of the spec, they will build the wrong audit and get false positives for registered-but-unexposed types.
+B6 says to walk each reachable model's `model._meta.get_fields()` and check every relation field. That is broader than the GraphQL surface the optimizer actually owns. A reachable `DjangoType` can legitimately hide relations via `Meta.fields`, `Meta.exclude`, or future `OptimizerHint.SKIP`, and those should not be flagged as missing optimization stories. As written, the audit will warn on model relations that are not exposed by the type at all, which makes the startup report noisy and untrustworthy.
 
 Recommended fix:
 
-- update the B6 TODO block in `extension.py` to match the spec’s settled shape
-- reference `registry.iter_types()`
-- mention schema reachability explicitly
-- use `strictness == "raise"` instead of the older “strict mode” phrasing
+- narrow the audit to the relation fields exposed by the reachable `DjangoType`, not the full Django model field set
+- explicitly say the audit must honor `Meta.fields`, `Meta.exclude`, and future optimizer-hint opt-outs when deciding what is "reachable by the walker"
 
-### 2. The B4 pseudo-code in `walker.py` and `types/base.py` still reflects the pre-`OptimizerHint` design
+### 2. B3 still underspecifies alias-safe relation-path matching
+
+Priority: P1
+
+B3 says the resolver can reconstruct its dotted path from `info.path` by walking `.prev` and `snake_case`-ing each segment. That is not enough once aliases enter the query, because `info.path` is a response path, not necessarily the underlying schema field path. A query like `{ allItems { cat: category { name } } }` yields a response-path segment like `cat`, while the optimizer plan is keyed on `category`. If the spec does not call this out explicitly, a straightforward implementation will misclassify planned aliased relations as unplanned.
+
+Recommended fix:
+
+- add an explicit rule that B3 must compare against underlying field names, not response aliases
+- either require resolver-side access to the field definition name, or prefer the alternative context-stashed path mapping for alias safety
+- add alias-based coverage to the B3 test surface in the spec text
+
+### 3. B8's queryset-state description is factually incomplete for `select_related()`
 
 Priority: P2
 
-The spec now makes a clear call: `Meta.optimizer_hints` values are `OptimizerHint` instances, not a loose mix of strings, dicts, and raw `Prefetch` objects. But the source-site guidance still sketches the older API:
-
-- `walker.py` checks for `"skip"`, raw `Prefetch`, and `{"select_related": True}`
-- `types/base.py` only mentions unknown-field validation and does not mention type validation for `OptimizerHint`
-
-That drift matters because these comments sit exactly where the implementation will land. They should steer future work toward the settled public contract, not back toward the discarded exploratory shape.
+B8 says `queryset.query.select_related` is either `False` or a nested `dict`. Django also uses `True` for the wildcard `select_related()` case. If the implementation follows the current spec literally, the diffing logic will mishandle or crash on querysets where the consumer already called bare `.select_related()`. That is exactly the kind of consumer-applied optimization B8 is supposed to coexist with.
 
 Recommended fix:
 
-- update the walker TODO to use `OptimizerHint.SKIP`, `.force_select`, `.force_prefetch`, and `.prefetch_obj`
-- update the `types/base.py` TODO to mention both unknown-field validation and `OptimizerHint` instance validation
+- update the B8 mechanism section to describe the three real states: `False`, `True`, or nested `dict`
+- specify what the optimizer should do when it sees `True` — practically, treat all `select_related` entries as already satisfied and skip select-related deltas
 
-### 3. The B3/B5 source comments still use the older context/strict API shape
+### 4. B2's elision-marker scope is not pinned tightly enough for repeated field names
 
 Priority: P2
 
-The finalized spec now says:
-
-- B3 uses `strictness: Literal["off", "warn", "raise"]`
-- B5 stashes onto `info.context` with `setattr(...)` first and dict fallback second
-
-But the source TODOs still preserve older versions of the design:
-
-- `extension.py` says `when strict=True`
-- `types/resolvers.py` says `DjangoOptimizerExtension(strict=True)`
-- `extension.py`'s B5 pseudo-code only shows `setattr(...)`, not the dict fallback
-
-These are not runtime bugs today, but they are implementation traps. The next person wiring B3/B5 from the nearby comment could easily reintroduce the older boolean API or forget the dict-context fallback that the spec now treats as part of the contract.
+B2's pseudo-code uses `mark_fk_id_elided(field.name)`, and the prose says the resolver reads an elision flag from `info.context` at call time. That is underspecified for queries with the same relation name in multiple branches or under multiple root fields. A flat flag keyed only by `field.name` can leak elision state from one branch into another and cause the wrong resolver behavior.
 
 Recommended fix:
 
-- change all B3 TODO wording to `strictness`, not `strict`
-- update the B5 pseudo-code in `extension.py` to show the `setattr` / `__setitem__` fallback pattern
-- keep the resolver-side B3 example aligned with the same terminology
+- require the elision marker to be keyed by full relation path, not bare field name
+- state that the resolver consults the same full-path identity the optimizer used when planning the elision
 
 ## Overall assessment
 
-The spec itself is in much better shape now. The remaining issue is mostly one of source-site guidance: several TODO-anchored pseudo-code blocks have drifted behind the spec that is supposed to govern them. I would sync those comments now while the decisions are fresh, so the next implementation pass does not accidentally follow obsolete scaffolding.
+The spec has the right shape and the remaining gaps are mostly about precision, not direction. The main thing to tighten before the next implementation pass is identity: which fields the audit actually owns, which names strictness compares, which queryset states diffing must understand, and which path an elision marker belongs to.

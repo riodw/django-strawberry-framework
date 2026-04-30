@@ -125,6 +125,26 @@ def test_clear_drops_all_state(fresh_registry):
     assert fresh_registry.get_enum(Category, "status") is None
 
 
+def test_iter_types_yields_registered_pairs(fresh_registry):
+    """``iter_types()`` yields ``(model, type_cls)`` for each registration."""
+
+    class CategoryType:
+        pass
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Category, CategoryType)
+    fresh_registry.register(Item, ItemType)
+    result = dict(fresh_registry.iter_types())
+    assert result == {Category: CategoryType, Item: ItemType}
+
+
+def test_iter_types_empty_on_fresh_registry(fresh_registry):
+    """``iter_types()`` yields nothing when no types are registered."""
+    assert list(fresh_registry.iter_types()) == []
+
+
 def test_global_registry_is_a_type_registry_instance():
     """The ``registry`` module-level singleton is a ``TypeRegistry``."""
     assert isinstance(registry, TypeRegistry)

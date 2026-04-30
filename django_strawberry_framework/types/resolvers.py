@@ -21,9 +21,69 @@ caller pre-computes the field list with ``base._select_fields(meta)`` and
 passes it in).
 """
 
+import logging
 from typing import Any
 
 import strawberry
+from strawberry.types import Info
+
+from ..utils.strings import snake_case
+
+_resolver_logger = logging.getLogger("django_strawberry_framework")
+
+
+def _get_relation_field_name(info: Any) -> str:
+    """Return the Django field name for the current resolver.
+
+    Uses ``info.field_name`` (the underlying GraphQL field name, NOT
+    the alias) and converts to snake_case. This avoids the alias
+    problem where ``info.path.key`` returns the response key (alias)
+    instead of the field name.
+
+    For depth-1 relations this is the full path the sentinel expects.
+    Nested-path reconstruction (depth > 1) will need revisiting when
+    O4 ships; for now, depth-1 is correct.
+    """
+    return snake_case(getattr(info, "field_name", "") or "")
+
+
+def _will_lazy_load(root: Any, field_name: str) -> bool:
+    """Return ``True`` if accessing ``field_name`` on ``root`` would trigger a query.
+
+    Checks Django's caching mechanisms:
+    - Forward FK / OneToOne: cached if ``field_name`` is in ``root.__dict__``
+      (Django stores the loaded related object there after the first access
+      or after ``select_related``).
+    - Many-side (reverse FK, M2M): cached if ``field_name`` is in
+      ``root._prefetched_objects_cache`` (populated by ``prefetch_related``).
+    """
+    # Forward FK / OneToOne: Django caches the related instance in __dict__.
+    if field_name in getattr(root, "__dict__", {}):
+        return False
+    # Many-side: Django caches prefetched querysets in _prefetched_objects_cache.
+    prefetch_cache = getattr(root, "_prefetched_objects_cache", {})
+    if field_name in prefetch_cache:
+        return False
+    return True
+
+
+def _check_n1(info: Any, root: Any, field_name: str) -> None:
+    """B3: warn or raise if the relation is not planned and would lazy-load."""
+    from ..exceptions import OptimizerError
+
+    planned = getattr(info.context, "dst_optimizer_planned", None) if info.context is not None else None
+    if planned is None:
+        return
+    if field_name in planned:
+        return
+    # Only warn/raise if the access would actually trigger a lazy load.
+    if not _will_lazy_load(root, field_name):
+        return
+    strictness = getattr(info.context, "dst_optimizer_strictness", "off")
+    if strictness == "raise":
+        raise OptimizerError(f"Unplanned N+1: {field_name}")
+    if strictness == "warn":
+        _resolver_logger.warning("Potential N+1 on %s", field_name)
 
 
 def _make_relation_resolver(field: Any) -> Any:
@@ -42,37 +102,16 @@ def _make_relation_resolver(field: Any) -> Any:
     - Forward FK / forward OneToOne: ``getattr(root, name)`` — returns
       the related instance, or ``None`` if the FK is nullable and unset.
 
-    .. todo:: spec-optimizer_beyond.md B3
-
-       When ``DjangoOptimizerExtension(strictness="warn")`` or
-       ``strictness="raise"`` is active, each resolver should check
-       ``info.context.dst_optimizer_planned`` (the sentinel
-       ``set[str]`` of planned relation paths, stashed by B5).
-       If the relation path is absent and the access will trigger a
-       lazy load, warn or raise depending on ``strictness``.
-       Requires threading ``info`` into the resolver signature
-       (today it only takes ``root``).
-
-       Pseudo (many_resolver example)::
-
-           def many_resolver(root, info):
-               planned = getattr(info.context,
-                                 "dst_optimizer_planned", None)
-               if planned is not None:
-                   path = build_dotted_path(info.path)
-                   if path not in planned:
-                       if strictness == "raise":
-                           raise OptimizerError(
-                               f"Unplanned N+1: {path}")
-                       logger.warning(
-                           "Potential N+1: %s", path)
-               return list(getattr(root, field_name).all())
+    B3: all resolvers now accept ``info`` (Strawberry injects it
+    automatically) and call ``_check_n1`` when a strictness sentinel
+    is present on ``info.context``.
     """
     field_name = field.name
 
     if field.many_to_many or field.one_to_many:
 
-        def many_resolver(root: Any) -> Any:
+        def many_resolver(root: Any, info: Info) -> Any:
+            _check_n1(info, root, field_name)
             return list(getattr(root, field_name).all())
 
         many_resolver.__name__ = f"resolve_{field_name}"
@@ -81,7 +120,8 @@ def _make_relation_resolver(field: Any) -> Any:
     if field.one_to_one and getattr(field, "auto_created", False):
         related_does_not_exist = field.related_model.DoesNotExist
 
-        def reverse_one_to_one_resolver(root: Any) -> Any:
+        def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
+            _check_n1(info, root, field_name)
             try:
                 return getattr(root, field_name)
             except related_does_not_exist:
@@ -90,7 +130,8 @@ def _make_relation_resolver(field: Any) -> Any:
         reverse_one_to_one_resolver.__name__ = f"resolve_{field_name}"
         return reverse_one_to_one_resolver
 
-    def forward_resolver(root: Any) -> Any:
+    def forward_resolver(root: Any, info: Info) -> Any:
+        _check_n1(info, root, field_name)
         return getattr(root, field_name)
 
     forward_resolver.__name__ = f"resolve_{field_name}"

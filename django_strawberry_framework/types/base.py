@@ -28,7 +28,10 @@ import strawberry
 from django.db import models
 
 from ..exceptions import ConfigurationError
+from ..optimizer.field_meta import FieldMeta
+from ..optimizer.hints import OptimizerHint
 from ..registry import registry
+from ..utils.strings import snake_case
 from .converters import convert_relation, convert_scalar
 from .resolvers import _attach_relation_resolvers
 
@@ -56,26 +59,7 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "exclude",
         "name",
         "description",
-        # TODO(spec-optimizer_beyond.md B4): add "optimizer_hints" here
-        # when the feature ships. Validation in ``_validate_meta``:
-        # 1) reject unknown field names (same as ``fields``/``exclude``)
-        # 2) reject non-``OptimizerHint`` values
-        #
-        # Pseudo (in _validate_meta, after existing checks):
-        #   hints = getattr(meta, "optimizer_hints", None)
-        #   if hints is not None:
-        #       unknown = sorted(
-        #           set(hints) - valid_field_names)
-        #       if unknown:
-        #           raise ConfigurationError(
-        #               f"optimizer_hints names unknown "
-        #               f"fields: {unknown}")
-        #       bad = [k for k, v in hints.items()
-        #              if not isinstance(v, OptimizerHint)]
-        #       if bad:
-        #           raise ConfigurationError(
-        #               f"optimizer_hints values must be "
-        #               f"OptimizerHint instances: {bad}")
+        "optimizer_hints",
     },
 )
 
@@ -156,24 +140,11 @@ class DjangoType:
         # is not duplicated and ``types.resolvers`` does not need to
         # import back into ``types.base``.
         fields = _select_fields(meta)
-        # TODO(spec-optimizer_beyond.md B7): after _select_fields,
-        # build ``cls._optimizer_field_map`` — a
-        # ``dict[str, FieldMeta]`` precomputing is_relation,
-        # cardinality, related_model, and attname per field. The O2
-        # walker reads this instead of calling _meta.get_fields().
-        #
-        # Pseudo:
-        #   cls._optimizer_field_map = {
-        #       snake_case(f.name): FieldMeta(
-        #           is_relation=f.is_relation,
-        #           many_to_many=getattr(f, "many_to_many", False),
-        #           one_to_many=getattr(f, "one_to_many", False),
-        #           one_to_one=getattr(f, "one_to_one", False),
-        #           related_model=getattr(f, "related_model", None),
-        #           attname=getattr(f, "attname", None),
-        #       )
-        #       for f in fields
-        #   }
+        # B7: precompute optimizer field metadata so the walker can
+        # skip _meta.get_fields() on every walk.
+        cls._optimizer_field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
+        # B4: stash optimizer_hints for the walker to consult.
+        cls._optimizer_hints = getattr(meta, "optimizer_hints", None) or {}
         synthesized = _build_annotations(cls, fields)
         # Implementation detail (NOT a stable consumer-override contract
         # in 0.0.3): consumer-declared annotations are merged on top of
@@ -276,6 +247,24 @@ def _validate_meta(meta: type) -> None:
     unknown = sorted(declared - ALLOWED_META_KEYS - DEFERRED_META_KEYS)
     if unknown:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
+
+    # B4: validate optimizer_hints field names and value types.
+    hints = getattr(meta, "optimizer_hints", None)
+    if hints is not None:
+        model = meta.model
+        valid_field_names = {f.name for f in model._meta.get_fields()}
+        unknown_hint_fields = sorted(set(hints) - valid_field_names)
+        if unknown_hint_fields:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta.optimizer_hints names unknown fields: "
+                f"{unknown_hint_fields}. Available: {sorted(valid_field_names)}.",
+            )
+        bad_values = sorted(k for k, v in hints.items() if not isinstance(v, OptimizerHint))
+        if bad_values:
+            raise ConfigurationError(
+                f"optimizer_hints values must be OptimizerHint instances, "
+                f"got non-OptimizerHint for: {bad_values}",
+            )
 
 
 def _select_fields(meta: type) -> list[Any]:

@@ -98,6 +98,14 @@ def _walk_selections(
     # build time) instead of rebuilding from ``_meta.get_fields()``
     # on every walk. Falls back to ``_meta.get_fields()`` when the
     # map is unavailable (unregistered model).
+    #
+    # Pseudo:
+    #   from ..registry import registry
+    #   type_cls = registry.get(model)
+    #   cached = getattr(type_cls, "_optimizer_field_map", None)
+    #   field_map = (cached if cached is not None
+    #               else {f.name: f
+    #                     for f in model._meta.get_fields()})
     field_map = {f.name: f for f in model._meta.get_fields()}
     merged = _merge_aliased_selections(selections)
     for sel in merged:
@@ -114,10 +122,25 @@ def _walk_selections(
             continue
         # TODO(spec-optimizer_beyond.md B4): consult
         # ``type_cls._optimizer_hints.get(django_name)`` before the
-        # cardinality dispatch below. If the hint is ``"skip"``,
-        # return early. If it is a ``Prefetch``, add it directly.
-        # If it is ``{"select_related": True}`` or
-        # ``{"prefetch_related": True}``, force that strategy.
+        # cardinality dispatch below. Values are ``OptimizerHint``
+        # instances (typed wrapper, not raw strings/dicts).
+        #
+        # Pseudo:
+        #   type_cls = registry.get(model)  # shared w/ B7
+        #   hint = getattr(type_cls, "_optimizer_hints",
+        #                  {}).get(django_name)
+        #   if hint is OptimizerHint.SKIP:
+        #       continue
+        #   if hint and hint.prefetch_obj is not None:
+        #       plan.prefetch_related.append(
+        #           hint.prefetch_obj)
+        #       continue
+        #   if hint and hint.force_select:
+        #       plan.select_related.append(full_path)
+        #       continue
+        #   if hint and hint.force_prefetch:
+        #       plan.prefetch_related.append(full_path)
+        #       continue
         # Relation dispatch by cardinality.
         full_path = f"{prefix}{django_name}"
         if django_field.many_to_many or django_field.one_to_many:
@@ -131,6 +154,22 @@ def _walk_selections(
             # ``field.attname`` to ``plan.only_fields`` instead.
             # Guard: skip elision when the target type has a custom
             # ``get_queryset`` (needs the JOIN for visibility).
+            # Applies to forward FK (many_to_one) and forward
+            # OneToOne (non-auto-created one_to_one).
+            #
+            # Pseudo:
+            #   child_scalars = {snake_case(c.name)
+            #                   for c in sel.selections
+            #                   if not _is_fragment(c)}
+            #   target_type = registry.get(
+            #       django_field.related_model)
+            #   if (child_scalars == {"id"}
+            #           and not (target_type
+            #                    and target_type
+            #                    .has_custom_get_queryset())):
+            #       plan.only_fields.append(
+            #           django_field.attname)
+            #       continue
             # TODO(spec-optimizer.md O6): check whether the target type
             # overrides get_queryset and downgrade select_related to
             # Prefetch when it does.

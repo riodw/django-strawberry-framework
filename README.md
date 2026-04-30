@@ -11,9 +11,9 @@
 [changelog-image]: https://img.shields.io/badge/changelog-CHANGELOG.md-blue
 [changelog-url]: https://github.com/riodw/django-strawberry-framework/blob/main/CHANGELOG.md
 
-A DRF-inspired Django integration framework for [Strawberry GraphQL](https://github.com/strawberry-graphql/strawberry) — filtering, ordering, aggregation, and permissions.
+A DRF-inspired Django integration framework for [Strawberry GraphQL](https://github.com/strawberry-graphql/strawberry) — `Meta`-class-driven type generation and N+1 optimization today, with filtering, ordering, aggregation, and permissions on the roadmap.
 
-> **Status: pre-alpha.** The public API is not stable and is expected to change rapidly until `0.1.0`. See [`docs/README.md`](docs/README.md) for the package's goals and positioning vs. `graphene-django` and `strawberry-graphql-django`.
+> **Status: pre-alpha.** The shipped surface is `DjangoType` (model-to-type generation with scalar, relation, and choice-enum conversion) and the optimizer foundation (selection-tree walker, cardinality-aware relation resolvers). The full Layer-3 surface (FilterSet, OrderSet, AggregateSet, permissions, connection fields) is designed but not yet implemented. The public API is not stable and is expected to change rapidly until `0.1.0`. See [`docs/README.md`](docs/README.md) for the package's goals and positioning vs. `graphene-django` and `strawberry-graphql-django`.
 
 #### This package takes inspiration from:
 

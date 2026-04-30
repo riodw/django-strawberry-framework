@@ -1,76 +1,64 @@
-# Review Feedback: Contract-Spec Batch
+# Review Feedback: Optimizer Scaffold Diff
 
 ## Scope reviewed
 
-- `django_strawberry_framework/types/base.py`
-- `tests/types/test_base.py`
-- `docs/spec-django_type_contract.md`
-- `docs/spec-public_surface.md`
-- `docs/spec-optimizer.md`
+- `django_strawberry_framework/optimizer/__init__.py`
+- `django_strawberry_framework/optimizer/plans.py`
+- `django_strawberry_framework/optimizer/walker.py`
+- `tests/optimizer/test_plans.py`
+- `tests/optimizer/test_walker.py`
 
-This feedback replaces the earlier alpha-wide review and only covers the current contract/public-surface batch.
+This review only covers the current optimizer-scaffolding diff.
 
 ## Findings
 
-### 1. `has_custom_get_queryset()` still misses the documented abstract-base pattern
+### 1. Re-exporting `plan_optimizations` from `optimizer/__init__.py` is likely to create a coverage/regression trap before O2 lands
 
 Priority: P1
 
-`DjangoType.__init_subclass__` returns immediately when a subclass has no `Meta` (`types/base.py` lines 106-110). That means an intermediate abstract base like:
+`django_strawberry_framework/optimizer/__init__.py` now imports and re-exports `plan_optimizations` from `walker.py`. That looks harmless, but it has two side effects:
 
-- subclassing `DjangoType`
-- defining `get_queryset`
-- intentionally omitting `Meta`
+- it makes the unimplemented walker look like stable subpackage API instead of scaffolding
+- it imports `walker.py` any time code imports `django_strawberry_framework.optimizer`
 
-never flips `_is_default_get_queryset` to `False`. A later concrete subclass with `Meta` but no own `get_queryset` then inherits `True`, so `has_custom_get_queryset()` incorrectly returns `False`.
-
-That is not an edge case. It breaks the exact shared-base pattern the class docstring explicitly allows for tenant scoping / soft delete / visibility rules. It also means the future optimizer downgrade-to-`Prefetch` rule will miss one of the main intended override paths.
+That second part matters because `tests/optimizer/test_extension.py` already imports `logger` from the subpackage root. So this scaffold now gets imported by existing optimizer tests even though `tests/optimizer/test_walker.py` has no executable tests yet, only comments. With package coverage still gated at 100%, this is an easy way to punch holes in coverage before O2 is actually implemented.
 
 Recommended fix:
 
-- flip the sentinel before the `meta is None` early return when `"get_queryset" in cls.__dict__`, or
-- make `has_custom_get_queryset()` walk the MRO instead of relying only on the sentinel.
+- keep `OptimizationPlan` and `plan_optimizations` at their dotted module paths until O2 is implemented and tested, or
+- add real smoke tests for the new modules in the same change so importing them does not create an uncovered surface
 
-The current test named `test_has_custom_get_queryset_inherits_through_intermediate_base` does not catch this because the parent in that test defines its own `Meta`, so it is not exercising the documented abstract-base path.
+### 2. The walker API shape is inconsistent across the scaffold, the extension TODO, and the spec
 
-### 2. The consumer-override claim is still present in `types/base.py`
+Priority: P1
+
+There are now three different descriptions of the walker entry point:
+
+- `docs/spec-optimizer.md` says `plan_optimizations(info, model) -> OptimizationPlan`
+- `optimizer/extension.py` still says the extracted helper will be `plan_optimizations(info, model) -> OptimizationPlan`
+- `optimizer/walker.py` implements `plan_optimizations(selected_fields, model) -> OptimizationPlan`
+
+This is exactly the kind of drift scaffolding is supposed to prevent. You should pick one contract now before other modules and tests start coding against different call signatures.
+
+My recommendation is to decide explicitly between:
+
+- `plan_optimizations(info, model)` if the helper owns the `selected_fields[0].selections` peel, or
+- `plan_optimizations(selected_fields, model)` if the helper is meant to stay narrower and purely selection-list based
+
+Either choice is fine, but the spec, the TODO anchors, and the scaffold should all say the same thing.
+
+### 3. `tests/optimizer/test_walker.py` is only commentary, so the scaffold does not yet pin any contract for the new module
 
 Priority: P2
 
-The new contract spec makes the right decision: remove the consumer-override promise for `0.0.3` and defer the real mechanism. But `types/base.py` still states the old promise in two places:
+The comments in `tests/optimizer/test_walker.py` are useful as a checklist, but they are not tests. Right now the repo has a real source module and a mirrored test file, but no executable contract for the walker at all.
 
-- the `__init_subclass__` pipeline docstring step about merging "consumer-provided overrides"
-- the inline comment above `cls.__annotations__ = {**synthesized, **existing}`
-
-That keeps the code comments out of sync with the new spec and with the skipped test that already documents the promise is not reliable. If the release intent is "not guaranteed yet", the implementation commentary should say exactly that.
-
-Recommended fix:
-
-- rewrite those comments/docstring lines to describe the merge as an implementation detail, not a supported override contract, until the future override spec lands.
-
-### 3. `spec-django_type_contract.md` reintroduces import-order semantics in the future-direction section
-
-Priority: P2
-
-The one-model-one-type section correctly rejects bare "first-registered wins" as the wrong long-term rule. But the future-direction paragraph then says:
-
-- "The primary-or-first-registered type wins..."
-
-That fallback quietly reintroduces import-order semantics whenever multiple types exist and none declares `Meta.primary`. It cuts against the reason for choosing `Meta.primary` in the first place, and it leaves the future rule muddier than the current strict-collision behavior.
-
-Recommended fix:
-
-- make the future rule explicit and import-order-free now, even if the implementation is deferred
-- for example: multiple types allowed only when exactly one declares `Meta.primary`, otherwise registration raises
-
-That keeps the follow-on spec anchored to a crisp direction instead of carrying forward a contradictory fallback.
+That is an oversight specifically because the spec for O2 says the walker is valuable partly because it is a pure function that can be unit-tested in isolation. If you want this commit to remain "scaffolding only", that is fine, but then the safer move is not to expose the walker from `optimizer/__init__.py` yet. If you do want to expose it now, add at least one smoke-level test that pins the current scaffold behavior, for example that calling it raises the expected `NotImplementedError`.
 
 ## Overall assessment
 
-This batch is moving in the right direction. Rejecting `Meta.interfaces`, validating `Meta.fields` / `Meta.exclude`, and formalizing the public-surface rules are all good changes. The remaining gaps are mostly consistency issues:
+The module split itself is good. `plans.py` and `walker.py` are the right seams for O2/O4/O5/O6 work. The main oversights are about discipline around the scaffold:
 
-- one real implementation bug around abstract `get_queryset` bases
-- one unfinished wording cleanup around consumer overrides
-- one spec-level contradiction around the future `Meta.primary` rule
-
-I would fix those before treating this contract batch as settled.
+- avoid exporting unfinished helpers too early
+- keep the spec and scaffold on one API signature
+- either add a minimal executable contract now or keep the new helper private until O2 lands

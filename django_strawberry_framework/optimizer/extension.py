@@ -142,11 +142,13 @@ class DjangoOptimizerExtension(SchemaExtension):
         """
         # TODO(spec-optimizer.md O2): extract this method into a new
         # ``optimizer/walker.py`` module exposing
-        # ``plan_optimizations(info, model) -> OptimizationPlan``. Make
-        # it a pure function so the walk is unit-testable in isolation
-        # against synthetic ``info`` objects without Strawberry
-        # execution. The current implementation is the depth-1 ancestor
-        # of that walker.
+        # ``plan_optimizations(selected_fields, model) -> OptimizationPlan``.
+        # The caller (O3's ``on_executing_start`` hook) owns the
+        # ``info.selected_fields[0].selections`` peel and passes the
+        # result in. Make it a pure function so the walk is
+        # unit-testable in isolation against synthetic selection lists
+        # without Strawberry execution. The current implementation is
+        # the depth-1 ancestor of that walker.
         # TODO(spec-optimizer.md O4): once O2's walker exists, extend it
         # to emit nested-relation chains like
         # ``prefetch_related("items__entries")`` rather than the flat

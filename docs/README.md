@@ -209,6 +209,8 @@ Feature-by-feature design documents live in [`docs/`](.) as committed `spec-*.md
 - [`spec-django_types.md`](spec-django_types.md) — the `DjangoType` foundation: Meta-driven model-to-type generation, scalar and relation field conversion, choice-to-enum generation, the type registry, and the `get_queryset` hook.
 - [`spec-optimizer.md`](spec-optimizer.md) — the built-in N+1 optimizer subsystem, forked out of the `DjangoType` spec mid-implementation to redesign around a top-level selection-tree walker plus thin custom resolvers (including the load-bearing `select_related` → `Prefetch` downgrade rule when the target type carries a custom `get_queryset`).
 
+- [`spec-optimizer_beyond.md`](spec-optimizer_beyond.md) — six optimizer improvements beyond what strawberry-graphql-django ships: AST-cached plans, forward-FK-id elision, N+1 detection in dev mode, `Meta.optimizer_hints`, plan introspection via context, and schema-build-time optimization audit.
+
 Subsequent specs will layer `FilterSet`, `OrderSet`, `AggregateSet`, `FieldSet`, the `DjangoConnectionField`, and the permissions subsystem on top of that foundation — one `spec-<topic>.md` per Layer-3 subsystem in the architecture above.
 
 ## Status

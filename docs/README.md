@@ -39,7 +39,12 @@ In short: `strawberry-graphql-django` gives you Strawberry on Django; this packa
 
 ## Design docs
 
-Feature-by-feature design documents live as plan documents alongside this repo. The first is the `DjangoType` foundation spec, which covers Meta-driven model-to-type generation, scalar and relation field conversion, the type registry, the `get_queryset` hook, and the built-in N+1 optimizer (including the load-bearing `select_related` → `Prefetch` downgrade rule). Subsequent specs will layer `FilterSet`, `OrderSet`, `AggregateSet`, `FieldSet`, and the connection field on top of that foundation.
+Feature-by-feature design documents live in [`docs/`](.) as committed `spec-*.md` files. The current set:
+
+- [`spec-django_types.md`](spec-django_types.md) — the `DjangoType` foundation: Meta-driven model-to-type generation, scalar and relation field conversion, choice-to-enum generation, the type registry, and the `get_queryset` hook.
+- [`spec-optimizer.md`](spec-optimizer.md) — the built-in N+1 optimizer subsystem, forked out of the `DjangoType` spec mid-implementation to redesign around a top-level selection-tree walker plus thin custom resolvers (including the load-bearing `select_related` → `Prefetch` downgrade rule when the target type carries a custom `get_queryset`).
+
+Subsequent specs will layer `FilterSet`, `OrderSet`, `AggregateSet`, `FieldSet`, and the connection field on top of that foundation.
 
 ## Status
 

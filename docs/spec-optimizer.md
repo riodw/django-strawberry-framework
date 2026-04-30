@@ -111,7 +111,24 @@ Three load-bearing details the walker must get right (strawberry-graphql-django'
 
 These three cases are why a synthetic-`info` test harness matters: each one has a tight, isolated test case that exercises the walker without standing up a Strawberry schema. Mirror strawberry-graphql-django's selection-walking utilities (e.g. `get_sub_field_selections`) rather than reinventing the dispatch.
 
-Slice O3 — Top-level optimizer hook. Replace `resolve` / `aresolve` with `on_executing_start`. Detect the root resolver's queryset return, run the planner from O2 against it, replace the resolver's return with the optimized queryset. The slice unskips and passes the three currently-skipped optimizer tests (`test_optimizer_applies_select_related_for_forward_fk`, `test_optimizer_applies_prefetch_related_for_reverse_fk`, `test_optimizer_combines_select_related_and_prefetch_related`).
+Slice O3 — Top-level optimizer hook.
+
+Strawberry's public `SchemaExtension` API does not expose `on_executing_start` or any pre-resolver hook that carries `info.selected_fields`. The hooks that exist are `on_operation`, `on_validate`, `on_parse`, `on_execute` (no `info`), `resolve`, and `aresolve` (per-field). So the "top-level walk once" architecture lands via `resolve` / `aresolve` gated on root-field detection — the same pattern strawberry-graphql-django uses. The gate is `info.path.prev is None`: a stable Strawberry / graphql-core idiom for "this is the operation's root resolver." When the gate fires, the planner walks the entire selection tree (including nested levels), builds a complete plan with `__`-chained paths, and applies it once to the root queryset. Django's `prefetch_related` natively understands `__` chains (`prefetch_related("items__entries")` issues two queries — one per level), so nested optimization falls out of the gate naturally; no per-level resolver coordination is needed.
+
+Mechanism, modeled directly on `strawberry_django/optimizer.py`:
+
+- **`on_execute` context manager.** Sets a `ContextVar` marking the extension instance as active for the operation. Lets nested helpers detect optimization-on without threading the extension through every call. (strawberry-graphql-django optimizer.py:1759-1764.)
+- **`resolve` hook.** Body: if `info.path.prev is not None`, return `_next(...)` unchanged — only root resolvers trigger the planner. Otherwise call `_next(...)` to obtain the resolver result; if it is not a `QuerySet`, return unchanged; otherwise resolve the Python `DjangoType` from `info.return_type` by name (see "Type-tracing fix" below), call the O2 walker (`plan_optimizations(info.selected_fields[0].selections, target_model)`), and apply the plan to the queryset via `qs.select_related(*plan.select_related).prefetch_related(*plan.prefetch_related)` (`.only(...)` stays empty until O5). Return the optimized queryset. (strawberry-graphql-django optimizer.py:1766-1794.)
+- **`aresolve` hook.** Same algorithm, async wrapper. The planning logic is sync (querysets are lazy regardless of resolver async-ness); both hooks call into a shared `_optimize(result, info)` helper so the queryset replacement happens in one place.
+
+Type-tracing fix. Slice 4's `_unwrap_return_type` peels one layer off graphql-core's wrapper (`getattr(rt, "of_type", None)`) and falls down at the next `NonNull`, returning the `GraphQLList` wrapper instead of the inner type — which is why `registry.model_for_type(...)` always returns `None` and the optimizer silently no-ops in real Strawberry execution today. O3 replaces this with recursive unwrap + name-based lookup: walk `rt.of_type` until reaching a leaf carrying a `.name` attribute, then `info.schema.get_type_by_name(name)` returns the Strawberry type definition, and `registry.model_for_type(...)` reaches the Django model from there. (strawberry-graphql-django optimizer.py:1638-1641.)
+
+Definition of done.
+
+- The three currently-skipped tests in `tests/optimizer/test_extension.py` unskip and pass: `test_optimizer_applies_select_related_for_forward_fk` (1 SQL query), `test_optimizer_applies_prefetch_related_for_reverse_fk` (2 queries: parent + prefetched child), `test_optimizer_combines_select_related_and_prefetch_related` (will need O4's nested-chain emission to be fully green; O3 unblocks the iterability + type-tracing failures, O4 makes the depth-2 query count assertion pass).
+- New tests in the same change: root-field gate (only root resolvers trigger planning, inner resolvers pass through), recursive type-tracing through wrapped graphql-core return types (`GraphQLNonNull(GraphQLList(GraphQLNonNull(GraphQLObjectType('ItemType'))))` -> `Item`), `aresolve` async parity with `resolve`, and `on_execute` context-var lifecycle (set on enter, reset on exit, never leaks between operations).
+- Removed in the same change: the broken `_unwrap_return_type` (replaced by the recursive name-based path) and the per-resolver `_plan` / `_optimize` (the O2 walker takes over). The helpers that already moved to `utils/` (`unwrap_return_type`, `snake_case`) keep their tests; only the optimizer-internal duplicates go.
+- Public surface promotion. Per the "Visibility status (alpha)" section below, `DjangoOptimizerExtension` returns to `django_strawberry_framework/__init__.py`'s `__all__` in the same commit as the hook flip; status marker in `docs/README.md` flips from `partial` to `shipped`.
 
 Slice O4 — Nested prefetch end-to-end. Extend the planner to emit `prefetch_related("items__entries")` style chains. Add tests that assert query counts at depths 2 and 3 (`category > items > entries` and `entry > item > category`).
 
@@ -139,13 +156,13 @@ Per `docs/spec-public_surface.md`, `DjangoOptimizerExtension` does not currently
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
 ```
 
-The class returns to the top-level `__all__` when O3 (the `on_executing_start` hook) lands and the three currently-skipped optimizer tests unskip and pass. That promotion is part of the O3 slice's definition of done — the `__init__.py` change ships in the same commit as the hook flip.
+The class returns to the top-level `__all__` when O3 (the root-gated `resolve` hook) lands and the three currently-skipped optimizer tests unskip and pass. That promotion is part of the O3 slice's definition of done — the `__init__.py` change ships in the same commit as the hook flip.
 
 This is the visibility-discipline pattern from `docs/spec-public_surface.md`: a Layer-2 subsystem stays subpackage-only until its core hook is effective. The optimizer's status marker in `docs/README.md` is `partial` until O3 ships, then `shipped`.
 
 ## Open questions
 
-Hooking point: `on_executing_start` is the analog of strawberry-graphql-django's choice, but Strawberry's extension API has been rearranged in recent releases. Confirm at O3 implementation time that the `info` object available at `on_executing_start` carries the `selected_fields` we need. If not, the next-best hook is `resolve` on the root type only, gated by `info.path.prev is None`.
+~~Hooking point~~ resolved (see Slice O3 above): Strawberry's public `SchemaExtension` API does not expose `on_executing_start` or any pre-resolver hook carrying `info.selected_fields`. The fallback `resolve` / `aresolve` hooks gated on `info.path.prev is None` are the implementation, modeled directly on strawberry-graphql-django's `optimizer.py`.
 
 Async resolver compatibility: Strawberry calls `resolve` for sync resolvers and `aresolve` for async; the optimizer's planner is sync (querysets are lazy regardless). Keep the planner as a pure sync function and call it from both hooks; the queryset's actual evaluation happens later in whichever async / sync context Strawberry chose.
 

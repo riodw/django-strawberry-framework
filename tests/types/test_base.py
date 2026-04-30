@@ -374,6 +374,42 @@ def test_has_custom_get_queryset_inherits_through_intermediate_base():
     assert ChildCategoryType.has_custom_get_queryset() is True
 
 
+def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
+    """A concrete subclass inherits override-detection from an abstract base that has no ``Meta``.
+
+    The abstract-shared-base pattern is documented as supported — the
+    ``__init_subclass__`` ``meta is None`` early return notes
+    "intermediate abstract subclasses without Meta are allowed". For
+    that pattern to work end-to-end with the optimizer's
+    downgrade-to-Prefetch rule, the sentinel flip must run regardless
+    of whether the abstract base declares its own ``Meta``. Used to be
+    a P1 bug: the flip sat after the ``meta is None`` early return, so
+    an abstract base that overrode ``get_queryset`` without Meta never
+    flipped the flag, and concrete subclasses inheriting from it
+    silently reported ``has_custom_get_queryset() is False``.
+    """
+
+    class TenantScopedType(DjangoType):
+        """Abstract base — no Meta, but defines ``get_queryset``."""
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.filter(is_private=False)
+
+    # The abstract base flipped its own sentinel even without Meta.
+    assert TenantScopedType._is_default_get_queryset is False
+
+    class CategoryType(TenantScopedType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+
+    # Concrete subclass does not redefine ``get_queryset`` itself, but
+    # inherits the flipped sentinel via normal attribute lookup.
+    assert "get_queryset" not in CategoryType.__dict__
+    assert CategoryType.has_custom_get_queryset() is True
+
+
 # ---------------------------------------------------------------------------
 # Slice 2 — convert_scalar direct unit coverage
 # ---------------------------------------------------------------------------

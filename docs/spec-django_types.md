@@ -155,9 +155,11 @@ Field-selection defaults: when neither `fields` nor `exclude` is declared on `Me
 
 The converter layer should mirror graphene-django's coverage but emit Strawberry/Python-native types instead of graphene field instances.
 
-`CharField`, `TextField`, `SlugField`, `EmailField`, `URLField` -> `str`
+`CharField`, `TextField`, `SlugField`, `EmailField`, `URLField`, `GenericIPAddressField` -> `str`
 
-`IntegerField`, `SmallIntegerField`, `PositiveIntegerField` -> `int`
+`FilePathField` -> `str` (filesystem path; semantically distinct from `FileField` but Strawberry-side it is just a string scalar)
+
+`IntegerField`, `SmallIntegerField`, `PositiveIntegerField`, `PositiveSmallIntegerField`, `PositiveBigIntegerField` -> `int`
 
 `AutoField`, `BigAutoField`, `SmallAutoField` -> `int` (Django primary-key column types; relay `GlobalID` remapping is the open question below)
 
@@ -208,9 +210,13 @@ SCALAR_MAP: dict[type[models.Field], type] = {
     models.SlugField: str,
     models.EmailField: str,
     models.URLField: str,
+    models.GenericIPAddressField: str,
+    models.FilePathField: str,
     models.IntegerField: int,
     models.SmallIntegerField: int,
     models.PositiveIntegerField: int,
+    models.PositiveSmallIntegerField: int,
+    models.PositiveBigIntegerField: int,
     models.BooleanField: bool,
     models.FloatField: float,
     models.DecimalField: decimal.Decimal,

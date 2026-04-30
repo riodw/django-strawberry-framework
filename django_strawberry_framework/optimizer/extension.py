@@ -7,68 +7,96 @@ Opt-in at schema construction::
         extensions=[DjangoOptimizerExtension()],
     )
 
-The extension wraps each resolver via Strawberry's ``resolve`` /
-``aresolve`` hooks. When a resolver returns a ``QuerySet``, the extension
-walks ``info.selected_fields`` to determine which related fields and
-scalars are selected, looks up each return type in the registry, and
-applies ``select_related`` / ``prefetch_related`` / ``only()`` to the
-queryset before passing it back to Strawberry's machinery.
+The extension hooks Strawberry's ``resolve`` middleware. At the
+operation's **root resolver** (detected via ``info.path.prev is None``)
+it walks the entire selection tree once using the O2 walker, builds an
+``OptimizationPlan``, and applies ``select_related`` /
+``prefetch_related`` to the root queryset. Non-root resolvers pass
+through untouched — Django's ``prefetch_related`` with ``__``-chained
+paths handles nested optimization in a single pass.
 
-Load-bearing rule: when a related field's target ``DjangoType`` defines a
-non-default ``get_queryset``, generate a ``Prefetch(...)`` keyed on the
-filtered queryset instead of a ``select_related``. This is the
-visibility-leak fix from strawberry-graphql-django #572 / #583. We copy
-the behaviour, not the API.
+Load-bearing rule (O6, not yet shipped): when a related field's target
+``DjangoType`` defines a non-default ``get_queryset``, generate a
+``Prefetch(...)`` keyed on the filtered queryset instead of a
+``select_related``. This is the visibility-leak fix from
+strawberry-graphql-django #572 / #583. We copy the behaviour, not the
+API.
 
-Status: this module currently ships the depth-1 per-resolver cardinality
-dispatch from ``spec-django_types.md`` Slice 4 (``resolve`` / ``aresolve``
-hooks, ``_plan``). Cross-cutting helpers — case conversion, return-type
-unwrapping — moved to ``django_strawberry_framework.utils`` so other
-subsystems can reuse them. Slices O2 through O6 in ``docs/spec-optimizer.md``
-rebuild this module on a top-level selection-tree-walk architecture:
-O3 replaces the per-resolver hooks with ``on_executing_start`` so
-nested prefetch chains plan in a single pass; O2 promotes ``_plan`` to
-a pure ``optimizer/walker.py`` module; O4 emits nested chains
-(``items__entries``); O5 adds ``only()`` projection (with FK-column
-inclusion); O6 lands the ``Prefetch`` downgrade for visibility-aware
-target types. O1 has shipped as a separate seam in
-``DjangoType.__init_subclass__`` — custom resolvers per relation field
-live in ``types/resolvers.py`` because the default ``getattr`` resolver
-chokes on Django's ``RelatedManager``.
+Architecture modeled on ``strawberry_django/optimizer.py`` — same
+root-gate pattern, same ``ContextVar`` lifecycle, same recursive
+type-tracing through graphql-core wrappers.
 """
 
 import logging
+from contextvars import ContextVar
 from typing import Any
 
 from django.db import models
 from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
-from ..utils.strings import snake_case
-from ..utils.typing import unwrap_return_type
+from .walker import plan_optimizations
 
 logger = logging.getLogger("django_strawberry_framework")
+
+_optimizer_active: ContextVar[bool] = ContextVar(
+    "django_strawberry_framework_optimizer_active",
+    default=False,
+)
+
+
+def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
+    """Trace ``info.return_type`` through graphql-core wrappers to a Django model.
+
+    graphql-core wraps resolver return types in layers of
+    ``GraphQLNonNull`` and ``GraphQLList``. This function recursively
+    peels ``.of_type`` until it reaches a leaf carrying a ``.name``
+    attribute (a ``GraphQLObjectType``), then looks up the corresponding
+    Strawberry type definition via the schema and reverse-maps to the
+    Django model through the registry.
+
+    Returns ``None`` when any step fails (unregistered type, non-object
+    leaf, missing schema backref). The caller treats ``None`` as
+    "nothing to optimize" and passes the queryset through unchanged.
+    """
+    rt = info.return_type
+    while hasattr(rt, "of_type"):
+        rt = rt.of_type
+    type_name = getattr(rt, "name", None)
+    if type_name is None:
+        return None
+    strawberry_schema = getattr(
+        getattr(info, "schema", None),
+        "_strawberry_schema",
+        None,
+    )
+    if strawberry_schema is None:
+        return None
+    definition = strawberry_schema.get_type_by_name(type_name)
+    if definition is None:
+        return None
+    origin = getattr(definition, "origin", None)
+    return registry.model_for_type(origin)
 
 
 class DjangoOptimizerExtension(SchemaExtension):
     """Strawberry schema extension that optimizes Django querysets per request.
 
-    Current state (Slice 4): depth-1 per-resolver dispatch on cardinality
-    flags. ``spec-optimizer.md`` slices O1-O6 rebuild this on the
-    selection-tree-walk architecture; see the module docstring for the
-    slice ordering.
+    Hooks:
+
+    - ``on_execute`` — sets a ``ContextVar`` marking the optimizer as
+      active for the operation's lifetime.
+    - ``resolve`` — gates on ``info.path.prev is None`` (root resolver
+      only). Calls ``_next``, checks ``isinstance(QuerySet)``, traces
+      the Django model from the graphql-core return type, runs the O2
+      walker, applies the plan.
     """
 
-    # TODO(spec-optimizer.md O3): replace ``resolve`` and ``aresolve``
-    # below with ``on_executing_start`` so the planner runs once at the
-    # top of execution. Per-resolver hooks cannot emit nested prefetch
-    # chains because the outer queryset is already evaluated by the
-    # time inner resolvers fire. The rewrite walks the entire selection
-    # tree once and applies the plan to the root queryset before
-    # evaluation. Confirm at implementation time that
-    # ``info.selected_fields`` is available at the new hook; if not,
-    # fall back to ``resolve`` on the root only, gated by
-    # ``info.path.prev is None``.
+    def on_execute(self) -> Any:  # type: ignore[override]
+        """Mark the optimizer as active for the duration of execution."""
+        token = _optimizer_active.set(True)
+        yield
+        _optimizer_active.reset(token)
 
     def resolve(
         self,
@@ -78,104 +106,55 @@ class DjangoOptimizerExtension(SchemaExtension):
         *args: Any,
         **kwargs: Any,
     ) -> Any:
-        """Sync resolver wrapper that optimizes any returned ``QuerySet``."""
-        return self._optimize(_next(root, info, *args, **kwargs), info)
+        """Root-gated resolver hook.
 
-    async def aresolve(
-        self,
-        _next: Any,
-        root: Any,
-        info: Any,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Any:
-        """Async resolver wrapper. Awaits ``_next`` then reuses the sync planner."""
-        return self._optimize(await _next(root, info, *args, **kwargs), info)
+        Only root-level resolvers (``info.path.prev is None``) trigger
+        the optimization pass. All other resolvers pass through
+        unchanged — the prefetch chain applied at the root handles
+        nested relations via Django's ``__``-chain support.
+        """
+        result = _next(root, info, *args, **kwargs)
+        if info.path.prev is not None:
+            return result
+        return self._optimize(result, info)
 
     def _optimize(self, result: Any, info: Any) -> Any:
-        """Core optimizer. Shared by ``resolve`` and ``aresolve``.
+        """Apply the O2 walker's plan to a root-level ``QuerySet``.
 
-        Algorithm (Slice 4 shipped steps 1–4; ``spec-optimizer.md`` O5
-        adds ``only()`` (step 5); O6 replaces step 4 with
-        ``plan_relation``):
+        Steps:
 
-        1. If the resolver returned anything other than a ``QuerySet``
-           (mutations, scalars, plain lists), pass through unchanged.
-        2. Walk wrapper types (``list[T]``, Strawberry ``of_type``) to
-           reach the underlying ``DjangoType`` class.
-        3. Reverse-lookup the Django model via ``registry.model_for_type``.
-           Unregistered types fall through to no-op (we have no plan).
-        4. Plan ``select_related`` / ``prefetch_related`` per selected
-           relation using the cardinality flags on Django's field meta.
+        1. Non-``QuerySet`` results pass through unchanged.
+        2. Trace the graphql-core return type to a Django model.
+        3. Run the O2 walker to build an ``OptimizationPlan``.
+        4. Apply the plan to the queryset.
         """
         if not isinstance(result, models.QuerySet):
             return result
-        target_type = unwrap_return_type(info.return_type)
-        target_model = registry.model_for_type(target_type)
+        target_model = _resolve_model_from_return_type(info)
         if target_model is None:
             logger.debug(
-                "Optimizer: %s has no registered DjangoType; passing queryset through unchanged.",
-                target_type,
+                "Optimizer: return type for %s has no registered DjangoType; "
+                "passing queryset through unchanged.",
+                info.field_name,
             )
             return result
-        selects, prefetches = self._plan(info, target_model)
-        if selects:
-            result = result.select_related(*selects)
-        if prefetches:
-            result = result.prefetch_related(*prefetches)
-        return result
+        if not info.field_nodes:
+            return result
+        # Strawberry's Info.selected_fields peels from field_nodes;
+        # at the raw GraphQLResolveInfo level we use the walker's
+        # convert_selections to get the same shape, or we can access
+        # the selections directly from the field node's selection set.
+        # The O2 walker expects the children of the root field, so we
+        # build the Strawberry-shaped selection list from field_nodes.
+        from strawberry.types.nodes import convert_selections
 
-    def _plan(
-        self,
-        info: Any,
-        model: type[models.Model],
-    ) -> tuple[list[str], list[str]]:
-        """Plan ``select_related`` / ``prefetch_related`` lists for the resolver.
-
-        Walks ``info.selected_fields[0].selections`` (the GraphQL
-        children of the current resolver), maps each selected name back
-        to a Django field via snake_case conversion + ``model._meta``
-        lookup, and routes each relation to the appropriate optimizer
-        method based on cardinality. Single-side relations (forward FK,
-        forward OneToOne) become ``select_related``; many-side relations
-        (M2M, reverse FK / OneToOne) become ``prefetch_related``.
-        """
-        # TODO(spec-optimizer.md O2): extract this method into a new
-        # ``optimizer/walker.py`` module exposing
-        # ``plan_optimizations(selected_fields, model) -> OptimizationPlan``.
-        # The caller (O3's ``on_executing_start`` hook) owns the
-        # ``info.selected_fields[0].selections`` peel and passes the
-        # result in. Make it a pure function so the walk is
-        # unit-testable in isolation against synthetic selection lists
-        # without Strawberry execution. The current implementation is
-        # the depth-1 ancestor of that walker.
-        # TODO(spec-optimizer.md O4): once O2's walker exists, extend it
-        # to emit nested-relation chains like
-        # ``prefetch_related("items__entries")`` rather than the flat
-        # single-level prefetches this implementation produces. Tests
-        # assert query counts at depths 2 and 3 (``category > items >
-        # entries`` and ``entry > item > category``).
-        # TODO(spec-optimizer.md O5): extend the O2 walker to emit
-        # ``only()`` column projections, including the FK columns
-        # required to materialize ``select_related`` joins (per
-        # ``spec-django_types.md`` "only() and FK columns"). Verify via
-        # ``qs.query.deferred_loading`` in tests.
-        if not info.selected_fields:
-            return [], []
-        sel_root = info.selected_fields[0].selections
-        selects: list[str] = []
-        prefetches: list[str] = []
-        field_map = {f.name: f for f in model._meta.get_fields()}
-        for sel in sel_root:
-            python_name = snake_case(sel.name)
-            django_field = field_map.get(python_name)
-            if django_field is None or not django_field.is_relation:
-                continue
-            if django_field.many_to_many or django_field.one_to_many:
-                prefetches.append(python_name)
-            else:
-                selects.append(python_name)
-        return selects, prefetches
+        selections = convert_selections(info, info.field_nodes)
+        # selections[0] is the root field; its .selections are the
+        # children the walker needs.
+        plan = plan_optimizations(selections[0].selections, target_model)
+        if plan.is_empty:
+            return result
+        return plan.apply(result)
 
     def plan_relation(
         self,
@@ -183,32 +162,14 @@ class DjangoOptimizerExtension(SchemaExtension):
         target_type: type,
         info: Any,
     ) -> tuple[str, Any]:
-        """Plan a single relation traversal (Slice 6 entry point).
+        """Plan a single relation traversal (O6 entry point).
 
         Returns ``("select", field_name)`` or
         ``("prefetch", Prefetch(...))`` describing how the optimizer
         should materialize this relation on the parent queryset.
-
-        Algorithm (per the spec's "N+1 strategy" section):
-
-        1. Build the target queryset:
-           ``field.related_model.objects.all()``.
-        2. Apply ``target_type.get_queryset(target_qs, info)`` so
-           visibility filters take effect.
-        3. If the relation is many-side (``many_to_many`` or
-           ``one_to_many``), emit ``("prefetch", Prefetch(field.name,
-           queryset=target_qs))``.
-        4. Otherwise, if ``target_type.has_custom_get_queryset()`` is
-           true, downgrade to ``("prefetch", Prefetch(field.name,
-           queryset=target_qs))`` so the visibility filter applies
-           across the join.
-        5. Otherwise, emit ``("select", field.name)`` for a plain
-           ``select_related``.
         """
-        # TODO(spec-optimizer.md O6): implement per the algorithm
-        # above. Log every downgrade decision via ``logger.debug`` so
-        # consumers can see which relations the visibility rule
-        # rerouted to Prefetch. O6 also wires this into the O2 walker
-        # so the planner delegates to ``plan_relation`` per relation
+        # TODO(spec-optimizer.md O6): implement. Log every downgrade
+        # decision via ``logger.debug``. Wire into the O2 walker so
+        # the planner delegates to ``plan_relation`` per relation
         # rather than dispatching on cardinality directly.
         raise NotImplementedError("plan_relation pending spec-optimizer.md O6")

@@ -8,7 +8,7 @@ Consumer surface::
             fields = "__all__"
 
 A nested ``Meta`` class declares the model and (optionally) ``fields``,
-``exclude``, ``interfaces``, ``name``, and ``description``. Subclassing
+``exclude``, ``name``, and ``description``. Subclassing
 triggers the ``__init_subclass__`` pipeline, which:
 
 1. Detects whether the subclass declares its own ``Meta``. Intermediate
@@ -39,6 +39,13 @@ DEFERRED_META_KEYS: frozenset[str] = frozenset(
         "aggregate_class",
         "fields_class",
         "search_fields",
+        # ``interfaces`` is in the deferred set rather than the allowed
+        # set because the relay-interface application pass
+        # (``cls.__bases__`` injection before ``strawberry.type``) has
+        # not landed yet. Accepting the key without applying it would
+        # silently produce types that look interface-bearing but are
+        # not, which is exactly the alpha posture we want to avoid.
+        "interfaces",
     },
 )
 
@@ -49,7 +56,6 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "exclude",
         "name",
         "description",
-        "interfaces",
     },
 )
 
@@ -87,12 +93,14 @@ class DjangoType:
            walk single-pass and the dependency direction one-way
            (``base`` -> ``resolvers``, never the reverse).
         8. ``strawberry.type(cls)`` — finalizes the class as a Strawberry
-           type with ``Meta.name`` / ``Meta.description`` /
-           ``Meta.interfaces``.
-        9. (TODO ``spec-optimizer.md`` O6) If the subclass defines its
-           own ``get_queryset``, flip ``cls._is_default_get_queryset``
-           to ``False`` so the optimizer can detect the override cheaply
-           (see ``has_custom_get_queryset`` below).
+           type with ``Meta.name`` and ``Meta.description``.
+           (``Meta.interfaces`` is reserved by ``DEFERRED_META_KEYS``
+           pending a future relay spec.)
+        9. If the subclass defines its own ``get_queryset``, flip
+           ``cls._is_default_get_queryset`` to ``False`` so the
+           ``has_custom_get_queryset`` check is a constant-time
+           attribute read for the optimizer's downgrade-to-Prefetch
+           rule (consumed by ``spec-optimizer.md`` O6).
         """
         super().__init_subclass__(**kwargs)
         meta = cls.__dict__.get("Meta")
@@ -120,22 +128,26 @@ class DjangoType:
         # run before ``strawberry.type(cls)`` so the field metadata is
         # in place when Strawberry processes the class.
         _attach_relation_resolvers(cls, fields)
-        # TODO(future): apply ``Meta.interfaces`` (e.g., ``relay.Node``)
-        # by injecting them into ``cls.__bases__`` before strawberry.type
-        # processes the class. For now consumers wanting a Strawberry
-        # interface should subclass it directly:
+        # TODO(future relay spec): when relay support lands, the
+        # implementation will inject ``Meta.interfaces`` (e.g.,
+        # ``relay.Node``) into ``cls.__bases__`` before strawberry.type
+        # processes the class, and ``"interfaces"`` will move from
+        # ``DEFERRED_META_KEYS`` back into ``ALLOWED_META_KEYS``.
+        # Until then the key is rejected by ``_validate_meta`` so it
+        # cannot be set silently. Consumers wanting a Strawberry
+        # interface today should subclass it directly:
         # ``class CategoryType(DjangoType, relay.Node): ...``.
         name = getattr(meta, "name", None)
         description = getattr(meta, "description", None)
         strawberry.type(cls, name=name, description=description)
-        # TODO(spec-optimizer.md O6): when ``"get_queryset"`` is present
-        # in ``cls.__dict__``, flip ``cls._is_default_get_queryset`` to
-        # False so ``has_custom_get_queryset`` collapses to a
-        # constant-time attribute read. The sentinel itself stays in
-        # this file (it is type-system surface); the flip is wired here
-        # because ``__init_subclass__`` is the only place that knows,
-        # at class-creation time, whether the subclass declared its own
-        # ``get_queryset``.
+        # spec-optimizer.md O6 sentinel: flip the class-level flag if
+        # this subclass declared its own ``get_queryset`` so
+        # ``has_custom_get_queryset`` is a constant-time attribute
+        # read. The optimizer's downgrade-to-Prefetch rule consumes
+        # this once the rebuild lands; the type-system half of the
+        # contract ships now.
+        if "get_queryset" in cls.__dict__:
+            cls._is_default_get_queryset = False
 
     @classmethod
     def get_queryset(
@@ -155,31 +167,21 @@ class DjangoType:
 
     @classmethod
     def has_custom_get_queryset(cls) -> bool:
-        """Return ``True`` if this subclass overrides ``get_queryset``.
+        """Return ``True`` if this subclass (or any intermediate base) overrides ``get_queryset``.
 
         Used by ``DjangoOptimizerExtension`` to decide whether a related-
         field traversal should be downgraded to a ``Prefetch`` (see the
         N+1 strategy section of the spec).
 
-        Detection options:
-
-        - Compare ``cls.__dict__.get("get_queryset")`` against the base
-          class's classmethod descriptor; any subclass that defines its
-          own ``get_queryset`` ends up with a distinct descriptor in its
-          own ``__dict__``.
-        - Walk ``cls.__mro__`` until hitting ``DjangoType``; return
-          ``True`` if any intermediate class declared ``get_queryset``.
-        - Use the ``_is_default_get_queryset`` sentinel:
-          ``__init_subclass__`` flips it to ``False`` when the subclass
-          declares ``get_queryset``; this method just returns the
-          negated flag. This is the planned approach because the check
-          collapses to a constant-time attribute read.
+        Implementation: ``__init_subclass__`` flips
+        ``_is_default_get_queryset`` to ``False`` at class-creation time
+        when the subclass declares its own ``get_queryset``; this method
+        returns the negated flag for a constant-time attribute read.
+        Inheritance walks naturally — a subclass without its own
+        ``get_queryset`` whose parent declared one inherits the parent's
+        ``False`` sentinel through the class hierarchy.
         """
-        # TODO(spec-optimizer.md O6): implement via the sentinel
-        # approach (paired with the ``__init_subclass__`` flip above).
-        # Returns ``not cls._is_default_get_queryset`` once the
-        # sentinel flip is wired.
-        raise NotImplementedError("has_custom_get_queryset pending spec-optimizer.md O6")
+        return not cls._is_default_get_queryset
 
 
 def _validate_meta(meta: type) -> None:
@@ -231,8 +233,15 @@ def _select_fields(meta: type) -> list[Any]:
 
     - ``fields == "__all__"`` (or both ``fields``/``exclude`` unset) ->
       every concrete + relation field.
-    - ``fields`` as a sequence -> only those names.
-    - ``exclude`` as a sequence -> every field except those names.
+    - ``fields`` as a sequence -> only those names; unknown names raise.
+    - ``exclude`` as a sequence -> every field except those names;
+      unknown names raise.
+
+    Raises:
+        ConfigurationError: ``Meta.fields`` or ``Meta.exclude`` names a
+            field that does not exist on ``Meta.model``. The error names
+            the model, the unknown values, and the available field set
+            so typos surface loudly instead of silently dropping.
     """
     model = meta.model
     fields_spec = getattr(meta, "fields", None)
@@ -240,13 +249,26 @@ def _select_fields(meta: type) -> list[Any]:
 
     all_fields = list(model._meta.get_fields())
     all_names = [f.name for f in all_fields]
+    valid_names = set(all_names)
 
     if fields_spec == "__all__" or (fields_spec is None and exclude_spec is None):
-        selected_names = set(all_names)
+        selected_names = valid_names
     elif fields_spec is not None:
+        unknown = sorted(set(fields_spec) - valid_names)
+        if unknown:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta.fields names unknown fields: {unknown}. "
+                f"Available: {sorted(valid_names)}.",
+            )
         selected_names = set(fields_spec)
     else:
-        selected_names = set(all_names) - set(exclude_spec)
+        unknown = sorted(set(exclude_spec) - valid_names)
+        if unknown:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta.exclude names unknown fields: {unknown}. "
+                f"Available: {sorted(valid_names)}.",
+            )
+        selected_names = valid_names - set(exclude_spec)
 
     return [f for f in all_fields if f.name in selected_names]
 

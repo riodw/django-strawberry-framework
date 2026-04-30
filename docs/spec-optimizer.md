@@ -115,11 +115,25 @@ Slice O6 — `get_queryset` + `Prefetch` downgrade. The planner consults `target
 
 `spec-django_types.md` Slices 4-6 are superseded by this spec's O1-O6. The DjangoType spec's `## Suggested implementation slices` section should be edited to mark Slices 4-6 as "moved to spec-optimizer.md" and the `## Scope creep into the N+1 problem` section's third paragraph (the one that justified bundling) should be revisited — the bundle didn't survive contact with implementation.
 
-The three optimizer tests blocked by the architectural shift (`test_optimizer_applies_select_related_for_forward_fk`, `test_optimizer_applies_prefetch_related_for_reverse_fk`, `test_optimizer_combines_select_related_and_prefetch_related`) carry `@pytest.mark.skip` markers citing `spec-optimizer.md O1/O3`. They unskip in O3 once the top-level hook is in place. The remaining `tests/test_optimizer.py` cases (the unit tests of `_unwrap_return_type`, `_plan`, `_snake_case`, `aresolve`, plus the no-relations and pass-through cases) keep passing throughout the rebuild and gate against regressions in the legacy code path until O3 retires it.
+The three optimizer tests blocked by the architectural shift (`test_optimizer_applies_select_related_for_forward_fk`, `test_optimizer_applies_prefetch_related_for_reverse_fk`, `test_optimizer_combines_select_related_and_prefetch_related`) live in `tests/optimizer/test_extension.py` and carry `@pytest.mark.skip` markers citing `spec-optimizer.md O3`. O1 has shipped, but O3 still gates them because the per-resolver hook can't trace types through graphql-core's wrappers. They unskip in O3 once the top-level hook is in place. The remaining `tests/optimizer/test_extension.py` cases (`_plan` unit tests, `aresolve`, the no-relations / pass-through cases, the synthetic-info cardinality dispatch and `select_related` / `prefetch_related` application) keep passing throughout the rebuild and gate against regressions in the legacy code path until O3 retires it. The `unwrap_return_type` and `snake_case` helpers that used to live on `DjangoOptimizerExtension` moved to `django_strawberry_framework.utils` in 0.0.2 and have their own unit tests in `tests/utils/`.
 
 The `_is_default_get_queryset` sentinel and `has_custom_get_queryset` introspection helper still belong in `spec-django_types.md` — they are part of the type-system surface that the optimizer consumes. The Slice 6 wiring of `__init_subclass__` ("flip the sentinel when the subclass declares get_queryset") moves to this spec's O6 because the consumer of the sentinel is now here.
 
 The `model_for_type` reverse-lookup on `TypeRegistry` stays where it is. Both halves use it.
+
+## Visibility status (alpha)
+
+Per `docs/spec-public_surface.md`, `DjangoOptimizerExtension` does not currently meet the top-level re-export rules: the per-resolver dispatch is shipped (Slice 4) and Slice O1's relation resolvers are shipped, but the type-tracing limitation through graphql-core's wrappers means the optimizer is not effective end-to-end. Three of the optimizer's tests in `tests/optimizer/test_extension.py` are `@pytest.mark.skip` pending O3 for that reason.
+
+**Decision for 0.0.3.** Drop `DjangoOptimizerExtension` from `django_strawberry_framework/__init__.py`'s `__all__`. Power users and tests still import via:
+
+```
+from django_strawberry_framework.optimizer import DjangoOptimizerExtension
+```
+
+The class returns to the top-level `__all__` when O3 (the `on_executing_start` hook) lands and the three currently-skipped optimizer tests unskip and pass. That promotion is part of the O3 slice's definition of done — the `__init__.py` change ships in the same commit as the hook flip.
+
+This is the visibility-discipline pattern from `docs/spec-public_surface.md`: a Layer-2 subsystem stays subpackage-only until its core hook is effective. The optimizer's status marker in `docs/README.md` is `partial` until O3 ships, then `shipped`.
 
 ## Open questions
 

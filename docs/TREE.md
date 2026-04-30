@@ -197,10 +197,10 @@ django_strawberry_framework/
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
 │   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
 │   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers
-├── optimizer/               # N+1 optimizer subsystem (Layer 2) — in progress
-│   ├── __init__.py          # re-exports DjangoOptimizerExtension only
-│   ├── extension.py         # DjangoOptimizerExtension (depth-1 Slice 4 hooks)
-│   ├── walker.py            # selection-tree walker (O2 shipped)
+├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O3 shipped, O4–O6 pending
+│   ├── __init__.py          # re-exports DjangoOptimizerExtension
+│   ├── extension.py         # DjangoOptimizerExtension (root-gated resolve hook, O3)
+│   ├── walker.py            # selection-tree walker (plan_optimizations, O2)
 │   └── plans.py             # OptimizationPlan data structure
 └── utils/                   # cross-cutting helpers
     ├── __init__.py
@@ -281,7 +281,7 @@ tests/                       # Package-internal tests (current state)
 │   └── test_resolvers.py    # ← O1 _make_relation_resolver / _attach_relation_resolvers
 ├── optimizer/               # mirrors django_strawberry_framework/optimizer/
 │   ├── __init__.py
-│   ├── test_extension.py    # ← DjangoOptimizerExtension (per-resolver Slice 4 hooks)
+│   ├── test_extension.py    # ← DjangoOptimizerExtension (root-gated resolve hook, O3)
 │   ├── test_walker.py       # ← O2 selection-tree walker
 │   └── test_plans.py        # ← OptimizationPlan data structure
 └── utils/                   # mirrors django_strawberry_framework/utils/

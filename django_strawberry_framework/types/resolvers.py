@@ -41,6 +41,16 @@ def _make_relation_resolver(field: Any) -> Any:
       the resolver returns ``None`` when the reverse row is absent.
     - Forward FK / forward OneToOne: ``getattr(root, name)`` — returns
       the related instance, or ``None`` if the FK is nullable and unset.
+
+    .. todo:: spec-optimizer_beyond.md B3
+
+       When ``DjangoOptimizerExtension(strict=True)`` is active, each
+       resolver should check ``info.context.dst_optimizer_planned``
+       (the sentinel ``set[str]`` of planned relation paths). If the
+       relation path is absent and the access will trigger a lazy load,
+       emit ``logger.warning("Potential N+1 on %s", relation_path)``.
+       Requires threading ``info`` into the resolver signature (today
+       it only takes ``root``).
     """
     field_name = field.name
 

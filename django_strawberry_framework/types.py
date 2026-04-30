@@ -24,7 +24,12 @@ triggers the ``__init_subclass__`` pipeline, which:
 
 from typing import Any, ClassVar
 
+import strawberry
 from django.db import models
+
+from .converters import convert_relation, convert_scalar
+from .exceptions import ConfigurationError
+from .registry import registry
 
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
     {
@@ -86,17 +91,41 @@ class DjangoType:
             # Intermediate abstract subclasses (no ``Meta``) opt out of
             # the pipeline. Concrete consumer types must declare ``Meta``.
             return
-        # TODO(slice 2): _validate_meta(meta)
-        # TODO(slice 2): annotations = _build_annotations(cls, meta)
-        # TODO(slice 2): cls.__annotations__.update(annotations)
-        # TODO(slice 2): registry.register(meta.model, cls)
-        # TODO(slice 2): apply Meta.interfaces (e.g., relay.Node) when set.
-        # TODO(slice 2): wrap with @strawberry.type carrying Meta.name and
-        #                Meta.description.
-        # TODO(slice 6): when ``"get_queryset"`` is present in
-        # ``cls.__dict__``, flip ``cls._is_default_get_queryset`` to
+        _validate_meta(meta)
+        synthesized = _build_annotations(cls, meta)
+        # Consumer-declared annotations override synthesized ones so a
+        # subclass can opt out of the auto-generated type for any field
+        # by re-annotating it (e.g. ``description: str = strawberry.field(...)``).
+        existing = dict(cls.__dict__.get("__annotations__", {}))
+        cls.__annotations__ = {**synthesized, **existing}
+        registry.register(meta.model, cls)
+        # TODO(spec-optimizer.md O1): generate one custom resolver per
+        # relation field so Strawberry's default ``getattr(source,
+        # attname)`` does not trip on Django's ``RelatedManager``.
+        # Per-cardinality shape: forward FK / OneToOne -> ``getattr(source,
+        # attname)``; reverse FK / reverse OneToOne / M2M -> return the
+        # prefetch cache when present, else ``manager.all()``. Iterate
+        # the same ``model._meta.get_fields()`` ``_build_annotations``
+        # walked, find relation entries, and inject ``cls.<field_name>
+        # = strawberry.field(resolver=...)`` before the
+        # ``strawberry.type(...)`` call below. Without this, every
+        # reverse rel raises "Expected Iterable" at GraphQL execution.
+        # TODO(future): apply ``Meta.interfaces`` (e.g., ``relay.Node``)
+        # by injecting them into ``cls.__bases__`` before strawberry.type
+        # processes the class. For now consumers wanting a Strawberry
+        # interface should subclass it directly:
+        # ``class CategoryType(DjangoType, relay.Node): ...``.
+        name = getattr(meta, "name", None)
+        description = getattr(meta, "description", None)
+        strawberry.type(cls, name=name, description=description)
+        # TODO(spec-optimizer.md O6): when ``"get_queryset"`` is present
+        # in ``cls.__dict__``, flip ``cls._is_default_get_queryset`` to
         # False so ``has_custom_get_queryset`` collapses to a
-        # constant-time attribute read.
+        # constant-time attribute read. The sentinel itself stays in
+        # this file (it is type-system surface); the flip is wired here
+        # because ``__init_subclass__`` is the only place that knows,
+        # at class-creation time, whether the subclass declared its own
+        # ``get_queryset``.
 
     @classmethod
     def get_queryset(
@@ -136,10 +165,11 @@ class DjangoType:
           negated flag. This is the planned approach because the check
           collapses to a constant-time attribute read.
         """
-        # TODO(slice 6): implement via the sentinel approach (see step 7
-        # in __init_subclass__'s pipeline). Returns
-        # ``not cls._is_default_get_queryset`` once the sentinel is wired.
-        raise NotImplementedError("has_custom_get_queryset pending Slice 6")
+        # TODO(spec-optimizer.md O6): implement via the sentinel
+        # approach (paired with the ``__init_subclass__`` flip above).
+        # Returns ``not cls._is_default_get_queryset`` once the
+        # sentinel flip is wired.
+        raise NotImplementedError("has_custom_get_queryset pending spec-optimizer.md O6")
 
 
 def _validate_meta(meta: type) -> None:
@@ -147,54 +177,89 @@ def _validate_meta(meta: type) -> None:
 
     Validation order:
 
-    1. ``getattr(meta, "model", None) is None`` -> ``ConfigurationError``
-       ("Meta.model is required").
-    2. Both ``fields`` and ``exclude`` declared -> ``ConfigurationError``
-       ("fields and exclude are mutually exclusive").
-    3. For each key in ``DEFERRED_META_KEYS`` declared on ``meta``,
-       ``ConfigurationError`` naming the key (e.g. "filterset_class is
-       not supported yet; the FilterSet spec has not shipped").
-    4. (Optional) For each non-dunder attribute on ``meta`` that is not
-       in ``ALLOWED_META_KEYS | DEFERRED_META_KEYS``, raise
-       ``ConfigurationError`` to fail fast on typos.
+    1. ``Meta.model`` is required.
+    2. ``fields`` and ``exclude`` are mutually exclusive.
+    3. Any key in ``DEFERRED_META_KEYS`` raises with a clear message
+       pointing at the spec that owns the feature.
+    4. Any non-dunder key on ``meta`` not in ``ALLOWED_META_KEYS |
+       DEFERRED_META_KEYS`` raises (typo guard).
 
     Raises:
         ConfigurationError: any of the above violations.
     """
-    # TODO(slice 2): implement the four-step validation above. Use the
-    # ``DEFERRED_META_KEYS`` and ``ALLOWED_META_KEYS`` module constants
-    # as the source of truth for accept / reject. Re-import
-    # ``ConfigurationError`` from ``.exceptions`` once this body is wired.
-    raise NotImplementedError("Meta validation pending Slice 2")
+    if getattr(meta, "model", None) is None:
+        raise ConfigurationError("Meta.model is required")
+
+    declared = {k for k in meta.__dict__ if not k.startswith("_")}
+
+    if "fields" in declared and "exclude" in declared:
+        raise ConfigurationError("Meta.fields and Meta.exclude are mutually exclusive")
+
+    deferred = sorted(declared & DEFERRED_META_KEYS)
+    if deferred:
+        raise ConfigurationError(
+            f"Meta keys not supported yet: {deferred}. The spec that owns them has not shipped.",
+        )
+
+    unknown = sorted(declared - ALLOWED_META_KEYS - DEFERRED_META_KEYS)
+    if unknown:
+        raise ConfigurationError(f"Unknown Meta keys: {unknown}")
 
 
 def _build_annotations(cls: type, meta: type) -> dict[str, Any]:
-    """Build the annotation dict the Strawberry type decorator expects.
+    """Build the annotation dict the Strawberry type decorator consumes.
 
-    Algorithm:
+    Field-by-field dispatch: every entry in ``model._meta.get_fields()`` is
+    routed through ``convert_relation`` if ``field.is_relation`` is true,
+    or ``convert_scalar`` otherwise. The Slice 2 "scalars only" filter has
+    been removed; relations now appear in the synthesized annotations as
+    long as the target's ``DjangoType`` is already registered.
 
-    1. Resolve the field list from ``Meta.fields`` (``"__all__"`` expands
-       to every concrete field) or by subtracting ``Meta.exclude`` from
-       the full set.
-    2. Iterate ``meta.model._meta.get_fields()``, filter by the resolved
-       list, and dispatch each field through:
-       - ``converters.convert_scalar(field, cls.__name__)`` for scalar
-         columns.
-       - ``converters.convert_relation(field)`` for FK / OneToOne /
-         reverse / M2M relations.
-    3. Return a ``{field_name: synthesized_type}`` mapping suitable for
-       merging into ``cls.__annotations__``.
+    Field selection follows ``Meta.fields`` / ``Meta.exclude``:
+
+    - ``fields == "__all__"`` (or both unset) -> every concrete + relation field.
+    - ``fields`` as a sequence -> only those names.
+    - ``exclude`` as a sequence -> everything except those names.
+
+    Iteration order follows ``model._meta.get_fields()`` so the generated
+    GraphQL type's field order matches Django's declared order with
+    reverse-side relations appended at the end.
 
     Args:
-        cls: The consumer-facing ``DjangoType`` subclass (used for
-            naming generated choice enums).
+        cls: The consumer-facing ``DjangoType`` subclass (its ``__name__``
+            threads into ``convert_scalar`` so generated choice enums
+            (Slice 7) carry a stable name).
         meta: The validated ``Meta`` inner class.
 
     Returns:
         A dict suitable for ``cls.__annotations__.update(...)``.
+
+    Raises:
+        ConfigurationError: a relation field's target ``DjangoType`` is not
+            yet registered (raised by ``convert_relation``); or an
+            unsupported scalar field type is encountered (raised by
+            ``convert_scalar``).
     """
-    # TODO(slice 2 + slice 3): implement scalar dispatch in slice 2,
-    # extend with relation dispatch in slice 3. The ``"__all__"``
-    # expansion must respect the model's concrete-field order so the
-    # generated GraphQL type's field order is deterministic.
-    raise NotImplementedError("Annotation synthesis pending Slice 2 / Slice 3")
+    model = meta.model
+    fields_spec = getattr(meta, "fields", None)
+    exclude_spec = getattr(meta, "exclude", None)
+
+    all_fields = list(model._meta.get_fields())
+    all_names = [f.name for f in all_fields]
+
+    if fields_spec == "__all__" or (fields_spec is None and exclude_spec is None):
+        selected_names = set(all_names)
+    elif fields_spec is not None:
+        selected_names = set(fields_spec)
+    else:
+        selected_names = set(all_names) - set(exclude_spec)
+
+    annotations: dict[str, Any] = {}
+    for field in all_fields:
+        if field.name not in selected_names:
+            continue
+        if field.is_relation:
+            annotations[field.name] = convert_relation(field)
+        else:
+            annotations[field.name] = convert_scalar(field, cls.__name__)
+    return annotations

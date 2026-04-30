@@ -26,10 +26,14 @@ class TypeRegistry:
 
     def __init__(self) -> None:
         self._types: dict[type[models.Model], type] = {}
+        self._models: dict[type, type[models.Model]] = {}
         self._enums: dict[tuple[type[models.Model], str], type[Enum]] = {}
 
     def register(self, model: type[models.Model], type_cls: type) -> None:
         """Register ``type_cls`` as the ``DjangoType`` for ``model``.
+
+        Maintains both directions of the mapping so the optimizer can
+        reverse a ``DjangoType`` class back to its Django model in O(1).
 
         Raises:
             ConfigurationError: ``model`` already has a registered type.
@@ -41,35 +45,52 @@ class TypeRegistry:
                 f"{model.__name__} is already registered as {self._types[model].__name__}",
             )
         self._types[model] = type_cls
+        self._models[type_cls] = model
 
     def get(self, model: type[models.Model]) -> type | None:
         """Return the registered ``DjangoType`` for ``model``, or ``None``."""
         return self._types.get(model)
 
+    def model_for_type(self, type_cls: type | None) -> type[models.Model] | None:
+        """Reverse-lookup: return the Django model for a registered ``DjangoType``.
+
+        Used by ``DjangoOptimizerExtension`` to trace a resolver's
+        GraphQL return type back to a Django model so it can walk
+        ``model._meta.get_fields()`` against the resolver's selection set.
+        Returns ``None`` for unregistered classes (and for ``None`` itself,
+        so the optimizer can pipeline through unwrapped wrapper types
+        without an extra guard).
+        """
+        if type_cls is None:
+            return None
+        return self._models.get(type_cls)
+
     def lazy_ref(self, model: type[models.Model]) -> Any:
         """Return a forward reference resolved at schema build.
 
-        Used during relation conversion when the target ``DjangoType`` may
-        not yet be registered. Resolution happens lazily when Strawberry
-        materializes the schema.
+        Slice 3 deferred this in favor of eager resolution
+        (``convert_relation`` calls ``registry.get`` and raises
+        ``ConfigurationError`` if the target is unregistered). Lifting
+        the dependency-order constraint requires picking one of:
 
-        Slice 3 will pick one of these mechanisms:
-
-        - Return ``Annotated["TargetType", strawberry.lazy("module.path")]``
-          so Strawberry resolves the type via a named import at schema
+        - ``Annotated["TargetType", strawberry.lazy("module.path")]`` so
+          Strawberry resolves the type via a named import at schema
           build time. Best for cross-module references.
-        - Return a string annotation (``"TargetType"``) that
+        - A string annotation (``"TargetType"``) that
           ``_build_annotations`` rewrites once all sibling types are
           registered. Simplest for same-module references.
-        - Register a "pending relation" record on the registry that
-          ``DjangoType.__init_subclass__`` post-processes after every
+        - A registry-tracked "pending relation" record that a
+          ``finalize_types()`` post-processing pass resolves after every
           subclass has been seen.
+
+        See the Post-slice-7 future work section in
+        ``docs/spec-django_types.md`` for the full discussion.
         """
-        # TODO(slice 3): pick a forward-ref strategy from the docstring
-        # and wire it. The string-annotation approach is simplest for
-        # same-module references; LazyType / Annotated is needed for
+        # TODO(future): pick a forward-ref strategy from the docstring
+        # above and wire it. The string-annotation approach is simplest
+        # for same-module references; LazyType / Annotated is needed for
         # cross-module relations.
-        raise NotImplementedError("lazy_ref pending Slice 3 (relation conversion)")
+        raise NotImplementedError("lazy_ref pending future slice (definition-order independence)")
 
     def register_enum(
         self,
@@ -101,6 +122,7 @@ class TypeRegistry:
         registry.
         """
         self._types.clear()
+        self._models.clear()
         self._enums.clear()
 
 

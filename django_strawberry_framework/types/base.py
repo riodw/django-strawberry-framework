@@ -57,9 +57,25 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "name",
         "description",
         # TODO(spec-optimizer_beyond.md B4): add "optimizer_hints" here
-        # when the feature ships. Validation in ``_validate_meta`` should
-        # reject unknown field names (same as ``fields``/``exclude``) and
-        # validate hint values at schema-build time.
+        # when the feature ships. Validation in ``_validate_meta``:
+        # 1) reject unknown field names (same as ``fields``/``exclude``)
+        # 2) reject non-``OptimizerHint`` values
+        #
+        # Pseudo (in _validate_meta, after existing checks):
+        #   hints = getattr(meta, "optimizer_hints", None)
+        #   if hints is not None:
+        #       unknown = sorted(
+        #           set(hints) - valid_field_names)
+        #       if unknown:
+        #           raise ConfigurationError(
+        #               f"optimizer_hints names unknown "
+        #               f"fields: {unknown}")
+        #       bad = [k for k, v in hints.items()
+        #              if not isinstance(v, OptimizerHint)]
+        #       if bad:
+        #           raise ConfigurationError(
+        #               f"optimizer_hints values must be "
+        #               f"OptimizerHint instances: {bad}")
     },
 )
 
@@ -145,6 +161,19 @@ class DjangoType:
         # ``dict[str, FieldMeta]`` precomputing is_relation,
         # cardinality, related_model, and attname per field. The O2
         # walker reads this instead of calling _meta.get_fields().
+        #
+        # Pseudo:
+        #   cls._optimizer_field_map = {
+        #       snake_case(f.name): FieldMeta(
+        #           is_relation=f.is_relation,
+        #           many_to_many=getattr(f, "many_to_many", False),
+        #           one_to_many=getattr(f, "one_to_many", False),
+        #           one_to_one=getattr(f, "one_to_one", False),
+        #           related_model=getattr(f, "related_model", None),
+        #           attname=getattr(f, "attname", None),
+        #       )
+        #       for f in fields
+        #   }
         synthesized = _build_annotations(cls, fields)
         # Implementation detail (NOT a stable consumer-override contract
         # in 0.0.3): consumer-declared annotations are merged on top of

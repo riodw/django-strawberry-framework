@@ -1,60 +1,75 @@
-# Review Feedback: O3 Optimizer Diff
+# Review Feedback: Optimizer Beyond Diff
 
 ## Scope reviewed
 
-- `docs/spec-optimizer.md`
+- `docs/spec-optimizer_beyond.md`
 - `django_strawberry_framework/optimizer/extension.py`
-- `tests/optimizer/test_extension.py`
+- `django_strawberry_framework/optimizer/walker.py`
+- `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/types/resolvers.py`
 
-This feedback only covers the current O3-oriented diff on `main`.
+This feedback only covers the current diff.
 
 ## Findings
 
-### 1. O3 drops `aresolve`, so async root resolvers are no longer covered by the optimizer contract
+### 1. `extension.py`'s B6 pseudo-code still points at the old audit design
 
 Priority: P1
 
-The updated spec still defines O3 as a `resolve` / `aresolve` pair with async parity:
+`docs/spec-optimizer_beyond.md` now settles B6 on a schema-reachable audit plus a public `registry.iter_types()` helper. But the source-site TODO in `django_strawberry_framework/optimizer/extension.py` still sketches the superseded version:
 
-- `docs/spec-optimizer.md` says both hooks call into a shared `_optimize(result, info)` helper
-- the O3 definition of done explicitly requires an async-parity test
+- iterating `registry._types.items()` directly
+- auditing every registered type instead of only schema-reachable ones
+- describing a generic “strict mode” instead of the settled `strictness` API
 
-But `django_strawberry_framework/optimizer/extension.py` now only implements `resolve`; `aresolve` is gone entirely.
-
-That is not just a test gap. It changes behavior. If a consumer defines an async root resolver that returns a `QuerySet`, this implementation no longer has an optimizer hook for that code path. The spec still treats async parity as part of O3, so the diff is currently short of its own target contract.
+Since these TODO blocks exist to anchor future implementation, this one is now actively misleading. If someone implements B6 from the source comment instead of the spec, they will build the wrong audit and get false positives for registered-but-unexposed types.
 
 Recommended fix:
 
-- restore `aresolve` and route it through the same `_optimize(...)` helper after awaiting `_next(...)`, or
-- explicitly narrow the spec and docs if async optimization is no longer part of O3
+- update the B6 TODO block in `extension.py` to match the spec’s settled shape
+- reference `registry.iter_types()`
+- mention schema reachability explicitly
+- use `strictness == "raise"` instead of the older “strict mode” phrasing
 
-Right now the code and spec disagree, and the code is the weaker of the two.
-
-### 2. The rewritten tests overstate O3 coverage: root-gate behavior and async parity are still not pinned
+### 2. The B4 pseudo-code in `walker.py` and `types/base.py` still reflects the pre-`OptimizerHint` design
 
 Priority: P2
 
-`tests/optimizer/test_extension.py` now says it covers:
+The spec now makes a clear call: `Meta.optimizer_hints` values are `OptimizerHint` instances, not a loose mix of strings, dicts, and raw `Prefetch` objects. But the source-site guidance still sketches the older API:
 
-- root-field gate behavior
-- type tracing
-- `on_execute` context-var lifecycle
+- `walker.py` checks for `"skip"`, raw `Prefetch`, and `{"select_related": True}`
+- `types/base.py` only mentions unknown-field validation and does not mention type validation for `OptimizerHint`
 
-The type-tracing and context-var parts are there, but two O3 commitments are still untested:
-
-1. **Root-field gate.** There is no test that a non-root resolver returning a `QuerySet` passes through unchanged and does not trigger planning.
-2. **Async parity.** The previous direct `aresolve` coverage is gone, and there is no replacement async test.
-
-This matters because these are the two main architectural claims of the O3 rewrite:
-
-- optimization runs only once at the root
-- async resolvers behave the same as sync resolvers
+That drift matters because these comments sit exactly where the implementation will land. They should steer future work toward the settled public contract, not back toward the discarded exploratory shape.
 
 Recommended fix:
 
-- add one direct unit test for the root gate (`info.path.prev is not None` returns `_next(...)` unchanged)
-- add one async test covering `aresolve` once it is restored
+- update the walker TODO to use `OptimizerHint.SKIP`, `.force_select`, `.force_prefetch`, and `.prefetch_obj`
+- update the `types/base.py` TODO to mention both unknown-field validation and `OptimizerHint` instance validation
+
+### 3. The B3/B5 source comments still use the older context/strict API shape
+
+Priority: P2
+
+The finalized spec now says:
+
+- B3 uses `strictness: Literal["off", "warn", "raise"]`
+- B5 stashes onto `info.context` with `setattr(...)` first and dict fallback second
+
+But the source TODOs still preserve older versions of the design:
+
+- `extension.py` says `when strict=True`
+- `types/resolvers.py` says `DjangoOptimizerExtension(strict=True)`
+- `extension.py`'s B5 pseudo-code only shows `setattr(...)`, not the dict fallback
+
+These are not runtime bugs today, but they are implementation traps. The next person wiring B3/B5 from the nearby comment could easily reintroduce the older boolean API or forget the dict-context fallback that the spec now treats as part of the contract.
+
+Recommended fix:
+
+- change all B3 TODO wording to `strictness`, not `strict`
+- update the B5 pseudo-code in `extension.py` to show the `setattr` / `__setitem__` fallback pattern
+- keep the resolver-side B3 example aligned with the same terminology
 
 ## Overall assessment
 
-The diff is moving in the right direction: the type-tracing rewrite is much closer to the spec, and the tests are now aimed at the right architecture instead of the old per-resolver planner. The remaining issue is that the implementation and tests have not fully caught up to the O3 contract yet. I would not treat O3 as "landed" until async parity and the root-gate behavior are both implemented and pinned.
+The spec itself is in much better shape now. The remaining issue is mostly one of source-site guidance: several TODO-anchored pseudo-code blocks have drifted behind the spec that is supposed to govern them. I would sync those comments now while the decisions are fresh, so the next implementation pass does not accidentally follow obsolete scaffolding.

@@ -44,13 +44,29 @@ def _make_relation_resolver(field: Any) -> Any:
 
     .. todo:: spec-optimizer_beyond.md B3
 
-       When ``DjangoOptimizerExtension(strict=True)`` is active, each
-       resolver should check ``info.context.dst_optimizer_planned``
-       (the sentinel ``set[str]`` of planned relation paths). If the
-       relation path is absent and the access will trigger a lazy load,
-       emit ``logger.warning("Potential N+1 on %s", relation_path)``.
-       Requires threading ``info`` into the resolver signature (today
-       it only takes ``root``).
+       When ``DjangoOptimizerExtension(strictness="warn")`` or
+       ``strictness="raise"`` is active, each resolver should check
+       ``info.context.dst_optimizer_planned`` (the sentinel
+       ``set[str]`` of planned relation paths, stashed by B5).
+       If the relation path is absent and the access will trigger a
+       lazy load, warn or raise depending on ``strictness``.
+       Requires threading ``info`` into the resolver signature
+       (today it only takes ``root``).
+
+       Pseudo (many_resolver example)::
+
+           def many_resolver(root, info):
+               planned = getattr(info.context,
+                                 "dst_optimizer_planned", None)
+               if planned is not None:
+                   path = build_dotted_path(info.path)
+                   if path not in planned:
+                       if strictness == "raise":
+                           raise OptimizerError(
+                               f"Unplanned N+1: {path}")
+                       logger.warning(
+                           "Potential N+1: %s", path)
+               return list(getattr(root, field_name).all())
     """
     field_name = field.name
 

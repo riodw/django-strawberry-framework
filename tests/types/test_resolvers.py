@@ -137,7 +137,8 @@ def test_o1_make_relation_resolver_many_side():
             return [1, 2, 3]
 
     fake_root = SimpleNamespace(items=FakeManager())
-    assert resolver(fake_root) == [1, 2, 3]
+    fake_info = SimpleNamespace(context=None, path=None)
+    assert resolver(fake_root, fake_info) == [1, 2, 3]
     assert resolver.__name__ == "resolve_items"
 
 
@@ -157,7 +158,8 @@ def test_o1_make_relation_resolver_forward_returns_attribute():
 
     sentinel = object()
     fake_root = SimpleNamespace(category=sentinel)
-    assert resolver(fake_root) is sentinel
+    fake_info = SimpleNamespace(context=None, path=None)
+    assert resolver(fake_root, fake_info) is sentinel
     assert resolver.__name__ == "resolve_category"
 
 
@@ -193,8 +195,9 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
     class RootWithProfile:
         profile = "the-profile"
 
-    assert resolver(RootMissingProfile()) is None
-    assert resolver(RootWithProfile()) == "the-profile"
+    fake_info = SimpleNamespace(context=None, path=None)
+    assert resolver(RootMissingProfile(), fake_info) is None
+    assert resolver(RootWithProfile(), fake_info) == "the-profile"
     assert resolver.__name__ == "resolve_profile"
 
 

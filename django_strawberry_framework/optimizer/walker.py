@@ -51,7 +51,9 @@ from typing import Any
 
 from django.db import models
 
+from ..registry import registry
 from ..utils.strings import snake_case
+from .hints import OptimizerHint
 from .plans import OptimizationPlan
 
 
@@ -93,20 +95,11 @@ def _walk_selections(
             ``"items__"`` when walking ``Category > items > ...``).
             Empty at the root level.
     """
-    # TODO(spec-optimizer_beyond.md B7): read
-    # ``target_type._optimizer_field_map`` (precomputed at DjangoType
-    # build time) instead of rebuilding from ``_meta.get_fields()``
-    # on every walk. Falls back to ``_meta.get_fields()`` when the
-    # map is unavailable (unregistered model).
-    #
-    # Pseudo:
-    #   from ..registry import registry
-    #   type_cls = registry.get(model)
-    #   cached = getattr(type_cls, "_optimizer_field_map", None)
-    #   field_map = (cached if cached is not None
-    #               else {f.name: f
-    #                     for f in model._meta.get_fields()})
-    field_map = {f.name: f for f in model._meta.get_fields()}
+    # B7: read precomputed _optimizer_field_map when available;
+    # fall back to _meta.get_fields() for unregistered models.
+    type_cls = registry.get(model)
+    cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
+    field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
     merged = _merge_aliased_selections(selections)
     for sel in merged:
         if not _should_include(sel):
@@ -120,27 +113,21 @@ def _walk_selections(
             # TODO(spec-optimizer.md O5): when the field is a scalar,
             # append django_name to plan.only_fields.
             continue
-        # TODO(spec-optimizer_beyond.md B4): consult
-        # ``type_cls._optimizer_hints.get(django_name)`` before the
-        # cardinality dispatch below. Values are ``OptimizerHint``
-        # instances (typed wrapper, not raw strings/dicts).
-        #
-        # Pseudo:
-        #   type_cls = registry.get(model)  # shared w/ B7
-        #   hint = getattr(type_cls, "_optimizer_hints",
-        #                  {}).get(django_name)
-        #   if hint is OptimizerHint.SKIP:
-        #       continue
-        #   if hint and hint.prefetch_obj is not None:
-        #       plan.prefetch_related.append(
-        #           hint.prefetch_obj)
-        #       continue
-        #   if hint and hint.force_select:
-        #       plan.select_related.append(full_path)
-        #       continue
-        #   if hint and hint.force_prefetch:
-        #       plan.prefetch_related.append(full_path)
-        #       continue
+        # B4: consult optimizer_hints before cardinality dispatch.
+        hint = getattr(type_cls, "_optimizer_hints", {}).get(django_name) if type_cls is not None else None
+        if hint is not None:
+            if hint is OptimizerHint.SKIP or hint.skip:
+                continue
+            full_path = f"{prefix}{django_name}"
+            if hint.prefetch_obj is not None:
+                plan.prefetch_related.append(hint.prefetch_obj)
+                continue
+            if hint.force_select:
+                plan.select_related.append(full_path)
+                continue
+            if hint.force_prefetch:
+                plan.prefetch_related.append(full_path)
+                continue
         # Relation dispatch by cardinality.
         full_path = f"{prefix}{django_name}"
         if django_field.many_to_many or django_field.one_to_many:

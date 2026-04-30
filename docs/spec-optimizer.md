@@ -145,25 +145,15 @@ The `_is_default_get_queryset` sentinel and `has_custom_get_queryset` introspect
 
 The `model_for_type` reverse-lookup on `TypeRegistry` stays where it is. Both halves use it.
 
-## Visibility status (alpha)
+## Visibility status
 
-Per `docs/spec-public_surface.md`, `DjangoOptimizerExtension` does not currently meet the top-level re-export rules: the per-resolver dispatch is shipped (Slice 4) and Slice O1's relation resolvers are shipped, but the type-tracing limitation through graphql-core's wrappers means the optimizer is not effective end-to-end. Three of the optimizer's tests in `tests/optimizer/test_extension.py` are `@pytest.mark.skip` pending O3 for that reason.
-
-**Decision for 0.0.3.** Drop `DjangoOptimizerExtension` from `django_strawberry_framework/__init__.py`'s `__all__`. Power users and tests still import via:
-
-```
-from django_strawberry_framework.optimizer import DjangoOptimizerExtension
-```
-
-The class returns to the top-level `__all__` when O3 (the root-gated `resolve` hook) lands and the three currently-skipped optimizer tests unskip and pass. That promotion is part of the O3 slice's definition of done — the `__init__.py` change ships in the same commit as the hook flip.
-
-This is the visibility-discipline pattern from `docs/spec-public_surface.md`: a Layer-2 subsystem stays subpackage-only until its core hook is effective. The optimizer's status marker in `docs/README.md` is `partial` until O3 ships, then `shipped`.
+O3 has shipped. `DjangoOptimizerExtension` is in `django_strawberry_framework/__init__.py`'s `__all__` and importable from the top-level namespace. The three previously-skipped optimizer tests (`test_optimizer_applies_select_related_for_forward_fk`, `test_optimizer_applies_prefetch_related_for_reverse_fk`, `test_optimizer_combines_select_related_and_prefetch_related`) are unskipped and passing. The optimizer's status marker in `docs/README.md` reflects "O1–O3 shipped". O4–O6 are the remaining slices in this spec; `spec-optimizer_beyond.md` covers the B1–B8 improvements layered on top.
 
 ## Open questions
 
 ~~Hooking point~~ resolved (see Slice O3 above): Strawberry's public `SchemaExtension` API does not expose `on_executing_start` or any pre-resolver hook carrying `info.selected_fields`. The fallback `resolve` / `aresolve` hooks gated on `info.path.prev is None` are the implementation, modeled directly on strawberry-graphql-django's `optimizer.py`.
 
-Async resolver compatibility: Strawberry calls `resolve` for sync resolvers and `aresolve` for async; the optimizer's planner is sync (querysets are lazy regardless). Keep the planner as a pure sync function and call it from both hooks; the queryset's actual evaluation happens later in whichever async / sync context Strawberry chose.
+~~Async resolver compatibility~~ resolved: Strawberry's `SchemaExtension` has a single `resolve` hook returning `AwaitableOrValue` — there is no separate `aresolve`. O3's implementation uses `inspect.isawaitable` to detect async resolvers and wraps them in an async function that awaits the result before running `_optimize`. The planner stays a pure sync function.
 
 Custom resolver opt-out: should consumers be able to override the auto-generated relation resolver with their own `@strawberry_django.field` decorator? Recommendation: yes, eventually — the auto-generated resolver only fires when no consumer-declared resolver exists for that name. Defer until O1 implementation surfaces a concrete need.
 
@@ -180,3 +170,12 @@ strawberry-graphql-django field result resolver: `https://github.com/strawberry-
 strawberry-graphql-django optimizer extension: `https://strawberry.rocks/docs/django/guide/optimizer` and the source under `strawberry_django/optimizer.py` in the same repository.
 
 The visibility-leak / `Prefetch` downgrade discussion that motivated bundling the optimizer with `spec-django_types.md` originally: issue #572 and PR #583 on `strawberry-graphql/strawberry-django`.
+
+## Implementation checklist
+
+- [x] O1 — Custom resolvers for relation fields
+- [x] O2 — Selection-tree walker
+- [x] O3 — Root-gated resolve hook (top-level optimizer)
+- [ ] O4 — Nested prefetch chains (depth > 1)
+- [ ] O5 — `only()` projection
+- [ ] O6 — `get_queryset` + `Prefetch` downgrade

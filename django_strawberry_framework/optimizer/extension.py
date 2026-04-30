@@ -30,15 +30,103 @@ type-tracing through graphql-core wrappers.
 import inspect
 import logging
 from contextvars import ContextVar
-from typing import Any
+from typing import Any, NamedTuple
 
 from django.db import models
+from graphql.language.ast import (
+    DirectiveNode,
+    FieldNode,
+    FragmentSpreadNode,
+    InlineFragmentNode,
+    VariableNode,
+)
+from graphql.language.printer import print_ast
 from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
 from .walker import plan_optimizations
 
+_MAX_PLAN_CACHE_SIZE = 256
+
+
+def _stash_on_context(context: Any, key: str, value: Any) -> None:
+    """Stash ``value`` on ``context`` under ``key``.
+
+    Strawberry's default context is an object, so ``setattr`` is the
+    primary path. Consumers sometimes pass a plain ``dict`` as context,
+    so we fall back to ``__setitem__`` when ``setattr`` raises.
+    When ``context`` is ``None`` (Strawberry's default when no
+    ``context_value`` is provided), the stash is silently skipped.
+
+    Shared by B5 (plan stashing) and future B3 (sentinel stashing).
+    """
+    if context is None:
+        return
+    try:
+        setattr(context, key, value)
+    except AttributeError:
+        context[key] = value
+
+
 logger = logging.getLogger("django_strawberry_framework")
+
+
+def _collect_directive_var_names(
+    node: Any,
+    fragments: dict[str, Any] | None = None,
+) -> frozenset[str]:
+    """Walk an AST node tree and return variable names used in ``@skip``/``@include``.
+
+    Only variables referenced inside the ``if`` argument of ``@skip`` or
+    ``@include`` directives matter for plan caching. All other variables
+    (e.g., filter arguments) do not affect the selection tree and must be
+    excluded from the cache key to avoid cardinality explosion.
+
+    ``fragments`` is the document's fragment definitions map
+    (``info.fragments``). When provided, ``FragmentSpreadNode``
+    references are followed into their definitions so directives inside
+    named fragments are included in the cache key.
+    """
+    names: set[str] = set()
+    _walk_directives(node, names, fragments or {})
+    return frozenset(names)
+
+
+def _walk_directives(
+    node: Any,
+    names: set[str],
+    fragments: dict[str, Any],
+) -> None:
+    """Recursive helper: descend into selections and collect directive var names."""
+    for directive in getattr(node, "directives", ()) or ():
+        if not isinstance(directive, DirectiveNode):
+            continue
+        d_name = directive.name.value if directive.name else None
+        if d_name not in ("skip", "include"):
+            continue
+        for arg in directive.arguments or ():
+            if isinstance(arg.value, VariableNode):
+                names.add(arg.value.name.value)
+    # Recurse into child selections.
+    selection_set = getattr(node, "selection_set", None)
+    if selection_set is not None:
+        for child in selection_set.selections or ():
+            if isinstance(child, FragmentSpreadNode):
+                frag_name = child.name.value if child.name else None
+                frag_def = fragments.get(frag_name) if frag_name else None
+                if frag_def is not None:
+                    _walk_directives(frag_def, names, fragments)
+            else:
+                _walk_directives(child, names, fragments)
+
+
+class CacheInfo(NamedTuple):
+    """Plan-cache statistics, modeled on ``functools.lru_cache``."""
+
+    hits: int
+    misses: int
+    size: int
+
 
 _optimizer_active: ContextVar[bool] = ContextVar(
     "django_strawberry_framework_optimizer_active",
@@ -83,6 +171,14 @@ def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
 class DjangoOptimizerExtension(SchemaExtension):
     """Strawberry schema extension that optimizes Django querysets per request.
 
+    Pass an **instance** (not the bare class) to benefit from plan
+    caching in async mode::
+
+        schema = strawberry.Schema(
+            query=Query,
+            extensions=[DjangoOptimizerExtension()],  # instance!
+        )
+
     Hooks:
 
     - ``on_execute`` — sets a ``ContextVar`` marking the optimizer as
@@ -92,6 +188,28 @@ class DjangoOptimizerExtension(SchemaExtension):
       the Django model from the graphql-core return type, runs the O2
       walker, applies the plan.
     """
+
+    def __init__(
+        self,
+        strictness: str = "off",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        if strictness not in ("off", "warn", "raise"):
+            msg = f"strictness must be 'off', 'warn', or 'raise', got {strictness!r}"
+            raise ValueError(msg)
+        self.strictness = strictness
+        self._plan_cache: dict[tuple[int, frozenset[tuple[str, Any]], type], Any] = {}
+        self._cache_hits = 0
+        self._cache_misses = 0
+
+    def cache_info(self) -> CacheInfo:
+        """Return plan-cache statistics (hits, misses, current size)."""
+        return CacheInfo(
+            hits=self._cache_hits,
+            misses=self._cache_misses,
+            size=len(self._plan_cache),
+        )
 
     def on_execute(self) -> Any:  # type: ignore[override]
         """Mark the optimizer as active for the duration of execution."""
@@ -164,50 +282,32 @@ class DjangoOptimizerExtension(SchemaExtension):
         selections = convert_selections(info, info.field_nodes)
         # selections[0] is the root field; its .selections are the
         # children the walker needs.
-        # TODO(spec-optimizer_beyond.md B1): check self._plan_cache
-        # before running the walker. Cache key is
-        # ``(document_hash(info), directive_vars(info.variable_values),
-        #   target_model)``; on miss, run the walker and store.
-        #
-        # Pseudo:
-        #   key = (document_hash(info),
-        #          directive_vars(info.variable_values),
-        #          target_model)
-        #   plan = self._plan_cache.get(key)
-        #   if plan is None:
-        #       plan = plan_optimizations(...)
-        #       self._plan_cache[key] = plan
-        plan = plan_optimizations(selections[0].selections, target_model)
-        # TODO(spec-optimizer_beyond.md B5): stash the plan on
-        # ``info.context`` as ``dst_optimizer_plan`` so consumers and
-        # tests can introspect the optimizer's decisions. Use
-        # ``setattr`` first, fall back to ``__setitem__`` for dict
-        # contexts.
-        #
-        # Pseudo:
-        #   try:
-        #       setattr(info.context, "dst_optimizer_plan", plan)
-        #   except AttributeError:
-        #       info.context["dst_optimizer_plan"] = plan
-        #
-        # TODO(spec-optimizer_beyond.md B3): when
-        # ``self.strictness != "off"``, attach a sentinel
-        # ``set[str]`` of planned relation paths to
-        # ``info.context.dst_optimizer_planned`` so O1 relation
-        # resolvers can warn (``"warn"``) or raise (``"raise"``) on
-        # unplanned lazy loads.
-        #
-        # Pseudo:
-        #   if self.strictness != "off":
-        #       paths = {e for e in plan.select_related}
-        #       paths |= {getattr(e, "prefetch_to", e)
-        #                 for e in plan.prefetch_related}
-        #       try:
-        #           setattr(info.context,
-        #                   "dst_optimizer_planned", paths)
-        #       except AttributeError:
-        #           info.context[
-        #               "dst_optimizer_planned"] = paths
+        # B1: plan cache — check before running the walker.
+        cache_key = self._build_cache_key(info, target_model)
+        cached_plan = self._plan_cache.get(cache_key)
+        if cached_plan is not None:
+            self._cache_hits += 1
+            plan = cached_plan
+        else:
+            plan = plan_optimizations(selections[0].selections, target_model)
+            # Evict oldest entries if cache is full.
+            if len(self._plan_cache) >= _MAX_PLAN_CACHE_SIZE:
+                # Remove the oldest quarter to amortize eviction cost.
+                to_remove = _MAX_PLAN_CACHE_SIZE // 4
+                for _ in range(to_remove):
+                    self._plan_cache.pop(next(iter(self._plan_cache)))
+            self._plan_cache[cache_key] = plan
+            self._cache_misses += 1
+        # B5: stash the plan on info.context so consumers and tests
+        # can introspect the optimizer's decisions.
+        _stash_on_context(info.context, "dst_optimizer_plan", plan)
+        # B3: when strictness is active, stash the sentinel so resolvers
+        # can detect unplanned lazy loads.
+        if self.strictness != "off":
+            paths: set[str] = set(plan.select_related)
+            paths |= {getattr(e, "prefetch_to", e) for e in plan.prefetch_related}
+            _stash_on_context(info.context, "dst_optimizer_planned", paths)
+            _stash_on_context(info.context, "dst_optimizer_strictness", self.strictness)
         if plan.is_empty:
             return result
         # TODO(spec-optimizer_beyond.md B8): diff the plan against the
@@ -252,6 +352,40 @@ class DjangoOptimizerExtension(SchemaExtension):
     #                       f"{model.__name__}.{f.name} "
     #                       "has no registered target type")
     #       return warnings
+
+    @staticmethod
+    def _build_cache_key(
+        info: Any,
+        target_model: type[models.Model],
+    ) -> tuple[int, frozenset[tuple[str, Any]], type]:
+        """Build the plan-cache key from resolver info and target model.
+
+        Key components:
+        1. Hash of the operation source text (stable across requests
+           for the same query string).
+        2. Frozenset of ``(var_name, var_value)`` for only the
+           variables referenced in ``@skip``/``@include`` directives.
+        3. The target Django model class (different root fields in the
+           same operation can return different models).
+        """
+        # Document hash: use the source body when available (cheap),
+        # fall back to print_ast (expensive but correct).
+        operation = info.operation
+        loc = getattr(operation, "loc", None)
+        if loc is not None and getattr(loc, "source", None) is not None:
+            doc_hash = hash(loc.source.body)
+        else:
+            doc_hash = hash(print_ast(operation))
+        # Directive-variable extraction.
+        directive_var_names = _collect_directive_var_names(
+            operation,
+            fragments=info.fragments,
+        )
+        variable_values = info.variable_values or {}
+        relevant_vars = frozenset(
+            (k, variable_values[k]) for k in directive_var_names if k in variable_values
+        )
+        return (doc_hash, relevant_vars, target_model)
 
     def plan_relation(
         self,

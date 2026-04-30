@@ -7,10 +7,11 @@ Covers:
 - Passthrough cases: non-``QuerySet`` resolver returns; resolvers whose
   return type is not registered in the registry; resolvers that select
   no relations (just scalars).
-- Direct unit coverage of the ``_unwrap_return_type``, ``_plan``, and
-  ``_snake_case`` helpers so the branches Strawberry doesn't naturally
-  exercise (alternate wrapper shapes, empty selection sets, unknown
-  field names) are still covered.
+- Direct unit coverage of the ``_plan`` helper so the branches Strawberry
+  doesn't naturally exercise (empty selection sets, unknown field names)
+  are still covered. ``snake_case`` and ``unwrap_return_type`` moved to
+  ``django_strawberry_framework.utils``; their unit tests live in
+  ``tests/utils/`` accordingly.
 
 Slice 5 (``only()`` projection) and Slice 6 (``plan_relation`` downgrade)
 are placeholder-skipped at the bottom of the file.
@@ -44,10 +45,14 @@ def _isolate_registry():
 
 @pytest.mark.skip(
     reason=(
-        "Pending spec-optimizer.md Slice O3. Slice 4's per-resolver hook ships "
-        "select_related correctly but the test path renders reverse rels in sibling "
-        "setup, which trips Strawberry's iterability error. Will re-enable once O1 "
-        "adds custom relation resolvers and O3 hooks the optimizer at on_executing_start."
+        "Pending spec-optimizer.md Slice O3. O1 fixed reverse-rel iterability, but "
+        "the Slice-4 ``_unwrap_return_type`` only peels one wrapper layer off "
+        "``info.return_type`` and never reaches the underlying Python class — at "
+        "the per-resolver hook, ``info.return_type`` is graphql-core's "
+        "``GraphQLNonNull(GraphQLList(GraphQLNonNull(GraphQLObjectType 'ItemType')))`` "
+        "shape, so ``registry.model_for_type`` always returns ``None`` and "
+        "``select_related`` is never applied. O3's on_executing_start hook gets "
+        "the Python type directly and side-steps this entirely."
     ),
 )
 @pytest.mark.django_db
@@ -71,7 +76,7 @@ def test_optimizer_applies_select_related_for_forward_fk(django_assert_num_queri
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension])
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     # 1 SQL query: SELECT items + JOIN categories via select_related.
     with django_assert_num_queries(1):
@@ -82,9 +87,11 @@ def test_optimizer_applies_select_related_for_forward_fk(django_assert_num_queri
 
 @pytest.mark.skip(
     reason=(
-        "Pending spec-optimizer.md Slice O1 + O3. Strawberry's default resolver "
-        "chokes on RelatedManager (Expected Iterable). O1 adds custom relation "
-        "resolvers; O3 reroutes the optimizer to on_executing_start."
+        "Pending spec-optimizer.md Slice O3. O1 fixed the ``RelatedManager`` "
+        "iterability error, but the Slice-4 ``_unwrap_return_type`` cannot reach "
+        "the underlying Python class through graphql-core's wrappers, so "
+        "``prefetch_related`` is never applied at the per-resolver hook. Same "
+        "type-tracing limitation as the forward-FK case above."
     ),
 )
 @pytest.mark.django_db
@@ -124,9 +131,11 @@ def test_optimizer_applies_prefetch_related_for_reverse_fk(django_assert_num_que
 
 @pytest.mark.skip(
     reason=(
-        "Pending spec-optimizer.md Slice O1 + O3. Same iterability issue on the "
-        "reverse-rel branch; will re-enable once custom resolvers + top-level "
-        "selection-tree walker land."
+        "Pending spec-optimizer.md Slice O3 (and O4 for nested chain emission). "
+        "Two blockers: the type-tracing limitation in ``_unwrap_return_type`` "
+        "(see the depth-1 forward-FK and reverse-FK skips above) and the "
+        "depth-2 chain itself — the per-resolver Slice-4 hook can only see one "
+        "level of selection at a time. O3's top-level walker fixes both."
     ),
 )
 @pytest.mark.django_db
@@ -255,45 +264,6 @@ def test_optimizer_passes_through_unregistered_return_type(caplog):
 # ---------------------------------------------------------------------------
 
 
-def test_unwrap_return_type_handles_typing_list():
-    """``list[T]`` annotation unwraps to ``T``."""
-    ext = DjangoOptimizerExtension()
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    assert ext._unwrap_return_type(list[CategoryType]) is CategoryType
-
-
-def test_unwrap_return_type_handles_strawberry_of_type():
-    """A Strawberry-style wrapper exposing ``of_type`` unwraps to the inner type."""
-    ext = DjangoOptimizerExtension()
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class FakeStrawberryList:
-        of_type = CategoryType
-
-    assert ext._unwrap_return_type(FakeStrawberryList()) is CategoryType
-
-
-def test_unwrap_return_type_returns_direct_class_when_unwrapped():
-    """A bare Strawberry type with no wrapper passes through."""
-    ext = DjangoOptimizerExtension()
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    assert ext._unwrap_return_type(CategoryType) is CategoryType
-
-
 def test_plan_returns_empty_when_no_selected_fields():
     """Defensive guard: empty ``selected_fields`` short-circuits to empty plans."""
     ext = DjangoOptimizerExtension()
@@ -321,11 +291,95 @@ def test_plan_skips_selections_not_in_field_map():
     assert ext._plan(info, Category) == ([], [])
 
 
-def test_snake_case_round_trips_camel_case():
-    fn = DjangoOptimizerExtension._snake_case
-    assert fn("name") == "name"
-    assert fn("isPrivate") == "is_private"
-    assert fn("createdDate") == "created_date"
+def test_plan_dispatches_relations_by_cardinality():
+    """``_plan`` routes single-side rels to selects, many-side rels to prefetches.
+
+    Drives ``_plan`` directly with a synthetic ``info`` whose selections
+    name a forward FK (``category`` on ``Item`` -> ``select_related``)
+    and a reverse FK (``entries`` on ``Item`` -> ``prefetch_related``).
+    Bypasses Strawberry execution because the per-resolver hook can't
+    trace the Python type through graphql-core's wrappers (skipped tests
+    above carry the spec-O3 explanation); this synthetic call exercises
+    the cardinality dispatch the optimizer relies on regardless.
+    """
+    ext = DjangoOptimizerExtension()
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category", "entries")
+
+    info = SimpleNamespace(
+        selected_fields=[
+            SimpleNamespace(
+                selections=[
+                    SimpleNamespace(name="category", selections=[]),
+                    SimpleNamespace(name="entries", selections=[]),
+                ],
+            ),
+        ],
+    )
+    selects, prefetches = ext._plan(info, Item)
+    assert selects == ["category"]
+    assert prefetches == ["entries"]
+
+
+def test_optimize_applies_select_related_and_prefetch_related():
+    """``_optimize`` applies ``select_related`` and ``prefetch_related`` when ``_plan`` returns non-empty.
+
+    Drives ``_optimize`` directly with a synthetic ``info`` and a lazy
+    queryset. Verifies the optimizer mutated the queryset's
+    ``query.select_related`` map and ``_prefetch_related_lookups`` tuple
+    rather than evaluating the queryset, so no DB access is needed.
+    """
+    ext = DjangoOptimizerExtension()
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category", "entries")
+
+    info = SimpleNamespace(
+        return_type=list[ItemType],
+        selected_fields=[
+            SimpleNamespace(
+                selections=[
+                    SimpleNamespace(name="category", selections=[]),
+                    SimpleNamespace(name="entries", selections=[]),
+                ],
+            ),
+        ],
+    )
+
+    optimized = ext._optimize(Item.objects.all(), info)
+
+    # ``select_related`` populates ``query.select_related`` as a dict
+    # keyed by relation name (with nested chains as nested dicts).
+    assert "category" in optimized.query.select_related
+    # ``prefetch_related`` accumulates lookups into the queryset's
+    # ``_prefetch_related_lookups`` tuple as raw strings or ``Prefetch``
+    # objects; we passed a string so it's there as-is.
+    assert "entries" in optimized._prefetch_related_lookups
 
 
 # ---------------------------------------------------------------------------

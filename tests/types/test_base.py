@@ -28,10 +28,11 @@ import strawberry
 from django.db import models
 from fakeshop.products.models import Category, Entry, Item, Property
 
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, converters
-from django_strawberry_framework.converters import convert_relation, convert_scalar
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types import converters
+from django_strawberry_framework.types.converters import convert_relation, convert_scalar
 
 CATEGORY_SCALAR_FIELDS = (
     "id",

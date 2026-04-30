@@ -42,6 +42,16 @@ Add a `DjangoType` base class and a `DjangoOptimizerExtension` so that consumers
 
 This spec does not implement `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `DjangoConnectionField`, `apply_cascade_permissions`, per-field permission hooks, mutations, polymorphic interfaces, or the full relay connection story. Those follow later. The first spec only creates the foundation that later specs can attach to.
 
+## Scope creep into the N+1 problem
+
+This document is `spec-django_types.md`, so its strict scope is the type-generation foundation: the `DjangoType` base class, Meta options, scalar and relation field conversion, the registry, the `get_queryset` hook, choice-field enum generation, and type naming. Anything in this spec that addresses the runtime resolver-optimization problem is creep into N+1 territory that, in a stricter project layout, would live in its own document such as `spec-optimizer.md`.
+
+The places this spec reaches into N+1 are concrete. The Goal sentence promises "relation resolution optimized by default" alongside type generation. The Proposed public surface lists `DjangoOptimizerExtension` as a top-level package name. The `## N+1 strategy` section is entirely optimizer territory, including the `select_related` / `prefetch_related` / `only()` rules and the `get_queryset` + `Prefetch` downgrade rule borrowed from strawberry-graphql-django PR #583. The `## get_queryset` section frames the hook as something "the optimizer must respect," which leaks the optimizer's existence into what would otherwise be a pure type-system primitive, and adds the `has_custom_get_queryset()` introspection helper that exists solely so the optimizer can detect overrides. Slices 4, 5, and 6 of the suggested implementation order are entirely optimizer work (extension scaffolding, `only()`, the `Prefetch` downgrade). The Testing strategy lists "optimizer query counts on relation traversal" and the visibility-leak scenario for the downgrade rule. One of the open questions and two of the references are about the optimizer rather than type generation.
+
+Reason for the creep, and decision to keep it: an N+1 fix cannot be specced in isolation because the problem only exists once a type system resolves relations across the ORM graph, and the load-bearing `get_queryset` + `Prefetch` rule in particular is what makes per-type visibility filtering actually work across joins. Splitting the optimizer into its own follow-up spec would mean shipping a foundation that is broken-by-default until that follow-up lands. We chose to bundle one combined foundation here rather than two specs that depend on each other in lockstep.
+
+If this document is ever split, the optimizer is the natural cut line. The seam is clean: `DjangoType` knows about `get_queryset` and exposes `has_custom_get_queryset()`; the optimizer is the only consumer of that introspection. Lifting Slices 4 through 6, the `## N+1 strategy` section, the `DjangoOptimizerExtension` public name, and the optimizer-shaped sentences in `## Goal` and `## get_queryset` into a `spec-optimizer.md` would leave a coherent type-generation-only document behind.
+
 ## Proposed public surface
 
 This spec adds three public names at the package root:
@@ -78,6 +88,23 @@ optional: `Meta.interfaces`, for example `(relay.Node,)`
 optional: `Meta.name` to override the GraphQL type name
 
 optional: `Meta.description`
+
+Subclasses without their own `Meta` are treated as abstract intermediates and pass through `__init_subclass__` untouched. This lets consumers layer shared scoping logic (tenant filtering, soft-delete, audit) into a base class that downstream concrete types inherit:
+
+```python
+class TenantScopedType(DjangoType):
+    """Abstract intermediate — no Meta, just a shared get_queryset."""
+
+    @classmethod
+    def get_queryset(cls, queryset, info, **kwargs):
+        return queryset.filter(tenant=info.context.tenant)
+
+
+class CategoryType(TenantScopedType):
+    class Meta:
+        model = Category
+        fields = "__all__"
+```
 
 The metaclass must reject unsupported future-surface keys for now. If a consumer declares `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, or `search_fields` before those specs ship, raise `ConfigurationError` rather than silently accepting noop config.
 
@@ -120,6 +147,10 @@ class CategoryType(DjangoType):
         search_fields = ("name",)          # ConfigurationError
 ```
 
+Field-selection defaults: when neither `fields` nor `exclude` is declared on `Meta`, the type behaves as if `fields = "__all__"` were set. This matches DRF's permissive default and avoids forcing every consumer to spell out `fields = "__all__"` for the common case. The deprecation warning graphene-django emits in this scenario is intentionally not reproduced here.
+
+`Meta.interfaces` parking: the key is accepted by validation (it is in `ALLOWED_META_KEYS`) but not yet wired through `__init_subclass__`. Until a future slice injects declared interfaces into `cls.__bases__` before `strawberry.type` finalization, consumers wanting a Strawberry interface (e.g., `relay.Node`) should subclass it directly: `class CategoryType(DjangoType, relay.Node):`. The `Meta.interfaces` tuple still validates without raising; it just has no effect.
+
 ## Scalar field conversion
 
 The converter layer should mirror graphene-django's coverage but emit Strawberry/Python-native types instead of graphene field instances.
@@ -127,6 +158,8 @@ The converter layer should mirror graphene-django's coverage but emit Strawberry
 `CharField`, `TextField`, `SlugField`, `EmailField`, `URLField` -> `str`
 
 `IntegerField`, `SmallIntegerField`, `PositiveIntegerField` -> `int`
+
+`AutoField`, `BigAutoField`, `SmallAutoField` -> `int` (Django primary-key column types; relay `GlobalID` remapping is the open question below)
 
 `BigIntegerField` -> custom `BigInt` scalar
 
@@ -156,7 +189,9 @@ The converter layer should mirror graphene-django's coverage but emit Strawberry
 
 `null=True` maps to `T | None`.
 
-Choice fields produce a generated strawberry `Enum` named `<TypeName><FieldName>Enum`. Those enums are cached in the registry keyed by `(model, field_name)` so multiple `DjangoType`s reading the same model field reuse the same enum.
+The `BigInt` scalar serializes to a JSON string (not number) so values past `2**53` survive round-tripping through clients that lose precision on large numbers; inbound values parse via `int()`.
+
+Choice fields are routed to a generated Strawberry `Enum` rather than to their raw scalar type. The naming rule, caching strategy, member-name sanitization, `TextChoices` / `IntegerChoices` support, `null=True` interaction, and test surface are pinned in "Choice field enum generation" below.
 
 ```python
 # django_strawberry_framework/converters.py — illustrative shape
@@ -191,7 +226,13 @@ SCALAR_MAP: dict[type[models.Field], type] = {
 
 
 def convert_scalar(field: models.Field, type_name: str) -> Any:
-    py_type: Any = SCALAR_MAP.get(type(field), Any)
+    py_type = SCALAR_MAP.get(type(field))
+    if py_type is None:
+        raise ConfigurationError(
+            f"Unsupported Django field type {type(field).__name__!r} on "
+            f"{field.model.__name__}.{field.name}. Add an entry to "
+            "SCALAR_MAP or exclude this field via Meta.exclude.",
+        )
     if field.choices:
         py_type = convert_choices_to_enum(field, type_name)
     if field.null:
@@ -201,13 +242,100 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
 
 `type_name` is the consumer-facing `DjangoType` class name. It threads through from `__init_subclass__` so `convert_choices_to_enum` can build the spec-mandated `<TypeName><FieldName>Enum` name. `convert_choices_to_enum(field, type_name) -> type[Enum]` carries the same parameter; enum reuse is keyed on `(field.model, field.name)` in the registry, independent of `type_name`, so two `DjangoType`s pointing at the same choice column share the same enum even if their class names differ.
 
+Deviation from earlier draft: the illustrative code originally fell back to `typing.Any` when `type(field)` was missing from `SCALAR_MAP`. Slice 2 instead raises `ConfigurationError` naming the offending field. The reasoning is that a silent `Any` fallback masks unsupported columns at schema-build time and surfaces them as opaque type errors much later (Strawberry has no native `Any` scalar mapping); `ConfigurationError` fails fast with the field path in the message and a one-line fix (extend `SCALAR_MAP` or add the field to `Meta.exclude`).
+
+Slice 2 implementation subset: the converter above is the eventual end-state. Slice 2 implements the `SCALAR_MAP` lookup, the unsupported-type raise, and the `field.null` widening. The `if field.choices:` branch is deferred to Slice 7 (choice-field enum generation) so coverage stays at 100% without an unreached path. `type_name` is therefore unused in Slice 2 and is annotated as such; it is preserved in the signature so the Slice 7 change is purely additive.
+
+Deferred scalar conversions: `BigIntegerField` -> custom `BigInt` scalar, `ArrayField` -> `list[inner_type]`, and `JSONField` / `HStoreField` -> Strawberry JSON scalar are all spec'd above but not implemented in Slice 2 because the fakeshop example models do not exercise them. They can be added without further design work as soon as a fakeshop model (or a real consumer) declares one. The TODO comments for each live in `django_strawberry_framework/converters.py` so they surface in code search.
+
+## Choice field enum generation
+
+Slice 7 routes Django choice columns through a generated Strawberry `Enum` instead of mapping them to their raw scalar type. This completes the scalar-conversion surface — it is the only branch `convert_scalar` deferred in Slice 2. The change consists of adding the `if field.choices:` branch to `convert_scalar` and implementing `convert_choices_to_enum`. With Slices 4 through 6 moved to `spec-optimizer.md`, Slice 7 is unblocked as soon as Slice 3 has shipped, and is the only remaining slice in this spec.
+
+### Naming rule
+
+The generated enum's GraphQL name is `f"{type_name}{PascalCase(field.name)}Enum"`:
+
+- `type_name` is the consumer-facing `DjangoType` class name, threaded down from `__init_subclass__` into `convert_scalar`.
+- `PascalCase(field.name)` converts a snake_case Django field name to PascalCase: `is_active` -> `IsActive`, `status` -> `Status`, `payment_method` -> `PaymentMethod`.
+
+The first `DjangoType` to read a given `(model, field_name)` wins the name. Sibling `DjangoType`s pointing at the same column reuse the cached enum regardless of their own `type_name` — see "Caching and reuse" below.
+
+### Algorithm
+
+`convert_choices_to_enum(field, type_name) -> type[Enum]`:
+
+1. Reject Django's grouped-choices form (a sequence of `(group_label, [...inner_pairs])` tuples) by raising `ConfigurationError`. The choices source must be a flat sequence of `(value, label)` pairs.
+2. Check `registry.get_enum(field.model, field.name)`; if a cached enum exists, return it unchanged.
+3. Compute `enum_name = f"{type_name}{PascalCase(field.name)}Enum"`.
+4. Build the member mapping: for each `(value, label)` pair in `field.choices`, derive a member name by sanitizing the value — coerce non-string values to `str()` first (so `IntegerField` choices produce identifiers), replace non-identifier characters with `_`, then prefix with `MEMBER_` if the sanitized result starts with a digit.
+5. Build `enum_cls = Enum(enum_name, members)` and decorate it with `strawberry.enum` so Strawberry recognizes it at schema build.
+6. Cache via `registry.register_enum(field.model, field.name, enum_cls)`.
+7. Return the enum class.
+
+Sanitization runs on the value, not the label. graphene-django and strawberry-graphql-django sanitize labels (`"Active"` -> `ACTIVE`) because labels are human-readable phrases that round-trip cleanly to identifiers; values can be opaque (`"M"`, `"F"`, `1`, `2`) and produce uglier members (`M`, `F`, `MEMBER_1`, `MEMBER_2`). Slice 7 takes the value-based path because labels are display strings consumers may translate or restyle, and coupling the GraphQL schema to them is fragile — the `MEMBER_<digit>` prefix in step 4 is the explicit cost of this trade-off.
+
+### Value semantics
+
+The enum's value (from Python's `Enum` perspective) is the Django choice's first tuple element — the database value, unchanged. Round-tripping a choice through GraphQL reads the enum at the resolver boundary and returns the underlying database value to Django, so existing query filters (`Model.objects.filter(status="active")`) continue to work without translation.
+
+### Django `TextChoices` / `IntegerChoices` support
+
+Django's `models.TextChoices` and `models.IntegerChoices` (introduced in Django 3.0) expose a class-based choices API that ultimately resolves to the same flat `(value, label)` sequence on `field.choices`. Slice 7 supports both forms transparently — the iteration over `field.choices` treats them identically. The grouped-choices rejection only fires when a consumer manually constructs nested-tuple choices.
+
+### Caching and reuse
+
+The registry caches enums on `(field.model, field.name)`, deliberately independent of `type_name`. Two `DjangoType`s reading the same column share the same enum object:
+
+```python
+class ItemTypeA(DjangoType):
+    class Meta:
+        model = Item
+        fields = ("id", "status")
+
+
+class ItemTypeB(DjangoType):
+    class Meta:
+        model = Item
+        fields = ("id", "name", "status")
+
+
+# Both types share the same generated enum:
+assert ItemTypeA.__annotations__["status"] is ItemTypeB.__annotations__["status"]
+```
+
+The first type defined wins the enum's name (`ItemTypeAStatusEnum`), even when later types share it. The enum name is for schema introspection only; the runtime behaviour is identical regardless of which type registered it first.
+
+This is intentional, but it leaves the published schema name dependent on Python import order — the trap class-based naming was meant to avoid. Consumers who want a stable, predictable name should declare the `DjangoType` they want to win first (or, eventually, override via a `Meta.choice_enum_names` mapping once such a key exists).
+
+### `null=True` interaction
+
+A nullable choice field widens to `EnumType | None`, matching the general scalar-nullability rule. The order inside `convert_scalar` is: scalar lookup -> choices branch (replaces `py_type` with the enum) -> `null` widening. So `CharField(choices=[...], null=True)` produces `<GeneratedEnum> | None`.
+
+### Test surface
+
+`tests/test_choice_enums.py` ships a session-scoped `pytest` fixture that defines an in-test `ChoiceFixture` Django model with a `TextField(choices=[...])` column, registers it via `django.apps.apps.register_model` under a synthetic `app_label`, and tears down on completion. Fakeshop has no choice columns, so the fixture is the only path that exercises this slice.
+
+Required tests:
+
+- `test_choice_field_generates_strawberry_enum` — a `DjangoType` over the fixture model produces an enum-typed annotation on the choice attribute, named per the rule above.
+- `test_choice_enum_cached_in_registry_keyed_by_model_field` — `registry.get_enum(ChoiceFixture, "status")` returns the generated enum after the first build and is identical across subsequent retrievals.
+- `test_two_djangotypes_reading_same_choice_field_share_one_enum` — defining two `DjangoType`s over `ChoiceFixture` yields the same enum object on both annotations.
+- `test_grouped_choices_form_rejected` — declaring grouped choices on the fixture model and constructing a `DjangoType` over it raises `ConfigurationError`.
+- `test_choice_member_name_sanitization` — choice values like `"first-name"` and `"123abc"` produce identifier-safe member names.
+- `test_choice_field_with_null_widens_to_enum_or_none` — a nullable choice column produces exactly `EnumType | None`. Pin the union shape (not `EnumType | None | None` or other widened variants) so a future ordering bug in `convert_scalar` surfaces immediately.
+
 ## Relation field conversion
 
-Forward FK and OneToOne map to the target `DjangoType`, nullable iff the Django field is nullable.
+Cardinality table:
 
-Reverse FK and reverse OneToOne map to the target `DjangoType` or `list[target_type]` depending on cardinality.
+- Forward FK (`many_to_one`) -> target type, nullable iff `field.null`.
+- Forward OneToOne (`one_to_one`) -> target type, nullable iff `field.null`.
+- Reverse FK (`one_to_many` on the related descriptor) -> `list[target_type]` (always non-nullable; empty list when no rows exist).
+- Reverse OneToOne (`one_to_one` on the related descriptor) -> target type or `None` (always conceptually nullable).
+- Forward / reverse M2M (`many_to_many`) -> `list[target_type]`.
 
-Forward and reverse M2M map to `list[target_type]`.
+Reverse-side `null` is not meaningful at the schema level; the cardinality flag is the authority.
 
 If the target model's `DjangoType` has not yet been registered, use Strawberry forward references so definition order does not matter.
 
@@ -232,9 +360,19 @@ def convert_relation(field: models.Field) -> Any:
     return target_ref
 ```
 
+Slice 2 -> Slice 3 hand-off: `_build_annotations` in Slice 2 filters relations out entirely (`[f for f in model._meta.get_fields() if not f.is_relation]`) so a model with FKs or reverse rels can be partially mapped (scalars only) without the unimplemented `convert_relation` raising. Slice 3 must flip that filter: every field goes through dispatch, with relations routed to `convert_relation` and scalars to `convert_scalar`. Once that change lands, `Meta.fields = "__all__"` will include relations on Category (`items`, `properties`), Item (`category`, `entries`), Property (`category`), and Entry (`property`, `item`). The `tests/test_django_types.py` placeholders for `test_relation_fk_to_target_djangotype`, `test_relation_reverse_fk_returns_list`, `test_relation_m2m_returns_list`, and `test_forward_reference_resolves_when_target_defined_later` already mark the test surface Slice 3 must fill in.
+
+Slice 3 status (post-implementation): Slice 3 shipped eager-only relation resolution. `convert_relation` looks up the target via `registry.get(field.related_model)` and raises `ConfigurationError` (with a message naming the unregistered model) if the target is not yet declared. `registry.lazy_ref` therefore stays as `NotImplementedError`; the spec's promise of definition-order independence is deferred to a future slice. The practical implication: consumers must declare related `DjangoType`s in dependency order — declare a target type before any type that references it via FK / OneToOne / M2M, or before any type whose model surfaces it via a reverse rel. The fakeshop dependency order is `CategoryType -> (PropertyType, ItemType) -> EntryType`. M2M handling is implemented in `convert_relation` (the `field.many_to_many` branch shares the same line as `field.one_to_many`, so line coverage holds), but no fakeshop model declares an M2M field, so the dedicated test placeholder stays skipped.
+
 ## Registry
 
 A global registry maps model -> `DjangoType` and `(model, field_name)` -> generated enum. It exists so relation fields and enum conversion can look up already-built types. Registering the same model twice should raise `ConfigurationError` by default. The registry also needs a test-only `clear()` helper for isolation.
+
+The registry also exposes `lazy_ref(model)`, used by relation conversion when the target type may not yet be registered. Slice 3 picks one of:
+
+- `Annotated["TargetType", strawberry.lazy("module.path")]` for cross-module references, resolved at schema-build time via a named import.
+- A string annotation (`"TargetType"`) that `_build_annotations` rewrites once all sibling types are registered. Simplest for same-module references.
+- A registry-tracked "pending relation" that `DjangoType.__init_subclass__` post-processes after every subclass has been seen.
 
 ```python
 # django_strawberry_framework/registry.py — illustrative shape
@@ -310,11 +448,13 @@ class ItemType(DjangoType):
 
 `DjangoType` also exposes `has_custom_get_queryset() -> bool` (introspection helper) so the optimizer can detect when a type overrides the default identity implementation. The default implementation returns the queryset unchanged; any subclass override flips this flag to `True`.
 
+`spec-optimizer.md` O6 implementation (sentinel flip): the introspection is wired in two places. First, `DjangoType` carries a class-var `_is_default_get_queryset: ClassVar[bool] = True` (already in place since Slice 1's scaffolding). Second, O6 adds a single line to `__init_subclass__` after the strawberry.type call: `if "get_queryset" in cls.__dict__: cls._is_default_get_queryset = False`. This shadows the base class's `True` with a subclass-local `False` whenever the consumer declares their own `get_queryset`. `has_custom_get_queryset` then becomes `return not cls._is_default_get_queryset` — a constant-time attribute read, called once per relation per resolver call by the optimizer.
+
 ## N+1 strategy
 
 The first spec should not treat N+1 as a later enhancement; it is part of the foundation.
 
-The package should ship a Strawberry schema extension named `DjangoOptimizerExtension`. Consumers opt in once at schema construction time. The extension inspects the selected field tree and optimizes the root queryset before evaluation.
+The package should ship a Strawberry schema extension named `DjangoOptimizerExtension`. Consumers opt in once at schema construction time. The extension wraps each resolver via Strawberry's `resolve` / `aresolve` hooks: when a resolver returns a `QuerySet`, the extension reads `info.selected_fields` to determine which related fields and scalars are selected, looks up each return type in the registry, and lifts the queryset into an optimized one before passing it back to Strawberry's evaluation machinery. Resolvers that return non-`QuerySet` values (mutations, scalars, computed fields, plain lists) pass through unchanged.
 
 Rules:
 
@@ -333,6 +473,12 @@ So the rule here is:
 if a related field would normally use `select_related`, but the target `DjangoType` overrides `get_queryset`, downgrade that relation to `Prefetch` with the target type's filtered queryset.
 
 That gives us the best part of strawberry-graphql-django's optimizer without adopting its decorator-first public API.
+
+Resolver-to-type tracing (Slice 4): the extension reads each resolver's GraphQL return type via `info.return_type` (Strawberry's per-call return-type metadata). The return type is the consumer's `DjangoType` subclass directly, so the extension pulls `__strawberry_definition__` off it, finds the matching Django model by reverse-walking the registry's `_types` dict, and uses that model to walk `info.selected_fields[0].selections` against `model._meta.get_fields()`. Resolvers that return non-`QuerySet` values (mutations, scalars, computed fields, plain lists) skip the optimizer entirely — the `isinstance(result, QuerySet)` check in the resolve hook guards the path.
+
+`only()` and FK columns (`spec-optimizer.md` O5): when `only()` is applied alongside `select_related`, it must include both the local FK column (e.g. `category_id`) and the joined columns (e.g. `category__id`, `category__name`) for every relation under traversal. Without those, Django marks the joined attributes as deferred and triggers an extra query the moment the resolver accesses them — a silent N+1 that the optimizer was supposed to prevent. strawberry-graphql-django's optimizer documentation calls this out explicitly; we copy the rule. The O5 implementation walks the cardinality plan emitted by the O2 walker and unions the FK columns into the only() set before applying.
+
+`plan_relation` integration (`spec-optimizer.md` O6): the simple Slice 4 cardinality rule (`forward FK / OneToOne -> select_related`) is replaced by a call to `plan_relation(field, target_type, info)`, which returns either `("select", field_name)` for a plain join or `("prefetch", Prefetch(...))` for the visibility-aware downgrade. The select/prefetch loop iterates the planning results rather than the raw cardinality flags. Every plan_relation call also runs `target_type.get_queryset(target_qs, info)` to apply the consumer's visibility filter to the prefetched queryset, so visibility filtering applies regardless of which plan branch fires.
 
 Schema-level opt-in:
 
@@ -467,19 +613,19 @@ def test_optimizer_downgrades_to_prefetch_when_target_has_custom_get_queryset(
 
 ## Suggested implementation slices
 
-Slice 1: scaffolding — `exceptions.py`, `registry.py`, `py.typed`, package re-exports, package logger.
+Slice 1: scaffolding — `exceptions.py`, `registry.py`, `py.typed`, package re-exports, package logger. Status: shipped.
 
-Slice 2: `DjangoType` with scalar field conversion only, enough to map `Category`.
+Slice 2: `DjangoType` with scalar field conversion only, enough to map `Category`. Status: shipped (v0.0.2 prerelease).
 
-Slice 3: relation conversion for FK / reverse / M2M, still without optimization.
+Slice 3: relation conversion for FK / reverse / M2M, still without optimization. Status: shipped (eager-only resolution; `lazy_ref` deferred — see Post-slice-7 future work).
 
-Slice 4: `DjangoOptimizerExtension` with `select_related` / `prefetch_related`.
+Slice 4: `DjangoOptimizerExtension` with `select_related` / `prefetch_related`. Status: shipped as a partial / depth-1-only implementation, then **superseded by `spec-optimizer.md`**. Running the slice's tests surfaced two architectural issues (Strawberry's default resolver chokes on `RelatedManager` for reverse rels; per-resolver hooks cannot emit nested `prefetch_related("items__entries")` chains) that warranted a dedicated optimizer spec. The shipped code (`DjangoOptimizerExtension`, `_optimize`, `_plan`, `_unwrap_return_type`, `_snake_case`, `registry.model_for_type`) stays in tree as the starting point. The rebuild splits across `spec-optimizer.md` slices: O1 lands custom relation-field resolvers in `DjangoType.__init_subclass__` (a separate seam in `types.py`, not a refactor of optimizer code); O2 promotes `_plan` to a pure walker module; O3 swaps the `resolve` / `aresolve` hooks for `on_executing_start`. O4-O6 then layer nested prefetch, `only()`, and the `Prefetch` downgrade onto the rebuilt architecture.
 
-Slice 5: `only()` optimization.
+Slice 5: `only()` optimization. **Moved to `spec-optimizer.md` Slice O5** — the `only()` column list and the FK-column inclusion rule both depend on the selection-tree walker introduced in O2, so they cannot land before that walker exists.
 
-Slice 6: the `get_queryset` + downgrade-to-`Prefetch` rule.
+Slice 6: the `get_queryset` + downgrade-to-`Prefetch` rule. **Moved to `spec-optimizer.md` Slice O6.** The `_is_default_get_queryset` sentinel on `DjangoType` and the `has_custom_get_queryset()` introspection helper still live in this spec (they are type-system surface). The `__init_subclass__` flip that toggles the sentinel and the `plan_relation`-style downgrade itself move to the optimizer spec because the optimizer is the only consumer.
 
-Slice 7: choice-field enum generation and enum caching.
+Slice 7: choice-field enum generation and enum caching. Adds the `if field.choices:` branch to `convert_scalar` (Slice 2 deferred it) plus the `convert_choices_to_enum` body. Status: shipped. With Slices 4 through 6 moved to `spec-optimizer.md`, Slice 7 was the only remaining slice in this spec and landed once Slice 3 had shipped. See the "Choice field enum generation" section above for the full design — naming rule, member-name sanitization, `TextChoices` / `IntegerChoices` support, caching semantics, `null=True` interaction, and test surface.
 
 Each slice should land with tests in the same change so package coverage remains at 100%. Stub bodies between slices use `raise NotImplementedError(...)`; the existing `pyproject.toml` coverage config already lists that line in `exclude_lines`, so a partial scaffold does not break the gate as long as no test reaches the stubbed code path. When a later slice replaces a stub, it must also add the test that covers the new branch.
 
@@ -501,7 +647,7 @@ The seven slices add the following package modules and tests. File paths are rel
 
 - `tests/test_django_types.py` — Meta validation (required `model`, `fields`/`exclude` mutual exclusivity, deferred-key rejection one assertion per key), scalar mapping against `Category`/`Item`/`Property`/`Entry`, relation generation (FK, reverse FK, M2M), registry behaviour (collision raises, `clear()` works), and the default `get_queryset` identity behaviour.
 - `tests/test_optimizer.py` — Query-count assertions via `django_assert_num_queries` for plain FK/reverse/M2M traversal, `only()` projection, and the `get_queryset` + downgrade-to-`Prefetch` rule using `is_private` as the visibility filter on items hanging off categories.
-- `tests/test_choice_enums.py` — Enum generation and caching. Because the fakeshop models do not declare `choices`, this test ships a small in-test model fixture (registered against an in-memory app config) so the choice-enum path is exercised without polluting the example schema.
+- `tests/test_choice_enums.py` — Enum generation and caching. Because the fakeshop models do not declare `choices`, this test ships a session-scoped `pytest` fixture that defines an in-test `ChoiceFixture` model with a synthetic `app_label`, registers it via `django.apps.apps.register_model` for the session's lifetime, and tears down on completion. The choice-enum path is exercised without polluting the example schema, and slice 7 reuses the same fixture for the cross-type enum-reuse test.
 
 `tests/base/` is not modified by this spec. No tests are added under `examples/fakeshop/.../tests/`.
 
@@ -510,6 +656,22 @@ The seven slices add the following package modules and tests. File paths are rel
 `fields.py`, `filters.py`, `orders.py`, `aggregates.py`, and `permissions.py` belong to later specs. The aspirational `examples/fakeshop/fakeshop/products/{filters,orders,aggregates,fields}.py` files exist already as design placeholders and stay aspirational until those specs ship. The aspirational `schema.py` block remains commented; uncommenting it is the responsibility of whichever later spec ships the last subsystem the example depends on.
 
 Coordination note for whoever uncomments `schema.py`: the `search_fields = (...)` lines on each `*Node` are currently in the outer commented block, not the doubly-commented set. The deferred-key rule in this spec rejects `search_fields` on any `DjangoType.Meta` until the FilterSet spec ships. So before the outer block is uncommented, either move every `search_fields` line into the doubly-commented set (alongside `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`) or land FilterSet first — otherwise `__init_subclass__` will raise `ConfigurationError` on import.
+
+## Post-slice-7 future work
+
+Items the spec called for but are deferred past Slice 7 because the foundation can ship without them. Each is tracked as a TODO in the relevant module so a code search surfaces them.
+
+`registry.lazy_ref` and definition-order independence: Slice 3 shipped eager-only relation lookup, leaving `lazy_ref` as `NotImplementedError`. Lifting the dependency-order constraint requires one of three approaches documented in `lazy_ref`'s docstring (string-annotation rewriting after every sibling registers; a `strawberry.lazy`-backed wrapper that resolves through the registry at schema-build time; or a deferred-`strawberry.type` pass invoked by a `finalize_types()` call). The choice point and test surface are captured by the `test_forward_reference_resolves_when_target_defined_later` placeholder.
+
+`Meta.interfaces` wiring: Slice 2 accepted the key in `ALLOWED_META_KEYS` but never injects declared interfaces into `cls.__bases__` before `strawberry.type` finalizes. Consumers wanting a Strawberry interface (typically `relay.Node`) subclass it directly until this lands.
+
+Scalar-conversion deferrals: `BigInt` scalar (for plain `BigIntegerField`), `ArrayField -> list[inner_type]`, and `JSONField` / `HStoreField -> JSON` are all spec'd in the Scalar field conversion section but not implemented because no fakeshop model exercises them. Each has a `TODO(future)` comment in `django_strawberry_framework/converters.py`.
+
+M2M relation tests: `convert_relation` already handles `many_to_many` (it shares the many-side branch with `one_to_many`, so line coverage holds), but no fakeshop model declares an M2M field, so the dedicated `test_relation_m2m_returns_list` placeholder stays skipped. Adding M2M to a fakeshop model or seeding `User.groups` for a sibling test fills this gap.
+
+Relay `GlobalID` for primary keys: the open question about `MAP_AUTO_ID_AS_GLOBAL_ID`-style remapping resolves once a relay-support spec lands. Until then, `AutoField` / `BigAutoField` / `SmallAutoField` map to `int`.
+
+Example schema uncomment: `examples/fakeshop/fakeshop/products/schema.py` is still a commented-out aspirational design (see the coordination note in the previous section). Slices 4 through 7 do not require it to come uncommented; the package and its tests work without the example schema being wired. Whichever spec ships the last subsystem the example depends on is responsible for the uncomment + the matching `urls.py` change.
 
 ## Open questions
 

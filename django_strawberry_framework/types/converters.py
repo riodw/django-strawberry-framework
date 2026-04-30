@@ -23,8 +23,9 @@ from typing import Any
 import strawberry
 from django.db import models
 
-from .exceptions import ConfigurationError
-from .registry import registry
+from ..exceptions import ConfigurationError
+from ..registry import registry
+from ..utils.strings import pascal_case
 
 # TODO(future): define and export a ``BigInt`` Strawberry scalar so
 # ``BigIntegerField`` maps to a 64-bit integer that survives JSON
@@ -112,15 +113,6 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
 _NON_IDENT = re.compile(r"\W+")
 
 
-def _pascal_case(name: str) -> str:
-    """Convert a snake_case Django field name to PascalCase.
-
-    ``is_active`` -> ``IsActive``; ``status`` -> ``Status``;
-    ``payment_method`` -> ``PaymentMethod``.
-    """
-    return "".join(part.capitalize() for part in name.split("_") if part)
-
-
 def _sanitize_member_name(value: Any) -> str:
     """Produce a valid Python identifier from a Django choice value.
 
@@ -192,7 +184,7 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
     if cached is not None:
         return cached
 
-    enum_name = f"{type_name}{_pascal_case(field.name)}Enum"
+    enum_name = f"{type_name}{pascal_case(field.name)}Enum"
     members = {_sanitize_member_name(value): value for value, _label in choices}
     enum_cls = Enum(enum_name, members)  # type: ignore[arg-type]
     enum_cls = strawberry.enum(enum_cls)

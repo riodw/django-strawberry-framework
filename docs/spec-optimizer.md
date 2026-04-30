@@ -19,15 +19,19 @@ These two problems are coupled: the resolver work and the optimizer work share a
 - `_unwrap_return_type` and `_plan` walk `info.selected_fields[0].selections` and dispatch by cardinality flags into a `select_related` list and a `prefetch_related` list.
 - `registry.model_for_type(type_cls)` reverse-lookup helper.
 
+Slice O1 has shipped (custom relation resolvers in `DjangoType.__init_subclass__`); the iterability error is fixed across forward FK / OneToOne / reverse FK / OneToOne / M2M. See `tests/test_django_types.py` "Slice O1" section for the integration tests and the three direct unit tests of `_make_relation_resolver`.
+
 Slice 4's tests in `tests/test_optimizer.py`:
 
-- `test_optimizer_applies_select_related_for_forward_fk` — `@pytest.mark.skip(reason="spec-optimizer.md O1/O3")`.
-- `test_optimizer_applies_prefetch_related_for_reverse_fk` — `@pytest.mark.skip(reason="spec-optimizer.md O1/O3")`. Pre-skip failure mode was the `Expected Iterable for field 'CategoryType.items'` `RelatedManager` error.
-- `test_optimizer_combines_select_related_and_prefetch_related` — `@pytest.mark.skip(reason="spec-optimizer.md O1/O3")`. Same pre-skip iterability error.
-- `test_optimizer_skips_when_no_relations_selected` — passing (no relations, no failure mode).
+- `test_optimizer_applies_select_related_for_forward_fk` — still `@pytest.mark.skip(reason="spec-optimizer.md O3")`. Iterability is no longer the blocker; the remaining one is type-tracing — see "Slice-4 type-tracing limitation" below.
+- `test_optimizer_applies_prefetch_related_for_reverse_fk` — still `@pytest.mark.skip(reason="spec-optimizer.md O3")`. Same type-tracing limitation.
+- `test_optimizer_combines_select_related_and_prefetch_related` — still `@pytest.mark.skip(reason="spec-optimizer.md O3 + O4")`. Same type-tracing limitation, plus the depth-2 chain that needs O3's top-level walker.
+- `test_optimizer_skips_when_no_relations_selected` — passing (but for the wrong reason — see below).
 - `test_optimizer_passes_through_non_queryset` — passing.
 - `test_optimizer_passes_through_unregistered_return_type` — passing.
 - All direct unit tests of `_unwrap_return_type` / `_plan` / `_snake_case` / `aresolve` — passing.
+
+Slice-4 type-tracing limitation: at the per-resolver `resolve` / `aresolve` hooks, `info.return_type` is graphql-core's wrapper shape — `GraphQLNonNull(GraphQLList(GraphQLNonNull(GraphQLObjectType('ItemType'))))` — not the consumer's `list[ItemType]` annotation. `_unwrap_return_type` only peels one layer (`getattr(rt, "of_type", None)`) and returns the inner `GraphQLList` wrapper, so `registry.model_for_type(...)` always yields `None` and `_optimize` exits early before applying any `select_related` / `prefetch_related`. The "passing" Slice-4 tests pass because they short-circuit on this `None` (no relations selected, or non-`QuerySet` returns) — not because the planner ever fires. O3's `on_executing_start` hook receives the Python annotation directly and side-steps this; no separate fix is needed before O3 lands.
 
 Slice 5 (`only()` projection) and Slice 6 (`plan_relation` + `Prefetch` downgrade) inside `spec-django_types.md` are still TODO. They are now this spec's scope.
 

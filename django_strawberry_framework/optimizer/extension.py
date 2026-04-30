@@ -22,26 +22,30 @@ the behaviour, not the API.
 
 Status: this module currently ships the depth-1 per-resolver cardinality
 dispatch from ``spec-django_types.md`` Slice 4 (``resolve`` / ``aresolve``
-hooks, ``_plan``, ``_unwrap_return_type``, ``_snake_case``). Slices O1
-through O6 in ``docs/spec-optimizer.md`` rebuild it on a top-level
-selection-tree-walk architecture: O3 replaces the per-resolver hooks
-with ``on_executing_start`` so nested prefetch chains plan in a single
-pass; O2 promotes ``_plan`` to a pure ``optimizer/walker.py`` module;
-O4 emits nested chains (``items__entries``); O5 adds ``only()``
-projection (with FK-column inclusion); O6 lands the ``Prefetch``
-downgrade for visibility-aware target types. O1 is a separate seam in
-``DjangoType.__init_subclass__`` — custom resolvers per relation field —
-because the default ``getattr`` resolver chokes on Django's
-``RelatedManager``.
+hooks, ``_plan``). Cross-cutting helpers — case conversion, return-type
+unwrapping — moved to ``django_strawberry_framework.utils`` so other
+subsystems can reuse them. Slices O2 through O6 in ``docs/spec-optimizer.md``
+rebuild this module on a top-level selection-tree-walk architecture:
+O3 replaces the per-resolver hooks with ``on_executing_start`` so
+nested prefetch chains plan in a single pass; O2 promotes ``_plan`` to
+a pure ``optimizer/walker.py`` module; O4 emits nested chains
+(``items__entries``); O5 adds ``only()`` projection (with FK-column
+inclusion); O6 lands the ``Prefetch`` downgrade for visibility-aware
+target types. O1 has shipped as a separate seam in
+``DjangoType.__init_subclass__`` — custom resolvers per relation field
+live in ``types/resolvers.py`` because the default ``getattr`` resolver
+chokes on Django's ``RelatedManager``.
 """
 
 import logging
-from typing import Any, get_args, get_origin
+from typing import Any
 
 from django.db import models
 from strawberry.extensions import SchemaExtension
 
-from .registry import registry
+from ..registry import registry
+from ..utils.strings import snake_case
+from ..utils.typing import unwrap_return_type
 
 logger = logging.getLogger("django_strawberry_framework")
 
@@ -106,7 +110,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         """
         if not isinstance(result, models.QuerySet):
             return result
-        target_type = self._unwrap_return_type(info.return_type)
+        target_type = unwrap_return_type(info.return_type)
         target_model = registry.model_for_type(target_type)
         if target_model is None:
             logger.debug(
@@ -120,21 +124,6 @@ class DjangoOptimizerExtension(SchemaExtension):
         if prefetches:
             result = result.prefetch_related(*prefetches)
         return result
-
-    def _unwrap_return_type(self, rt: Any) -> Any:
-        """Unwrap one layer of list / Strawberry-list-wrapper around the inner type.
-
-        Strawberry exposes lists either as native ``typing.list[T]`` or
-        wraps them in an internal ``StrawberryList``-style object that
-        carries an ``of_type`` attribute. Handling both styles keeps the
-        extension portable across Strawberry versions.
-        """
-        inner = getattr(rt, "of_type", None)
-        if inner is not None:
-            return inner
-        if get_origin(rt) is list:
-            return get_args(rt)[0]
-        return rt
 
     def _plan(
         self,
@@ -176,7 +165,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         prefetches: list[str] = []
         field_map = {f.name: f for f in model._meta.get_fields()}
         for sel in sel_root:
-            python_name = self._snake_case(sel.name)
+            python_name = snake_case(sel.name)
             django_field = field_map.get(python_name)
             if django_field is None or not django_field.is_relation:
                 continue
@@ -185,21 +174,6 @@ class DjangoOptimizerExtension(SchemaExtension):
             else:
                 selects.append(python_name)
         return selects, prefetches
-
-    @staticmethod
-    def _snake_case(name: str) -> str:
-        """Convert a Strawberry default-cased GraphQL name back to ``snake_case``.
-
-        Strawberry's default name converter emits ``camelCase`` from
-        ``snake_case`` Python attributes; reversing it lets us look up
-        the corresponding Django field name without an extra mapping.
-        """
-        out: list[str] = []
-        for i, c in enumerate(name):
-            if i > 0 and c.isupper():
-                out.append("_")
-            out.append(c.lower())
-        return "".join(out)
 
     def plan_relation(
         self,

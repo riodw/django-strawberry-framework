@@ -26,13 +26,12 @@ import pytest
 from django.db import models
 
 from django_strawberry_framework import DjangoType
-from django_strawberry_framework.converters import (
-    _pascal_case,
+from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.converters import (
     _sanitize_member_name,
     convert_choices_to_enum,
 )
-from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
@@ -220,16 +219,6 @@ def test_choice_field_with_null_widens_to_enum_or_none(choice_fixture_model):
 # Direct unit coverage of the helpers (covers branches the integration
 # tests above don't naturally exercise)
 # ---------------------------------------------------------------------------
-
-
-def test_pascal_case_handles_snake_case_inputs():
-    assert _pascal_case("status") == "Status"
-    assert _pascal_case("is_active") == "IsActive"
-    assert _pascal_case("payment_method") == "PaymentMethod"
-    # Adjacent / trailing underscores collapse to nothing.
-    assert _pascal_case("_leading") == "Leading"
-    assert _pascal_case("trailing_") == "Trailing"
-    assert _pascal_case("double__underscore") == "DoubleUnderscore"
 
 
 def test_convert_choices_to_enum_raises_on_empty_choices(choice_fixture_model):

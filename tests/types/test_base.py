@@ -9,10 +9,11 @@ Slice scope:
   unregistered-target rejection); ``_build_annotations`` dispatch on
   ``field.is_relation`` rather than filtering relations out.
 
-Slice 4-5 (optimizer + ``only()``), Slice 6 (``has_custom_get_queryset`` +
-downgrade-to-``Prefetch``), Slice 7 (choice-field enums), and the full
-forward-reference / definition-order independence path live as
-``@pytest.mark.skip`` placeholders.
+Slice 6's optimizer downgrade-to-``Prefetch`` end-to-end test stays
+``@pytest.mark.skip`` pending the optimizer rebuild, but the
+``has_custom_get_queryset`` sentinel and override-detection have shipped
+and are tested directly. The full forward-reference / definition-order
+independence path remains ``@pytest.mark.skip``.
 
 Where Slice 2 tests originally used ``fields = \"__all__\"`` on ``Category``,
 they now either declare related types up front (so the registry resolves
@@ -127,6 +128,7 @@ def test_meta_fields_and_exclude_mutually_exclusive():
         "aggregate_class",
         "fields_class",
         "search_fields",
+        "interfaces",
     ],
 )
 def test_meta_rejects_each_deferred_key(deferred_key):
@@ -157,6 +159,42 @@ def test_meta_rejects_unknown_key():
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
                 bogus_key = "value"
+
+
+def test_meta_fields_unknown_name_raises():
+    """A typo in ``Meta.fields`` raises ``ConfigurationError`` rather than silently dropping."""
+    with pytest.raises(ConfigurationError, match="unknown fields"):
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "nmae")  # typo: "nmae" instead of "name"
+
+
+def test_meta_fields_unknown_name_includes_model_and_available():
+    """The error names the model and lists available fields so the typo is obvious."""
+    with pytest.raises(ConfigurationError) as exc_info:
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("nope",)
+
+    msg = str(exc_info.value)
+    assert "Category.Meta.fields" in msg
+    assert "nope" in msg
+    # Mentions some real fields so the consumer sees the available surface.
+    assert "name" in msg
+
+
+def test_meta_exclude_unknown_name_raises():
+    """A typo in ``Meta.exclude`` raises rather than silently keeping the field."""
+    with pytest.raises(ConfigurationError, match="unknown fields"):
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                exclude = ("descriptoin",)  # typo
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +315,63 @@ def test_get_queryset_default_returns_input_unchanged():
 
     qs = Category.objects.all()
     assert CategoryType.get_queryset(qs, info=None) is qs
+
+
+def test_has_custom_get_queryset_false_when_using_default():
+    """A subclass that does not override ``get_queryset`` reports False."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+
+    assert CategoryType._is_default_get_queryset is True
+    assert CategoryType.has_custom_get_queryset() is False
+
+
+def test_has_custom_get_queryset_true_when_overridden():
+    """A subclass that overrides ``get_queryset`` flips the sentinel and reports True."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.filter(is_private=False)
+
+    assert CategoryType._is_default_get_queryset is False
+    assert CategoryType.has_custom_get_queryset() is True
+
+
+def test_has_custom_get_queryset_inherits_through_intermediate_base():
+    """A subclass without its own ``get_queryset`` whose parent overrides one still reports True.
+
+    The sentinel sits on the class itself — Python's normal attribute
+    lookup walks the MRO, so a child that does not redeclare
+    ``get_queryset`` inherits the parent's ``False`` flag through the
+    class hierarchy without us writing any MRO-walking code.
+    """
+
+    class BaseCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.filter(is_private=False)
+
+    # Drop the registry collision so we can subclass cleanly.
+    registry.clear()
+
+    class ChildCategoryType(BaseCategoryType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+
+    assert ChildCategoryType.has_custom_get_queryset() is True
 
 
 # ---------------------------------------------------------------------------

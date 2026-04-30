@@ -56,6 +56,10 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "exclude",
         "name",
         "description",
+        # TODO(spec-optimizer_beyond.md B4): add "optimizer_hints" here
+        # when the feature ships. Validation in ``_validate_meta`` should
+        # reject unknown field names (same as ``fields``/``exclude``) and
+        # validate hint values at schema-build time.
     },
 )
 
@@ -136,6 +140,11 @@ class DjangoType:
         # is not duplicated and ``types.resolvers`` does not need to
         # import back into ``types.base``.
         fields = _select_fields(meta)
+        # TODO(spec-optimizer_beyond.md B7): after _select_fields,
+        # build ``cls._optimizer_field_map`` — a
+        # ``dict[str, FieldMeta]`` precomputing is_relation,
+        # cardinality, related_model, and attname per field. The O2
+        # walker reads this instead of calling _meta.get_fields().
         synthesized = _build_annotations(cls, fields)
         # Implementation detail (NOT a stable consumer-override contract
         # in 0.0.3): consumer-declared annotations are merged on top of

@@ -8,9 +8,8 @@ subpackage.
 
 ``OptimizationPlan`` and ``plan_optimizations`` live at their dotted
 module paths (``optimizer.plans`` and ``optimizer.walker``) and are
-not re-exported here until O2 ships with executable tests. Promoting
-them to the subpackage root before that would pull unimplemented code
-into package coverage via existing imports of this ``__init__``.
+not re-exported here — they are internal implementation details
+consumed by ``extension.py`` and tests, not consumer-facing API.
 """
 
 from .extension import DjangoOptimizerExtension, logger

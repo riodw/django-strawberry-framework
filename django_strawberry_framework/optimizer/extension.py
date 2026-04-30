@@ -164,10 +164,31 @@ class DjangoOptimizerExtension(SchemaExtension):
         selections = convert_selections(info, info.field_nodes)
         # selections[0] is the root field; its .selections are the
         # children the walker needs.
+        # TODO(spec-optimizer_beyond.md B1): check self._plan_cache
+        # before running the walker. Cache key is
+        # ``(document_hash(info), directive_vars(info.variable_values))``;
+        # on miss, run the walker and store the plan.
         plan = plan_optimizations(selections[0].selections, target_model)
+        # TODO(spec-optimizer_beyond.md B5): stash the plan on
+        # ``info.context`` as ``dst_optimizer_plan`` so consumers and
+        # tests can introspect the optimizer's decisions.
+        # TODO(spec-optimizer_beyond.md B3): when ``strict=True``,
+        # attach a sentinel ``set[str]`` of planned relation paths to
+        # ``info.context.dst_optimizer_planned`` so O1 relation
+        # resolvers can warn on unplanned lazy loads.
         if plan.is_empty:
             return result
+        # TODO(spec-optimizer_beyond.md B8): diff the plan against the
+        # queryset's existing ``query.select_related`` and
+        # ``_prefetch_related_lookups``; apply only the delta so
+        # consumer-applied optimizations are not duplicated.
         return plan.apply(result)
+
+    # TODO(spec-optimizer_beyond.md B6): add a ``check_schema(schema)``
+    # classmethod that walks every registered ``DjangoType``, inspects
+    # its relation fields, and warns about any relation whose target
+    # model has no registered ``DjangoType`` (will lazy-load on every
+    # access). In ``strict`` mode the warnings become errors at startup.
 
     def plan_relation(
         self,

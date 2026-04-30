@@ -93,6 +93,11 @@ def _walk_selections(
             ``"items__"`` when walking ``Category > items > ...``).
             Empty at the root level.
     """
+    # TODO(spec-optimizer_beyond.md B7): read
+    # ``target_type._optimizer_field_map`` (precomputed at DjangoType
+    # build time) instead of rebuilding from ``_meta.get_fields()``
+    # on every walk. Falls back to ``_meta.get_fields()`` when the
+    # map is unavailable (unregistered model).
     field_map = {f.name: f for f in model._meta.get_fields()}
     merged = _merge_aliased_selections(selections)
     for sel in merged:
@@ -107,11 +112,25 @@ def _walk_selections(
             # TODO(spec-optimizer.md O5): when the field is a scalar,
             # append django_name to plan.only_fields.
             continue
+        # TODO(spec-optimizer_beyond.md B4): consult
+        # ``type_cls._optimizer_hints.get(django_name)`` before the
+        # cardinality dispatch below. If the hint is ``"skip"``,
+        # return early. If it is a ``Prefetch``, add it directly.
+        # If it is ``{"select_related": True}`` or
+        # ``{"prefetch_related": True}``, force that strategy.
         # Relation dispatch by cardinality.
         full_path = f"{prefix}{django_name}"
         if django_field.many_to_many or django_field.one_to_many:
             plan.prefetch_related.append(full_path)
         else:
+            # TODO(spec-optimizer_beyond.md B2): before emitting
+            # ``select_related``, check whether the only child
+            # selections on the FK target are columns already
+            # available on the source row (e.g. ``{"id"}`` maps to
+            # ``field.attname``). If so, elide the JOIN and add
+            # ``field.attname`` to ``plan.only_fields`` instead.
+            # Guard: skip elision when the target type has a custom
+            # ``get_queryset`` (needs the JOIN for visibility).
             # TODO(spec-optimizer.md O6): check whether the target type
             # overrides get_queryset and downgrade select_related to
             # Prefetch when it does.

@@ -4,7 +4,7 @@
 
 `spec-optimizer.md` O1–O6 rebuild the N+1 optimizer on the same architecture strawberry-graphql-django pioneered: root-gated resolve hook, selection-tree walker, cardinality-based `select_related`/`prefetch_related` dispatch, `Prefetch` downgrade for visibility-aware target types. That foundation is correct and battle-tested. But strawberry-graphql-django stopped there — every request re-walks the tree, every forward FK emits a JOIN even when the parent row already carries the answer, and the optimizer's behavior is invisible to consumers outside of raw SQL logs.
 
-This spec covers six improvements that the existing libraries do not ship. Each is independent; they can land in any order after O3 (the root-gated hook) is effective. The numbering is priority order, not dependency order.
+This spec covers eight improvements that the existing libraries do not ship. Each is independent; they can land in any order after O3 (the root-gated hook) is effective. The numbering is priority order, not dependency order.
 
 ## Current state
 
@@ -20,6 +20,17 @@ O1 (custom relation resolvers), O2 (selection-tree walker), and O3 (root-gated r
 
 Implementation site: `_optimize` in `optimizer/extension.py`, before the `plan_optimizations` call. Check the cache first; on miss, run the walker and store. The cache lives on the extension instance (one per schema in sync mode, fresh per request in async mode — matches Strawberry's extension lifecycle). Use `functools.lru_cache` or a simple dict with bounded size.
 
+Pseudo code:
+
+```text
+cache_key = (document_hash(info), directive_vars(info.variable_values))
+plan = self._plan_cache.get(cache_key)
+if plan is None:
+    plan = plan_optimizations(selected_fields, target_model)
+    self._plan_cache[cache_key] = plan
+return plan.apply(queryset)
+```
+
 **Cache invalidation.** The plan is immutable once built — no invalidation needed within a schema lifetime. Schema rebuild (e.g., hot-reload in dev) creates fresh extension instances, which start with empty caches. The `@skip`/`@include` variable values are the only runtime input; static queries (no conditional directives) collapse to a single cache entry per document.
 
 **Test surface.** Cache hit/miss counts via a `_cache_info()` method (mirrors `lru_cache.cache_info()`). End-to-end test: execute the same query twice, assert the walker ran once (mock or count). Edge case: same document with different `@skip` variable values produces different plans and both are cached.
@@ -34,6 +45,16 @@ Implementation site: `_optimize` in `optimizer/extension.py`, before the `plan_o
 
 The common case is `{ category { id } }` — consumers select the FK target's `id` to pass to the frontend as a reference. The parent row's `category_id` is the same value. No JOIN needed.
 
+Pseudo code:
+
+```text
+if field.many_to_one and selected_child_scalars == {"id"}:
+    plan.only_fields.add(field.attname)  # "category_id"
+    mark_fk_id_elided(field.name)
+    return
+plan.select_related.add(field.name)
+```
+
 **Edge cases.** If the selection includes any scalar beyond `id` on the target (e.g., `{ category { id name } }`), the JOIN is required — fall through to the existing `select_related` path. If the target type has a custom `get_queryset` (O6), the elision cannot fire because the visibility filter needs the JOIN. This is a pure performance optimization with a clean fallback.
 
 **Test surface.** Query-count assertion: `{ items { category { id } } }` issues 1 query (no JOIN) vs. 2 without elision. Negative case: `{ items { category { id name } } }` still JOINs. Edge case: nullable FK with `category { id }` returns `None` when the FK is null.
@@ -47,6 +68,16 @@ The common case is `{ category { id } }` — consumers select the FK target's `i
 **Mechanism.** When `strict=True`, after applying the plan to the root queryset, attach a sentinel to `info.context` listing the planned relations. The O1 relation resolvers (in `types/resolvers.py`) check the sentinel: if a relation is accessed that is not in the plan, log a warning naming the field, the parent type, and the query path. In dev mode this surfaces immediately in the console; in production it is a standard Python `logging.warning` that monitoring can alert on.
 
 The sentinel is a `set[str]` of planned relation paths (e.g., `{"category", "items", "items__entries"}`). The resolver checks `f"{prefix}{field_name}" in sentinel`. If not present and the queryset is not already prefetched (i.e., the access will trigger a lazy load), emit the warning.
+
+Pseudo code:
+
+```text
+info.context.dst_optimizer_planned = planned_relation_paths(plan)
+
+if strict and relation_path not in info.context.dst_optimizer_planned:
+    if will_lazy_load(root, field_name):
+        logger.warning("Potential N+1 on %s", relation_path)
+```
 
 **Strictness levels.** `strict=True` warns. A future `strict="raise"` could raise `OptimizerError` to fail-fast in tests. Default is `False` (current behavior — silent).
 
@@ -67,6 +98,20 @@ Supported hint values (initial set):
 
 The walker consults `optimizer_hints` before its default cardinality dispatch. If a hint exists for the current field, it takes precedence. This is the DRF-shaped analog of strawberry-graphql-django's `disable_optimization=True` per-field marker, but richer because it allows positive overrides (force a specific `Prefetch`), not just opt-out.
 
+Pseudo code:
+
+```text
+hint = type_cls._optimizer_hints.get(field_name)
+if hint == "skip":
+    return
+if isinstance(hint, Prefetch):
+    plan.prefetch_related.add(hint)
+    return
+if hint == {"select_related": True}:
+    plan.select_related.add(field_name)
+    return
+```
+
 **Validation.** `_validate_meta` rejects unknown field names in `optimizer_hints` (same as `fields`/`exclude` validation). Hint values are validated at schema-build time so typos surface early.
 
 **Test surface.** `"skip"` suppresses a relation from the plan. `Prefetch(...)` appears in the plan instead of a plain string. Unknown field name raises `ConfigurationError`.
@@ -80,6 +125,14 @@ The walker consults `optimizer_hints` before its default cardinality dispatch. I
 **Mechanism.** After `plan_optimizations` returns in `_optimize`, set `info.context.dst_optimizer_plan = plan` (or use a `ContextVar` if the context object is not a dict). Consumers and test code access it directly. The plan is a frozen snapshot — mutating it after the fact has no effect on the already-applied queryset.
 
 The key name is `dst_optimizer_plan` (short for django-strawberry-framework) to avoid collision with consumer keys.
+
+Pseudo code:
+
+```text
+plan = plan_optimizations(selected_fields, target_model)
+setattr(info.context, "dst_optimizer_plan", plan)
+return plan.apply(queryset)
+```
 
 **Test surface.** End-to-end: execute a query, assert `result.extensions` or `info.context` carries the plan with the expected `select_related` / `prefetch_related` entries. Unit: `_optimize` sets the context key.
 
@@ -95,6 +148,17 @@ The key name is `dst_optimizer_plan` (short for django-strawberry-framework) to 
 - Forward FKs to unregistered types are flagged as "will lazy-load on every access."
 
 Output is a list of warnings, one per unoptimized relation, with the field path and a suggested fix. In `strict` mode (see B3), these become errors at startup.
+
+Pseudo code:
+
+```text
+for model, type_cls in registry._types.items():
+    for field in model._meta.get_fields():
+        if not field.is_relation:
+            continue
+        if registry.get(field.related_model) is None:
+            warn(f"{model.__name__}.{field.name} has no registered target type")
+```
 
 **Test surface.** Schema with an unregistered FK target triggers a warning. Schema with all relations covered produces no warnings. Management command `check_optimizer` runs the audit and exits 0/1.
 
@@ -120,6 +184,19 @@ This is complementary to B1: B1 caches the *plan output* (the finished `Optimiza
 
 **Mechanism.** In `DjangoType.__init_subclass__`, after `_select_fields(meta)` computes the field list, build a `dict[str, FieldMeta]` where `FieldMeta` is a lightweight namedtuple or dataclass holding `is_relation`, `many_to_many`, `one_to_many`, `one_to_one`, `related_model`, and `attname` (the FK column name for forward FKs). Stash it as `cls._optimizer_field_map`. The walker reads `target_type._optimizer_field_map` instead of calling `model._meta.get_fields()`.
 
+Pseudo code:
+
+```text
+cls._optimizer_field_map = {
+    snake_case(field.name): FieldMeta.from_django_field(field)
+    for field in selected_fields
+}
+
+field_meta = type_cls._optimizer_field_map.get(selection_name)
+if field_meta and field_meta.is_relation:
+    dispatch(field_meta)
+```
+
 **Test surface.** Assert `_optimizer_field_map` is populated after `DjangoType` subclass creation. Assert the walker produces the same plan whether it reads the cached map or rebuilds from `_meta`. Benchmark (optional): measure walk time with and without the cached map on a model with 20+ fields.
 
 **Depends on.** O2 (shipped). Independent of O4–O6 and B1.
@@ -133,6 +210,18 @@ This is complementary to B1: B1 caches the *plan output* (the finished `Optimiza
 - `queryset._prefetch_related_lookups` — a tuple of strings and `Prefetch` objects. If a lookup is already present, skip it.
 
 The diff is a simple set subtraction: `plan.select_related - already_selected`, `plan.prefetch_related - already_prefetched`. Apply only the delta.
+
+Pseudo code:
+
+```text
+already_selected = flatten_select_related(queryset.query.select_related)
+already_prefetched = normalize_prefetches(queryset._prefetch_related_lookups)
+
+plan.select_related = [p for p in plan.select_related if p not in already_selected]
+plan.prefetch_related = [p for p in plan.prefetch_related if key(p) not in already_prefetched]
+
+return plan.apply(queryset)
+```
 
 **Edge cases.** `Prefetch` objects are compared by `prefetch_to` attribute (the lookup path), not by identity. A consumer's `Prefetch("items", queryset=custom_qs)` should suppress the optimizer's plain `"items"` string — the consumer's version is more specific.
 

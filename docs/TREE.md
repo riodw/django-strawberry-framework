@@ -181,9 +181,36 @@ django_graphene_filters/
 └── utils.py
 ```
 
-## django_strawberry_framework (proposed target layout)
+## django_strawberry_framework (current on-disk layout)
 
-This is the target shape for **this** package, derived from the three reference trees above and the dependency-graph reasoning in [`README.md`](README.md) "Package architecture". It is not the current on-disk state — `types/`, `optimizer/`, and `utils/` are still flat top-level modules at this point in development. Migration happens incidentally as each spec slice lands; no big-bang restructure is planned.
+The Layer 1 + Layer 2 subpackage migration is complete: `types/`, `optimizer/`, and `utils/` are on disk as subpackages. Layer 3 modules (`filters/`, `orders/`, `aggregates/`, `fieldset.py`, `permissions.py`, `connection.py`, `apps.py`, `management/`) do not exist yet and will land as their respective specs ship.
+
+```text
+django_strawberry_framework/
+├── __init__.py              # re-exports DjangoType, DjangoOptimizerExtension, auto
+├── py.typed
+├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
+├── exceptions.py            # error hierarchy
+├── registry.py              # model→type registry
+├── types/                   # DjangoType subsystem (Layer 2) — shipped
+│   ├── __init__.py
+│   ├── base.py              # DjangoType, _validate_meta, _build_annotations
+│   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
+│   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers
+├── optimizer/               # N+1 optimizer subsystem (Layer 2) — in progress
+│   ├── __init__.py          # re-exports DjangoOptimizerExtension only
+│   ├── extension.py         # DjangoOptimizerExtension (depth-1 Slice 4 hooks)
+│   ├── walker.py            # selection-tree walker (O2 shipped)
+│   └── plans.py             # OptimizationPlan data structure
+└── utils/                   # cross-cutting helpers
+    ├── __init__.py
+    ├── strings.py           # snake_case / PascalCase conversion
+    └── typing.py            # type unwrapping (unwrap_return_type)
+```
+
+## django_strawberry_framework (target layout)
+
+The target shape adds Layer 3 modules on top of the current layout. Derived from the three reference trees above and the dependency-graph reasoning in [`README.md`](README.md) "Package architecture".
 
 ```text
 django_strawberry_framework/
@@ -241,6 +268,8 @@ Tests live across three roots, each with a focused responsibility. The root `tes
 
 ```text
 tests/                       # Package-internal tests (current state)
+├── __init__.py
+├── test_registry.py         # model→type registry
 ├── base/                    # FROZEN: only conf and version checks
 │   ├── __init__.py
 │   ├── test_conf.py
@@ -250,9 +279,15 @@ tests/                       # Package-internal tests (current state)
 │   ├── test_base.py         # ← DjangoType + Meta validation + scalar/relation synthesis
 │   ├── test_converters.py   # ← convert_scalar / convert_relation / convert_choices_to_enum
 │   └── test_resolvers.py    # ← O1 _make_relation_resolver / _attach_relation_resolvers
-└── optimizer/               # mirrors django_strawberry_framework/optimizer/
+├── optimizer/               # mirrors django_strawberry_framework/optimizer/
+│   ├── __init__.py
+│   ├── test_extension.py    # ← DjangoOptimizerExtension (per-resolver Slice 4 hooks)
+│   ├── test_walker.py       # ← O2 selection-tree walker
+│   └── test_plans.py        # ← OptimizationPlan data structure
+└── utils/                   # mirrors django_strawberry_framework/utils/
     ├── __init__.py
-    └── test_extension.py    # ← DjangoOptimizerExtension (per-resolver Slice 4 hooks)
+    ├── test_strings.py      # ← snake_case / pascal_case
+    └── test_typing.py       # ← unwrap_return_type
 
 examples/fakeshop/tests/     # Example-project tests, NO /graphql HTTP
 ├── test_admin.py            # admin actions via django.test.Client on /admin/...

@@ -8,9 +8,9 @@ The intention is to give Django developers the same `Meta`-class-driven, "batter
 
 Concretely, the package aims to provide:
 
-- A `DjangoType` base class that generates a Strawberry type from a Django model via a familiar nested `Meta` configuration block.
-- Declarative filtering, ordering, aggregation, and permission rules — all configured in `Meta`, all composable, all introspectable from a single class definition.
-- A built-in N+1 optimizer that respects per-type `get_queryset` overrides (downgrading `select_related` to `Prefetch` so visibility filters are honored across joins). Borrowed behaviorally from `strawberry-graphql-django`'s optimizer; we ship it in the foundation, not as an opt-in afterthought.
+- **Shipped:** A `DjangoType` base class that generates a Strawberry type from a Django model via a familiar nested `Meta` configuration block — scalar, relation, and choice-enum conversion, the type registry, and the `get_queryset` hook.
+- **Shipped (partial):** A built-in N+1 optimizer foundation — cardinality-aware relation resolvers (O1), a selection-tree walker (O2), and the `OptimizationPlan` data structure. The top-level `on_executing_start` hook (O3), nested prefetch chains (O4), `only()` projection (O5), and the `get_queryset` + `Prefetch` downgrade rule (O6) are specified in `spec-optimizer.md` but not yet implemented.
+- **Planned:** Declarative filtering, ordering, aggregation, and permission rules — all configured in `Meta`, all composable, all introspectable from a single class definition. These are the Layer-3 subsystems described below; none are implemented yet.
 - A migration path that feels natural for teams coming from `django-filter`, DRF, or `graphene-django`.
 - Zero dependency on `strawberry-graphql-django`. We build directly on `strawberry-graphql` so we control the API surface end-to-end.
 
@@ -43,14 +43,14 @@ The package is organized around a **layered dependency graph**: a small shared-i
 
 ### Subsystems
 
-**Layer 1 — Shared infrastructure** (no internal dependencies). `conf` reads the `DJANGO_STRAWBERRY_FRAMEWORK` settings dict; `exceptions` defines the package error hierarchy (`DjangoStrawberryFrameworkError` and its subclasses); `registry` owns the model→type registry; `apps` is the Django `AppConfig` (so the package can opt into management commands and `ready()` hooks); `utils/` is a focused-submodule subpackage covering string-case conversion (`utils/strings.py`), type unwrapping (`utils/typing.py`), and queryset introspection (`utils/queryset.py`). Every other layer depends on these; nothing here depends on any layer above.
+**Layer 1 — Shared infrastructure** *(shipped)* (no internal dependencies). `conf` reads the `DJANGO_STRAWBERRY_FRAMEWORK` settings dict; `exceptions` defines the package error hierarchy (`DjangoStrawberryFrameworkError` and its subclasses); `registry` owns the model→type registry; `utils/` is a focused-submodule subpackage covering string-case conversion (`utils/strings.py`) and type unwrapping (`utils/typing.py`). Every other layer depends on these; nothing here depends on any layer above. *Not yet on disk:* `apps.py` (Django `AppConfig`) and `utils/queryset.py` (queryset introspection) land when the features that need them ship.
 
-**Layer 2 — Type system** (depends on Layer 1). Two subsystems sit at this layer because they're tightly coupled — one consumes the other's registry — but each is large enough to deserve its own dependency boundary:
+**Layer 2 — Type system** *(shipped / in progress)* (depends on Layer 1). Two subsystems sit at this layer because they're tightly coupled — one consumes the other's registry — but each is large enough to deserve its own dependency boundary:
 
-- `types/` — the `DjangoType` base class, scalar/relation/choice converters, and the cardinality-aware relation resolvers. This is the `Meta`-class-driven Django-model-to-Strawberry-type adapter and is the heart of the package.
-- `optimizer/` — `DjangoOptimizerExtension`, the selection-tree walker, and the `OptimizationPlan` shape. Reads relation metadata off types registered in `types/`; nothing in `types/` reads anything from `optimizer/`. The optimizer ships in the foundation rather than as an opt-in afterthought because nested-prefetch correctness is too load-bearing to leave to consumer plumbing.
+- `types/` *(shipped)* — the `DjangoType` base class, scalar/relation/choice converters, and the cardinality-aware relation resolvers. This is the `Meta`-class-driven Django-model-to-Strawberry-type adapter and is the heart of the package.
+- `optimizer/` *(in progress)* — `DjangoOptimizerExtension`, the selection-tree walker (`walker.py`, O2 shipped), and the `OptimizationPlan` shape (`plans.py`). Reads relation metadata off types registered in `types/`; nothing in `types/` reads anything from `optimizer/`. The optimizer ships in the foundation rather than as an opt-in afterthought because nested-prefetch correctness is too load-bearing to leave to consumer plumbing. `DjangoOptimizerExtension` is currently importable from `django_strawberry_framework.optimizer` (subpackage path) but is **not** in the top-level `__init__.py` `__all__` — it returns there when O3 (the `on_executing_start` hook) makes it effective end-to-end.
 
-**Layer 3 — GraphQL surface generators** (depend on Layer 2). Each subsystem follows the same `Meta`-class-driven, factory-emitting shape pioneered by `django-filter` and DRF:
+**Layer 3 — GraphQL surface generators** *(planned — not yet implemented)* (depend on Layer 2). Each subsystem follows the same `Meta`-class-driven, factory-emitting shape pioneered by `django-filter` and DRF:
 
 - `filters/` — individual `Filter` classes, the `FilterSet` base, the filterset factory (auto-build a `FilterSet` from a model), the GraphQL argument factory, and the input-type / input-data adapters. This is the core of the original `django-graphene-filters`, ported to Strawberry.
 - `orders/` — `Order` classes, `OrderSet`, GraphQL argument factory.
@@ -59,9 +59,36 @@ The package is organized around a **layered dependency graph**: a small shared-i
 - `connection.py` — `DjangoConnectionField` (Relay-style connection that composes filtering, ordering, aggregation, and field selection). Single-file Layer-3 module; promotes to a `relay/` subpackage if/when full Relay (`Node`, `Edge`, `cursor_connection` vs `list_connection`) lands.
 - `permissions.py` — `apply_cascade_permissions` (cascade a permission decision through nested relations, integrated with the optimizer's `Prefetch` downgrade rule) and per-field permission hooks declared via `Meta`. Single-file Layer-3 module; promotes to `permissions/` if DRF-style `BasePermission` classes plus cascade plus hooks accumulate enough material.
 
-The public consumer surface re-exported from `django_strawberry_framework/__init__.py` is `DjangoType`, `DjangoOptimizerExtension`, `FilterSet`, `Filter`, `OrderSet`, `Order`, `AggregateSet`, `FieldSet`, `DjangoConnectionField`, `apply_cascade_permissions`, plus `auto` (re-exported from `strawberry`). Internal helpers — factories, walkers, converters, individual filter / order / aggregate primitives — stay reachable via dotted paths (`from django_strawberry_framework.filters.factories import ...`) for power users and tests but are not in the top-level namespace.
+The **current** top-level re-exports from `django_strawberry_framework/__init__.py` are `DjangoType`, `DjangoOptimizerExtension`, and `auto` (re-exported from `strawberry`). `DjangoOptimizerExtension` is in `__all__` but will be removed until O3 ships (see `spec-optimizer.md` visibility status). The **eventual** public surface will add `FilterSet`, `Filter`, `OrderSet`, `Order`, `AggregateSet`, `FieldSet`, `DjangoConnectionField`, and `apply_cascade_permissions` as their respective Layer-3 specs land. Internal helpers — factories, walkers, converters, individual filter / order / aggregate primitives — stay reachable via dotted paths (`from django_strawberry_framework.optimizer.walker import plan_optimizations`) for power users and tests but are not in the top-level namespace.
 
 ### Folder layout
+
+#### Current (on disk today)
+
+```text
+django_strawberry_framework/
+├── __init__.py              # public-API re-exports (DjangoType, DjangoOptimizerExtension, auto)
+├── py.typed
+├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
+├── exceptions.py            # error hierarchy
+├── registry.py              # model→type registry
+├── types/                   # DjangoType subsystem (Layer 2) — shipped
+│   ├── __init__.py
+│   ├── base.py              # DjangoType, _validate_meta, _build_annotations
+│   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
+│   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers
+├── optimizer/               # N+1 optimizer subsystem (Layer 2) — in progress
+│   ├── __init__.py          # re-exports DjangoOptimizerExtension only (walker/plans private until O3)
+│   ├── extension.py         # DjangoOptimizerExtension (Strawberry SchemaExtension, depth-1 Slice 4)
+│   ├── walker.py            # selection-tree walker (plan_optimizations, O2 shipped)
+│   └── plans.py             # OptimizationPlan data structure
+└── utils/                   # cross-cutting helpers
+    ├── __init__.py
+    ├── strings.py           # snake_case / camelCase / PascalCase conversion
+    └── typing.py            # type unwrapping (list[T], of_type, Optional[T])
+```
+
+#### Target (as Layer-3 subsystems land)
 
 ```text
 django_strawberry_framework/
@@ -186,4 +213,4 @@ Subsequent specs will layer `FilterSet`, `OrderSet`, `AggregateSet`, `FieldSet`,
 
 ## Status
 
-Pre-alpha. The public API is not stable and is expected to change rapidly until `0.1.0`.
+Pre-alpha. The shipped surface is Layer 1 (shared infrastructure) and Layer 2 (DjangoType + optimizer foundation). Layer 3 (filters, orders, aggregates, permissions, connection fields) is designed and spec'd but not yet implemented. The public API is not stable and is expected to change rapidly until `0.1.0`.

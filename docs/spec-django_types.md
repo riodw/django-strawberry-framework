@@ -54,6 +54,13 @@ This spec adds three public names at the package root:
 
 It also adds internal support modules: `registry.py`, `converters.py`, `exceptions.py`, and a `py.typed` marker.
 
+The `auto` re-export is a pass-through of `strawberry.auto` so consumers can annotate fields inside a `DjangoType` without a separate `import strawberry`.
+
+```python
+from django_strawberry_framework import DjangoType, DjangoOptimizerExtension, auto
+from django_strawberry_framework.exceptions import ConfigurationError
+```
+
 ## `DjangoType`
 
 `DjangoType` is a base class with a metaclass (or equivalent `__init_subclass__` pipeline) that reads a nested `Meta` class, synthesizes Strawberry annotations from the Django model, registers the resulting type for later relation lookup, and then finalizes the class as a Strawberry type.
@@ -73,6 +80,45 @@ optional: `Meta.name` to override the GraphQL type name
 optional: `Meta.description`
 
 The metaclass must reject unsupported future-surface keys for now. If a consumer declares `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, or `search_fields` before those specs ship, raise `ConfigurationError` rather than silently accepting noop config.
+
+```python
+# Minimal, scalars only
+class CategoryType(DjangoType):
+    class Meta:
+        model = Category
+        fields = "__all__"
+
+
+# Full surface
+class ItemType(DjangoType):
+    class Meta:
+        model = Item
+        fields = ("id", "name", "category", "is_private")
+        name = "Item"
+        description = "A generated item produced from a Faker provider."
+        interfaces = (relay.Node,)
+
+    @classmethod
+    def get_queryset(cls, queryset, info, **kwargs):
+        user = getattr(info.context, "user", None)
+        if user and user.is_staff:
+            return queryset
+        return queryset.filter(is_private=False)
+```
+
+Deferred-key rejection — every line below raises `ConfigurationError` until the spec that owns the feature ships:
+
+```python
+class CategoryType(DjangoType):
+    class Meta:
+        model = Category
+        fields = "__all__"
+        filterset_class = CategoryFilter   # ConfigurationError: filterset_class is not supported yet
+        orderset_class = CategoryOrder     # ConfigurationError
+        aggregate_class = CategoryAggregate  # ConfigurationError
+        fields_class = CategoryFieldSet    # ConfigurationError
+        search_fields = ("name",)          # ConfigurationError
+```
 
 ## Scalar field conversion
 
@@ -112,6 +158,49 @@ The converter layer should mirror graphene-django's coverage but emit Strawberry
 
 Choice fields produce a generated strawberry `Enum` named `<TypeName><FieldName>Enum`. Those enums are cached in the registry keyed by `(model, field_name)` so multiple `DjangoType`s reading the same model field reuse the same enum.
 
+```python
+# django_strawberry_framework/converters.py — illustrative shape
+import datetime
+import decimal
+import uuid
+from typing import Any
+
+from django.db import models
+
+SCALAR_MAP: dict[type[models.Field], type] = {
+    models.CharField: str,
+    models.TextField: str,
+    models.SlugField: str,
+    models.EmailField: str,
+    models.URLField: str,
+    models.IntegerField: int,
+    models.SmallIntegerField: int,
+    models.PositiveIntegerField: int,
+    models.BooleanField: bool,
+    models.FloatField: float,
+    models.DecimalField: decimal.Decimal,
+    models.DateField: datetime.date,
+    models.DateTimeField: datetime.datetime,
+    models.TimeField: datetime.time,
+    models.DurationField: datetime.timedelta,
+    models.UUIDField: uuid.UUID,
+    models.BinaryField: bytes,
+    models.FileField: str,
+    models.ImageField: str,
+}
+
+
+def convert_scalar(field: models.Field, type_name: str) -> Any:
+    py_type: Any = SCALAR_MAP.get(type(field), Any)
+    if field.choices:
+        py_type = convert_choices_to_enum(field, type_name)
+    if field.null:
+        py_type = py_type | None
+    return py_type
+```
+
+`type_name` is the consumer-facing `DjangoType` class name. It threads through from `__init_subclass__` so `convert_choices_to_enum` can build the spec-mandated `<TypeName><FieldName>Enum` name. `convert_choices_to_enum(field, type_name) -> type[Enum]` carries the same parameter; enum reuse is keyed on `(field.model, field.name)` in the registry, independent of `type_name`, so two `DjangoType`s pointing at the same choice column share the same enum even if their class names differ.
+
 ## Relation field conversion
 
 Forward FK and OneToOne map to the target `DjangoType`, nullable iff the Django field is nullable.
@@ -124,13 +213,102 @@ If the target model's `DjangoType` has not yet been registered, use Strawberry f
 
 This spec intentionally keeps relation field resolution inside the type system rather than introducing a separate consumer-facing decorator API. Consumers should be able to write one `class CategoryType(DjangoType): class Meta: ...` and have relations appear automatically.
 
+```python
+# django_strawberry_framework/converters.py — relation half
+from typing import Any
+
+from django.db import models
+
+from .registry import registry
+
+
+def convert_relation(field: models.Field) -> Any:
+    target_model = field.related_model
+    target_ref = registry.lazy_ref(target_model)   # forward reference; resolved at schema build
+    if field.many_to_many or field.one_to_many:
+        return list[target_ref]
+    if getattr(field, "null", False):
+        return target_ref | None
+    return target_ref
+```
+
 ## Registry
 
 A global registry maps model -> `DjangoType` and `(model, field_name)` -> generated enum. It exists so relation fields and enum conversion can look up already-built types. Registering the same model twice should raise `ConfigurationError` by default. The registry also needs a test-only `clear()` helper for isolation.
 
+```python
+# django_strawberry_framework/registry.py — illustrative shape
+from enum import Enum
+from typing import Any
+
+from django.db import models
+
+from .exceptions import ConfigurationError
+
+
+class TypeRegistry:
+    def __init__(self) -> None:
+        self._types: dict[type[models.Model], type] = {}
+        self._enums: dict[tuple[type[models.Model], str], type[Enum]] = {}
+
+    def register(self, model: type[models.Model], type_cls: type) -> None:
+        if model in self._types:
+            raise ConfigurationError(
+                f"{model.__name__} is already registered as {self._types[model].__name__}",
+            )
+        self._types[model] = type_cls
+
+    def get(self, model: type[models.Model]) -> type | None:
+        return self._types.get(model)
+
+    def lazy_ref(self, model: type[models.Model]) -> Any:
+        """Return a forward reference resolved at schema build."""
+
+    def register_enum(
+        self,
+        model: type[models.Model],
+        field_name: str,
+        enum_cls: type[Enum],
+    ) -> None:
+        self._enums[(model, field_name)] = enum_cls
+
+    def get_enum(
+        self,
+        model: type[models.Model],
+        field_name: str,
+    ) -> type[Enum] | None:
+        return self._enums.get((model, field_name))
+
+    def clear(self) -> None:
+        """Test-only — drop all registered types and enums."""
+        self._types.clear()
+        self._enums.clear()
+
+
+registry = TypeRegistry()
+```
+
 ## `get_queryset`
 
 `DjangoType` exposes `@classmethod get_queryset(cls, queryset, info, **kwargs)` with a default identity implementation. This is the single authoritative hook for permission scoping, multi-tenancy, soft-delete filtering, and any future consumer-side queryset constraints. The optimizer must respect it, especially on related fields.
+
+```python
+class ItemType(DjangoType):
+    class Meta:
+        model = Item
+        fields = "__all__"
+
+    @classmethod
+    def get_queryset(cls, queryset, info, **kwargs):
+        user = getattr(info.context, "user", None)
+        if user and user.is_staff:
+            return queryset
+        if user and user.has_perm("products.view_item"):
+            return queryset
+        return queryset.filter(is_private=False)
+```
+
+`DjangoType` also exposes `has_custom_get_queryset() -> bool` (introspection helper) so the optimizer can detect when a type overrides the default identity implementation. The default implementation returns the queryset unchanged; any subclass override flips this flag to `True`.
 
 ## N+1 strategy
 
@@ -155,6 +333,40 @@ So the rule here is:
 if a related field would normally use `select_related`, but the target `DjangoType` overrides `get_queryset`, downgrade that relation to `Prefetch` with the target type's filtered queryset.
 
 That gives us the best part of strawberry-graphql-django's optimizer without adopting its decorator-first public API.
+
+Schema-level opt-in:
+
+```python
+import strawberry
+
+from django_strawberry_framework import DjangoOptimizerExtension
+
+schema = strawberry.Schema(
+    query=Query,
+    extensions=[DjangoOptimizerExtension()],
+)
+```
+
+The downgrade rule, in pseudocode:
+
+```python
+# django_strawberry_framework/optimizer.py — load-bearing rule
+from django.db.models import Prefetch
+
+
+def plan_relation(field, target_type, info):
+    target_qs = field.related_model.objects.all()
+    target_qs = target_type.get_queryset(target_qs, info)
+
+    if field.many_to_many or field.one_to_many:
+        return ("prefetch", Prefetch(field.name, queryset=target_qs))
+
+    if target_type.has_custom_get_queryset():
+        # would-be select_related downgrades to Prefetch so visibility filters apply
+        return ("prefetch", Prefetch(field.name, queryset=target_qs))
+
+    return ("select", field.name)
+```
 
 ## Type naming
 
@@ -186,6 +398,73 @@ the `get_queryset` + optimizer downgrade rule using a hidden related row scenari
 
 The example tests already exercise admin, services, commands, schema, urls, and models through real Django flows. Those stay as-is; this spec adds focused package tests around the new core types and optimizer.
 
+```python
+# tests/test_django_types.py — illustrative
+import pytest
+import strawberry
+
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoType
+from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.registry import registry
+from fakeshop.products import services
+from fakeshop.products.models import Category, Item
+
+
+@pytest.fixture(autouse=True)
+def _isolate_registry():
+    registry.clear()
+    yield
+    registry.clear()
+
+
+@pytest.mark.django_db
+def test_meta_rejects_filterset_class():
+    services.seed_data(1)
+    with pytest.raises(ConfigurationError, match="filterset_class"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = "__all__"
+                filterset_class = object
+
+
+@pytest.mark.django_db
+def test_optimizer_downgrades_to_prefetch_when_target_has_custom_get_queryset(
+    django_assert_num_queries,
+):
+    services.seed_data(1)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.filter(is_private=False)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return list(Category.objects.all())
+
+    schema = strawberry.Schema(
+        query=Query,
+        extensions=[DjangoOptimizerExtension()],
+    )
+
+    with django_assert_num_queries(2):   # 1 categories, 1 prefetched filtered items
+        result = schema.execute_sync("{ allCategories { id name items { id name } } }")
+        assert result.errors is None
+```
+
 ## Suggested implementation slices
 
 Slice 1: scaffolding — `exceptions.py`, `registry.py`, `py.typed`, package re-exports, package logger.
@@ -202,7 +481,35 @@ Slice 6: the `get_queryset` + downgrade-to-`Prefetch` rule.
 
 Slice 7: choice-field enum generation and enum caching.
 
-Each slice should land with tests in the same change so package coverage remains at 100%.
+Each slice should land with tests in the same change so package coverage remains at 100%. Stub bodies between slices use `raise NotImplementedError(...)`; the existing `pyproject.toml` coverage config already lists that line in `exclude_lines`, so a partial scaffold does not break the gate as long as no test reaches the stubbed code path. When a later slice replaces a stub, it must also add the test that covers the new branch.
+
+## Files to add
+
+The seven slices add the following package modules and tests. File paths are relative to the repository root.
+
+### Package source
+
+- `django_strawberry_framework/exceptions.py` — `DjangoStrawberryFrameworkError` base class plus two subclasses: `ConfigurationError` (raised by Meta validation, registry collisions, and optimizer planning failures) and `OptimizerError` (raised when the optimizer cannot plan a relation traversal). The base class lets consumers catch the broad family in a single `except` while still distinguishing the specific causes downstream. No Django or Strawberry imports — keeps the exception hierarchy importable from anywhere in the package without circulars.
+- `django_strawberry_framework/registry.py` — `TypeRegistry` class plus a module-level singleton `registry`. Holds `model -> DjangoType` and `(model, field_name) -> Enum`. Exposes `register`, `get`, `register_enum`, `get_enum`, `lazy_ref(model)` (forward references for definition-order independence), and `clear()` (test-only).
+- `django_strawberry_framework/converters.py` — `SCALAR_MAP`, the `BigInt` scalar definition, `convert_scalar(field)`, `convert_choices_to_enum(model, field, type_name)`, and `convert_relation(field)`. All field-shape introspection lives here so `types.py` stays focused on Meta orchestration.
+- `django_strawberry_framework/types.py` — `DjangoType` base class. Owns the `__init_subclass__` (or metaclass) pipeline that validates `Meta`, synthesizes annotations via `converters.py`, registers the resulting type with `registry`, and finalizes it via `@strawberry.type`. Defines the default `get_queryset` classmethod, the `has_custom_get_queryset()` introspection helper, and the deferred-key rejection list (`filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`).
+- `django_strawberry_framework/optimizer.py` — `DjangoOptimizerExtension` (Strawberry `SchemaExtension`). Walks the resolved selection set, looks up each return type in `registry`, and applies `select_related` / `prefetch_related` / `only()` to the root queryset before evaluation. Implements the load-bearing downgrade rule: when a related field's target type defines a non-default `get_queryset`, generate a `Prefetch(...)` keyed on that filtered queryset instead of a `select_related`.
+- `django_strawberry_framework/py.typed` — Empty PEP 561 marker so `mypy` and `pyright` consume our annotations from the installed wheel.
+- `django_strawberry_framework/__init__.py` — Re-exports `DjangoType`, `DjangoOptimizerExtension`, and `auto` (pass-through of `strawberry.auto`). Keeps `__version__`. Exposes a package-level `logging.getLogger("django_strawberry_framework")` for the optimizer to emit downgrade decisions and other diagnostics.
+
+### Tests
+
+- `tests/test_django_types.py` — Meta validation (required `model`, `fields`/`exclude` mutual exclusivity, deferred-key rejection one assertion per key), scalar mapping against `Category`/`Item`/`Property`/`Entry`, relation generation (FK, reverse FK, M2M), registry behaviour (collision raises, `clear()` works), and the default `get_queryset` identity behaviour.
+- `tests/test_optimizer.py` — Query-count assertions via `django_assert_num_queries` for plain FK/reverse/M2M traversal, `only()` projection, and the `get_queryset` + downgrade-to-`Prefetch` rule using `is_private` as the visibility filter on items hanging off categories.
+- `tests/test_choice_enums.py` — Enum generation and caching. Because the fakeshop models do not declare `choices`, this test ships a small in-test model fixture (registered against an in-memory app config) so the choice-enum path is exercised without polluting the example schema.
+
+`tests/base/` is not modified by this spec. No tests are added under `examples/fakeshop/.../tests/`.
+
+### Files NOT in this spec
+
+`fields.py`, `filters.py`, `orders.py`, `aggregates.py`, and `permissions.py` belong to later specs. The aspirational `examples/fakeshop/fakeshop/products/{filters,orders,aggregates,fields}.py` files exist already as design placeholders and stay aspirational until those specs ship. The aspirational `schema.py` block remains commented; uncommenting it is the responsibility of whichever later spec ships the last subsystem the example depends on.
+
+Coordination note for whoever uncomments `schema.py`: the `search_fields = (...)` lines on each `*Node` are currently in the outer commented block, not the doubly-commented set. The deferred-key rule in this spec rejects `search_fields` on any `DjangoType.Meta` until the FilterSet spec ships. So before the outer block is uncommented, either move every `search_fields` line into the doubly-commented set (alongside `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`) or land FilterSet first — otherwise `__init_subclass__` will raise `ConfigurationError` on import.
 
 ## Open questions
 

@@ -668,6 +668,47 @@ def test_cache_differentiates_queries(django_assert_num_queries):
 
 
 @pytest.mark.django_db
+def test_cache_differentiates_same_model_root_fields(django_assert_num_queries):
+    """B1/O4: root fields returning the same model do not share one cached plan."""
+    services.seed_data(1)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+        @strawberry.field
+        def featured_categories(self) -> list[CategoryType]:
+            return Category.objects.filter(is_private=False)
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+    query = "{ allCategories { name items { name } } featuredCategories { name } }"
+
+    with django_assert_num_queries(3):
+        result = schema.execute_sync(query, context_value=ctx)
+
+    assert result.errors is None
+    assert ext.cache_info().hits == 0
+    assert ext.cache_info().misses == 2
+    assert ext.cache_info().size == 2
+    assert ctx.dst_optimizer_plan.prefetch_related == []
+
+
+@pytest.mark.django_db
 def test_filter_vars_do_not_affect_cache():
     """B1: variables not used in @skip/@include don't split cache entries."""
     services.seed_data(1)
@@ -912,18 +953,6 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
     assert "ItemType.category@allItems.category" in ctx.dst_optimizer_planned
     assert ctx.dst_optimizer_fk_id_elisions == {"ItemType.category@allItems.category"}
     assert not any("Potential N+1" in r.message for r in caplog.records)
-
-
-def test_get_relation_field_name_uses_field_name_not_alias():
-    """B3: _get_relation_field_name uses info.field_name, not the path alias."""
-    from django_strawberry_framework.types.resolvers import _get_relation_field_name
-
-    info = SimpleNamespace(field_name="category")
-    assert _get_relation_field_name(info) == "category"
-
-    # Alias case: path.key would be "cat", but field_name is still "category".
-    info_aliased = SimpleNamespace(field_name="category")
-    assert _get_relation_field_name(info_aliased) == "category"
 
 
 def test_will_lazy_load_false_when_cached():

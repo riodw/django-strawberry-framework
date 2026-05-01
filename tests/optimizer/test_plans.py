@@ -13,7 +13,7 @@ from django_strawberry_framework.optimizer.plans import OptimizationPlan, lookup
 
 
 class TestOptimizationPlanIsEmpty:
-    """``is_empty`` returns ``True`` only when all three bags are empty."""
+    """``is_empty`` returns ``True`` only when all plan directives are empty."""
 
     def test_empty_plan(self):
         plan = OptimizationPlan()

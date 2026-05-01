@@ -250,11 +250,8 @@ def _plan_prefetch_relation(
     _merge_child_plan_metadata(plan, child_plan)
     if not child_plan.cacheable:
         plan.cacheable = False
-    if child_plan.is_empty and not has_custom_get_queryset:
-        _append_unique(plan.prefetch_related, full_path)
-        return
     child_queryset = child_plan.apply(_build_child_queryset(django_field, target_type, info))
-    plan.prefetch_related.append(Prefetch(full_path, queryset=child_queryset))
+    _append_prefetch_unique(plan.prefetch_related, Prefetch(full_path, queryset=child_queryset))
 
 
 def _merge_child_plan_metadata(parent_plan: OptimizationPlan, child_plan: OptimizationPlan) -> None:
@@ -371,6 +368,14 @@ def _append_unique_many(values: list[Any], new_values: tuple[Any, ...]) -> None:
         _append_unique(values, value)
 
 
+def _append_prefetch_unique(values: list[Any], prefetch: Prefetch) -> None:
+    """Append ``prefetch`` unless a lookup for the same path already exists."""
+    lookup_path = prefetch.prefetch_to
+    if any(getattr(value, "prefetch_to", value) == lookup_path for value in values):
+        return
+    values.append(prefetch)
+
+
 def _should_include(selection: Any) -> bool:
     """Evaluate ``@skip`` / ``@include`` directives on a selection."""
     directives = getattr(selection, "directives", None) or {}
@@ -406,6 +411,10 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             merged = SimpleNamespace(
                 name=sel.name,
                 alias=getattr(sel, "alias", None),
+                # The walker filters directives before merging and does not
+                # inspect arguments. If future optimizer slices use arguments,
+                # this merge must become per-response-key instead of keeping
+                # only the first occurrence's values.
                 directives=getattr(sel, "directives", None) or {},
                 arguments=getattr(sel, "arguments", None) or {},
                 selections=list(getattr(sel, "selections", None) or []),

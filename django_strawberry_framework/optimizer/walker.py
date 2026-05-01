@@ -47,19 +47,24 @@ Strawberry's ``info.selected_fields`` exposes three node types
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from django.db import models
+from django.db.models import Prefetch
 
 from ..registry import registry
 from ..utils.strings import snake_case
 from .hints import OptimizerHint
 from .plans import OptimizationPlan
 
+logger = logging.getLogger("django_strawberry_framework")
+
 
 def plan_optimizations(
     selected_fields: list[Any],
     model: type[models.Model],
+    info: Any | None = None,
 ) -> OptimizationPlan:
     """Walk the selection tree and produce an ``OptimizationPlan``.
 
@@ -74,8 +79,35 @@ def plan_optimizations(
         via ``plan.apply(queryset)``.
     """
     plan = OptimizationPlan()
-    _walk_selections(selected_fields, model, plan)
+    _walk_selections(selected_fields, model, plan, info=info)
     return plan
+
+
+def plan_relation(
+    field: Any,
+    target_type: type | None,
+    info: Any | None,
+) -> tuple[str, Any]:
+    """Plan one relation traversal.
+
+    Returns ``("select", field_name)`` for a normal single-valued join
+    or ``("prefetch", lookup)`` for many-side relations and O6
+    visibility-aware downgrades. When the registered target
+    ``DjangoType`` overrides ``get_queryset``, the lookup is a
+    ``Prefetch`` object whose queryset has passed through that hook.
+    """
+    if target_type is not None and target_type.has_custom_get_queryset():
+        target_qs = field.related_model._default_manager.all()
+        target_qs = target_type.get_queryset(target_qs, info)
+        logger.debug(
+            "Optimizer: downgraded %s to Prefetch because %s overrides get_queryset.",
+            field.name,
+            target_type.__name__,
+        )
+        return ("prefetch", Prefetch(field.name, queryset=target_qs))
+    if field.many_to_many or field.one_to_many:
+        return ("prefetch", field.name)
+    return ("select", field.name)
 
 
 def _walk_selections(
@@ -83,6 +115,7 @@ def _walk_selections(
     model: type[models.Model],
     plan: OptimizationPlan,
     prefix: str = "",
+    info: Any | None = None,
 ) -> None:
     """Recursive workhorse: descend one level of the selection tree.
 
@@ -105,7 +138,7 @@ def _walk_selections(
         if not _should_include(sel):
             continue
         if _is_fragment(sel):
-            _walk_selections(sel.selections, model, plan, prefix)
+            _walk_selections(sel.selections, model, plan, prefix, info)
             continue
         django_name = snake_case(sel.name)
         django_field = field_map.get(django_name)
@@ -144,8 +177,18 @@ def _walk_selections(
                 continue
         # Relation dispatch by cardinality.
         full_path = f"{prefix}{django_name}"
-        if django_field.many_to_many or django_field.one_to_many:
-            plan.prefetch_related.append(full_path)
+        target_type = (
+            registry.get(django_field.related_model) if django_field.related_model is not None else None
+        )
+        relation_kind, relation_lookup = plan_relation(django_field, target_type, info)
+        if relation_kind == "prefetch":
+            if django_field.attname is not None:
+                _append_unique(plan.only_fields, f"{prefix}{django_field.attname}")
+            if target_type is not None and target_type.has_custom_get_queryset():
+                plan.cacheable = False
+            plan.prefetch_related.append(
+                full_path if relation_lookup == django_name else relation_lookup,
+            )
         else:
             if django_field.attname is not None:
                 _append_unique(plan.only_fields, f"{prefix}{django_field.attname}")
@@ -180,9 +223,6 @@ def _walk_selections(
             #       plan.only_fields.append(
             #           django_field.attname)
             #       continue
-            # TODO(spec-optimizer.md O6): check whether the target type
-            # overrides get_queryset and downgrade select_related to
-            # Prefetch when it does.
             plan.select_related.append(full_path)
         # TODO(spec-optimizer.md O4): recurse into sel.selections to
         # build nested Prefetch chains for depth > 1.

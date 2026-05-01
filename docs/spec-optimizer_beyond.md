@@ -8,7 +8,7 @@ This spec covers eight improvements that the existing libraries do not ship. The
 
 ## Current state
 
-O1 (custom relation resolvers), O2 (selection-tree walker), O3 (root-gated resolve hook with async parity and type-tracing), and O5 (`only()` projection) have shipped. The optimizer is effective end-to-end for depth-1 queries. O4 (nested prefetch chains) and O6 (`Prefetch` downgrade) are specified in `spec-optimizer.md` but not yet implemented. This spec's items layer on top of O3 and are independent of O4–O6 unless noted.
+O1 (custom relation resolvers), O2 (selection-tree walker), O3 (root-gated resolve hook with async parity and type-tracing), O5 (`only()` projection), and O6 (`Prefetch` downgrade) have shipped. The optimizer is effective end-to-end for depth-1 queries. O4 (nested prefetch chains) is specified in `spec-optimizer.md` but not yet implemented. This spec's items layer on top of O3 and are independent of O4 unless noted.
 
 ## Proposed improvements
 

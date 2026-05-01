@@ -30,6 +30,10 @@ class TestOptimizationPlanIsEmpty:
         plan = OptimizationPlan(only_fields=["name"])
         assert plan.is_empty is False
 
+    def test_cacheable_flag_does_not_affect_empty_state(self):
+        plan = OptimizationPlan(cacheable=False)
+        assert plan.is_empty is True
+
 
 class TestOptimizationPlanApply:
     """``apply`` mutates a queryset with the collected directives."""

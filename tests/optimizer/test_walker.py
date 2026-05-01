@@ -18,6 +18,7 @@ when they land.
 
 from types import SimpleNamespace
 
+from django.db.models import Prefetch
 from fakeshop.products.models import Category, Entry, Item
 
 from django_strawberry_framework.optimizer.walker import (
@@ -26,6 +27,7 @@ from django_strawberry_framework.optimizer.walker import (
     _should_include,
     plan_optimizations,
 )
+from django_strawberry_framework.registry import registry
 
 # ---------------------------------------------------------------------------
 # Helpers: synthetic selection factories
@@ -358,13 +360,108 @@ def test_plan_collects_related_scalar_only_fields_from_fragment():
 
 
 # ---------------------------------------------------------------------------
+# O6 — get_queryset + Prefetch downgrade
+# ---------------------------------------------------------------------------
+
+
+def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
+    """O6: a custom target ``get_queryset`` downgrades forward FK joins to ``Prefetch``."""
+    registry.clear()
+    info = SimpleNamespace(field_name="allItems")
+    calls = {}
+
+    class FilteredCategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return True
+
+        @classmethod
+        def get_queryset(cls, queryset, passed_info, **kwargs):
+            calls["queryset"] = queryset
+            calls["info"] = passed_info
+            return queryset.filter(is_private=False)
+
+    registry.register(Category, FilteredCategoryType)
+    try:
+        plan = plan_optimizations(
+            [_sel("category", selections=[_sel("name")])],
+            Item,
+            info=info,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.select_related == []
+    assert plan.only_fields == ["category_id"]
+    assert plan.cacheable is False
+    assert len(plan.prefetch_related) == 1
+    prefetch = plan.prefetch_related[0]
+    assert isinstance(prefetch, Prefetch)
+    assert prefetch.prefetch_to == "category"
+    assert prefetch.queryset.model is Category
+    assert calls["queryset"].model is Category
+    assert calls["info"] is info
+
+
+def test_plan_keeps_select_related_when_target_uses_default_get_queryset():
+    """O6: registered target types without custom ``get_queryset`` still use joins."""
+    registry.clear()
+
+    class DefaultCategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Category, DefaultCategoryType)
+    try:
+        plan = plan_optimizations(
+            [_sel("category", selections=[_sel("name")])],
+            Item,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.select_related == ["category"]
+    assert plan.prefetch_related == []
+    assert plan.only_fields == ["category_id", "category__name"]
+    assert plan.cacheable is True
+
+
+def test_plan_prefetches_many_side_with_custom_target_get_queryset():
+    """O6: many-side relations use filtered ``Prefetch`` when the target has visibility logic."""
+    registry.clear()
+    calls = {}
+
+    class FilteredItemType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return True
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            calls["queryset"] = queryset
+            return queryset.filter(is_private=False)
+
+    registry.register(Item, FilteredItemType)
+    try:
+        plan = plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
+    finally:
+        registry.clear()
+
+    assert plan.select_related == []
+    assert plan.cacheable is False
+    assert len(plan.prefetch_related) == 1
+    prefetch = plan.prefetch_related[0]
+    assert isinstance(prefetch, Prefetch)
+    assert prefetch.prefetch_to == "items"
+    assert prefetch.queryset.model is Item
+    assert calls["queryset"].model is Item
+
+
+# ---------------------------------------------------------------------------
 # Future slice placeholders
 # ---------------------------------------------------------------------------
 
 # TODO(spec-optimizer.md O4): add nested-prefetch tests:
 # - test_plan_emits_nested_prefetch_chain_depth_2
 # - test_plan_emits_nested_prefetch_chain_depth_3
-
-
-# TODO(spec-optimizer.md O6): add Prefetch downgrade tests:
-# - test_plan_downgrades_select_related_when_target_has_custom_get_queryset

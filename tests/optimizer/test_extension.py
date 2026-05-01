@@ -13,8 +13,8 @@ Covers:
   no relations (just scalars).
 - ``on_execute`` ContextVar lifecycle.
 
-Slice 6 (``plan_relation`` downgrade) is placeholder-skipped at the bottom
-of the file.
+O6 covers the ``plan_relation`` downgrade from ``select_related`` to
+``Prefetch`` for target types with custom ``get_queryset`` hooks.
 """
 
 import contextlib
@@ -1280,13 +1280,124 @@ def test_optimizer_applies_only_for_selected_scalars(django_assert_num_queries):
 
 
 # ---------------------------------------------------------------------------
-# Slice 6 placeholders
+# O6 — get_queryset + Prefetch downgrade
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="Slice 6: plan_relation downgrade-to-Prefetch pending")
-def test_optimizer_downgrades_select_related_for_custom_get_queryset():
-    pass
+@pytest.mark.django_db
+def test_optimizer_downgrades_select_related_for_custom_get_queryset(django_assert_num_queries):
+    """O6: custom target ``get_queryset`` downgrades forward FK traversal to ``Prefetch``."""
+    from django.db.models import Prefetch
+
+    services.seed_data(1)
+    calls = []
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            calls.append(info)
+            return queryset
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(2):
+        result = schema.execute_sync(
+            "{ allItems { name category { name } } }",
+            context_value=ctx,
+        )
+    assert result.errors is None
+    assert calls
+    plan = ctx.dst_optimizer_plan
+    assert plan.select_related == []
+    assert "category_id" in plan.only_fields
+    assert "category__name" not in plan.only_fields
+    assert plan.cacheable is False
+    assert ext.cache_info().size == 0
+    assert len(plan.prefetch_related) == 1
+    assert isinstance(plan.prefetch_related[0], Prefetch)
+    assert plan.prefetch_related[0].prefetch_to == "category"
+
+
+@pytest.mark.django_db
+def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
+    """O6: request-dependent ``Prefetch`` querysets are rebuilt instead of cached."""
+    services.seed_data(1)
+    calls = []
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            calls.append(info)
+            return queryset
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    query = "{ allItems { name category { name } } }"
+
+    assert schema.execute_sync(query).errors is None
+    assert schema.execute_sync(query).errors is None
+
+    assert len(calls) == 2
+    assert ext.cache_info().hits == 0
+    assert ext.cache_info().misses == 2
+    assert ext.cache_info().size == 0
+
+
+def test_plan_relation_returns_prefetch_for_custom_get_queryset():
+    """O6: the extension exposes the relation planner entry point."""
+    from django.db.models import Prefetch
+
+    field = Item._meta.get_field("category")
+    info = SimpleNamespace()
+
+    class FilteredCategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return True
+
+        @classmethod
+        def get_queryset(cls, queryset, passed_info, **kwargs):
+            assert passed_info is info
+            return queryset
+
+    kind, lookup = DjangoOptimizerExtension().plan_relation(field, FilteredCategoryType, info)
+    assert kind == "prefetch"
+    assert isinstance(lookup, Prefetch)
+    assert lookup.prefetch_to == "category"
 
 
 @pytest.mark.skip(reason="Slice 4+: M2M relation — fakeshop has no M2M field; deferred.")

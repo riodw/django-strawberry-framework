@@ -49,15 +49,17 @@ class OptimizationPlan:
     # already accepts ``Prefetch`` objects, so no signature change is
     # needed — the walker just builds nested ``Prefetch`` instances.
 
-    # TODO(spec-optimizer.md O6): the ``Prefetch`` downgrade rule
-    # replaces what would have been a ``select_related`` entry with a
-    # ``Prefetch(field_name, queryset=target_type.get_queryset(...))``
-    # in ``prefetch_related``. The plan itself is agnostic to which rule
-    # produced the entry — the extension just calls
-    # ``qs.prefetch_related(*self.prefetch_related)``.
-
     only_fields: list[str] = field(default_factory=list)
     """Scalar column names for ``QuerySet.only``."""
+    cacheable: bool = True
+    """Whether this plan can be reused from the extension's plan cache.
+
+    O6 ``Prefetch`` downgrades may embed querysets produced by
+    ``DjangoType.get_queryset(queryset, info)``. Those querysets can be
+    request-dependent because ``info.context`` may carry the current
+    user, tenant, or permissions. Plans containing such dynamic
+    querysets must be applied for the current request only.
+    """
 
     @property
     def is_empty(self) -> bool:

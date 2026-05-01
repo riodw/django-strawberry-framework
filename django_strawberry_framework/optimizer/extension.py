@@ -15,8 +15,8 @@ it walks the entire selection tree once using the O2 walker, builds an
 through untouched — Django's ``prefetch_related`` with ``__``-chained
 paths handles nested optimization in a single pass.
 
-Load-bearing rule (O6, not yet shipped): when a related field's target
-``DjangoType`` defines a non-default ``get_queryset``, generate a
+Load-bearing rule (O6): when a related field's target ``DjangoType``
+defines a non-default ``get_queryset``, generate a
 ``Prefetch(...)`` keyed on the filtered queryset instead of a
 ``select_related``. This is the visibility-leak fix from
 strawberry-graphql-django #572 / #583. We copy the behaviour, not the
@@ -43,7 +43,7 @@ from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
 from .hints import OptimizerHint
-from .walker import plan_optimizations
+from .walker import plan_optimizations, plan_relation
 
 _MAX_PLAN_CACHE_SIZE = 256
 
@@ -335,14 +335,15 @@ class DjangoOptimizerExtension(SchemaExtension):
             self._cache_hits += 1
             plan = cached_plan
         else:
-            plan = plan_optimizations(selections[0].selections, target_model)
+            plan = plan_optimizations(selections[0].selections, target_model, info=info)
             # Evict oldest entries if cache is full.
-            if len(self._plan_cache) >= _MAX_PLAN_CACHE_SIZE:
+            if plan.cacheable and len(self._plan_cache) >= _MAX_PLAN_CACHE_SIZE:
                 # Remove the oldest quarter to amortize eviction cost.
                 to_remove = _MAX_PLAN_CACHE_SIZE // 4
                 for _ in range(to_remove):
                     self._plan_cache.pop(next(iter(self._plan_cache)))
-            self._plan_cache[cache_key] = plan
+            if plan.cacheable:
+                self._plan_cache[cache_key] = plan
             self._cache_misses += 1
         # B5: stash the plan on info.context so consumers and tests
         # can introspect the optimizer's decisions.
@@ -457,8 +458,4 @@ class DjangoOptimizerExtension(SchemaExtension):
         ``("prefetch", Prefetch(...))`` describing how the optimizer
         should materialize this relation on the parent queryset.
         """
-        # TODO(spec-optimizer.md O6): implement. Log every downgrade
-        # decision via ``logger.debug``. Wire into the O2 walker so
-        # the planner delegates to ``plan_relation`` per relation
-        # rather than dispatching on cardinality directly.
-        raise NotImplementedError("plan_relation pending spec-optimizer.md O6")
+        return plan_relation(field, target_type, info)

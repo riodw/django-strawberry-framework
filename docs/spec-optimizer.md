@@ -33,7 +33,7 @@ Slice 4's tests in `tests/test_optimizer.py`:
 
 Slice-4 type-tracing limitation: at the per-resolver `resolve` / `aresolve` hooks, `info.return_type` is graphql-core's wrapper shape — `GraphQLNonNull(GraphQLList(GraphQLNonNull(GraphQLObjectType('ItemType'))))` — not the consumer's `list[ItemType]` annotation. `_unwrap_return_type` only peels one layer (`getattr(rt, "of_type", None)`) and returns the inner `GraphQLList` wrapper, so `registry.model_for_type(...)` always yields `None` and `_optimize` exits early before applying any `select_related` / `prefetch_related`. The "passing" Slice-4 tests pass because they short-circuit on this `None` (no relations selected, or non-`QuerySet` returns) — not because the planner ever fires. O3's `on_executing_start` hook receives the Python annotation directly and side-steps this; no separate fix is needed before O3 lands.
 
-Slice 5 (`only()` projection) and Slice 6 (`plan_relation` + `Prefetch` downgrade) inside `spec-django_types.md` moved into this spec's scope. O5 has shipped; O6 remains pending.
+Slice 5 (`only()` projection) and Slice 6 (`plan_relation` + `Prefetch` downgrade) inside `spec-django_types.md` moved into this spec's scope. O5 and O6 have shipped.
 
 graphene-django's reverse-relation resolution is a custom `Field.wrap_resolve` per FK / M2M (see `converter.py:308-471`). graphene-django does not ship an optimizer — it relies on `graphene-django-optimizer` which uses the same selection-tree-walk approach as strawberry-graphql-django.
 
@@ -147,7 +147,7 @@ The `model_for_type` reverse-lookup on `TypeRegistry` stays where it is. Both ha
 
 ## Visibility status
 
-O3 and O5 have shipped. `DjangoOptimizerExtension` is in `django_strawberry_framework/__init__.py`'s `__all__` and importable from the top-level namespace. The three previously-skipped optimizer tests (`test_optimizer_applies_select_related_for_forward_fk`, `test_optimizer_applies_prefetch_related_for_reverse_fk`, `test_optimizer_combines_select_related_and_prefetch_related`) are unskipped and passing. The optimizer's status marker in `docs/README.md` reflects "O1–O3/O5 shipped". O4 and O6 are the remaining slices in this spec; `spec-optimizer_beyond.md` covers the B1–B8 improvements layered on top.
+O3, O5, and O6 have shipped. `DjangoOptimizerExtension` is in `django_strawberry_framework/__init__.py`'s `__all__` and importable from the top-level namespace. The three previously-skipped optimizer tests (`test_optimizer_applies_select_related_for_forward_fk`, `test_optimizer_applies_prefetch_related_for_reverse_fk`, `test_optimizer_combines_select_related_and_prefetch_related`) are unskipped and passing. The optimizer's status marker in `docs/README.md` reflects "O1–O3/O5–O6 shipped". O4 is the remaining slice in this spec; `spec-optimizer_beyond.md` covers the B1–B8 improvements layered on top.
 
 ## Open questions
 
@@ -178,4 +178,4 @@ The visibility-leak / `Prefetch` downgrade discussion that motivated bundling th
 - [x] O3 — Root-gated resolve hook (top-level optimizer)
 - [ ] O4 — Nested prefetch chains (depth > 1)
 - [x] O5 — `only()` projection
-- [ ] O6 — `get_queryset` + `Prefetch` downgrade
+- [x] O6 — `get_queryset` + `Prefetch` downgrade

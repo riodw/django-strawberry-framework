@@ -108,7 +108,7 @@ This rule should be checked at every spec slice that introduces or moves a Meta 
 
 `spec-django_types.md` defines the pipeline (Meta validation, scalar synthesis, relation conversion, choice enums, `get_queryset` hook). This spec defines the boundary of that pipeline — what is rejected, what is reserved for the future, what consumers can and cannot rely on.
 
-`spec-optimizer.md` defines the N+1 optimizer subsystem. The `has_custom_get_queryset` sentinel landed alongside the override-detection contract in 0.0.3 and is consumed by the future O6 work; this spec covers the type-system half of the contract.
+`spec-optimizer.md` defines the N+1 optimizer subsystem. The `has_custom_get_queryset` sentinel landed alongside the override-detection contract in 0.0.3 and is consumed by O6's `Prefetch` downgrade rule; this spec covers the type-system half of the contract.
 
 When a future spec (filtering, ordering, aggregates, permissions, connection field, relay interfaces, `Meta.primary`, consumer overrides) adds a new Meta key or changes an existing one, that spec must update this contract spec accordingly.
 

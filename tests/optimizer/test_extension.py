@@ -578,6 +578,37 @@ def test_optimize_handles_empty_field_nodes(django_assert_num_queries):
     assert result.query.select_related is False
 
 
+@pytest.mark.django_db
+def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch):
+    """If the walker produces an empty plan, _optimize returns the original queryset."""
+    import django_strawberry_framework.optimizer.extension as extension_module
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    monkeypatch.setattr(
+        extension_module,
+        "plan_optimizations",
+        lambda selected_fields, model, info=None: OptimizationPlan(),
+    )
+    ctx = SimpleNamespace()
+    result = schema.execute_sync("{ allCategories { name } }", context_value=ctx)
+    assert result.errors is None
+    assert ctx.dst_optimizer_plan.is_empty
+
+
 # ---------------------------------------------------------------------------
 # O3: on_execute ContextVar lifecycle
 # ---------------------------------------------------------------------------
@@ -708,6 +739,61 @@ def test_cache_differentiates_same_model_root_fields(django_assert_num_queries):
     assert ctx.dst_optimizer_plan.prefetch_related == []
 
 
+def test_cache_key_includes_root_runtime_path_for_same_model_fields():
+    """B1/O4: cache keys differ for root fields returning the same model."""
+    from graphql import parse
+
+    operation = parse("{ allCategories { name } featured { name } }").definitions[0]
+    info_a = SimpleNamespace(
+        operation=operation,
+        fragments={},
+        variable_values={},
+        path=SimpleNamespace(key="allCategories", prev=None),
+    )
+    info_b = SimpleNamespace(
+        operation=operation,
+        fragments={},
+        variable_values={},
+        path=SimpleNamespace(key="featured", prev=None),
+    )
+
+    assert DjangoOptimizerExtension._build_cache_key(
+        info_a,
+        Category,
+    ) != DjangoOptimizerExtension._build_cache_key(info_b, Category)
+
+
+@pytest.mark.django_db
+def test_cache_eviction_removes_old_entries(monkeypatch):
+    """B1: the plan cache evicts old entries when it reaches capacity."""
+    import django_strawberry_framework.optimizer.extension as extension_module
+
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    ext = DjangoOptimizerExtension()
+    monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 4)
+    ext._plan_cache = {(idx, frozenset(), Category, (f"root{idx}",)): object() for idx in range(4)}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    result = schema.execute_sync("{ allCategories { name } }")
+
+    assert result.errors is None
+    assert ext.cache_info().misses == 1
+    assert ext.cache_info().size == 4
+    assert (0, frozenset(), Category, ("root0",)) not in ext._plan_cache
+
+
 @pytest.mark.django_db
 def test_filter_vars_do_not_affect_cache():
     """B1: variables not used in @skip/@include don't split cache entries."""
@@ -741,6 +827,24 @@ def test_filter_vars_do_not_affect_cache():
     assert ext.cache_info().size == 1
 
 
+def test_build_cache_key_uses_print_ast_when_source_location_missing():
+    """B1: cache keys fall back to print_ast when the operation has no source body."""
+    from graphql import parse
+
+    operation = parse("{ allCategories { name } }", no_location=True).definitions[0]
+    info = SimpleNamespace(
+        operation=operation,
+        fragments={},
+        variable_values={},
+        path=None,
+    )
+
+    key = DjangoOptimizerExtension._build_cache_key(info, Category)
+
+    assert key[2] is Category
+    assert isinstance(key[3], tuple)
+
+
 def test_collect_directive_var_names_with_skip():
     """B1: _collect_directive_var_names finds vars in @skip directives."""
     from graphql import parse
@@ -770,6 +874,32 @@ def test_collect_directive_var_names_ignores_non_directive_vars():
     from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
 
     doc = parse("query Q($limit: Int!) { items(limit: $limit) { name } }")
+    names = _collect_directive_var_names(doc.definitions[0])
+    assert names == frozenset()
+
+
+def test_walk_directives_ignores_non_directive_objects():
+    """B1: directive collection skips defensive non-DirectiveNode entries."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _walk_directives
+
+    operation = parse("query Q($v: Boolean!) { items @skip(if: $v) { name } }").definitions[0]
+    field = operation.selection_set.selections[0]
+
+    names: set[str] = set()
+    node = SimpleNamespace(directives=[object(), *field.directives], selection_set=None)
+    _walk_directives(node, names, fragments={})
+    assert names == {"v"}
+
+
+def test_collect_directive_var_names_ignores_other_directives():
+    """B1: only @skip and @include directives split the plan cache."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+
+    doc = parse("query Q($v: Boolean!) { items @custom(if: $v) { name } }")
     names = _collect_directive_var_names(doc.definitions[0])
     assert names == frozenset()
 
@@ -1261,6 +1391,34 @@ def test_collect_directive_var_names_in_named_fragment():
 # ---------------------------------------------------------------------------
 # B6: Schema-build-time optimization audit
 # ---------------------------------------------------------------------------
+
+
+def test_collect_schema_reachable_types_returns_empty_without_graphql_schema():
+    """B6: schemas without a graphql-core schema expose no reachable types."""
+    from django_strawberry_framework.optimizer.extension import _collect_schema_reachable_types
+
+    assert _collect_schema_reachable_types(SimpleNamespace()) == set()
+
+
+def test_check_schema_skips_unreachable_and_missing_field_map(monkeypatch):
+    """B6: check_schema skips orphan types and types without optimizer metadata."""
+    import django_strawberry_framework.optimizer.extension as extension_module
+
+    class ReachableWithoutFieldMap:
+        pass
+
+    class UnreachableType:
+        pass
+
+    registry.register(Category, ReachableWithoutFieldMap)
+    registry.register(Item, UnreachableType)
+    monkeypatch.setattr(
+        extension_module,
+        "_collect_schema_reachable_types",
+        lambda schema: {ReachableWithoutFieldMap},
+    )
+
+    assert DjangoOptimizerExtension.check_schema(SimpleNamespace()) == []
 
 
 def test_check_schema_warns_unregistered_target():

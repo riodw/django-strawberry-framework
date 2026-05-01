@@ -69,6 +69,11 @@ class TestLookupPaths:
         )
         assert lookup_paths(plan) == {"category"}
 
+    def test_ignores_unknown_prefetch_like_entries(self):
+        # Deliberately impossible for generated plans; covers defensive flattening.
+        plan = OptimizationPlan(prefetch_related=[object()])
+        assert lookup_paths(plan) == set()
+
 
 def test_resolver_key_includes_parent_type_and_runtime_path():
     class ItemType:

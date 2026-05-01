@@ -20,6 +20,7 @@ import strawberry
 from fakeshop.products.models import Category, Item
 
 from django_strawberry_framework import DjangoType
+from django_strawberry_framework.optimizer.plans import resolver_key
 from django_strawberry_framework.registry import registry
 
 CATEGORY_SCALAR_FIELDS = (
@@ -30,6 +31,14 @@ CATEGORY_SCALAR_FIELDS = (
     "created_date",
     "updated_date",
 )
+
+
+def _path(*keys):
+    """Build a graphql-core-style linked response path."""
+    path = None
+    for key in keys:
+        path = type("Path", (), {"key": key, "prev": path})()
+    return path
 
 
 @pytest.fixture(autouse=True)
@@ -172,6 +181,9 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
 
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
+    class ItemType:
+        pass
+
     class Root:
         category_id = 42
 
@@ -180,10 +192,12 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
             raise AssertionError("B2 resolver should not lazy-load the relation")
 
     field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field)
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    key = resolver_key(ItemType, "category", ("allItems", "category"))
     fake_info = SimpleNamespace(
-        context=SimpleNamespace(dst_optimizer_fk_id_elisions={"category"}),
+        context=SimpleNamespace(dst_optimizer_fk_id_elisions={key}),
         field_name="category",
+        path=_path("allItems", 0, "category"),
     )
 
     root = Root()
@@ -192,21 +206,7 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
     assert result.pk == 42
     assert result.id == 42
     assert result._state.adding is False
-    assert result._state.db == router.db_for_read(Category, instance=root)
-
-
-# TODO(spec-optimizer_nested_prefetch_chains.md O4): update the B2
-# resolver tests to use branch-sensitive resolver keys and add a leak
-# regression.
-#
-# Pseudo:
-# - test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation:
-#     context contains {"ItemType.category@allItems.category"}.
-# - test_b2_forward_fk_id_elision_returns_none_for_null_fk:
-#     same key shape, null <field>_id returns None.
-# - test_b2_forward_fk_id_elision_does_not_leak_across_parent_types:
-#     elide one parent type's category relation; assert another same
-#     field name on a different parent type follows normal getattr.
+    assert result._state.db == router.db_for_read(Category)
 
 
 def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
@@ -215,15 +215,56 @@ def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
 
     from django_strawberry_framework.types.resolvers import _make_relation_resolver
 
+    class ItemType:
+        pass
+
     field = Item._meta.get_field("category")
-    resolver = _make_relation_resolver(field)
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    key = resolver_key(ItemType, "category", ("allItems", "category"))
     fake_root = SimpleNamespace(category_id=None)
     fake_info = SimpleNamespace(
-        context={"dst_optimizer_fk_id_elisions": {"category"}},
+        context={"dst_optimizer_fk_id_elisions": {key}},
         field_name="category",
+        path=_path("allItems", 0, "category"),
     )
 
     assert resolver(fake_root, fake_info) is None
+
+
+def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types():
+    """B2/O4: elision for one parent type does not affect another type."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    class ItemType:
+        pass
+
+    class OtherType:
+        pass
+
+    sentinel = object()
+    field = Item._meta.get_field("category")
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    wrong_key = resolver_key(OtherType, "category", ("allItems", "category"))
+    fake_root = SimpleNamespace(category_id=42, category=sentinel)
+    fake_info = SimpleNamespace(
+        context={"dst_optimizer_fk_id_elisions": {wrong_key}},
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+
+    assert resolver(fake_root, fake_info) is sentinel
+
+
+def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
+    """O4: runtime response paths preserve aliases and omit list indexes."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _runtime_path_from_info
+
+    info = SimpleNamespace(path=_path("allItems", 0, "cat"))
+    assert _runtime_path_from_info(info) == ("allItems", "cat")
 
 
 def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexist():

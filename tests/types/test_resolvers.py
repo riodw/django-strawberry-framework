@@ -257,14 +257,59 @@ def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types():
     assert resolver(fake_root, fake_info) is sentinel
 
 
+def test_b2_forward_fk_id_elision_ignores_bare_field_name_key():
+    """B2/O4: elision requires the full branch-sensitive resolver key."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    class ItemType:
+        pass
+
+    sentinel = object()
+    field = Item._meta.get_field("category")
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    fake_root = SimpleNamespace(category_id=42, category=sentinel)
+    fake_info = SimpleNamespace(
+        context={"dst_optimizer_fk_id_elisions": {"category"}},
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+
+    assert resolver(fake_root, fake_info) is sentinel
+
+
+def test_check_n1_ignores_bare_field_name_key():
+    """B3/O4: planned relations require the full branch-sensitive resolver key."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.exceptions import OptimizerError
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class ItemType:
+        pass
+
+    fake_info = SimpleNamespace(
+        context={
+            "dst_optimizer_planned": {"category"},
+            "dst_optimizer_strictness": "raise",
+        },
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+
+    with pytest.raises(OptimizerError, match="Unplanned N\\+1"):
+        _check_n1(fake_info, SimpleNamespace(), "category", ItemType)
+
+
 def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
     """O4: runtime response paths preserve aliases and omit list indexes."""
     from types import SimpleNamespace
 
-    from django_strawberry_framework.types.resolvers import _runtime_path_from_info
+    from django_strawberry_framework.optimizer.plans import runtime_path_from_info
 
     info = SimpleNamespace(path=_path("allItems", 0, "cat"))
-    assert _runtime_path_from_info(info) == ("allItems", "cat")
+    assert runtime_path_from_info(info) == ("allItems", "cat")
 
 
 def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexist():

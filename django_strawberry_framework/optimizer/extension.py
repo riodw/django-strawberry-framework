@@ -456,7 +456,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         field: Any,
         target_type: type,
         info: Any,
-    ) -> tuple[str, Any]:
+    ) -> tuple[str, str]:
         """Plan a single relation traversal (O6 entry point).
 
         Returns ``("select", reason)`` or ``("prefetch", reason)`` describing how

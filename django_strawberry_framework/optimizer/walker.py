@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 from django.db import models
@@ -11,7 +12,7 @@ from django.db.models import Prefetch
 from ..registry import registry
 from ..utils.strings import snake_case
 from .hints import OptimizerHint
-from .plans import OptimizationPlan, resolver_key
+from .plans import OptimizationPlan, resolver_key, runtime_path_from_info
 
 logger = logging.getLogger("django_strawberry_framework")
 
@@ -28,7 +29,7 @@ def plan_optimizations(
         model,
         plan,
         info=info,
-        runtime_prefix=_runtime_prefix_from_info(info),
+        runtime_prefixes=(runtime_path_from_info(info),),
     )
     return plan
 
@@ -65,16 +66,14 @@ def _walk_selections(
     plan: OptimizationPlan,
     prefix: str = "",
     info: Any | None = None,
-    runtime_prefix: tuple[str, ...] = (),
+    runtime_prefixes: tuple[tuple[str, ...], ...] = ((),),
 ) -> None:
     """Recursive workhorse: descend one level of the selection tree."""
     type_cls = registry.get(model)
     cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
     field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
-    merged = _merge_aliased_selections(selections)
+    merged = _merge_aliased_selections([sel for sel in selections if _should_include(sel)])
     for sel in merged:
-        if not _should_include(sel):
-            continue
         if _is_fragment(sel):
             _walk_selections(
                 sel.selections,
@@ -82,7 +81,7 @@ def _walk_selections(
                 plan,
                 prefix=prefix,
                 info=info,
-                runtime_prefix=runtime_prefix,
+                runtime_prefixes=runtime_prefixes,
             )
             continue
         django_name = snake_case(sel.name)
@@ -94,8 +93,14 @@ def _walk_selections(
             continue
 
         full_path = f"{prefix}{django_name}"
-        runtime_path = (*runtime_prefix, getattr(sel, "alias", None) or sel.name)
-        resolver_identity = resolver_key(type_cls, django_name, runtime_path)
+        runtime_paths = tuple(
+            (*runtime_prefix, response_key)
+            for runtime_prefix in runtime_prefixes
+            for response_key in _response_keys(sel)
+        )
+        resolver_identities = tuple(
+            resolver_key(type_cls, django_name, runtime_path) for runtime_path in runtime_paths
+        )
         target_type = (
             registry.get(django_field.related_model) if django_field.related_model is not None else None
         )
@@ -108,7 +113,7 @@ def _walk_selections(
                 attname = getattr(django_field, "attname", None)
                 if attname is not None:
                     _append_unique(plan.only_fields, f"{prefix}{attname}")
-                _append_unique(plan.planned_resolver_keys, resolver_identity)
+                _append_unique_many(plan.planned_resolver_keys, resolver_identities)
                 plan.prefetch_related.append(hint.prefetch_obj)
                 continue
             if hint.force_select:
@@ -122,8 +127,8 @@ def _walk_selections(
                     prefix,
                     full_path,
                     info,
-                    runtime_path,
-                    resolver_identity,
+                    runtime_paths,
+                    resolver_identities,
                 )
                 continue
             if hint.force_prefetch:
@@ -135,8 +140,8 @@ def _walk_selections(
                     prefix,
                     full_path,
                     info,
-                    runtime_path,
-                    resolver_identity,
+                    runtime_paths,
+                    resolver_identities,
                 )
                 continue
 
@@ -150,8 +155,8 @@ def _walk_selections(
                 prefix,
                 full_path,
                 info,
-                runtime_path,
-                resolver_identity,
+                runtime_paths,
+                resolver_identities,
             )
         else:
             _plan_select_relation(
@@ -164,8 +169,8 @@ def _walk_selections(
                 prefix,
                 full_path,
                 info,
-                runtime_path,
-                resolver_identity,
+                runtime_paths,
+                resolver_identities,
             )
 
 
@@ -179,8 +184,8 @@ def _plan_select_relation(
     prefix: str,
     full_path: str,
     info: Any | None,
-    runtime_path: tuple[str, ...],
-    resolver_identity: str,
+    runtime_paths: tuple[tuple[str, ...], ...],
+    resolver_identities: tuple[str, ...],
 ) -> None:
     """Plan a same-query single-valued relation traversal."""
     attname = getattr(django_field, "attname", None)
@@ -193,10 +198,10 @@ def _plan_select_relation(
         and not _has_custom_id_resolver(target_type, target_pk_name)
         and _selected_scalar_names(sel.selections, django_field.related_model) == {target_pk_name}
     ):
-        _append_unique(plan.fk_id_elisions, resolver_identity)
-        _append_unique(plan.planned_resolver_keys, resolver_identity)
+        _append_unique_many(plan.fk_id_elisions, resolver_identities)
+        _append_unique_many(plan.planned_resolver_keys, resolver_identities)
         return
-    _append_unique(plan.planned_resolver_keys, resolver_identity)
+    _append_unique_many(plan.planned_resolver_keys, resolver_identities)
     _append_unique(plan.select_related, full_path)
     if django_field.related_model is not None:
         _walk_selections(
@@ -205,7 +210,7 @@ def _plan_select_relation(
             plan,
             prefix=f"{full_path}__",
             info=info,
-            runtime_prefix=runtime_path,
+            runtime_prefixes=runtime_paths,
         )
 
 
@@ -217,14 +222,14 @@ def _plan_prefetch_relation(
     prefix: str,
     full_path: str,
     info: Any | None,
-    runtime_path: tuple[str, ...],
-    resolver_identity: str,
+    runtime_paths: tuple[tuple[str, ...], ...],
+    resolver_identities: tuple[str, ...],
 ) -> None:
     """Plan a queryset-boundary relation traversal with optional child optimization."""
     attname = getattr(django_field, "attname", None)
     if attname is not None:
         _append_unique(plan.only_fields, f"{prefix}{attname}")
-    _append_unique(plan.planned_resolver_keys, resolver_identity)
+    _append_unique_many(plan.planned_resolver_keys, resolver_identities)
     has_custom_get_queryset = target_type is not None and target_type.has_custom_get_queryset()
     if has_custom_get_queryset:
         plan.cacheable = False
@@ -239,7 +244,7 @@ def _plan_prefetch_relation(
         child_plan,
         prefix="",
         info=info,
-        runtime_prefix=runtime_path,
+        runtime_prefixes=runtime_paths,
     )
     _ensure_connector_only_fields(child_plan, django_field)
     _merge_child_plan_metadata(plan, child_plan)
@@ -271,9 +276,7 @@ def _selected_scalar_names(
     cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
     field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
     scalar_names: set[str] = set()
-    for sel in _merge_aliased_selections(selections):
-        if not _should_include(sel):
-            continue
+    for sel in _merge_aliased_selections([sel for sel in selections if _should_include(sel)]):
         if _is_fragment(sel):
             nested = _selected_scalar_names(sel.selections, model)
             if nested is None:
@@ -349,30 +352,23 @@ def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> 
         attname = parent_field.related_model._meta.pk.attname
     if attname is not None:
         _append_unique(plan.only_fields, attname)
-
-
-def _runtime_prefix_from_info(info: Any | None) -> tuple[str, ...]:
-    """Return the root response path prefix for a root resolver info object."""
-    if info is None:
-        return ()
-    return _runtime_path_from_path(getattr(info, "path", None))
-
-
-def _runtime_path_from_path(path: Any) -> tuple[str, ...]:
-    """Return a response path tuple with list indexes stripped."""
-    keys: list[str] = []
-    while path is not None:
-        key = getattr(path, "key", None)
-        if not isinstance(key, int) and key is not None:
-            keys.append(str(key))
-        path = getattr(path, "prev", None)
-    return tuple(reversed(keys))
+        return
+    logger.debug(
+        "Optimizer: could not resolve connector column for Prefetch %s; only() may be less precise.",
+        getattr(parent_field, "name", parent_field),
+    )
 
 
 def _append_unique(values: list[Any], value: Any) -> None:
     """Append ``value`` to ``values`` if it is not already present."""
     if value not in values:
         values.append(value)
+
+
+def _append_unique_many(values: list[Any], new_values: tuple[Any, ...]) -> None:
+    """Append each value in ``new_values`` if it is not already present."""
+    for value in new_values:
+        _append_unique(values, value)
 
 
 def _should_include(selection: Any) -> bool:
@@ -392,7 +388,7 @@ def _should_include(selection: Any) -> bool:
 
 
 def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
-    """Merge selections that alias the same underlying field."""
+    """Merge selections that alias the same underlying field while preserving response keys."""
     seen: dict[str, Any] = {}
     result: list[Any] = []
     for sel in selections:
@@ -401,11 +397,33 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             continue
         key = snake_case(sel.name)
         if key in seen:
-            seen[key].selections = list(seen[key].selections) + list(sel.selections)
+            merged = seen[key]
+            merged.selections = list(merged.selections) + list(sel.selections)
+            response_key = _response_key(sel)
+            if response_key not in merged._optimizer_response_keys:
+                merged._optimizer_response_keys.append(response_key)
         else:
-            seen[key] = sel
-            result.append(sel)
+            merged = SimpleNamespace(
+                name=sel.name,
+                alias=getattr(sel, "alias", None),
+                directives=getattr(sel, "directives", None) or {},
+                arguments=getattr(sel, "arguments", None) or {},
+                selections=list(getattr(sel, "selections", None) or []),
+                _optimizer_response_keys=[_response_key(sel)],
+            )
+            seen[key] = merged
+            result.append(merged)
     return result
+
+
+def _response_key(selection: Any) -> str:
+    """Return the GraphQL response key for a field selection."""
+    return getattr(selection, "alias", None) or selection.name
+
+
+def _response_keys(selection: Any) -> tuple[str, ...]:
+    """Return all response keys represented by a possibly merged selection."""
+    return tuple(getattr(selection, "_optimizer_response_keys", None) or (_response_key(selection),))
 
 
 def _is_fragment(selection: Any) -> bool:

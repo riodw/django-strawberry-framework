@@ -1,133 +1,176 @@
-# Alpha Review Feedback: B2 Forward-FK-id elision
+# Alpha Review Feedback: O4 Nested Prefetch Chains
 
 ## Scope reviewed
 
-- `django_strawberry_framework/optimizer/extension.py`
-- `django_strawberry_framework/optimizer/plans.py`
+- `docs/spec-optimizer_nested_prefetch_chains.md`
 - `django_strawberry_framework/optimizer/walker.py`
+- `django_strawberry_framework/optimizer/plans.py`
+- `django_strawberry_framework/optimizer/extension.py`
+- `django_strawberry_framework/optimizer/field_meta.py`
+- `django_strawberry_framework/optimizer/hints.py`
 - `django_strawberry_framework/types/resolvers.py`
-- `examples/fakeshop/fakeshop/products/schema.py`
+- `tests/optimizer/test_walker.py`
 - `tests/optimizer/test_extension.py`
 - `tests/optimizer/test_plans.py`
-- `tests/optimizer/test_walker.py`
 - `tests/types/test_resolvers.py`
-- `docs/spec-optimizer_beyond.md`
 
 ## Findings
 
-### 1. FK with `to_field` pointing at a non-PK column produces a stub with the wrong PK
+### 1. Bare `field_name` fallback in resolvers defeats branch-sensitive keys
 
 Priority: P1
 
-In `_build_fk_id_stub` ([resolvers.py:74-78](django_strawberry_framework/types/resolvers.py:74)) the stub is built as `field.related_model(pk=related_id)` where `related_id = getattr(root, field.attname)`. For a `ForeignKey(..., to_field="code")`, `field.attname` is the source column that stores the *target's `code` value*, not its PK. Constructing `Related(pk=<code value>)` therefore creates a stub whose `.pk` / `.id` is wrong, and any GraphQL `id` resolver (especially Relay GlobalID, `to_global_id(type, instance.pk)`) will return a value that points at the wrong row — silent data corruption rather than a query error.
+Both `_is_fk_id_elided` and `_check_n1` in `resolvers.py` contain an `or field_name in elisions` / `or field_name in planned` fallback after the branch-sensitive resolver-key check:
 
-Recommended fix:
+```python
+# _is_fk_id_elided
+key = resolver_key(parent_type, field_name, _runtime_path_from_info(info))
+return key in elisions or field_name in elisions
 
-- Gate elision in `_can_elide_fk_id` on `field.target_field` being the related model's primary key (i.e., `field.target_field is field.related_model._meta.pk`), or
-- Build the stub by setting the actual `target_field` attribute instead of `pk`.
-- Add a regression test using a `ForeignKey(..., to_field=...)` model.
+# _check_n1
+key = resolver_key(parent_type, field_name, _runtime_path_from_info(info))
+if key in planned or field_name in planned:
+    return
+```
+
+The walker now exclusively produces resolver keys (e.g. `"ItemType.category@allItems.category"`), not bare field names. The `planned` and `elisions` sets only contain these resolver keys. So `field_name in planned` / `field_name in elisions` is dead code that will never match.
+
+The fallback is harmless today but dangerous going forward: if a future change accidentally populates a bare field name into either set, the fallback would silently match for *every* branch that uses that field name — exactly the cross-branch leak the resolver-key design exists to prevent.
+
+Recommended fix: Remove both fallbacks. If they exist as a safety net for some transition period, gate them behind a comment with a concrete removal deadline (e.g. "Remove after O4 tests are green for one release cycle").
 
 Relevant code:
 
-- `django_strawberry_framework/types/resolvers.py:69-78`
-- `django_strawberry_framework/optimizer/walker.py:271-278`
+- `django_strawberry_framework/types/resolvers.py:80-81`
+- `django_strawberry_framework/types/resolvers.py:128-129`
 
-### 2. Elision check is hard-coded to the literal Django field name `"id"`
+### 2. Alias merging discards runtime-path info, breaking B2/B3 for aliased branches
 
 Priority: P2
 
-`_walk_selections` only elides when `_selected_scalar_names(...) == {"id"}` ([walker.py:198](django_strawberry_framework/optimizer/walker.py:198)). The contract is "the only column requested is one already on the source row," which is really "the target's PK column." Models whose PK is renamed (e.g. `uuid = models.UUIDField(primary_key=True)`, no implicit `id`) will never elide even though the optimization is still valid, because the GraphQL field name surfaces as `uuid` and the literal-string match fails. Conversely, if a model has both a renamed PK and a regular field literally named `id`, the elision triggers on the wrong column.
+The spec explicitly warns: "_Because `_merge_aliased_selections` currently merges by underlying field name, O4 must either preserve the response aliases on merged nodes or record resolver keys from the original selections before merging. Do not collapse two branches into one elision key unless their selection sets are equivalent for that optimization._"
 
-Recommended fix:
+The current implementation does neither. `_merge_aliased_selections` merges two aliased selections into one node (keeping the first occurrence's alias), and the walker produces one resolver key using that first alias. At resolve time, the second alias fires its own resolver, whose `_runtime_path_from_info(info)` produces a different path (containing the second alias), so its resolver key won't match the single walker-produced key.
 
-- Replace the `{"id"}` literal with `{model._meta.pk.name}` (or accept either `pk` or the actual PK field name).
-- Add a test with a model whose PK is not named `id`.
+Example: `{ first: category { id } second: category { id } }` on an Item root. The walker merges both into one selection, elides (id-only), and stores one key like `"ItemType.category@allItems.first"`. When the `second` resolver fires, it computes `"ItemType.category@allItems.second"`, which is not in `fk_id_elisions`. The bare-name fallback (finding #1) doesn't help either since `"category"` is not in the set. The resolver falls through to `getattr(root, field_name)`, triggering a lazy load for the second alias.
+
+This is unlikely to cause data correctness issues (Django's cache would often prevent the lazy load), and the B3 strictness false positive would be masked by `_will_lazy_load` returning `False` in most cases. But it's a contract violation the spec specifically identified.
+
+Recommended fix: Either emit resolver keys for all original aliases before merging, or record a set of alias-equivalent keys during merge so both `first` and `second` map to the same plan entry.
 
 Relevant code:
 
-- `django_strawberry_framework/optimizer/walker.py:195-201`
+- `django_strawberry_framework/optimizer/walker.py:94-98` (runtime_path computation)
+- `django_strawberry_framework/optimizer/walker.py:394-408` (`_merge_aliased_selections`)
 
-### 3. Stub `Model(pk=…)` leaves `_state.adding = True`
+### 3. Duplicate runtime-path helpers with subtle behavioral divergence
 
 Priority: P2
 
-`field.related_model(pk=related_id)` yields an instance with `_state.adding=True` and `_state.db=None`, which is the marker Django uses for "never persisted". Downstream code that branches on `instance._state.adding` (custom `__str__`, signal handlers attached to types via `Meta.interfaces`, permission checks, audit logging) will now see "new object" semantics for what is actually a loaded row. For an `id`-only selection this rarely matters, but if any consumer extension reads state — or if a future feature on the same type chain accesses an attribute that triggers an unintended behavior — this becomes a hard-to-trace bug.
+Two separate implementations of the "walk `info.path`, strip int indexes, reverse" logic exist:
 
-Recommended fix:
+- `walker.py:_runtime_prefix_from_info` → `_runtime_path_from_path` (no fallback for empty paths)
+- `resolvers.py:_runtime_path_from_info` (has a `field_name` fallback when path has no string keys)
 
-- After constructing the stub, set `stub._state.adding = False; stub._state.db = router.db_for_read(field.related_model)` (or just `"default"`), matching what `Model.from_db` does.
+The resolver version's fallback:
+
+```python
+if keys:
+    return tuple(reversed(keys))
+field_name = getattr(info, "field_name", None)
+return (str(field_name),) if field_name else ()
+```
+
+If this fallback ever fires, the resolver-side key would be `"ParentType.field@field_name"` while the walker side would be `"ParentType.field@"` (empty path joined). They would not match.
+
+The spec anticipated this: "_Add `_runtime_path_from_info(info)` and shared resolver-key helpers in this module or import them from a small optimizer utility if needed._"
+
+Recommended fix: Extract one canonical implementation into a shared location (e.g. `optimizer/plans.py` alongside `resolver_key`, or a small `optimizer/paths.py`). Remove the resolver-side fallback — if `info.path` produces no string keys, something is wrong and the mismatch should surface as a test failure, not be papered over.
 
 Relevant code:
 
-- `django_strawberry_framework/types/resolvers.py:74-78`
+- `django_strawberry_framework/optimizer/walker.py:354-369`
+- `django_strawberry_framework/types/resolvers.py:58-70`
 
-### 4. Custom `resolve_id` / non-`pk`-derived id resolvers silently break under elision
+### 4. No depth-3 test
 
 Priority: P2
 
-The stub only has `pk` set; every other model attribute is the field default. If a `DjangoType` defines a custom `id` resolver that depends on any other column (composite ids, hashed/encoded ids built from `name`+`pk`, tenant-scoped ids reading `instance.tenant_id`, etc.), elision will return wrong values without warning because the resolver receives a stub model whose other fields are defaults, not what's in the database.
+The recursion naturally handles arbitrary depth, and the removed TODO placeholder mentioned `test_plan_emits_nested_prefetch_chain_depth_3`. The new test suite doesn't include it. A depth-3 test (e.g. `Category > items > entries > property`) would exercise that inner `Prefetch` objects correctly nest their own child `Prefetch` objects and that connector columns are injected at each boundary.
 
-The current `has_custom_get_queryset` guard catches visibility filters but not custom id resolution.
+Without it, a regression that breaks only at depth 3+ (e.g. a connector-column bug when the parent field is itself inside a child queryset) could land undetected.
 
-Recommended fix:
+Recommended fix: Add `test_plan_emits_nested_prefetch_chain_depth_3` exercising `Category > items > entries > property` (all four fakeshop models). Assert the queryset nesting is three `Prefetch` objects deep and that each child queryset's `only()` includes its connector column.
 
-- Either extend the guard to also skip elision when `CategoryType` defines its own `resolve_id` / `id` strawberry field with a non-default resolver, or
-- Document this constraint explicitly in `spec-optimizer_beyond.md` under B2 (the spec mentions "potential GlobalID interaction" but not custom id resolvers).
-
-Relevant code:
-
-- `django_strawberry_framework/optimizer/walker.py:195-199`
-- `docs/spec-optimizer_beyond.md` B2 section
-
-### 5. `_is_fk_id_elided` checks two name variants where one suffices
+### 5. `_ensure_connector_only_fields` silently swallows `None` attname
 
 Priority: P3
 
-`_is_fk_id_elided` tests `field_name in elisions or _get_relation_field_name(info) in elisions` ([resolvers.py:64-65](django_strawberry_framework/types/resolvers.py:64)). At depth-1 the walker only stores the bare Django field name and the resolver closure already passes the snake_cased Django field name, so both lookups always agree. The fallback is dead code today and obscures the contract: it implies "we sometimes get aliased names here" when we don't.
+The function has three branches: `one_to_many`, `not many_to_many` (forward FK / O2O downgrade), and `many_to_many`. The `one_to_many` and forward branches use double-getattr chains that can both produce `None`:
 
-When O4 (nested prefetch chains) lands, elisions will be stored as dotted/`__` paths (e.g. `parent__child`) and *neither* lookup form will match — both will need a different join key. The current second lookup gives the false impression that depth-N is already partly handled.
+```python
+if parent_field.one_to_many:
+    attname = getattr(getattr(parent_field, "field", None), "attname", None) or getattr(
+        parent_field, "reverse_connector_attname", None,
+    )
+```
 
-Recommended fix:
+When both paths return `None`, the final `if attname is not None` guard prevents a crash, but the missing connector column would cause Django to issue an extra query to fetch the FK column — silently degrading from the expected query count. This would only happen for a Django field object that is `one_to_many` but has neither `.field.attname` nor `.reverse_connector_attname` (an unusual edge case, possibly a `GenericRelation`).
 
-- Drop the second lookup, or
-- Add a comment that explicitly says "depth-1 only; revisit when O4 lands."
-
-Relevant code:
-
-- `django_strawberry_framework/types/resolvers.py:60-65`
-
-### 6. `examples/fakeshop` adds an unused import purely as a packaging smoke test
-
-Priority: P3
-
-`examples/fakeshop/fakeshop/products/schema.py` now imports `DjangoOptimizerExtension` and `DjangoType` and re-exports them via `__all__` without using them in `Query`. The inline comment explains the intent ("pre-flight import only — surfaces real-world packaging / import-graph gaps"), but:
-
-- Linters (ruff `F401`, pyflakes) will flag this; if the example is part of CI it'll either need a per-file ignore or a `noqa` comment.
-- A runtime `import` at the bottom of a module that's imported anyway gives the same signal as a dedicated `tests/test_packaging_imports.py` that does `import django_strawberry_framework as dst; assert dst.DjangoOptimizerExtension`. The dedicated test communicates intent better and survives example refactors.
-
-Recommended fix:
-
-- Move the smoke test to a real test under `tests/` and revert the example file, or
-- Add `# noqa: F401` on the import line and a TODO referencing the slice that wires it into `Query`.
+Recommended fix: Add a `logger.debug` when `attname` resolves to `None` despite `plan.only_fields` being non-empty, so the missing connector surfaces in debug logs.
 
 Relevant code:
 
-- `examples/fakeshop/fakeshop/products/schema.py:182-200`
+- `django_strawberry_framework/optimizer/walker.py:332-351`
 
-### 7. Spec rationale text is now mismatched with the actual ordering
+### 6. Spec-required doc updates are missing
 
 Priority: P3
 
-`spec-optimizer_beyond.md` previously said "B2 last among the perf items"; the diff rewrites this to "B2 landed after O5+O6+B5". That's accurate but B6 is also marked done in the same checklist, so "after … B5" alone understates which slices preceded B2. Minor — readers reconstructing the slice timeline from this paragraph will be slightly off.
+The spec's "Documentation updates when O4 ships" section requires:
 
-Recommended fix:
+- Update `docs/spec-optimizer.md` to mark O4 shipped.
+- Update `docs/spec-optimizer_beyond.md` to remove the "O4 is unimplemented" riders.
+- Remove remaining `TODO(spec-optimizer_nested_prefetch_chains.md O4)` anchors from source and test files.
 
-- Update the rationale paragraph to list the actually-shipped predecessors (O5, O6, B5, B7, B3, B4, B6), or generalize to "after the surrounding optimizer slices".
+The diff cleans up all source-level TODO anchors but does not touch `spec-optimizer.md` or `spec-optimizer_beyond.md`. These should land in the same change to keep the docs consistent with the shipped state.
 
-Relevant doc:
+### 7. `_append_unique` is O(n) per call
 
-- `docs/spec-optimizer_beyond.md:227`
+Priority: P3
+
+`_append_unique` uses `if value not in values: values.append(value)`, which is O(n) per call where n is the current list length. For each relation at each depth, the walker calls `_append_unique` on `only_fields`, `planned_resolver_keys`, `fk_id_elisions`, `select_related`, and `prefetch_related`. For a schema with hundreds of fields and deep nesting, this accumulates to O(n²) per plan construction.
+
+This is unlikely to matter for realistic schemas today but could become noticeable as the optimizer handles wider queries on larger schemas.
+
+Recommended fix: Not urgent. If profiling ever shows this as a bottleneck, switch to a `(list, set)` pair per bag — the set for O(1) membership checks, the list for ordered output.
+
+### 8. `plan_relation` return type annotation changed but `DjangoOptimizerExtension.plan_relation` annotation not updated
+
+Priority: P3
+
+The module-level `plan_relation` now returns `tuple[str, str]` (kind + reason string), but `DjangoOptimizerExtension.plan_relation` in `extension.py:454-465` still has the return annotation `tuple[str, Any]`. The docstring was updated ("Returns `("select", reason)` or `("prefetch", reason)`"), but the type annotation should match for `mypy`/`pyright` consistency.
+
+Relevant code:
+
+- `django_strawberry_framework/optimizer/extension.py:459`
+
+### 9. `_plan_select_relation` parameter list is wide (11 params)
+
+Priority: P3
+
+`_plan_select_relation` accepts 11 positional parameters. `_plan_prefetch_relation` accepts 9. These are internal helpers, but the wide parameter lists make call sites verbose and error-prone (easy to swap `runtime_path` and `resolver_identity`, both tuples/strings). A lightweight `_WalkerContext` dataclass grouping the common parameters (`plan`, `prefix`, `full_path`, `info`, `runtime_path`, `resolver_identity`) would reduce every call site and make additions easier.
+
+### 10. `_plan_prefetch_relation` emits string fallback that diverges from spec preference
+
+Priority: P3
+
+The spec says: "_Prefer `Prefetch` for uniformity with B8 diffing (which inspects `prefetch_to`)._" The implementation emits a plain string when `child_plan.is_empty and not has_custom_get_queryset`. This is functionally correct (a string and a `Prefetch` with no queryset are equivalent to Django), but it means `lookup_paths` must handle both string and `Prefetch` entries — which it already does, so no bug. However, the B8 diffing code will need to handle the mixed-type list too. Switching to always-`Prefetch` would simplify downstream consumers at the cost of one extra object allocation per trivial prefetch.
 
 ## Overall assessment
 
-B2 is a meaningful optimization and the test coverage of the happy path, fragment path, custom-`get_queryset` downgrade, null-FK, and strictness integration is solid. The P1 risk is the `to_field` case: today's stub silently emits wrong ids for any FK that doesn't point at the target's PK. The P2 issues (literal `"id"`, `_state.adding`, custom id resolvers) are correctness gaps that are unlikely to fire in the fakeshop example but will bite real schemas.
+The O4 implementation is structurally sound. The core recursion — same-query `_plan_select_relation` for single-valued chains and queryset-boundary `_plan_prefetch_relation` for many-side branches — matches the spec design. The `plan_relation` refactoring to a pure classification function is clean, connector column injection via `_ensure_connector_only_fields` handles both raw Django fields and `FieldMeta` objects correctly, and cacheability propagation from nested custom `get_queryset` branches is properly wired.
+
+Test coverage is solid: all spec-enumerated tests are present, the integration tests verify real query counts against the fakeshop seeder, and the resolver-key leak regression test is a good addition.
+
+The P1 risk is the bare-field-name fallback in resolvers, which is dead code that obscures whether keys actually match. The P2 risks are the alias-merging gap (spec explicitly flagged this) and the duplicate runtime-path helpers (which could diverge). Neither will cause data corruption today, but both weaken the branch-sensitivity guarantees the resolver-key design was built to provide.

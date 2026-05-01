@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **B7 — Precomputed field metadata.** `FieldMeta` frozen dataclass built at `DjangoType` class-creation time; walker reads cached map instead of `_meta.get_fields()` per request.
 - **B3 — N+1 detection.** `DjangoOptimizerExtension(strictness="warn"|"raise")` with alias-safe field-name comparison and lazy-load check.
 - **B4 — `Meta.optimizer_hints`.** `OptimizerHint` typed wrapper (`SKIP`, `.select_related()`, `.prefetch_related()`, `.prefetch(obj)`) with build-time validation.
+- **O5 — `only()` projection.** Optimizer plans now collect selected scalar columns, include FK columns for `select_related` traversals, and apply `QuerySet.only()` before relation optimization.
 - `OptimizerHint` re-exported from top-level `__init__.py`.
 - `registry.iter_types()` public iterator.
 - Resolver signature changed to `(root, info: Info)` for B3 N+1 detection.

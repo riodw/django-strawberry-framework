@@ -9,7 +9,7 @@ The intention is to give Django developers the same `Meta`-class-driven, "batter
 Concretely, the package aims to provide:
 
 - **Shipped:** A `DjangoType` base class that generates a Strawberry type from a Django model via a familiar nested `Meta` configuration block — scalar, relation, and choice-enum conversion, the type registry, and the `get_queryset` hook.
-- **Shipped:** A built-in N+1 optimizer — cardinality-aware relation resolvers (O1), a selection-tree walker (O2), the `OptimizationPlan` data structure, and the root-gated `resolve` hook with async parity and type-tracing (O3). The optimizer is effective end-to-end for depth-1 queries. Nested prefetch chains (O4), `only()` projection (O5), and the `get_queryset` + `Prefetch` downgrade rule (O6) are specified in `spec-optimizer.md` but not yet implemented.
+- **Shipped:** A built-in N+1 optimizer — cardinality-aware relation resolvers (O1), a selection-tree walker (O2), the `OptimizationPlan` data structure, the root-gated `resolve` hook with async parity and type-tracing (O3), and `only()` projection (O5). The optimizer is effective end-to-end for depth-1 queries. Nested prefetch chains (O4) and the `get_queryset` + `Prefetch` downgrade rule (O6) are specified in `spec-optimizer.md` but not yet implemented.
 - **Shipped:** Optimizer improvements beyond strawberry-graphql-django (B-slices from `spec-optimizer_beyond.md`): AST-cached plans with directive-variable extraction (B1), precomputed field metadata eliminating per-request `_meta.get_fields()` (B7), plan introspection via `info.context` (B5), N+1 detection with `strictness` API — `"off"` / `"warn"` / `"raise"` (B3), and `Meta.optimizer_hints` with typed `OptimizerHint` wrapper — `SKIP`, `.select_related()`, `.prefetch_related()`, `.prefetch(Prefetch(...))` (B4). Forward-FK-id elision (B2), schema-build-time audit (B6), and queryset diffing (B8) are specified but not yet implemented.
 - **Planned:** Declarative filtering, ordering, aggregation, and permission rules — all configured in `Meta`, all composable, all introspectable from a single class definition. These are the Layer-3 subsystems described below; none are implemented yet.
 - A migration path that feels natural for teams coming from `django-filter`, DRF, or `graphene-django`.
@@ -49,7 +49,7 @@ The package is organized around a **layered dependency graph**: a small shared-i
 **Layer 2 — Type system** *(shipped / in progress)* (depends on Layer 1). Two subsystems sit at this layer because they're tightly coupled — one consumes the other's registry — but each is large enough to deserve its own dependency boundary:
 
 - `types/` *(shipped)* — the `DjangoType` base class, scalar/relation/choice converters, and the cardinality-aware relation resolvers. This is the `Meta`-class-driven Django-model-to-Strawberry-type adapter and is the heart of the package.
-- `optimizer/` *(O1–O3 + B1/B3–B5/B7 shipped)* — `DjangoOptimizerExtension`, the selection-tree walker (`walker.py`, O2), and the `OptimizationPlan` shape (`plans.py`). Reads relation metadata off types registered in `types/`; nothing in `types/` reads anything from `optimizer/`. The optimizer ships in the foundation rather than as an opt-in afterthought because nested-prefetch correctness is too load-bearing to leave to consumer plumbing. `DjangoOptimizerExtension` is importable from both `django_strawberry_framework.optimizer` (subpackage path) and the top-level `django_strawberry_framework` namespace (`__all__`).
+- `optimizer/` *(O1–O3/O5 + B1/B3–B5/B7 shipped)* — `DjangoOptimizerExtension`, the selection-tree walker (`walker.py`, O2), and the `OptimizationPlan` shape (`plans.py`). Reads relation metadata off types registered in `types/`; nothing in `types/` reads anything from `optimizer/`. The optimizer ships in the foundation rather than as an opt-in afterthought because nested-prefetch correctness is too load-bearing to leave to consumer plumbing. `DjangoOptimizerExtension` is importable from both `django_strawberry_framework.optimizer` (subpackage path) and the top-level `django_strawberry_framework` namespace (`__all__`).
 
 **Layer 3 — GraphQL surface generators** *(planned — not yet implemented)* (depend on Layer 2). Each subsystem follows the same `Meta`-class-driven, factory-emitting shape pioneered by `django-filter` and DRF:
 
@@ -78,10 +78,10 @@ django_strawberry_framework/
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
 │   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
 │   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers, B3 N+1 detection
-├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O3 + B1/B3–B5/B7 shipped
+├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O3/O5 + B1/B3–B5/B7 shipped
 │   ├── __init__.py          # re-exports DjangoOptimizerExtension
 │   ├── extension.py         # DjangoOptimizerExtension (O3 hook, B1 cache, B3 strictness, B5 context stash)
-│   ├── walker.py            # selection-tree walker (O2, B4 hints, B7 cached field map)
+│   ├── walker.py            # selection-tree walker (O2, O5 only fields, B4 hints, B7 cached field map)
 │   └── plans.py             # OptimizationPlan data structure
 │   ├── hints.py             # OptimizerHint typed wrapper (B4)
 │   └── field_meta.py        # FieldMeta precomputed field metadata (B7)

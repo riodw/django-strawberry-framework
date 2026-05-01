@@ -35,15 +35,14 @@ from typing import Any, NamedTuple
 from django.db import models
 from graphql.language.ast import (
     DirectiveNode,
-    FieldNode,
     FragmentSpreadNode,
-    InlineFragmentNode,
     VariableNode,
 )
 from graphql.language.printer import print_ast
 from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
+from .hints import OptimizerHint
 from .walker import plan_optimizations
 
 _MAX_PLAN_CACHE_SIZE = 256
@@ -132,6 +131,53 @@ _optimizer_active: ContextVar[bool] = ContextVar(
     "django_strawberry_framework_optimizer_active",
     default=False,
 )
+
+
+def _collect_schema_reachable_types(schema: Any) -> set[type]:
+    """Return the set of ``DjangoType`` classes reachable from the schema's root types.
+
+    Traverses from ``query_type``, ``mutation_type``, and
+    ``subscription_type`` through their field return types recursively.
+    Only types reachable from a root operation are included; orphan
+    types passed via ``types=[]`` at schema construction are excluded
+    to avoid false-positive audit warnings.
+    """
+    reachable: set[type] = set()
+    gql_schema = getattr(schema, "_schema", None)
+    if gql_schema is None:
+        return reachable
+    strawberry_schema = getattr(schema, "_strawberry_schema", schema)
+    visited_type_names: set[str] = set()
+
+    def _walk_gql_type(gql_type: Any) -> None:
+        """Recursively collect DjangoType origins from a graphql-core type."""
+        # Unwrap NonNull / List wrappers.
+        while hasattr(gql_type, "of_type"):
+            gql_type = gql_type.of_type
+        type_name = getattr(gql_type, "name", None)
+        if type_name is None or type_name in visited_type_names:
+            return
+        visited_type_names.add(type_name)
+        # Check if this type is a DjangoType.
+        definition = (
+            strawberry_schema.get_type_by_name(type_name)
+            if hasattr(strawberry_schema, "get_type_by_name")
+            else None
+        )
+        if definition is not None:
+            origin = getattr(definition, "origin", None)
+            if origin is not None and hasattr(origin, "_optimizer_field_map"):
+                reachable.add(origin)
+        # Recurse into fields.
+        fields = getattr(gql_type, "fields", None)
+        if fields is not None:
+            for field_obj in fields.values():
+                _walk_gql_type(getattr(field_obj, "type", None))
+
+    for root_type in (gql_schema.query_type, gql_schema.mutation_type, gql_schema.subscription_type):
+        if root_type is not None:
+            _walk_gql_type(root_type)
+    return reachable
 
 
 def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
@@ -329,29 +375,41 @@ class DjangoOptimizerExtension(SchemaExtension):
         #           not in already_pf)]
         return plan.apply(result)
 
-    # TODO(spec-optimizer_beyond.md B6): add a ``check_schema(schema)``
-    # classmethod that walks only schema-reachable ``DjangoType``s
-    # (not every registered type — registered-but-unexposed types
-    # would produce false positives). Uses ``registry.iter_types()``
-    # (public iterator, not ``registry._types``). When
-    # ``strictness == "raise"`` the warnings become errors at startup.
-    #
-    # Pseudo:
-    #   @classmethod
-    #   def check_schema(cls, schema):
-    #       reachable = _collect_reachable_types(schema)
-    #       warnings = []
-    #       for model, type_cls in registry.iter_types():
-    #           if type_cls not in reachable:
-    #               continue
-    #           for f in model._meta.get_fields():
-    #               if not f.is_relation:
-    #                   continue
-    #               if registry.get(f.related_model) is None:
-    #                   warnings.append(
-    #                       f"{model.__name__}.{f.name} "
-    #                       "has no registered target type")
-    #       return warnings
+    @classmethod
+    def check_schema(cls, schema: Any) -> list[str]:
+        """Audit schema-reachable types for unoptimized relations.
+
+        Walks only the ``DjangoType``s reachable from the schema's root
+        types (not the entire registry) and checks each **exposed**
+        relation field (i.e., present in ``_optimizer_field_map``, not
+        hidden by ``Meta.fields``/``Meta.exclude`` or
+        ``OptimizerHint.SKIP``). Returns a list of warning strings for
+        relations whose target model has no registered ``DjangoType``.
+
+        Always returns warnings — never raises. The caller decides
+        whether to raise based on the extension's ``strictness``.
+        """
+        reachable = _collect_schema_reachable_types(schema)
+        warnings: list[str] = []
+        for _model, type_cls in registry.iter_types():
+            if type_cls not in reachable:
+                continue
+            field_map = getattr(type_cls, "_optimizer_field_map", None)
+            if field_map is None:
+                continue
+            hints = getattr(type_cls, "_optimizer_hints", {})
+            for field_name, meta in field_map.items():
+                if not meta.is_relation:
+                    continue
+                # Skip fields opted out via OptimizerHint.SKIP.
+                hint = hints.get(field_name)
+                if hint is not None and (hint is OptimizerHint.SKIP or hint.skip):
+                    continue
+                if meta.related_model is not None and registry.get(meta.related_model) is None:
+                    warnings.append(
+                        f"{_model.__name__}.{field_name} has no registered target DjangoType",
+                    )
+        return warnings
 
     @staticmethod
     def _build_cache_key(

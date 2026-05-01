@@ -62,9 +62,7 @@ def _will_lazy_load(root: Any, field_name: str) -> bool:
         return False
     # Many-side: Django caches prefetched querysets in _prefetched_objects_cache.
     prefetch_cache = getattr(root, "_prefetched_objects_cache", {})
-    if field_name in prefetch_cache:
-        return False
-    return True
+    return field_name not in prefetch_cache
 
 
 def _check_n1(info: Any, root: Any, field_name: str) -> None:

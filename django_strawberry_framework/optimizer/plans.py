@@ -58,10 +58,6 @@ class OptimizationPlan:
 
     only_fields: list[str] = field(default_factory=list)
     """Scalar column names for ``QuerySet.only``."""
-    # TODO(spec-optimizer.md O5): populate this from the walker's
-    # scalar-selection pass. Must include FK columns (e.g.
-    # ``category_id``) for every ``select_related`` entry so Django
-    # doesn't mark them as deferred and re-query on access.
 
     @property
     def is_empty(self) -> bool:
@@ -77,10 +73,8 @@ class OptimizationPlan:
         ``prefetch_related`` may carry nested ``Prefetch`` objects whose
         inner querysets already have their own ``only()`` applied.
         """
-        # TODO(spec-optimizer.md O5): apply ``only_fields`` before the
-        # relation directives. Must union FK columns into the set first
-        # (see the O5 TODO above) so ``select_related`` joins don't
-        # trigger deferred-attribute re-queries.
+        if self.only_fields:
+            queryset = queryset.only(*self.only_fields)
         if self.select_related:
             queryset = queryset.select_related(*self.select_related)
         if self.prefetch_related:

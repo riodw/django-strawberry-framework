@@ -109,9 +109,10 @@ def _walk_selections(
             continue
         django_name = snake_case(sel.name)
         django_field = field_map.get(django_name)
-        if django_field is None or not django_field.is_relation:
-            # TODO(spec-optimizer.md O5): when the field is a scalar,
-            # append django_name to plan.only_fields.
+        if django_field is None:
+            continue
+        if not django_field.is_relation:
+            _append_unique(plan.only_fields, f"{prefix}{django_name}")
             continue
         # B4: consult optimizer_hints before cardinality dispatch.
         hint = getattr(type_cls, "_optimizer_hints", {}).get(django_name) if type_cls is not None else None
@@ -120,12 +121,25 @@ def _walk_selections(
                 continue
             full_path = f"{prefix}{django_name}"
             if hint.prefetch_obj is not None:
+                if django_field.attname is not None:
+                    _append_unique(plan.only_fields, f"{prefix}{django_field.attname}")
                 plan.prefetch_related.append(hint.prefetch_obj)
                 continue
             if hint.force_select:
+                if django_field.attname is not None:
+                    _append_unique(plan.only_fields, f"{prefix}{django_field.attname}")
+                if django_field.related_model is not None:
+                    _collect_scalar_only_fields(
+                        sel.selections,
+                        django_field.related_model,
+                        plan,
+                        prefix=f"{full_path}__",
+                    )
                 plan.select_related.append(full_path)
                 continue
             if hint.force_prefetch:
+                if django_field.attname is not None:
+                    _append_unique(plan.only_fields, f"{prefix}{django_field.attname}")
                 plan.prefetch_related.append(full_path)
                 continue
         # Relation dispatch by cardinality.
@@ -133,6 +147,15 @@ def _walk_selections(
         if django_field.many_to_many or django_field.one_to_many:
             plan.prefetch_related.append(full_path)
         else:
+            if django_field.attname is not None:
+                _append_unique(plan.only_fields, f"{prefix}{django_field.attname}")
+            if django_field.related_model is not None:
+                _collect_scalar_only_fields(
+                    sel.selections,
+                    django_field.related_model,
+                    plan,
+                    prefix=f"{full_path}__",
+                )
             # TODO(spec-optimizer_beyond.md B2): before emitting
             # ``select_related``, check whether the only child
             # selections on the FK target are columns already
@@ -163,6 +186,41 @@ def _walk_selections(
             plan.select_related.append(full_path)
         # TODO(spec-optimizer.md O4): recurse into sel.selections to
         # build nested Prefetch chains for depth > 1.
+
+
+def _collect_scalar_only_fields(
+    selections: list[Any],
+    model: type[models.Model],
+    plan: OptimizationPlan,
+    prefix: str = "",
+) -> None:
+    """Collect scalar child selections for ``only()`` without planning relations.
+
+    O5 is allowed to project columns across ``select_related`` joins
+    using Django's ``relation__column`` syntax. This helper walks only
+    scalar selections under a single-valued relation and leaves nested
+    relation planning to O4.
+    """
+    type_cls = registry.get(model)
+    cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
+    field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
+    merged = _merge_aliased_selections(selections)
+    for sel in merged:
+        if not _should_include(sel):
+            continue
+        if _is_fragment(sel):
+            _collect_scalar_only_fields(sel.selections, model, plan, prefix)
+            continue
+        django_name = snake_case(sel.name)
+        django_field = field_map.get(django_name)
+        if django_field is not None and not django_field.is_relation:
+            _append_unique(plan.only_fields, f"{prefix}{django_name}")
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    """Append ``value`` to ``values`` if it is not already present."""
+    if value not in values:
+        values.append(value)
 
 
 def _should_include(selection: Any) -> bool:

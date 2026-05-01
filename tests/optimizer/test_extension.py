@@ -979,6 +979,20 @@ def test_strictness_warn_planned_alias_no_warning(caplog):
     assert not any("Potential N+1" in r.message for r in caplog.records)
 
 
+# TODO(spec-optimizer_nested_prefetch_chains.md O4): add extension
+# integration tests near this strictness/query-count coverage.
+#
+# Pseudo:
+# - test_optimizer_prefetches_nested_reverse_fk_depth_2:
+#     { allCategories { items { entries { value } } } } => 3 queries.
+# - test_optimizer_selects_nested_forward_fk_depth_2:
+#     { allEntries { item { category { name } } } } => 1 query.
+# - test_optimizer_strictness_accepts_nested_planned_relation:
+#     strictness="raise" does not raise for a nested planned resolver key.
+# - test_optimizer_nested_fk_id_elision_does_not_leak_to_sibling_branch.
+# - test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable.
+
+
 def test_collect_directive_var_names_in_named_fragment():
     """B1: _collect_directive_var_names follows named fragment spreads."""
     from graphql import parse

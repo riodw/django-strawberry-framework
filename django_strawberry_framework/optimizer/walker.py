@@ -96,6 +96,17 @@ def plan_relation(
     ``DjangoType`` overrides ``get_queryset``, the lookup is a
     ``Prefetch`` object whose queryset has passed through that hook.
     """
+    # TODO(spec-optimizer_nested_prefetch_chains.md O4): refactor this
+    # helper so it reports only relation kind / downgrade intent. The
+    # prefetch branch in _walk_selections will own child queryset
+    # construction and call get_queryset exactly once.
+    #
+    # Pseudo:
+    #   if target_type.has_custom_get_queryset():
+    #       return ("prefetch", "custom_get_queryset")
+    #   if field.many_to_many or field.one_to_many:
+    #       return ("prefetch", "default")
+    #   return ("select", "default")
     if target_type is not None and target_type.has_custom_get_queryset():
         target_qs = field.related_model._default_manager.all()
         target_qs = target_type.get_queryset(target_qs, info)
@@ -108,6 +119,20 @@ def plan_relation(
     if field.many_to_many or field.one_to_many:
         return ("prefetch", field.name)
     return ("select", field.name)
+
+
+# TODO(spec-optimizer_nested_prefetch_chains.md O4): add child-queryset
+# construction here after plan_relation is refactored.
+#
+# Pseudo:
+#   def _build_child_queryset(field, target_type, info):
+#       qs = field.related_model._default_manager.all()
+#       if target_type.has_custom_get_queryset():
+#           qs = target_type.get_queryset(qs, info)
+#       return qs
+#
+# This is also the point where O6 cacheability is decided for nested
+# Prefetch branches.
 
 
 def _walk_selections(
@@ -150,6 +175,18 @@ def _walk_selections(
         # B4: consult optimizer_hints before cardinality dispatch.
         hint = getattr(type_cls, "_optimizer_hints", {}).get(django_name) if type_cls is not None else None
         if hint is not None:
+            # TODO(spec-optimizer_nested_prefetch_chains.md O4): route
+            # force_select / force_prefetch through the same recursion
+            # paths as automatic dispatch. hint.prefetch_obj stays a
+            # leaf and must not walk inner selections.
+            #
+            # Pseudo:
+            #   if hint.prefetch_obj:
+            #       append verbatim; continue
+            #   if hint.force_select:
+            #       same_query_recursion(sel, django_field)
+            #   if hint.force_prefetch:
+            #       prefetch_boundary_recursion(sel, django_field)
             if hint is OptimizerHint.SKIP or hint.skip:
                 continue
             full_path = f"{prefix}{django_name}"
@@ -182,6 +219,26 @@ def _walk_selections(
         )
         relation_kind, relation_lookup = plan_relation(django_field, target_type, info)
         if relation_kind == "prefetch":
+            # TODO(spec-optimizer_nested_prefetch_chains.md O4):
+            # replace this depth-1 branch with prefetch-boundary
+            # recursion. Child only() paths must apply to the child
+            # queryset, not the root queryset.
+            #
+            # Pseudo:
+            #   child_qs = _build_child_queryset(django_field, target_type, info)
+            #   child_plan = OptimizationPlan()
+            #   _walk_selections(
+            #       sel.selections,
+            #       django_field.related_model,
+            #       child_plan,
+            #       prefix="",
+            #       runtime_prefix=runtime_path,
+            #       info=info,
+            #   )
+            #   _ensure_connector_only_fields(child_plan, django_field)
+            #   child_qs = child_plan.apply(child_qs)
+            #   plan.cacheable = plan.cacheable and child_plan.cacheable
+            #   plan.prefetch_related.append(Prefetch(full_path, queryset=child_qs))
             if django_field.attname is not None:
                 _append_unique(plan.only_fields, f"{prefix}{django_field.attname}")
             if target_type is not None and target_type.has_custom_get_queryset():
@@ -199,9 +256,33 @@ def _walk_selections(
                 and not _has_custom_id_resolver(target_type, target_pk_name)
                 and _selected_scalar_names(sel.selections, django_field.related_model) == {target_pk_name}
             ):
+                # TODO(spec-optimizer_nested_prefetch_chains.md O4):
+                # store a branch-sensitive resolver key rather than a
+                # bare relation path so nested/sibling/root branches do
+                # not leak elision state.
+                #
+                # Pseudo:
+                #   key = _resolver_key(type_cls, django_name, runtime_path)
+                #   _append_unique(plan.fk_id_elisions, key)
                 _append_unique(plan.fk_id_elisions, full_path)
                 continue
             if django_field.related_model is not None:
+                # TODO(spec-optimizer_nested_prefetch_chains.md O4):
+                # replace scalar-only collection with same-query
+                # recursion so nested single-valued chains become
+                # select_related paths and their scalar columns land in
+                # root only_fields.
+                #
+                # Pseudo:
+                #   plan.select_related.append(full_path)
+                #   _walk_selections(
+                #       sel.selections,
+                #       django_field.related_model,
+                #       plan,
+                #       prefix=f"{full_path}__",
+                #       runtime_prefix=runtime_path,
+                #       info=info,
+                #   )
                 _collect_scalar_only_fields(
                     sel.selections,
                     django_field.related_model,
@@ -209,8 +290,23 @@ def _walk_selections(
                     prefix=f"{full_path}__",
                 )
             plan.select_related.append(full_path)
-        # TODO(spec-optimizer.md O4): recurse into sel.selections to
-        # build nested Prefetch chains for depth > 1.
+        # TODO(spec-optimizer_nested_prefetch_chains.md O4): delete
+        # this anchor once the prefetch and same-query recursion paths
+        # above replace the depth-1 dispatch.
+
+
+# TODO(spec-optimizer_nested_prefetch_chains.md O4): delete this helper
+# once _walk_selections handles same-query recursion directly.
+#
+# Pseudo replacement:
+#   _walk_selections(
+#       selections,
+#       related_model,
+#       plan,
+#       prefix=f"{full_path}__",
+#       runtime_prefix=runtime_path,
+#       info=info,
+#   )
 
 
 def _collect_scalar_only_fields(
@@ -309,6 +405,27 @@ def _has_custom_id_resolver(target_type: type | None, target_pk_name: str | None
         for cls in getattr(target_type, "__mro__", ())
         for name in resolver_names
     )
+
+
+# TODO(spec-optimizer_nested_prefetch_chains.md O4): add connector and
+# resolver-key helpers near the existing small helper block.
+#
+# Pseudo:
+#   def _ensure_connector_only_fields(plan, parent_field):
+#       if not plan.only_fields:
+#           return
+#       if parent_field.one_to_many:
+#           _append_unique(plan.only_fields, parent_field.field.attname)
+#       elif not parent_field.many_to_many:
+#           _append_unique(plan.only_fields, parent_field.target_field.attname)
+#       else:
+#           _append_unique(plan.only_fields, parent_field.related_model._meta.pk.attname)
+#
+#   def _resolver_key(parent_type, field_name, runtime_path):
+#       path = ".".join(runtime_path)
+#       if parent_type is None:
+#           return f"{field_name}@{path}"
+#       return f"{parent_type.__name__}.{field_name}@{path}"
 
 
 def _append_unique(values: list[str], value: str) -> None:

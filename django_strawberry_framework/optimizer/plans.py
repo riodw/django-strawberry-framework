@@ -14,6 +14,8 @@ The plan is a simple data class carrying three bags:
 - ``fk_id_elisions``: forward FK / OneToOne paths where only the target
   ``id`` is selected, so the resolver can use the source row's
   ``<field>_id`` value instead of lazy-loading the related row.
+  TODO(spec-optimizer_nested_prefetch_chains.md O4): these become
+  branch-sensitive resolver keys rather than bare relation paths.
 
 The plan starts empty and accumulates entries as the walker descends the
 selection tree. The extension applies it to the root queryset in a single
@@ -45,17 +47,28 @@ class OptimizationPlan:
     visibility-aware downgrade from spec-optimizer.md O6) or when the
     lookup is a nested chain (O4).
     """
-    # TODO(spec-optimizer.md O4): nested prefetch chains land as
-    # ``Prefetch("items", queryset=Item.objects.prefetch_related(
-    #     Prefetch("entries", queryset=...)))`` rather than the flat
-    # ``"items"`` strings the current O2 walker emits. The list type
-    # already accepts ``Prefetch`` objects, so no signature change is
-    # needed — the walker just builds nested ``Prefetch`` instances.
+    # TODO(spec-optimizer_nested_prefetch_chains.md O4): replace this
+    # anchor with shipped nested-Prefetch semantics when O4 lands.
+    #
+    # Pseudo:
+    #   Prefetch(
+    #       "items",
+    #       queryset=Item.objects.only(...).prefetch_related(
+    #           Prefetch("entries", queryset=Entry.objects.only(...)),
+    #       ),
+    #   )
 
     only_fields: list[str] = field(default_factory=list)
     """Scalar column names for ``QuerySet.only``."""
     fk_id_elisions: list[str] = field(default_factory=list)
     """Forward relation paths elided because the source row already carries the target id."""
+    # TODO(spec-optimizer_nested_prefetch_chains.md O4): optionally add
+    # a separate planned_resolver_keys bag for B3 strictness so resolver
+    # checks do not depend on Django lookup paths.
+    #
+    # Pseudo:
+    #   planned_resolver_keys: list[str] = field(default_factory=list)
+    #   is_empty includes not self.planned_resolver_keys
     cacheable: bool = True
     """Whether this plan can be reused from the extension's plan cache.
 
@@ -92,3 +105,28 @@ class OptimizationPlan:
         if self.prefetch_related:
             queryset = queryset.prefetch_related(*self.prefetch_related)
         return queryset
+
+
+# TODO(spec-optimizer_nested_prefetch_chains.md O4): add recursive
+# lookup-path flattening for B8/debugging. Do not use this helper for
+# B3 resolver strictness; strictness needs branch-sensitive resolver
+# keys produced by the walker.
+#
+# Pseudo:
+#   def lookup_paths(plan):
+#       paths = set(plan.select_related)
+#       paths.update(_prefetch_lookup_paths(plan.prefetch_related))
+#       return paths
+#
+#   def _prefetch_lookup_paths(entries, prefix=""):
+#       for entry in entries:
+#           if isinstance(entry, str):
+#               yield f"{prefix}__{entry}" if prefix else entry
+#               continue
+#           path = f"{prefix}__{entry.prefetch_to}" if prefix else entry.prefetch_to
+#           yield path
+#           if entry.queryset is not None:
+#               yield from _prefetch_lookup_paths(
+#                   entry.queryset._prefetch_related_lookups,
+#                   path,
+#               )

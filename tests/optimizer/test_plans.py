@@ -39,6 +39,20 @@ class TestOptimizationPlanIsEmpty:
         assert plan.is_empty is True
 
 
+# TODO(spec-optimizer_nested_prefetch_chains.md O4): add
+# TestLookupPaths after lookup_paths(plan) lands.
+#
+# Pseudo:
+#   class TestLookupPaths:
+#       test_flatten_select_related_paths
+#       test_flatten_plain_prefetch_string
+#       test_flatten_nested_prefetch_objects_recursively
+#       test_does_not_include_resolver_keys
+#
+# If OptimizationPlan gains planned_resolver_keys, add construction and
+# is_empty coverage for that field here too.
+
+
 class TestOptimizationPlanApply:
     """``apply`` mutates a queryset with the collected directives."""
 

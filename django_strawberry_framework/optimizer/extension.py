@@ -348,10 +348,36 @@ class DjangoOptimizerExtension(SchemaExtension):
         # B5: stash the plan on info.context so consumers and tests
         # can introspect the optimizer's decisions.
         _stash_on_context(info.context, "dst_optimizer_plan", plan)
+        # TODO(spec-optimizer_nested_prefetch_chains.md O4): the walker
+        # will emit branch-sensitive resolver keys here, not bare field
+        # names or Django lookup paths.
+        #
+        # Pseudo:
+        #   dst_optimizer_fk_id_elisions = {
+        #       "ItemType.category@allCategories.items.category",
+        #       ...
+        #   }
         _stash_on_context(info.context, "dst_optimizer_fk_id_elisions", set(plan.fk_id_elisions))
         # B3: when strictness is active, stash the sentinel so resolvers
         # can detect unplanned lazy loads.
         if self.strictness != "off":
+            # TODO(spec-optimizer_nested_prefetch_chains.md O4):
+            # replace this lookup-path-ish set with the walker-produced
+            # resolver-key set. lookup_paths(plan) may be stashed
+            # separately for B8/debugging, but must not drive B3
+            # resolver checks.
+            #
+            # Pseudo:
+            #   _stash_on_context(
+            #       info.context,
+            #       "dst_optimizer_planned",
+            #       set(plan.planned_resolver_keys),
+            #   )
+            #   _stash_on_context(
+            #       info.context,
+            #       "dst_optimizer_lookup_paths",
+            #       lookup_paths(plan),
+            #   )
             paths: set[str] = set(plan.select_related)
             paths |= {getattr(e, "prefetch_to", e) for e in plan.prefetch_related}
             paths |= set(plan.fk_id_elisions)
@@ -376,6 +402,10 @@ class DjangoOptimizerExtension(SchemaExtension):
         #       p for p in plan.prefetch_related
         #       if (getattr(p, "prefetch_to", p)
         #           not in already_pf)]
+        # TODO(spec-optimizer_nested_prefetch_chains.md O4): B8 should
+        # reuse or extend lookup_paths(plan) when diffing nested
+        # Prefetch objects. Leave the B8 pseudo-code anchor intact until
+        # queryset diffing ships.
         return plan.apply(result)
 
     @classmethod

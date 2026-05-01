@@ -195,6 +195,20 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
     assert result._state.db == router.db_for_read(Category, instance=root)
 
 
+# TODO(spec-optimizer_nested_prefetch_chains.md O4): update the B2
+# resolver tests to use branch-sensitive resolver keys and add a leak
+# regression.
+#
+# Pseudo:
+# - test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation:
+#     context contains {"ItemType.category@allItems.category"}.
+# - test_b2_forward_fk_id_elision_returns_none_for_null_fk:
+#     same key shape, null <field>_id returns None.
+# - test_b2_forward_fk_id_elision_does_not_leak_across_parent_types:
+#     elide one parent type's category relation; assert another same
+#     field name on a different parent type follows normal getattr.
+
+
 def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
     """B2: nullable FK ids still resolve to ``None`` instead of a stub."""
     from types import SimpleNamespace

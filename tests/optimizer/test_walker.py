@@ -635,7 +635,18 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
 # ---------------------------------------------------------------------------
 # Future slice placeholders
 # ---------------------------------------------------------------------------
-
-# TODO(spec-optimizer.md O4): add nested-prefetch tests:
-# - test_plan_emits_nested_prefetch_chain_depth_2
+# TODO(spec-optimizer_nested_prefetch_chains.md O4): add walker tests.
+#
+# Pseudo:
+# - test_plan_emits_nested_prefetch_chain_depth_2:
+#     Category > items > entries emits outer Prefetch("items") whose
+#     child queryset prefetches entries.
+# - test_plan_emits_nested_select_related_chain_depth_2:
+#     Entry > item > category emits ["item", "item__category"].
+# - test_plan_combines_prefetch_boundary_with_inner_select_related.
+# - test_plan_propagates_uncacheable_nested_custom_get_queryset.
+# - test_plan_honors_optimizer_hints_at_nested_depth.
+# - test_plan_honors_prefetch_obj_hint_does_not_walk_inner_selections.
+# - test_plan_records_nested_fk_id_elision_with_resolver_key.
+# - add fragment / alias / directive variants for nested branches.
 # - test_plan_emits_nested_prefetch_chain_depth_3

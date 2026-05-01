@@ -45,6 +45,19 @@ def _get_relation_field_name(info: Any) -> str:
     Nested-path reconstruction (depth > 1) will need revisiting when
     O4 ships; for now, depth-1 is correct.
     """
+    # TODO(spec-optimizer_nested_prefetch_chains.md O4): keep this only
+    # as a field-name helper. B2/B3 resolver sentinels need a separate
+    # runtime response-path helper.
+    #
+    # Pseudo:
+    #   _runtime_path_from_info(info):
+    #       keys = []
+    #       path = info.path
+    #       while path is not None:
+    #           if not isinstance(path.key, int):
+    #               keys.append(path.key)
+    #           path = path.prev
+    #       return tuple(reversed(keys))
     return snake_case(getattr(info, "field_name", "") or "")
 
 
@@ -59,6 +72,17 @@ def _get_context_value(context: Any, key: str, default: Any = None) -> Any:
 
 def _is_fk_id_elided(info: Any, field_name: str) -> bool:
     """Return ``True`` if B2 marked this forward relation as FK-id elided."""
+    # TODO(spec-optimizer_nested_prefetch_chains.md O4): add
+    # parent_type and compare against the same branch-sensitive resolver
+    # key the walker emits.
+    #
+    # Pseudo:
+    #   key = _resolver_key(
+    #       parent_type,
+    #       field_name,
+    #       _runtime_path_from_info(info),
+    #   )
+    #   return key in elisions
     elisions = _get_context_value(
         getattr(info, "context", None),
         "dst_optimizer_fk_id_elisions",
@@ -106,6 +130,13 @@ def _check_n1(info: Any, root: Any, field_name: str) -> None:
     planned = _get_context_value(getattr(info, "context", None), "dst_optimizer_planned")
     if planned is None:
         return
+    # TODO(spec-optimizer_nested_prefetch_chains.md O4): switch to
+    # branch-sensitive resolver-key membership for parity with B2.
+    #
+    # Pseudo:
+    #   key = _resolver_key(parent_type, field_name, _runtime_path_from_info(info))
+    #   if key in planned:
+    #       return
     if field_name in planned:
         return
     # Only warn/raise if the access would actually trigger a lazy load.
@@ -138,6 +169,15 @@ def _make_relation_resolver(field: Any) -> Any:
     automatically) and call ``_check_n1`` when a strictness sentinel
     is present on ``info.context``.
     """
+    # TODO(spec-optimizer_nested_prefetch_chains.md O4): accept a
+    # parent_type parameter and bind it into every resolver closure so
+    # B2/B3 can build branch-sensitive resolver keys.
+    #
+    # Pseudo:
+    #   def _make_relation_resolver(field, parent_type):
+    #       ...
+    #       _check_n1(info, root, field_name, parent_type)
+    #       _is_fk_id_elided(info, field_name, parent_type)
     field_name = field.name
 
     if field.many_to_many or field.one_to_many:
@@ -163,6 +203,9 @@ def _make_relation_resolver(field: Any) -> Any:
         return reverse_one_to_one_resolver
 
     def forward_resolver(root: Any, info: Info) -> Any:
+        # TODO(spec-optimizer_nested_prefetch_chains.md O4): pass
+        # parent_type into both sentinel checks after _make_relation_resolver
+        # captures it.
         if field.attname is not None and _is_fk_id_elided(info, field_name):
             return _build_fk_id_stub(root, field)
         _check_n1(info, root, field_name)
@@ -184,5 +227,10 @@ def _attach_relation_resolvers(cls: type, fields: list[Any]) -> None:
     for field in fields:
         if not field.is_relation:
             continue
+        # TODO(spec-optimizer_nested_prefetch_chains.md O4): pass the
+        # parent DjangoType into the resolver factory.
+        #
+        # Pseudo:
+        #   resolver = _make_relation_resolver(field, parent_type=cls)
         resolver = _make_relation_resolver(field)
         setattr(cls, field.name, strawberry.field(resolver=resolver))

@@ -43,7 +43,7 @@ from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
 from .hints import OptimizerHint
-from .plans import lookup_paths
+from .plans import lookup_paths, runtime_path_from_info
 from .walker import plan_optimizations, plan_relation
 
 _MAX_PLAN_CACHE_SIZE = 256
@@ -246,7 +246,10 @@ class DjangoOptimizerExtension(SchemaExtension):
             msg = f"strictness must be 'off', 'warn', or 'raise', got {strictness!r}"
             raise ValueError(msg)
         self.strictness = strictness
-        self._plan_cache: dict[tuple[int, frozenset[tuple[str, Any]], type], Any] = {}
+        self._plan_cache: dict[
+            tuple[int, frozenset[tuple[str, Any]], type, tuple[str, ...]],
+            Any,
+        ] = {}
         self._cache_hits = 0
         self._cache_misses = 0
 
@@ -421,7 +424,7 @@ class DjangoOptimizerExtension(SchemaExtension):
     def _build_cache_key(
         info: Any,
         target_model: type[models.Model],
-    ) -> tuple[int, frozenset[tuple[str, Any]], type]:
+    ) -> tuple[int, frozenset[tuple[str, Any]], type, tuple[str, ...]]:
         """Build the plan-cache key from resolver info and target model.
 
         Key components:
@@ -431,6 +434,8 @@ class DjangoOptimizerExtension(SchemaExtension):
            variables referenced in ``@skip``/``@include`` directives.
         3. The target Django model class (different root fields in the
            same operation can return different models).
+        4. The root response path, so multiple root fields returning the
+           same model do not share a plan within one operation.
         """
         # Document hash: use the source body when available (cheap),
         # fall back to print_ast (expensive but correct).
@@ -449,7 +454,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         relevant_vars = frozenset(
             (k, variable_values[k]) for k in directive_var_names if k in variable_values
         )
-        return (doc_hash, relevant_vars, target_model)
+        return (doc_hash, relevant_vars, target_model, runtime_path_from_info(info))
 
     def plan_relation(
         self,

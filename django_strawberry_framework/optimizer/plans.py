@@ -1,11 +1,11 @@
 """``OptimizationPlan`` — the shape the walker emits and the extension consumes.
 
-The plan is a simple data class carrying three bags:
+The plan is a simple data class carrying optimization directives and metadata:
 
 - ``select_related``: forward FK / OneToOne joins that collapse into the
   parent query via ``QuerySet.select_related(*names)``.
 - ``prefetch_related``: many-side relations (reverse FK, M2M) and
-  visibility-downgraded forward rels, expressed as strings or
+  visibility-downgraded forward rels, usually expressed as
   ``django.db.models.Prefetch`` objects. Consumed by
   ``QuerySet.prefetch_related(*lookups)``.
 - ``only_fields``: scalar column names for ``QuerySet.only(*names)``,
@@ -15,6 +15,10 @@ The plan is a simple data class carrying three bags:
   OneToOne fields where only the target primary key is selected, so the
   resolver can use the source row's ``<field>_id`` value instead of
   lazy-loading the related row.
+- ``planned_resolver_keys``: branch-sensitive resolver keys for relations
+  covered by the plan, used by strictness checks.
+- ``cacheable``: whether this plan can be reused from the extension's plan
+  cache.
 
 The plan starts empty and accumulates entries as the walker descends the
 selection tree. The extension applies it to the root queryset in a single
@@ -42,10 +46,10 @@ class OptimizationPlan:
     prefetch_related: list[Any] = field(default_factory=list)
     """Strings or ``Prefetch`` objects for ``QuerySet.prefetch_related``.
 
-    Plain strings for simple reverse-FK / M2M lookups; ``Prefetch``
-    objects when the target type has a custom ``get_queryset`` (the
-    visibility-aware downgrade from spec-optimizer.md O6) or when the
-    lookup is a nested chain (O4).
+    Generated relation plans use ``Prefetch`` objects so child querysets can
+    consistently carry projection and nested lookup state. Plain strings are
+    still accepted for compatibility with manual plans or defensive fallback
+    branches.
     """
 
     only_fields: list[str] = field(default_factory=list)

@@ -98,7 +98,8 @@ def test_plan_dispatches_reverse_fk_to_prefetch_related():
     """A reverse FK selection routes to ``prefetch_related``."""
     plan = plan_optimizations([_sel("items")], Category)
     assert plan.select_related == []
-    assert plan.prefetch_related == ["items"]
+    prefetch = _prefetch_entry(plan)
+    assert prefetch.prefetch_to == "items"
 
 
 def test_plan_dispatches_mixed_relations():
@@ -108,7 +109,8 @@ def test_plan_dispatches_mixed_relations():
         Item,
     )
     assert plan.select_related == ["category"]
-    assert plan.prefetch_related == ["entries"]
+    prefetch = _prefetch_entry(plan)
+    assert prefetch.prefetch_to == "entries"
     assert plan.only_fields == ["category_id"]
 
 
@@ -234,7 +236,8 @@ def test_plan_handles_inline_fragment():
         selections=[_sel("name"), _sel("items")],
     )
     plan = plan_optimizations([inline], Category)
-    assert plan.prefetch_related == ["items"]
+    prefetch = _prefetch_entry(plan)
+    assert prefetch.prefetch_to == "items"
 
 
 def test_plan_handles_named_fragment_spread():
@@ -245,7 +248,8 @@ def test_plan_handles_named_fragment_spread():
         selections=[_sel("name"), _sel("items")],
     )
     plan = plan_optimizations([spread], Category)
-    assert plan.prefetch_related == ["items"]
+    prefetch = _prefetch_entry(plan)
+    assert prefetch.prefetch_to == "items"
 
 
 def test_fragment_spread_from_multiple_sites_does_not_double_prefetch():
@@ -269,8 +273,7 @@ def test_fragment_spread_from_multiple_sites_does_not_double_prefetch():
     # O4 may refine deduplication when nested Prefetch objects land.
     # For now, assert that the relation *is* in the plan and the count
     # is at most 2 (one per spread).
-    assert "items" in plan.prefetch_related
-    assert plan.prefetch_related.count("items") <= 2
+    assert [prefetch.prefetch_to for prefetch in plan.prefetch_related] == ["items"]
 
 
 def test_plan_skips_fragment_with_skip_directive():
@@ -326,6 +329,7 @@ def test_plan_merges_aliased_selections():
     )
     prefetch = _prefetch_entry(plan)
     assert prefetch.prefetch_to == "items"
+    assert plan.planned_resolver_keys == ["items@first", "items@second"]
 
 
 # ---------------------------------------------------------------------------
@@ -786,7 +790,8 @@ def test_plan_honors_optimizer_hints_at_nested_depth():
     finally:
         registry.clear()
 
-    assert plan.prefetch_related == ["items"]
+    prefetch = _prefetch_entry(plan)
+    assert prefetch.prefetch_to == "items"
 
 
 def test_plan_honors_prefetch_obj_hint_does_not_walk_inner_selections():

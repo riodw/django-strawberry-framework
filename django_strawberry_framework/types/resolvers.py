@@ -29,21 +29,8 @@ from django.db import router
 from strawberry.types import Info
 
 from ..optimizer.plans import resolver_key, runtime_path_from_info
-from ..utils.strings import snake_case
 
 _resolver_logger = logging.getLogger("django_strawberry_framework")
-
-
-def _get_relation_field_name(info: Any) -> str:
-    """Return the Django field name for the current resolver.
-
-    Uses ``info.field_name`` (the underlying GraphQL field name, NOT
-    the alias) and converts to snake_case. This avoids the alias
-    problem where ``info.path.key`` returns the response key (alias)
-    instead of the field name.
-
-    """
-    return snake_case(getattr(info, "field_name", "") or "")
 
 
 def _get_context_value(context: Any, key: str, default: Any = None) -> Any:

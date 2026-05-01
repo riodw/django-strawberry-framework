@@ -80,9 +80,9 @@ class OptimizerHint:
     def prefetch(cls, obj: Any) -> OptimizerHint:
         """Use a specific ``Prefetch`` object for this field.
 
-        TODO(spec-optimizer_nested_prefetch_chains.md O4): this is a
-        leaf operation. The consumer-provided queryset is the source of
-        truth, and nested selections under this field are not walked.
+        This is a leaf operation. The consumer-provided queryset is the
+        source of truth, and nested selections under this field are not
+        walked by the optimizer.
         """
         return cls(prefetch_obj=obj)
 

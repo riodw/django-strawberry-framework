@@ -43,6 +43,7 @@ from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
 from .hints import OptimizerHint
+from .plans import lookup_paths
 from .walker import plan_optimizations, plan_relation
 
 _MAX_PLAN_CACHE_SIZE = 256
@@ -348,40 +349,16 @@ class DjangoOptimizerExtension(SchemaExtension):
         # B5: stash the plan on info.context so consumers and tests
         # can introspect the optimizer's decisions.
         _stash_on_context(info.context, "dst_optimizer_plan", plan)
-        # TODO(spec-optimizer_nested_prefetch_chains.md O4): the walker
-        # will emit branch-sensitive resolver keys here, not bare field
-        # names or Django lookup paths.
-        #
-        # Pseudo:
-        #   dst_optimizer_fk_id_elisions = {
-        #       "ItemType.category@allCategories.items.category",
-        #       ...
-        #   }
         _stash_on_context(info.context, "dst_optimizer_fk_id_elisions", set(plan.fk_id_elisions))
         # B3: when strictness is active, stash the sentinel so resolvers
         # can detect unplanned lazy loads.
         if self.strictness != "off":
-            # TODO(spec-optimizer_nested_prefetch_chains.md O4):
-            # replace this lookup-path-ish set with the walker-produced
-            # resolver-key set. lookup_paths(plan) may be stashed
-            # separately for B8/debugging, but must not drive B3
-            # resolver checks.
-            #
-            # Pseudo:
-            #   _stash_on_context(
-            #       info.context,
-            #       "dst_optimizer_planned",
-            #       set(plan.planned_resolver_keys),
-            #   )
-            #   _stash_on_context(
-            #       info.context,
-            #       "dst_optimizer_lookup_paths",
-            #       lookup_paths(plan),
-            #   )
-            paths: set[str] = set(plan.select_related)
-            paths |= {getattr(e, "prefetch_to", e) for e in plan.prefetch_related}
-            paths |= set(plan.fk_id_elisions)
-            _stash_on_context(info.context, "dst_optimizer_planned", paths)
+            _stash_on_context(
+                info.context,
+                "dst_optimizer_planned",
+                set(plan.planned_resolver_keys),
+            )
+            _stash_on_context(info.context, "dst_optimizer_lookup_paths", lookup_paths(plan))
             _stash_on_context(info.context, "dst_optimizer_strictness", self.strictness)
         if plan.is_empty:
             return result
@@ -391,8 +368,8 @@ class DjangoOptimizerExtension(SchemaExtension):
         # consumer-applied optimizations are not duplicated.
         #
         # Pseudo:
-        #   sr = result.query.select_related
-        #   already_sel = _flatten(sr) if sr is not False else set()
+        #   sr = result.query.select_related  # noqa: ERA001
+        #   already_sel = _flatten(sr) if sr is not False else set()  # noqa: ERA001
         #   already_pf = {getattr(p, "prefetch_to", p)
         #                 for p in result._prefetch_related_lookups}
         #   plan.select_related = [
@@ -402,10 +379,6 @@ class DjangoOptimizerExtension(SchemaExtension):
         #       p for p in plan.prefetch_related
         #       if (getattr(p, "prefetch_to", p)
         #           not in already_pf)]
-        # TODO(spec-optimizer_nested_prefetch_chains.md O4): B8 should
-        # reuse or extend lookup_paths(plan) when diffing nested
-        # Prefetch objects. Leave the B8 pseudo-code anchor intact until
-        # queryset diffing ships.
         return plan.apply(result)
 
     @classmethod
@@ -486,8 +459,7 @@ class DjangoOptimizerExtension(SchemaExtension):
     ) -> tuple[str, Any]:
         """Plan a single relation traversal (O6 entry point).
 
-        Returns ``("select", field_name)`` or
-        ``("prefetch", Prefetch(...))`` describing how the optimizer
-        should materialize this relation on the parent queryset.
+        Returns ``("select", reason)`` or ``("prefetch", reason)`` describing how
+        the walker should materialize this relation on the parent queryset.
         """
         return plan_relation(field, target_type, info)

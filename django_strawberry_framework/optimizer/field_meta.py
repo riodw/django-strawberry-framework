@@ -30,6 +30,11 @@ class FieldMeta:
             ``None`` for reverse relations and non-FK fields.
         target_field_name: The target model field name a FK points at,
             or ``None`` for non-FK fields.
+        target_field_attname: The target model column attname a FK
+            points at, preserving non-PK ``to_field`` connector rules.
+        reverse_connector_attname: For reverse FK relations, the forward
+            FK column on the related model that points back to the
+            parent model.
         auto_created: ``True`` for reverse-side auto-created fields.
     """
 
@@ -41,6 +46,8 @@ class FieldMeta:
     related_model: Any = None
     attname: str | None = None
     target_field_name: str | None = None
+    target_field_attname: str | None = None
+    reverse_connector_attname: str | None = None
     auto_created: bool = False
 
     @classmethod
@@ -55,5 +62,7 @@ class FieldMeta:
             related_model=getattr(field, "related_model", None),
             attname=getattr(field, "attname", None),
             target_field_name=getattr(getattr(field, "target_field", None), "name", None),
+            target_field_attname=getattr(getattr(field, "target_field", None), "attname", None),
+            reverse_connector_attname=getattr(getattr(field, "field", None), "attname", None),
             auto_created=bool(getattr(field, "auto_created", False)),
         )

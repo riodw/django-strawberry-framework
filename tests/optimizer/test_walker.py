@@ -22,6 +22,7 @@ from django.db import models
 from django.db.models import Prefetch
 from fakeshop.products.models import Category, Entry, Item
 
+from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.optimizer.walker import (
     _is_fragment,
     _merge_aliased_selections,
@@ -44,6 +45,13 @@ def _sel(name, selections=None, directives=None, alias=None):
         arguments={},
         selections=selections or [],
     )
+
+
+def _prefetch_entry(plan, index=0):
+    """Return a prefetch entry and assert it is a ``Prefetch`` object."""
+    entry = plan.prefetch_related[index]
+    assert isinstance(entry, Prefetch)
+    return entry
 
 
 def _inline_fragment(type_condition, selections=None, directives=None):
@@ -315,7 +323,8 @@ def test_plan_merges_aliased_selections():
         ],
         Category,
     )
-    assert plan.prefetch_related == ["items"]
+    prefetch = _prefetch_entry(plan)
+    assert prefetch.prefetch_to == "items"
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +383,8 @@ def test_plan_elides_forward_fk_when_child_selection_is_id_only():
     assert plan.select_related == []
     assert plan.prefetch_related == []
     assert plan.only_fields == ["name", "category_id"]
-    assert plan.fk_id_elisions == ["category"]
+    assert plan.fk_id_elisions == ["category@category"]
+    assert plan.planned_resolver_keys == ["category@category"]
 
 
 def test_plan_does_not_elide_forward_fk_when_extra_target_scalar_selected():
@@ -404,7 +414,7 @@ def test_plan_elides_forward_fk_id_only_selection_inside_fragment():
     )
     assert plan.select_related == []
     assert plan.only_fields == ["category_id"]
-    assert plan.fk_id_elisions == ["category"]
+    assert plan.fk_id_elisions == ["category@category"]
 
 
 def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
@@ -460,7 +470,7 @@ def test_plan_elides_forward_fk_when_target_pk_is_not_named_id():
     )
     assert plan.select_related == []
     assert plan.only_fields == ["target_id"]
-    assert plan.fk_id_elisions == ["target"]
+    assert plan.fk_id_elisions == ["target@target"]
 
 
 def test_plan_does_not_elide_fk_to_non_pk_to_field():
@@ -633,20 +643,177 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
 
 
 # ---------------------------------------------------------------------------
-# Future slice placeholders
+# O4 — nested prefetch chains
 # ---------------------------------------------------------------------------
-# TODO(spec-optimizer_nested_prefetch_chains.md O4): add walker tests.
-#
-# Pseudo:
-# - test_plan_emits_nested_prefetch_chain_depth_2:
-#     Category > items > entries emits outer Prefetch("items") whose
-#     child queryset prefetches entries.
-# - test_plan_emits_nested_select_related_chain_depth_2:
-#     Entry > item > category emits ["item", "item__category"].
-# - test_plan_combines_prefetch_boundary_with_inner_select_related.
-# - test_plan_propagates_uncacheable_nested_custom_get_queryset.
-# - test_plan_honors_optimizer_hints_at_nested_depth.
-# - test_plan_honors_prefetch_obj_hint_does_not_walk_inner_selections.
-# - test_plan_records_nested_fk_id_elision_with_resolver_key.
-# - add fragment / alias / directive variants for nested branches.
-# - test_plan_emits_nested_prefetch_chain_depth_3
+
+
+def test_plan_emits_nested_prefetch_chain_depth_2():
+    """O4: ``Category > items > entries`` emits nested ``Prefetch`` objects."""
+    plan = plan_optimizations(
+        [_sel("items", selections=[_sel("entries", selections=[_sel("value")])])],
+        Category,
+    )
+
+    outer = _prefetch_entry(plan)
+    assert outer.prefetch_to == "items"
+    inner = outer.queryset._prefetch_related_lookups[0]
+    assert isinstance(inner, Prefetch)
+    assert inner.prefetch_to == "entries"
+    assert inner.queryset.model is Entry
+    fields, is_deferred = inner.queryset.query.deferred_loading
+    assert fields == {"value", "item_id"}
+    assert is_deferred is False
+
+
+def test_plan_emits_nested_select_related_chain_depth_2():
+    """O4: ``Entry > item > category`` stays in one joined queryset."""
+    plan = plan_optimizations(
+        [_sel("item", selections=[_sel("category", selections=[_sel("name")])])],
+        Entry,
+    )
+
+    assert plan.select_related == ["item", "item__category"]
+    assert plan.prefetch_related == []
+    assert plan.only_fields == ["item_id", "item__category_id", "item__category__name"]
+
+
+def test_plan_combines_prefetch_boundary_with_inner_select_related():
+    """O4: a prefetched child queryset can carry its own ``select_related``."""
+    plan = plan_optimizations(
+        [_sel("items", selections=[_sel("category", selections=[_sel("name")])])],
+        Category,
+    )
+
+    outer = _prefetch_entry(plan)
+    assert outer.prefetch_to == "items"
+    assert outer.queryset.query.select_related == {"category": {}}
+    fields, is_deferred = outer.queryset.query.deferred_loading
+    assert fields == {"category_id", "category__name"}
+    assert is_deferred is False
+
+
+def test_plan_propagates_uncacheable_nested_custom_get_queryset():
+    """O4+O6: a nested custom ``get_queryset`` makes the root plan uncacheable."""
+    registry.clear()
+
+    class FilteredEntryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return True
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.filter(is_private=False)
+
+    registry.register(Entry, FilteredEntryType)
+    try:
+        plan = plan_optimizations(
+            [_sel("items", selections=[_sel("entries", selections=[_sel("value")])])],
+            Category,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.cacheable is False
+    outer = _prefetch_entry(plan)
+    inner = outer.queryset._prefetch_related_lookups[0]
+    assert isinstance(inner, Prefetch)
+    assert inner.prefetch_to == "entries"
+
+
+def test_plan_honors_optimizer_hints_at_nested_depth():
+    """O4+B4: nested ``OptimizerHint.SKIP`` suppresses that branch."""
+    registry.clear()
+
+    class ItemType:
+        _optimizer_hints = {"entries": OptimizerHint.SKIP}
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Item, ItemType)
+    try:
+        plan = plan_optimizations(
+            [_sel("items", selections=[_sel("entries", selections=[_sel("value")])])],
+            Category,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.prefetch_related == ["items"]
+
+
+def test_plan_honors_prefetch_obj_hint_does_not_walk_inner_selections():
+    """O4+B4: explicit ``Prefetch`` hints are leaf operations."""
+    registry.clear()
+    explicit = Prefetch("items", queryset=Item.objects.only("name"))
+
+    class CategoryType:
+        _optimizer_hints = {"items": OptimizerHint.prefetch(explicit)}
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Category, CategoryType)
+    try:
+        plan = plan_optimizations(
+            [_sel("items", selections=[_sel("entries", selections=[_sel("value")])])],
+            Category,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.prefetch_related == [explicit]
+
+
+def test_plan_records_nested_fk_id_elision_with_resolver_key():
+    """O4+B2: FK-id elision inside a child plan uses the nested resolver key."""
+    plan = plan_optimizations(
+        [_sel("items", selections=[_sel("category", selections=[_sel("id")])])],
+        Category,
+    )
+
+    outer = _prefetch_entry(plan)
+    assert outer.prefetch_to == "items"
+    assert plan.fk_id_elisions == ["category@items.category"]
+    assert "category@items.category" in plan.planned_resolver_keys
+
+
+def test_plan_nested_prefetch_respects_fragment_alias_and_directive_shapes():
+    """O4: nested branches still honor existing fragment/alias/directive behavior."""
+    plan = plan_optimizations(
+        [
+            _sel(
+                "items",
+                alias="things",
+                selections=[
+                    _inline_fragment(
+                        "ItemType",
+                        selections=[
+                            _sel(
+                                "entries",
+                                selections=[_sel("value")],
+                                directives={"include": {"if": True}},
+                            ),
+                            _sel(
+                                "category",
+                                selections=[_sel("name")],
+                                directives={"skip": {"if": True}},
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+        Category,
+    )
+
+    outer = _prefetch_entry(plan)
+    assert outer.prefetch_to == "items"
+    inner = outer.queryset._prefetch_related_lookups[0]
+    assert isinstance(inner, Prefetch)
+    assert inner.prefetch_to == "entries"
+    select_related = outer.queryset.query.select_related
+    assert select_related is False or "category" not in select_related

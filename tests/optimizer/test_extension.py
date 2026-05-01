@@ -189,8 +189,8 @@ def test_optimizer_elides_forward_fk_id_only_selection(django_assert_num_queries
     assert plan.select_related == []
     assert plan.prefetch_related == []
     assert plan.only_fields == ["name", "category_id"]
-    assert plan.fk_id_elisions == ["category"]
-    assert ctx.dst_optimizer_fk_id_elisions == {"category"}
+    assert plan.fk_id_elisions == ["ItemType.category@allItems.category"]
+    assert ctx.dst_optimizer_fk_id_elisions == {"ItemType.category@allItems.category"}
 
 
 @pytest.mark.django_db
@@ -829,7 +829,7 @@ def test_strictness_warn_stashes_sentinel():
     assert result.errors is None
     planned = getattr(ctx, "dst_optimizer_planned", None)
     assert planned is not None
-    assert "category" in planned
+    assert "ItemType.category@allItems.category" in planned
     assert getattr(ctx, "dst_optimizer_strictness") == "warn"
 
 
@@ -864,8 +864,8 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
         context_value=ctx,
     )
     assert result.errors is None
-    assert "category" in ctx.dst_optimizer_planned
-    assert ctx.dst_optimizer_fk_id_elisions == {"category"}
+    assert "ItemType.category@allItems.category" in ctx.dst_optimizer_planned
+    assert ctx.dst_optimizer_fk_id_elisions == {"ItemType.category@allItems.category"}
     assert not any("Potential N+1" in r.message for r in caplog.records)
 
 
@@ -979,18 +979,193 @@ def test_strictness_warn_planned_alias_no_warning(caplog):
     assert not any("Potential N+1" in r.message for r in caplog.records)
 
 
-# TODO(spec-optimizer_nested_prefetch_chains.md O4): add extension
-# integration tests near this strictness/query-count coverage.
-#
-# Pseudo:
-# - test_optimizer_prefetches_nested_reverse_fk_depth_2:
-#     { allCategories { items { entries { value } } } } => 3 queries.
-# - test_optimizer_selects_nested_forward_fk_depth_2:
-#     { allEntries { item { category { name } } } } => 1 query.
-# - test_optimizer_strictness_accepts_nested_planned_relation:
-#     strictness="raise" does not raise for a nested planned resolver key.
-# - test_optimizer_nested_fk_id_elision_does_not_leak_to_sibling_branch.
-# - test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable.
+@pytest.mark.django_db
+def test_optimizer_prefetches_nested_reverse_fk_depth_2(django_assert_num_queries):
+    """O4: nested reverse-FK traversal is optimized from the root queryset."""
+    services.seed_data(1)
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "entries")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+
+    with django_assert_num_queries(3):
+        result = schema.execute_sync("{ allCategories { items { entries { value } } } }")
+    assert result.errors is None
+
+
+@pytest.mark.django_db
+def test_optimizer_selects_nested_forward_fk_depth_2(django_assert_num_queries):
+    """O4: nested forward-FK traversal stays in a single joined query."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "category")
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "item")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_entries(self) -> list[EntryType]:
+            return Entry.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+
+    with django_assert_num_queries(1):
+        result = schema.execute_sync("{ allEntries { item { category { name } } } }")
+    assert result.errors is None
+
+
+@pytest.mark.django_db
+def test_optimizer_strictness_accepts_nested_planned_relation():
+    """O4+B3: strictness accepts resolver keys from nested plans."""
+    services.seed_data(1)
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "entries")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "items")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    ext = DjangoOptimizerExtension(strictness="raise")
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ allCategories { items { entries { value } } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    assert "ItemType.entries@allCategories.items.entries" in ctx.dst_optimizer_planned
+
+
+@pytest.mark.django_db
+def test_optimizer_nested_fk_id_elision_does_not_leak_to_sibling_branch(django_assert_num_queries):
+    """O4+B2: FK-id elision on one root branch does not leak to another."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "category")
+
+    class PropertyType(DjangoType):
+        class Meta:
+            model = Property
+            fields = ("id", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+        @strawberry.field
+        def all_properties(self) -> list[PropertyType]:
+            return Property.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(2):
+        result = schema.execute_sync(
+            "{ allItems { category { id } } allProperties { category { name } } }",
+            context_value=ctx,
+        )
+    assert result.errors is None
+    assert result.data["allItems"][0]["category"]["id"]
+    assert result.data["allProperties"][0]["category"]["name"]
+
+
+@pytest.mark.django_db
+def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
+    """O4+O6: nested request-dependent prefetch plans are not cached."""
+    services.seed_data(1)
+    calls = []
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            calls.append(info)
+            return queryset
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "entries")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "items")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    query = "{ allCategories { items { entries { value } } } }"
+
+    assert schema.execute_sync(query).errors is None
+    assert schema.execute_sync(query).errors is None
+    assert len(calls) == 2
+    assert ext.cache_info().size == 0
 
 
 def test_collect_directive_var_names_in_named_fragment():
@@ -1194,7 +1369,7 @@ def test_optimizer_hint_force_prefetch(django_assert_num_queries):
     assert result.errors is None
     plan = ctx.dst_optimizer_plan
     # Force-prefetch overrides the default select_related for forward FK.
-    assert "category" in plan.prefetch_related
+    assert [lookup.prefetch_to for lookup in plan.prefetch_related] == ["category"]
     assert "category" not in plan.select_related
     assert "category_id" in plan.only_fields
 
@@ -1349,7 +1524,7 @@ def test_plan_stashed_with_prefetch_related(django_assert_num_queries):
     assert result.errors is None
     plan = getattr(ctx, "dst_optimizer_plan", None)
     assert plan is not None
-    assert "items" in plan.prefetch_related
+    assert [lookup.prefetch_to for lookup in plan.prefetch_related] == ["items"]
 
 
 def test_plan_stashed_on_dict_context():
@@ -1548,7 +1723,6 @@ def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
 
 def test_plan_relation_returns_prefetch_for_custom_get_queryset():
     """O6: the extension exposes the relation planner entry point."""
-    from django.db.models import Prefetch
 
     field = Item._meta.get_field("category")
     info = SimpleNamespace()
@@ -1563,10 +1737,9 @@ def test_plan_relation_returns_prefetch_for_custom_get_queryset():
             assert passed_info is info
             return queryset
 
-    kind, lookup = DjangoOptimizerExtension().plan_relation(field, FilteredCategoryType, info)
+    kind, reason = DjangoOptimizerExtension().plan_relation(field, FilteredCategoryType, info)
     assert kind == "prefetch"
-    assert isinstance(lookup, Prefetch)
-    assert lookup.prefetch_to == "category"
+    assert reason == "custom_get_queryset"
 
 
 @pytest.mark.skip(reason="Slice 4+: M2M relation — fakeshop has no M2M field; deferred.")

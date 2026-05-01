@@ -6,9 +6,10 @@ in ``test_walker.py`` exercise construction; these tests verify that the
 plan's own methods work correctly in isolation.
 """
 
-from fakeshop.products.models import Category
+from django.db.models import Prefetch
+from fakeshop.products.models import Category, Entry, Item
 
-from django_strawberry_framework.optimizer.plans import OptimizationPlan
+from django_strawberry_framework.optimizer.plans import OptimizationPlan, lookup_paths, resolver_key
 
 
 class TestOptimizationPlanIsEmpty:
@@ -31,7 +32,11 @@ class TestOptimizationPlanIsEmpty:
         assert plan.is_empty is False
 
     def test_non_empty_fk_id_elisions(self):
-        plan = OptimizationPlan(fk_id_elisions=["category"])
+        plan = OptimizationPlan(fk_id_elisions=["ItemType.category@allItems.category"])
+        assert plan.is_empty is False
+
+    def test_non_empty_planned_resolver_keys(self):
+        plan = OptimizationPlan(planned_resolver_keys=["ItemType.category@allItems.category"])
         assert plan.is_empty is False
 
     def test_cacheable_flag_does_not_affect_empty_state(self):
@@ -39,18 +44,39 @@ class TestOptimizationPlanIsEmpty:
         assert plan.is_empty is True
 
 
-# TODO(spec-optimizer_nested_prefetch_chains.md O4): add
-# TestLookupPaths after lookup_paths(plan) lands.
-#
-# Pseudo:
-#   class TestLookupPaths:
-#       test_flatten_select_related_paths
-#       test_flatten_plain_prefetch_string
-#       test_flatten_nested_prefetch_objects_recursively
-#       test_does_not_include_resolver_keys
-#
-# If OptimizationPlan gains planned_resolver_keys, add construction and
-# is_empty coverage for that field here too.
+class TestLookupPaths:
+    """``lookup_paths`` flattens Django lookup paths for debugging/B8."""
+
+    def test_flatten_select_related_paths(self):
+        plan = OptimizationPlan(select_related=["item", "item__category"])
+        assert lookup_paths(plan) == {"item", "item__category"}
+
+    def test_flatten_plain_prefetch_string(self):
+        plan = OptimizationPlan(prefetch_related=["items"])
+        assert lookup_paths(plan) == {"items"}
+
+    def test_flatten_nested_prefetch_objects_recursively(self):
+        inner = Prefetch("entries", queryset=Entry.objects.only("value", "item_id"))
+        outer = Prefetch("items", queryset=Item.objects.prefetch_related(inner))
+        plan = OptimizationPlan(prefetch_related=[outer])
+        assert lookup_paths(plan) == {"items", "items__entries"}
+
+    def test_does_not_include_resolver_keys(self):
+        plan = OptimizationPlan(
+            select_related=["category"],
+            planned_resolver_keys=["ItemType.category@allItems.category"],
+            fk_id_elisions=["ItemType.owner@allItems.owner"],
+        )
+        assert lookup_paths(plan) == {"category"}
+
+
+def test_resolver_key_includes_parent_type_and_runtime_path():
+    class ItemType:
+        pass
+
+    assert (
+        resolver_key(ItemType, "category", ("allItems", "category")) == "ItemType.category@allItems.category"
+    )
 
 
 class TestOptimizationPlanApply:

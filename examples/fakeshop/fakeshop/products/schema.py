@@ -187,3 +187,6 @@ class Query:
     @strawberry.field
     def hello(self) -> str:
         return "fakeshop placeholder"
+
+
+__all__ = ("Query",)

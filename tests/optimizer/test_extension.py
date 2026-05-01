@@ -154,6 +154,125 @@ def test_optimizer_combines_select_related_and_prefetch_related(django_assert_nu
 
 
 @pytest.mark.django_db
+def test_optimizer_elides_forward_fk_id_only_selection(django_assert_num_queries):
+    """B2: ``category { id }`` is served from ``Item.category_id`` with no JOIN."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(1):
+        result = schema.execute_sync(
+            "{ allItems { name category { id } } }",
+            context_value=ctx,
+        )
+    assert result.errors is None
+    assert len(result.data["allItems"]) == 25
+    assert all(item["category"]["id"] for item in result.data["allItems"])
+    plan = ctx.dst_optimizer_plan
+    assert plan.select_related == []
+    assert plan.prefetch_related == []
+    assert plan.only_fields == ["name", "category_id"]
+    assert plan.fk_id_elisions == ["category"]
+    assert ctx.dst_optimizer_fk_id_elisions == {"category"}
+
+
+@pytest.mark.django_db
+def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected(django_assert_num_queries):
+    """B2: selecting any target scalar beyond ``id`` keeps the normal JOIN path."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(1):
+        result = schema.execute_sync(
+            "{ allItems { name category { id name } } }",
+            context_value=ctx,
+        )
+    assert result.errors is None
+    plan = ctx.dst_optimizer_plan
+    assert plan.select_related == ["category"]
+    assert plan.fk_id_elisions == []
+    assert plan.only_fields == ["name", "category_id", "category__id", "category__name"]
+
+
+@pytest.mark.django_db
+def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset(
+    django_assert_num_queries,
+):
+    """B2: a custom target ``get_queryset`` uses O6 Prefetch even for ``id`` only."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(2):
+        result = schema.execute_sync(
+            "{ allItems { name category { id } } }",
+            context_value=ctx,
+        )
+    assert result.errors is None
+    plan = ctx.dst_optimizer_plan
+    assert plan.select_related == []
+    assert plan.fk_id_elisions == []
+    assert plan.only_fields == ["name", "category_id"]
+    assert len(plan.prefetch_related) == 1
+
+
+@pytest.mark.django_db
 def test_optimizer_skips_when_no_relations_selected(django_assert_num_queries):
     """If the selection contains only scalars, only projection is applied."""
     services.seed_data(1)
@@ -712,6 +831,42 @@ def test_strictness_warn_stashes_sentinel():
     assert planned is not None
     assert "category" in planned
     assert getattr(ctx, "dst_optimizer_strictness") == "warn"
+
+
+@pytest.mark.django_db
+def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
+    """B2+B3: FK-id-elided relations are planned and do not warn."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    ext = DjangoOptimizerExtension(strictness="warn")
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    result = schema.execute_sync(
+        "{ allItems { name category { id } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    assert "category" in ctx.dst_optimizer_planned
+    assert ctx.dst_optimizer_fk_id_elisions == {"category"}
+    assert not any("Potential N+1" in r.message for r in caplog.records)
 
 
 def test_get_relation_field_name_uses_field_name_not_alias():

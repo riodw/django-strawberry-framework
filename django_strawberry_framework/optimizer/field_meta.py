@@ -28,6 +28,8 @@ class FieldMeta:
         related_model: The target model class for relations, or ``None``.
         attname: The DB column name (e.g., ``category_id`` for a FK).
             ``None`` for reverse relations and non-FK fields.
+        target_field_name: The target model field name a FK points at,
+            or ``None`` for non-FK fields.
         auto_created: ``True`` for reverse-side auto-created fields.
     """
 
@@ -38,6 +40,7 @@ class FieldMeta:
     one_to_one: bool = False
     related_model: Any = None
     attname: str | None = None
+    target_field_name: str | None = None
     auto_created: bool = False
 
     @classmethod
@@ -51,5 +54,6 @@ class FieldMeta:
             one_to_one=bool(getattr(field, "one_to_one", False)),
             related_model=getattr(field, "related_model", None),
             attname=getattr(field, "attname", None),
+            target_field_name=getattr(getattr(field, "target_field", None), "name", None),
             auto_created=bool(getattr(field, "auto_created", False)),
         )

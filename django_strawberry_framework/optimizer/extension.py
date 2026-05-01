@@ -348,11 +348,13 @@ class DjangoOptimizerExtension(SchemaExtension):
         # B5: stash the plan on info.context so consumers and tests
         # can introspect the optimizer's decisions.
         _stash_on_context(info.context, "dst_optimizer_plan", plan)
+        _stash_on_context(info.context, "dst_optimizer_fk_id_elisions", set(plan.fk_id_elisions))
         # B3: when strictness is active, stash the sentinel so resolvers
         # can detect unplanned lazy loads.
         if self.strictness != "off":
             paths: set[str] = set(plan.select_related)
             paths |= {getattr(e, "prefetch_to", e) for e in plan.prefetch_related}
+            paths |= set(plan.fk_id_elisions)
             _stash_on_context(info.context, "dst_optimizer_planned", paths)
             _stash_on_context(info.context, "dst_optimizer_strictness", self.strictness)
         if plan.is_empty:

@@ -150,6 +150,7 @@ def test_o1_make_relation_resolver_forward_returns_attribute():
 
     fake_field = SimpleNamespace(
         name="category",
+        attname="category_id",
         many_to_many=False,
         one_to_many=False,
         one_to_one=False,
@@ -161,6 +162,54 @@ def test_o1_make_relation_resolver_forward_returns_attribute():
     fake_info = SimpleNamespace(context=None, path=None)
     assert resolver(fake_root, fake_info) is sentinel
     assert resolver.__name__ == "resolve_category"
+
+
+def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
+    """B2: forward resolver returns a target stub from ``<field>_id`` when elided."""
+    from types import SimpleNamespace
+
+    from django.db import router
+
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    class Root:
+        category_id = 42
+
+        @property
+        def category(self):
+            raise AssertionError("B2 resolver should not lazy-load the relation")
+
+    field = Item._meta.get_field("category")
+    resolver = _make_relation_resolver(field)
+    fake_info = SimpleNamespace(
+        context=SimpleNamespace(dst_optimizer_fk_id_elisions={"category"}),
+        field_name="category",
+    )
+
+    root = Root()
+    result = resolver(root, fake_info)
+    assert isinstance(result, Category)
+    assert result.pk == 42
+    assert result.id == 42
+    assert result._state.adding is False
+    assert result._state.db == router.db_for_read(Category, instance=root)
+
+
+def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
+    """B2: nullable FK ids still resolve to ``None`` instead of a stub."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    field = Item._meta.get_field("category")
+    resolver = _make_relation_resolver(field)
+    fake_root = SimpleNamespace(category_id=None)
+    fake_info = SimpleNamespace(
+        context={"dst_optimizer_fk_id_elisions": {"category"}},
+        field_name="category",
+    )
+
+    assert resolver(fake_root, fake_info) is None
 
 
 def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexist():

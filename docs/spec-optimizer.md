@@ -33,7 +33,7 @@ Slice 4's tests in `tests/test_optimizer.py`:
 
 Slice-4 type-tracing limitation: at the per-resolver `resolve` / `aresolve` hooks, `info.return_type` is graphql-core's wrapper shape — `GraphQLNonNull(GraphQLList(GraphQLNonNull(GraphQLObjectType('ItemType'))))` — not the consumer's `list[ItemType]` annotation. `_unwrap_return_type` only peels one layer (`getattr(rt, "of_type", None)`) and returns the inner `GraphQLList` wrapper, so `registry.model_for_type(...)` always yields `None` and `_optimize` exits early before applying any `select_related` / `prefetch_related`. The "passing" Slice-4 tests pass because they short-circuit on this `None` (no relations selected, or non-`QuerySet` returns) — not because the planner ever fires. O3's `on_executing_start` hook receives the Python annotation directly and side-steps this; no separate fix is needed before O3 lands.
 
-Slice 5 (`only()` projection) and Slice 6 (`plan_relation` + `Prefetch` downgrade) inside `spec-django_types.md` are still TODO. They are now this spec's scope.
+Slice 5 (`only()` projection) and Slice 6 (`plan_relation` + `Prefetch` downgrade) inside `spec-django_types.md` moved into this spec's scope. O5 has shipped; O6 remains pending.
 
 graphene-django's reverse-relation resolution is a custom `Field.wrap_resolve` per FK / M2M (see `converter.py:308-471`). graphene-django does not ship an optimizer — it relies on `graphene-django-optimizer` which uses the same selection-tree-walk approach as strawberry-graphql-django.
 
@@ -118,7 +118,7 @@ Strawberry's public `SchemaExtension` API does not expose `on_executing_start` o
 Mechanism, modeled directly on `strawberry_django/optimizer.py`:
 
 - **`on_execute` context manager.** Sets a `ContextVar` marking the extension instance as active for the operation. Lets nested helpers detect optimization-on without threading the extension through every call. (strawberry-graphql-django optimizer.py:1759-1764.)
-- **`resolve` hook.** Strawberry's `SchemaExtension.resolve` returns `AwaitableOrValue[object]` — a single hook handles both sync and async resolvers (there is no separate `aresolve`). Body: call `_next(root, info, *args, **kwargs)`. If `info.path.prev is not None`, return the result unchanged — only root resolvers trigger the planner. If the result is an awaitable (async resolver), return an async wrapper that awaits it, then runs `_optimize`. Otherwise run `_optimize` synchronously. `_optimize` checks `isinstance(QuerySet)`, traces the return type to a Django model (see "Type-tracing fix" below), calls the O2 walker (`plan_optimizations(selections[0].selections, target_model)`), and applies the plan via `plan.apply(queryset)` (`.only(...)` stays empty until O5). (strawberry-graphql-django optimizer.py:1766-1794.)
+- **`resolve` hook.** Strawberry's `SchemaExtension.resolve` returns `AwaitableOrValue[object]` — a single hook handles both sync and async resolvers (there is no separate `aresolve`). Body: call `_next(root, info, *args, **kwargs)`. If `info.path.prev is not None`, return the result unchanged — only root resolvers trigger the planner. If the result is an awaitable (async resolver), return an async wrapper that awaits it, then runs `_optimize`. Otherwise run `_optimize` synchronously. `_optimize` checks `isinstance(QuerySet)`, traces the return type to a Django model (see "Type-tracing fix" below), calls the O2 walker (`plan_optimizations(selections[0].selections, target_model)`), and applies the plan via `plan.apply(queryset)`. (strawberry-graphql-django optimizer.py:1766-1794.)
 
 Type-tracing fix. Slice 4's `_unwrap_return_type` peels one layer off graphql-core's wrapper (`getattr(rt, "of_type", None)`) and falls down at the next `NonNull`, returning the `GraphQLList` wrapper instead of the inner type — which is why `registry.model_for_type(...)` always returns `None` and the optimizer silently no-ops in real Strawberry execution today. O3 replaces this with recursive unwrap + name-based lookup: walk `rt.of_type` until reaching a leaf carrying a `.name` attribute, then `info.schema.get_type_by_name(name)` returns the Strawberry type definition, and `registry.model_for_type(...)` reaches the Django model from there. (strawberry-graphql-django optimizer.py:1638-1641.)
 
@@ -147,7 +147,7 @@ The `model_for_type` reverse-lookup on `TypeRegistry` stays where it is. Both ha
 
 ## Visibility status
 
-O3 has shipped. `DjangoOptimizerExtension` is in `django_strawberry_framework/__init__.py`'s `__all__` and importable from the top-level namespace. The three previously-skipped optimizer tests (`test_optimizer_applies_select_related_for_forward_fk`, `test_optimizer_applies_prefetch_related_for_reverse_fk`, `test_optimizer_combines_select_related_and_prefetch_related`) are unskipped and passing. The optimizer's status marker in `docs/README.md` reflects "O1–O3 shipped". O4–O6 are the remaining slices in this spec; `spec-optimizer_beyond.md` covers the B1–B8 improvements layered on top.
+O3 and O5 have shipped. `DjangoOptimizerExtension` is in `django_strawberry_framework/__init__.py`'s `__all__` and importable from the top-level namespace. The three previously-skipped optimizer tests (`test_optimizer_applies_select_related_for_forward_fk`, `test_optimizer_applies_prefetch_related_for_reverse_fk`, `test_optimizer_combines_select_related_and_prefetch_related`) are unskipped and passing. The optimizer's status marker in `docs/README.md` reflects "O1–O3/O5 shipped". O4 and O6 are the remaining slices in this spec; `spec-optimizer_beyond.md` covers the B1–B8 improvements layered on top.
 
 ## Open questions
 
@@ -157,7 +157,7 @@ O3 has shipped. `DjangoOptimizerExtension` is in `django_strawberry_framework/__
 
 Custom resolver opt-out: should consumers be able to override the auto-generated relation resolver with their own `@strawberry_django.field` decorator? Recommendation: yes, eventually — the auto-generated resolver only fires when no consumer-declared resolver exists for that name. Defer until O1 implementation surfaces a concrete need.
 
-`only()` opt-out per consumer field: strawberry-graphql-django ships `disable_optimization=True` on individual fields. We should plan for the same flag, on `Meta.optimizer_overrides` or a per-field marker, but defer the API decision until O5.
+`only()` opt-out per consumer field: strawberry-graphql-django ships `disable_optimization=True` on individual fields. We should plan for the same flag, on `Meta.optimizer_overrides` or a per-field marker, in a future optimizer-control spec.
 
 ## References
 
@@ -177,5 +177,5 @@ The visibility-leak / `Prefetch` downgrade discussion that motivated bundling th
 - [x] O2 — Selection-tree walker
 - [x] O3 — Root-gated resolve hook (top-level optimizer)
 - [ ] O4 — Nested prefetch chains (depth > 1)
-- [ ] O5 — `only()` projection
+- [x] O5 — `only()` projection
 - [ ] O6 — `get_queryset` + `Prefetch` downgrade

@@ -11,7 +11,7 @@ The walker dispatches on duck-typed attributes (``name``, ``alias``,
 ``directives``, ``selections``, ``type_condition``), so synthetic
 objects exercise exactly the same code paths as real Strawberry nodes.
 
-O4 (nested prefetch chains), O5 (``only()`` projection), and O6
+O4 (nested prefetch chains) and O6
 (``Prefetch`` downgrade) each extend this file with additional tests
 when they land.
 """
@@ -68,10 +68,11 @@ def _fragment_spread(name, type_condition, selections=None, directives=None):
 
 
 def test_plan_returns_empty_for_scalar_only_selection():
-    """Selecting only scalars produces an empty plan (no relations)."""
+    """Selecting only scalars produces an ``only()`` projection but no relations."""
     plan = plan_optimizations([_sel("name"), _sel("id")], Category)
     assert plan.select_related == []
     assert plan.prefetch_related == []
+    assert plan.only_fields == ["name", "id"]
 
 
 def test_plan_dispatches_forward_fk_to_select_related():
@@ -79,6 +80,7 @@ def test_plan_dispatches_forward_fk_to_select_related():
     plan = plan_optimizations([_sel("category")], Item)
     assert plan.select_related == ["category"]
     assert plan.prefetch_related == []
+    assert plan.only_fields == ["category_id"]
 
 
 def test_plan_dispatches_reverse_fk_to_prefetch_related():
@@ -96,6 +98,7 @@ def test_plan_dispatches_mixed_relations():
     )
     assert plan.select_related == ["category"]
     assert plan.prefetch_related == ["entries"]
+    assert plan.only_fields == ["category_id"]
 
 
 def test_plan_skips_unknown_selections():
@@ -313,6 +316,48 @@ def test_plan_merges_aliased_selections():
 
 
 # ---------------------------------------------------------------------------
+# O5 — only() projection
+# ---------------------------------------------------------------------------
+
+
+def test_plan_collects_only_fields_for_selected_scalars():
+    """O5: scalar selections are collected into ``only_fields``."""
+    plan = plan_optimizations([_sel("id"), _sel("name")], Category)
+    assert plan.only_fields == ["id", "name"]
+    assert plan.select_related == []
+    assert plan.prefetch_related == []
+
+
+def test_plan_includes_fk_columns_in_only_fields():
+    """O5: select_related FK traversals include the source FK column."""
+    plan = plan_optimizations(
+        [_sel("name"), _sel("category", selections=[_sel("name")])],
+        Item,
+    )
+    assert plan.select_related == ["category"]
+    assert plan.only_fields == ["name", "category_id", "category__name"]
+
+
+def test_plan_collects_related_scalar_only_fields_from_fragment():
+    """O5: scalar selections inside relation fragments use relation paths."""
+    plan = plan_optimizations(
+        [
+            _sel(
+                "category",
+                selections=[
+                    _inline_fragment(
+                        "CategoryType",
+                        selections=[_sel("id"), _sel("name")],
+                    ),
+                ],
+            ),
+        ],
+        Item,
+    )
+    assert plan.only_fields == ["category_id", "category__id", "category__name"]
+
+
+# ---------------------------------------------------------------------------
 # Future slice placeholders
 # ---------------------------------------------------------------------------
 
@@ -320,9 +365,6 @@ def test_plan_merges_aliased_selections():
 # - test_plan_emits_nested_prefetch_chain_depth_2
 # - test_plan_emits_nested_prefetch_chain_depth_3
 
-# TODO(spec-optimizer.md O5): add only() projection tests:
-# - test_plan_collects_only_fields_for_selected_scalars
-# - test_plan_includes_fk_columns_in_only_fields
 
 # TODO(spec-optimizer.md O6): add Prefetch downgrade tests:
 # - test_plan_downgrades_select_related_when_target_has_custom_get_queryset

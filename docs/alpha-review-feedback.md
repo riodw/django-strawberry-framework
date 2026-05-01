@@ -1,58 +1,49 @@
-# Review Feedback: `spec-optimizer_beyond.md`
+# Review Feedback: B6 Audit Diff
 
 ## Scope reviewed
 
+- `django_strawberry_framework/optimizer/extension.py`
+- `tests/optimizer/test_extension.py`
 - `docs/spec-optimizer_beyond.md`
 
-This feedback only covers the current spec text.
+This feedback only covers the current diff.
 
 ## Findings
 
-### 1. B6's audit target is still too broad and will produce false positives on valid hidden relations
+### 1. `_collect_schema_reachable_types()` audits the schema type map, not true root-reachable types
 
 Priority: P1
 
-B6 says to walk each reachable model's `model._meta.get_fields()` and check every relation field. That is broader than the GraphQL surface the optimizer actually owns. A reachable `DjangoType` can legitimately hide relations via `Meta.fields`, `Meta.exclude`, or future `OptimizerHint.SKIP`, and those should not be flagged as missing optimization stories. As written, the audit will warn on model relations that are not exposed by the type at all, which makes the startup report noisy and untrustworthy.
+The new B6 helper walks `schema._schema.type_map` and treats every `GraphQLObjectType` with a `DjangoType` origin as reachable. That is broader than the contract in `spec-optimizer_beyond.md`, which says the audit should walk only types reachable from the schema's root types. In GraphQL/Strawberry, the schema type map can include extra object types that are present in the schema registry but not actually reachable from `query` / `mutation` / `subscription` roots. Auditing the whole type map will therefore produce false positives for orphan or helper types the consumer intentionally passed into the schema but does not expose.
 
 Recommended fix:
 
-- narrow the audit to the relation fields exposed by the reachable `DjangoType`, not the full Django model field set
-- explicitly say the audit must honor `Meta.fields`, `Meta.exclude`, and future optimizer-hint opt-outs when deciding what is "reachable by the walker"
+- either do a real traversal from the root operation types, or explicitly narrow the shipped contract to “all object types in the schema type map”
+- add a test with an extra `DjangoType` included in the schema but not referenced from any root field, and assert B6 ignores it
 
-### 2. B3 still underspecifies alias-safe relation-path matching
+Relevant code:
+
+- `django_strawberry_framework/optimizer/extension.py:138-164`
+- `docs/spec-optimizer_beyond.md:179-181`
+
+### 2. B6 is marked shipped, but the implementation still covers only the unregistered-target subset of the audit contract
 
 Priority: P1
 
-B3 says the resolver can reconstruct its dotted path from `info.path` by walking `.prev` and `snake_case`-ing each segment. That is not enough once aliases enter the query, because `info.path` is a response path, not necessarily the underlying schema field path. A query like `{ allItems { cat: category { name } } }` yields a response-path segment like `cat`, while the optimizer plan is keyed on `category`. If the spec does not call this out explicitly, a straightforward implementation will misclassify planned aliased relations as unplanned.
+`docs/spec-optimizer_beyond.md` now marks B6 complete, and the implementation does ship a useful `check_schema(schema)` pass. But the current code only warns when an exposed relation's `related_model` has no registered `DjangoType`. The B6 contract in the same spec is broader: it says the audit should also surface relations hidden behind custom resolvers that bypass the optimizer, and the test surface still names a `check_optimizer` management command. None of that shipped in this diff. Marking B6 complete at this point makes the spec overstate the audit's current guarantees.
 
 Recommended fix:
 
-- add an explicit rule that B3 must compare against underlying field names, not response aliases
-- either require resolver-side access to the field definition name, or prefer the alternative context-stashed path mapping for alias safety
-- add alias-based coverage to the B3 test surface in the spec text
+- either narrow the B6 prose/test surface to “unregistered-target audit” and leave the broader custom-resolver / command work for a follow-up slice, or
+- keep B6 unchecked until those remaining behaviors actually land
 
-### 3. B8's queryset-state description is factually incomplete for `select_related()`
+Relevant code/spec:
 
-Priority: P2
-
-B8 says `queryset.query.select_related` is either `False` or a nested `dict`. Django also uses `True` for the wildcard `select_related()` case. If the implementation follows the current spec literally, the diffing logic will mishandle or crash on querysets where the consumer already called bare `.select_related()`. That is exactly the kind of consumer-applied optimization B8 is supposed to coexist with.
-
-Recommended fix:
-
-- update the B8 mechanism section to describe the three real states: `False`, `True`, or nested `dict`
-- specify what the optimizer should do when it sees `True` — practically, treat all `select_related` entries as already satisfied and skip select-related deltas
-
-### 4. B2's elision-marker scope is not pinned tightly enough for repeated field names
-
-Priority: P2
-
-B2's pseudo-code uses `mark_fk_id_elided(field.name)`, and the prose says the resolver reads an elision flag from `info.context` at call time. That is underspecified for queries with the same relation name in multiple branches or under multiple root fields. A flat flag keyed only by `field.name` can leak elision state from one branch into another and cause the wrong resolver behavior.
-
-Recommended fix:
-
-- require the elision marker to be keyed by full relation path, not bare field name
-- state that the resolver consults the same full-path identity the optimizer used when planning the elision
+- `django_strawberry_framework/optimizer/extension.py:362-396`
+- `tests/optimizer/test_extension.py:848-951`
+- `docs/spec-optimizer_beyond.md:177-209`
+- `docs/spec-optimizer_beyond.md:320-323`
 
 ## Overall assessment
 
-The spec has the right shape and the remaining gaps are mostly about precision, not direction. The main thing to tighten before the next implementation pass is identity: which fields the audit actually owns, which names strictness compares, which queryset states diffing must understand, and which path an elision marker belongs to.
+This is a good incremental B6 pass, but it is not the full B6 described in the spec yet. The core issue is boundary accuracy: the audit currently answers “which exposed relations point at unregistered target types,” while the spec now says it answers the broader “which relations have no optimization story” question.

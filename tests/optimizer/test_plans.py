@@ -57,5 +57,10 @@ class TestOptimizationPlanApply:
         result = plan.apply(qs)
         assert "items" in result._prefetch_related_lookups
 
-    # TODO(spec-optimizer.md O5): test_apply_only_fields — verify
-    # ``only()`` is applied and FK columns are included.
+    def test_apply_only_fields(self):
+        plan = OptimizationPlan(only_fields=["name"])
+        qs = Category.objects.all()
+        result = plan.apply(qs)
+        fields, is_deferred = result.query.deferred_loading
+        assert fields == {"name"}
+        assert is_deferred is False

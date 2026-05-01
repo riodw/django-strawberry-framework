@@ -13,8 +13,8 @@ Covers:
   no relations (just scalars).
 - ``on_execute`` ContextVar lifecycle.
 
-Slice 5 (``only()`` projection) and Slice 6 (``plan_relation`` downgrade)
-are placeholder-skipped at the bottom of the file.
+Slice 6 (``plan_relation`` downgrade) is placeholder-skipped at the bottom
+of the file.
 """
 
 import contextlib
@@ -155,7 +155,7 @@ def test_optimizer_combines_select_related_and_prefetch_related(django_assert_nu
 
 @pytest.mark.django_db
 def test_optimizer_skips_when_no_relations_selected(django_assert_num_queries):
-    """If the selection contains only scalars, the queryset is unchanged."""
+    """If the selection contains only scalars, only projection is applied."""
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -841,6 +841,117 @@ def test_collect_directive_var_names_in_named_fragment():
 
 
 # ---------------------------------------------------------------------------
+# B6: Schema-build-time optimization audit
+# ---------------------------------------------------------------------------
+
+
+def test_check_schema_warns_unregistered_target():
+    """B6: check_schema warns when a relation's target has no registered DjangoType."""
+
+    # Must register CategoryType first so convert_relation succeeds,
+    # then clear it from the registry so check_schema sees the gap.
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return []
+
+    schema = strawberry.Schema(query=Query)
+    # Clear Category's registration so the audit finds a gap.
+    registry._types.pop(Category, None)
+    registry._models.pop(CategoryType, None)
+    warnings = DjangoOptimizerExtension.check_schema(schema)
+    assert any("category" in w and "no registered target" in w for w in warnings)
+
+
+def test_check_schema_no_warnings_when_all_covered():
+    """B6: check_schema returns no warnings when all relations have registered targets."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return []
+
+    schema = strawberry.Schema(query=Query)
+    warnings = DjangoOptimizerExtension.check_schema(schema)
+    # category's target (Category) is registered, so no warnings for it.
+    assert not any("category" in w for w in warnings)
+
+
+def test_check_schema_skip_hint_suppresses_warning():
+    """B6: relations with OptimizerHint.SKIP are not flagged."""
+    from django_strawberry_framework import OptimizerHint
+
+    # Register CategoryType so convert_relation succeeds.
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            optimizer_hints = {"category": OptimizerHint.SKIP}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return []
+
+    schema = strawberry.Schema(query=Query)
+    # Clear Category so the audit would normally warn — but SKIP suppresses.
+    registry._types.pop(Category, None)
+    registry._models.pop(CategoryType, None)
+    warnings = DjangoOptimizerExtension.check_schema(schema)
+    # SKIP means category is intentionally unoptimized — no warning.
+    assert not any("category" in w for w in warnings)
+
+
+def test_check_schema_hidden_fields_not_flagged():
+    """B6: relations excluded by Meta.fields are not flagged."""
+
+    # ItemType excludes "category" from Meta.fields.
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return []
+
+    schema = strawberry.Schema(query=Query)
+    warnings = DjangoOptimizerExtension.check_schema(schema)
+    # category is not in _optimizer_field_map so not flagged.
+    assert not any("category" in w for w in warnings)
+
+
+# ---------------------------------------------------------------------------
 # B4: Meta.optimizer_hints
 # ---------------------------------------------------------------------------
 
@@ -916,6 +1027,7 @@ def test_optimizer_hint_force_prefetch(django_assert_num_queries):
     # Force-prefetch overrides the default select_related for forward FK.
     assert "category" in plan.prefetch_related
     assert "category" not in plan.select_related
+    assert "category_id" in plan.only_fields
 
 
 def test_optimizer_hints_unknown_field_raises():
@@ -1014,8 +1126,7 @@ def test_plan_stashed_with_select_related(django_assert_num_queries):
 
     schema = strawberry.Schema(query=Query, extensions=[ext])
     # Build a synthetic info to drive _optimize directly.
-    from graphql import GraphQLNonNull, GraphQLList
-    from strawberry.types.nodes import convert_selections
+    from graphql import GraphQLList, GraphQLNonNull
 
     inner = schema._schema.type_map["ItemType"]
     wrapped = GraphQLNonNull(GraphQLList(GraphQLNonNull(inner)))
@@ -1108,7 +1219,7 @@ def test_plan_stashed_on_object_context_unit():
 
 @pytest.mark.django_db
 def test_empty_plan_still_stashed():
-    """B5: even when no relations are selected, the plan is stashed (empty)."""
+    """B5/O5: even when no relations are selected, the scalar-only plan is stashed."""
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -1128,17 +1239,49 @@ def test_empty_plan_still_stashed():
     assert result.errors is None
     plan = getattr(ctx, "dst_optimizer_plan", None)
     assert plan is not None
-    assert plan.is_empty
+    assert plan.only_fields == ["name"]
+    assert plan.select_related == []
+    assert plan.prefetch_related == []
 
 
 # ---------------------------------------------------------------------------
-# Slice 5 / 6 placeholders
+# O5 — only() projection
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="Slice 5: only() projection pending")
-def test_optimizer_applies_only_for_selected_scalars():
-    pass
+@pytest.mark.django_db
+def test_optimizer_applies_only_for_selected_scalars(django_assert_num_queries):
+    """O5: selected scalar fields are collected into the stashed plan."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+    with django_assert_num_queries(1):
+        result = schema.execute_sync(
+            "{ allCategories { name } }",
+            context_value=ctx,
+        )
+    assert result.errors is None
+    plan = ctx.dst_optimizer_plan
+    assert plan.only_fields == ["name"]
+    assert plan.select_related == []
+    assert plan.prefetch_related == []
+
+
+# ---------------------------------------------------------------------------
+# Slice 6 placeholders
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skip(reason="Slice 6: plan_relation downgrade-to-Prefetch pending")

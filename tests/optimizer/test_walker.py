@@ -24,8 +24,10 @@ from fakeshop.products.models import Category, Entry, Item
 
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.optimizer.walker import (
+    _ensure_connector_only_fields,
     _is_fragment,
     _merge_aliased_selections,
+    _selected_scalar_names,
     _should_include,
     plan_optimizations,
 )
@@ -118,6 +120,59 @@ def test_plan_skips_unknown_selections():
     """Selections not on the Django model are silently skipped."""
     plan = plan_optimizations([_sel("bogusField")], Category)
     assert plan.is_empty
+
+
+def test_plan_prefetches_relation_with_missing_related_model_defensively():
+    """Defensive branch: relation fields without related_model become string prefetches."""
+
+    class FakeModel:
+        pass
+
+    # Deliberately impossible in real Django; covers the defensive branch.
+    fake_field = SimpleNamespace(
+        name="generic",
+        is_relation=True,
+        related_model=None,
+        attname=None,
+        many_to_many=True,
+        one_to_many=False,
+    )
+    FakeModel._meta = SimpleNamespace(get_fields=lambda: [fake_field])
+
+    plan = plan_optimizations([_sel("generic")], FakeModel)
+
+    assert plan.prefetch_related == ["generic"]
+    assert plan.planned_resolver_keys == ["generic@generic"]
+
+
+def test_plan_select_relation_with_missing_related_model_is_not_elided():
+    """Defensive branch: FK-id elision is unsafe when related_model is missing."""
+
+    class FakeModel:
+        pass
+
+    fake_field = SimpleNamespace(
+        name="relation",
+        is_relation=True,
+        related_model=None,
+        attname="relation_id",
+        many_to_many=False,
+        one_to_many=False,
+        auto_created=False,
+    )
+    FakeModel._meta = SimpleNamespace(get_fields=lambda: [fake_field])
+
+    plan = plan_optimizations([_sel("relation", selections=[_sel("id")])], FakeModel)
+
+    assert plan.select_related == ["relation"]
+    assert plan.only_fields == ["relation_id"]
+    assert plan.fk_id_elisions == []
+
+
+def test_selected_scalar_names_returns_none_without_model():
+    """Defensive branch: FK-id elision is unsafe without a concrete model."""
+    # Deliberately impossible in normal walker flow; covers the helper guard.
+    assert _selected_scalar_names([_sel("id")], None) is None
 
 
 def test_plan_converts_camel_case_to_snake_case():
@@ -435,6 +490,24 @@ def test_plan_elides_forward_fk_id_only_selection_inside_fragment():
     assert plan.select_related == []
     assert plan.only_fields == ["category_id"]
     assert plan.fk_id_elisions == ["category@category"]
+
+
+def test_plan_does_not_elide_when_fragment_contains_relation_selection():
+    """B2: relation selections inside fragments make FK-id elision unsafe."""
+    plan = plan_optimizations(
+        [
+            _sel(
+                "category",
+                selections=[
+                    _inline_fragment("CategoryType", selections=[_sel("items")]),
+                ],
+            ),
+        ],
+        Item,
+    )
+    assert plan.select_related == ["category"]
+    assert plan.only_fields == ["category_id"]
+    assert plan.fk_id_elisions == []
 
 
 def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
@@ -818,6 +891,59 @@ def test_plan_honors_prefetch_obj_hint_does_not_walk_inner_selections():
     assert plan.prefetch_related == [explicit]
 
 
+def test_plan_prefetch_obj_hint_on_forward_fk_adds_connector_column():
+    """B4: explicit ``Prefetch`` hints on forward FKs keep the source FK column."""
+    registry.clear()
+    explicit = Prefetch("category", queryset=Category.objects.only("name"))
+
+    class ItemType:
+        _optimizer_hints = {"category": OptimizerHint.prefetch(explicit)}
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Item, ItemType)
+    try:
+        plan = plan_optimizations([_sel("category", selections=[_sel("name")])], Item)
+    finally:
+        registry.clear()
+
+    assert plan.prefetch_related == [explicit]
+    assert plan.only_fields == ["category_id"]
+    assert plan.planned_resolver_keys == ["ItemType.category@category"]
+
+
+def test_plan_force_select_hint_uses_select_recursion():
+    """B4: ``select_related`` hints flow through same-query recursion."""
+    registry.clear()
+
+    class ItemType:
+        _optimizer_hints = {"category": OptimizerHint.select_related()}
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Item, ItemType)
+    try:
+        plan = plan_optimizations(
+            [_sel("category", selections=[_sel("name"), _sel("items", selections=[_sel("name")])])],
+            Item,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.select_related == ["category"]
+    assert plan.only_fields == ["category_id", "category__name"]
+    assert plan.planned_resolver_keys == ["ItemType.category@category", "items@category.items"]
+    prefetch = _prefetch_entry(plan)
+    assert prefetch.prefetch_to == "category__items"
+    fields, is_deferred = prefetch.queryset.query.deferred_loading
+    assert fields == {"name", "category_id"}
+    assert is_deferred is False
+
+
 def test_plan_records_nested_fk_id_elision_with_resolver_key():
     """O4+B2: FK-id elision inside a child plan uses the nested resolver key."""
     plan = plan_optimizations(
@@ -867,3 +993,38 @@ def test_plan_nested_prefetch_respects_fragment_alias_and_directive_shapes():
     assert inner.prefetch_to == "entries"
     select_related = outer.queryset.query.select_related
     assert select_related is False or "category" not in select_related
+
+
+def test_ensure_connector_only_fields_adds_m2m_target_pk():
+    """Connector injection supports M2M-style relation metadata."""
+    plan = plan_optimizations([_sel("name")], Category)
+    fake_related_model = SimpleNamespace(
+        _meta=SimpleNamespace(pk=SimpleNamespace(attname="id")),
+    )
+    fake_parent_field = SimpleNamespace(
+        one_to_many=False,
+        many_to_many=True,
+        related_model=fake_related_model,
+    )
+
+    _ensure_connector_only_fields(plan, fake_parent_field)
+
+    assert plan.only_fields == ["name", "id"]
+
+
+def test_ensure_connector_only_fields_logs_when_connector_unknown(caplog):
+    """Connector injection logs when a relation lacks connector metadata."""
+    from django_strawberry_framework.optimizer.walker import logger
+
+    plan = plan_optimizations([_sel("name")], Category)
+    fake_parent_field = SimpleNamespace(
+        name="generic",
+        one_to_many=True,
+        many_to_many=False,
+    )
+
+    caplog.set_level("DEBUG", logger=logger.name)
+    _ensure_connector_only_fields(plan, fake_parent_field)
+
+    assert plan.only_fields == ["name"]
+    assert any("could not resolve connector column" in r.message for r in caplog.records)

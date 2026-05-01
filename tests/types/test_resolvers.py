@@ -302,6 +302,49 @@ def test_check_n1_ignores_bare_field_name_key():
         _check_n1(fake_info, SimpleNamespace(), "category", ItemType)
 
 
+def test_check_n1_returns_when_relation_is_already_loaded():
+    """B3: unplanned-but-cached relations do not warn or raise."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class ItemType:
+        pass
+
+    fake_info = SimpleNamespace(
+        context={
+            "dst_optimizer_planned": set(),
+            "dst_optimizer_strictness": "raise",
+        },
+        path=_path("allItems", 0, "category"),
+    )
+
+    _check_n1(fake_info, SimpleNamespace(category="cached"), "category", ItemType)
+
+
+def test_check_n1_warns_for_unplanned_lazy_load(caplog):
+    """B3: warn strictness logs an unplanned lazy-load relation."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class ItemType:
+        pass
+
+    fake_info = SimpleNamespace(
+        context={
+            "dst_optimizer_planned": set(),
+            "dst_optimizer_strictness": "warn",
+        },
+        path=_path("allItems", 0, "category"),
+    )
+
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    _check_n1(fake_info, SimpleNamespace(), "category", ItemType)
+
+    assert any("Potential N+1 on category" in r.message for r in caplog.records)
+
+
 def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
     """O4: runtime response paths preserve aliases and omit list indexes."""
     from types import SimpleNamespace

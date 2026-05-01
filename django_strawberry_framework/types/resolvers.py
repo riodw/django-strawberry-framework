@@ -28,7 +28,7 @@ import strawberry
 from django.db import router
 from strawberry.types import Info
 
-from ..optimizer.plans import resolver_key
+from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..utils.strings import snake_case
 
 _resolver_logger = logging.getLogger("django_strawberry_framework")
@@ -55,21 +55,6 @@ def _get_context_value(context: Any, key: str, default: Any = None) -> Any:
     return getattr(context, key, default)
 
 
-def _runtime_path_from_info(info: Any) -> tuple[str, ...]:
-    """Return the current GraphQL response path with list indexes stripped."""
-    keys: list[str] = []
-    path = getattr(info, "path", None)
-    while path is not None:
-        key = getattr(path, "key", None)
-        if not isinstance(key, int) and key is not None:
-            keys.append(str(key))
-        path = getattr(path, "prev", None)
-    if keys:
-        return tuple(reversed(keys))
-    field_name = getattr(info, "field_name", None)
-    return (str(field_name),) if field_name else ()
-
-
 def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
     """Return ``True`` if B2 marked this forward relation as FK-id elided."""
     elisions = _get_context_value(
@@ -77,8 +62,8 @@ def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None
         "dst_optimizer_fk_id_elisions",
         set(),
     )
-    key = resolver_key(parent_type, field_name, _runtime_path_from_info(info))
-    return key in elisions or field_name in elisions
+    key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
+    return key in elisions
 
 
 def _build_fk_id_stub(root: Any, field: Any) -> Any:
@@ -125,8 +110,8 @@ def _check_n1(
     planned = _get_context_value(getattr(info, "context", None), "dst_optimizer_planned")
     if planned is None:
         return
-    key = resolver_key(parent_type, field_name, _runtime_path_from_info(info))
-    if key in planned or field_name in planned:
+    key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
+    if key in planned:
         return
     # Only warn/raise if the access would actually trigger a lazy load.
     if not _will_lazy_load(root, field_name):

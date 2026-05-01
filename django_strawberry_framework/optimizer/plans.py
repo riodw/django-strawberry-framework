@@ -105,6 +105,24 @@ def resolver_key(
     return f"{parent_type.__name__}.{field_name}@{path}"
 
 
+def runtime_path_from_info(info: Any | None) -> tuple[str, ...]:
+    """Return a GraphQL response path tuple with list indexes stripped."""
+    if info is None:
+        return ()
+    return runtime_path_from_path(getattr(info, "path", None))
+
+
+def runtime_path_from_path(path: Any) -> tuple[str, ...]:
+    """Return a GraphQL response path tuple with list indexes stripped."""
+    keys: list[str] = []
+    while path is not None:
+        key = getattr(path, "key", None)
+        if not isinstance(key, int) and key is not None:
+            keys.append(str(key))
+        path = getattr(path, "prev", None)
+    return tuple(reversed(keys))
+
+
 def lookup_paths(plan: OptimizationPlan) -> set[str]:
     """Return Django relation lookup paths covered by ``plan`` for B8/debugging."""
     paths = set(plan.select_related)

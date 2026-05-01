@@ -194,6 +194,51 @@ def test_optimizer_elides_forward_fk_id_only_selection(django_assert_num_queries
 
 
 @pytest.mark.django_db
+def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias(django_assert_num_queries):
+    """B2/O4: duplicate aliases are both served from the source FK column."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(1):
+        result = schema.execute_sync(
+            "{ allItems { first: category { id } second: category { id } } }",
+            context_value=ctx,
+        )
+    assert result.errors is None
+    assert all(item["first"]["id"] == item["second"]["id"] for item in result.data["allItems"])
+    plan = ctx.dst_optimizer_plan
+    assert plan.select_related == []
+    assert plan.prefetch_related == []
+    assert plan.only_fields == ["category_id"]
+    assert plan.fk_id_elisions == [
+        "ItemType.category@allItems.first",
+        "ItemType.category@allItems.second",
+    ]
+    assert ctx.dst_optimizer_fk_id_elisions == {
+        "ItemType.category@allItems.first",
+        "ItemType.category@allItems.second",
+    }
+
+
+@pytest.mark.django_db
 def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected(django_assert_num_queries):
     """B2: selecting any target scalar beyond ``id`` keeps the normal JOIN path."""
     services.seed_data(1)

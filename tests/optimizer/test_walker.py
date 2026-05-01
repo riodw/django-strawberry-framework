@@ -296,6 +296,7 @@ def test_merge_aliased_selections_merges_same_field():
     merged = _merge_aliased_selections([sel_a, sel_b])
     assert len(merged) == 1
     assert len(merged[0].selections) == 2
+    assert merged[0]._optimizer_response_keys == ["first", "second"]
 
 
 def test_merge_aliased_selections_preserves_different_fields():
@@ -385,6 +386,21 @@ def test_plan_elides_forward_fk_when_child_selection_is_id_only():
     assert plan.only_fields == ["name", "category_id"]
     assert plan.fk_id_elisions == ["category@category"]
     assert plan.planned_resolver_keys == ["category@category"]
+
+
+def test_plan_elides_forward_fk_id_only_selection_for_each_alias():
+    """B2/O4: duplicate aliases keep distinct resolver keys for FK-id elision."""
+    plan = plan_optimizations(
+        [
+            _sel("category", selections=[_sel("id")], alias="first"),
+            _sel("category", selections=[_sel("id")], alias="second"),
+        ],
+        Item,
+    )
+    assert plan.select_related == []
+    assert plan.only_fields == ["category_id"]
+    assert plan.fk_id_elisions == ["category@first", "category@second"]
+    assert plan.planned_resolver_keys == ["category@first", "category@second"]
 
 
 def test_plan_does_not_elide_forward_fk_when_extra_target_scalar_selected():
@@ -662,6 +678,35 @@ def test_plan_emits_nested_prefetch_chain_depth_2():
     assert inner.queryset.model is Entry
     fields, is_deferred = inner.queryset.query.deferred_loading
     assert fields == {"value", "item_id"}
+    assert is_deferred is False
+
+
+def test_plan_emits_nested_prefetch_chain_depth_3_with_inner_select():
+    """O4: ``Category > items > entries > property`` keeps connector columns."""
+    plan = plan_optimizations(
+        [
+            _sel(
+                "items",
+                selections=[
+                    _sel(
+                        "entries",
+                        selections=[_sel("property", selections=[_sel("name")])],
+                    ),
+                ],
+            ),
+        ],
+        Category,
+    )
+
+    outer = _prefetch_entry(plan)
+    assert outer.prefetch_to == "items"
+    inner = outer.queryset._prefetch_related_lookups[0]
+    assert isinstance(inner, Prefetch)
+    assert inner.prefetch_to == "entries"
+    assert inner.queryset.model is Entry
+    assert inner.queryset.query.select_related == {"property": {}}
+    fields, is_deferred = inner.queryset.query.deferred_loading
+    assert fields == {"item_id", "property_id", "property__name"}
     assert is_deferred is False
 
 

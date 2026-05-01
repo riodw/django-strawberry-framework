@@ -8,7 +8,7 @@ This spec covers eight improvements that the existing libraries do not ship. The
 
 ## Current state
 
-O1 (custom relation resolvers), O2 (selection-tree walker), O3 (root-gated resolve hook with async parity and type-tracing), O5 (`only()` projection), and O6 (`Prefetch` downgrade) have shipped. The optimizer is effective end-to-end for depth-1 queries. O4 (nested prefetch chains) is specified in `spec-optimizer.md` but not yet implemented. This spec's items layer on top of O3 and are independent of O4 unless noted.
+O1 (custom relation resolvers), O2 (selection-tree walker), O3 (root-gated resolve hook with async parity and type-tracing), O5 (`only()` projection), and O6 (`Prefetch` downgrade) have shipped. The optimizer is effective end-to-end for depth-1 queries, including B2 forward-FK-id elision for `id`-only target selections. O4 (nested prefetch chains) is specified in `spec-optimizer.md` but not yet implemented. This spec's items layer on top of O3 and are independent of O4 unless noted.
 
 ## Proposed improvements
 
@@ -49,25 +49,29 @@ return plan.apply(queryset)
 
 **The win.** `{ items { name category { id } } }` does not need a JOIN. The `category_id` column is already on the `Item` row — Django stores FK values as `<field>_id` on the source model. strawberry-graphql-django emits `select_related("category")` anyway, pulling the entire `Category` row across a JOIN for nothing. We can detect "the only fields selected on the FK target are columns the source model already has" and skip the JOIN entirely.
 
-**Mechanism.** In the walker's relation dispatch (currently in `_walk_selections`), before emitting a `select_related` entry for a forward FK: inspect the child selections on the FK target. If every selected scalar on the target is a field whose value is already available on the source row (specifically: `id` is always available as `<fk_name>_id` on the source), elide the `select_related` and instead ensure the `<fk_name>_id` column is in the `only()` set (O5). The resolver for the FK field can then return a stub object or resolve from the cached `_id` value.
+**Mechanism.** In the walker's relation dispatch (currently in `_walk_selections`), before emitting a `select_related` entry for a forward FK: inspect the child selections on the FK target. If the only selected scalar on the target is the target model's concrete primary-key field, and the FK points at that primary key, elide the `select_related` and instead ensure the `<fk_name>_id` column is in the `only()` set (O5). The resolver for the FK field can then return a loaded-state stub object or resolve from the cached `_id` value.
 
-The common case is `{ category { id } }` — consumers select the FK target's `id` to pass to the frontend as a reference. The parent row's `category_id` is the same value. No JOIN needed.
+The common case is `{ category { id } }` — consumers select the FK target's primary key to pass to the frontend as a reference. The parent row's `category_id` is the same value when the FK targets the related model's primary key. No JOIN needed.
 
 Pseudo code:
 
 ```text
-if (field.many_to_one or field.one_to_one) and selected_child_scalars == {"id"}:
+if (field.many_to_one or field.one_to_one) and selected_child_scalars == {target_pk_name}:
+    if field.target_field != field.related_model._meta.pk:
+        return select_related
+    if target_type.has_custom_id_resolver(target_pk_name):
+        return select_related
     plan.only_fields.add(field.attname)  # "category_id"
     mark_fk_id_elided(field.name)
     return
 plan.select_related.add(field.name)
 ```
 
-**Applicability.** The elision applies to both forward `ForeignKey` (`many_to_one`) and forward `OneToOneField` (non-auto-created `one_to_one`). Both store the `_id` column on the source row. Reverse OneToOne (`auto_created=True`) does not have an `_id` column on the source and is excluded.
+**Applicability.** The elision applies to both forward `ForeignKey` (`many_to_one`) and forward `OneToOneField` (non-auto-created `one_to_one`) when the relation targets the related model's primary key. Both store the target primary-key value on the source row. Reverse OneToOne (`auto_created=True`) does not have an `_id` column on the source and is excluded. Foreign keys using `to_field` against a non-PK target are also excluded because the source column stores the target field value, not the related instance's primary key.
 
-**Resolver change required.** When the JOIN is elided, the existing forward resolver (`getattr(root, field_name)`) would trigger a lazy load because Django has no cached related object. The resolver must be swapped to return a lightweight stub — e.g., `target_model(pk=getattr(root, field.attname))` — or resolve the raw ID value directly into the GraphQL `id` field. The elision flag must be keyed by the **full relation path** (not the bare field name) to avoid leaking elision state between branches or root fields in the same query. A query like `{ a: allItems { category { id } } b: allItems { category { id name } } }` must elide in branch `a` but not in branch `b`; a flat `field_name`-keyed flag would incorrectly apply to both. The flag is stashed on `info.context` (via B5's mechanism) and the resolver consults the same full-path identity the optimizer used when planning.
+**Resolver change required.** When the JOIN is elided, the existing forward resolver (`getattr(root, field_name)`) would trigger a lazy load because Django has no cached related object. The resolver must be swapped to return a lightweight stub — e.g., `target_model(pk=getattr(root, field.attname))` — and mark it as a loaded row (`_state.adding = False`) rather than a new unsaved instance. The elision flag must be keyed by the **full relation path** (not the bare field name) to avoid leaking elision state between branches or root fields in the same query. A query like `{ a: allItems { category { id } } b: allItems { category { id name } } }` must elide in branch `a` but not in branch `b`; a flat `field_name`-keyed flag would incorrectly apply to both. The flag is stashed on `info.context` (via B5's mechanism) and the resolver consults the same full-path identity the optimizer used when planning.
 
-**Edge cases.** If the selection includes any scalar beyond `id` on the target (e.g., `{ category { id name } }`), the JOIN is required — fall through to the existing `select_related` path. If the target type has a custom `get_queryset` (O6), the elision cannot fire because the visibility filter needs the JOIN. This is a pure performance optimization with a clean fallback.
+**Edge cases.** If the selection includes any scalar beyond the target primary key (e.g., `{ category { id name } }`), the JOIN is required — fall through to the existing `select_related` path. If the target type has a custom `get_queryset` (O6), the elision cannot fire because the visibility filter needs the JOIN. If the target type customizes resolution of the selected id/PK field, elision must also fall back to the JOIN because the custom resolver may depend on non-stubbed columns. This is a pure performance optimization with a clean fallback.
 
 **Test surface.** Query-count assertion: `{ items { category { id } } }` issues 1 query (no JOIN) vs. 2 without elision. Negative case: `{ items { category { id name } } }` still JOINs. Edge case: nullable FK with `category { id }` returns `None` when the FK is null.
 
@@ -224,7 +228,7 @@ def check_schema(cls, schema):
 
 **B4 after B3** because the `OptimizerHint` type and `_validate_meta` integration are API-surface work that benefits from the walker being well-exercised by B1/B7/B3 first.
 
-**B2 last among the perf items** because it is the most subtle — resolver-stub trickery, `only()` column interaction, `has_custom_get_queryset` guard, and potential GlobalID interaction all need O5+O6+B5 to be settled first.
+**B2 landed after the surrounding optimizer foundations** because it is subtle — resolver-stub trickery, `only()` column interaction, `has_custom_get_queryset` guard, field-metadata accuracy, strictness integration, optimizer hints, and GlobalID/custom-id interaction all needed the neighboring slices to settle first.
 
 **B6 late** because the schema-build-time audit is ambitious and independent — it does not block any other slice and benefits from B4's `optimizer_hints` being available (hints affect which relations are flagged as unoptimized).
 
@@ -318,6 +322,6 @@ graphql-core AST node types: `graphql/language/ast.py` — `FieldNode`, `InlineF
 - [x] B7 — Precomputed optimizer field metadata
 - [x] B3 — N+1 detection (`strictness` API)
 - [x] B4 — `Meta.optimizer_hints` + `OptimizerHint` wiring
-- [ ] B2 — Forward-FK-id elision
+- [x] B2 — Forward-FK-id elision
 - [x] B6 — Schema-build-time optimization audit
 - [ ] B8 — Queryset optimization diffing

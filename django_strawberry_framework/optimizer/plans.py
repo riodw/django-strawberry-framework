@@ -11,6 +11,9 @@ The plan is a simple data class carrying three bags:
 - ``only_fields``: scalar column names for ``QuerySet.only(*names)``,
   including the FK columns required to materialize ``select_related``
   joins so Django doesn't mark them as deferred and re-query.
+- ``fk_id_elisions``: forward FK / OneToOne paths where only the target
+  ``id`` is selected, so the resolver can use the source row's
+  ``<field>_id`` value instead of lazy-loading the related row.
 
 The plan starts empty and accumulates entries as the walker descends the
 selection tree. The extension applies it to the root queryset in a single
@@ -51,6 +54,8 @@ class OptimizationPlan:
 
     only_fields: list[str] = field(default_factory=list)
     """Scalar column names for ``QuerySet.only``."""
+    fk_id_elisions: list[str] = field(default_factory=list)
+    """Forward relation paths elided because the source row already carries the target id."""
     cacheable: bool = True
     """Whether this plan can be reused from the extension's plan cache.
 
@@ -64,7 +69,12 @@ class OptimizationPlan:
     @property
     def is_empty(self) -> bool:
         """Return ``True`` when no optimization directives were collected."""
-        return not self.select_related and not self.prefetch_related and not self.only_fields
+        return (
+            not self.select_related
+            and not self.prefetch_related
+            and not self.only_fields
+            and not self.fk_id_elisions
+        )
 
     def apply(self, queryset: Any) -> Any:
         """Apply the plan to a ``QuerySet`` and return the optimized copy.

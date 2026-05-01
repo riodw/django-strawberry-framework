@@ -18,6 +18,7 @@ when they land.
 
 from types import SimpleNamespace
 
+from django.db import models
 from django.db.models import Prefetch
 from fakeshop.products.models import Category, Entry, Item
 
@@ -357,6 +358,179 @@ def test_plan_collects_related_scalar_only_fields_from_fragment():
         Item,
     )
     assert plan.only_fields == ["category_id", "category__id", "category__name"]
+
+
+# ---------------------------------------------------------------------------
+# B2 — Forward-FK-id elision
+# ---------------------------------------------------------------------------
+
+
+def test_plan_elides_forward_fk_when_child_selection_is_id_only():
+    """B2: ``category { id }`` uses ``category_id`` instead of a JOIN."""
+    plan = plan_optimizations(
+        [_sel("name"), _sel("category", selections=[_sel("id")])],
+        Item,
+    )
+    assert plan.select_related == []
+    assert plan.prefetch_related == []
+    assert plan.only_fields == ["name", "category_id"]
+    assert plan.fk_id_elisions == ["category"]
+
+
+def test_plan_does_not_elide_forward_fk_when_extra_target_scalar_selected():
+    """B2: ``category { id name }`` still needs ``select_related``."""
+    plan = plan_optimizations(
+        [_sel("category", selections=[_sel("id"), _sel("name")])],
+        Item,
+    )
+    assert plan.select_related == ["category"]
+    assert plan.prefetch_related == []
+    assert plan.only_fields == ["category_id", "category__id", "category__name"]
+    assert plan.fk_id_elisions == []
+
+
+def test_plan_elides_forward_fk_id_only_selection_inside_fragment():
+    """B2: id-only selections discovered through fragments can elide the JOIN."""
+    plan = plan_optimizations(
+        [
+            _sel(
+                "category",
+                selections=[
+                    _inline_fragment("CategoryType", selections=[_sel("id")]),
+                ],
+            ),
+        ],
+        Item,
+    )
+    assert plan.select_related == []
+    assert plan.only_fields == ["category_id"]
+    assert plan.fk_id_elisions == ["category"]
+
+
+def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
+    """B2: O6 visibility hooks win over FK-id elision."""
+    registry.clear()
+
+    class FilteredCategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return True
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset
+
+    registry.register(Category, FilteredCategoryType)
+    try:
+        plan = plan_optimizations(
+            [_sel("category", selections=[_sel("id")])],
+            Item,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.select_related == []
+    assert plan.fk_id_elisions == []
+    assert plan.only_fields == ["category_id"]
+    assert len(plan.prefetch_related) == 1
+    assert isinstance(plan.prefetch_related[0], Prefetch)
+
+
+def test_plan_elides_forward_fk_when_target_pk_is_not_named_id():
+    """B2: elision uses the related model's actual PK field name, not literal ``id``."""
+
+    class UuidTarget(models.Model):
+        uuid = models.CharField(max_length=32, primary_key=True)
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class UuidSource(models.Model):
+        target = models.ForeignKey(UuidTarget, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    plan = plan_optimizations(
+        [_sel("target", selections=[_sel("uuid")])],
+        UuidSource,
+    )
+    assert plan.select_related == []
+    assert plan.only_fields == ["target_id"]
+    assert plan.fk_id_elisions == ["target"]
+
+
+def test_plan_does_not_elide_fk_to_non_pk_to_field():
+    """B2: FK ``to_field`` values are not treated as related PK values."""
+
+    class CodeTarget(models.Model):
+        code = models.CharField(max_length=32, unique=True)
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class CodeSource(models.Model):
+        target = models.ForeignKey(
+            CodeTarget,
+            to_field="code",
+            on_delete=models.CASCADE,
+        )
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    plan = plan_optimizations(
+        [_sel("target", selections=[_sel("id")])],
+        CodeSource,
+    )
+    assert plan.select_related == ["target"]
+    assert plan.fk_id_elisions == []
+    assert plan.only_fields == ["target_id", "target__id"]
+
+
+def test_plan_does_not_elide_when_target_type_has_custom_id_resolver():
+    """B2: custom id resolvers may need more than the stubbed PK."""
+
+    class CustomIdTarget(models.Model):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class CustomIdSource(models.Model):
+        target = models.ForeignKey(CustomIdTarget, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class CustomIdTargetType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+        def resolve_id(self):
+            return f"{self.name}:{self.pk}"
+
+    registry.register(CustomIdTarget, CustomIdTargetType)
+    try:
+        plan = plan_optimizations(
+            [_sel("target", selections=[_sel("id")])],
+            CustomIdSource,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.select_related == ["target"]
+    assert plan.fk_id_elisions == []
+    assert plan.only_fields == ["target_id", "target__id"]
 
 
 # ---------------------------------------------------------------------------

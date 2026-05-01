@@ -44,6 +44,7 @@ def test_from_django_field_forward_fk():
     assert fm.is_relation is True
     assert fm.related_model is Category
     assert fm.attname == "category_id"
+    assert fm.target_field_name == "id"
     assert fm.many_to_many is False
     assert fm.one_to_many is False
 

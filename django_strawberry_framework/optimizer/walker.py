@@ -192,6 +192,15 @@ def _walk_selections(
         else:
             if django_field.attname is not None:
                 _append_unique(plan.only_fields, f"{prefix}{django_field.attname}")
+            target_pk_name = _target_pk_name(django_field)
+            if (
+                _can_elide_fk_id(django_field)
+                and not (target_type is not None and target_type.has_custom_get_queryset())
+                and not _has_custom_id_resolver(target_type, target_pk_name)
+                and _selected_scalar_names(sel.selections, django_field.related_model) == {target_pk_name}
+            ):
+                _append_unique(plan.fk_id_elisions, full_path)
+                continue
             if django_field.related_model is not None:
                 _collect_scalar_only_fields(
                     sel.selections,
@@ -199,30 +208,6 @@ def _walk_selections(
                     plan,
                     prefix=f"{full_path}__",
                 )
-            # TODO(spec-optimizer_beyond.md B2): before emitting
-            # ``select_related``, check whether the only child
-            # selections on the FK target are columns already
-            # available on the source row (e.g. ``{"id"}`` maps to
-            # ``field.attname``). If so, elide the JOIN and add
-            # ``field.attname`` to ``plan.only_fields`` instead.
-            # Guard: skip elision when the target type has a custom
-            # ``get_queryset`` (needs the JOIN for visibility).
-            # Applies to forward FK (many_to_one) and forward
-            # OneToOne (non-auto-created one_to_one).
-            #
-            # Pseudo:
-            #   child_scalars = {snake_case(c.name)
-            #                   for c in sel.selections
-            #                   if not _is_fragment(c)}
-            #   target_type = registry.get(
-            #       django_field.related_model)
-            #   if (child_scalars == {"id"}
-            #           and not (target_type
-            #                    and target_type
-            #                    .has_custom_get_queryset())):
-            #       plan.only_fields.append(
-            #           django_field.attname)
-            #       continue
             plan.select_related.append(full_path)
         # TODO(spec-optimizer.md O4): recurse into sel.selections to
         # build nested Prefetch chains for depth > 1.
@@ -255,6 +240,75 @@ def _collect_scalar_only_fields(
         django_field = field_map.get(django_name)
         if django_field is not None and not django_field.is_relation:
             _append_unique(plan.only_fields, f"{prefix}{django_name}")
+
+
+def _selected_scalar_names(
+    selections: list[Any],
+    model: type[models.Model] | None,
+) -> set[str] | None:
+    """Return selected scalar Django field names, or ``None`` when elision is unsafe."""
+    if model is None:
+        return None
+    type_cls = registry.get(model)
+    cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
+    field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
+    scalar_names: set[str] = set()
+    for sel in _merge_aliased_selections(selections):
+        if not _should_include(sel):
+            continue
+        if _is_fragment(sel):
+            nested = _selected_scalar_names(sel.selections, model)
+            if nested is None:
+                return None
+            scalar_names.update(nested)
+            continue
+        django_name = snake_case(sel.name)
+        django_field = field_map.get(django_name)
+        if django_field is None or django_field.is_relation:
+            return None
+        scalar_names.add(django_name)
+    return scalar_names
+
+
+def _can_elide_fk_id(field: Any) -> bool:
+    """Return ``True`` when ``field`` stores the related object's id on the source row."""
+    related_model = getattr(field, "related_model", None)
+    target_pk_name = _target_pk_name(field)
+    target_field = getattr(field, "target_field", None)
+    target_field_name = (
+        getattr(target_field, "name", None)
+        if target_field is not None
+        else getattr(field, "target_field_name", None)
+    )
+    return (
+        field.attname is not None
+        and related_model is not None
+        and target_pk_name is not None
+        and target_field_name == target_pk_name
+        and not field.many_to_many
+        and not field.one_to_many
+        and not getattr(field, "auto_created", False)
+    )
+
+
+def _target_pk_name(field: Any) -> str | None:
+    """Return the related model's concrete primary-key field name."""
+    related_model = getattr(field, "related_model", None)
+    if related_model is None:
+        return None
+    return related_model._meta.pk.name
+
+
+def _has_custom_id_resolver(target_type: type | None, target_pk_name: str | None) -> bool:
+    """Return ``True`` when target type customizes the selected id field."""
+    if target_type is None or target_pk_name is None:
+        return False
+    resolver_names = (target_pk_name, f"resolve_{target_pk_name}")
+    return any(
+        name in getattr(cls, "__dict__", {})
+        for cls in getattr(target_type, "__mro__", ())
+        for name in resolver_names
+    )
 
 
 def _append_unique(values: list[str], value: str) -> None:

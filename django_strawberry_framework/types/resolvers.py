@@ -25,6 +25,7 @@ import logging
 from typing import Any
 
 import strawberry
+from django.db import router
 from strawberry.types import Info
 
 from ..utils.strings import snake_case
@@ -45,6 +46,39 @@ def _get_relation_field_name(info: Any) -> str:
     O4 ships; for now, depth-1 is correct.
     """
     return snake_case(getattr(info, "field_name", "") or "")
+
+
+def _get_context_value(context: Any, key: str, default: Any = None) -> Any:
+    """Return ``key`` from an object or dict context."""
+    if context is None:
+        return default
+    if isinstance(context, dict):
+        return context.get(key, default)
+    return getattr(context, key, default)
+
+
+def _is_fk_id_elided(info: Any, field_name: str) -> bool:
+    """Return ``True`` if B2 marked this forward relation as FK-id elided."""
+    elisions = _get_context_value(
+        getattr(info, "context", None),
+        "dst_optimizer_fk_id_elisions",
+        set(),
+    )
+    # Depth-1 only. O4 nested paths will need full relation-path reconstruction.
+    return field_name in elisions
+
+
+def _build_fk_id_stub(root: Any, field: Any) -> Any:
+    """Build a target-model stub from ``root.<attname>`` for B2 id-only selections."""
+    related_id = getattr(root, field.attname)
+    if related_id is None:
+        return None
+    stub = field.related_model(pk=related_id)
+    state = getattr(stub, "_state", None)
+    if state is not None:
+        state.adding = False
+        state.db = router.db_for_read(field.related_model, instance=root)
+    return stub
 
 
 def _will_lazy_load(root: Any, field_name: str) -> bool:
@@ -69,7 +103,7 @@ def _check_n1(info: Any, root: Any, field_name: str) -> None:
     """B3: warn or raise if the relation is not planned and would lazy-load."""
     from ..exceptions import OptimizerError
 
-    planned = getattr(info.context, "dst_optimizer_planned", None) if info.context is not None else None
+    planned = _get_context_value(getattr(info, "context", None), "dst_optimizer_planned")
     if planned is None:
         return
     if field_name in planned:
@@ -77,7 +111,7 @@ def _check_n1(info: Any, root: Any, field_name: str) -> None:
     # Only warn/raise if the access would actually trigger a lazy load.
     if not _will_lazy_load(root, field_name):
         return
-    strictness = getattr(info.context, "dst_optimizer_strictness", "off")
+    strictness = _get_context_value(getattr(info, "context", None), "dst_optimizer_strictness", "off")
     if strictness == "raise":
         raise OptimizerError(f"Unplanned N+1: {field_name}")
     if strictness == "warn":
@@ -129,6 +163,8 @@ def _make_relation_resolver(field: Any) -> Any:
         return reverse_one_to_one_resolver
 
     def forward_resolver(root: Any, info: Info) -> Any:
+        if field.attname is not None and _is_fk_id_elided(info, field_name):
+            return _build_fk_id_stub(root, field)
         _check_n1(info, root, field_name)
         return getattr(root, field_name)
 

@@ -1977,3 +1977,112 @@ def test_plan_relation_returns_prefetch_for_custom_get_queryset():
 @pytest.mark.skip(reason="Slice 4+: M2M relation — fakeshop has no M2M field; deferred.")
 def test_optimizer_applies_prefetch_related_for_m2m():
     pass
+
+
+# ---------------------------------------------------------------------------
+# B8: queryset optimization diffing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_b8_consumer_select_related_does_not_mutate_cached_plan():
+    """B8: a consumer's pre-applied ``select_related`` must not mutate B1's cached plan."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.select_related("category")
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+
+    # First request warms the plan cache. The plan is stashed pre-diff.
+    ctx1 = SimpleNamespace()
+    result1 = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx1,
+    )
+    assert result1.errors is None
+    cached_plan = ctx1.dst_optimizer_plan
+    assert cached_plan.select_related == ["category"]
+    assert ext.cache_info().hits == 0
+    assert ext.cache_info().misses == 1
+
+    # Second request hits the cache. The cached plan must still carry
+    # ["category"] — the diff must not have mutated it during request 1.
+    ctx2 = SimpleNamespace()
+    result2 = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx2,
+    )
+    assert result2.errors is None
+    assert ctx2.dst_optimizer_plan is cached_plan
+    assert cached_plan.select_related == ["category"]
+    assert ext.cache_info().hits == 1
+
+
+@pytest.mark.django_db
+def test_b8_consumer_prefetch_object_suppresses_optimizer_string():
+    """B8: ``Prefetch("items", ...)`` from the consumer suppresses the optimizer's plain ``"items"``."""
+    from django.db.models import Prefetch
+
+    services.seed_data(1)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    captured: list[object] = []
+
+    class _CaptureExt(DjangoOptimizerExtension):
+        def _optimize(self, result, info):
+            optimized = super()._optimize(result, info)
+            captured.append(optimized)
+            return optimized
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.prefetch_related(
+                Prefetch("items", queryset=Item.objects.all()),
+            )
+
+    schema = strawberry.Schema(query=Query, extensions=[_CaptureExt()])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ allCategories { name items { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    # Stashed plan still records the optimizer's intended ``"items"``
+    # entry (B5 stashes the pre-diff plan).
+    plan = ctx.dst_optimizer_plan
+    assert [getattr(entry, "prefetch_to", entry) for entry in plan.prefetch_related] == ["items"]
+    # But the queryset that came out of ``_optimize`` carries exactly the
+    # consumer's single ``Prefetch`` — the optimizer's plain string was
+    # diffed away before ``apply``.
+    optimized_qs = captured[0]
+    lookups = optimized_qs._prefetch_related_lookups
+    assert len(lookups) == 1
+    assert isinstance(lookups[0], Prefetch)
+    assert lookups[0].prefetch_to == "items"

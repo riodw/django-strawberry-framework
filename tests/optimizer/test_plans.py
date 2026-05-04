@@ -9,7 +9,13 @@ plan's own methods work correctly in isolation.
 from django.db.models import Prefetch
 from fakeshop.products.models import Category, Entry, Item
 
-from django_strawberry_framework.optimizer.plans import OptimizationPlan, lookup_paths, resolver_key
+from django_strawberry_framework.optimizer.plans import (
+    OptimizationPlan,
+    _flatten_select_related,
+    diff_plan_for_queryset,
+    lookup_paths,
+    resolver_key,
+)
 
 
 class TestOptimizationPlanIsEmpty:
@@ -117,3 +123,88 @@ class TestOptimizationPlanApply:
         fields, is_deferred = result.query.deferred_loading
         assert fields == {"name"}
         assert is_deferred is False
+
+
+class TestFlattenSelectRelated:
+    """``_flatten_select_related`` normalizes Django's three select_related shapes."""
+
+    def test_false_returns_empty_set(self):
+        assert _flatten_select_related(False) == set()
+
+    def test_true_returns_none_for_wildcard(self):
+        assert _flatten_select_related(True) is None
+
+    def test_dict_flattens_to_top_level_paths(self):
+        assert _flatten_select_related({"category": {}}) == {"category"}
+
+    def test_dict_flattens_nested_chains(self):
+        assert _flatten_select_related({"category": {"parent": {}}}) == {
+            "category",
+            "category__parent",
+        }
+
+
+class TestDiffPlanForQueryset:
+    """``diff_plan_for_queryset`` removes already-applied entries without mutating."""
+
+    def test_returns_same_instance_when_nothing_to_drop(self):
+        plan = OptimizationPlan(select_related=["category"], prefetch_related=["items"])
+        qs = Category.objects.all()
+        assert diff_plan_for_queryset(plan, qs) is plan
+
+    def test_drops_select_related_already_on_queryset(self):
+        plan = OptimizationPlan(select_related=["category"])
+        qs = Item.objects.select_related("category")
+        delta = diff_plan_for_queryset(plan, qs)
+        assert delta is not plan
+        assert delta.select_related == []
+        # Original plan is untouched — B1 caches it across requests.
+        assert plan.select_related == ["category"]
+
+    def test_drops_chained_select_related(self):
+        plan = OptimizationPlan(select_related=["item__category"])
+        qs = Entry.objects.select_related("item__category")
+        delta = diff_plan_for_queryset(plan, qs)
+        assert delta.select_related == []
+
+    def test_wildcard_select_related_drops_all(self):
+        plan = OptimizationPlan(select_related=["item", "property"])
+        qs = Entry.objects.select_related()
+        delta = diff_plan_for_queryset(plan, qs)
+        assert delta.select_related == []
+        assert plan.select_related == ["item", "property"]
+
+    def test_drops_string_prefetch_already_on_queryset(self):
+        plan = OptimizationPlan(prefetch_related=["items"])
+        qs = Category.objects.prefetch_related("items")
+        delta = diff_plan_for_queryset(plan, qs)
+        assert delta.prefetch_related == []
+        assert plan.prefetch_related == ["items"]
+
+    def test_consumer_prefetch_object_suppresses_plan_string(self):
+        plan = OptimizationPlan(prefetch_related=["items"])
+        qs = Category.objects.prefetch_related(Prefetch("items", queryset=Item.objects.all()))
+        delta = diff_plan_for_queryset(plan, qs)
+        assert delta.prefetch_related == []
+
+    def test_partial_overlap_keeps_remaining_entries(self):
+        plan = OptimizationPlan(select_related=["item", "property"])
+        qs = Entry.objects.select_related("item")
+        delta = diff_plan_for_queryset(plan, qs)
+        assert delta.select_related == ["property"]
+        assert plan.select_related == ["item", "property"]
+
+    def test_carries_over_metadata_fields(self):
+        plan = OptimizationPlan(
+            select_related=["category"],
+            only_fields=["name"],
+            fk_id_elisions=["ItemType.category@allItems.category"],
+            planned_resolver_keys=["ItemType.category@allItems.category"],
+            cacheable=False,
+        )
+        qs = Item.objects.select_related("category")
+        delta = diff_plan_for_queryset(plan, qs)
+        assert delta.only_fields == ["name"]
+        assert delta.fk_id_elisions == ["ItemType.category@allItems.category"]
+        assert delta.planned_resolver_keys == ["ItemType.category@allItems.category"]
+        assert delta.cacheable is False

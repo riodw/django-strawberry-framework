@@ -324,4 +324,4 @@ graphql-core AST node types: `graphql/language/ast.py` — `FieldNode`, `InlineF
 - [x] B4 — `Meta.optimizer_hints` + `OptimizerHint` wiring
 - [x] B2 — Forward-FK-id elision
 - [x] B6 — Schema-build-time optimization audit
-- [ ] B8 — Queryset optimization diffing
+- [x] B8 — Queryset optimization diffing

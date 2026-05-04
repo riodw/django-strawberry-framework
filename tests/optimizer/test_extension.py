@@ -2035,8 +2035,8 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
 
 
 @pytest.mark.django_db
-def test_b8_consumer_prefetch_object_suppresses_optimizer_string():
-    """B8: ``Prefetch("items", ...)`` from the consumer suppresses the optimizer's plain ``"items"``."""
+def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
+    """B8: a consumer ``Prefetch("items", queryset=Item.objects.all())`` keeps its slot."""
     from django.db.models import Prefetch
 
     services.seed_data(1)
@@ -2045,6 +2045,136 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_string():
         class Meta:
             model = Item
             fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    consumer_pf = Prefetch("items", queryset=Item.objects.all())
+    captured: list[object] = []
+
+    class _CaptureExt(DjangoOptimizerExtension):
+        def _optimize(self, result, info):
+            optimized = super()._optimize(result, info)
+            captured.append(optimized)
+            return optimized
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.prefetch_related(consumer_pf)
+
+    schema = strawberry.Schema(query=Query, extensions=[_CaptureExt()])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ allCategories { name items { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    # Stashed plan still records the optimizer's intended ``items``
+    # entry (B5 stashes the pre-diff plan).
+    plan = ctx.dst_optimizer_plan
+    assert [getattr(entry, "prefetch_to", entry) for entry in plan.prefetch_related] == ["items"]
+    # The queryset that came out of ``_optimize`` carries exactly the
+    # consumer's ``Prefetch`` — the optimizer entry was diffed away.
+    optimized_qs = captured[0]
+    lookups = optimized_qs._prefetch_related_lookups
+    assert lookups == (consumer_pf,)
+
+
+@pytest.mark.django_db
+def test_b8_consumer_descendant_prefetch_does_not_raise(django_assert_num_queries):
+    """B8 P1: consumer ``prefetch_related("items__entries")`` must not collide with the optimizer."""
+    services.seed_data(1)
+
+    class PropertyType(DjangoType):
+        class Meta:
+            model = Property
+            fields = ("id", "name")
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "entries")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.prefetch_related("items__entries")
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    # Query must succeed instead of raising ``'items' lookup was already
+    # seen with a different queryset``.
+    result = schema.execute_sync(
+        "{ allCategories { name items { name entries { value } } } }",
+    )
+    assert result.errors is None
+    assert result.data["allCategories"]
+
+
+@pytest.mark.django_db
+def test_b8_consumer_exact_plus_descendant_prefetch_does_not_raise():
+    """B8 P1 follow-up: ``prefetch_related("items", "items__entries")`` must not collide."""
+    services.seed_data(1)
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "entries")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.prefetch_related("items", "items__entries")
+
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    result = schema.execute_sync(
+        "{ allCategories { name items { name entries { value } } } }",
+    )
+    assert result.errors is None
+    assert result.data["allCategories"]
+
+
+@pytest.mark.django_db
+def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
+    """B8 P1: a consumer's plain ``"items"`` string is replaced by the optimizer's nested ``Prefetch``."""
+    from django.db.models import Prefetch
+
+    services.seed_data(1)
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "entries")
 
     class CategoryType(DjangoType):
         class Meta:
@@ -2063,26 +2193,21 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_string():
     class Query:
         @strawberry.field
         def all_categories(self) -> list[CategoryType]:
-            return Category.objects.prefetch_related(
-                Prefetch("items", queryset=Item.objects.all()),
-            )
+            return Category.objects.prefetch_related("items")
 
     schema = strawberry.Schema(query=Query, extensions=[_CaptureExt()])
-    ctx = SimpleNamespace()
     result = schema.execute_sync(
-        "{ allCategories { name items { name } } }",
-        context_value=ctx,
+        "{ allCategories { name items { name entries { value } } } }",
     )
     assert result.errors is None
-    # Stashed plan still records the optimizer's intended ``"items"``
-    # entry (B5 stashes the pre-diff plan).
-    plan = ctx.dst_optimizer_plan
-    assert [getattr(entry, "prefetch_to", entry) for entry in plan.prefetch_related] == ["items"]
-    # But the queryset that came out of ``_optimize`` carries exactly the
-    # consumer's single ``Prefetch`` — the optimizer's plain string was
-    # diffed away before ``apply``.
     optimized_qs = captured[0]
     lookups = optimized_qs._prefetch_related_lookups
+    # Exactly one ``items`` lookup — the optimizer's ``Prefetch`` —
+    # carrying the nested ``entries`` chain. The consumer's plain
+    # ``"items"`` string was stripped.
     assert len(lookups) == 1
-    assert isinstance(lookups[0], Prefetch)
-    assert lookups[0].prefetch_to == "items"
+    items_pf = lookups[0]
+    assert isinstance(items_pf, Prefetch)
+    assert items_pf.prefetch_to == "items"
+    nested = items_pf.queryset._prefetch_related_lookups
+    assert any(getattr(entry, "prefetch_to", entry) == "entries" for entry in nested)

@@ -127,23 +127,26 @@ def runtime_path_from_path(path: Any) -> tuple[str, ...]:
     return tuple(reversed(keys))
 
 
-def _flatten_select_related(sr: Any) -> set[str] | None:
+def _flatten_select_related(sr: Any) -> set[str]:
     """Flatten Django's ``query.select_related`` into a set of dotted paths.
 
     Django stores ``select_related`` in three shapes:
 
-    - ``False``: the default — nothing has been selected. Returns the empty set.
-    - ``True``: the wildcard ``select_related()`` form — every forward
-      relation is implicitly covered. Returns ``None`` to signal the
-      wildcard so callers can short-circuit.
-    - ``dict``: a nested mapping of selected field names to sub-dicts,
-      e.g. ``{"category": {"parent": {}}}``. Returns the set of dotted
-      lookup paths produced by walking the nesting.
+    - ``False`` (the default — nothing has been selected): empty set.
+    - ``True`` (the wildcard ``select_related()`` form): empty set as
+      well. Django's wildcard only follows non-null FKs, so we cannot
+      treat it as covering every optimizer entry — nullable FKs in the
+      plan still need to be applied. Treating ``True`` as no overlap
+      keeps optimizer entries; the consumer's wildcard will be narrowed
+      by Django's subsequent ``select_related(*names)`` call, a known
+      interaction that consumers combining wildcard ``select_related()``
+      with this optimizer should be aware of.
+    - ``dict`` (a nested mapping of selected field names): flattens to
+      dotted lookup paths via recursive walk, e.g.
+      ``{"category": {"parent": {}}}`` → ``{"category", "category__parent"}``.
     """
-    if sr is False:
+    if sr is False or sr is True:
         return set()
-    if sr is True:
-        return None
     paths: set[str] = set()
 
     def _walk(d: dict[str, Any], prefix: str) -> None:
@@ -157,42 +160,96 @@ def _flatten_select_related(sr: Any) -> set[str] | None:
     return paths
 
 
-def diff_plan_for_queryset(plan: OptimizationPlan, queryset: Any) -> OptimizationPlan:
-    """Return ``plan`` with select/prefetch entries already on ``queryset`` removed.
+def diff_plan_for_queryset(
+    plan: OptimizationPlan,
+    queryset: Any,
+) -> tuple[OptimizationPlan, Any]:
+    """Reconcile ``plan`` against optimizations already on ``queryset``.
 
-    Reads the queryset's existing ``query.select_related`` and
-    ``_prefetch_related_lookups`` and drops any plan entry the consumer
-    has already applied. Returns ``plan`` unchanged when nothing was
-    dropped; otherwise returns a new ``OptimizationPlan`` carrying the
-    delta. Never mutates the input — B1 caches plan instances across
-    requests, so in-place mutation would corrupt subsequent lookups.
+    Returns ``(delta_plan, queryset_to_apply_against)``. The plan is
+    only ever copied (never mutated) so B1's cache stays intact. The
+    queryset is rewritten only when the consumer applied a plain
+    ``prefetch_related("path")`` string that the optimizer can replace
+    with a more specific ``Prefetch(path, queryset=...)`` carrying
+    nested chains or projection.
 
-    Comparison rules:
+    Reconciliation rules:
 
-    - ``select_related``: compared as dotted lookup paths. A wildcard
-      ``select_related()`` (Django stores ``True``) drops every plan
-      entry.
-    - ``prefetch_related``: compared by ``prefetch_to`` (the lookup
-      path). A consumer's ``Prefetch("items", queryset=...)`` therefore
-      suppresses the optimizer's plain ``"items"`` string entry.
+    ``select_related`` — compared as dotted lookup paths against the
+    consumer's existing ``query.select_related`` dict. Exact matches
+    are dropped from the plan; the wildcard form (``True``) is treated
+    as no overlap so explicit nullable-FK entries still apply.
+
+    ``prefetch_related`` — compared by ``prefetch_to`` with ancestry
+    awareness. For each optimizer entry we gather the consumer entries
+    on the same subtree (exact path or any descendant of it) and
+    decide as a group:
+
+    - **No consumer entries on the subtree** — the optimizer entry
+      passes through unchanged.
+    - **Optimizer can losslessly absorb the consumer subtree** — when
+      the optimizer entry is a ``Prefetch`` carrying a queryset *and*
+      every matching consumer entry is a bare string, the consumer
+      strings (which carry no information of their own) are stripped
+      from the queryset and the optimizer's nested ``Prefetch`` takes
+      over. This is what makes
+      ``prefetch_related("items", "items__entries")`` cooperate with
+      ``Prefetch("items", queryset=...prefetch_related("entries"))``
+      instead of raising ``ValueError: 'items' lookup was already seen
+      with a different queryset``.
+    - **Consumer wins** — for any other shape (consumer's own custom
+      ``Prefetch`` somewhere on the subtree, or a plain-string-vs-
+      plain-string match where the optimizer has no queryset to add),
+      the optimizer entry is dropped to avoid the collision. The
+      consumer's explicit subtree is preserved as-is.
     """
     already_select = _flatten_select_related(getattr(queryset.query, "select_related", False))
-    existing_pf = getattr(queryset, "_prefetch_related_lookups", ()) or ()
-    already_prefetch = {getattr(entry, "prefetch_to", entry) for entry in existing_pf}
+    new_select = [name for name in plan.select_related if name not in already_select]
 
-    if already_select is None:
-        new_select: list[str] = []
-    else:
-        new_select = [name for name in plan.select_related if name not in already_select]
-    new_prefetch = [
-        entry
-        for entry in plan.prefetch_related
-        if getattr(entry, "prefetch_to", entry) not in already_prefetch
-    ]
+    consumer_pf = list(getattr(queryset, "_prefetch_related_lookups", ()) or ())
+    consumer_by_path: dict[str, Any] = {}
+    for entry in consumer_pf:
+        path = getattr(entry, "prefetch_to", entry)
+        consumer_by_path[path] = entry
 
-    if len(new_select) == len(plan.select_related) and len(new_prefetch) == len(plan.prefetch_related):
-        return plan
-    return replace(plan, select_related=new_select, prefetch_related=new_prefetch)
+    new_prefetch: list[Any] = []
+    paths_to_strip: set[str] = set()
+
+    for opt_entry in plan.prefetch_related:
+        opt_path = getattr(opt_entry, "prefetch_to", opt_entry)
+        descendant_prefix = f"{opt_path}__"
+        matching_paths = [
+            path for path in consumer_by_path if path == opt_path or path.startswith(descendant_prefix)
+        ]
+        if not matching_paths:
+            new_prefetch.append(opt_entry)
+            continue
+        opt_qs = getattr(opt_entry, "queryset", None)
+        all_consumer_strings = all(isinstance(consumer_by_path[p], str) for p in matching_paths)
+        if opt_qs is not None and all_consumer_strings:
+            paths_to_strip.update(matching_paths)
+            new_prefetch.append(opt_entry)
+        # else: consumer wins on this subtree; optimizer dropped.
+
+    new_queryset = queryset
+    if paths_to_strip:
+        keep = tuple(
+            entry for entry in consumer_pf if getattr(entry, "prefetch_to", entry) not in paths_to_strip
+        )
+        new_queryset = queryset.prefetch_related(None)
+        if keep:
+            new_queryset = new_queryset.prefetch_related(*keep)
+
+    if (
+        len(new_select) == len(plan.select_related)
+        and len(new_prefetch) == len(plan.prefetch_related)
+        and new_queryset is queryset
+    ):
+        return plan, queryset
+    return (
+        replace(plan, select_related=new_select, prefetch_related=new_prefetch),
+        new_queryset,
+    )
 
 
 def lookup_paths(plan: OptimizationPlan) -> set[str]:

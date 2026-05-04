@@ -249,6 +249,33 @@ class TestDiffPlanForQueryset:
         assert delta_qs is not qs
         assert delta_qs._prefetch_related_lookups == ()
 
+    def test_optimizer_does_not_strip_consumer_descendants_it_does_not_cover(self):
+        # P1 follow-up: when the optimizer's own subtree does not cover
+        # every consumer descendant on the same subtree, absorbing
+        # would silently drop data. Drop the optimizer entry instead;
+        # the consumer's deeper prefetch is preserved.
+        outer = Prefetch("items", queryset=Item.objects.only("name"))  # no nested chain
+        plan = OptimizationPlan(prefetch_related=[outer])
+        qs = Category.objects.prefetch_related("items__entries")
+        delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
+        assert delta_plan.prefetch_related == []
+        assert delta_qs is qs
+        assert {getattr(e, "prefetch_to", e) for e in delta_qs._prefetch_related_lookups} == {
+            "items__entries",
+        }
+
+    def test_optimizer_can_absorb_consumer_path_only_when_covered(self):
+        # Variant: consumer has both a covered descendant and an
+        # uncovered descendant. The uncovered one tips the decision —
+        # we drop the optimizer to keep the consumer's full subtree.
+        inner = Prefetch("entries", queryset=Entry.objects.only("value", "item_id"))
+        outer = Prefetch("items", queryset=Item.objects.prefetch_related(inner))
+        plan = OptimizationPlan(prefetch_related=[outer])
+        qs = Category.objects.prefetch_related("items__entries", "items__properties")
+        delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
+        assert delta_plan.prefetch_related == []
+        assert delta_qs is qs
+
     def test_consumer_descendant_with_custom_prefetch_drops_optimizer(self):
         # When any consumer entry on the subtree is a custom
         # ``Prefetch`` (not just a bare string), we cannot losslessly

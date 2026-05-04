@@ -160,6 +160,36 @@ def _flatten_select_related(sr: Any) -> set[str]:
     return paths
 
 
+def _optimizer_can_absorb(
+    opt_entry: Any,
+    consumer_paths: list[str],
+    consumer_by_path: dict[str, Any],
+) -> bool:
+    """Return ``True`` when ``opt_entry`` can losslessly take over the consumer's subtree.
+
+    All three conditions must hold:
+
+    1. The optimizer entry is a ``Prefetch`` carrying a queryset (a
+       bare string carries no projection / nested chain that would
+       justify replacing the consumer's entries).
+    2. Every matching consumer entry is a bare string. A consumer
+       ``Prefetch`` with a custom queryset cannot be losslessly
+       replaced.
+    3. Every matching consumer path is covered by the optimizer's own
+       lookup tree. Otherwise the consumer has prefetches the
+       optimizer would not replace, and absorbing them would silently
+       drop data — for example, optimizer
+       ``Prefetch("items", queryset=Item.objects.only("name"))``
+       cannot absorb consumer ``"items__entries"``.
+    """
+    if getattr(opt_entry, "queryset", None) is None:
+        return False
+    if not all(isinstance(consumer_by_path[p], str) for p in consumer_paths):
+        return False
+    opt_covered = _prefetch_lookup_paths([opt_entry])
+    return all(path in opt_covered for path in consumer_paths)
+
+
 def diff_plan_for_queryset(
     plan: OptimizationPlan,
     queryset: Any,
@@ -188,9 +218,10 @@ def diff_plan_for_queryset(
     - **No consumer entries on the subtree** — the optimizer entry
       passes through unchanged.
     - **Optimizer can losslessly absorb the consumer subtree** — when
-      the optimizer entry is a ``Prefetch`` carrying a queryset *and*
-      every matching consumer entry is a bare string, the consumer
-      strings (which carry no information of their own) are stripped
+      the optimizer entry is a ``Prefetch`` carrying a queryset, every
+      matching consumer entry is a bare string, *and* every matching
+      consumer path is covered by the optimizer's own lookup tree
+      (``_prefetch_lookup_paths``), the consumer strings are stripped
       from the queryset and the optimizer's nested ``Prefetch`` takes
       over. This is what makes
       ``prefetch_related("items", "items__entries")`` cooperate with
@@ -198,10 +229,12 @@ def diff_plan_for_queryset(
       instead of raising ``ValueError: 'items' lookup was already seen
       with a different queryset``.
     - **Consumer wins** — for any other shape (consumer's own custom
-      ``Prefetch`` somewhere on the subtree, or a plain-string-vs-
-      plain-string match where the optimizer has no queryset to add),
-      the optimizer entry is dropped to avoid the collision. The
-      consumer's explicit subtree is preserved as-is.
+      ``Prefetch`` somewhere on the subtree, plain-string-vs-
+      plain-string match where the optimizer has no queryset, or a
+      consumer descendant the optimizer's own subtree does not cover),
+      the optimizer entry is dropped to avoid the collision and to
+      avoid silently stripping consumer prefetches the optimizer would
+      not replace.
     """
     already_select = _flatten_select_related(getattr(queryset.query, "select_related", False))
     new_select = [name for name in plan.select_related if name not in already_select]
@@ -224,9 +257,7 @@ def diff_plan_for_queryset(
         if not matching_paths:
             new_prefetch.append(opt_entry)
             continue
-        opt_qs = getattr(opt_entry, "queryset", None)
-        all_consumer_strings = all(isinstance(consumer_by_path[p], str) for p in matching_paths)
-        if opt_qs is not None and all_consumer_strings:
+        if _optimizer_can_absorb(opt_entry, matching_paths, consumer_by_path):
             paths_to_strip.update(matching_paths)
             new_prefetch.append(opt_entry)
         # else: consumer wins on this subtree; optimizer dropped.

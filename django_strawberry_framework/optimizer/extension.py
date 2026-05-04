@@ -43,7 +43,7 @@ from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
 from .hints import OptimizerHint
-from .plans import lookup_paths, runtime_path_from_info
+from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
 from .walker import plan_optimizations, plan_relation
 
 _MAX_PLAN_CACHE_SIZE = 256
@@ -365,23 +365,11 @@ class DjangoOptimizerExtension(SchemaExtension):
             _stash_on_context(info.context, "dst_optimizer_strictness", self.strictness)
         if plan.is_empty:
             return result
-        # TODO(spec-optimizer_beyond.md B8): diff the plan against the
-        # queryset's existing ``query.select_related`` and
-        # ``_prefetch_related_lookups``; apply only the delta so
-        # consumer-applied optimizations are not duplicated.
-        #
-        # Pseudo:
-        #   sr = result.query.select_related  # noqa: ERA001
-        #   already_sel = _flatten(sr) if sr is not False else set()  # noqa: ERA001
-        #   already_pf = {getattr(p, "prefetch_to", p)
-        #                 for p in result._prefetch_related_lookups}
-        #   plan.select_related = [
-        #       p for p in plan.select_related
-        #       if p not in already_sel]
-        #   plan.prefetch_related = [
-        #       p for p in plan.prefetch_related
-        #       if (getattr(p, "prefetch_to", p)
-        #           not in already_pf)]
+        # B8: drop select_related / prefetch_related entries the
+        # consumer has already applied to ``result``. Returns a new
+        # plan when anything changed; B1's cached plan is never
+        # mutated in place.
+        plan = diff_plan_for_queryset(plan, result)
         return plan.apply(result)
 
     @classmethod

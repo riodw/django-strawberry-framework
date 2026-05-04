@@ -365,11 +365,15 @@ class DjangoOptimizerExtension(SchemaExtension):
             _stash_on_context(info.context, "dst_optimizer_strictness", self.strictness)
         if plan.is_empty:
             return result
-        # B8: drop select_related / prefetch_related entries the
-        # consumer has already applied to ``result``. Returns a new
-        # plan when anything changed; B1's cached plan is never
-        # mutated in place.
-        plan = diff_plan_for_queryset(plan, result)
+        # B8: reconcile the plan against optimizations the consumer has
+        # already applied to ``result``. Drops exact-match entries,
+        # avoids "lookup already seen" errors when the consumer's
+        # prefetch chain descends past the optimizer's path, and
+        # losslessly upgrades a consumer's plain ``"items"`` string to
+        # the optimizer's richer ``Prefetch("items", queryset=...)``.
+        # Returns a fresh plan and (when an upgrade was applied) a
+        # rewritten queryset; B1's cached plan is never mutated.
+        plan, result = diff_plan_for_queryset(plan, result)
         return plan.apply(result)
 
     @classmethod

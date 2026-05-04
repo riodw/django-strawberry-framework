@@ -197,7 +197,7 @@ django_strawberry_framework/
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
 │   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
 │   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers
-├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O3/O5–O6 + B1–B7 shipped, O4 pending
+├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O6 + B1–B8 shipped
 │   ├── __init__.py          # re-exports DjangoOptimizerExtension
 │   ├── extension.py         # DjangoOptimizerExtension (root-gated resolve hook, O3, B1/B2/B3/B5)
 │   ├── walker.py            # selection-tree walker (plan_optimizations, O2/O5/B2/B4/B7)

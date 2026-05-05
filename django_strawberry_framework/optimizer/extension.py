@@ -111,13 +111,15 @@ def _walk_directives(
     selection_set = getattr(node, "selection_set", None)
     if selection_set is not None:
         for child in selection_set.selections or ():
+            # Always recurse into the child first so directives attached
+            # to the child itself are collected (FragmentSpreadNode has
+            # no ``selection_set`` so this is just the directive sweep).
+            _walk_directives(child, names, fragments)
             if isinstance(child, FragmentSpreadNode):
                 frag_name = child.name.value if child.name else None
                 frag_def = fragments.get(frag_name) if frag_name else None
                 if frag_def is not None:
                     _walk_directives(frag_def, names, fragments)
-            else:
-                _walk_directives(child, names, fragments)
 
 
 class CacheInfo(NamedTuple):
@@ -420,8 +422,11 @@ class DjangoOptimizerExtension(SchemaExtension):
         """Build the plan-cache key from resolver info and target model.
 
         Key components:
-        1. Hash of the operation source text (stable across requests
-           for the same query string).
+        1. Hash of the selected operation's printed AST. ``print_ast``
+           includes the operation name and its own selection set only,
+           so multi-operation documents (``query A {...} query B {...}``)
+           never collide — using the raw source body would, because
+           ``loc.source.body`` is the entire document.
         2. Frozenset of ``(var_name, var_value)`` for only the
            variables referenced in ``@skip``/``@include`` directives.
         3. The target Django model class (different root fields in the
@@ -429,14 +434,8 @@ class DjangoOptimizerExtension(SchemaExtension):
         4. The root response path, so multiple root fields returning the
            same model do not share a plan within one operation.
         """
-        # Document hash: use the source body when available (cheap),
-        # fall back to print_ast (expensive but correct).
         operation = info.operation
-        loc = getattr(operation, "loc", None)
-        if loc is not None and getattr(loc, "source", None) is not None:
-            doc_hash = hash(loc.source.body)
-        else:
-            doc_hash = hash(print_ast(operation))
+        doc_hash = hash(print_ast(operation))
         # Directive-variable extraction.
         directive_var_names = _collect_directive_var_names(
             operation,

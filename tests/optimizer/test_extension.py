@@ -763,6 +763,32 @@ def test_cache_key_includes_root_runtime_path_for_same_model_fields():
     ) != DjangoOptimizerExtension._build_cache_key(info_b, Category)
 
 
+def test_cache_key_differs_for_named_operations_in_same_document():
+    """B1: two named operations in one document must not share a plan cache entry."""
+    from graphql import parse
+
+    doc = parse("query A { allItems { name } } query B { allItems { category { name } } }")
+    operation_a = next(d for d in doc.definitions if getattr(d.name, "value", None) == "A")
+    operation_b = next(d for d in doc.definitions if getattr(d.name, "value", None) == "B")
+    info_a = SimpleNamespace(
+        operation=operation_a,
+        fragments={},
+        variable_values={},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
+    info_b = SimpleNamespace(
+        operation=operation_b,
+        fragments={},
+        variable_values={},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
+
+    assert DjangoOptimizerExtension._build_cache_key(
+        info_a,
+        Item,
+    ) != DjangoOptimizerExtension._build_cache_key(info_b, Item)
+
+
 @pytest.mark.django_db
 def test_cache_eviction_removes_old_entries(monkeypatch):
     """B1: the plan cache evicts old entries when it reaches capacity."""
@@ -827,8 +853,44 @@ def test_filter_vars_do_not_affect_cache():
     assert ext.cache_info().size == 1
 
 
-def test_build_cache_key_uses_print_ast_when_source_location_missing():
-    """B1: cache keys fall back to print_ast when the operation has no source body."""
+@pytest.mark.django_db
+def test_cache_separates_operation_names_in_same_document():
+    """B1: executing two named operations in one document yields two cache entries."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    document = "query A { allItems { name } } query B { allItems { name category { name } } }"
+
+    result_a = schema.execute_sync(document, operation_name="A")
+    result_b = schema.execute_sync(document, operation_name="B")
+
+    assert result_a.errors is None
+    assert result_b.errors is None
+    assert ext.cache_info().hits == 0
+    assert ext.cache_info().misses == 2
+    assert ext.cache_info().size == 2
+
+
+def test_build_cache_key_is_stable_when_source_location_missing():
+    """B1: cache key still works when the operation has no source body."""
     from graphql import parse
 
     operation = parse("{ allCategories { name } }", no_location=True).definitions[0]
@@ -1386,6 +1448,51 @@ def test_collect_directive_var_names_in_named_fragment():
     fragments = {d.name.value: d for d in doc.definitions if hasattr(d, "type_condition")}
     names = _collect_directive_var_names(operation, fragments=fragments)
     assert names == frozenset({"show"})
+
+
+def test_collect_directive_var_names_includes_fragment_spread_directives():
+    """B1: directives on a ``...Spread`` itself feed the cache key, not just the body."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _collect_directive_var_names
+
+    doc = parse(
+        "query Q($show: Boolean!) { allItems { ...ItemBits @include(if: $show) } } "
+        "fragment ItemBits on ItemType { category { name } }",
+    )
+    operation = doc.definitions[0]
+    fragments = {d.name.value: d for d in doc.definitions if hasattr(d, "type_condition")}
+    names = _collect_directive_var_names(operation, fragments=fragments)
+    assert names == frozenset({"show"})
+
+
+def test_cache_key_includes_fragment_spread_directive_variable_value():
+    """B1: a variable on a fragment-spread ``@include`` splits the cache."""
+    from graphql import parse
+
+    doc = parse(
+        "query Q($show: Boolean!) { allItems { ...ItemBits @include(if: $show) } } "
+        "fragment ItemBits on ItemType { category { name } }",
+    )
+    operation = doc.definitions[0]
+    fragments = {d.name.value: d for d in doc.definitions if hasattr(d, "type_condition")}
+    info_false = SimpleNamespace(
+        operation=operation,
+        fragments=fragments,
+        variable_values={"show": False},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
+    info_true = SimpleNamespace(
+        operation=operation,
+        fragments=fragments,
+        variable_values={"show": True},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
+
+    assert DjangoOptimizerExtension._build_cache_key(
+        info_false,
+        Item,
+    ) != DjangoOptimizerExtension._build_cache_key(info_true, Item)
 
 
 # ---------------------------------------------------------------------------

@@ -161,5 +161,9 @@ poetry.toml
 # ruff
 .ruff_cache/
 
+# Review workflow shadow files (static-analysis byproducts)
+# Review artifacts, plan files, and worker instructions under docs/review/ are tracked.
+docs/review/shadow/
+
 # LSP config files
 pyrightconfig.json

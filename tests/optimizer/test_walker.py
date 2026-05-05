@@ -1,4 +1,4 @@
-"""Tests for ``optimizer/walker.py`` — ``spec-optimizer.md`` O2.
+"""Tests for ``optimizer/walker.py``.
 
 The walker is a pure function (``plan_optimizations``) tested in
 isolation against synthetic selection objects — no Strawberry execution
@@ -11,9 +11,8 @@ The walker dispatches on duck-typed attributes (``name``, ``alias``,
 ``directives``, ``selections``, ``type_condition``), so synthetic
 objects exercise exactly the same code paths as real Strawberry nodes.
 
-O4 (nested prefetch chains) and O6
-(``Prefetch`` downgrade) each extend this file with additional tests
-when they land.
+Nested prefetch chains, FK-id elision, optimizer hints, and ``Prefetch``
+downgrades extend this same walker surface.
 """
 
 from types import SimpleNamespace

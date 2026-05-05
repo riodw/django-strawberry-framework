@@ -1,4 +1,4 @@
-"""Selection-tree walker — ``spec-optimizer.md`` O2/O4."""
+"""Selection-tree walker for ORM optimization plans."""
 
 from __future__ import annotations
 

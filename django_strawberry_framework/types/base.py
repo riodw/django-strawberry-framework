@@ -75,9 +75,9 @@ class DjangoType:
 
         Pipeline order:
 
-        1. ``spec-optimizer.md`` O6 sentinel: if the subclass declares
-           its own ``get_queryset``, flip ``cls._is_default_get_queryset``
-           to ``False``. Runs **unconditionally** — before the
+        1. If the subclass declares its own ``get_queryset``, flip
+           ``cls._is_default_get_queryset`` to ``False``. Runs
+           **unconditionally** — before the
            ``meta is None`` early return — so an intermediate abstract
            base (no ``Meta``, but its own ``get_queryset``) still flips
            the flag, and any concrete subclass that inherits from such
@@ -98,34 +98,28 @@ class DjangoType:
            annotations are merged on top as an implementation detail,
            but ``@strawberry.type`` rewrites ``cls.__annotations__``
            from its own field metadata downstream, so the merge is
-           **not** a reliable consumer-override contract in 0.0.3
-           (see ``docs/spec-django_type_contract.md`` "Consumer
-           override semantics" and the skipped
-           ``test_consumer_annotation_overrides_synthesized``).
+           **not** a reliable consumer-override contract in 0.0.3.
         7. ``registry.register(meta.model, cls)`` — claims the model.
-        8. ``_attach_relation_resolvers(cls, fields)`` —
-           ``spec-optimizer.md`` O1: attaches a cardinality-aware
-           resolver per relation field (forward FK / OneToOne, reverse
-           FK / M2M, reverse OneToOne) so Strawberry's default
-           ``getattr`` resolver does not see a Django
-           ``RelatedManager``. Lives in ``types.resolvers``; caller
-           passes the pre-computed field list to keep the field walk
-           single-pass and the dependency direction one-way
-           (``base`` -> ``resolvers``, never the reverse).
+        8. ``_attach_relation_resolvers(cls, fields)`` attaches a
+           cardinality-aware resolver per relation field (forward FK /
+           OneToOne, reverse FK / M2M, reverse OneToOne) so Strawberry's
+           default ``getattr`` resolver does not see a Django
+           ``RelatedManager``. Lives in ``types.resolvers``; caller passes
+           the pre-computed field list to keep the field walk single-pass
+           and the dependency direction one-way (``base`` -> ``resolvers``,
+           never the reverse).
         9. ``strawberry.type(cls)`` — finalizes the class as a
            Strawberry type with ``Meta.name`` and ``Meta.description``.
            (``Meta.interfaces`` is reserved by ``DEFERRED_META_KEYS``
            pending a future relay spec.)
         """
         super().__init_subclass__(**kwargs)
-        # spec-optimizer.md O6 sentinel: flip the class-level flag if
-        # *this* class declared its own ``get_queryset``. Runs
-        # unconditionally — before the ``meta is None`` early return —
-        # so an intermediate abstract base (no ``Meta``, but its own
-        # ``get_queryset``) still flips the flag for any concrete
-        # subclass that inherits from it. The optimizer's
-        # downgrade-to-Prefetch rule consumes this once the rebuild
-        # lands; the type-system half of the contract ships now.
+        # Flip the class-level flag if *this* class declared its own
+        # ``get_queryset``. Runs unconditionally — before the
+        # ``meta is None`` early return — so an intermediate abstract
+        # base (no ``Meta``, but its own ``get_queryset``) still flips
+        # the flag for any concrete subclass that inherits from it. The
+        # optimizer consumes this for its downgrade-to-Prefetch rule.
         if "get_queryset" in cls.__dict__:
             cls._is_default_get_queryset = False
         meta = cls.__dict__.get("Meta")
@@ -151,21 +145,19 @@ class DjangoType:
         # the synthesized ones in the dict literal below, but
         # ``@strawberry.type`` rewrites ``cls.__annotations__`` from
         # its own field metadata downstream, so the merge does not
-        # reliably preserve the override. Documented in
-        # ``docs/spec-django_type_contract.md`` "Consumer override
-        # semantics"; pinned by the skipped
-        # ``test_consumer_annotation_overrides_synthesized``. The
-        # eventual stable mechanism lives in a future
-        # ``spec-consumer_overrides.md``.
+        # reliably preserve the override. The skipped
+        # ``test_consumer_annotation_overrides_synthesized`` pins the
+        # current limitation until a future consumer-overrides design
+        # defines the stable mechanism.
         existing = dict(cls.__dict__.get("__annotations__", {}))
         cls.__annotations__ = {**synthesized, **existing}
         registry.register(meta.model, cls)
-        # spec-optimizer.md O1: attach cardinality-aware resolvers per
-        # relation field. Without this, Strawberry's default ``getattr``
-        # resolver returns a Django ``RelatedManager`` for reverse rels
-        # / M2M and Strawberry rejects with "Expected Iterable". Must
-        # run before ``strawberry.type(cls)`` so the field metadata is
-        # in place when Strawberry processes the class.
+        # Attach cardinality-aware resolvers per relation field. Without
+        # this, Strawberry's default ``getattr`` resolver returns a
+        # Django ``RelatedManager`` for reverse rels / M2M and Strawberry
+        # rejects with "Expected Iterable". Must run before
+        # ``strawberry.type(cls)`` so the field metadata is in place when
+        # Strawberry processes the class.
         _attach_relation_resolvers(cls, fields)
         # TODO(future relay spec): when relay support lands, the
         # implementation will inject ``Meta.interfaces`` (e.g.,
@@ -201,8 +193,7 @@ class DjangoType:
         """Return ``True`` if this subclass (or any intermediate base) overrides ``get_queryset``.
 
         Used by ``DjangoOptimizerExtension`` to decide whether a related-
-        field traversal should be downgraded to a ``Prefetch`` (see the
-        N+1 strategy section of the spec).
+        field traversal should be downgraded to a ``Prefetch``.
 
         Implementation: ``__init_subclass__`` flips
         ``_is_default_get_queryset`` to ``False`` at class-creation time
@@ -222,8 +213,7 @@ def _validate_meta(meta: type) -> None:
 
     1. ``Meta.model`` is required.
     2. ``fields`` and ``exclude`` are mutually exclusive.
-    3. Any key in ``DEFERRED_META_KEYS`` raises with a clear message
-       pointing at the spec that owns the feature.
+    3. Any key in ``DEFERRED_META_KEYS`` raises with a clear message.
     4. Any non-dunder key on ``meta`` not in ``ALLOWED_META_KEYS |
        DEFERRED_META_KEYS`` raises (typo guard).
 
@@ -241,7 +231,7 @@ def _validate_meta(meta: type) -> None:
     deferred = sorted(declared & DEFERRED_META_KEYS)
     if deferred:
         raise ConfigurationError(
-            f"Meta keys not supported yet: {deferred}. The spec that owns them has not shipped.",
+            f"Meta keys not supported yet: {deferred}. The feature that owns them has not shipped.",
         )
 
     unknown = sorted(declared - ALLOWED_META_KEYS - DEFERRED_META_KEYS)
@@ -333,7 +323,7 @@ def _build_annotations(cls: type, fields: list[Any]) -> dict[str, Any]:
     Args:
         cls: The consumer-facing ``DjangoType`` subclass (its ``__name__``
             threads into ``convert_scalar`` so generated choice enums
-            (Slice 7) carry a stable name).
+            carry a stable name).
         fields: The Meta-filtered list of Django field objects.
 
     Returns:

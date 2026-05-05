@@ -3,8 +3,8 @@
 Maps Django models to their generated ``DjangoType`` and ``(model,
 field_name)`` to generated ``Enum`` classes. Used by:
 
-- ``converters.convert_relation`` for forward-reference relation
-  resolution when relating types are defined in any order.
+- ``converters.convert_relation`` for relation resolution once target
+  types are registered.
 - ``converters.convert_choices_to_enum`` for enum reuse across multiple
   ``DjangoType`` subclasses reading the same choice column.
 
@@ -79,9 +79,9 @@ class TypeRegistry:
     def lazy_ref(self, model: type[models.Model]) -> Any:
         """Return a forward reference resolved at schema build.
 
-        Slice 3 deferred this in favor of eager resolution
-        (``convert_relation`` calls ``registry.get`` and raises
-        ``ConfigurationError`` if the target is unregistered). Lifting
+        Current alpha behavior uses eager resolution:
+        ``convert_relation`` calls ``registry.get`` and raises
+        ``ConfigurationError`` if the target is unregistered. Lifting
         the dependency-order constraint requires picking one of:
 
         - ``Annotated["TargetType", strawberry.lazy("module.path")]`` so
@@ -94,8 +94,8 @@ class TypeRegistry:
           ``finalize_types()`` post-processing pass resolves after every
           subclass has been seen.
 
-        See the Post-slice-7 future work section in
-        ``docs/spec-django_types.md`` for the full discussion.
+        Definition-order independence is tracked as future work in the
+        project board.
         """
         # TODO(future): pick a forward-ref strategy from the docstring
         # above and wire it. The string-annotation approach is simplest

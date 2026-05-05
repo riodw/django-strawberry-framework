@@ -1,12 +1,11 @@
-"""Tests for ``convert_choices_to_enum`` — Slice 7 scope.
+"""Tests for ``convert_choices_to_enum``.
 
 Fakeshop has no choice columns, so the test surface is built around a
 session-scoped ``ChoiceFixture`` Django model that lives under a synthetic
 ``app_label``. Every test in this file uses that fixture as the source of
 truth so the behaviour is exercised without polluting the example schema.
 
-The 6 required tests come straight from the Slice 7 spec section in
-``docs/spec-django_types.md``:
+Covered behavior:
 
 - enum generation + naming
 - registry caching keyed on ``(model, field_name)``
@@ -15,9 +14,8 @@ The 6 required tests come straight from the Slice 7 spec section in
 - member-name sanitization (hyphens, leading digits, keywords)
 - ``null=True`` widening to exactly ``EnumType | None``
 
-Coverage knock-ons: this slice exercises ``convert_scalar``'s ``null``
-widening branch and ``registry.register_enum`` / ``get_enum``, the lines
-that have been uncovered since Slice 4.
+Coverage knock-ons: these tests exercise ``convert_scalar``'s ``null``
+widening branch and ``registry.register_enum`` / ``get_enum``.
 """
 
 import enum
@@ -100,7 +98,7 @@ def grouped_choice_field(choice_fixture_model):
 
 
 # ---------------------------------------------------------------------------
-# Required Slice 7 tests
+# Choice enum behavior
 # ---------------------------------------------------------------------------
 
 
@@ -147,9 +145,8 @@ def test_two_djangotypes_reading_same_choice_field_share_one_enum(choice_fixture
     """Two ``DjangoType``s pointing at the same column receive the cached enum.
 
     The first type wins the enum's GraphQL name; later types reuse the
-    same object. Per the import-order caveat in the spec, the enum's
-    ``__name__`` is set by whichever type registered first, even though
-    runtime behaviour is identical.
+    same object. The enum's ``__name__`` is set by whichever type
+    registered first, even though runtime behaviour is identical.
     """
 
     class FixtureTypeA(DjangoType):

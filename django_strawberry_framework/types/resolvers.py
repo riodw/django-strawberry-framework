@@ -1,4 +1,4 @@
-"""Relation-field resolvers — ``spec-optimizer.md`` O1.
+"""Relation-field resolvers for ``DjangoType`` relation annotations.
 
 Strawberry's default resolver for an annotated class attribute does
 ``getattr(source, name)``. For Django relations that returns a
@@ -11,8 +11,7 @@ the right shape.
 Forward FK / OneToOne fields would technically work without a custom
 resolver (``getattr`` returns the related instance), but they get the
 same treatment for consistency and to centralize the prefetch-cache
-contract — once ``spec-optimizer.md`` O3+ swaps the manager out, the
-resolver shape stays unchanged.
+contract used by the optimizer.
 
 Layered as a sibling of ``types.base`` so the ``DjangoType.__init_subclass__``
 pipeline can import ``_attach_relation_resolvers`` without a circular

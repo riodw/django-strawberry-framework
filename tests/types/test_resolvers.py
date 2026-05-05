@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.types.resolvers`` — spec-optimizer.md O1.
+"""Tests for ``django_strawberry_framework.types.resolvers``.
 
 Covers the cardinality-aware relation resolvers attached by
 ``DjangoType.__init_subclass__`` via ``_attach_relation_resolvers``:
@@ -50,7 +50,7 @@ def _isolate_registry():
 
 
 # ---------------------------------------------------------------------------
-# Slice O1 — custom relation resolvers (spec-optimizer.md)
+# Custom relation resolvers
 # ---------------------------------------------------------------------------
 
 
@@ -96,10 +96,9 @@ def test_o1_forward_fk_resolves_to_related_instance():
 def test_o1_reverse_fk_resolves_without_iterability_error():
     """O1: reverse FK resolver returns a list, fixing 'Expected Iterable'.
 
-    Pre-O1 failure mode (per spec-optimizer.md): Strawberry's default
-    resolver returns a ``RelatedManager`` and raises ``Expected Iterable,
-    but did not find one for field 'CategoryType.items'``. O1's custom
-    resolver returns ``list(manager.all())`` so iteration works.
+    Strawberry's default resolver returns a ``RelatedManager`` and raises
+    ``Expected Iterable, but did not find one for field 'CategoryType.items'``.
+    The custom resolver returns ``list(manager.all())`` so iteration works.
     """
     from fakeshop.products import services
 
@@ -360,7 +359,7 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
 
     Fakeshop has no OneToOne fields, so this exercises the branch via a
     SimpleNamespace and a fabricated ``DoesNotExist``. The behaviour is
-    spec-mandated (see the cardinality table in spec-django_types.md).
+    part of the relation cardinality contract.
     """
     from types import SimpleNamespace
 
@@ -397,9 +396,9 @@ def test_o1_make_relation_resolver_reverse_one_to_one_returns_none_on_doesnotexi
 def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries):
     """O1 is correctness-only: query count is 1 + N until O3 lands the optimizer.
 
-    Per spec-optimizer.md O1: 'After this slice, ``{ allCategories { items
-    { name } } }`` returns correct results in 26 SQL queries (1 + 25). The
-    optimizer is still off-architecture and not invoked.'
+    Without the optimizer extension, ``{ allCategories { items { name } } }``
+    returns correct results in 26 SQL queries (1 + 25): one category query
+    plus one item query per category.
     """
     from fakeshop.products import services
 

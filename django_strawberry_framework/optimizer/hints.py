@@ -18,11 +18,9 @@ Consumer surface::
                 "entries": OptimizerHint.prefetch_related(),
             }
 
-The class lives in the optimizer subpackage because its only consumer
-is the walker (``optimizer/walker.py``), but it is re-exported from the
-top-level ``__init__.py`` when B4 ships so the import path stays short.
-
-See ``spec-optimizer_beyond.md`` B4 for the full design.
+The class lives in the optimizer subpackage because its primary consumer
+is the walker (``optimizer/walker.py``), and it is re-exported from the
+top-level ``__init__.py`` so the import path stays short.
 """
 
 from __future__ import annotations

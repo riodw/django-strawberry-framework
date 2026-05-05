@@ -2,13 +2,9 @@
 
 Last refreshed: 2026-05-05
 
-This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, and specs. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
+This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
-Related docs:
-- [`README.md`](README.md) — install, run, seed example data, test, build, publish, and contributor operations.
-- [`docs/README.md`](docs/README.md) — friendly docs landing page for goals, positioning, current surface, compact trees, and status.
-- [`docs/FEATURES.md`](docs/FEATURES.md) — detailed shipped/planned/deferred capability catalog and package comparisons.
-- [`docs/TREE.md`](docs/TREE.md) — detailed architecture, package-tree, and test-layout reference.
+For install, local development, testing, and the canonical documentation map, start from [`README.md`](README.md).
 
 ## Snapshot
 
@@ -113,7 +109,7 @@ Evidence:
 
 Notes:
 
-- Some old spec text still describes optimizer pieces as pending. Treat source/tests as truth and clean docs under READY-007.
+- Shipped behavior is consolidated into `docs/FEATURES.md`; source/tests are the truth for optimizer behavior.
 
 ### DONE-003 — Optimizer beyond slices B1-B8
 
@@ -152,19 +148,44 @@ Priority: completed enough for current alpha
 
 Scope:
 
-- `docs/README.md` describes shipped Layer 1 and Layer 2.
-- `docs/spec-optimizer.md` checklist marks O1-O6 complete.
-- `docs/spec-optimizer_beyond.md` checklist marks B1-B8 complete.
+- `docs/README.md` gives a quickstart, package positioning, optimizer value, and status.
+- `docs/FEATURES.md` describes shipped, planned, deferred, and alpha-constrained capabilities.
+- `docs/TREE.md` preserves detailed package/test tree responsibilities.
 
 Evidence:
 
 - `docs/README.md`
-- `docs/spec-optimizer.md`
-- `docs/spec-optimizer_beyond.md`
+- `docs/FEATURES.md`
+- `docs/TREE.md`
 
 Notes:
 
-- This is not fully clean. Several docs still contain stale sections or old target trees. Track cleanup under READY-007.
+- User-facing docs avoid internal slice shorthand; maintainer docs can still use it where useful.
+
+### DONE-005 — 0.0.4 onboarding docs and completed-spec archive
+
+Priority: completed docs cleanup
+
+Scope:
+
+- Root `README.md` is the canonical documentation map and operational entry point.
+- `docs/README.md` is code-first: quickstart, three-minute path, optimizer behavior, and status.
+- `docs/FEATURES.md` is the capability catalog with value-led optimizer language and comparison table.
+- `docs/TREE.md` is the detailed layout/test-tree reference.
+- `CHANGELOG.md` is condensed and no longer points at archived design docs.
+- Completed design docs are removed after shipped behavior is folded into docs and future work is preserved here.
+
+Evidence:
+
+- `README.md`
+- `docs/README.md`
+- `docs/FEATURES.md`
+- `docs/TREE.md`
+- `CHANGELOG.md`
+
+Notes:
+
+- Future in-flight design docs still use the `docs/spec-<topic>.md` convention, then get folded into durable docs and archived when shipped.
 
 ## Ready
 
@@ -288,7 +309,6 @@ Files likely touched:
 - `django_strawberry_framework/types/base.py`
 - `django_strawberry_framework/types/resolvers.py`
 - `tests/types/test_base.py`
-- `docs/spec-django_type_contract.md`
 
 ### READY-004 — Relay and `Meta.interfaces`
 
@@ -379,41 +399,7 @@ Files likely touched:
 - `tests/types/test_base.py`
 - `docs/alpha-review-feedback.md`
 
-### READY-007 — Documentation drift and spec archive sweep
-
-Priority: medium
-
-Status: ready
-
-Current issues:
-
-- Existing `docs/spec-*.md` files contain a mix of shipped implementation history, stale pending-language, and deferred future work.
-- `docs/alpha-review-feedback.md` now lists the shipped behavior that should be consolidated into a concise `docs/README.md`.
-- Source, tests, docs, `START.md`, `AGENTS.md`, `CHANGELOG.md`, and `KANBAN.md` still contain references to the existing spec files.
-- `docs/TREE.md` needs a keep/delete decision once the README has a compact current package layout.
-
-Definition of done:
-
-- Consolidate shipped current-state behavior from the existing specs into `docs/README.md`.
-- Keep future `docs/spec-*.md` as the design convention; only archive/delete the existing completed specs after consolidation.
-- Move remaining unimplemented spec ideas into `KANBAN.md` before deleting the source specs.
-- Rewrite source/test/doc comments so they stand alone without pointing at archived spec files.
-- Condense `CHANGELOG.md` and remove links/references to archived spec files when explicitly working on this archive pass.
-- Run a final grep for `spec-` and `TODO(spec-` before deletion.
-
-Files likely touched:
-
-- `docs/README.md`
-- `docs/TREE.md`
-- `docs/alpha-review-feedback.md`
-- `CHANGELOG.md`
-- `START.md`
-- `AGENTS.md`
-- `KANBAN.md`
-- existing `docs/spec-*.md`
-- source/test files with spec-reference comments
-
-### READY-008 — Version and release alignment
+### READY-007 — Version and release alignment
 
 Priority: medium
 
@@ -423,13 +409,13 @@ Current behavior:
 
 - `pyproject.toml` version is `0.0.3`.
 - `django_strawberry_framework/__init__.py` version is `0.0.3`.
-- 0.0.4 work has begun with documentation/spec archive consolidation.
+- 0.0.4 work has begun after documentation archive consolidation.
 
 Definition of done:
 
 - Decide the next release version.
 - Bump `pyproject.toml` and `django_strawberry_framework/__init__.py` together.
-- Confirm README/Kanban/spec language matches the chosen release.
+- Confirm README/Kanban/docs language matches the chosen release.
 - Only update `CHANGELOG.md` if explicitly requested.
 
 Files likely touched:
@@ -683,7 +669,7 @@ Status: ongoing
 Current behavior:
 
 - Top-level exports currently include `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `auto`, and `__version__`.
-- Future names must follow `docs/spec-public_surface.md` rules.
+- Future names must follow the public-surface promotion discipline in this card.
 - README/TREE language should use the public-surface status vocabulary: `shipped`, `partial`, `experimental`, `planned`, `in flight`, `deferred`, and `aspirational`.
 
 Definition of done for each future public symbol:
@@ -838,15 +824,14 @@ Test placement:
 ### Sequence A — Stabilize Layer 2 before Layer 3
 
 1. READY-006 — clean stale test/doc placeholders.
-2. READY-007 — archive completed specs and consolidate README.
-3. READY-001 — definition-order independence.
-4. READY-002 — multiple types per model / `Meta.primary`.
-5. READY-003 — consumer override semantics.
-6. READY-004 — Relay / `Meta.interfaces`.
-7. READY-005 — deferred scalar conversions.
-8. BACKLOG-004 — real M2M coverage.
-9. BACKLOG-007 — stable choice enum naming override.
-10. BACKLOG-008 — model-property optimization hints.
+2. READY-001 — definition-order independence.
+3. READY-002 — multiple types per model / `Meta.primary`.
+4. READY-003 — consumer override semantics.
+5. READY-004 — Relay / `Meta.interfaces`.
+6. READY-005 — deferred scalar conversions.
+7. BACKLOG-004 — real M2M coverage.
+8. BACKLOG-007 — stable choice enum naming override.
+9. BACKLOG-008 — model-property optimization hints.
 
 Use this sequence if the goal is to make `DjangoType` feel solid before expanding the public API.
 
@@ -866,15 +851,14 @@ Use this sequence if the goal is to demonstrate the DRF-shaped API surface quick
 ### Recommended hybrid
 
 1. READY-006 — remove stale noise first.
-2. READY-007 — archive completed specs and bring docs into alignment so future planning starts from truth.
-3. READY-001 — fix `lazy_ref`; it reduces friction across almost every future subsystem.
-4. NEXT-001 — implement `FieldSet` as the smallest Layer 3 slice.
-5. NEXT-002 and NEXT-003 — filters and orders.
-6. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants.
-7. NEXT-005 and NEXT-006 — connection field and permissions.
-8. BACKLOG-007 — add stable choice enum naming if schema import-order friction appears in real use.
-9. BACKLOG-008 — add model-property optimization hints if computed fields start broadening queries.
-10. BACKLOG-005 — activate the real fakeshop GraphQL schema.
+2. READY-001 — fix `lazy_ref`; it reduces friction across almost every future subsystem.
+3. NEXT-001 — implement `FieldSet` as the smallest Layer 3 slice.
+4. NEXT-002 and NEXT-003 — filters and orders.
+5. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants.
+6. NEXT-005 and NEXT-006 — connection field and permissions.
+7. BACKLOG-007 — add stable choice enum naming if schema import-order friction appears in real use.
+8. BACKLOG-008 — add model-property optimization hints if computed fields start broadening queries.
+9. BACKLOG-005 — activate the real fakeshop GraphQL schema.
 
 ## Release readiness checklist
 
@@ -882,7 +866,7 @@ Before a release:
 
 - `pyproject.toml` and `django_strawberry_framework/__init__.py` versions match.
 - README status matches actual top-level exports.
-- `docs/README.md`, `docs/TREE.md`, and relevant specs agree on shipped/planned state.
+- `docs/README.md`, `docs/FEATURES.md`, `docs/TREE.md`, and any active design docs agree on shipped/planned state.
 - No stale skipped tests refer to already-shipped slices.
 - New source modules have mirrored tests in the correct tree.
 - `uv run ruff format .` passes.

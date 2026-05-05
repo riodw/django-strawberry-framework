@@ -5,8 +5,8 @@ Two halves:
 - ``convert_scalar(field, type_name)`` — scalar columns
   (``CharField`` -> ``str`` etc.) and choice fields (-> generated ``Enum``).
 - ``convert_relation(field)`` — FK / OneToOne / reverse / M2M, returning
-  a forward reference to the target ``DjangoType`` so definition order is
-  free.
+  the registered target ``DjangoType`` in the correct GraphQL cardinality
+  shape.
 
 All field-shape introspection lives here so ``types.py`` stays focused on
 ``Meta`` orchestration.
@@ -33,8 +33,8 @@ from ..utils.strings import pascal_case
 # ``name="BigInt"``, ``serialize=str`` (so JSON clients receive a string
 # and avoid silent truncation past 2**53), and ``parse_value=int`` for
 # the inbound side. Once defined, add ``models.BigIntegerField: BigInt``
-# to ``SCALAR_MAP``. Not in Slice 2 because the example fakeshop models
-# use ``BigAutoField`` (mapped to ``int``) and no plain ``BigIntegerField``.
+# to ``SCALAR_MAP``. The example fakeshop models use ``BigAutoField``
+# (mapped to ``int``) and no plain ``BigIntegerField``.
 
 # TODO(future): handle ``ArrayField`` -> ``list[inner_type]`` by
 # inspecting ``field.base_field`` (itself a Django Field) and recursing
@@ -77,7 +77,7 @@ SCALAR_MAP: dict[type[models.Field], type] = {
 def convert_scalar(field: models.Field, type_name: str) -> Any:
     """Map a Django scalar field to a Python / Strawberry type.
 
-    Algorithm (per spec):
+    Algorithm:
 
     1. Look up ``type(field)`` in ``SCALAR_MAP``; raise ``ConfigurationError``
        if unsupported.
@@ -139,16 +139,12 @@ def _sanitize_member_name(value: Any) -> str:
 def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
     """Generate (or fetch from registry) a Strawberry ``Enum`` for ``field.choices``.
 
-    Per the Slice 7 spec algorithm (``docs/spec-django_types.md`` section
-    "Choice field enum generation"):
-
     1. Reject Django's grouped-choices form.
     2. Cache check on ``(field.model, field.name)``.
     3. Compute enum name ``f"{type_name}{PascalCase(field.name)}Enum"``.
     4. Sanitize member names from choice *values* (not labels) so a label
-       edit doesn't churn the GraphQL schema. The cost is that integer or
-       hyphenated values produce ``MEMBER_<digit>`` / underscore-mangled
-       member names — see the trade-off paragraph in the spec.
+       edit doesn't churn the GraphQL schema. Integer or hyphenated
+       values produce ``MEMBER_<digit>`` / underscore-mangled names.
     5. Build the ``Enum`` and decorate with ``strawberry.enum``.
     6. Cache via ``registry.register_enum``.
     7. Return the enum class.
@@ -179,8 +175,8 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
         if isinstance(label, (list, tuple)):
             raise ConfigurationError(
                 f"{field.model.__name__}.{field.name} uses Django's grouped-choices "
-                "form (nested tuples for option groups). Slice 7 supports only the "
-                "flat (value, label) form; flatten the choices source or split into "
+                "form (nested tuples for option groups). Only the flat "
+                "(value, label) form is supported; flatten the choices source or split into "
                 "separate fields.",
             )
 
@@ -210,14 +206,14 @@ def convert_relation(field: models.Field) -> Any:
     - Reverse FK (``one_to_many``) -> ``list[target_type]``.
     - Forward / reverse M2M (``many_to_many``) -> ``list[target_type]``.
 
-    Slice 3 simplification: the target's ``DjangoType`` must already be
+    Current alpha behavior: the target's ``DjangoType`` must already be
     registered. If it is not, ``ConfigurationError`` fires with a message
-    naming the unregistered model. Definition-order independence (the
-    spec's ``lazy_ref`` mechanism) is deferred to a future slice; until
-    then, declare related models in dependency order. The ``related_name``
-    on Django's reverse descriptor surfaces here via ``field.name`` (e.g.
-    ``Category._meta.get_fields()`` yields a reverse rel named ``items``
-    when ``Item.category`` declares ``related_name="items"``).
+    naming the unregistered model. Definition-order independence is
+    deferred; until then, declare related models in dependency order. The
+    ``related_name`` on Django's reverse descriptor surfaces here via
+    ``field.name`` (e.g. ``Category._meta.get_fields()`` yields a reverse
+    rel named ``items`` when ``Item.category`` declares
+    ``related_name="items"``).
 
     Args:
         field: A bound Django relation field or related-object descriptor.

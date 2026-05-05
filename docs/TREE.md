@@ -2,11 +2,7 @@
 
 This file is the detailed layout reference. It exists to preserve the package/test tree rationale, upstream layout comparisons, and per-file responsibilities without turning [`README.md`](README.md) into a second architecture document.
 
-Related docs:
-- [`../README.md`](../README.md) — install, run, seed example data, test, build, publish, and contributor operations.
-- [`README.md`](README.md) — friendly docs landing page for goals, positioning, current surface, and compact current/target trees.
-- [`FEATURES.md`](FEATURES.md) — detailed package capability catalog.
-- [`../KANBAN.md`](../KANBAN.md) — active shipped/planned/deferred project board.
+For install, local development, testing, and the canonical documentation map, start from [`../README.md`](../README.md).
 
 The upstream trees are captured for reference while shaping `django-strawberry-framework`'s own subpackage layout. Filters applied: `__pycache__/` directories, package-internal `tests/` directories, `conftest.py`, and `*.pyc` files are excluded so both trees show only the library logic surface (the strawberry-django source checkout already keeps tests outside the package directory; graphene-django ships its tests inside the installed package, so they're filtered here for comparability).
 
@@ -191,7 +187,7 @@ django_graphene_filters/
 
 ## django_strawberry_framework (current on-disk layout)
 
-The Layer 1 + Layer 2 subpackage migration is complete: `types/`, `optimizer/`, and `utils/` are on disk as subpackages. Layer 3 modules (`filters/`, `orders/`, `aggregates/`, `fieldset.py`, `permissions.py`, `connection.py`, `apps.py`, `management/`) do not exist yet and will land as their respective specs ship.
+The shared infrastructure plus model/type and optimizer subpackages are on disk: `types/`, `optimizer/`, and `utils/`. Query-surface modules (`filters/`, `orders/`, `aggregates/`, `fieldset.py`, `permissions.py`, `connection.py`, `apps.py`, `management/`) do not exist yet and will land as their future design slices ship.
 
 ```text
 django_strawberry_framework/
@@ -220,7 +216,7 @@ django_strawberry_framework/
 
 ## django_strawberry_framework (target layout)
 
-The target shape adds Layer 3 modules on top of the current layout. Derived from the three reference trees above and the dependency-graph reasoning in [`README.md`](README.md) "Package architecture".
+The target shape adds query-surface modules on top of the current layout. It is derived from the three reference trees above and the package direction captured in [`FEATURES.md`](FEATURES.md).
 
 ```text
 django_strawberry_framework/

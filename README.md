@@ -11,9 +11,9 @@
 [changelog-image]: https://img.shields.io/badge/changelog-CHANGELOG.md-blue
 [changelog-url]: https://github.com/riodw/django-strawberry-framework/blob/main/CHANGELOG.md
 
-A DRF-inspired Django integration framework for [Strawberry GraphQL](https://github.com/strawberry-graphql/strawberry) — `Meta`-class-driven type generation and N+1 optimization today, with filtering, ordering, aggregation, and permissions on the roadmap.
+Meta classes, not decorators. [Strawberry GraphQL](https://github.com/strawberry-graphql/strawberry) on Django, with an N+1 optimizer that cooperates with your existing querysets. Filters / orders / aggregates / permissions are on the roadmap.
 
-> **Status: pre-alpha.** The shipped surface is `DjangoType` plus the N+1 optimizer. The full Layer-3 surface (FilterSet, OrderSet, AggregateSet, permissions, connection fields) is planned but not yet implemented. The public API is expected to change until `0.1.0`.
+> **Status: 0.0.3, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `auto` — are intended to remain stable through `0.1.0`. Coming features — filters, orders, aggregates, connections, permissions, and more `Meta` keys — do not ship yet.
 
 #### This package takes inspiration from:
 
@@ -25,10 +25,14 @@ A DRF-inspired Django integration framework for [Strawberry GraphQL](https://git
 
 This root README is the operational entry point: install, run, seed example data, test, build, and publish.
 
-- [`docs/README.md`](docs/README.md) — friendly package orientation, goals, current surface, status, and compact current/target trees.
+- [`docs/README.md`](docs/README.md) — quick start, package orientation, optimizer behavior, and status.
 - [`docs/FEATURES.md`](docs/FEATURES.md) — detailed shipped/planned/deferred capability catalog and comparisons with `strawberry-graphql-django` and `graphene-django`.
 - [`docs/TREE.md`](docs/TREE.md) — detailed layout reference for upstream trees, this package's source tree, target architecture, and test placement.
-- [`KANBAN.md`](KANBAN.md) — project board for shipped work, planned work, blockers, and release-readiness notes.
+- [`KANBAN.md`](KANBAN.md) — contributor/maintainer board for shipped work, planned work, blockers, and release-readiness notes.
+
+## Quick start
+
+Install the package, define `DjangoType` classes with nested `Meta`, and enable `DjangoOptimizerExtension` on your Strawberry schema. The working schema example lives in [`docs/README.md`](docs/README.md#quick-start).
 
 ## Installation
 

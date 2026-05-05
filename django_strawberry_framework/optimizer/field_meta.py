@@ -5,8 +5,6 @@ Built once per ``DjangoType`` at class-creation time (in
 The O2 walker reads the cached map instead of calling
 ``model._meta.get_fields()`` on every walk, eliminating per-request
 Django introspection overhead.
-
-See ``spec-optimizer_beyond.md`` B7 for the full design.
 """
 
 from __future__ import annotations

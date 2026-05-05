@@ -4,11 +4,7 @@
 
 This file is the capability catalog. It answers “what can this package do?” and stays separate from operational setup and internal layout details.
 
-Related docs:
-- [`../README.md`](../README.md) — install, run, seed example data, test, build, publish, and contributor operations.
-- [`README.md`](README.md) — friendly docs landing page for goals, positioning, current surface, and status.
-- [`TREE.md`](TREE.md) — detailed architecture and layout reference.
-- [`../KANBAN.md`](../KANBAN.md) — active shipped/planned/deferred project board.
+For install, local development, testing, and the canonical documentation map, start from [`../README.md`](../README.md).
 
 ## Feature status
 - `shipped` — implemented, tested, and available in the current package surface.
@@ -16,8 +12,21 @@ Related docs:
 - `deferred` — reserved for later design or blocked on another feature.
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
 
+Most users only care about `shipped` and `planned`. The other two labels are for contributors deciding what to work on next.
+
+## Quick comparison
+
+| Concern | graphene-django | strawberry-graphql-django | this package |
+| --- | --- | --- | --- |
+| Configuration shape | `class Meta` | decorators | `class Meta` |
+| Async resolvers | retrofitted | native | native |
+| Modern typing | `graphene.String()` style declarations | type hints | type hints |
+| Built-in N+1 optimizer | external patterns | shipped | shipped + plan cache + FK-id elision + queryset diffing + strictness |
+| Filter / order / aggregate | shipped | shipped | planned |
+| Stable today | yes | yes | alpha |
+
 ## DRF-shaped GraphQL API
-Status: shipped foundation, planned Layer 3 expansion.
+Status: shipped foundation, planned query features.
 
 The package uses nested `Meta` classes as the consumer-facing configuration surface. The goal is a GraphQL API style that feels like DRF, django-filter, and Django model declarations instead of a stack of Strawberry decorators.
 
@@ -110,17 +119,9 @@ Shipped resolver behavior:
 ## Queryset visibility hook
 Status: shipped.
 
-`DjangoType.get_queryset(cls, queryset, info, **kwargs)` is the central hook for type-level visibility and request-scoped queryset shaping.
+If you've used DRF, you already know this hook. `DjangoType.get_queryset(cls, queryset, info, **kwargs)` runs once per type, defaults to identity, and is where permission filters, tenant scoping, soft-delete, staff/public visibility splits, and request-user filters live.
 
-Common uses:
-- permission filtering
-- tenancy filtering
-- soft-delete filtering
-- staff/public visibility splits
-- request-user scoping
-- future connection and filtering integration
-
-The default implementation is identity. `has_custom_get_queryset()` reports whether a type or inherited intermediate base overrides it. The optimizer uses that signal so a relation with custom visibility is fetched through `Prefetch` instead of a raw SQL join that would bypass the target type's queryset filter.
+The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` reports whether a type or inherited intermediate base overrides the hook, and the optimizer downgrades a JOIN to a `Prefetch` when a target type defines one. Your visibility filter survives relation traversal instead of being bypassed by a raw `select_related` join.
 
 ## Automatic ORM optimization
 Status: shipped.
@@ -144,36 +145,50 @@ Status: shipped.
 
 The optimizer includes performance and correctness features beyond the baseline N+1 avoidance pattern.
 
-Shipped features:
-- AST-keyed plan cache for repeated GraphQL operations
-- cache keys based on selected operation AST, directive variables, target model, and root runtime path
-- directive-variable extraction limited to `@skip` and `@include`
-- named-fragment directive support
-- multi-operation document safety
-- `cache_info()` for hit/miss/size introspection
-- uncacheable plans when request-scoped `get_queryset` results are embedded
-- precomputed optimizer field metadata on `DjangoType` classes
-- cached-plan safety during queryset diffing
+Shipped value:
+- **Plan cache.** The same query 10,000×/sec walks the selection tree once, not 10,000 times. Cache keys ignore filter variables that do not affect selection shape, so a query with many filter combinations can still reuse one cached plan.
+- **Selection-shape keys.** Cache keys include the selected operation AST, relevant `@skip` / `@include` variables, target model, and root runtime path.
+- **Multi-operation safety.** `query A { ... } query B { ... }` in one document never shares a plan across operations.
+- **Named-fragment safety.** Directives inside named fragments are tracked into the cache key.
+- **Introspection.** `cache_info()` exposes hit, miss, and size counts.
+- **Request-scope safety.** Plans that embed request-scoped `get_queryset` results are marked uncacheable.
+- **Low per-request overhead.** `DjangoType` precomputes optimizer field metadata at class creation, and cached plans are never mutated while reconciling against a specific queryset.
 
 ## Join avoidance and projection
 Status: shipped.
 
 The optimizer can avoid unnecessary database work in common relation shapes.
 
-Shipped features:
-- FK-id elision for selections like `{ relation { id } }` when the parent row already has `<field>_id`
-- fallback to a join when the target selection needs more than the primary key
-- fallback to a join when a custom ID resolver or custom target `get_queryset` makes elision unsafe
-- branch-sensitive elision state so aliases and sibling root fields do not leak behavior
-- `only` projection for scalar selections
-- connector-column injection for `select_related`, reverse FK, FK/OneToOne, and M2M attachment paths
+Shipped value:
+- **FK-id elision.** `{ category { id } }` reads `category_id` off the parent row — no JOIN, no second query.
+- **Safe fallback.** The optimizer falls back to a join when the target selection needs more than the primary key, when the target ID has a custom resolver, or when a target `get_queryset` hook must run.
+- **Branch isolation.** Aliases and sibling root fields do not leak elision state into each other.
+- **Column projection.** Scalar selections become `only()` projections.
+- **Connector preservation.** Projection plans include connector columns for `select_related`, reverse FK, FK/OneToOne, and M2M attachment paths so Django can stitch related rows without lazy loads.
 
 ## Optimizer hints
 Status: shipped.
 
-`Meta.optimizer_hints` lets a type override automatic relation planning per field.
+Override the optimizer per relation when you know better than it does — skip a relation entirely, force a join, or hand it your own `Prefetch` for filtered children. Configure it in the same `class Meta` you already declared the type with:
 
-Supported hints:
+```python
+from django.db.models import Prefetch
+from django_strawberry_framework import DjangoType, OptimizerHint
+from myapp.models import Category, Item
+
+
+class CategoryType(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name", "items")
+        optimizer_hints = {
+            "items": OptimizerHint.prefetch(
+                Prefetch("items", queryset=Item.objects.filter(is_published=True)),
+            ),
+        }
+```
+
+Supported hint modes:
 - `OptimizerHint.SKIP` — exclude a relation from automatic planning
 - `OptimizerHint.select_related()` — force `select_related`
 - `OptimizerHint.prefetch_related()` — force `prefetch_related`
@@ -212,14 +227,14 @@ Status: shipped.
 
 The optimizer does not assume it owns the queryset. It reconciles framework-generated plans against queryset work the consumer already applied.
 
-Shipped behavior:
-- exact `select_related` entries already on the queryset are dropped from the optimizer delta
-- existing `prefetch_related` lookups are compared by lookup path
-- consumer `Prefetch` objects win over less-specific optimizer work
-- safe consumer plain-string prefetches can be absorbed by richer optimizer `Prefetch` objects
-- cached plans are never mutated while diffing against a specific queryset
+Shipped value:
+- **Queryset cooperation.** If your resolver already calls `select_related("category")`, the optimizer does not reapply it.
+- **Prefetch cooperation.** If your resolver returns `Category.objects.prefetch_related(Prefetch("items", queryset=...))`, the consumer `Prefetch` wins over less-specific automatic work.
+- **Subtree-aware reconciliation.** `prefetch_related("items", "items__entries")` cooperates with the optimizer's nested `Prefetch("items", ...)` instead of raising Django's "lookup already seen with a different queryset" error.
+- **Plain-string absorption.** Safe consumer string prefetches can be absorbed by richer optimizer `Prefetch` objects.
+- **Cache safety.** Cached plans are copied before queryset-specific diffing, so one resolver's queryset shape cannot mutate a plan reused by another request.
 
-## Planned Layer 3 features
+## Planned query features
 Status: planned.
 
 These are the user-facing features intended to turn the foundation into the full DRF-shaped GraphQL stack.
@@ -237,7 +252,7 @@ Planned type/query surfaces:
 - shared queryset utility helpers
 
 Planned integration goals:
-- Layer 3 `Meta` keys become accepted only when their subsystem applies them end-to-end
+- deferred `Meta` keys become accepted only when their subsystem applies them end-to-end
 - filters, orders, aggregates, permissions, and connection fields compose with the optimizer
 - fakeshop GraphQL schema activates only as its dependencies ship
 
@@ -303,7 +318,7 @@ Future migration advantage:
 - teams can move toward Strawberry without giving up Django-shaped schema declarations
 
 ## Deferred and future work
-Tracked in [`../KANBAN.md`](../KANBAN.md):
+Tracked in the contributor/maintainer board, [`../KANBAN.md`](../KANBAN.md):
 - definition-order independence
 - multiple types per model
 - consumer override semantics
@@ -311,7 +326,7 @@ Tracked in [`../KANBAN.md`](../KANBAN.md):
 - Relay interfaces and `GlobalID`
 - specialized scalar conversions
 - real M2M coverage
-- Layer 3 filters, orders, aggregates, fieldsets, connections, and permissions
+- filters, orders, aggregates, fieldsets, connections, and permissions
 - model-property and cached-property optimizer hints
 
 Migration guides will be split into dedicated docs so this file can stay focused on package capabilities.

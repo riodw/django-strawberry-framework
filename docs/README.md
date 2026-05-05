@@ -39,20 +39,17 @@ schema = strawberry.Schema(
 
 That is the shipped surface: `class Meta` configures the type, and the optimizer extension turns nested selections into Django ORM `select_related`, `prefetch_related`, and `only` calls. The current alpha requires relation target types to be declared before fields that reference them; definition-order independence is planned.
 
-## Three-minute path
+## What just happened?
 
-1. Define `DjangoType` classes for the Django models you want in GraphQL.
-2. Return a Django `QuerySet` from a root Strawberry resolver.
-3. Add `DjangoOptimizerExtension()` to the schema.
-4. Query nested relations; the optimizer handles joins, prefetches, projections, and strictness checks.
-5. Read [`FEATURES.md`](FEATURES.md) when you want the full capability catalog.
+- `class Meta` tells the package which Django model and fields become a Strawberry type.
+- Returning a Django `QuerySet` from the root resolver gives the optimizer something it can shape.
+- `DjangoOptimizerExtension()` walks the selected GraphQL fields once at the root and applies one ORM plan.
+- Nested relations become joins, prefetches, projections, and strictness checks without replacing your queryset.
+- [`FEATURES.md`](FEATURES.md) has the full capability catalog when you need details.
 
 ## Why this package exists
 
-- Django developers already know `Meta.model`, `fields`, `exclude`, filtersets, serializers, and queryset hooks.
-- Strawberry is the modern Python GraphQL engine, but its Django ecosystem is decorator-oriented.
-- This package keeps the Strawberry engine while making the public API feel like DRF, django-filter, and Django itself.
-- The package builds directly on Strawberry; it does not depend on `strawberry-graphql-django`.
+Django teams already think in `Meta.model`, `fields`, `exclude`, querysets, and DRF/django-filter idioms. Strawberry is the modern Python GraphQL engine, but its Django ecosystem leans on decorators. This package keeps Strawberry as the engine and the configuration shape consumers already know.
 
 ## Today and coming next
 
@@ -75,23 +72,25 @@ Coming:
 - permissions and cascade permissions
 - schema export helpers
 
+How this stacks up against the alternatives: see the [quick comparison in `FEATURES.md`](FEATURES.md#quick-comparison).
+
 ## Optimizer behavior
 
 The optimizer is opt-in and only changes root resolvers that return Django `QuerySet`s. It walks the selected GraphQL fields once, builds an ORM plan, then applies that plan without taking ownership of querysets you already shaped.
 
 Shipped optimizer value:
-- forward relations use `select_related`
-- many-side relations use `prefetch_related`
-- nested many-side selections become nested `Prefetch` objects
-- scalar selections become `only` projections with connector columns preserved
-- `category { id }` can read `category_id` from the parent row without a join
-- resolver-defined `get_queryset` filters survive relation traversal through a `Prefetch` downgrade
-- consumer-applied `select_related`, `prefetch_related`, and `Prefetch` entries are respected
-- `strictness="warn"` or `strictness="raise"` helps catch accidental N+1s in development and tests
+- **Forward relations** use `select_related`.
+- **Many-side relations** use `prefetch_related`.
+- **Nested many-side selections** become nested `Prefetch` objects.
+- **Scalar selections** become `only` projections with connector columns preserved.
+- **`category { id }`** can read `category_id` from the parent row without a join.
+- **Resolver-defined `get_queryset` filters** survive relation traversal through a `Prefetch` downgrade.
+- **Consumer-shaped querysets** keep their existing `select_related`, `prefetch_related`, and `Prefetch` entries.
+- **Strictness mode** can warn or raise when development/test queries would accidentally lazy-load.
 
 ## Status
 
-**Status: 0.0.3, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `auto` — are intended to remain stable through `0.1.0`.
+**Status: 0.0.3, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `auto` — are intended to remain stable through `0.1.0`. API names are the stability promise; correctness and edge-case behavior are still hardening.
 
 Expect the deferred `Meta` keys (`filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `interfaces`) to move from rejected to accepted as their subsystems ship. The registry will gain `Meta.primary` for multiple `DjangoType`s per model. None of those changes break code that uses today's surface.
 

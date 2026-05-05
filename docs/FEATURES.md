@@ -257,6 +257,10 @@ Planned integration goals:
 - fakeshop GraphQL schema activates only as its dependencies ship
 
 ## Enhancements over strawberry-graphql-django
+
+###  Migration notes
+For teams migrating from `strawberry-graphql-django`: keep Strawberry as the engine, but move decorator-heavy Django configuration into nested `Meta` classes. The main differences today are the DRF-shaped type surface, loud rejection of unshipped `Meta` keys, typed optimizer hints, plan caching, FK-id elision, strictness mode, and queryset diffing.
+
 The package keeps Strawberry as the GraphQL engine but improves the Django integration surface and extends optimizer behavior.
 
 API enhancements:
@@ -290,6 +294,10 @@ Django-stack enhancements:
 - future features are shaped around DRF/django-filter conventions rather than Strawberry decorator conventions
 
 ## Enhancements over graphene-django
+
+###  Migration notes
+For teams migrating from `graphene-django`: keep the familiar Django-shaped `Meta` mental model while moving to Strawberry's modern Python annotations and async-compatible resolver lifecycle. The main differences today are Strawberry enums/types, built-in ORM optimization, and an alpha query-feature surface while filters, orders, aggregates, connections, and permissions are still planned.
+
 The package keeps the Django-shaped API ideas that made graphene-django familiar while moving the GraphQL engine and type system forward.
 
 Engine and typing enhancements:
@@ -329,4 +337,4 @@ Tracked in the contributor/maintainer board, [`../KANBAN.md`](../KANBAN.md):
 - filters, orders, aggregates, fieldsets, connections, and permissions
 - model-property and cached-property optimizer hints
 
-Migration guides will be split into dedicated docs so this file can stay focused on package capabilities.
+Dedicated migration guides are tracked in [`../KANBAN.md`](../KANBAN.md#backlog-009--migration-and-adoption-guides) so this file can stay focused on package capabilities.

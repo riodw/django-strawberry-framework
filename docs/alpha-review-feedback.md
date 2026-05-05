@@ -1,97 +1,156 @@
-Additional Findings
+# Alpha review feedback
 
-A. Plan cache key collides across root fields with the same target model
+## Optimizer plan-cache key correctness follow-up
 
-Priority: P1 (likely pre-existing, but newly load-bearing under O4)
+Scope reviewed: commits `cbe1519` through `9ba0b64`, limited to changed Python files. Both issues below are in `django_strawberry_framework/optimizer/extension.py` and affect B1 plan-cache correctness.
 
-DjangoOptimizerExtension._build_cache_key returns:
-python
-return (doc_hash, relevant_vars, target_model)
+### Finding 1 — Fragment-spread directives are omitted from the directive-variable cache key
 
-Two root fields in the same operation that return the same model — e.g. { allCategories { items { id } } featured: someOtherCategoryRoot { name } } — produce the same (doc_hash, relevant_vars, target_model) tuple, so the second resolver pulls the first root's plan out of the cache and applies it to a queryset whose actual selections are different. Before O4 this was a smaller problem (depth-1 plans were mostly additive). With nested Prefetch objects now embedding child querysets and only() projections, applying the wrong plan can either over- or under-fetch.
+`_walk_directives()` collects directives on ordinary AST nodes before recursing, but when a child is a `FragmentSpreadNode` it jumps directly to the fragment definition. That misses directives attached to the spread itself, such as `...ItemBits @include(if: $show)`.
 
-The cache key also doesn't account for which root field within the operation is being optimized. A robust key would include something like the AST path of the resolved root field (e.g. info.path.key) or info.field_name, in addition to the model.
+Why this matters: `_build_cache_key()` includes only variables collected by `_collect_directive_var_names()`. If a spread-level `@skip` or `@include` variable is omitted, two executions with different values for that variable can share one cached plan even though they select different fields.
 
-Relevant code:
-•  django_strawberry_framework/optimizer/extension.py:420-452 (_build_cache_key)
+Confirmed reproduction: parsing `query Q($show: Boolean!) { allItems { ...ItemBits @include(if: $show) } } fragment ItemBits on ItemType { category { name } }` and calling `_collect_directive_var_names(operation, fragments=fragments)` currently returns `frozenset()` instead of `frozenset({"show"})`.
 
-B. _get_relation_field_name in resolvers.py is now dead code
+Fix spec:
 
-Priority: P3
-django_strawberry_framework/types/resolvers.py (37-41)
-def _get_relation_field_name(info: Any) -> str:
-    """Return the Django field name for the current resolver.
-    ...
-    """
-    return snake_case(getattr(info, "field_name", "") or "")
+- Update `_walk_directives()` so a `FragmentSpreadNode` child has its own directives processed before the walker descends into the referenced fragment definition.
+- Keep the existing behavior that directives inside the fragment definition are also collected.
+- Avoid double-count concerns by continuing to collect into a `set[str]`.
+- Add a focused unit test in `tests/optimizer/test_extension.py` where a named fragment spread carries `@include(if: $show)` or `@skip(if: $show)` and assert `_collect_directive_var_names(...) == frozenset({"show"})`.
+- Add, if practical, a cache-key-level test proving the directive variable changes `_build_cache_key()` relevant-vars when the directive sits on the spread rather than inside the fragment body.
 
-Nothing in resolvers.py (or anywhere else after the resolver-key migration) calls it. Either delete it or wire it into _runtime_path_from_info if you want to keep a fallback for missing info.path.
+### Finding 2 — Multi-operation documents collide in the plan cache
 
-C. plans.py module docstring still says "three bags" but lists 5+ fields
+`_build_cache_key()` uses `hash(loc.source.body)` when source location is present. For a GraphQL document with multiple operations, `loc.source.body` is the full document, not the selected operation. Two operations in the same document can therefore share the same document hash when they have the same root response path and target model.
 
-Priority: P3
-django_strawberry_framework/optimizer/plans.py (1-9)
-"""``OptimizationPlan`` — the shape the walker emits and the extension consumes.
+Why this matters: plan shape depends on the selected operation's AST. If `query A { allItems { name } }` warms the cache before `query B { allItems { category { name } } }`, operation B can reuse A's scalar-only plan and lose the relation optimization.
 
-The plan is a simple data class carrying three bags:
+Confirmed reproduction: parsing `query A { allItems { name } } query B { allItems { category { name } } }` and building keys for both operation definitions with the same `path=("allItems",)` and target model currently produces equal cache keys.
 
-- ``select_related``: ...
-- ``prefetch_related``: ...
-- ``only_fields``: ...
-- ``fk_id_elisions``: ...
-"""
+Fix spec:
 
-The class now also carries planned_resolver_keys and cacheable. Update "three bags" and add the new fields to the docstring listing.
+- Change the document component of `_build_cache_key()` to hash the selected operation AST, not the full source body.
+- Prefer `hash(print_ast(operation))` unconditionally for correctness. If performance becomes a concern later, introduce a small helper that slices the operation's source range rather than using the whole source body.
+- Include the selected operation name in the hashed material or rely on `print_ast(operation)`, which includes named operation text. The key requirement is that distinct operation definitions in the same document produce distinct document components when their ASTs differ.
+- Update the `_build_cache_key()` docstring and comments so they no longer claim the source-body hash represents the selected query string.
+- Add a direct test in `tests/optimizer/test_extension.py` with two named operations in one parsed document:
+  - `query A { allItems { name } }`
+  - `query B { allItems { category { name } } }`
+  Build synthetic infos for each operation with the same root path and target model, then assert the cache keys differ.
+- Consider an integration test if the direct test is not sufficient: execute the same multi-operation document once with `operation_name="A"` and once with `operation_name="B"` and assert the extension records two cache misses and two cache entries.
 
-D. Test gap: test_plan_merges_aliased_selections doesn't assert per-alias resolver keys
+## Pseudocode for regression tests
 
-Priority: P3
-tests/optimizer/test_walker.py (318-328)
-def test_plan_merges_aliased_selections():
-    """Aliased selections for the same relation produce one plan entry."""
-    plan = plan_optimizations(
-        [
-            _sel("items", selections=[_sel("id")], alias="first"),
-            _sel("items", selections=[_sel("name")], alias="second"),
-        ],
-        Category,
+### Fragment-spread directive variable collection
+
+```python
+def test_collect_directive_var_names_includes_fragment_spread_directives():
+    doc = parse(
+        "query Q($show: Boolean!) { "
+        "  allItems { ...ItemBits @include(if: $show) } "
+        "} "
+        "fragment ItemBits on ItemType { category { name } }"
     )
-    prefetch = _prefetch_entry(plan)
-    assert prefetch.prefetch_to == "items"
+    operation = first_operation_definition(doc)
+    fragments = fragment_definitions_by_name(doc)
 
-The test only verifies that the merge happened and produced a single Prefetch. It doesn't assert that planned_resolver_keys contains both items@first and items@second — which is the actual contract _response_keys exists to support. Add:
-python
-assert plan.planned_resolver_keys == ["items@first", "items@second"]
+    names = _collect_directive_var_names(operation, fragments=fragments)
 
-E. _merge_aliased_selections overwrites directives and arguments from the second occurrence
+    assert names == frozenset({"show"})
+```
 
-Priority: P3
-
-The SimpleNamespace is built from the first occurrence; directives and arguments from the second alias are dropped:
-django_strawberry_framework/optimizer/walker.py (405-412)
-else:
-    merged = SimpleNamespace(
-        name=sel.name,
-        alias=getattr(sel, "alias", None),
-        directives=getattr(sel, "directives", None) or {},
-        arguments=getattr(sel, "arguments", None) or {},
-        ...
+```python
+def test_cache_key_includes_fragment_spread_directive_variable_value():
+    doc = parse(
+        "query Q($show: Boolean!) { "
+        "  allItems { ...ItemBits @include(if: $show) } "
+        "} "
+        "fragment ItemBits on ItemType { category { name } }"
+    )
+    operation = first_operation_definition(doc)
+    fragments = fragment_definitions_by_name(doc)
+    info_false = SimpleNamespace(
+        operation=operation,
+        fragments=fragments,
+        variable_values={"show": False},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
+    info_true = SimpleNamespace(
+        operation=operation,
+        fragments=fragments,
+        variable_values={"show": True},
+        path=SimpleNamespace(key="allItems", prev=None),
     )
 
-In practice this is fine because _should_include already filtered both inputs before merge and arguments aren't consulted by the walker. But if you ever extend the walker to look at arguments (e.g. for a future filter-aware optimization), it will silently see only the first alias's arguments. Worth a comment noting the limitation.
+    assert DjangoOptimizerExtension._build_cache_key(info_false, Item) != (
+        DjangoOptimizerExtension._build_cache_key(info_true, Item)
+    )
+```
 
-F. _plan_prefetch_relation falls back to a string lookup but spec recommends always-Prefetch
+### Multi-operation document cache-key separation
 
-Priority: P3 (re-flagged from previous review)
+```python
+def test_cache_key_differs_for_named_operations_in_same_document():
+    doc = parse(
+        "query A { allItems { name } } "
+        "query B { allItems { category { name } } }"
+    )
+    operation_a = operation_definition_named(doc, "A")
+    operation_b = operation_definition_named(doc, "B")
+    info_a = SimpleNamespace(
+        operation=operation_a,
+        fragments={},
+        variable_values={},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
+    info_b = SimpleNamespace(
+        operation=operation_b,
+        fragments={},
+        variable_values={},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
 
-I noticed this hasn't been addressed yet:
-django_strawberry_framework/optimizer/walker.py (253-255)
-if child_plan.is_empty and not has_custom_get_queryset:
-    _append_unique(plan.prefetch_related, full_path)
-    return
+    assert DjangoOptimizerExtension._build_cache_key(info_a, Item) != (
+        DjangoOptimizerExtension._build_cache_key(info_b, Item)
+    )
+```
 
-Spec says: "Prefer Prefetch for uniformity with B8 diffing." Switching to always-Prefetch would cost one extra Prefetch(full_path) allocation per trivial prefetch but would simplify B8 diffing and lookup_paths consumers (no need to handle the isinstance(entry, str) branch).
+```python
+@pytest.mark.django_db
+def test_cache_separates_operation_names_in_same_document():
+    services.seed_data(1)
 
-Overall
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
 
-The fixes addressed the higher-priority items cleanly. The A finding (cache-key collision) is the most concerning — it's likely a latent bug that O4 makes worse because plans are now larger and more selection-dependent. B, C, D, E are housekeeping. F is a forward-looking recommendation, not a bug.
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    document = (
+        "query A { allItems { name } } "
+        "query B { allItems { name category { name } } }"
+    )
+
+    result_a = schema.execute_sync(document, operation_name="A")
+    result_b = schema.execute_sync(document, operation_name="B")
+
+    assert result_a.errors is None
+    assert result_b.errors is None
+    assert ext.cache_info().misses == 2
+    assert ext.cache_info().hits == 0
+    assert ext.cache_info().size == 2
+```

@@ -38,9 +38,12 @@ This board summarizes what is shipped, what has recently landed, and what remain
   - definition-order independence / `registry.lazy_ref`
   - multiple `DjangoType`s per model / `Meta.primary`
   - stable consumer override semantics
+  - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
   - `Meta.interfaces` / Relay interface wiring
   - deferred scalar conversions: `BigIntegerField`, `ArrayField`, `JSONField`, `HStoreField`
   - real M2M fixture/test coverage
+- Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
+  - model-property / cached-property optimization hints
 - The fakeshop GraphQL schema is still a placeholder; the aspirational schema block remains commented.
 
 ## Board columns
@@ -102,8 +105,7 @@ Evidence:
 
 Notes:
 
-- Some old spec text still describes O4 as pending. Treat source/tests as truth and clean docs under READY-007.
-- `tests/types/test_base.py` still has a skipped O6 placeholder that is now stale. Track that under READY-006.
+- Some old spec text still describes optimizer pieces as pending. Treat source/tests as truth and clean docs under READY-007.
 
 ### DONE-003 — Optimizer beyond slices B1-B8
 
@@ -301,8 +303,9 @@ Definition of done:
 
 - New Relay/interface spec.
 - Decide whether `Meta.interfaces` injects bases before `strawberry.type`.
-- Decide `AutoField` / `BigAutoField` / `SmallAutoField` mapping for Relay types.
+- Decide whether `AutoField` / `BigAutoField` / `SmallAutoField` mapping for Relay types is automatic, tied to `Meta.interfaces`, or controlled by a `MAP_AUTO_ID_AS_GLOBAL_ID`-style setting.
 - Implement and test `relay.Node` integration.
+- Define how Relay interfaces interact with future connection fields and any future polymorphic-interface story.
 - Move `interfaces` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when it is applied end-to-end.
 
 Files likely touched:
@@ -354,15 +357,13 @@ Status: ready
 
 Current issues:
 
-- `tests/types/test_base.py` still has a skipped placeholder named `test_optimizer_downgrades_to_prefetch_when_target_has_custom_get_queryset`, but O6 is implemented and covered in optimizer tests.
 - `tests/types/test_base.py` still has skipped placeholders for M2M and forward-reference independence; those are valid, but should be named and grouped as future work rather than stale slice leftovers.
-- `docs/alpha-review-feedback.md` contains historical findings for cache-key bugs that are already fixed in source.
+- `docs/alpha-review-feedback.md` is now the 0.0.4 consolidation checklist, not a historical cache-key bug review.
 
 Definition of done:
 
-- Remove or rewrite the stale O6 skipped test.
 - Keep valid future skips for M2M and `lazy_ref`, but make their skip reasons current and concise.
-- Decide whether `docs/alpha-review-feedback.md` remains a historical review artifact or gets an “implemented” status note.
+- Keep `docs/alpha-review-feedback.md` focused on the current 0.0.4 consolidation pass until the archive work is done.
 - Run formatting/lint.
 
 Files likely touched:
@@ -370,7 +371,7 @@ Files likely touched:
 - `tests/types/test_base.py`
 - `docs/alpha-review-feedback.md`
 
-### READY-007 — Documentation drift sweep
+### READY-007 — Documentation drift and spec archive sweep
 
 Priority: medium
 
@@ -378,26 +379,31 @@ Status: ready
 
 Current issues:
 
-- `docs/spec-django_types.md` still contains old “current state” language and historical implementation-slice text.
-- `docs/spec-optimizer_nested_prefetch_chains.md` is now mostly a shipped design record but still reads as a pending implementation spec in many places.
-- `docs/README.md` current tree still has a stale optimizer comment in the folder layout section that does not fully reflect O1-O6 and B1-B8.
-- `docs/spec-public_surface.md` contains historical 0.0.3 decisions that may no longer match the current top-level exports.
+- Existing `docs/spec-*.md` files contain a mix of shipped implementation history, stale pending-language, and deferred future work.
+- `docs/alpha-review-feedback.md` now lists the shipped behavior that should be consolidated into a concise `docs/README.md`.
+- Source, tests, docs, `START.md`, `AGENTS.md`, `CHANGELOG.md`, and `KANBAN.md` still contain references to the existing spec files.
+- `docs/TREE.md` needs a keep/delete decision once the README has a compact current package layout.
 
 Definition of done:
 
-- Preserve historical design rationale, but clearly label shipped vs historical sections.
-- Make `docs/README.md`, `docs/TREE.md`, and spec status sections agree with source.
-- Avoid changing `CHANGELOG.md` unless explicitly requested.
-- Do not remove useful design context; prefer “Status now” callouts over destructive rewrites.
+- Consolidate shipped current-state behavior from the existing specs into `docs/README.md`.
+- Keep future `docs/spec-*.md` as the design convention; only archive/delete the existing completed specs after consolidation.
+- Move remaining unimplemented spec ideas into `KANBAN.md` before deleting the source specs.
+- Rewrite source/test/doc comments so they stand alone without pointing at archived spec files.
+- Condense `CHANGELOG.md` and remove links/references to archived spec files when explicitly working on this archive pass.
+- Run a final grep for `spec-` and `TODO(spec-` before deletion.
 
 Files likely touched:
 
 - `docs/README.md`
 - `docs/TREE.md`
-- `docs/spec-django_types.md`
-- `docs/spec-optimizer_nested_prefetch_chains.md`
-- `docs/spec-public_surface.md`
 - `docs/alpha-review-feedback.md`
+- `CHANGELOG.md`
+- `START.md`
+- `AGENTS.md`
+- `KANBAN.md`
+- existing `docs/spec-*.md`
+- source/test files with spec-reference comments
 
 ### READY-008 — Version and release alignment
 
@@ -407,15 +413,15 @@ Status: ready when preparing a release
 
 Current behavior:
 
-- `pyproject.toml` version is `0.0.2`.
-- `django_strawberry_framework/__init__.py` version is `0.0.2`.
-- Specs mention “0.0.3” as shipped/in flight in places.
+- `pyproject.toml` version is `0.0.3`.
+- `django_strawberry_framework/__init__.py` version is `0.0.3`.
+- 0.0.4 work has begun with documentation/spec archive consolidation.
 
 Definition of done:
 
 - Decide the next release version.
 - Bump `pyproject.toml` and `django_strawberry_framework/__init__.py` together.
-- Confirm README/spec language matches the chosen release.
+- Confirm README/Kanban/spec language matches the chosen release.
 - Only update `CHANGELOG.md` if explicitly requested.
 
 Files likely touched:
@@ -661,6 +667,7 @@ Current behavior:
 
 - Top-level exports currently include `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `auto`, and `__version__`.
 - Future names must follow `docs/spec-public_surface.md` rules.
+- README/TREE language should use the public-surface status vocabulary: `shipped`, `partial`, `experimental`, `planned`, `in flight`, `deferred`, and `aspirational`.
 
 Definition of done for each future public symbol:
 
@@ -669,6 +676,70 @@ Definition of done for each future public symbol:
 - Docs mark it shipped.
 - API name is stable enough for alpha.
 - Top-level `__all__` and subpackage exports are updated together.
+- README/TREE status markers match the symbol's actual implementation state.
+
+### BACKLOG-007 — Stable choice enum naming override
+
+Priority: low-medium
+
+Status: planned
+
+Current behavior:
+
+- Choice fields generate Strawberry enums and cache them by `(model, field_name)`.
+- The first `DjangoType` to read a choice column wins the generated enum's GraphQL name.
+- This is deterministic for a fixed import order but still makes schema naming dependent on which type imports first.
+
+Potential scope:
+
+- Add a stable override surface such as `Meta.choice_enum_names = {"status": "ItemStatusEnum"}`.
+- Decide whether this belongs in the consumer-overrides spec or a small choice-enum follow-up spec.
+- Preserve enum reuse by `(model, field_name)` while making the published schema name explicit when consumers need it.
+
+Definition of done:
+
+- New or amended spec documents the override key and ambiguity behavior.
+- `_validate_meta` accepts the key only when the pipeline applies it end-to-end.
+- `convert_choices_to_enum()` uses the explicit name when provided.
+- Tests cover explicit naming, cache reuse, duplicate/conflicting names, and default first-reader behavior.
+
+Files likely touched:
+
+- `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/types/converters.py`
+- `django_strawberry_framework/registry.py`
+- `tests/types/test_converters.py`
+
+### BACKLOG-008 — Model-property optimization hints
+
+Priority: low-medium
+
+Status: deferred
+
+Current behavior:
+
+- The optimizer plans Django model fields and relation fields.
+- `Meta.optimizer_hints` controls relation planning only.
+- Model properties and cached properties are not part of the optimizer contract.
+
+Potential scope:
+
+- Evaluate `model_property` / `cached_model_property` style hints after the core optimizer has real-world use.
+- Decide whether property hints belong in `Meta.optimizer_hints`, a separate `Meta.property_hints`, or field customization.
+- Define how property dependencies declare the Django columns or relations they require.
+
+Definition of done:
+
+- New spec defines supported property hint syntax and interaction with `only()`, `select_related`, and `prefetch_related`.
+- Implementation lets computed fields declare required columns/relations without broadening every query.
+- Tests cover plain properties, cached properties, relation-dependent properties, and failure modes.
+
+Files likely touched:
+
+- `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/optimizer/walker.py`
+- `django_strawberry_framework/optimizer/plans.py`
+- `tests/optimizer/`
 
 ## Blocked / Deferred
 
@@ -721,13 +792,15 @@ Test placement:
 ### Sequence A — Stabilize Layer 2 before Layer 3
 
 1. READY-006 — clean stale test/doc placeholders.
-2. READY-007 — sweep spec and README drift.
+2. READY-007 — archive completed specs and consolidate README.
 3. READY-001 — definition-order independence.
 4. READY-002 — multiple types per model / `Meta.primary`.
 5. READY-003 — consumer override semantics.
 6. READY-004 — Relay / `Meta.interfaces`.
 7. READY-005 — deferred scalar conversions.
 8. BACKLOG-004 — real M2M coverage.
+9. BACKLOG-007 — stable choice enum naming override.
+10. BACKLOG-008 — model-property optimization hints.
 
 Use this sequence if the goal is to make `DjangoType` feel solid before expanding the public API.
 
@@ -747,13 +820,15 @@ Use this sequence if the goal is to demonstrate the DRF-shaped API surface quick
 ### Recommended hybrid
 
 1. READY-006 — remove stale noise first.
-2. READY-007 — bring docs into alignment so future planning starts from truth.
+2. READY-007 — archive completed specs and bring docs into alignment so future planning starts from truth.
 3. READY-001 — fix `lazy_ref`; it reduces friction across almost every future subsystem.
 4. NEXT-001 — implement `FieldSet` as the smallest Layer 3 slice.
 5. NEXT-002 and NEXT-003 — filters and orders.
 6. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants.
 7. NEXT-005 and NEXT-006 — connection field and permissions.
-8. BACKLOG-005 — activate the real fakeshop GraphQL schema.
+8. BACKLOG-007 — add stable choice enum naming if schema import-order friction appears in real use.
+9. BACKLOG-008 — add model-property optimization hints if computed fields start broadening queries.
+10. BACKLOG-005 — activate the real fakeshop GraphQL schema.
 
 ## Release readiness checklist
 

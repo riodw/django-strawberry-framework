@@ -4,11 +4,18 @@ Last refreshed: 2026-05-05
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, and specs. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
+Related docs:
+- [`README.md`](README.md) — install, run, seed example data, test, build, publish, and contributor operations.
+- [`docs/README.md`](docs/README.md) — friendly docs landing page for goals, positioning, current surface, compact trees, and status.
+- [`docs/FEATURES.md`](docs/FEATURES.md) — detailed shipped/planned/deferred capability catalog and package comparisons.
+- [`docs/TREE.md`](docs/TREE.md) — detailed architecture, package-tree, and test-layout reference.
+
 ## Snapshot
 
 ### Shipped foundation
 
 - Layer 1 shared infrastructure is in place: `conf.py`, `exceptions.py`, `registry.py`, `utils/strings.py`, `utils/typing.py`, `py.typed`.
+- The package builds directly on `strawberry-graphql` and does not depend on `strawberry-graphql-django`; that dependency boundary is intentional so this package controls its DRF-shaped API surface end-to-end.
 - `DjangoType` is usable today for model-backed Strawberry types:
   - Meta validation for `model`, `fields`, `exclude`, `name`, `description`, and `optimizer_hints`.
   - Deferred Meta keys are rejected loudly: `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `interfaces`.
@@ -34,6 +41,7 @@ This board summarizes what is shipped, what has recently landed, and what remain
   - `apps.py`
   - `management/commands/export_schema.py`
   - `utils/queryset.py`
+- Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
 - Several DjangoType contract gaps remain:
   - definition-order independence / `registry.lazy_ref`
   - multiple `DjangoType`s per model / `Meta.primary`
@@ -471,6 +479,9 @@ Definition of done:
 - Add `docs/spec-filters.md`.
 - Add `django_strawberry_framework/filters/`.
 - Add mirrored `tests/filters/`.
+- Promote `Meta.filterset_class` only when filters are applied end-to-end from `DjangoType` / connection fields.
+- Keep filter declarations composable with ordering, aggregation, permissions, and optimizer planning.
+- Expose enough introspection for one type definition to show what filter surface it supports.
 - Use fakeshop flows where practical, but package tests belong under `tests/filters/`.
 - Validate Django ORM query generation for N+1 opportunities when filters traverse relations.
 
@@ -497,8 +508,10 @@ Definition of done:
 - Add `docs/spec-orders.md`.
 - Add `django_strawberry_framework/orders/`.
 - Add mirrored `tests/orders/`.
+- Promote `Meta.orderset_class` only when ordering is applied end-to-end.
 - Support simple fields and relation paths.
 - Define interaction with filters and connection field.
+- Keep ordering declarations introspectable from the owning type/query surface.
 
 ### NEXT-004 — Aggregation subsystem
 
@@ -518,8 +531,10 @@ Definition of done:
 - Add `docs/spec-aggregates.md`.
 - Add `django_strawberry_framework/aggregates/`.
 - Add mirrored `tests/aggregates/`.
+- Promote `Meta.aggregate_class` only when aggregation is applied end-to-end.
 - Decide result type naming and grouping semantics.
 - Validate generated queryset aggregation paths.
+- Keep aggregation declarations composable with filters, ordering, and connection field behavior.
 
 ### NEXT-005 — `DjangoConnectionField`
 
@@ -558,12 +573,14 @@ Scope:
 - `apply_cascade_permissions`
 - per-field permission hooks declared via `Meta`
 - integration with optimizer `Prefetch` downgrade
+- composable permission rules that remain visible from the owning type/query surface
 
 Definition of done:
 
 - Add `docs/spec-permissions.md`.
 - Implement `django_strawberry_framework/permissions.py` or a `permissions/` package if the surface grows.
 - Add `tests/test_permissions.py`.
+- Define the `Meta` surface for per-field permissions and promote keys only when applied end-to-end.
 - Use real fakeshop permission users through `services.create_users(1)` in example tests where the system-under-test is the example project.
 - Check all permission-related ORM paths for N+1 behavior.
 
@@ -740,6 +757,35 @@ Files likely touched:
 - `django_strawberry_framework/optimizer/walker.py`
 - `django_strawberry_framework/optimizer/plans.py`
 - `tests/optimizer/`
+
+### BACKLOG-009 — Migration and adoption guides
+
+Priority: medium
+
+Status: planned
+
+Current behavior:
+
+- The package is intentionally shaped for teams coming from `django-filter`, DRF, `graphene-django`, and `strawberry-graphql-django`.
+- The feature docs explain the positioning, but there are no dedicated migration guides yet.
+
+Potential scope:
+
+- Add a `graphene-django` migration guide covering `DjangoObjectType` to `DjangoType`, enum/field conversion differences, query optimizations, and Relay caveats.
+- Add a `strawberry-graphql-django` migration guide covering decorator-to-`Meta` translation, optimizer differences, `get_queryset`, and optimizer hints.
+- Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
+
+Definition of done:
+
+- New docs are added for the two major migration paths.
+- README and `FEATURES.md` link to the migration docs.
+- Guides distinguish shipped migration steps from planned Layer 3 migration targets.
+
+Files likely touched:
+
+- future migration docs under `docs/`
+- `docs/README.md`
+- `docs/FEATURES.md`
 
 ## Blocked / Deferred
 

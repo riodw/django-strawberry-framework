@@ -1,6 +1,14 @@
 # Reference Trees
 
-Side-by-side directory listings of the two upstream Django + GraphQL integrations this package draws from. Captured for reference while shaping `django-strawberry-framework`'s own subpackage layout (see `docs/README.md` "Package architecture"). Filters applied: `__pycache__/` directories, package-internal `tests/` directories, `conftest.py`, and `*.pyc` files are excluded so both trees show only the library logic surface (the strawberry-django source checkout already keeps tests outside the package directory; graphene-django ships its tests inside the installed package, so they're filtered here for comparability).
+This file is the detailed layout reference. It exists to preserve the package/test tree rationale, upstream layout comparisons, and per-file responsibilities without turning [`README.md`](README.md) into a second architecture document.
+
+Related docs:
+- [`../README.md`](../README.md) — install, run, seed example data, test, build, publish, and contributor operations.
+- [`README.md`](README.md) — friendly docs landing page for goals, positioning, current surface, and compact current/target trees.
+- [`FEATURES.md`](FEATURES.md) — detailed package capability catalog.
+- [`../KANBAN.md`](../KANBAN.md) — active shipped/planned/deferred project board.
+
+The upstream trees are captured for reference while shaping `django-strawberry-framework`'s own subpackage layout. Filters applied: `__pycache__/` directories, package-internal `tests/` directories, `conftest.py`, and `*.pyc` files are excluded so both trees show only the library logic surface (the strawberry-django source checkout already keeps tests outside the package directory; graphene-django ships its tests inside the installed package, so they're filtered here for comparability).
 
 ## graphene_django
 
@@ -187,27 +195,27 @@ The Layer 1 + Layer 2 subpackage migration is complete: `types/`, `optimizer/`, 
 
 ```text
 django_strawberry_framework/
-├── __init__.py              # re-exports DjangoType, DjangoOptimizerExtension, auto
+├── __init__.py              # public-API re-exports (DjangoType, DjangoOptimizerExtension, OptimizerHint, auto)
 ├── py.typed
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
-├── registry.py              # model→type registry
+├── registry.py              # model→type registry (+ iter_types() public iterator)
 ├── types/                   # DjangoType subsystem (Layer 2) — shipped
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
 │   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
-│   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers
+│   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers, B3 N+1 detection
 ├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O6 + B1–B8 shipped
 │   ├── __init__.py          # re-exports DjangoOptimizerExtension
-│   ├── extension.py         # DjangoOptimizerExtension (root-gated resolve hook, O3, B1/B2/B3/B5)
-│   ├── walker.py            # selection-tree walker (plan_optimizations, O2/O5/B2/B4/B7)
+│   ├── extension.py         # DjangoOptimizerExtension (O3 hook, B1 cache, B2 elision stash, B3 strictness, B5 context stash)
+│   ├── walker.py            # selection-tree walker (O2, O5 only fields, B2 FK-id elision, B4 hints, B7 cached field map)
 │   ├── plans.py             # OptimizationPlan data structure
 │   ├── hints.py             # OptimizerHint typed wrapper (B4)
 │   └── field_meta.py        # FieldMeta precomputed field metadata (B7)
 └── utils/                   # cross-cutting helpers
     ├── __init__.py
-    ├── strings.py           # snake_case / PascalCase conversion
-    └── typing.py            # type unwrapping (unwrap_return_type)
+    ├── strings.py           # snake_case / camelCase / PascalCase conversion
+    └── typing.py            # type unwrapping (list[T], of_type, Optional[T])
 ```
 
 ## django_strawberry_framework (target layout)
@@ -234,7 +242,9 @@ django_strawberry_framework/
 │   ├── __init__.py
 │   ├── extension.py         # DjangoOptimizerExtension (Strawberry SchemaExtension)
 │   ├── walker.py            # selection-tree walker (plan_optimizations)
-│   └── plans.py             # OptimizationPlan, Prefetch chain helpers
+│   ├── plans.py             # OptimizationPlan, Prefetch chain helpers
+│   ├── hints.py             # OptimizerHint typed wrapper
+│   └── field_meta.py        # FieldMeta precomputed field metadata
 ├── filters/                 # Filtering subsystem (Layer 3)
 │   ├── __init__.py
 │   ├── base.py              # individual Filter classes
@@ -285,11 +295,13 @@ tests/                       # Package-internal tests (current state)
 │   ├── __init__.py
 │   ├── test_extension.py    # ← DjangoOptimizerExtension (root-gated resolve hook, O3)
 │   ├── test_walker.py       # ← O2 selection-tree walker
-│   └── test_plans.py        # ← OptimizationPlan data structure
+│   ├── test_plans.py        # ← OptimizationPlan data structure
+│   ├── test_hints.py        # ← OptimizerHint typed wrapper
+│   └── test_field_meta.py   # ← FieldMeta precomputed field metadata
 └── utils/                   # mirrors django_strawberry_framework/utils/
     ├── __init__.py
-    ├── test_strings.py      # ← snake_case / pascal_case
-    └── test_typing.py       # ← unwrap_return_type
+    ├── test_strings.py      # ← snake_case / camelCase / PascalCase conversion
+    └── test_typing.py       # ← type unwrapping
 
 examples/fakeshop/tests/     # Example-project tests, NO /graphql HTTP
 ├── test_admin.py            # admin actions via django.test.Client on /admin/...
@@ -324,8 +336,10 @@ tests/                       # Package-internal tests (target as Layer-3 subsyst
 │   └── test_resolvers.py
 ├── optimizer/
 │   ├── test_extension.py
-│   ├── test_walker.py       # spec-optimizer.md O2 selection-tree walker
-│   └── test_plans.py        # OptimizationPlan / Prefetch chain helpers
+│   ├── test_walker.py       # selection-tree walker
+│   ├── test_plans.py        # OptimizationPlan / Prefetch chain helpers
+│   ├── test_hints.py        # OptimizerHint typed wrapper
+│   └── test_field_meta.py   # FieldMeta precomputed field metadata
 ├── filters/
 │   ├── test_base.py
 │   ├── test_sets.py

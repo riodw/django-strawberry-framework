@@ -13,13 +13,22 @@
 
 A DRF-inspired Django integration framework for [Strawberry GraphQL](https://github.com/strawberry-graphql/strawberry) — `Meta`-class-driven type generation and N+1 optimization today, with filtering, ordering, aggregation, and permissions on the roadmap.
 
-> **Status: pre-alpha.** The shipped surface is `DjangoType` (model-to-type generation with scalar, relation, and choice-enum conversion) and the N+1 optimizer (cardinality-aware relation resolvers, selection-tree walker, root-gated resolve hook with async parity). The full Layer-3 surface (FilterSet, OrderSet, AggregateSet, permissions, connection fields) is designed but not yet implemented. The public API is not stable and is expected to change rapidly until `0.1.0`. See [`docs/README.md`](docs/README.md) for the package's goals and positioning vs. `graphene-django` and `strawberry-graphql-django`.
+> **Status: pre-alpha.** The shipped surface is `DjangoType` plus the N+1 optimizer. The full Layer-3 surface (FilterSet, OrderSet, AggregateSet, permissions, connection fields) is planned but not yet implemented. The public API is expected to change until `0.1.0`.
 
 #### This package takes inspiration from:
 
 - <https://github.com/riodw/django-graphene-filters>
 - <https://github.com/encode/django-rest-framework>
 - <https://github.com/strawberry-graphql/strawberry-graphql-django>
+
+## Project documentation
+
+This root README is the operational entry point: install, run, seed example data, test, build, and publish.
+
+- [`docs/README.md`](docs/README.md) — friendly package orientation, goals, current surface, status, and compact current/target trees.
+- [`docs/FEATURES.md`](docs/FEATURES.md) — detailed shipped/planned/deferred capability catalog and comparisons with `strawberry-graphql-django` and `graphene-django`.
+- [`docs/TREE.md`](docs/TREE.md) — detailed layout reference for upstream trees, this package's source tree, target architecture, and test placement.
+- [`KANBAN.md`](KANBAN.md) — project board for shipped work, planned work, blockers, and release-readiness notes.
 
 ## Installation
 

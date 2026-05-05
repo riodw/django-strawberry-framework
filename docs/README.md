@@ -78,7 +78,7 @@ django_strawberry_framework/
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
 │   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
 │   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers, B3 N+1 detection
-├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O3/O5–O6 + B1–B7 shipped
+├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O6 + B1–B8 shipped
 │   ├── __init__.py          # re-exports DjangoOptimizerExtension
 │   ├── extension.py         # DjangoOptimizerExtension (O3 hook, B1 cache, B2 elision stash, B3 strictness, B5 context stash)
 │   ├── walker.py            # selection-tree walker (O2, O5 only fields, B2 FK-id elision, B4 hints, B7 cached field map)

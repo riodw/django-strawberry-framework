@@ -1,156 +1,170 @@
 # Alpha review feedback
 
-## Optimizer plan-cache key correctness follow-up
+## 0.0.3 release polish
+Purpose: capture the small, low-risk finishing work completed before bundling the current DjangoType + optimizer milestone as `0.0.3`. Larger feature work moves to `0.0.4` instead of expanding this release.
+Status: completed for 0.0.3 release prep on 2026-05-05; formatting, lint, tests, and build passed.
 
-Scope reviewed: commits `cbe1519` through `9ba0b64`, limited to changed Python files. Both issues below are in `django_strawberry_framework/optimizer/extension.py` and affect B1 plan-cache correctness.
+## Completed before 0.0.3
+### 1. Bump version metadata everywhere
+Scope:
 
-### Finding 1 — Fragment-spread directives are omitted from the directive-variable cache key
+- `pyproject.toml`
+- `django_strawberry_framework/__init__.py`
+- `tests/base/test_init.py`
+- `uv.lock`
 
-`_walk_directives()` collects directives on ordinary AST nodes before recursing, but when a child is a `FragmentSpreadNode` it jumps directly to the fragment definition. That misses directives attached to the spread itself, such as `...ItemBits @include(if: $show)`.
+Starting state:
 
-Why this matters: `_build_cache_key()` includes only variables collected by `_collect_directive_var_names()`. If a spread-level `@skip` or `@include` variable is omitted, two executions with different values for that variable can share one cached plan even though they select different fields.
+- Package version was still `0.0.2`.
+- The version test still expected `0.0.2`.
+- The lockfile still recorded the editable package as `0.0.2`.
 
-Confirmed reproduction: parsing `query Q($show: Boolean!) { allItems { ...ItemBits @include(if: $show) } } fragment ItemBits on ItemType { category { name } }` and calling `_collect_directive_var_names(operation, fragments=fragments)` currently returns `frozenset()` instead of `frozenset({"show"})`.
+Completed state:
 
-Fix spec:
+- `pyproject.toml` uses `version = "0.0.3"`.
+- `django_strawberry_framework/__init__.py` uses `__version__ = "0.0.3"`.
+- `tests/base/test_init.py` expects `0.0.3`.
+- `uv lock` has been run so `uv.lock` reflects `0.0.3`.
+- Version values match exactly.
 
-- Update `_walk_directives()` so a `FragmentSpreadNode` child has its own directives processed before the walker descends into the referenced fragment definition.
-- Keep the existing behavior that directives inside the fragment definition are also collected.
-- Avoid double-count concerns by continuing to collect into a `set[str]`.
-- Add a focused unit test in `tests/optimizer/test_extension.py` where a named fragment spread carries `@include(if: $show)` or `@skip(if: $show)` and assert `_collect_directive_var_names(...) == frozenset({"show"})`.
-- Add, if practical, a cache-key-level test proving the directive variable changes `_build_cache_key()` relevant-vars when the directive sits on the spread rather than inside the fragment body.
+### 2. Promote changelog entries into a 0.0.3 release section
+Scope:
 
-### Finding 2 — Multi-operation documents collide in the plan cache
+- `CHANGELOG.md`
 
-`_build_cache_key()` uses `hash(loc.source.body)` when source location is present. For a GraphQL document with multiple operations, `loc.source.body` is the full document, not the selected operation. Two operations in the same document can therefore share the same document hash when they have the same root response path and target model.
+Starting state:
 
-Why this matters: plan shape depends on the selected operation's AST. If `query A { allItems { name } }` warms the cache before `query B { allItems { category { name } } }`, operation B can reuse A's scalar-only plan and lose the relation optimization.
+- `[Unreleased]` included only part of the optimizer work that had landed.
+- It mentioned B1, B3, B4, B5, B7, and O5, but did not clearly summarize the full 0.0.3 milestone.
 
-Confirmed reproduction: parsing `query A { allItems { name } } query B { allItems { category { name } } }` and building keys for both operation definitions with the same `path=("allItems",)` and target model currently produces equal cache keys.
+Completed state:
 
-Fix spec:
+- The optimizer-related `[Unreleased]` material is now a dated `[0.0.3]` section.
+- The section summarizes the Layer 2 optimizer milestone accurately.
+- `[Unreleased]` remains present and reserved for future changes.
+- No Layer 3 features are described as shipped.
 
-- Change the document component of `_build_cache_key()` to hash the selected operation AST, not the full source body.
-- Prefer `hash(print_ast(operation))` unconditionally for correctness. If performance becomes a concern later, introduce a small helper that slices the operation's source range rather than using the whole source body.
-- Include the selected operation name in the hashed material or rely on `print_ast(operation)`, which includes named operation text. The key requirement is that distinct operation definitions in the same document produce distinct document components when their ASTs differ.
-- Update the `_build_cache_key()` docstring and comments so they no longer claim the source-body hash represents the selected query string.
-- Add a direct test in `tests/optimizer/test_extension.py` with two named operations in one parsed document:
-  - `query A { allItems { name } }`
-  - `query B { allItems { category { name } } }`
-  Build synthetic infos for each operation with the same root path and target model, then assert the cache keys differ.
-- Consider an integration test if the direct test is not sufficient: execute the same multi-operation document once with `operation_name="A"` and once with `operation_name="B"` and assert the extension records two cache misses and two cache entries.
+Items represented:
 
-## Pseudocode for regression tests
+- O3 root-gated optimizer hook.
+- O4 nested prefetch chains and same-query recursion.
+- O5 `only()` projection.
+- O6 custom `get_queryset` downgrade to `Prefetch`.
+- B1 AST-cached plans.
+- B2 FK-id elision.
+- B3 N+1 detection strictness.
+- B4 `Meta.optimizer_hints`.
+- B5 context plan introspection.
+- B6 schema-build-time audit.
+- B7 precomputed field metadata.
+- B8 queryset diffing.
+- Fragment-spread directive cache-key fix.
+- Multi-operation document cache-key fix.
+- `OptimizerHint` top-level export.
+- `registry.iter_types()` public iterator.
 
-### Fragment-spread directive variable collection
+### 3. Fix stale public-surface spec text
+Scope:
 
-```python
-def test_collect_directive_var_names_includes_fragment_spread_directives():
-    doc = parse(
-        "query Q($show: Boolean!) { "
-        "  allItems { ...ItemBits @include(if: $show) } "
-        "} "
-        "fragment ItemBits on ItemType { category { name } }"
-    )
-    operation = first_operation_definition(doc)
-    fragments = fragment_definitions_by_name(doc)
+- `docs/spec-public_surface.md`
 
-    names = _collect_directive_var_names(operation, fragments=fragments)
+Starting state:
 
-    assert names == frozenset({"show"})
-```
+- The spec still said the 0.0.3 decision was to drop `DjangoOptimizerExtension` from top-level exports because the optimizer was not effective end-to-end.
+- That was no longer true: the optimizer is shipped, tested, and exported.
 
-```python
-def test_cache_key_includes_fragment_spread_directive_variable_value():
-    doc = parse(
-        "query Q($show: Boolean!) { "
-        "  allItems { ...ItemBits @include(if: $show) } "
-        "} "
-        "fragment ItemBits on ItemType { category { name } }"
-    )
-    operation = first_operation_definition(doc)
-    fragments = fragment_definitions_by_name(doc)
-    info_false = SimpleNamespace(
-        operation=operation,
-        fragments=fragments,
-        variable_values={"show": False},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
-    info_true = SimpleNamespace(
-        operation=operation,
-        fragments=fragments,
-        variable_values={"show": True},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
+Completed state:
 
-    assert DjangoOptimizerExtension._build_cache_key(info_false, Item) != (
-        DjangoOptimizerExtension._build_cache_key(info_true, Item)
-    )
-```
+- `docs/spec-public_surface.md` no longer contradicts `django_strawberry_framework/__init__.py`.
+- `DjangoOptimizerExtension` remains top-level-exported.
+- `OptimizerHint` is top-level-exported.
+- The optimizer is marked shipped because O1-O6 and B1-B8 are implemented and covered.
+- The top-level re-export rule remains intact; only the stale 0.0.3 application of the rule changed.
 
-### Multi-operation document cache-key separation
+### 4. Fix stale optimizer status in docs README tree
+Scope:
 
-```python
-def test_cache_key_differs_for_named_operations_in_same_document():
-    doc = parse(
-        "query A { allItems { name } } "
-        "query B { allItems { category { name } } }"
-    )
-    operation_a = operation_definition_named(doc, "A")
-    operation_b = operation_definition_named(doc, "B")
-    info_a = SimpleNamespace(
-        operation=operation_a,
-        fragments={},
-        variable_values={},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
-    info_b = SimpleNamespace(
-        operation=operation_b,
-        fragments={},
-        variable_values={},
-        path=SimpleNamespace(key="allItems", prev=None),
-    )
+- `docs/README.md`
 
-    assert DjangoOptimizerExtension._build_cache_key(info_a, Item) != (
-        DjangoOptimizerExtension._build_cache_key(info_b, Item)
-    )
-```
+Starting state:
 
-```python
-@pytest.mark.django_db
-def test_cache_separates_operation_names_in_same_document():
-    services.seed_data(1)
+- The folder-layout tree still described `optimizer/` as `O1–O3/O5–O6 + B1–B7 shipped`.
+- Current source/tests supported `O1–O6 + B1–B8 shipped`.
 
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
+Completed state:
 
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
+- The optimizer tree comment now says `O1–O6 + B1–B8 shipped`.
+- `docs/README.md` status language matches `docs/spec-optimizer.md`, `docs/spec-optimizer_beyond.md`, and source.
 
-    ext = DjangoOptimizerExtension()
+### 5. Remove stale O6 skipped placeholder
+Scope:
 
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
+- `tests/types/test_base.py`
 
-    schema = strawberry.Schema(query=Query, extensions=[ext])
-    document = (
-        "query A { allItems { name } } "
-        "query B { allItems { name category { name } } }"
-    )
+Starting state:
 
-    result_a = schema.execute_sync(document, operation_name="A")
-    result_b = schema.execute_sync(document, operation_name="B")
+- `test_optimizer_downgrades_to_prefetch_when_target_has_custom_get_queryset` was still skipped with the reason `Slice 6: optimizer downgrade-to-Prefetch rule pending`.
+- O6 was implemented and covered in `tests/optimizer/test_extension.py`.
 
-    assert result_a.errors is None
-    assert result_b.errors is None
-    assert ext.cache_info().misses == 2
-    assert ext.cache_info().hits == 0
-    assert ext.cache_info().size == 2
-```
+Completed state:
+
+- The stale skipped placeholder was deleted.
+- The real O6 tests remain in `tests/optimizer/`, the correct package-test location for optimizer behavior.
+- No skipped test claims O6 is pending.
+- Valid future skips for M2M and definition-order independence remain, with current reasons.
+
+### 6. Keep historical cache-key review notes only if marked implemented
+Scope:
+
+- `docs/alpha-review-feedback.md`
+
+Completed state:
+
+- This file is focused on the current 0.0.3 fine-touches checklist.
+- It does not imply that fixed cache-key bugs are still open.
+- If old cache-key review content is restored as history later, it should include a status note that both issues are implemented and retained only as regression-test rationale.
+
+### 7. Run release validation
+Scope:
+
+- local validation commands
+
+Completed commands:
+
+- `uv run ruff format .`
+- `uv run ruff check --fix .`
+- `uv run pytest`
+- `rm -rf dist/`
+- `uv build`
+
+Completed state:
+
+- Formatting passes.
+- Lint passes.
+- Full test suite passes with 100% package coverage.
+- Build succeeds and produces fresh 0.0.3 artifacts.
+
+## Defer to 0.0.4
+These are real backlog items, but they should not block the 0.0.3 release:
+
+- definition-order independence / `registry.lazy_ref`
+- multiple `DjangoType`s per model / `Meta.primary`
+- consumer override semantics
+- Relay / `Meta.interfaces`
+- deferred scalar conversions (`BigIntegerField`, `ArrayField`, `JSONField`, `HStoreField`)
+- real M2M fixture/test coverage
+- filters
+- orders
+- aggregates
+- `FieldSet`
+- `DjangoConnectionField`
+- permissions
+- fakeshop schema activation
+
+## Release framing
+Recommended positioning for `0.0.3`:
+
+- `0.0.3` is the “DjangoType + optimizer foundation is real” release.
+- It ships the completed Layer 2 optimizer milestone cleanly.
+- It does not absorb new Layer 3 feature work.
+- `0.0.4` begins the next product-surface phase after this release is tagged.

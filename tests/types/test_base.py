@@ -9,11 +9,10 @@ Slice scope:
   unregistered-target rejection); ``_build_annotations`` dispatch on
   ``field.is_relation`` rather than filtering relations out.
 
-Slice 6's optimizer downgrade-to-``Prefetch`` end-to-end test stays
-``@pytest.mark.skip`` pending the optimizer rebuild, but the
-``has_custom_get_queryset`` sentinel and override-detection have shipped
-and are tested directly. The full forward-reference / definition-order
-independence path remains ``@pytest.mark.skip``.
+The ``has_custom_get_queryset`` sentinel and override-detection have
+shipped and are tested directly. Optimizer downgrade-to-``Prefetch``
+coverage belongs in ``tests/optimizer/``; the full forward-reference /
+definition-order independence path remains ``@pytest.mark.skip``.
 
 Where Slice 2 tests originally used ``fields = \"__all__\"`` on ``Category``,
 they now either declare related types up front (so the registry resolves
@@ -25,11 +24,10 @@ captures the scalar-only field list used in those updated tests.
 import datetime
 
 import pytest
-import strawberry
 from django.db import models
 from fakeshop.products.models import Category, Entry, Item, Property
 
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoType
+from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
@@ -571,47 +569,3 @@ def test_relation_m2m_returns_list():
 )
 def test_forward_reference_resolves_when_target_defined_later():
     pass
-
-
-# ---------------------------------------------------------------------------
-# Slice 6 — optimizer downgrade rule (placeholder)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skip(reason="Slice 6: optimizer downgrade-to-Prefetch rule pending")
-def test_optimizer_downgrades_to_prefetch_when_target_has_custom_get_queryset(
-    django_assert_num_queries,
-):
-    """End-to-end: hidden private items must not leak through a select_related join."""
-    from fakeshop.products import services
-
-    services.seed_data(1)
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-
-        @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
-            return queryset.filter(is_private=False)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            return list(Category.objects.all())
-
-    schema = strawberry.Schema(
-        query=Query,
-        extensions=[DjangoOptimizerExtension()],
-    )
-
-    with django_assert_num_queries(2):
-        result = schema.execute_sync("{ allCategories { id name items { id name } } }")
-        assert result.errors is None

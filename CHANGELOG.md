@@ -7,13 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-05-05
+
 ### Added
-- **B1 — AST-cached plans.** Plan cache keyed on `(document_hash, directive_vars, target_model)` with directive-variable extraction (including named fragment resolution), bounded-size dict, and public `cache_info()` method.
-- **B5 — Plan introspection.** `OptimizationPlan` stashed on `info.context.dst_optimizer_plan` after every optimization pass.
-- **B7 — Precomputed field metadata.** `FieldMeta` frozen dataclass built at `DjangoType` class-creation time; walker reads cached map instead of `_meta.get_fields()` per request.
-- **B3 — N+1 detection.** `DjangoOptimizerExtension(strictness="warn"|"raise")` with alias-safe field-name comparison and lazy-load check.
+- **Layer 2 optimizer milestone.** `DjangoOptimizerExtension` is now effective end-to-end with the root-gated O3 optimizer hook, O4 nested prefetch chains and same-query recursion, O5 `only()` projection, and O6 custom `get_queryset` downgrade to `Prefetch`.
+- **B1 — AST-cached plans.** Plan cache keyed on selected operation AST, directive variables, model, and root runtime path, with fragment-spread directive coverage, multi-operation document correctness, bounded-size storage, and public `cache_info()`.
+- **B2 — FK-id elision.** Forward foreign-key relations selected only for `id` can be satisfied from the local `*_id` column when safe.
+- **B3 — N+1 detection.** `DjangoOptimizerExtension(strictness="warn"|"raise")` with alias-safe field-name comparison and lazy-load checks.
 - **B4 — `Meta.optimizer_hints`.** `OptimizerHint` typed wrapper (`SKIP`, `.select_related()`, `.prefetch_related()`, `.prefetch(obj)`) with build-time validation.
-- **O5 — `only()` projection.** Optimizer plans now collect selected scalar columns, include FK columns for `select_related` traversals, and apply `QuerySet.only()` before relation optimization.
+- **B5 — Plan introspection.** `OptimizationPlan` stashed on `info.context.dst_optimizer_plan` after every optimization pass.
+- **B6 — Schema-build-time audit.** Optimizer validation walks registered Django types and reports invalid hints before request execution.
+- **B7 — Precomputed field metadata.** `FieldMeta` frozen dataclass built at `DjangoType` class-creation time; walker reads cached maps instead of `_meta.get_fields()` per request.
+- **B8 — Queryset diffing.** Consumer-applied `select_related`, `prefetch_related`, and `Prefetch` lookups are reconciled so optimizer plans do not duplicate them.
 - `OptimizerHint` re-exported from top-level `__init__.py`.
 - `registry.iter_types()` public iterator.
 - Resolver signature changed to `(root, info: Info)` for B3 N+1 detection.

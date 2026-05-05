@@ -2,24 +2,25 @@
 
 ## Problem statement
 
-The package's public surface — what's re-exported from `django_strawberry_framework/__init__.py`, what `docs/README.md` describes as "shipped", what tests pin as the consumer contract — has drifted ahead of the actual implementation. The alpha review specifically called this out (recommendations #1, #2, #7, and #8): the README reads like a target-architecture document, the optimizer is exported at the top level despite not being effective end-to-end, and several documented features are described in stronger terms than the code currently supports.
+The package's public surface — what's re-exported from `django_strawberry_framework/__init__.py`, what `docs/README.md` describes as "shipped", what tests pin as the consumer contract — must stay aligned with the actual implementation. The original alpha review called this out while the optimizer was still incomplete. As of 0.0.3, the Layer 2 optimizer is effective end-to-end, so this spec records the promotion discipline and the current exported surface.
 
-The fix is not more documentation. It is stricter documentation discipline. This spec defines the rules that govern what gets promoted to the public surface and how the surface is described. With those rules in place, the README rewrite, the optimizer-visibility change, and any future "is X shipped?" judgment call all reduce to applying the rules.
+The fix is not more documentation. It is stricter documentation discipline. This spec defines the rules that govern what gets promoted to the public surface and how the surface is described. With those rules in place, README updates, optimizer-visibility decisions, and any future "is X shipped?" judgment call all reduce to applying the rules.
 
 ## Current state
 
-0.0.2 public surface (per `django_strawberry_framework/__init__.py`):
+0.0.3 public surface (per `django_strawberry_framework/__init__.py`):
 
 - `DjangoType` — Layer 2 type system, shipped.
-- `DjangoOptimizerExtension` — Layer 2 optimizer, per-resolver hooks shipped, end-to-end not effective (graphql-core's wrapper types break the per-resolver type tracing; the rebuild is in flight as `spec-optimizer.md` slices O2–O6).
+- `DjangoOptimizerExtension` — Layer 2 optimizer, shipped end-to-end through O1-O6 and B1-B8.
+- `OptimizerHint` — typed optimizer-hint wrapper, shipped as part of B4.
 - `auto` — re-exported from `strawberry`.
 - `__version__`.
 
-0.0.2 README structure (`docs/README.md`):
+Current README structure (`docs/README.md`):
 
 - Goal, vs comparisons, full target architecture (subsystems, folder layout, tests-mirror), design-doc list, status.
 
-The mismatch: the README's "Folder layout" tree shows subpackages that don't exist on disk (`filters/`, `orders/`, `aggregates/`, `management/`, plus single-file modules `apps.py`, `fieldset.py`, `permissions.py`, `connection.py`); the public-API list mentions consumer-facing names (`FilterSet`, `OrderSet`, `AggregateSet`, `FieldSet`, `DjangoConnectionField`, `apply_cascade_permissions`) that don't exist yet. The optimizer is described as a foundation feature in stronger terms than the code currently supports.
+The remaining mismatch risk is Layer 3: the README's target layout includes subpackages that do not exist on disk yet (`filters/`, `orders/`, `aggregates/`, `management/`, plus single-file modules `apps.py`, `fieldset.py`, `permissions.py`, `connection.py`). Those names stay planned until their implementations, tests, and docs land.
 
 ## Goal
 
@@ -49,21 +50,26 @@ Names that fail any of these stay reachable via their dotted submodule path (`fr
 
 #### Decision for 0.0.3
 
-`DjangoOptimizerExtension` is dropped from the top-level `__init__.py` re-exports. The per-resolver hook shipped, but the type-tracing limitation through graphql-core's wrappers means the optimizer is not effective end-to-end (see `docs/spec-optimizer.md` "Current state" and the three currently-skipped optimizer tests in `tests/optimizer/test_extension.py`). It returns to the top-level re-exports when O3 (the `on_executing_start` hook) lands and the three skipped tests unskip and pass — that promotion is part of the O3 slice's definition of done.
+`DjangoOptimizerExtension` remains top-level-exported because the optimizer is now effective end-to-end. O1-O6 and B1-B8 are implemented and covered, including the O3 root-gated resolve hook, nested prefetch chains, projection, custom `get_queryset` downgrade to `Prefetch`, optimizer hints, plan introspection, schema audit, field metadata caching, and queryset diffing.
 
-The class stays importable as:
+```
+from django_strawberry_framework import DjangoOptimizerExtension, OptimizerHint
+```
+
+The subpackage paths also remain supported:
 
 ```
 from django_strawberry_framework.optimizer import DjangoOptimizerExtension
+from django_strawberry_framework.optimizer.hints import OptimizerHint
 ```
 
-Tests already use this dotted path. Power users who want to opt into the alpha optimizer despite the limitation can still reach it; consumers who don't go reading subpackage docs won't accidentally pick up an ineffective import.
-
-The `__all__` after 0.0.3 is therefore:
+The `__all__` for 0.0.3 is therefore:
 
 ```
 __all__ = (
+    "DjangoOptimizerExtension",
     "DjangoType",
+    "OptimizerHint",
     "__version__",
     "auto",
 )
@@ -139,5 +145,5 @@ None blocking 0.0.3.
 - `docs/alpha-review-feedback.md` — recommendations #1 (silent acceptance), #2 (README aspirational), #7 (docs gap), #8 (alpha guarantees).
 - `docs/spec-django_type_contract.md` — companion spec for the DjangoType-side contract.
 - `docs/spec-optimizer.md` — carries the local visibility-status amendment that this spec governs.
-- `docs/README.md` — the surface this spec governs. Will be rewritten to follow these rules in the same release that ships this spec.
+- `docs/README.md` — the surface this spec governs.
 - `django_strawberry_framework/__init__.py` — the canonical top-level surface.

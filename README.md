@@ -29,6 +29,7 @@ This root README is the operational entry point: install, run, seed example data
 - [`docs/FEATURES.md`](docs/FEATURES.md) — detailed shipped/planned/deferred capability catalog, quick comparison table, and migration notes.
 - [`docs/TREE.md`](docs/TREE.md) — detailed layout reference for upstream trees, this package's source tree, target architecture, and test placement.
 - [`KANBAN.md`](KANBAN.md) — contributor/maintainer board for shipped work, planned work, blockers, and release-readiness notes.
+- [`scripts/`](scripts/) — review and tooling helpers used during release review; see [`docs/review/REVIEW.md`](docs/review/REVIEW.md).
 
 ## Quick start
 

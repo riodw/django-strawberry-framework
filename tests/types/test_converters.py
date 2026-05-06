@@ -228,3 +228,24 @@ def test_convert_choices_to_enum_raises_on_empty_choices(choice_fixture_model):
             convert_choices_to_enum(field, "FixtureType")
     finally:
         field.choices = original
+
+
+def test_convert_choices_to_enum_raises_on_sanitized_member_collision(choice_fixture_model):
+    """Two choice values that sanitize to the same Python identifier raise.
+
+    Pins the Medium fix from ``rev-types__converters.md``: without the
+    collision check, the dict comprehension silently kept the last
+    value, leaving the GraphQL enum missing one of the choices and
+    producing a runtime coercion error long after schema build.
+    """
+    field = choice_fixture_model._meta.get_field("status")
+    original = field.choices
+    # ``a-b`` and ``a_b`` both sanitize to ``a_b``.
+    field.choices = (("a-b", "Hyphen"), ("a_b", "Underscore"))
+    registry.clear()
+    try:
+        with pytest.raises(ConfigurationError, match="sanitize to the same enum member"):
+            convert_choices_to_enum(field, "FixtureType")
+    finally:
+        field.choices = original
+        registry.clear()

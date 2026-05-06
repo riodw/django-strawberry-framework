@@ -28,7 +28,6 @@ type-tracing through graphql-core wrappers.
 """
 
 import inspect
-import logging
 from contextvars import ContextVar
 from typing import Any, NamedTuple
 
@@ -42,6 +41,7 @@ from graphql.language.printer import print_ast
 from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
+from . import logger
 from .hints import OptimizerHint
 from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
 from .walker import plan_optimizations, plan_relation
@@ -53,8 +53,13 @@ def _stash_on_context(context: Any, key: str, value: Any) -> None:
     """Stash ``value`` on ``context`` under ``key``.
 
     Strawberry's default context is an object, so ``setattr`` is the
-    primary path. Consumers sometimes pass a plain ``dict`` as context,
-    so we fall back to ``__setitem__`` when ``setattr`` raises.
+    primary path.  Consumers sometimes pass a plain ``dict`` as context,
+    so we fall back to ``__setitem__`` when ``setattr`` raises.  Frozen
+    objects (``MappingProxyType``, frozen dataclasses, ``pydantic``
+    models with ``frozen=True``) raise ``TypeError`` on assignment;
+    those stashes are silently skipped — the optimizer's introspection
+    surface is a nice-to-have, not a correctness invariant, so a
+    read-only context must not abort the resolver chain.
     When ``context`` is ``None`` (Strawberry's default when no
     ``context_value`` is provided), the stash is silently skipped.
 
@@ -64,11 +69,13 @@ def _stash_on_context(context: Any, key: str, value: Any) -> None:
         return
     try:
         setattr(context, key, value)
-    except AttributeError:
+        return
+    except (AttributeError, TypeError):
+        pass
+    try:
         context[key] = value
-
-
-logger = logging.getLogger("django_strawberry_framework")
+    except (TypeError, KeyError):
+        return
 
 
 def _collect_directive_var_names(
@@ -97,7 +104,19 @@ def _walk_directives(
     names: set[str],
     fragments: dict[str, Any],
 ) -> None:
-    """Recursive helper: descend into selections and collect directive var names."""
+    """Recursive helper: descend into selections and collect directive var names.
+
+    Handles four AST shapes:
+    1. **Directives on the current node** — collect ``@skip``/``@include``
+       variable references.
+    2. **Selection-set children** — recurse so directives on inner fields
+       are collected.
+    3. **FragmentSpreadNode children** — also recurse into the named
+       fragment's definition (looked up in ``fragments``) so directives
+       inside the spread fragment are included in the cache key.
+    4. **InlineFragmentNode / regular field children** — handled by the
+       same selection-set recursion in shape 2.
+    """
     for directive in getattr(node, "directives", ()) or ():
         if not isinstance(directive, DirectiveNode):
             continue
@@ -136,6 +155,26 @@ _optimizer_active: ContextVar[bool] = ContextVar(
 )
 
 
+def _strawberry_schema_from_schema(schema: Any) -> Any:
+    """Unwrap a Strawberry Schema to its inner schema; return ``schema`` if already unwrapped.
+
+    Centralizes the brittle Strawberry-private ``_strawberry_schema``
+    contract.  Test fixtures sometimes pass the inner schema directly,
+    so the fallback is the input itself.
+    """
+    return getattr(schema, "_strawberry_schema", schema)
+
+
+def _strawberry_schema_from_info(info: Any) -> Any | None:
+    """Walk ``info.schema._strawberry_schema``; return ``None`` if any step is missing.
+
+    Centralizes the brittle Strawberry-private ``_strawberry_schema``
+    contract for the resolver-info path.  Caller treats ``None`` as
+    "no schema available, nothing to look up."
+    """
+    return getattr(getattr(info, "schema", None), "_strawberry_schema", None)
+
+
 def _collect_schema_reachable_types(schema: Any) -> set[type]:
     """Return the set of ``DjangoType`` classes reachable from the schema's root types.
 
@@ -149,7 +188,7 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
     gql_schema = getattr(schema, "_schema", None)
     if gql_schema is None:
         return reachable
-    strawberry_schema = getattr(schema, "_strawberry_schema", schema)
+    strawberry_schema = _strawberry_schema_from_schema(schema)
     visited_type_names: set[str] = set()
 
     def _walk_gql_type(gql_type: Any) -> None:
@@ -203,11 +242,7 @@ def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
     type_name = getattr(rt, "name", None)
     if type_name is None:
         return None
-    strawberry_schema = getattr(
-        getattr(info, "schema", None),
-        "_strawberry_schema",
-        None,
-    )
+    strawberry_schema = _strawberry_schema_from_info(info)
     if strawberry_schema is None:
         return None
     definition = strawberry_schema.get_type_by_name(type_name)
@@ -249,7 +284,7 @@ class DjangoOptimizerExtension(SchemaExtension):
             raise ValueError(msg)
         self.strictness = strictness
         self._plan_cache: dict[
-            tuple[int, frozenset[tuple[str, Any]], type, tuple[str, ...]],
+            tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...]],
             Any,
         ] = {}
         self._cache_hits = 0
@@ -308,8 +343,12 @@ class DjangoOptimizerExtension(SchemaExtension):
 
         1. Non-``QuerySet`` results pass through unchanged.
         2. Trace the graphql-core return type to a Django model.
-        3. Run the O2 walker to build an ``OptimizationPlan``.
-        4. Apply the plan to the queryset.
+        3. Build (or fetch from cache) an ``OptimizationPlan`` via
+           ``_get_or_build_plan``.
+        4. Publish the plan + strictness sentinels to ``info.context``
+           via ``_publish_plan_to_context``.
+        5. Reconcile against the consumer's existing queryset
+           optimizations and apply.
         """
         if not isinstance(result, models.QuerySet):
             return result
@@ -323,48 +362,19 @@ class DjangoOptimizerExtension(SchemaExtension):
             return result
         if not info.field_nodes:
             return result
-        # Strawberry's Info.selected_fields peels from field_nodes;
-        # at the raw GraphQLResolveInfo level we use the walker's
-        # convert_selections to get the same shape, or we can access
-        # the selections directly from the field node's selection set.
         # The O2 walker expects the children of the root field, so we
-        # build the Strawberry-shaped selection list from field_nodes.
+        # build the Strawberry-shaped selection list from field_nodes
+        # via ``convert_selections``.  Imported lazily because Strawberry
+        # marks ``strawberry.types.nodes`` as an internal surface and we
+        # do not want a hard import-time dependency on it from any
+        # caller that imports the extension only to instantiate it.
         from strawberry.types.nodes import convert_selections
 
         selections = convert_selections(info, info.field_nodes)
         # selections[0] is the root field; its .selections are the
         # children the walker needs.
-        # B1: plan cache — check before running the walker.
-        cache_key = self._build_cache_key(info, target_model)
-        cached_plan = self._plan_cache.get(cache_key)
-        if cached_plan is not None:
-            self._cache_hits += 1
-            plan = cached_plan
-        else:
-            plan = plan_optimizations(selections[0].selections, target_model, info=info)
-            # Evict oldest entries if cache is full.
-            if plan.cacheable and len(self._plan_cache) >= _MAX_PLAN_CACHE_SIZE:
-                # Remove the oldest quarter to amortize eviction cost.
-                to_remove = _MAX_PLAN_CACHE_SIZE // 4
-                for _ in range(to_remove):
-                    self._plan_cache.pop(next(iter(self._plan_cache)))
-            if plan.cacheable:
-                self._plan_cache[cache_key] = plan
-            self._cache_misses += 1
-        # B5: stash the plan on info.context so consumers and tests
-        # can introspect the optimizer's decisions.
-        _stash_on_context(info.context, "dst_optimizer_plan", plan)
-        _stash_on_context(info.context, "dst_optimizer_fk_id_elisions", set(plan.fk_id_elisions))
-        # B3: when strictness is active, stash the sentinel so resolvers
-        # can detect unplanned lazy loads.
-        if self.strictness != "off":
-            _stash_on_context(
-                info.context,
-                "dst_optimizer_planned",
-                set(plan.planned_resolver_keys),
-            )
-            _stash_on_context(info.context, "dst_optimizer_lookup_paths", lookup_paths(plan))
-            _stash_on_context(info.context, "dst_optimizer_strictness", self.strictness)
+        plan = self._get_or_build_plan(selections[0].selections, target_model, info)
+        self._publish_plan_to_context(plan, info)
         if plan.is_empty:
             return result
         # B8: reconcile the plan against optimizations the consumer has
@@ -377,6 +387,53 @@ class DjangoOptimizerExtension(SchemaExtension):
         # rewritten queryset; B1's cached plan is never mutated.
         plan, result = diff_plan_for_queryset(plan, result)
         return plan.apply(result)
+
+    def _get_or_build_plan(self, selections: list[Any], target_model: type, info: Any) -> Any:
+        """Return the cached plan for ``(info, target_model)`` or build and cache a new one.
+
+        B1: plan cache.  Cache hits increment ``_cache_hits``; misses run
+        the walker, evict the oldest quarter when full, insert iff the
+        plan is ``cacheable``, and increment ``_cache_misses``.
+        """
+        cache_key = self._build_cache_key(info, target_model)
+        cached_plan = self._plan_cache.get(cache_key)
+        if cached_plan is not None:
+            self._cache_hits += 1
+            return cached_plan
+        plan = plan_optimizations(selections, target_model, info=info)
+        if plan.cacheable and len(self._plan_cache) >= _MAX_PLAN_CACHE_SIZE:
+            # FIFO eviction: drop the oldest quarter at once to amortise
+            # eviction cost across many subsequent inserts.  A cache hit
+            # does *not* refresh recency (no LRU promotion), so a hot
+            # plan that survives an eviction sweep continues to age out
+            # naturally on the next sweep.
+            to_remove = _MAX_PLAN_CACHE_SIZE // 4
+            for _ in range(to_remove):
+                self._plan_cache.pop(next(iter(self._plan_cache)))
+        if plan.cacheable:
+            self._plan_cache[cache_key] = plan
+        self._cache_misses += 1
+        return plan
+
+    def _publish_plan_to_context(self, plan: Any, info: Any) -> None:
+        """Stash the plan and (when strictness is active) the strictness sentinels on ``info.context``.
+
+        B5: introspection stash so consumers and tests can inspect the
+        optimizer's decisions.  B3: when ``strictness != "off"``, also
+        stash the planned-resolver sentinel set, the lookup paths, and
+        the strictness mode so per-relation resolvers can detect
+        unplanned lazy loads.
+        """
+        _stash_on_context(info.context, "dst_optimizer_plan", plan)
+        _stash_on_context(info.context, "dst_optimizer_fk_id_elisions", set(plan.fk_id_elisions))
+        if self.strictness != "off":
+            _stash_on_context(
+                info.context,
+                "dst_optimizer_planned",
+                set(plan.planned_resolver_keys),
+            )
+            _stash_on_context(info.context, "dst_optimizer_lookup_paths", lookup_paths(plan))
+            _stash_on_context(info.context, "dst_optimizer_strictness", self.strictness)
 
     @classmethod
     def check_schema(cls, schema: Any) -> list[str]:
@@ -418,15 +475,18 @@ class DjangoOptimizerExtension(SchemaExtension):
     def _build_cache_key(
         info: Any,
         target_model: type[models.Model],
-    ) -> tuple[int, frozenset[tuple[str, Any]], type, tuple[str, ...]]:
+    ) -> tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...]]:
         """Build the plan-cache key from resolver info and target model.
 
         Key components:
-        1. Hash of the selected operation's printed AST. ``print_ast``
+        1. The selected operation's printed AST string.  ``print_ast``
            includes the operation name and its own selection set only,
            so multi-operation documents (``query A {...} query B {...}``)
            never collide — using the raw source body would, because
-           ``loc.source.body`` is the entire document.
+           ``loc.source.body`` is the entire document.  We store the
+           printed string (not its ``hash``) to eliminate the rare-but-
+           real chance of two distinct operations sharing a 64-bit hash
+           and silently sharing a cached plan.
         2. Frozenset of ``(var_name, var_value)`` for only the
            variables referenced in ``@skip``/``@include`` directives.
         3. The target Django model class (different root fields in the
@@ -435,7 +495,7 @@ class DjangoOptimizerExtension(SchemaExtension):
            same model do not share a plan within one operation.
         """
         operation = info.operation
-        doc_hash = hash(print_ast(operation))
+        doc_key = print_ast(operation)
         # Directive-variable extraction.
         directive_var_names = _collect_directive_var_names(
             operation,
@@ -445,7 +505,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         relevant_vars = frozenset(
             (k, variable_values[k]) for k in directive_var_names if k in variable_values
         )
-        return (doc_hash, relevant_vars, target_model, runtime_path_from_info(info))
+        return (doc_key, relevant_vars, target_model, runtime_path_from_info(info))
 
     def plan_relation(
         self,
@@ -454,6 +514,12 @@ class DjangoOptimizerExtension(SchemaExtension):
         info: Any,
     ) -> tuple[str, str]:
         """Plan a single relation traversal (O6 entry point).
+
+        Thin instance-method delegate to the module-level ``plan_relation``
+        in ``walker.py``.  Kept on the class as a deliberate override seam:
+        subclasses can replace per-relation planning without monkey-patching
+        the walker module, and tests can swap an instance method for
+        custom strategies.
 
         Returns ``("select", reason)`` or ``("prefetch", reason)`` describing how
         the walker should materialize this relation on the parent queryset.

@@ -23,7 +23,14 @@ from .exceptions import ConfigurationError
 
 
 class TypeRegistry:
-    """Process-global registry of generated GraphQL types and enums."""
+    """Process-global registry of generated GraphQL types and enums.
+
+    Mutations (``register``, ``register_enum``, ``clear``) are not guarded
+    by a lock.  This is safe because every production-path mutation runs
+    at import time from ``DjangoType.__init_subclass__`` (single-threaded
+    module loading); ``clear`` is test-only.  Do not call ``register`` or
+    ``register_enum`` from a request handler or async resolver.
+    """
 
     def __init__(self) -> None:
         self._types: dict[type[models.Model], type] = {}
@@ -37,13 +44,20 @@ class TypeRegistry:
         reverse a ``DjangoType`` class back to its Django model in O(1).
 
         Raises:
-            ConfigurationError: ``model`` already has a registered type.
-                The error message names the conflicting class so the
-                consumer can identify the duplicate at import time.
+            ConfigurationError: ``model`` already has a registered type,
+                or ``type_cls`` is already registered against a different
+                model.  The error message names the conflicting class or
+                model so the consumer can identify the duplicate at
+                import time.
         """
         if model in self._types:
             raise ConfigurationError(
                 f"{model.__name__} is already registered as {self._types[model].__name__}",
+            )
+        existing_model = self._models.get(type_cls)
+        if existing_model is not None and existing_model is not model:
+            raise ConfigurationError(
+                f"{type_cls.__name__} is already registered against {existing_model.__name__}",
             )
         self._types[model] = type_cls
         self._models[type_cls] = model
@@ -113,8 +127,21 @@ class TypeRegistry:
 
         Two ``DjangoType``s pointing at the same choice column reuse the
         same enum, even if their consumer-facing class names differ.
+
+        Raises:
+            ConfigurationError: an enum is already cached for
+                ``(model, field_name)`` and it is a different class.
+                Re-registering the *same* enum class is a no-op so the
+                normal ``get_enum``-then-``register_enum`` cache pattern
+                in ``convert_choices_to_enum`` still works under retry.
         """
-        self._enums[(model, field_name)] = enum_cls
+        key = (model, field_name)
+        existing = self._enums.get(key)
+        if existing is not None and existing is not enum_cls:
+            raise ConfigurationError(
+                f"{model.__name__}.{field_name} is already registered as {existing.__name__}",
+            )
+        self._enums[key] = enum_cls
 
     def get_enum(
         self,

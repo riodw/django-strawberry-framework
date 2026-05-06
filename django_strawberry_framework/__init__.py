@@ -3,8 +3,8 @@
 A DRF-inspired Django integration framework for Strawberry GraphQL.
 """
 
-import logging
-
+# `auto` is re-exported so consumers can write `from django_strawberry_framework import auto`
+# without importing strawberry directly; this is part of the DRF-shaped public surface.
 from strawberry import auto
 
 from .optimizer import DjangoOptimizerExtension
@@ -20,5 +20,3 @@ __all__ = (
     "__version__",
     "auto",
 )
-
-logger = logging.getLogger(__name__)

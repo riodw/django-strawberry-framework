@@ -13,7 +13,7 @@ from typing import Any, get_args, get_origin
 
 
 def unwrap_return_type(rt: Any) -> Any:
-    """Unwrap one layer of list / Strawberry-list-wrapper around the inner type.
+    """Unwrap **one layer** of list / Strawberry-list-wrapper around the inner type.
 
     Returns the inner type when ``rt`` is ``list[T]``, a Strawberry-style
     wrapper exposing ``of_type``, or returns ``rt`` itself when there is
@@ -23,6 +23,18 @@ def unwrap_return_type(rt: Any) -> Any:
     them in an internal ``StrawberryList``-style object that carries an
     ``of_type`` attribute. Handling both styles keeps callers portable
     across Strawberry versions.
+
+    The Strawberry-wrapper check (``of_type``) runs first so a wrapper
+    that *also* presents a list-like origin (a hypothetical
+    ``StrawberryList[list[T]]``) yields its declared inner type rather
+    than the generic-args inner type.
+
+    Examples:
+        ``list[int]`` -> ``int``;
+        ``list[list[int]]`` -> ``list[int]`` (this helper peels one
+        layer; chain calls if you need full unwrapping);
+        ``StrawberryList(of_type=int)`` -> ``int``;
+        ``int`` -> ``int`` (no wrapper to peel).
     """
     inner = getattr(rt, "of_type", None)
     if inner is not None:

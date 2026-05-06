@@ -372,6 +372,39 @@ def test_merge_aliased_selections_passes_fragments_through():
     assert len(merged) == 2
 
 
+def test_merge_aliased_selections_logs_when_arguments_diverge(caplog):
+    """Aliased selections with different ``arguments`` emit a DEBUG signal.
+
+    Today's walker ignores ``arguments``, so divergence is harmless and
+    merge proceeds.  The DEBUG line exists so the future optimizer slice
+    that begins planning per-argument has an immediate trace pointing
+    at this branch.
+    """
+    sel_a = SimpleNamespace(
+        name="items",
+        alias="first",
+        directives={},
+        arguments={"active": True},
+        selections=[_sel("id")],
+    )
+    sel_b = SimpleNamespace(
+        name="items",
+        alias="second",
+        directives={},
+        arguments={"active": False},
+        selections=[_sel("name")],
+    )
+
+    with caplog.at_level("DEBUG", logger="django_strawberry_framework"):
+        merged = _merge_aliased_selections([sel_a, sel_b])
+
+    # Merge still proceeds; the first occurrence's ``arguments`` are kept.
+    assert len(merged) == 1
+    assert merged[0].arguments == {"active": True}
+    assert merged[0]._optimizer_response_keys == ["first", "second"]
+    assert any("different arguments" in record.message for record in caplog.records)
+
+
 def test_plan_merges_aliased_selections():
     """Aliased selections for the same relation produce one plan entry."""
     plan = plan_optimizations(

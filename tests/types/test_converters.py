@@ -249,3 +249,23 @@ def test_convert_choices_to_enum_raises_on_sanitized_member_collision(choice_fix
     finally:
         field.choices = original
         registry.clear()
+
+
+def test_convert_choices_to_enum_raises_on_keyword_prefix_collision(choice_fixture_model):
+    """Keyword-prefix collisions also raise: ``"if"`` mangles to ``"_if"`` and collides with raw ``"_if"``.
+
+    Pins the second collision shape from ``rev-types__converters.md``:
+    the value ``"if"`` is a Python keyword and is sanitized to ``"_if"``;
+    a sibling raw value ``"_if"`` would silently overwrite the first
+    without the guard.
+    """
+    field = choice_fixture_model._meta.get_field("status")
+    original = field.choices
+    field.choices = (("if", "Conditional"), ("_if", "Underscored"))
+    registry.clear()
+    try:
+        with pytest.raises(ConfigurationError, match="sanitize to the same enum member"):
+            convert_choices_to_enum(field, "FixtureType")
+    finally:
+        field.choices = original
+        registry.clear()

@@ -302,8 +302,12 @@ def _diff_select_related(plan_select_related: list[str], queryset: Any) -> list[
     ``query.select_related`` dict.  Exact matches are dropped; the
     wildcard form (``True``) is treated as no overlap so explicit
     nullable-FK entries still apply (see ``_flatten_select_related``).
+    Defensive: a queryset-shaped object without ``.query`` is treated
+    as having no existing select_related, matching the rest of the
+    file's defensive ``getattr`` style.
     """
-    already_select = _flatten_select_related(getattr(queryset.query, "select_related", False))
+    query = getattr(queryset, "query", None)
+    already_select = _flatten_select_related(getattr(query, "select_related", False))
     return [name for name in plan_select_related if name not in already_select]
 
 

@@ -245,7 +245,9 @@ def convert_relation(field: models.Field) -> Any:
         raise ConfigurationError(
             f"DjangoType for {target_model.__name__} is not yet registered. "
             "Declare it before any DjangoType that references it via FK / OneToOne / M2M, "
-            "or before any DjangoType whose model is referenced by it via a reverse rel.",
+            "or before any DjangoType whose model is referenced by it via a reverse rel. "
+            "Definition-order independence is tracked as future work; see "
+            "``django_strawberry_framework.registry.TypeRegistry.lazy_ref``.",
         )
 
     # Many-side cardinality always becomes a list at the schema level.

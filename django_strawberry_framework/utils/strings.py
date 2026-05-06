@@ -17,11 +17,18 @@ call site.
 
 
 def snake_case(name: str) -> str:
-    """Convert a ``camelCase`` GraphQL name back to ``snake_case``.
+    """Convert a strict ``camelCase`` GraphQL name back to ``snake_case``.
 
     Strawberry's default name converter emits ``camelCase`` from
     ``snake_case`` Python attributes; reversing it lets us look up the
     corresponding Django field name without an extra mapping.
+
+    Strict ``camelCase`` only — acronyms are *not* handled.  An input
+    like ``"HTMLParser"`` becomes ``"h_t_m_l_parser"`` because each
+    upper-case letter triggers a boundary; this is unreachable through
+    Strawberry's documented call chain (Python attrs would already be
+    ``html_parser``) but is documented here so a future direct caller
+    is not surprised.
 
     Examples:
         ``"name"`` -> ``"name"``;

@@ -27,16 +27,8 @@ from django.db import router
 from strawberry.types import Info
 
 from ..optimizer import logger as _resolver_logger
+from ..optimizer._context import get_context_value as _get_context_value
 from ..optimizer.plans import resolver_key, runtime_path_from_info
-
-
-def _get_context_value(context: Any, key: str, default: Any = None) -> Any:
-    """Return ``key`` from an object or dict context."""
-    if context is None:
-        return default
-    if isinstance(context, dict):
-        return context.get(key, default)
-    return getattr(context, key, default)
 
 
 def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
@@ -91,7 +83,8 @@ def _check_n1(
     """B3: warn or raise if the relation is not planned and would lazy-load."""
     from ..exceptions import OptimizerError
 
-    planned = _get_context_value(getattr(info, "context", None), "dst_optimizer_planned")
+    context = getattr(info, "context", None)
+    planned = _get_context_value(context, "dst_optimizer_planned")
     if planned is None:
         return
     key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
@@ -100,7 +93,7 @@ def _check_n1(
     # Only warn/raise if the access would actually trigger a lazy load.
     if not _will_lazy_load(root, field_name):
         return
-    strictness = _get_context_value(getattr(info, "context", None), "dst_optimizer_strictness", "off")
+    strictness = _get_context_value(context, "dst_optimizer_strictness", "off")
     if strictness == "raise":
         raise OptimizerError(f"Unplanned N+1: {field_name}")
     if strictness == "warn":
@@ -151,8 +144,10 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         reverse_one_to_one_resolver.__name__ = f"resolve_{field_name}"
         return reverse_one_to_one_resolver
 
+    attname = getattr(field, "attname", None)
+
     def forward_resolver(root: Any, info: Info) -> Any:
-        if field.attname is not None and _is_fk_id_elided(info, field_name, parent_type):
+        if attname is not None and _is_fk_id_elided(info, field_name, parent_type):
             return _build_fk_id_stub(root, field)
         _check_n1(info, root, field_name, parent_type)
         return getattr(root, field_name)

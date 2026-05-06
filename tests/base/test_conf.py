@@ -51,16 +51,16 @@ def test_settings_user_settings_falsy_falls_back_to_empty_dict(settings):
 # ---------------------------------------------------------------------------
 
 
-def test_reload_settings_replaces_global_when_our_key_changes(settings):
-    """Changing our key replaces the module-level ``settings`` instance."""
+def test_reload_settings_refreshes_singleton_when_our_key_changes(settings):
+    """Changing our key mutates the singleton ``settings`` instance in place."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "f1"}
     assert conf.settings.FILTER_KEY == "f1"
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "f2"}
     assert conf.settings.FILTER_KEY == "f2"
 
 
-def test_reload_settings_for_unrelated_key_keeps_global():
-    """Direct call with an unrelated key should not replace the instance."""
+def test_reload_settings_for_unrelated_key_keeps_singleton():
+    """Direct call with an unrelated key should not mutate the instance."""
     sentinel = conf.settings
     reload_settings("UNRELATED_SETTING", "value")
     assert conf.settings is sentinel

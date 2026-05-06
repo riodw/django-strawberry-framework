@@ -9,8 +9,10 @@ User-provided settings live in a top-level Django settings dict named
 
 Missing keys raise ``AttributeError``.  Whenever Django's
 ``setting_changed`` signal fires (for example, in tests using
-``pytest-django``'s ``settings`` fixture), the module-level ``settings``
-instance is rebuilt so changes are visible immediately.
+``pytest-django``'s ``settings`` fixture), the singleton ``settings``
+instance is mutated in place — the module global is *not* rebound — so
+references bound via ``from .conf import settings`` see the change
+immediately.
 """
 
 from typing import Any

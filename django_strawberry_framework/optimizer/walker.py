@@ -482,6 +482,20 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             response_key = _response_key(sel)
             if response_key not in merged._optimizer_response_keys:
                 merged._optimizer_response_keys.append(response_key)
+            # Forward-compat signal: today's walker ignores ``arguments``,
+            # so divergent arguments between aliased selections are
+            # harmless.  When a future slice plans differently per
+            # argument set this branch will need to plan per-response-key
+            # instead of merging — emitting at DEBUG level here gives
+            # that author a fast trace without changing current
+            # behaviour.
+            sel_arguments = getattr(sel, "arguments", None) or {}
+            if sel_arguments != merged.arguments:
+                logger.debug(
+                    "Optimizer: aliased selections of %s carry different arguments; "
+                    "merge keeps the first occurrence's values.",
+                    sel.name,
+                )
         else:
             merged = SimpleNamespace(
                 name=sel.name,

@@ -42,40 +42,19 @@ from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
 from . import logger
+from ._context import stash_on_context as _stash_on_context
 from .hints import OptimizerHint
 from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
 from .walker import plan_optimizations, plan_relation
 
 _MAX_PLAN_CACHE_SIZE = 256
 
-
-def _stash_on_context(context: Any, key: str, value: Any) -> None:
-    """Stash ``value`` on ``context`` under ``key``.
-
-    Strawberry's default context is an object, so ``setattr`` is the
-    primary path.  Consumers sometimes pass a plain ``dict`` as context,
-    so we fall back to ``__setitem__`` when ``setattr`` raises.  Frozen
-    objects (``MappingProxyType``, frozen dataclasses, ``pydantic``
-    models with ``frozen=True``) raise ``TypeError`` on assignment;
-    those stashes are silently skipped — the optimizer's introspection
-    surface is a nice-to-have, not a correctness invariant, so a
-    read-only context must not abort the resolver chain.
-    When ``context`` is ``None`` (Strawberry's default when no
-    ``context_value`` is provided), the stash is silently skipped.
-
-    Shared by B5 (plan stashing) and future B3 (sentinel stashing).
-    """
-    if context is None:
-        return
-    try:
-        setattr(context, key, value)
-        return
-    except (AttributeError, TypeError):
-        pass
-    try:
-        context[key] = value
-    except (TypeError, KeyError):
-        return
+# Re-export the stash helper under its original underscore-prefixed name so
+# existing tests that import ``from ...extension import _stash_on_context``
+# keep working without a churn pass.  Canonical implementation lives in
+# ``optimizer/_context.py`` for cross-subpackage reuse with the read-side
+# ``get_context_value`` (consumed by ``types/resolvers.py``).
+__all__ = ("CacheInfo", "DjangoOptimizerExtension", "_stash_on_context")
 
 
 def _collect_directive_var_names(
@@ -152,6 +131,17 @@ class CacheInfo(NamedTuple):
 _optimizer_active: ContextVar[bool] = ContextVar(
     "django_strawberry_framework_optimizer_active",
     default=False,
+)
+
+
+# Per-execution memo for ``print_ast(operation)``.  Set in ``on_execute``
+# and reset on its way out so each execution gets its own dict; the
+# ``ContextVar`` shape keeps async executions isolated even when they
+# share the same extension instance.  ``_build_cache_key`` reads from
+# this dict before recomputing, keyed by ``id(operation)``.
+_printed_ast_cache: ContextVar[dict[int, str] | None] = ContextVar(
+    "django_strawberry_framework_optimizer_printed_ast_cache",
+    default=None,
 )
 
 
@@ -299,10 +289,14 @@ class DjangoOptimizerExtension(SchemaExtension):
         )
 
     def on_execute(self) -> Any:  # type: ignore[override]
-        """Mark the optimizer as active for the duration of execution."""
-        token = _optimizer_active.set(True)
-        yield
-        _optimizer_active.reset(token)
+        """Mark the optimizer as active and seed the per-execution AST memo."""
+        active_token = _optimizer_active.set(True)
+        ast_token = _printed_ast_cache.set({})
+        try:
+            yield
+        finally:
+            _printed_ast_cache.reset(ast_token)
+            _optimizer_active.reset(active_token)
 
     def resolve(
         self,
@@ -495,7 +489,22 @@ class DjangoOptimizerExtension(SchemaExtension):
            same model do not share a plan within one operation.
         """
         operation = info.operation
-        doc_key = print_ast(operation)
+        # Memoize ``print_ast(operation)`` per execution: many root
+        # resolvers in one operation share the same operation node, and
+        # ``print_ast`` is the heaviest step of cache-key construction.
+        # The memo is a per-execution ``ContextVar`` dict installed by
+        # ``on_execute``; if the extension is invoked outside an
+        # ``on_execute`` lifecycle (some test fixtures call
+        # ``_build_cache_key`` directly), fall back to recomputing.
+        memo = _printed_ast_cache.get()
+        if memo is None:
+            doc_key = print_ast(operation)
+        else:
+            op_id = id(operation)
+            doc_key = memo.get(op_id)
+            if doc_key is None:
+                doc_key = print_ast(operation)
+                memo[op_id] = doc_key
         # Directive-variable extraction.
         directive_var_names = _collect_directive_var_names(
             operation,

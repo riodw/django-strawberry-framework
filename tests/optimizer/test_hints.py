@@ -115,3 +115,50 @@ class TestEquality:
     def test_prefetch_with_different_objects_not_equal(self) -> None:
         """Two prefetch hints with different objects are not equal."""
         assert OptimizerHint.prefetch(Prefetch("a")) != OptimizerHint.prefetch(Prefetch("b"))
+
+
+class TestConflictingFlagsRejected:
+    """``__post_init__`` rejects flag combinations the walker would silently drop.
+
+    Pins the Medium fix from ``rev-optimizer__hints.md``: combining flags
+    beyond the documented four shapes (``SKIP``, ``select_related()``,
+    ``prefetch_related()``, ``prefetch(obj)``) lets the walker's priority
+    order silently swallow the lower-priority directive.  Each rejected
+    combination raises ``ConfigurationError`` at construction time.
+    """
+
+    def test_skip_with_force_select_raises(self) -> None:
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="skip=True"):
+            OptimizerHint(skip=True, force_select=True)
+
+    def test_skip_with_force_prefetch_raises(self) -> None:
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="skip=True"):
+            OptimizerHint(skip=True, force_prefetch=True)
+
+    def test_skip_with_prefetch_obj_raises(self) -> None:
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="skip=True"):
+            OptimizerHint(skip=True, prefetch_obj=Prefetch("items"))
+
+    def test_force_select_with_force_prefetch_raises(self) -> None:
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="force_select and force_prefetch"):
+            OptimizerHint(force_select=True, force_prefetch=True)
+
+    def test_prefetch_obj_with_force_select_raises(self) -> None:
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="prefetch_obj"):
+            OptimizerHint(prefetch_obj=Prefetch("items"), force_select=True)
+
+    def test_prefetch_obj_with_force_prefetch_raises(self) -> None:
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="prefetch_obj"):
+            OptimizerHint(prefetch_obj=Prefetch("items"), force_prefetch=True)

@@ -185,7 +185,22 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
         return cached
 
     enum_name = f"{type_name}{pascal_case(field.name)}Enum"
-    members = {_sanitize_member_name(value): value for value, _label in choices}
+    members: dict[str, Any] = {}
+    collisions: dict[str, list[Any]] = {}
+    for value, _label in choices:
+        member = _sanitize_member_name(value)
+        if member in members:
+            collisions.setdefault(member, [members[member]]).append(value)
+        else:
+            members[member] = value
+    if collisions:
+        details = ", ".join(
+            f"{member!r} from values {sorted(map(repr, vals))}" for member, vals in sorted(collisions.items())
+        )
+        raise ConfigurationError(
+            f"{field.model.__name__}.{field.name} choices sanitize to the same enum member: "
+            f"{details}.  Rename one side or split into separate fields.",
+        )
     enum_cls = Enum(enum_name, members)  # type: ignore[arg-type]
     enum_cls = strawberry.enum(enum_cls)
     registry.register_enum(field.model, field.name, enum_cls)

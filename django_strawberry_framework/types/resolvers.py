@@ -27,15 +27,23 @@ from django.db import router
 from strawberry.types import Info
 
 from ..optimizer import logger as _resolver_logger
-from ..optimizer._context import get_context_value as _get_context_value
+from ..optimizer._context import (
+    DST_OPTIMIZER_FK_ID_ELISIONS,
+    DST_OPTIMIZER_PLANNED,
+    DST_OPTIMIZER_STRICTNESS,
+)
+from ..optimizer._context import (
+    get_context_value as _get_context_value,
+)
 from ..optimizer.plans import resolver_key, runtime_path_from_info
+from ..utils.relations import relation_kind
 
 
 def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
     """Return ``True`` if B2 marked this forward relation as FK-id elided."""
     elisions = _get_context_value(
         getattr(info, "context", None),
-        "dst_optimizer_fk_id_elisions",
+        DST_OPTIMIZER_FK_ID_ELISIONS,
         set(),
     )
     key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
@@ -84,7 +92,7 @@ def _check_n1(
     from ..exceptions import OptimizerError
 
     context = getattr(info, "context", None)
-    planned = _get_context_value(context, "dst_optimizer_planned")
+    planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
     if planned is None:
         return
     key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
@@ -93,7 +101,7 @@ def _check_n1(
     # Only warn/raise if the access would actually trigger a lazy load.
     if not _will_lazy_load(root, field_name):
         return
-    strictness = _get_context_value(context, "dst_optimizer_strictness", "off")
+    strictness = _get_context_value(context, DST_OPTIMIZER_STRICTNESS, "off")
     if strictness == "raise":
         raise OptimizerError(f"Unplanned N+1: {field_name}")
     if strictness == "warn":
@@ -121,8 +129,9 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     is present on ``info.context``.
     """
     field_name = field.name
+    kind = relation_kind(field)
 
-    if field.many_to_many or field.one_to_many:
+    if kind == "many":
 
         def many_resolver(root: Any, info: Info) -> Any:
             _check_n1(info, root, field_name, parent_type)
@@ -131,7 +140,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         many_resolver.__name__ = f"resolve_{field_name}"
         return many_resolver
 
-    if field.one_to_one and getattr(field, "auto_created", False):
+    if kind == "reverse_one_to_one":
         related_does_not_exist = field.related_model.DoesNotExist
 
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:

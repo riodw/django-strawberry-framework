@@ -42,7 +42,16 @@ from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
 from . import logger
-from ._context import stash_on_context as _stash_on_context
+from ._context import (
+    DST_OPTIMIZER_FK_ID_ELISIONS,
+    DST_OPTIMIZER_LOOKUP_PATHS,
+    DST_OPTIMIZER_PLAN,
+    DST_OPTIMIZER_PLANNED,
+    DST_OPTIMIZER_STRICTNESS,
+)
+from ._context import (
+    stash_on_context as _stash_on_context,
+)
 from .hints import OptimizerHint
 from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
 from .walker import plan_optimizations, plan_relation
@@ -418,16 +427,16 @@ class DjangoOptimizerExtension(SchemaExtension):
         the strictness mode so per-relation resolvers can detect
         unplanned lazy loads.
         """
-        _stash_on_context(info.context, "dst_optimizer_plan", plan)
-        _stash_on_context(info.context, "dst_optimizer_fk_id_elisions", set(plan.fk_id_elisions))
+        _stash_on_context(info.context, DST_OPTIMIZER_PLAN, plan)
+        _stash_on_context(info.context, DST_OPTIMIZER_FK_ID_ELISIONS, set(plan.fk_id_elisions))
         if self.strictness != "off":
             _stash_on_context(
                 info.context,
-                "dst_optimizer_planned",
+                DST_OPTIMIZER_PLANNED,
                 set(plan.planned_resolver_keys),
             )
-            _stash_on_context(info.context, "dst_optimizer_lookup_paths", lookup_paths(plan))
-            _stash_on_context(info.context, "dst_optimizer_strictness", self.strictness)
+            _stash_on_context(info.context, DST_OPTIMIZER_LOOKUP_PATHS, lookup_paths(plan))
+            _stash_on_context(info.context, DST_OPTIMIZER_STRICTNESS, self.strictness)
 
     @classmethod
     def check_schema(cls, schema: Any) -> list[str]:

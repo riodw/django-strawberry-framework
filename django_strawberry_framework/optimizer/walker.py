@@ -9,10 +9,11 @@ from django.db import models
 from django.db.models import Prefetch
 
 from ..registry import registry
+from ..utils.relations import relation_kind
 from ..utils.strings import snake_case
 from . import logger
 from .hints import OptimizerHint
-from .plans import OptimizationPlan, resolver_key, runtime_path_from_info
+from .plans import OptimizationPlan, _lookup_path, resolver_key, runtime_path_from_info
 
 
 def plan_optimizations(
@@ -45,7 +46,7 @@ def plan_relation(
             target_type.__name__,
         )
         return ("prefetch", "custom_get_queryset")
-    if field.many_to_many or field.one_to_many:
+    if relation_kind(field) == "many":
         return ("prefetch", "default")
     return ("select", "default")
 
@@ -143,8 +144,8 @@ def _walk_selections(
         ):
             continue
 
-        relation_kind, _reason = plan_relation(django_field, target_type, info)
-        if relation_kind == "prefetch":
+        relation_plan_kind, _ = plan_relation(django_field, target_type, info)
+        if relation_plan_kind == "prefetch":
             _plan_prefetch_relation(
                 sel,
                 django_field,
@@ -445,8 +446,8 @@ def _append_unique_many(values: list[Any], new_values: tuple[Any, ...]) -> None:
 
 def _append_prefetch_unique(values: list[Any], prefetch: Prefetch) -> None:
     """Append ``prefetch`` unless a lookup for the same path already exists."""
-    lookup_path = prefetch.prefetch_to
-    if any(getattr(value, "prefetch_to", value) == lookup_path for value in values):
+    lookup_path = _lookup_path(prefetch)
+    if any(_lookup_path(value) == lookup_path for value in values):
         return
     values.append(prefetch)
 

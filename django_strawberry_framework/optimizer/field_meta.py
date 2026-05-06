@@ -10,7 +10,10 @@ Django introspection overhead.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    from django.db import models
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +44,7 @@ class FieldMeta:
     many_to_many: bool = False
     one_to_many: bool = False
     one_to_one: bool = False
-    related_model: Any = None
+    related_model: type[models.Model] | None = None
     attname: str | None = None
     target_field_name: str | None = None
     target_field_attname: str | None = None
@@ -49,8 +52,15 @@ class FieldMeta:
     auto_created: bool = False
 
     @classmethod
-    def from_django_field(cls, field: Any) -> FieldMeta:
-        """Build a ``FieldMeta`` from a Django field object."""
+    def from_django_field(cls, field: object) -> FieldMeta:
+        """Build a ``FieldMeta`` from a Django field object.
+
+        ``field.name`` and ``field.is_relation`` are accessed directly
+        because every Django ``Field`` / reverse-relation descriptor
+        guarantees them; the rest are read with ``getattr`` defaults so
+        forward fields, reverse relations, and the various M2M shapes
+        all build cleanly without per-shape branching.
+        """
         return cls(
             name=field.name,
             is_relation=bool(field.is_relation),

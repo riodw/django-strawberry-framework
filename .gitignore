@@ -165,5 +165,10 @@ poetry.toml
 # Review artifacts, plan files, and worker instructions under docs/review/ are tracked.
 docs/review/shadow/
 
+# Per-worker scratch memory used during an active review cycle.
+# Created by Worker 0 at plan time; deleted by Worker 0 at closeout.
+# The tracked permanent record is the rev-*.md artifacts, never these notes.
+docs/review/worker-memory/
+
 # LSP config files
 pyrightconfig.json

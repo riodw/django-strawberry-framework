@@ -25,6 +25,7 @@ from django.db import models
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
+from ..utils.relations import relation_kind
 from ..utils.strings import pascal_case
 
 # TODO(future): define and export a ``BigInt`` Strawberry scalar so
@@ -250,14 +251,15 @@ def convert_relation(field: models.Field) -> Any:
             "``django_strawberry_framework.registry.TypeRegistry.lazy_ref``.",
         )
 
+    kind = relation_kind(field)
+
     # Many-side cardinality always becomes a list at the schema level.
-    if field.many_to_many or field.one_to_many:
+    if kind == "many":
         return list[target_type]
 
     # Single-side cardinality: forward FK, forward OneToOne, or reverse
     # OneToOne. Reverse OneToOne is conceptually nullable regardless of
     # the source field's ``null`` (the reverse row may simply not exist).
-    is_reverse = getattr(field, "auto_created", False)
-    if (is_reverse and field.one_to_one) or getattr(field, "null", False):
+    if kind == "reverse_one_to_one" or getattr(field, "null", False):
         return target_type | None
     return target_type

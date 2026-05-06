@@ -1,8 +1,8 @@
 """Shared context read/write helpers for optimizer ↔ resolver hand-off.
 
 Both the optimizer (write side) and the relation resolvers (read side)
-need to interact with Strawberry's ``info.context``, which can be one
-of three shapes:
+need to interact with Strawberry's ``info.context``, which can take
+several shapes:
 
 - ``None`` — Strawberry's default when no ``context_value`` is provided.
 - An object — the typical Strawberry context (attribute access).
@@ -20,6 +20,12 @@ land in one place rather than across ``optimizer/extension.py`` and
 from __future__ import annotations
 
 from typing import Any
+
+DST_OPTIMIZER_PLAN = "dst_optimizer_plan"
+DST_OPTIMIZER_FK_ID_ELISIONS = "dst_optimizer_fk_id_elisions"
+DST_OPTIMIZER_PLANNED = "dst_optimizer_planned"
+DST_OPTIMIZER_LOOKUP_PATHS = "dst_optimizer_lookup_paths"
+DST_OPTIMIZER_STRICTNESS = "dst_optimizer_strictness"
 
 
 def get_context_value(context: Any, key: str, default: Any = None) -> Any:

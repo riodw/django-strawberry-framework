@@ -29,7 +29,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover
+    from django.db.models import Prefetch
 
 
 @dataclass
@@ -38,12 +41,20 @@ class OptimizationPlan:
 
     Constructed by ``plan_optimizations`` in ``optimizer/walker.py`` and
     consumed by ``DjangoOptimizerExtension`` in ``optimizer/extension.py``.
+
+    Cache invariant: once a plan has been handed off (returned from the
+    walker, stashed on ``info.context``, or stored in the extension's
+    plan cache), it must not be mutated in place.  Use
+    ``dataclasses.replace`` to derive a modified plan.  The class is
+    intentionally not ``frozen=True`` so the walker can accumulate
+    entries during construction; every other caller treats the plan as
+    immutable.
     """
 
     select_related: list[str] = field(default_factory=list)
     """Forward FK / OneToOne field names for ``QuerySet.select_related``."""
 
-    prefetch_related: list[Any] = field(default_factory=list)
+    prefetch_related: list[str | Prefetch] = field(default_factory=list)
     """Strings or ``Prefetch`` objects for ``QuerySet.prefetch_related``.
 
     Generated relation plans use ``Prefetch`` objects so child querysets can
@@ -110,14 +121,26 @@ def resolver_key(
 
 
 def runtime_path_from_info(info: Any | None) -> tuple[str, ...]:
-    """Return a GraphQL response path tuple with list indexes stripped."""
+    """Return the runtime path tuple from a GraphQL ``info`` (or ``()`` when absent).
+
+    Thin wrapper that pulls ``info.path`` and delegates to
+    ``runtime_path_from_path``; ``info=None`` short-circuits to the
+    empty tuple so resolver-key construction stays branch-free at the
+    call site.
+    """
     if info is None:
         return ()
     return runtime_path_from_path(getattr(info, "path", None))
 
 
 def runtime_path_from_path(path: Any) -> tuple[str, ...]:
-    """Return a GraphQL response path tuple with list indexes stripped."""
+    """Walk a GraphQL ``path`` linked-list and return its keys, list indexes stripped.
+
+    Iterates ``path.prev`` from the deepest selection back to the root,
+    skipping integer keys (graphql-core's list-index entries) so the
+    resulting tuple is a stable structural identity for cache-key and
+    resolver-key purposes.
+    """
     keys: list[str] = []
     while path is not None:
         key = getattr(path, "key", None)
@@ -158,6 +181,27 @@ def _flatten_select_related(sr: Any) -> set[str]:
 
     _walk(sr, "")
     return paths
+
+
+def _lookup_path(entry: Any) -> str:
+    """Return the prefetch lookup path for an entry (string or ``Prefetch``).
+
+    Centralizes the brittle Django-private contract for ``Prefetch.prefetch_to``
+    so a future Django rename has one fix.  Plain-string entries are
+    returned as-is (they double as their own path).
+    """
+    return getattr(entry, "prefetch_to", entry)
+
+
+def _consumer_prefetch_lookups(queryset: Any) -> list[Any]:
+    """Return the ``_prefetch_related_lookups`` already attached to a queryset.
+
+    Centralizes the brittle Django-private contract for
+    ``QuerySet._prefetch_related_lookups``.  Returns an empty list when
+    the queryset has no prefetches (or the attribute is missing entirely
+    on a non-QuerySet input).
+    """
+    return list(getattr(queryset, "_prefetch_related_lookups", ()) or ())
 
 
 def _optimizer_can_absorb(
@@ -236,20 +280,50 @@ def diff_plan_for_queryset(
       avoid silently stripping consumer prefetches the optimizer would
       not replace.
     """
-    already_select = _flatten_select_related(getattr(queryset.query, "select_related", False))
-    new_select = [name for name in plan.select_related if name not in already_select]
+    new_select = _diff_select_related(plan.select_related, queryset)
+    new_prefetch, new_queryset = _diff_prefetch_related(plan.prefetch_related, queryset)
 
-    consumer_pf = list(getattr(queryset, "_prefetch_related_lookups", ()) or ())
-    consumer_by_path: dict[str, Any] = {}
-    for entry in consumer_pf:
-        path = getattr(entry, "prefetch_to", entry)
-        consumer_by_path[path] = entry
+    if (
+        len(new_select) == len(plan.select_related)
+        and len(new_prefetch) == len(plan.prefetch_related)
+        and new_queryset is queryset
+    ):
+        return plan, queryset
+    return (
+        replace(plan, select_related=new_select, prefetch_related=new_prefetch),
+        new_queryset,
+    )
+
+
+def _diff_select_related(plan_select_related: list[str], queryset: Any) -> list[str]:
+    """Drop optimizer ``select_related`` entries that the queryset already has.
+
+    Compared as dotted lookup paths against the consumer's existing
+    ``query.select_related`` dict.  Exact matches are dropped; the
+    wildcard form (``True``) is treated as no overlap so explicit
+    nullable-FK entries still apply (see ``_flatten_select_related``).
+    """
+    already_select = _flatten_select_related(getattr(queryset.query, "select_related", False))
+    return [name for name in plan_select_related if name not in already_select]
+
+
+def _diff_prefetch_related(
+    plan_prefetch_related: list[Any],
+    queryset: Any,
+) -> tuple[list[Any], Any]:
+    """Reconcile optimizer ``prefetch_related`` against the queryset's existing lookups.
+
+    Returns ``(new_prefetch_list, queryset_to_apply_against)``.  See
+    ``diff_plan_for_queryset`` for the full reconciliation rules.
+    """
+    consumer_pf = _consumer_prefetch_lookups(queryset)
+    consumer_by_path: dict[str, Any] = {_lookup_path(entry): entry for entry in consumer_pf}
 
     new_prefetch: list[Any] = []
     paths_to_strip: set[str] = set()
 
-    for opt_entry in plan.prefetch_related:
-        opt_path = getattr(opt_entry, "prefetch_to", opt_entry)
+    for opt_entry in plan_prefetch_related:
+        opt_path = _lookup_path(opt_entry)
         descendant_prefix = f"{opt_path}__"
         matching_paths = [
             path for path in consumer_by_path if path == opt_path or path.startswith(descendant_prefix)
@@ -264,23 +338,16 @@ def diff_plan_for_queryset(
 
     new_queryset = queryset
     if paths_to_strip:
-        keep = tuple(
-            entry for entry in consumer_pf if getattr(entry, "prefetch_to", entry) not in paths_to_strip
-        )
+        keep = tuple(entry for entry in consumer_pf if _lookup_path(entry) not in paths_to_strip)
+        # ``prefetch_related(None)`` clears the prefetch list on the
+        # queryset; subsequent ``prefetch_related(*keep)`` rebuilds it
+        # from the surviving consumer entries.  This is the documented
+        # Django reset idiom for prefetch lookups.
         new_queryset = queryset.prefetch_related(None)
         if keep:
             new_queryset = new_queryset.prefetch_related(*keep)
 
-    if (
-        len(new_select) == len(plan.select_related)
-        and len(new_prefetch) == len(plan.prefetch_related)
-        and new_queryset is queryset
-    ):
-        return plan, queryset
-    return (
-        replace(plan, select_related=new_select, prefetch_related=new_prefetch),
-        new_queryset,
-    )
+    return new_prefetch, new_queryset
 
 
 def lookup_paths(plan: OptimizationPlan) -> set[str]:
@@ -304,7 +371,7 @@ def _prefetch_lookup_paths(entries: Iterable[Any], prefix: str = "") -> set[str]
         path = f"{prefix}__{prefetch_to}" if prefix else prefetch_to
         paths.add(path)
         inner = getattr(entry, "queryset", None)
-        inner_lookups = getattr(inner, "_prefetch_related_lookups", None)
+        inner_lookups = _consumer_prefetch_lookups(inner) if inner is not None else []
         if inner_lookups:
             paths.update(_prefetch_lookup_paths(inner_lookups, path))
     return paths

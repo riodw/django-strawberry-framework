@@ -368,7 +368,15 @@ def _strip_comments(source: str) -> str:
         if token.type == tokenize.COMMENT:
             continue
         tokens.append(token)
-    return tokenize.untokenize(tokens)
+    rebuilt = tokenize.untokenize(tokens)
+    # ``tokenize.untokenize`` preserves the (row, col) positions of tokens
+    # that follow a removed comment by padding with spaces.  That leaves
+    # comment-only lines as runs of spaces and code lines that had a
+    # trailing inline comment with a long run of trailing spaces.  Strip
+    # each line so comment-only lines render as true blank lines and
+    # inline-comment removal does not leave whitespace garbage.  Line
+    # numbers are preserved because we rebuild line-for-line.
+    return "\n".join(line.rstrip() for line in rebuilt.split("\n"))
 
 
 def _strip_docstrings(source: str, tree: ast.AST) -> str:

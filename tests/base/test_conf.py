@@ -64,3 +64,20 @@ def test_reload_settings_for_unrelated_key_keeps_global():
     sentinel = conf.settings
     reload_settings("UNRELATED_SETTING", "value")
     assert conf.settings is sentinel
+
+
+def test_reload_settings_updates_already_imported_reference(settings):
+    """A reference bound via ``from .conf import settings`` must see updates.
+
+    Pins the contract that ``reload_settings`` mutates the existing instance
+    rather than rebinding the module global — otherwise the docstring's
+    recommended import pattern breaks under ``override_settings`` /
+    ``pytest-django``'s ``settings`` fixture.
+    """
+    from django_strawberry_framework.conf import settings as bound_settings
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "first"}
+    assert bound_settings.FILTER_KEY == "first"
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "second"}
+    assert bound_settings.FILTER_KEY == "second"
+    assert bound_settings is conf.settings

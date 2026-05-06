@@ -62,6 +62,25 @@ def test_register_collision_raises(fresh_registry):
         fresh_registry.register(Category, CategoryTypeB)
 
 
+def test_register_same_class_against_two_models_raises(fresh_registry):
+    """Registering the same ``type_cls`` against two models raises ``ConfigurationError``.
+
+    Pins the reverse-direction guard: ``_models[type_cls]`` must not be
+    silently overwritten when the same class is reused for a different
+    model, because that would leave ``model_for_type`` returning the
+    wrong model for the original registration.
+    """
+
+    class SharedType:
+        pass
+
+    fresh_registry.register(Category, SharedType)
+    with pytest.raises(ConfigurationError, match="already registered against Category"):
+        fresh_registry.register(Item, SharedType)
+    # Original mapping is preserved.
+    assert fresh_registry.model_for_type(SharedType) is Category
+
+
 def test_model_for_type_returns_none_for_none(fresh_registry):
     """Passing ``None`` short-circuits to ``None`` so the optimizer can pipeline.
 
@@ -102,6 +121,38 @@ def test_register_enum_caches_by_model_field(fresh_registry):
     # Distinct ``(model, field_name)`` keys do not collide.
     assert fresh_registry.get_enum(Category, "other_field") is None
     assert fresh_registry.get_enum(Item, "status") is None
+
+
+def test_register_enum_same_class_is_idempotent(fresh_registry):
+    """Re-registering the *same* enum class for the same key is a no-op.
+
+    Pins the convert_choices_to_enum cache pattern: the call site reads
+    ``get_enum`` first, so a redundant ``register_enum`` with the same
+    class must not raise.
+    """
+
+    class Status(Enum):
+        ACTIVE = "active"
+
+    fresh_registry.register_enum(Category, "status", Status)
+    fresh_registry.register_enum(Category, "status", Status)
+    assert fresh_registry.get_enum(Category, "status") is Status
+
+
+def test_register_enum_different_class_for_same_key_raises(fresh_registry):
+    """Registering a *different* enum class for an existing key raises."""
+
+    class StatusA(Enum):
+        ACTIVE = "active"
+
+    class StatusB(Enum):
+        ACTIVE = "active"
+
+    fresh_registry.register_enum(Category, "status", StatusA)
+    with pytest.raises(ConfigurationError, match="Category.status is already registered as StatusA"):
+        fresh_registry.register_enum(Category, "status", StatusB)
+    # Original cache is preserved.
+    assert fresh_registry.get_enum(Category, "status") is StatusA
 
 
 def test_clear_drops_all_state(fresh_registry):

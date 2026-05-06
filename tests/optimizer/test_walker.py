@@ -943,6 +943,36 @@ def test_plan_force_select_hint_uses_select_recursion():
     assert is_deferred is False
 
 
+def test_plan_no_flag_hint_falls_through_to_default_dispatch():
+    """``OptimizerHint()`` with no flag set is a no-op: the walker falls back to default cardinality dispatch.
+
+    Pins the ``_apply_hint`` ``return False`` branch.  The four documented
+    factories (``SKIP``, ``select_related()``, ``prefetch_related()``,
+    ``prefetch(...)``) all set exactly one flag, but a consumer who
+    constructs ``OptimizerHint()`` with no args lands here.  The walker
+    must treat it as if no hint were present, not silently skip the
+    field or do something unexpected.
+    """
+    registry.clear()
+
+    class ItemType:
+        _optimizer_hints = {"category": OptimizerHint()}
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Item, ItemType)
+    try:
+        plan = plan_optimizations([_sel("category", selections=[_sel("name")])], Item)
+    finally:
+        registry.clear()
+
+    # Forward FK with non-id-only child → default dispatch picks select_related.
+    assert plan.select_related == ["category"]
+    assert plan.only_fields == ["category_id", "category__name"]
+
+
 def test_plan_records_nested_fk_id_elision_with_resolver_key():
     """O4+B2: FK-id elision inside a child plan uses the nested resolver key."""
     plan = plan_optimizations(

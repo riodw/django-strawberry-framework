@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,10 +10,9 @@ from django.db.models import Prefetch
 
 from ..registry import registry
 from ..utils.strings import snake_case
+from . import logger
 from .hints import OptimizerHint
 from .plans import OptimizationPlan, resolver_key, runtime_path_from_info
-
-logger = logging.getLogger("django_strawberry_framework")
 
 
 def plan_optimizations(
@@ -52,10 +50,35 @@ def plan_relation(
     return ("select", "default")
 
 
-def _build_child_queryset(field: Any, target_type: type | None, info: Any | None) -> Any:
-    """Build the queryset used inside a generated ``Prefetch`` object."""
+def _resolve_field_map(model: type[models.Model]) -> tuple[type | None, dict[str, Any]]:
+    """Return ``(registered DjangoType, field_map)`` for ``model``.
+
+    Prefers the precomputed ``_optimizer_field_map`` cached on the
+    ``DjangoType`` subclass; falls back to a fresh
+    ``model._meta.get_fields()`` walk when the model has no registered
+    type.  Centralizes the brittle Django-private ``_meta`` access used
+    by the walker.
+    """
+    type_cls = registry.get(model)
+    cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
+    field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
+    return type_cls, field_map
+
+
+def _build_child_queryset(
+    field: Any,
+    target_type: type | None,
+    info: Any | None,
+    has_custom_qs: bool,
+) -> Any:
+    """Build the queryset used inside a generated ``Prefetch`` object.
+
+    ``has_custom_qs`` is the precomputed value of
+    ``target_type.has_custom_get_queryset()`` from the caller, so the
+    method does not need to be called twice on the prefetch path.
+    """
     queryset = field.related_model._default_manager.all()
-    if target_type is not None and target_type.has_custom_get_queryset():
+    if has_custom_qs:
         queryset = target_type.get_queryset(queryset, info)
     return queryset
 
@@ -69,9 +92,7 @@ def _walk_selections(
     runtime_prefixes: tuple[tuple[str, ...], ...] = ((),),
 ) -> None:
     """Recursive workhorse: descend one level of the selection tree."""
-    type_cls = registry.get(model)
-    cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
-    field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
+    type_cls, field_map = _resolve_field_map(model)
     merged = _merge_aliased_selections([sel for sel in selections if _should_include(sel)])
     for sel in merged:
         if _is_fragment(sel):
@@ -106,44 +127,21 @@ def _walk_selections(
         )
 
         hint = getattr(type_cls, "_optimizer_hints", {}).get(django_name) if type_cls is not None else None
-        if hint is not None:
-            if hint is OptimizerHint.SKIP or hint.skip:
-                continue
-            if hint.prefetch_obj is not None:
-                attname = getattr(django_field, "attname", None)
-                if attname is not None:
-                    _append_unique(plan.only_fields, f"{prefix}{attname}")
-                _append_unique_many(plan.planned_resolver_keys, resolver_identities)
-                plan.prefetch_related.append(hint.prefetch_obj)
-                continue
-            if hint.force_select:
-                _plan_select_relation(
-                    sel,
-                    django_field,
-                    django_name,
-                    type_cls,
-                    target_type,
-                    plan,
-                    prefix,
-                    full_path,
-                    info,
-                    runtime_paths,
-                    resolver_identities,
-                )
-                continue
-            if hint.force_prefetch:
-                _plan_prefetch_relation(
-                    sel,
-                    django_field,
-                    target_type,
-                    plan,
-                    prefix,
-                    full_path,
-                    info,
-                    runtime_paths,
-                    resolver_identities,
-                )
-                continue
+        if hint is not None and _apply_hint(
+            hint,
+            sel=sel,
+            django_field=django_field,
+            django_name=django_name,
+            type_cls=type_cls,
+            target_type=target_type,
+            plan=plan,
+            prefix=prefix,
+            full_path=full_path,
+            info=info,
+            runtime_paths=runtime_paths,
+            resolver_identities=resolver_identities,
+        ):
+            continue
 
         relation_kind, _reason = plan_relation(django_field, target_type, info)
         if relation_kind == "prefetch":
@@ -250,8 +248,75 @@ def _plan_prefetch_relation(
     _merge_child_plan_metadata(plan, child_plan)
     if not child_plan.cacheable:
         plan.cacheable = False
-    child_queryset = child_plan.apply(_build_child_queryset(django_field, target_type, info))
+    child_queryset = child_plan.apply(
+        _build_child_queryset(django_field, target_type, info, has_custom_qs=has_custom_get_queryset),
+    )
     _append_prefetch_unique(plan.prefetch_related, Prefetch(full_path, queryset=child_queryset))
+
+
+def _apply_hint(
+    hint: OptimizerHint,
+    *,
+    sel: Any,
+    django_field: Any,
+    django_name: str,
+    type_cls: type | None,
+    target_type: type | None,
+    plan: OptimizationPlan,
+    prefix: str,
+    full_path: str,
+    info: Any | None,
+    runtime_paths: tuple[tuple[str, ...], ...],
+    resolver_identities: tuple[str, ...],
+) -> bool:
+    """Apply a Meta-level ``OptimizerHint`` to ``plan``; return ``True`` when handled.
+
+    Dispatches the four documented hint shapes (``SKIP``, ``prefetch_obj``,
+    ``force_select``, ``force_prefetch``) and returns ``True`` after the
+    matching action has been taken.  Returns ``False`` for hints that
+    set no flag — the caller falls back to the default cardinality
+    dispatch in that case.  ``OptimizerHint.__post_init__`` already
+    rejects conflicting flag combinations, so the priority order here
+    is documentation, not collision arbitration.
+    """
+    if hint is OptimizerHint.SKIP or hint.skip:
+        return True
+    if hint.prefetch_obj is not None:
+        attname = getattr(django_field, "attname", None)
+        if attname is not None:
+            _append_unique(plan.only_fields, f"{prefix}{attname}")
+        _append_unique_many(plan.planned_resolver_keys, resolver_identities)
+        plan.prefetch_related.append(hint.prefetch_obj)
+        return True
+    if hint.force_select:
+        _plan_select_relation(
+            sel,
+            django_field,
+            django_name,
+            type_cls,
+            target_type,
+            plan,
+            prefix,
+            full_path,
+            info,
+            runtime_paths,
+            resolver_identities,
+        )
+        return True
+    if hint.force_prefetch:
+        _plan_prefetch_relation(
+            sel,
+            django_field,
+            target_type,
+            plan,
+            prefix,
+            full_path,
+            info,
+            runtime_paths,
+            resolver_identities,
+        )
+        return True
+    return False
 
 
 def _merge_child_plan_metadata(parent_plan: OptimizationPlan, child_plan: OptimizationPlan) -> None:
@@ -269,9 +334,7 @@ def _selected_scalar_names(
     """Return selected scalar Django field names, or ``None`` when elision is unsafe."""
     if model is None:
         return None
-    type_cls = registry.get(model)
-    cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
-    field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
+    _type_cls, field_map = _resolve_field_map(model)
     scalar_names: set[str] = set()
     for sel in _merge_aliased_selections([sel for sel in selections if _should_include(sel)]):
         if _is_fragment(sel):
@@ -289,7 +352,13 @@ def _selected_scalar_names(
 
 
 def _can_elide_fk_id(field: Any) -> bool:
-    """Return ``True`` when ``field`` stores the related object's id on the source row."""
+    """Return ``True`` when ``field`` stores the related object's id on the source row.
+
+    Composite primary keys (Django 5.2+) are excluded: the source-row
+    ``attname`` carries a single column id, but the target's ``pk`` is
+    a tuple, so eliding would compare the wrong shapes and surface
+    wrong data.
+    """
     related_model = getattr(field, "related_model", None)
     target_pk_name = _target_pk_name(field)
     target_field = getattr(field, "target_field", None)
@@ -298,6 +367,12 @@ def _can_elide_fk_id(field: Any) -> bool:
         if target_field is not None
         else getattr(field, "target_field_name", None)
     )
+    pk_fields = getattr(related_model._meta, "pk_fields", None) if related_model is not None else None
+    if pk_fields is not None and len(pk_fields) > 1:  # pragma: no cover
+        # Composite primary key (Django 5.2+).  Test fixtures do not
+        # define one; the guard exists so the elision branch fails
+        # closed if a consumer adopts composite PKs.
+        return False
     return (
         field.attname is not None
         and related_model is not None

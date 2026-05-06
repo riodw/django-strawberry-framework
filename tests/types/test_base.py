@@ -195,6 +195,24 @@ def test_meta_exclude_unknown_name_raises():
                 exclude = ("descriptoin",)  # typo
 
 
+def test_meta_optimizer_hints_for_excluded_field_raises():
+    """A hint for a real Django field that is *excluded* from the type raises.
+
+    Pins the Medium fix from ``rev-types__base.md``: without this check
+    the consumer's optimization intent is silently dead because the
+    walker never visits an excluded field.
+    """
+    from django_strawberry_framework.optimizer.hints import OptimizerHint
+
+    with pytest.raises(ConfigurationError, match="not in the type's selected fields"):
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                optimizer_hints = {"items": OptimizerHint.prefetch_related()}
+
+
 # ---------------------------------------------------------------------------
 # Slice 2 — scalar synthesis
 # ---------------------------------------------------------------------------

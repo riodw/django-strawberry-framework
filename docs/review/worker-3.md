@@ -2,6 +2,8 @@
 
 Worker 3 verifies Worker 2's changes against one review artifact. Worker 3 is the only worker role that marks the active review checklist item complete.
 
+Worker 3 runs as a **fresh subagent invocation per cycle item**, dispatched by Worker 0. The dispatch is intentional: Worker 3 has cycle-spanning history (its own memory file) of what kinds of fixes it has accepted before, but **no in-context memory of *this* cycle's implementation reasoning**. That is the point. A worker cannot review its own code; Worker 3 is structurally the reviewer-not-author for every cycle. See `REVIEW.md` "Subagent dispatch and worker memory" for the full model.
+
 ## Required reading
 
 Read these before acting:
@@ -11,11 +13,14 @@ Read these before acting:
 - `docs/review/REVIEW.md`
 - `docs/review/worker-3.md`
 - the active `docs/review/review-<0_0_X>.md`
-- the current `docs/review/rev-<folder__file_name>.md`
+- `docs/review/worker-memory/worker-3.md` — your own running notes from prior cycles in this release. Read first; the calibration on what to accept and what bit you later is the carry-forward that makes you a useful reviewer rather than a fresh one every time.
+- the current `docs/review/rev-<folder__file_name>.md` — the contract Worker 1 produced and Worker 2 implemented against. This is the only contract you verify against.
 - Worker 2's diff
 - the target source file and relevant tests
 
 If Worker 2 used a shadow file, also read the shadow overview or stripped file as a control-flow aid only.
+
+**Forbidden reads.** Worker 3 must not read `docs/review/worker-memory/worker-1.md` or `docs/review/worker-memory/worker-2.md`. The artifact and the diff are the contract; the other workers' running notes (their reasoning, their alternative considerations, their internal calibration) are private. If you find yourself wishing you had access, that's a signal the artifact is under-specified — flag that as verification feedback.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
@@ -25,12 +30,15 @@ Worker 3 may edit:
 
 - `docs/review/rev-<folder__file_name>.md` to record verification feedback
 - `docs/review/review-<0_0_X>.md` to mark the item complete after all gates pass
+- `docs/review/worker-memory/worker-3.md` — append-only updates to its own memory file
 
 Worker 3 must not:
 
 - implement Worker 2's source changes
 - approve unrelated cleanup
 - mark the checkbox complete before logic, comments, validation, and changelog handling are complete
+- read or edit `docs/review/worker-memory/worker-1.md` or `worker-2.md`
+- truncate or rewrite history in `worker-memory/worker-3.md` — append only (consolidate via merge if the file exceeds ~50 lines)
 - commit unless the maintainer explicitly asks
 
 ## Shadow-file dicta
@@ -88,7 +96,22 @@ Mark the corresponding checkbox `- [x]` in `docs/review/review-<0_0_X>.md` only 
 - comments/docstrings have been reviewed after logic approval
 - `CHANGELOG.md` has been updated or intentionally left unchanged
 
-If feedback is needed, record it in the current `docs/review/rev-<folder__file_name>.md` artifact and stop without marking the checkbox complete.
+After marking the checkbox, append a short entry (3-5 lines) to `docs/review/worker-memory/worker-3.md`: what kind of fix you accepted, what almost made you reject, and any pattern worth carrying into the next cycle.
+
+If feedback is needed, record it in the current `docs/review/rev-<folder__file_name>.md` artifact and stop without marking the checkbox complete. Do **not** append to your memory file on a rejection pass — wait until the cycle item is closed so the memory entry reflects the final accepted state.
+
+### Memory entry shape
+
+Append a brief block per accepted cycle item. Example:
+
+```
+## 2026-05-06 — types/base.py
+- Accepted: new `_validate_optimizer_hints_against_selected_fields` helper + test pinning excluded-field rejection.
+- Almost rejected: error message initially listed only the unknown keys; required model name be cited too.
+- Carry forward: when a Medium fix adds a validator, check that error messages name the model — consumers grep stack traces for model names.
+```
+
+Keep entries terse. If the file approaches 50 lines, merge similar entries into a single pattern observation before adding more.
 
 ## Stop conditions
 

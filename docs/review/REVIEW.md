@@ -29,7 +29,10 @@ If the version values do not match, stop and record that mismatch in the plan be
 
 ## Review scope
 
-The review covers every tracked file under `django_strawberry_framework/`, including package marker files such as `py.typed`. Python files get the full logic/comment review. Non-Python package files get a narrower packaging/API-contract review.
+The review covers tracked **`.py`** source files under `django_strawberry_framework/`, with two exclusions:
+
+- **Non-Python files are out of scope.** Package marker files (e.g. `py.typed`), data files, and any other non-`.py` file are not reviewed and not listed in the plan checklist. Their behavior is governed by packaging configuration (`pyproject.toml`, `MANIFEST.in`), not by per-file logic review.
+- **`__init__.py` files are out of scope.** They are typically thin re-export shims whose surface is more usefully reviewed at the folder pass (where the public-vs-private contract for the subpackage is set) than at the per-file level. Logic that lands in an `__init__.py` is reviewed as part of the folder pass for that subpackage.
 
 The review is folder-by-folder and one file at a time within each folder.
 
@@ -37,9 +40,9 @@ Rules:
 
 - Review only one file or one folder-summary pass at a time.
 - Do not start the next file until the current file's review/fix/verification/commit cycle is complete.
-- After all files in a folder are reviewed, perform one folder-level pass using the context gathered from those files. Before that folder pass, Worker 1 must read every sibling `docs/review/rev-*.md` artifact for the folder.
-- The folder-level pass should primarily look for DRY opportunities, duplicated logic, misplaced responsibilities, and cross-file inconsistencies.
-- After all files and folder passes are complete, perform one project-level pass over `django_strawberry_framework/` for DRY and structure opportunities that only become visible with full-package context.
+- After all in-scope files in a folder are reviewed, perform one folder-level pass using the context gathered from those files. The folder pass also covers the folder's `__init__.py` (re-exports, public-vs-private contract, side-effect-free imports). Before that folder pass, Worker 1 must read every sibling `docs/review/rev-*.md` artifact for the folder.
+- The folder-level pass should primarily look for DRY opportunities, duplicated logic, misplaced responsibilities, cross-file inconsistencies, and the subpackage's `__init__.py` re-export contract.
+- After all files and folder passes are complete, perform one project-level pass over `django_strawberry_framework/` for DRY and structure opportunities that only become visible with full-package context. The project pass also covers the top-level `django_strawberry_framework/__init__.py` (the package's public-API surface).
 
 ## Required plan structure
 
@@ -67,9 +70,7 @@ Review rule: one file or folder-summary pass at a time.
 
 ## Artifact list
 
-- `docs/review/rev-__init__.md`
 - `docs/review/rev-conf.md`
-- `docs/review/rev-optimizer____init__.md`
 - `docs/review/rev-optimizer__field_meta.md`
 - `docs/review/rev-optimizer.md`
 - `docs/review/rev-django_strawberry_framework.md`
@@ -77,16 +78,14 @@ Review rule: one file or folder-summary pass at a time.
 ## Checklist
 
 - `django_strawberry_framework/`
-  - [ ] `django_strawberry_framework/__init__.py` -> `docs/review/rev-__init__.md`
   - [ ] `django_strawberry_framework/conf.py` -> `docs/review/rev-conf.md`
   - `django_strawberry_framework/optimizer/`
-    - [ ] `django_strawberry_framework/optimizer/__init__.py` -> `docs/review/rev-optimizer____init__.md`
     - [ ] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
     - [ ] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
   - [ ] project-level pass: `django_strawberry_framework/` -> `docs/review/rev-django_strawberry_framework.md`
 ```
 
-Use the actual on-disk package tree when creating the plan. Do not invent files. Keep the checklist in review order.
+Use the actual on-disk package tree when creating the plan. Do not invent files. Skip every non-`.py` file (e.g. `py.typed`) and every `__init__.py` — they are out of scope per the rules above; the subpackage `__init__.py` and the top-level package `__init__.py` are covered by the folder pass and the project pass respectively. Keep the checklist in review order.
 
 ## Review artifact naming
 
@@ -97,20 +96,19 @@ Naming rules:
 - Start with `docs/review/rev-`.
 - Use the path relative to `django_strawberry_framework/`.
 - Replace `/` with `__`.
-- Drop the `.py` suffix for Python files.
-- Keep dunder names readable even if they produce multiple underscores.
+- Drop the `.py` suffix.
 - End with `.md`.
 
 Examples:
 
-- `django_strawberry_framework/__init__.py` -> `docs/review/rev-__init__.md`
 - `django_strawberry_framework/conf.py` -> `docs/review/rev-conf.md`
-- `django_strawberry_framework/optimizer/__init__.py` -> `docs/review/rev-optimizer____init__.md`
+- `django_strawberry_framework/registry.py` -> `docs/review/rev-registry.md`
 - `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
+- `django_strawberry_framework/types/base.py` -> `docs/review/rev-types__base.md`
 - folder pass for `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
 - project-level pass for `django_strawberry_framework/` -> `docs/review/rev-django_strawberry_framework.md`
 
-The generated `docs/review/review-<0_0_X>.md` file must list every artifact before review work starts.
+`__init__.py` files are out of scope as standalone artifacts; their re-export contract is reviewed inside the folder pass (or the project pass, for `django_strawberry_framework/__init__.py`). Non-`.py` files (e.g. `py.typed`) are out of scope entirely. The generated `docs/review/review-<0_0_X>.md` file must list every artifact before review work starts.
 
 ## Output rule for Worker 1
 
@@ -124,14 +122,14 @@ Worker 1 must not:
 - mark the checklist item done
 - produce a separate narrative response
 
-Worker 1 creates exactly one `docs/review/rev-<folder__file_name>.md` file for the current file or folder pass, then stops. For low-surface files such as `py.typed` or a trivial re-export-only `__init__.py`, that artifact may be a skip artifact explaining why there is no review-worthy logic or comment surface. Worker 1 still does not mark the checklist item done; Worker 3 or the maintainer handles the checkbox after accepting the skip artifact.
+Worker 1 creates exactly one `docs/review/rev-<folder__file_name>.md` file for the current file or folder pass, then stops. For low-surface `.py` files (e.g., a pure-class-definition module like `exceptions.py`), that artifact may be a skip artifact explaining why there is no review-worthy logic or comment surface. `__init__.py` files and non-`.py` files are out of scope for per-file artifacts entirely (see Review scope). Worker 1 still does not mark the checklist item done; Worker 3 or the maintainer handles the checkbox after accepting the skip artifact.
 
 ## Review artifact template
 
 Every `docs/review/rev-<folder__file_name>.md` file must use this structure:
 
 ````text
-# Review: `django_strawberry_framework/optimizer/__init__.py`
+# Review: `django_strawberry_framework/optimizer/walker.py`
 
 ## High:
 
@@ -139,7 +137,7 @@ Every `docs/review/rev-<folder__file_name>.md` file must use this structure:
 
 Issue summary, why it matters, and the recommended change.
 
-```django_strawberry_framework/optimizer/__init__.py:02:08
+```django_strawberry_framework/optimizer/walker.py:02:08
 Relevant excerpt or pseudo-diff context.
 ```
 
@@ -149,7 +147,7 @@ Relevant excerpt or pseudo-diff context.
 
 Issue summary, why it matters, and the recommended change.
 
-```django_strawberry_framework/optimizer/__init__.py:10:14
+```django_strawberry_framework/optimizer/walker.py:10:14
 Relevant excerpt or pseudo-diff context.
 ```
 
@@ -159,7 +157,7 @@ Relevant excerpt or pseudo-diff context.
 
 Issue summary, why it matters, and the recommended change.
 
-```django_strawberry_framework/optimizer/__init__.py:20:26
+```django_strawberry_framework/optimizer/walker.py:20:26
 Relevant excerpt or pseudo-diff context.
 ```
 
@@ -229,28 +227,78 @@ Focus on:
 - test coverage needed to prove the change
 - Two Scoops of Django structure: small focused modules, explicit queryset boundaries, clear settings boundaries, minimal magic, reusable utilities only when genuinely shared, and code placed where future Django maintainers would expect it
 
-When reviewing Python logic, Worker 2 may use a temporary comment-stripped shadow view when helpful. Worker 3 should receive that shadow view on the first verification pass when it was used to implement the fix. The shadow view is only an aid for reading control flow; never edit or commit it, and always cite line numbers from the original file.
+### Static review helper: `scripts/review_inspect.py`
 
-The comment-stripped pass should remove `#` comments from the view so logic can be read without explanatory text. It may leave docstrings in place unless docstrings obscure the control flow being checked. Shadow-file line numbers are not authoritative because comments may be stripped. Review artifacts and Worker 3 feedback must use original source-file line numbers, not shadow-file line numbers. Worker 3 feedback should be placed in the `docs/review/rev-<folder__file_name>.md` file.
+Worker 1 and Worker 2 both use the static helper. It parses the target as text and AST only — it never imports or executes the module — so it is safe to run on files that touch Django settings, the registry, or Strawberry type creation at import time.
 
-Use the static review helper from the project root:
+#### When to run the helper
+
+Worker 1 **must run** the helper before reviewing any of:
+
+- Any `.py` file with at least 150 source lines.
+- Any `.py` file under `django_strawberry_framework/optimizer/` or `django_strawberry_framework/types/`, regardless of length. These are the ORM-heavy and Strawberry-coupled subsystems where the marker and hotspot sections are load-bearing.
+- Every in-scope `.py` file in the folder being summarized, before writing the folder-level artifact. The folder-pass repeated-literal and cross-file structural checks rely on having an overview for every sibling.
+
+For the folder pass itself, the helper should also be run on the folder's `__init__.py` so its imports, repeated literals, and any hidden side-effects show up alongside the sibling overviews.
+
+Worker 1 **may skip** the helper for:
+
+- Pure-class-definition modules whose body is only `class` declarations with docstrings (e.g., `exceptions.py`). These will produce a skip artifact regardless.
+- Any `.py` file where the per-file artifact will be a "no review-worthy logic" skip artifact.
+
+When the helper is skipped, the `What looks solid` section of the artifact must say so explicitly with a short reason. (Non-`.py` files and standalone `__init__.py` reviews are out of scope per the Review scope rules; the helper question does not apply to them.)
+
+Worker 2 **must re-read** the overview already written by Worker 1 before implementing any non-trivial fix on a file the helper was run against. Worker 2 may re-run the helper with `--strip-docstrings` when the logic is hard to read with docstrings inline; in that case, the shadow file's path is passed to Worker 3 on the first verification pass.
+
+#### How to run
+
+From the repository root:
 
 ```shell
 python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py
 ```
 
-By default it writes:
+Useful flags:
 
-- `docs/review/shadow/<target>.stripped.py` — target source with `#` comments removed
-- `docs/review/shadow/<target>.overview.md` — static AST overview with imports, symbols, control-flow hotspots, Django/ORM markers, comments, docstrings, calls of interest, and repeated literals
+- `--strip-docstrings` — also strip module/class/function docstrings from the shadow file. Use when docstrings obscure the control flow being read.
+- `--outline-only` — overview keeps only Imports, Symbols, Control-flow hotspots, and Django/ORM markers. Use for a fast-scan pass on a file you have already reviewed.
+- `--stdout` — print the overview to stdout in addition to writing it. Useful for quick triage from the terminal.
+- `--marker NAME` — add a custom marker to the Django/ORM marker table. Repeatable. Use when a file traffics in a name (e.g., `Connection`, `relay`) the default marker list does not cover.
 
-Useful options:
+#### Output files
 
-- `--strip-docstrings` also strips docstrings from the shadow file
-- `--outline-only` keeps the overview focused on imports, symbols, hotspots, and markers
-- `--stdout` prints the overview while still writing the generated files
+Two files land under `docs/review/shadow/<stable-stem>`:
 
-The helper never imports or executes the target module. Generated files under `docs/review/shadow/` are static-analysis byproducts and are ignored by git; the `.md` review artifacts and plan file under `docs/review/` are tracked.
+- `<stem>.stripped.py` — target source with `#` comments removed (and docstrings, with `--strip-docstrings`).
+- `<stem>.overview.md` — static AST overview with the sections described below.
+
+`docs/review/shadow/` is gitignored: the shadow file and overview are throwaway analysis byproducts. The tracked, committed review artifact is the `docs/review/rev-*.md` file Worker 1 produces.
+
+#### Reading the overview — section-by-section guidance
+
+| Section | Reviewer use |
+|---|---|
+| **Imports** | Confirm the file's place in the dependency graph: local / first-party / django / strawberry / standard. New cross-folder imports are usually structural changes worth flagging. |
+| **Symbols** | Use as a fast table of contents. Jump straight to the function being reviewed. The class/parent column flags methods that may belong elsewhere. |
+| **Control-flow hotspots** | Functions over 40 lines or 8 branches surface here. Apply Medium-tier "complexity / branchy" attention to every hotspot. If a hotspot has no test exercising every branch, that is a Medium-tier "missing tests for important branches" finding. |
+| **Django / ORM markers** | **Audit checklist for ORM-heavy files.** Every line in this table touches `QuerySet`, `select_related`, `prefetch_related`, `Prefetch`, `only`, `_meta`, `get_queryset`, `_prefetched_objects_cache`, `fields_cache`, `DjangoType`, `OptimizationPlan`, `OptimizerHint`, `dst_optimizer_plan`, or `_optimizer_field_map`. Walk every entry. Each one needs either a one-line justification ("this is correct because …") or a finding. |
+| **Calls of interest** | Reflective-access audit: every `getattr` / `hasattr` / `isinstance` / `setattr` and every container-coercion (`dict`, `frozenset`, `iter`, `len`, `list`, `set`, `tuple`) lands here. These are the typical sites of shape-contract bugs and missing defensive defaults. |
+| **Comments and docstrings → Docstrings** | Verify every public function/class has a docstring describing the *final* approved behavior (after logic changes are accepted). |
+| **Comments and docstrings → TODO comments** | Comment-pass checklist: each TODO must still be actionable and must match its anchored spec; remove the anchor in the same change that ships the slice (per AGENTS.md). |
+| **Comments and docstrings → Comment inventory** | Spot stale or restating-the-obvious comments. Comment polish belongs in the comment pass, not the logic pass. |
+| **Repeated string literals** | DRY signal. Useful at the per-file pass for catching string-keyed dispatch (e.g., context keys); essential at the folder pass for catching cross-file duplication (`logger = logging.getLogger("django_strawberry_framework")` in three files would surface as the same literal in three overviews). |
+
+#### Folder-pass repeated-literal check
+
+When writing a folder-level artifact, Worker 1 must:
+
+1. Confirm the helper has been run on every Python file in the folder (overviews exist under `docs/review/shadow/`).
+2. Compare the **Repeated string literals** sections across sibling overviews. A literal that appears in two or more files is a folder-level DRY candidate; record it in the folder artifact's Medium or Low section depending on severity.
+3. Compare the **Imports** sections across sibling overviews to confirm one-way dependency direction inside the folder and to spot a sibling that has started importing from outside the documented boundary.
+
+#### Shadow-file line numbers are NOT canonical
+
+The shadow file strips `#` comments (and optionally docstrings), so its line numbers do not match the original source. Review artifacts, Worker 3 feedback, and source edits must cite **original source-file line numbers**, never shadow-file line numbers. The shadow file is read-only for review purposes; never edit or commit it. If Worker 2 used the shadow file during fix implementation, Worker 3's first verification pass must include the shadow-file caveat (see the `worker-3.md` shadow-file dicta).
 
 If a review identifies coverage that would seem to belong under frozen `tests/base/`, follow `AGENTS.md`: do not add new files there. Route new coverage to the correct existing parallel package test path or extend an allowed existing file only when that matches the standing rules.
 
@@ -269,6 +317,57 @@ Focus on:
 - public API docstrings that should mention consumer-visible constraints
 
 Do not polish comments before logic is correct. Comments should describe the final approved behavior, not the pre-fix behavior.
+
+## Subagent dispatch and worker memory
+
+Workers 1, 2, and 3 each run as **separate subagent invocations per cycle item**. Worker 0 stays in the main thread as the orchestrator. The split exists so the worker that verifies a fix has no in-context memory of the worker that wrote it — a worker cannot review its own implementation reasoning, just the artifact-and-diff contract handed to it.
+
+### Why subagent dispatch
+
+A single agent role-playing all three workers can convince itself a fix is sufficient because it remembers *why* it implemented the fix that way. Subagent isolation removes that path: Worker 3 starts fresh per cycle, sees only the artifact and the diff, and accepts or rejects on what is actually written down. The artifact and the diff become the contract; nothing flows between workers except those two files (plus the source under review).
+
+### Worker memory
+
+Each worker keeps a private scratch memory file that **persists across cycles within a single release** but is invisible to every other worker:
+
+- `docs/review/worker-memory/worker-1.md` — Worker 1's review notebook
+- `docs/review/worker-memory/worker-2.md` — Worker 2's implementation notebook
+- `docs/review/worker-memory/worker-3.md` — Worker 3's verification notebook
+
+These files are gitignored. Worker 0 creates the directory at plan time and deletes it at closeout. The tracked permanent record is the `rev-*.md` artifacts, never these notes.
+
+**What a worker writes to its memory.** At the end of each cycle, the worker appends a short entry — typically 3-5 lines — capturing what to carry into the next cycle:
+
+- Worker 1: recurring patterns being flagged, severity calibration ("after seeing this in three files I'm calling it Medium not Low"), reusable phrasing for common findings.
+- Worker 2: implementation patterns that worked (validation guard shapes, test scaffolding, comment polish style), maintainer pushback to remember.
+- Worker 3: kinds of fixes that passed muster, kinds that bit later, calibration on when to reject vs accept.
+
+Entries are append-only. If a worker's memory exceeds ~50 lines, the worker must consolidate (merge similar entries into a single pattern observation) before adding more — never delete without consolidating first.
+
+**Read isolation rules.** A worker may read **only** its own memory file:
+
+- Worker 1 may not read `worker-2.md` or `worker-3.md`.
+- Worker 2 may not read `worker-1.md` or `worker-3.md`. (Worker 2 reads the *artifact* Worker 1 produced — that is the contract — but never Worker 1's running notes.)
+- Worker 3 may not read `worker-1.md` or `worker-2.md`. (Worker 3 reads the *artifact* and the *diff* — those are the contract — but never the other workers' running notes.)
+- Worker 0 may read all memory files at closeout to seed the retrospective, but never edits them.
+
+**Write isolation rules.** A worker writes only to its own memory file. The main thread (Worker 0) never edits a worker's memory.
+
+**Spawn-per-cycle dispatch.** Worker 0 spawns each worker as a fresh subagent, once per cycle item, in this order:
+
+1. Worker 1 subagent — produces the artifact, appends to `worker-1.md`, returns.
+2. Worker 2 subagent — implements fixes, appends to `worker-2.md`, returns.
+3. Worker 3 subagent — verifies, marks the checkbox, appends to `worker-3.md`, returns.
+
+Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.md`, `REVIEW.md`, the worker's own role file), the active plan, the cycle's artifact (Workers 2 and 3) or source target (Worker 1), and the worker's own memory file contents. The subagent's prompt must explicitly forbid reading the other workers' memory files.
+
+**No cross-worker chatter.** Subagents do not message each other directly. All inter-worker information flows through the artifact (`rev-<folder__file_name>.md`) and the diff. If Worker 2 needs to flag something to Worker 3 (e.g., "I used the shadow view"), it goes in the artifact. If Worker 3 wants another Worker 2 pass, it goes in the artifact's verification feedback section.
+
+**Lifecycle.**
+
+- Worker 0 creates `docs/review/worker-memory/` and seeds three empty files (`worker-1.md`, `worker-2.md`, `worker-3.md`) at plan-creation time.
+- Workers 1/2/3 read their own file at the start of every spawn and append at the end.
+- Worker 0 deletes `docs/review/worker-memory/` at cycle closeout, after the retrospective is written.
 
 ## Worker process
 
@@ -291,13 +390,13 @@ The retrospective must be general. It should describe recurring bug types, stumb
 
 ### Worker 1: perform the next unchecked review
 
-Worker 1 reads `docs/review/review-<0_0_X>.md`, [Worker 1's role instructions](worker-1.md), finds the first checklist item not marked `- [x]`, and reviews only that file or folder pass.
+Worker 1 runs as a fresh subagent invocation per cycle item (see "Subagent dispatch and worker memory"). It reads `docs/review/review-<0_0_X>.md`, [Worker 1's role instructions](worker-1.md), `docs/review/worker-memory/worker-1.md` (its own running notes from prior cycles in this release), finds the first checklist item not marked `- [x]`, and reviews only that file or folder pass.
 
-Worker 1 creates the required `docs/review/rev-<folder__file_name>.md` artifact and stops.
+Worker 1 creates the required `docs/review/rev-<folder__file_name>.md` artifact, appends a short entry to `docs/review/worker-memory/worker-1.md`, and stops. Worker 1 may not read `worker-memory/worker-2.md` or `worker-memory/worker-3.md`.
 
 ### Worker 2: implement fixes
 
-Worker 2 reads the current `docs/review/rev-<folder__file_name>.md` file, [Worker 2's role instructions](worker-2.md), reviews the target source file, and implements the approved logic changes.
+Worker 2 runs as a fresh subagent invocation per cycle item. It reads the current `docs/review/rev-<folder__file_name>.md` file, [Worker 2's role instructions](worker-2.md), `docs/review/worker-memory/worker-2.md` (its own running notes from prior cycles), the target source file, and implements the approved logic changes. Worker 2 may not read `worker-memory/worker-1.md` or `worker-memory/worker-3.md`; the artifact is the only contract Worker 1 hands over.
 
 Worker 2 should:
 
@@ -308,13 +407,15 @@ Worker 2 should:
 - add or update tests when the logic change needs proof
 - run focused validation appropriate to the change
 
-After Worker 3 approves the logic changes, Worker 2 updates comments/docstrings for the reviewed scope. After Worker 3 approves comments, Worker 2 updates `CHANGELOG.md` if the change is user-visible or release-note-worthy.
+After Worker 3 approves the logic changes, Worker 2 updates comments/docstrings for the reviewed scope. After Worker 3 approves comments, Worker 2 updates `CHANGELOG.md` if the change is user-visible or release-note-worthy. Each Worker 2 pass is a fresh subagent spawn — Worker 2 only knows about the previous pass through what it wrote in the artifact and in `worker-memory/worker-2.md`.
 
-When a review artifact has no High-severity issues, Worker 2 and Worker 3 may be the same agent invocation if the maintainer explicitly chooses that lower-ceremony path for the item.
+At the end of its final pass for a cycle item, Worker 2 appends a short entry to `docs/review/worker-memory/worker-2.md`.
+
+When a review artifact has no High-severity issues, Worker 2 and Worker 3 may be the same agent invocation if the maintainer explicitly chooses that lower-ceremony path for the item — but this defeats the isolation guarantee and should be reserved for trivial cycles.
 
 ### Worker 3: verify fixes
 
-Worker 3 reads [Worker 3's role instructions](worker-3.md) and reviews Worker 2's diff against the `docs/review/rev-<folder__file_name>.md` artifact.
+Worker 3 runs as a fresh subagent invocation per cycle item. It reads [Worker 3's role instructions](worker-3.md), `docs/review/worker-memory/worker-3.md` (its own running notes from prior cycles), and reviews Worker 2's diff against the `docs/review/rev-<folder__file_name>.md` artifact. Worker 3 may not read `worker-memory/worker-1.md` or `worker-memory/worker-2.md`. Worker 3 has cycle-spanning history of what kinds of fixes it has accepted before, but no in-context memory of *this* cycle's implementation reasoning — that is the point of the dispatch.
 
 If Worker 2 used a shadow view, Worker 3's first-pass prompt must explicitly say: "The shadow file strips comments and may strip docstrings; its line numbers will not match the original source or the review artifact. Treat original source-file line numbers and the `docs/review/rev-<folder__file_name>.md` line references as canonical. Use the shadow only to understand control flow."
 
@@ -324,8 +425,9 @@ Worker 3 should:
 - check that tests or validation match the risk level
 - reject any High-severity fix that does not add or update tests pinning the corrected behavior, unless the artifact explicitly explains why a test is impossible or inappropriate
 - review comment/docstring updates after logic is approved
-- request another Worker 2 pass if needed
+- request another Worker 2 pass if needed (recorded in the artifact's verification feedback section — Worker 3 does not message Worker 2 directly)
 - mark the corresponding checkbox `- [x]` in `docs/review/review-<0_0_X>.md` only after logic, comments, validation, and changelog updates are complete
+- append a short entry to `docs/review/worker-memory/worker-3.md` capturing what to carry into the next cycle
 
 ### Maintainer checkpoint
 

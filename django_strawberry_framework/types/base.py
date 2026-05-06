@@ -70,6 +70,13 @@ class DjangoType:
     # Sentinel so ``has_custom_get_queryset`` can detect overrides.
     _is_default_get_queryset: ClassVar[bool] = True
 
+    # Empty defaults so attribute reads on the base class (or on an
+    # intermediate abstract subclass without ``Meta``) succeed without
+    # ``AttributeError``.  ``__init_subclass__`` writes the populated
+    # versions on every concrete subclass.
+    _optimizer_field_map: ClassVar[dict[str, FieldMeta]] = {}
+    _optimizer_hints: ClassVar[dict[str, OptimizerHint]] = {}
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Validate ``Meta`` and assemble the Strawberry type.
 
@@ -134,11 +141,12 @@ class DjangoType:
         # is not duplicated and ``types.resolvers`` does not need to
         # import back into ``types.base``.
         fields = _select_fields(meta)
+        _validate_optimizer_hints_against_selected_fields(meta, fields)
         # B7: precompute optimizer field metadata so the walker can
         # skip _meta.get_fields() on every walk.
         cls._optimizer_field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         # B4: stash optimizer_hints for the walker to consult.
-        cls._optimizer_hints = getattr(meta, "optimizer_hints", None) or {}
+        cls._optimizer_hints = _meta_optimizer_hints(meta)
         synthesized = _build_annotations(cls, fields)
         # Implementation detail (NOT a stable consumer-override contract
         # in 0.0.3): consumer-declared annotations are merged on top of
@@ -206,6 +214,27 @@ class DjangoType:
         return not cls._is_default_get_queryset
 
 
+def _meta_optimizer_hints(meta: type) -> dict[str, Any]:
+    """Return ``meta.optimizer_hints`` as a dict, or ``{}`` when unset/empty.
+
+    Centralizes the ``getattr(meta, "optimizer_hints", None) or {}`` pattern
+    used across ``__init_subclass__`` and the validators so the Meta key
+    name only appears once at the read site.
+    """
+    return getattr(meta, "optimizer_hints", None) or {}
+
+
+def _format_unknown_fields_error(*, model: type, attr: str, unknown: list[str], available: set[str]) -> str:
+    """Return the standard "unknown fields … Available: …" error message.
+
+    Used by every validator that points at a typo in ``Meta.fields``,
+    ``Meta.exclude``, or ``Meta.optimizer_hints``.  Centralizing the
+    format keeps the consumer-visible error shape consistent across
+    typo-guard sites.
+    """
+    return f"{model.__name__}.Meta.{attr} names unknown fields: {unknown}. Available: {sorted(available)}."
+
+
 def _validate_meta(meta: type) -> None:
     """Validate a ``DjangoType`` subclass's nested ``Meta`` class.
 
@@ -239,15 +268,19 @@ def _validate_meta(meta: type) -> None:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
 
     # B4: validate optimizer_hints field names and value types.
-    hints = getattr(meta, "optimizer_hints", None)
-    if hints is not None:
+    hints = _meta_optimizer_hints(meta)
+    if hints:
         model = meta.model
         valid_field_names = {f.name for f in model._meta.get_fields()}
         unknown_hint_fields = sorted(set(hints) - valid_field_names)
         if unknown_hint_fields:
             raise ConfigurationError(
-                f"{model.__name__}.Meta.optimizer_hints names unknown fields: "
-                f"{unknown_hint_fields}. Available: {sorted(valid_field_names)}.",
+                _format_unknown_fields_error(
+                    model=model,
+                    attr="optimizer_hints",
+                    unknown=unknown_hint_fields,
+                    available=valid_field_names,
+                ),
             )
         bad_values = sorted(k for k, v in hints.items() if not isinstance(v, OptimizerHint))
         if bad_values:
@@ -255,6 +288,27 @@ def _validate_meta(meta: type) -> None:
                 f"optimizer_hints values must be OptimizerHint instances, "
                 f"got non-OptimizerHint for: {bad_values}",
             )
+
+
+def _validate_optimizer_hints_against_selected_fields(meta: type, fields: list[Any]) -> None:
+    """Reject ``optimizer_hints`` keys that are not in the type's selected fields.
+
+    ``_validate_meta`` already checks that hint keys name real Django fields
+    on ``meta.model``.  This second check catches the silent-dead-code
+    case where the field is real but excluded from the GraphQL type via
+    ``Meta.fields`` / ``Meta.exclude`` — the walker never visits it, so
+    the consumer's optimization intent is lost.
+    """
+    hints = _meta_optimizer_hints(meta)
+    if not hints:
+        return
+    selected_names = {f.name for f in fields}
+    excluded_hint_fields = sorted(set(hints) - selected_names)
+    if excluded_hint_fields:
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.optimizer_hints names fields not in the type's "
+            f"selected fields: {excluded_hint_fields}.  Selected: {sorted(selected_names)}.",
+        )
 
 
 def _select_fields(meta: type) -> list[Any]:
@@ -296,16 +350,24 @@ def _select_fields(meta: type) -> list[Any]:
         unknown = sorted(set(fields_spec) - valid_names)
         if unknown:
             raise ConfigurationError(
-                f"{model.__name__}.Meta.fields names unknown fields: {unknown}. "
-                f"Available: {sorted(valid_names)}.",
+                _format_unknown_fields_error(
+                    model=model,
+                    attr="fields",
+                    unknown=unknown,
+                    available=valid_names,
+                ),
             )
         selected_names = set(fields_spec)
     else:
         unknown = sorted(set(exclude_spec) - valid_names)
         if unknown:
             raise ConfigurationError(
-                f"{model.__name__}.Meta.exclude names unknown fields: {unknown}. "
-                f"Available: {sorted(valid_names)}.",
+                _format_unknown_fields_error(
+                    model=model,
+                    attr="exclude",
+                    unknown=unknown,
+                    available=valid_names,
+                ),
             )
         selected_names = valid_names - set(exclude_spec)
 

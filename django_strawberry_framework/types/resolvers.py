@@ -20,16 +20,14 @@ caller pre-computes the field list with ``base._select_fields(meta)`` and
 passes it in).
 """
 
-import logging
 from typing import Any
 
 import strawberry
 from django.db import router
 from strawberry.types import Info
 
+from ..optimizer import logger as _resolver_logger
 from ..optimizer.plans import resolver_key, runtime_path_from_info
-
-_resolver_logger = logging.getLogger("django_strawberry_framework")
 
 
 def _get_context_value(context: Any, key: str, default: Any = None) -> Any:

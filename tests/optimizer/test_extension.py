@@ -1900,6 +1900,47 @@ def test_plan_stashed_on_object_context_unit():
     assert ctx.dst_optimizer_plan is plan
 
 
+def test_stash_on_read_only_mapping_is_silent():
+    """B5: a read-only ``MappingProxyType`` context must not abort the resolver chain.
+
+    Pins the Medium fix from rev-optimizer__extension.md: ``setattr`` on a
+    ``MappingProxyType`` raises ``TypeError`` (not ``AttributeError``), and
+    ``__setitem__`` then raises ``TypeError`` again. Both must be swallowed
+    so the optimizer's introspection-stash failure never crashes the
+    request.
+    """
+    from types import MappingProxyType
+
+    from django_strawberry_framework.optimizer.extension import _stash_on_context
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    ctx = MappingProxyType({})
+    plan = OptimizationPlan(prefetch_related=["items"])
+    # Should not raise.
+    _stash_on_context(ctx, "dst_optimizer_plan", plan)
+    assert "dst_optimizer_plan" not in ctx
+
+
+def test_stash_falls_back_to_setitem_on_typeerror():
+    """B5: ``setattr`` raising ``TypeError`` falls back to ``__setitem__``.
+
+    Pins the broadened exception catch: some context objects (e.g. frozen
+    pydantic models) raise ``TypeError`` rather than ``AttributeError`` on
+    ``setattr``, so the dict-style fallback must still run.
+    """
+    from django_strawberry_framework.optimizer.extension import _stash_on_context
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    class TypeErrorOnSetattr(dict):
+        def __setattr__(self, _key: str, _value: object) -> None:
+            raise TypeError("read-only attribute access")
+
+    ctx = TypeErrorOnSetattr()
+    plan = OptimizationPlan(prefetch_related=["items"])
+    _stash_on_context(ctx, "dst_optimizer_plan", plan)
+    assert ctx["dst_optimizer_plan"] is plan
+
+
 @pytest.mark.django_db
 def test_empty_plan_still_stashed():
     """B5/O5: even when no relations are selected, the scalar-only plan is stashed."""

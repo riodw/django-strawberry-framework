@@ -1,160 +1,231 @@
-# Feedback on `docs/spec-foundation.md`
-## Overall assessment
-`docs/spec-foundation.md` is a strong implementation contract for the first foundation slice. It correctly narrows the broader architecture into the type-definition, registry, pending-relation, finalization, cyclic-test, fail-loud-error, and optimizer-preservation work needed before filters, orders, aggregates, fieldsets, permissions, and connection fields can be built safely.
-The best parts of the spec are:
-- clear release scope and explicit non-scope
-- strong invariants against silent schema degradation
-- a concrete finalization strategy instead of vague lazy-reference language
-- explicit migration points from the current source
-- acceptance coverage for declaration-order cycles and optimizer regressions
-- a public API delta limited to `finalize_django_types()`
-I would treat the spec as close to implementable, but I would fix the issues below before writing production code.
-## Highest-priority feedback
-### 1. Clarify the real finalization boundary
-The spec says users call `finalize_django_types()` before constructing the Strawberry schema. That may be too late.
-In the current package, consumers usually reference `DjangoType` classes inside `@strawberry.type` query classes:
-- resolver return annotations such as `list[ItemType]`
-- field annotations such as `item: ItemType`
-- future `DjangoConnectionField(ItemType)` helpers
-Strawberry may need `ItemType.__strawberry_definition__` when the query class itself is decorated, not only when `strawberry.Schema(query=Query)` is constructed. The spikes should explicitly test this shape:
-- define several `DjangoType` classes without finalizing them
-- call `finalize_django_types()`
-- then decorate a `Query` class that returns `list[ItemType]`
-- construct and execute a `strawberry.Schema`
-Also test the reverse ordering:
-- decorate `Query` before `finalize_django_types()`
-- prove whether it fails, works, or stores enough lazy annotation state
-The public contract should say the exact safe point. If the safe point is “before any Strawberry decorator processes a class that references these `DjangoType`s,” the docs and examples need to say that directly.
-### 2. The spec calls deferred `strawberry.type` both “gated by spikes” and “committed”
-The pre-implementation spike section says implementation must pause if Spike A fails. Later, “Strawberry finalization strategy (committed)” says the slice commits to deferring `strawberry.type(cls)`.
-That is fine if Spike A has already passed. If it has not passed, the wording should be softened:
-- “assumed strategy pending Spike A”
-- “preferred strategy”
-- “committed only after Spike A passes”
-This matters because almost every production change depends on that outcome. A contributor should not be able to skip the spike and assume Strawberry finalization timing will work.
-### 3. Preserve inherited `get_queryset` behavior
-The collection pseudocode stores:
-```python path=null start=null
-has_custom_get_queryset = "get_queryset" in cls.__dict__
-```
-That is not equivalent to today’s behavior.
-Current behavior intentionally supports abstract bases without `Meta` that override `get_queryset`; concrete subclasses inherit the flipped `_is_default_get_queryset` sentinel through normal MRO lookup. If the new definition object stores only `"get_queryset" in cls.__dict__`, this supported case regresses:
-```python path=null start=null
-class TenantScopedType(DjangoType):
-    @classmethod
-    def get_queryset(cls, queryset, info, **kwargs):
-        return queryset.filter(tenant=info.context.tenant)
+# Foundation spec review feedback
 
-class ItemType(TenantScopedType):
-    class Meta:
-        model = Item
-        fields = "__all__"
-```
-`ItemType` must still report custom queryset behavior. The spec should compute `has_custom_get_queryset` from the inherited sentinel or an MRO-aware helper, not only from `cls.__dict__`.
-### 4. The optimizer backward-compat shim cannot be a normal `@property`
-The spec suggests retaining:
-```python path=null start=null
-@property
-def _optimizer_field_map(self):
-    return self.__django_strawberry_definition__.field_map
-```
-The optimizer reads this from the class:
-```python path=null start=null
-getattr(type_cls, "_optimizer_field_map", None)
-```
-A normal instance property returns the `property` object when accessed on the class, not the field map. That would break the walker and schema audit.
-Better options:
-- keep assigning class attributes for one minor version and mirror the definition object values into them
-- introduce a class-level descriptor
-- update every read path to the definition object and do not promise a class-level shim
-The simplest safe migration is to keep `_optimizer_field_map`, `_optimizer_hints`, and `_is_default_get_queryset` class attributes synchronized while the internal definition object becomes canonical.
-### 5. Store selected Django field objects or make resolver generation explicitly `FieldMeta`-compatible
-The finalizer pseudocode calls `_attach_relation_resolvers_for_definition(type_cls, definition)`, but `DjangoTypeDefinition` only stores `field_map: dict[str, FieldMeta]`.
-Today `_attach_relation_resolvers(cls, fields)` receives real Django field objects. `_make_relation_resolver` needs field attributes such as:
-- `name`
-- relation cardinality flags
-- `related_model.DoesNotExist` for reverse OneToOne
-- `attname` for FK-id elision stubs
-`FieldMeta` may be enough if resolver code is intentionally refactored to accept it, but the spec should say that. Otherwise, store `selected_fields: tuple[Any, ...]` on `DjangoTypeDefinition` and keep the resolver path closer to today’s behavior.
-My recommendation: store selected Django fields now. They are useful for future rich field generation too, and they avoid losing metadata before `DjangoModelField` exists.
-### 6. Manual annotations and pending relation finalization conflict
-The spec keeps the current merge:
-```python path=null start=null
-cls.__annotations__ = {**synthesized, **existing}
-```
-But the finalizer later rewrites:
-```python path=null start=null
-p.source_type.__annotations__[p.field_name] = resolved_annotation
-```
-That will overwrite a user-authored annotation for the same relation field if a pending relation was recorded before the merge.
-The spec should choose one of these contracts for 0.0.4:
-- user annotations are not a stable override contract, and relation overrides are explicitly unsupported
-- user annotations on relation fields are preserved and validated
-- user annotations skip pending automatic relation resolution for that field
-Because the spec also says `Annotated[..., strawberry.lazy(...)]` remains an optional explicit override path, I would make that path real and add tests for it. At minimum, do not silently overwrite user-authored relation annotations at finalization.
-### 7. Align relation-kind vocabulary
-The `PendingRelation` pseudocode uses:
-```python path=null start=null
-relation_kind: Literal["one", "many", "reverse_one_to_one"]
-```
-The current shared utility returns:
-```python path=null start=null
-Literal["many", "reverse_one_to_one", "forward_single"]
-```
-Pick one vocabulary and use it everywhere. I recommend keeping the current `forward_single` name because it is more precise than `one` and already matches `utils/relations.py`.
-### 8. Add the post-finalization registration guard to the pseudocode
-The lifecycle contract says a `DjangoType` declared after `finalize_django_types()` raises `ConfigurationError`, but the `__init_subclass__` pseudocode does not include that guard.
-Add it explicitly near the start of the concrete-type path:
-- abstract subclasses without `Meta` can still opt out cleanly
-- concrete subclasses with `Meta` raise if the registry is already finalized
-This prevents contributors from missing one of the most important lifecycle rules.
-## Test and fixture feedback
-### 9. Reconsider the proposed `tests/conftest.py` app-registration strategy
-The spec proposes `tests/fixtures/cardinality_models.py` plus `apps.get_app_config(...)` registration in `tests/conftest.py`. There is no current `tests/conftest.py`, and manual app registration can become brittle with Django’s global app registry.
-Current tests already use inline unmanaged synthetic models with `app_label` for specialized cases. The fixture strategy should be specific:
-- define unmanaged test models with a unique `app_label`
-- keep them module-scoped where possible to avoid repeated model-registration warnings
-- only create database tables if resolver execution truly needs persistence
-- avoid manual app-registry mutation unless a spike proves it is necessary
-If reverse relation discovery requires registered test models, pin that in a small test before building the larger fixture suite.
-### 10. Add schema integration tests, not only annotation tests
-The new acceptance tests should assert more than `__annotations__` contents.
-Add at least one end-to-end schema test that:
-- declares a cyclic graph in “bad” import order
-- calls `finalize_django_types()`
-- exposes a list field through `@strawberry.type Query`
-- constructs `strawberry.Schema`
-- executes a nested query successfully
-This is the test that proves the foundation actually works for users, not just for internal metadata.
-### 11. Add a failure atomicity test
-If `finalize_django_types()` raises because unresolved targets remain, the registry should not be left half-finalized.
-Add a test that:
-- declares one resolvable type and one unresolved relation
-- calls `finalize_django_types()` and catches `ConfigurationError`
-- verifies `registry.is_finalized()` is still false
-- verifies no definition has been marked finalized unless the whole pass succeeded
-This protects retry behavior in tests and avoids confusing partial state.
-### 12. Keep existing registry test locations in mind
-The spec says to add idempotency/isolation tests under `tests/test_registry.py`. Current registry coverage lives mostly in `tests/types/test_base.py`. Creating a new root test file is fine, but the spec should be explicit that this is a new file, not an existing one.
-## Documentation and release feedback
-### 13. Update `README.md` as well as docs pages
-The phased implementation section says to update `TODAY.md`, `docs/README.md`, and `docs/FEATURES.md`. Since `finalize_django_types()` becomes public API, the root `README.md` should also be updated wherever it lists exported names or shows schema setup.
-### 14. Include all export points
-The public API delta mentions a top-level re-export in `django_strawberry_framework/__init__.py`. Also update `django_strawberry_framework/types/__init__.py` if `finalize_django_types()` should be available from the type subsystem.
-### 15. Decide whether this slice bumps package version metadata
-The spec calls this the `0.0.4` foundation slice, while the current project metadata is still `0.0.3` in `pyproject.toml` and `django_strawberry_framework/__init__.py`.
-If implementation is meant to ship as `0.0.4`, include version updates in the implementation checklist. If not, remove the release-number language from the spec and call it the “next foundation slice.”
-## Suggested spec edits before implementation
-I would update `docs/spec-foundation.md` before code begins to:
-1. clarify that the deferred Strawberry strategy is conditional until Spike A passes
-2. define the exact point where users must call `finalize_django_types()`
-3. preserve inherited `get_queryset` detection
-4. replace the invalid `@property` optimizer shim guidance
-5. store selected Django field objects or explicitly refactor resolver generation to consume `FieldMeta`
-6. define the 0.0.4 manual-annotation contract for relation fields
-7. align `PendingRelation.relation_kind` with `utils.relations.relation_kind`
-8. add the post-finalization registration guard to the pseudocode
-9. add schema-level and failure-atomicity tests
-10. add `README.md`, export-point, and version metadata updates to the documentation/release work
-## Bottom line
-The spec is pointed in the right direction and is much stronger than the broader exploratory specs for implementation purposes. I would not start coding until the Strawberry timing spike is proven and the lifecycle/compatibility issues above are resolved in the text. After that, this is a solid first implementation slice for the larger `GOAL.md` architecture.
+Reviewed:
+
+- `KANBAN.md`
+- `docs/spec-rich_schema_architecture.md`
+- `docs/spec-definition_order_independence.md`
+- `docs/spec-foundation.md`
+
+The long-term direction is coherent: the 0.0.4 foundation slice should unblock definition-order independence without prematurely shipping Layer 3 systems. The remaining issues below are mostly lifecycle/atomicity gaps where the docs currently promise more than the implementation can safely guarantee.
+
+## P1 — Finalization atomicity is overstated
+
+`docs/spec-foundation.md` says `finalize_django_types()` is atomic: it either resolves, attaches resolvers, finalizes every type, and marks the registry finalized, or it raises with no `DjangoTypeDefinition.finalized` flags flipped.
+
+That is only true for the Phase 1 unresolved-target failure path in the pseudocode. It is not true for later failures:
+
+- `_attach_relation_resolvers(...)` mutates classes by setting `strawberry.field(...)` attributes.
+- `strawberry.type(type_cls, ...)` mutates each class by creating/updating `__strawberry_definition__`.
+- The Phase 3 loop flips `definition.finalized = True` one type at a time after each successful `strawberry.type(...)` call.
+
+If type N finalizes successfully and type N+1 fails because of a bad user annotation, Strawberry forward-ref error, duplicate field, etc., the process is partially mutated even though `registry.is_finalized()` remains false.
+
+Fix the contract before implementation:
+
+- Either weaken the guarantee to “failure-atomic only before Strawberry mutation begins; after a Strawberry-side failure, call `registry.clear()` and recreate fresh classes”.
+- Or add a prevalidation phase that can catch all expected `strawberry.type(...)` failures before mutating any class, if that is actually possible.
+- Add a test that deliberately makes one type fail during `strawberry.type(...)` and asserts the documented recovery behavior.
+
+## P1 — Finalization is not thread-safe as documented
+
+`docs/spec-foundation.md` currently says `finalize_django_types()` is safe to call from any thread and does not need a lock because tests are single-threaded and production callers run it from request thread or schema construction.
+
+That is unsafe. The finalizer mutates a process-global registry and class objects. The current registry explicitly has no locking, and class mutation during concurrent schema/request handling can produce partial or inconsistent Strawberry definitions.
+
+Fix the lifecycle contract:
+
+- `finalize_django_types()` must run during single-threaded import/app/schema setup, before serving requests.
+- Do not describe request-thread finalization as supported.
+- If future helpers might auto-trigger finalization lazily, they need a real lock or must be constrained to schema construction only.
+
+## P1 — Import discovery is underspecified
+
+The foundation slice exposes only `finalize_django_types()`; it explicitly does not ship `DjangoSchema`, `DjangoConnectionField`, `DjangoNodeField`, `apps.py`, or module autodiscovery.
+
+That means finalization can only resolve `DjangoType`s whose Python modules have already been imported. A project can have a valid `CategoryType` in another app module, but if that module has not been imported before `finalize_django_types()`, the finalizer will report `Category` as unresolved.
+
+The spec should make this explicit and test/document it:
+
+- Users must import every module that defines `DjangoType` classes before calling `finalize_django_types()`.
+- The README setup example needs to show the import boundary, not just the finalizer call.
+- Consider adding a deliberate “target type exists in code but module not imported” doc note, because this will be the most common production failure mode until `DjangoSchema`/`apps.py` or another discovery mechanism ships.
+
+This matters for the KANBAN direction because `apps.py` remains backlog and cannot silently be assumed by the 0.0.4 foundation slice.
+
+## P1 — Manual relation annotation contract ignores consumer resolvers/fields
+
+The spec pins a relation-field manual annotation contract: if a consumer supplies an annotation for a relation field, collection skips placeholder synthesis and pending-relation recording, and the finalizer never rewrites that annotation.
+
+However, Phase 2 still calls `_attach_relation_resolvers(type_cls, definition.selected_fields)` for every selected relation field. That function sets `setattr(cls, field.name, strawberry.field(resolver=resolver))`.
+
+So a consumer shape like this can be clobbered:
+
+- `items: list["ItemType"] = strawberry.field(resolver=custom_items)`
+- `@strawberry.field def items(...) -> list["ItemType"]`
+- possibly any pre-existing relation field descriptor/resolver assigned by the user
+
+The spec should choose one behavior:
+
+- Consumer-authored relation field/resolver wins, so finalizer must skip resolver attachment for that field.
+- Or annotation-only override is supported, but field/resolver override is explicitly unsupported and should raise a clear error instead of silently overwriting.
+
+Add tests for both annotation-only and resolver/field-assignment cases.
+
+## P1 — M2M end-to-end test plan conflicts with unmanaged fixtures
+
+`docs/spec-foundation.md` says the cardinality fixture models should be unmanaged (`managed = False`) and that resolver-execution tests needing persistence are out of foundation scope. Later, the end-to-end schema tests require executing an M2M query such as `{ allBooks { title tags { name } } }`.
+
+Those requirements conflict unless the test uses a non-DB resolver stub or creates temporary tables. A real M2M resolver calls the related manager and needs both model tables plus the through table.
+
+Fix the acceptance plan:
+
+- Either make the M2M schema test metadata-only and reserve DB-backed M2M execution for a later fixture.
+- Or explicitly create the unmanaged test tables/through table in the test setup.
+- Or monkeypatch the resolver/queryset in a documented way so the test proves Strawberry shape, not Django M2M persistence.
+
+## P2 — `registry.clear()` is described as a full clean state, but it cannot undo class mutation
+
+The spec says `registry.clear()` returns the package to a fully clean state. It can clear registry maps, pending relations, enum cache, and finalized flags. It cannot remove:
+
+- `__strawberry_definition__` from already-finalized classes
+- relation resolver attributes attached to already-mutated classes
+- `__django_strawberry_definition__` stored on class objects
+- rewritten `__annotations__`
+
+That is okay if tests always define fresh classes after `registry.clear()`, but the spec should say that explicitly.
+
+Suggested wording:
+
+- `registry.clear()` resets registry state for fresh type classes.
+- It does not roll back mutations on already-created Python classes.
+- Tests must not reuse finalized `DjangoType` classes after clearing unless a helper explicitly strips class-level Strawberry/DSF metadata.
+
+## P2 — Successful finalization leaves “pending” records unless cleared
+
+The pseudocode resolves entries from `registry.iter_pending_relations()` but never clears `_pending` after success. After finalization, `iter_pending_relations()` would still return historical records that are no longer pending.
+
+That can confuse diagnostics and future schema audit code.
+
+Pick one:
+
+- Clear `_pending` after all relations resolve successfully.
+- Rename the storage/API to something like `_relation_records` if resolved records intentionally remain.
+- Track a resolved/unresolved state on each record.
+
+Add an assertion to the idempotency tests for the chosen behavior.
+
+## P2 — Same-module/manual forward-reference behavior needs an explicit test
+
+The spec defers borrowing Strawberry-Django’s `get_strawberry_annotations`, while also promising manual relation annotations can flow through unchanged.
+
+That leaves a risky gap for these user forms:
+
+- `from __future__ import annotations` with `items: list[ItemType]`
+- string annotations such as `items: list["ItemType"]`
+- `Annotated[..., strawberry.lazy(...)]`
+- same-module versus cross-module target types
+
+If the finalizer simply mutates `cls.__annotations__` and later calls `strawberry.type(...)`, Strawberry may handle these, but the spec should not assume it.
+
+Add acceptance tests for:
+
+- same-module string forward refs without `strawberry.lazy`
+- future-annotations stringified refs
+- cross-module lazy refs
+- a manual annotation to a non-primary or alternate target type, even if multi-type support remains deferred
+
+If any of those are unsupported in 0.0.4, document the exact supported manual annotation forms.
+
+## P2 — Rich architecture Phase 1 conflicts with the foundation slice
+
+`docs/spec-rich_schema_architecture.md` says Phase 1/Foundation adds:
+
+- `DjangoTypeDefinition`
+- pending relation registry
+- `finalize_django_types()`
+- schema helper `DjangoSchema`
+- tests for finalization order
+
+But `docs/spec-foundation.md` explicitly says `DjangoSchema` does not ship in this slice. KANBAN also frames the current focus as the explicit finalizer, not schema helpers.
+
+Update the rich architecture migration path so Phase 1 matches the final foundation contract:
+
+- Foundation ships only `finalize_django_types()`.
+- `DjangoSchema` is a later wrapper/helper phase.
+
+## P2 — `PendingRelation.relation_kind` naming is inconsistent across specs
+
+`docs/spec-rich_schema_architecture.md` uses:
+
+- `Literal["one", "many", "reverse_one_to_one"]`
+
+`docs/spec-foundation.md` and the current utility type use:
+
+- `Literal["forward_single", "many", "reverse_one_to_one"]`
+
+Use the current `utils.relations.RelationKind` names everywhere. Otherwise implementation and tests can drift on the forward single-valued relation name.
+
+## P2 — Spike workflow is a gate but not an implementation phase
+
+The foundation spec correctly says no production code should be written before Spike A passes, but the phased implementation order starts with adding production dataclasses and registry APIs.
+
+Add an explicit Phase 0:
+
+1. Add/run Spike A, B, and C under `scripts/spikes/`.
+2. Record the outcome in the spec or README.
+3. Delete the throwaway scripts only after their conclusions are captured.
+4. Only then begin production implementation.
+
+Without this phase, the implementation checklist contradicts the gate.
+
+## P2 — The spec has a stale self-reference to `docs/feedback.md`
+
+`docs/spec-foundation.md` says “the eight clarifications from the verification report and the fifteen items in `docs/feedback.md` together form the checklist...”
+
+That is brittle and currently circular: this feedback file is being created after the spec, and the number of items may change.
+
+Replace it with wording like:
+
+- “The current review feedback in `docs/feedback.md` forms the review checklist until resolved.”
+
+Avoid pinning an item count in the implementation contract.
+
+## P3 — Source line references are already drifting
+
+The specs include many exact line references to current source files. Several are already stale after recent optimizer refactors, for example `DjangoOptimizerExtension` now has `_get_or_build_plan`, `_publish_plan_to_context`, `_context` helpers, string AST cache keys, and B8 diffing that the architecture spec’s baseline does not mention.
+
+This is not a blocker, but it makes specs harder to trust during implementation.
+
+Suggestion:
+
+- Keep exact line references only for external prior-art snapshots.
+- For in-repo source, reference symbols and files rather than line numbers unless the line is part of a review target.
+- Refresh the current baseline section before starting the slice.
+
+## P3 — Proposed Layer 3 module layout conflicts with KANBAN package layout
+
+`docs/spec-rich_schema_architecture.md` proposes flat modules such as:
+
+- `django_strawberry_framework/filters.py`
+- `filterset.py`
+- `orders.py`
+- `orderset.py`
+- `aggregateset.py`
+
+KANBAN lists planned Layer 3 subsystems as packages:
+
+- `filters/`
+- `orders/`
+- `aggregates/`
+
+This should be aligned before Layer 3 specs land. The package layout affects import paths, public surface promotion, and test tree mirroring.
+
+## P3 — Generic unresolved-relation fallback is discussed as a Meta key without a card
+
+The rich architecture spec sketches:
+
+- `Meta.unresolved_relations = "generic"`
+- default `"error"`
+
+KANBAN and the foundation spec both say generic fallback is not part of 0.0.4 and should not ship by default. If this remains as a possible future feature, it should be framed as a deferred design idea with its own future card. Otherwise readers may assume `Meta.unresolved_relations` is planned soon and start designing around an unaccepted Meta key.

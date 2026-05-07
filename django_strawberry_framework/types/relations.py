@@ -12,7 +12,11 @@ from ..utils.relations import RelationKind
 
 @dataclass(frozen=True)
 class PendingRelation:
-    """Relation field whose target ``DjangoType`` was not registered during collection."""
+    """Relation field whose target ``DjangoType`` was not registered during collection.
+
+    Fields must remain hashable because ``TypeRegistry.discard_pending()`` builds
+    ``set(resolved)`` when removing records after successful finalization.
+    """
 
     source_type: type
     source_model: type[models.Model]

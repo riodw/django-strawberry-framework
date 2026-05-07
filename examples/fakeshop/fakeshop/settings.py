@@ -48,7 +48,10 @@ INSTALLED_APPS = [
     "django_strawberry_framework",
     # Local
     "fakeshop.products.apps.ProductsConfig",
-    # Test fixtures
+    # Test-scoped unmanaged models used by definition-order/cardinality coverage.
+    # Keep this app installed: reverse OneToOne/M2M discovery requires the
+    # models to live in Django's app registry, and tests avoid mutating
+    # apps.get_app_config(...) at runtime.
     "tests.fixtures.apps.TestsCardinalityConfig",
 ]
 

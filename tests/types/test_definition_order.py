@@ -19,7 +19,12 @@ def _isolate_registry():
 
 
 def _strawberry_field(type_cls: type, field_name: str):
-    """Return a finalized Strawberry field by Python name."""
+    """Return a finalized Strawberry field by Python name.
+
+    Tests intentionally inspect Strawberry internals such as
+    ``base_resolver.wrapped_func`` to pin resolver attachment; if Strawberry
+    changes this field shape, these tests should fail loudly.
+    """
     return next(
         field for field in type_cls.__strawberry_definition__.fields if field.python_name == field_name
     )

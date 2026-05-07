@@ -13,12 +13,13 @@ from enum import Enum
 
 import pytest
 from django.db import models
-from fakeshop.products.models import Category, Item
+from fakeshop.products.models import Category, Item, Property
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import TypeRegistry, registry
 from django_strawberry_framework.types import finalizer as finalizer_module
+from django_strawberry_framework.types.relations import PendingRelationAnnotation
 
 
 @pytest.fixture
@@ -295,6 +296,52 @@ def test_phase_1_failure_is_atomic_and_retryable_after_missing_target_registers(
 
     assert registry.is_finalized() is True
     assert ItemType.__annotations__["category"] is CategoryType
+    assert list(registry.iter_pending_relations()) == []
+
+
+def test_phase_1_failure_does_not_rewrite_any_pending_annotations_when_one_target_is_missing():
+    """A mixed pending set stays untouched until every relation target resolves."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items", "properties")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    assert CategoryType.__annotations__["items"] is PendingRelationAnnotation
+    assert CategoryType.__annotations__["properties"] is PendingRelationAnnotation
+
+    with pytest.raises(ConfigurationError, match="Category.properties -> Property"):
+        finalize_django_types()
+
+    pending_names = [pending.field_name for pending in registry.iter_pending_relations()]
+    category_definition = registry.get_definition(CategoryType)
+    item_definition = registry.get_definition(ItemType)
+    assert registry.is_finalized() is False
+    assert category_definition is not None
+    assert item_definition is not None
+    assert category_definition.finalized is False
+    assert item_definition.finalized is False
+    assert not hasattr(CategoryType, "__strawberry_definition__")
+    assert not hasattr(ItemType, "__strawberry_definition__")
+    assert pending_names == ["items", "properties"]
+    assert CategoryType.__annotations__["items"] is PendingRelationAnnotation
+    assert CategoryType.__annotations__["properties"] is PendingRelationAnnotation
+
+    class PropertyType(DjangoType):
+        class Meta:
+            model = Property
+            fields = ("id", "name")
+
+    finalize_django_types()
+
+    assert registry.is_finalized() is True
+    assert CategoryType.__annotations__["items"] == list[ItemType]
+    assert CategoryType.__annotations__["properties"] == list[PropertyType]
     assert list(registry.iter_pending_relations()) == []
 
 

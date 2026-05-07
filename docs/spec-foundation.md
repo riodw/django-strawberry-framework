@@ -67,9 +67,9 @@ Phase 0 confirmed the following strategy.
 ### Manual annotation contract for relation fields (0.0.4)
 For relation fields only, the foundation slice pins this contract:
 - **Annotation override**: if the consumer has supplied an annotation on the same Python name as a Django relation field (`items: list["ItemType"]`, `items: Annotated[list["ItemType"], strawberry.lazy("...")]`, etc.), the collection phase **skips both** placeholder synthesis and pending-relation recording for that field. The user's annotation is left untouched and flows through Strawberry's normal annotation handling at finalization time.
-- **Field / resolver override**: if the consumer assigns a Strawberry field or resolver to the same Python name (`items: list["ItemType"] = strawberry.field(resolver=custom_items)`, `@strawberry.field def items(...) -> list["ItemType"]`, or any pre-existing `cls.<field_name>` value that is not the default Django attribute), the collection phase records the field name on `DjangoTypeDefinition.consumer_authored_fields` and the **finalizer's resolver-attachment phase skips that field**. `_attach_relation_resolvers` must consult this set and `setattr(cls, field.name, ...)` only for relation fields the consumer did not author. The consumer-authored field/resolver wins; the finalizer never clobbers it.
-- **Detection rule**: a relation field is treated as consumer-authored if either (a) `field.name` is present in `cls.__dict__` and the value is not a Django manager/descriptor (i.e., it was assigned by the consumer, not by Django's class machinery), or (b) `field.name` appears in the consumer's pre-collection `__annotations__`. The two sets are unioned; both feed `consumer_authored_fields`.
-- The finalizer **never** rewrites a relation annotation that was consumer-supplied and **never** attaches a resolver to a consumer-authored relation field.
+- **Field / resolver override**: if the consumer assigns a Strawberry field or resolver to the same Python name (`items: list["ItemType"] = strawberry.field(resolver=custom_items)`, `@strawberry.field def items(...) -> list["ItemType"]`, or any pre-existing `cls.<field_name>` value that is not the default Django attribute), the collection phase records the field name on `DjangoTypeDefinition.consumer_assigned_relation_fields` and the **finalizer's resolver-attachment phase skips that field**. `_attach_relation_resolvers` must consult this set and `setattr(cls, field.name, ...)` only for relation fields the consumer did not assign. The consumer-assigned field/resolver wins; the finalizer never clobbers it.
+- **Detection rule**: a relation field is treated as consumer-authored if either (a) `field.name` is present in `cls.__dict__` and the value is not a Django manager/descriptor (i.e., it was assigned by the consumer, not by Django's class machinery), or (b) `field.name` appears in the consumer's pre-collection `__annotations__`. The two sets are unioned in `consumer_authored_fields`, while `consumer_annotated_relation_fields` and `consumer_assigned_relation_fields` preserve the split for finalization.
+- The finalizer **never** rewrites a relation annotation that was consumer-supplied and **never** attaches a resolver to a consumer-assigned relation field. Annotation-only overrides still receive generated relation resolvers.
 - Validation that a consumer-supplied annotation matches the Django relation cardinality (`many_to_many` → `list[T]`, nullable FK → `T | None`, etc.) is **deferred**. The 0.0.4 contract is "trust the user's annotation; do not silently overwrite."
 - Tests cover all four shapes:
   - annotation-only override (`items: list["ItemType"]`)
@@ -109,14 +109,13 @@ class DjangoTypeDefinition:
     has_custom_get_queryset: bool             # was cls._is_default_get_queryset (negated)
     # Names of relation fields whose annotation OR field/resolver was
     # supplied by the consumer (see "Manual annotation contract for
-    # relation fields"). The collection phase populates this from both
-    # sources (pre-existing annotation OR pre-existing class-dict value).
-    # The finalizer's annotation-rewrite phase skips these field names
-    # when rewriting annotations, AND _attach_relation_resolvers skips
-    # them when attaching resolvers, so consumer-authored
-    # `strawberry.field(resolver=...)` / `@strawberry.field` shapes are
-    # never clobbered.
+    # relation fields"). The collection phase stores both the union and
+    # the split views: annotation-only overrides suppress placeholder
+    # synthesis and pending-relation rewrites, while assigned Strawberry
+    # fields/resolvers also suppress generated resolver attachment.
     consumer_authored_fields: frozenset[str] = frozenset()
+    consumer_annotated_relation_fields: frozenset[str] = frozenset()
+    consumer_assigned_relation_fields: frozenset[str] = frozenset()
     # Forward-reserved slots (declared but unused in 0.0.4)
     # These exist so later subsystems plug in without reshaping the dataclass.
     # Validation in _validate_meta still rejects the matching Meta keys until
@@ -224,18 +223,23 @@ def __init_subclass__(cls, **kwargs):
     #    consumer pre-supplied an annotation on the same name, or (b)
     #    the consumer assigned a value (typically strawberry.field(...)
     #    or a @strawberry.field decorator result) on the same name. The
-    #    union feeds DjangoTypeDefinition.consumer_authored_fields and
-    #    is consulted by both the annotation rewrite path and the
-    #    resolver attachment path so neither overwrites consumer code.
+    #    union feeds DjangoTypeDefinition.consumer_authored_fields, while
+    #    the split sets let finalization distinguish annotation-only
+    #    overrides from assigned Strawberry field/resolver overrides.
     consumer_annotations = dict(cls.__dict__.get("__annotations__", {}))
     consumer_class_dict = cls.__dict__
-    consumer_authored_fields = frozenset(
+    consumer_annotated_relation_fields = frozenset(
         f.name for f in fields
-        if f.is_relation and (
-            f.name in consumer_annotations
-            or _is_consumer_authored_class_attr(consumer_class_dict, f.name)
-        )
+        if f.is_relation and f.name in consumer_annotations
     )
+    consumer_assigned_relation_fields = frozenset(
+        f.name for f in fields
+        if f.is_relation and _is_consumer_authored_class_attr(consumer_class_dict, f.name)
+    )
+    consumer_authored_fields = frozenset({
+        *consumer_annotated_relation_fields,
+        *consumer_assigned_relation_fields,
+    })
     # 8. Build annotations. Scalars resolve immediately; relations either
     #    resolve immediately if their target is registered, defer if the
     #    target is unknown, or get left alone if the consumer pre-supplied
@@ -272,6 +276,8 @@ def __init_subclass__(cls, **kwargs):
         optimizer_hints=optimizer_hints,
         has_custom_get_queryset=has_custom_get_queryset,
         consumer_authored_fields=consumer_authored_fields,
+        consumer_annotated_relation_fields=consumer_annotated_relation_fields,
+        consumer_assigned_relation_fields=consumer_assigned_relation_fields,
     )
     # 10. Register early so later siblings can resolve us.
     registry.register(meta.model, cls)
@@ -334,49 +340,55 @@ def finalize_django_types() -> None:
     """
     if registry.is_finalized():
         return  # idempotent
-    # Phase 1 (resolve pending relations). Skip any field whose owning
-    # DjangoTypeDefinition recorded a consumer-authored relation — that
-    # field's annotation was never replaced by a placeholder in
-    # collection and must not be overwritten now.
+    # Phase 1 (resolve pending relations). First collect every resolvable
+    # and unresolved pending record without mutating classes. Skip any
+    # field whose owning DjangoTypeDefinition recorded a consumer-authored
+    # relation — that field's annotation was never replaced by a
+    # placeholder in collection and must not be overwritten now.
     unresolved: list[PendingRelation] = []
-    resolved: list[PendingRelation] = []
+    resolved: list[tuple[PendingRelation, type]] = []
+    consumer_authored: list[PendingRelation] = []
     for p in registry.iter_pending_relations():
         owning_def = registry.get_definition(p.source_type)
         if owning_def is not None and p.field_name in owning_def.consumer_authored_fields:
-            resolved.append(p)  # consumer-authored: nothing to resolve, but not unresolved
+            consumer_authored.append(p)  # nothing to resolve, but not unresolved
             continue
         target_type = registry.get(p.related_model)
         if target_type is None:
             unresolved.append(p)
             continue
-        p.source_type.__annotations__[p.field_name] = (
-            _resolved_relation_annotation_from_pending(p, target_type)
-        )
-        resolved.append(p)
+        resolved.append((p, target_type))
     # Phase 1 fail-loud: no class mutation runs and no type is marked
     # finalized if there are unresolved targets. This is the ONLY
     # failure-atomic boundary in finalize_django_types(); see docstring.
     if unresolved:
         raise ConfigurationError(_format_unresolved_targets_error(unresolved))
+    resolved_pending = [*consumer_authored]
+    for p, target_type in resolved:
+        p.source_type.__annotations__[p.field_name] = resolved_relation_annotation(
+            p.django_field,
+            target_type,
+        )
+        resolved_pending.append(p)
     # All pending relations either resolved or were claimed by the
     # consumer-authored escape hatch. Drop them from the pending list so
     # post-finalization diagnostics (and any retry-after-clear scenario)
     # see an empty pending set.
-    registry.discard_pending(resolved)
+    registry.discard_pending(resolved_pending)
     # Phase 2 (attach relation resolvers). Uses definition.selected_fields
     # — the real Django field objects — not field_map (FieldMeta), because
     # _make_relation_resolver needs `attname`, `related_model.DoesNotExist`,
     # cardinality flags, etc. (see `types/resolvers.py:111-165`). Skip
-    # any relation field whose name is in the consumer-authored set so
-    # consumer-supplied resolvers / @strawberry.field decorators are
-    # never clobbered.
+    # consumer-assigned Strawberry fields/resolvers so generated
+    # resolvers never clobber them; annotation-only overrides still get
+    # generated resolvers.
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue
         _attach_relation_resolvers(
             type_cls,
             definition.selected_fields,
-            skip_field_names=definition.consumer_authored_fields,
+            skip_field_names=definition.consumer_assigned_relation_fields,
         )
     # Phase 3 (finalize each type with strawberry.type). NOT atomic; see
     # docstring. A Strawberry-side failure here leaves the registry and
@@ -459,7 +471,7 @@ Every change below is mapped to a specific symbol in the current source.
 - **Single-threaded setup window.** `finalize_django_types()` must be called once during single-threaded import / app / schema construction, before any request handling begins. The function mutates a process-global registry **and** mutates class objects (annotations, attached fields, `__strawberry_definition__`, `__django_strawberry_definition__`); the registry is intentionally lockless (see `registry.py:28-33`) and concurrent finalization can produce partial Strawberry definitions. Calling the finalizer from a request thread, async resolver, or any other concurrent context is **not supported**. Future helpers that auto-trigger finalization must be constrained to schema construction time or must acquire a real lock around the finalizer.
 - A `DjangoType` declared **after** `finalize_django_types()` returns raises `ConfigurationError` from `__init_subclass__` with the message "`finalize_django_types()` already ran; cannot register `<TypeName>` after finalization. Call `registry.clear()` first if this is a test." This is the contract that makes test isolation predictable: tests use the autouse fixture pattern at `tests/types/test_base.py:46-51` (`registry.clear(); yield; registry.clear()`) and never see a stale pending-relation set.
 - **`registry.clear()` resets registry state for fresh type classes; it does not roll back class mutation.** `clear()` resets `_types`, `_models`, `_enums`, `_definitions`, `_pending`, and `_finalized`, so the next test's `__init_subclass__` and `finalize_django_types()` calls behave like a fresh process *for newly created classes*. It cannot remove `__strawberry_definition__` from already-finalized classes, cannot remove relation resolver attributes from mutated classes, and cannot remove `__django_strawberry_definition__` or rewritten `__annotations__`. Tests must not reuse finalized `DjangoType` classes after `clear()`; the autouse fixture pattern naturally avoids this because each test redefines its types inside the test function or fixture.
-- **Pending records are dropped after a successful resolution.** The finalizer calls `registry.discard_pending(resolved)` once phase 1 has matched every pending entry to either a target type or the consumer-authored escape hatch. Post-finalization, `registry.iter_pending_relations()` returns an empty iterator. This keeps schema-audit and diagnostic code from seeing historical records that are no longer pending.
+- **Pending records are dropped after a successful resolution.** The finalizer calls `registry.discard_pending(resolved_pending)` once phase 1 has matched every pending entry to either a target type or the consumer-authored escape hatch. Post-finalization, `registry.iter_pending_relations()` returns an empty iterator. This keeps schema-audit and diagnostic code from seeing historical records that are no longer pending.
 ## Test fixtures and acceptance criteria
 ### Fakeshop coverage gap
 The fakeshop product graph (`examples/fakeshop/fakeshop/products/models.py`) covers FK and reverse FK only:
@@ -473,7 +485,7 @@ It has **no OneToOne and no M2M relations**. The acceptance criteria require all
 Implementation rules (informed by the existing in-test pattern at `tests/types/test_converters.py:41-72` and `tests/optimizer/test_field_meta.py:82-146`):
 - Each model declares an explicit `class Meta: app_label = "tests_cardinality"; managed = False`. The `managed = False` flag avoids creating database tables; resolver-execution tests that need persistence either monkeypatch a queryset or are scoped under a separate fixture (out of foundation scope).
 - Models are module-scoped so Django's app registry sees one copy each; per-test inline declarations create the model-registration warning storm visible across the rest of `tests/types/test_base.py`.
-- **No `tests/conftest.py`** and **no `apps.get_app_config(...)` mutation** by default — the existing tests work without either, and the autouse `_isolate_registry` fixture pattern at `tests/types/test_base.py:46-51` is replicated per-file. If reverse-relation discovery requires an additional Django app to be registered, prove it in a small spike before adding `apps.get_app_config(...)` calls.
+- **No `tests/conftest.py`** and **no `apps.get_app_config(...)` mutation** by default — the existing tests work without either, and the autouse `_isolate_registry` fixture pattern at `tests/types/test_base.py:46-51` is replicated per-file. A reverse OneToOne/M2M discovery probe proved the unmanaged cardinality models must live in an installed app, so `tests.fixtures.apps.TestsCardinalityConfig` is registered in the fakeshop `INSTALLED_APPS`; this keeps models module-scoped and avoids runtime app-registry mutation.
 ### Cyclic acceptance tests (new)
 Under `tests/types/test_definition_order.py`:
 - `Category` declared before `Item`; `Item.category` resolves to `CategoryType`; `Category.items` resolves to `list[ItemType]`.
@@ -521,7 +533,7 @@ The slice is ordered so each step lands a passing test suite. **Phase 0 is the s
 1. Add `DjangoTypeDefinition` dataclass at `types/definition.py` and the `PendingRelation` dataclass at `types/relations.py`. No behavior change yet.
 2. Extend `TypeRegistry` with `register_definition`, `get_definition`, `iter_definitions`, `add_pending_relation`, `iter_pending_relations`, `discard_pending`, `is_finalized`, `mark_finalized`, and the extended `clear`. Delete `lazy_ref`.
 3. Implement `finalize_django_types()` at `types/finalizer.py`. No collection changes yet; the function runs against an empty pending list.
-4. Split `__init_subclass__` into the collection-only pseudocode. Move the `strawberry.type(cls, ...)` call out and into `finalize_django_types()`. Move `_attach_relation_resolvers` out and into `finalize_django_types()` (consuming `definition.selected_fields` and skipping `definition.consumer_authored_fields`). Add the post-finalization registration guard and the consumer-authored detection (annotation OR class-dict assignment).
+4. Split `__init_subclass__` into the collection-only pseudocode. Move the `strawberry.type(cls, ...)` call out and into `finalize_django_types()`. Move `_attach_relation_resolvers` out and into `finalize_django_types()` (consuming `definition.selected_fields` and skipping `definition.consumer_assigned_relation_fields`). Add the post-finalization registration guard and the consumer-authored detection (annotation OR class-dict assignment).
 5. Replace the eager `cls.__dict__` get_queryset detection with `_detect_custom_get_queryset(cls)` (MRO-aware) so abstract bases keep propagating the sentinel.
 6. Migrate `_optimizer_field_map`, `_optimizer_hints`, `_is_default_get_queryset` reads to live on the definition. Mirror them as plain class attributes in `__init_subclass__` (not `@property`) for one minor version so the walker's `getattr(type_cls, ...)` reads keep working.
 7. Add the cardinality fixture under `tests/fixtures/cardinality_models.py` (unmanaged models with explicit `app_label`; no `conftest.py` / app-registry mutation unless a spike proves it is required).

@@ -264,12 +264,12 @@ def test_meta_exclude_filters_concrete_fields():
 
 @pytest.mark.skip(
     reason=(
-        "Slice 2 known issue: Strawberry's @strawberry.type decorator regenerates "
-        "cls.__annotations__ from its own field metadata after our merge in "
-        "DjangoType.__init_subclass__, so the consumer's class-level annotation "
-        "loses to the synthesized one. Fix is to bypass strawberry.type's "
-        "annotation rewrite or to apply consumer overrides through Strawberry's "
-        "own field-customization API. Tracked separately from the optimizer split."
+        "Deferred scalar-field override behavior: Strawberry's @strawberry.type "
+        "decorator regenerates cls.__annotations__ from its own field metadata "
+        "after our merge in DjangoType.__init_subclass__, so the consumer's "
+        "class-level scalar annotation loses to the synthesized one. This is "
+        "unrelated to the 0.0.4 relation-override contract, which is pinned in "
+        "tests/types/test_definition_order.py."
     ),
 )
 def test_consumer_annotation_overrides_synthesized():

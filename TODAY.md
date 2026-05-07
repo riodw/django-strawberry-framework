@@ -25,6 +25,16 @@ The commented rich fakeshop design is not directly usable yet because it depends
 
 ## What to put in `examples/fakeshop/fakeshop/products/schema.py` today
 
+<!-- TODO(spec-foundation 0.0.4): when the foundation slice ships,
+refresh the example schema below to show definition-order-independent
+bidirectional relations (Category.items + Item.category on the same
+types) and add the `finalize_django_types()` call site at the
+Spike-A-proven safe boundary. If finalization must happen before any
+`@strawberry.type` query class references these `DjangoType`s, the
+example should be reorganized so the finalizer runs before that query
+decorator, not merely before `strawberry.Schema(...)` construction. Per
+`docs/spec-foundation.md` Phase 10 of the phased implementation order. -->
+
 Replace the placeholder with list-based Strawberry query fields using `DjangoType` and manual root resolvers that return Django `QuerySet`s.
 
 Use this forward-relation schema first:

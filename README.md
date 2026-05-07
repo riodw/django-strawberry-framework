@@ -26,6 +26,8 @@ Meta classes, not decorators. [Strawberry GraphQL](https://github.com/strawberry
 This root README is the operational entry point: install, run, seed example data, test, build, and publish.
 
 - [`docs/README.md`](docs/README.md) — quick start, package orientation, optimizer behavior, and status.
+- [`GOAL.md`](GOAL.md) — long-term project destination and rich-schema north star.
+- [`TODAY.md`](TODAY.md) — current package capability snapshot for examples and early adopters.
 - [`docs/FEATURES.md`](docs/FEATURES.md) — detailed shipped/planned/deferred capability catalog, quick comparison table, and migration notes.
 - [`docs/TREE.md`](docs/TREE.md) — detailed layout reference for upstream trees, this package's source tree, target architecture, and test placement.
 - [`KANBAN.md`](KANBAN.md) — contributor/maintainer board for shipped work, planned work, blockers, and release-readiness notes.

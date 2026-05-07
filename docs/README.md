@@ -2,7 +2,7 @@
 
 `django-strawberry-framework` is a DRF-shaped Django integration for Strawberry GraphQL. It lets Django teams build GraphQL APIs from Django models using the familiar `class Meta` style instead of a decorator-heavy surface.
 
-For install, local development, testing, and the canonical documentation map, start from [`../README.md`](../README.md).
+For install, local development, testing, and the canonical documentation map, start from [`../README.md`](../README.md). For the long-term destination, see [`../GOAL.md`](../GOAL.md). For the current capability snapshot, see [`../TODAY.md`](../TODAY.md).
 
 ## Quick start
 
@@ -73,6 +73,8 @@ Coming:
 - schema export helpers
 
 How this stacks up against the alternatives: see the [quick comparison in `FEATURES.md`](FEATURES.md#quick-comparison).
+
+For a more narrative snapshot of what the package can do right now in the example project, see [`../TODAY.md`](../TODAY.md). For the full north-star goal, see [`../GOAL.md`](../GOAL.md).
 
 ## Optimizer behavior
 

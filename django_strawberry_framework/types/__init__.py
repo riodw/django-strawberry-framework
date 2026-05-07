@@ -13,6 +13,13 @@ logger).  The optimizer subpackage must not import back from ``types/``;
 shared primitives belong in ``optimizer/`` or in a sibling utility module.
 """
 
+# TODO(spec-foundation 0.0.4): re-export ``finalize_django_types`` from
+# the new ``types/finalizer.py`` module and add it to ``__all__`` so
+# ``from django_strawberry_framework.types import finalize_django_types``
+# works alongside ``from django_strawberry_framework.types import
+# DjangoType``. Symmetry with the package-root re-export in
+# ``django_strawberry_framework/__init__.py`` is required by
+# ``docs/spec-foundation.md`` "Phased implementation order" step 11.
 from .base import DjangoType
 
 __all__ = ("DjangoType",)

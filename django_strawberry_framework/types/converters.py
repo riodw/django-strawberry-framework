@@ -208,6 +208,19 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
     return enum_cls
 
 
+# TODO(spec-foundation 0.0.4): redo this function. The eager
+# ``ConfigurationError`` for unregistered targets MUST be removed; the
+# same wording moves into ``finalizer._format_unresolved_targets_error``
+# and only fires after every ``DjangoType`` has had a chance to
+# register. After the rewrite this becomes a thin helper:
+#   - If ``registry.get(field.related_model)`` returns a type, return
+#     the concrete annotation (``list[T]`` for ``many``, ``T | None``
+#     for ``reverse_one_to_one`` or nullable forward, ``T`` otherwise).
+#   - If the target is unregistered, return a sentinel placeholder and
+#     let the caller (the rewritten ``_build_annotations``) append a
+#     ``PendingRelation`` for the finalizer to rewrite.
+# See ``docs/spec-foundation.md`` "Migration of current code" / "Must
+# redo (not augment)".
 def convert_relation(field: models.Field) -> Any:
     """Map a Django relation field to its target ``DjangoType``.
 
@@ -242,6 +255,14 @@ def convert_relation(field: models.Field) -> Any:
     """
     target_model = field.related_model
     target_type = registry.get(target_model)
+    # TODO(spec-foundation 0.0.4): replace this eager raise with a
+    # sentinel-return path. The unresolved-target error message moves
+    # to ``finalizer._format_unresolved_targets_error`` and is raised
+    # by ``finalize_django_types()`` only after every type has had a
+    # chance to register. The reference to ``TypeRegistry.lazy_ref``
+    # below is misleading already (the placeholder is being deleted in
+    # this slice) — the error message and the lazy_ref method both go
+    # away together.
     if target_type is None:
         raise ConfigurationError(
             f"DjangoType for {target_model.__name__} is not yet registered. "

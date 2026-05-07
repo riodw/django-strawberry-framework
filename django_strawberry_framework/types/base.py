@@ -35,6 +35,12 @@ from ..utils.strings import snake_case
 from .converters import convert_relation, convert_scalar
 from .resolvers import _attach_relation_resolvers
 
+# TODO(spec-foundation 0.0.4): introduce ``DjangoTypeDefinition`` (new
+# module ``types/definition.py``) and ``PendingRelation`` (new module
+# ``types/relations.py``) per ``docs/spec-foundation.md`` "Architecture
+# (canonical, with pseudocode)". Imports land in step 1 of the phased
+# implementation order; ``__init_subclass__`` consumes them in step 4.
+
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
     {
         "filterset_class",
@@ -67,6 +73,17 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
 class DjangoType:
     """Base class for Django-model-backed Strawberry GraphQL types."""
 
+    # TODO(spec-foundation 0.0.4): the canonical home for per-type
+    # metadata moves to ``cls.__django_strawberry_definition__: DjangoTypeDefinition``.
+    # The three ``ClassVar`` attributes below stay for one minor version
+    # as a compat mirror so the optimizer walker's ``getattr(type_cls,
+    # "_optimizer_field_map", None)`` / ``getattr(type_cls,
+    # "_optimizer_hints", {})`` / ``cls._is_default_get_queryset`` reads
+    # keep working without a same-slice walker rewrite. Mirrored as plain
+    # class attributes (NOT ``@property``) per the verification report at
+    # ``docs/spec-foundation.md`` "Should redo now". Removed in the next
+    # minor once the walker reads through ``registry.get_definition(...)``.
+
     # Sentinel so ``has_custom_get_queryset`` can detect overrides.
     _is_default_get_queryset: ClassVar[bool] = True
 
@@ -78,6 +95,59 @@ class DjangoType:
     _optimizer_hints: ClassVar[dict[str, OptimizerHint]] = {}
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
+        # TODO(spec-foundation 0.0.4): split this method into a
+        # collection-only phase described in ``docs/spec-foundation.md``.
+        # Required
+        # changes (Phase 4 of the phased implementation order):
+        #   - Replace the eager ``"get_queryset" in cls.__dict__`` flip
+        #     with ``_detect_custom_get_queryset(cls)`` (MRO-aware) so
+        #     abstract bases keep propagating the sentinel. The MRO
+        #     walk runs UNCONDITIONALLY before the ``meta is None``
+        #     early return.
+        #   - After the ``meta is None`` early return, add the
+        #     post-finalization registration guard. The guard checks
+        #     ``registry.is_finalized()`` and raises ``ConfigurationError``
+        #     with the canonical "finalize_django_types() already ran"
+        #     message from the spec. This branch must remain reachable
+        #     AFTER finalization so abstract bases without ``Meta`` never
+        #     trip the guard.
+        #   - Snapshot consumer-authored relation fields BEFORE any
+        #     synthesis: union of (a) names already in
+        #     ``cls.__dict__["__annotations__"]`` and (b) names whose
+        #     ``cls.__dict__`` value is consumer-supplied (not a Django
+        #     manager/descriptor). Feeds
+        #     ``DjangoTypeDefinition.consumer_authored_fields``.
+        #   - Replace ``_build_annotations(cls, fields)`` with a
+        #     per-field dispatch that:
+        #       * routes scalars through ``convert_scalar``
+        #       * for relations: skips consumer-authored names entirely
+        #         (no synthesis, no pending record); resolves immediately
+        #         when ``registry.get(field.related_model)`` returns a
+        #         type; otherwise appends a ``PendingRelation`` and
+        #         installs a sentinel placeholder annotation that the
+        #         finalizer rewrites.
+        #   - Build ``DjangoTypeDefinition`` and stash it on the class
+        #     as ``cls.__django_strawberry_definition__``. Mirror
+        #     ``field_map`` / ``optimizer_hints`` /
+        #     ``_is_default_get_queryset`` to the legacy class attrs for
+        #     one minor version (compat for the walker).
+        #   - Register the model/type pair early via ``registry.register``
+        #     and store the definition via
+        #     ``registry.register_definition``; record pending relations
+        #     via ``registry.add_pending_relation``.
+        #   - REMOVE the ``_attach_relation_resolvers(cls, fields)``
+        #     call below; resolver attachment moves to
+        #     ``finalize_django_types()`` and consumes
+        #     ``definition.selected_fields`` with
+        #     ``skip_field_names=definition.consumer_authored_fields``.
+        #   - REMOVE the trailing ``strawberry.type(cls, ...)`` call;
+        #     finalization runs once per class inside
+        #     ``finalize_django_types()`` after every pending relation
+        #     has been resolved.
+        #
+        # The docstring below describes the CURRENT 0.0.3 pipeline; it
+        # will be rewritten to describe the collection-only phase when
+        # this slice ships.
         """Validate ``Meta`` and assemble the Strawberry type.
 
         Pipeline order:
@@ -121,6 +191,14 @@ class DjangoType:
            pending a future relay spec.)
         """
         super().__init_subclass__(**kwargs)
+        # TODO(spec-foundation 0.0.4): replace this single-class
+        # ``"get_queryset" in cls.__dict__`` check with a call to a new
+        # MRO-walking helper ``_detect_custom_get_queryset(cls)`` and
+        # propagate the result through
+        # ``DjangoTypeDefinition.has_custom_get_queryset``. The class-attr
+        # mirror below stays for one minor version. See ``docs/spec-foundation.md``
+        # "Should redo now" for why a class-dict-only check is
+        # insufficient (abstract tenant-scoped mixins must propagate).
         # Flip the class-level flag if *this* class declared its own
         # ``get_queryset``. Runs unconditionally — before the
         # ``meta is None`` early return — so an intermediate abstract
@@ -135,6 +213,14 @@ class DjangoType:
             # the rest of the pipeline. Concrete consumer types must
             # declare ``Meta``.
             return
+        # TODO(spec-foundation 0.0.4): immediately after the ``meta is
+        # None`` early return above, raise ``ConfigurationError`` when
+        # ``registry.is_finalized()`` is True so a ``DjangoType`` declared
+        # after ``finalize_django_types()`` ran fails loud with the
+        # canonical message ("finalize_django_types() already ran; "
+        # "cannot register <TypeName> after finalization. Call "
+        # "registry.clear() first if this is a test."). Test isolation
+        # depends on ``registry.clear()`` resetting the finalized flag.
         _validate_meta(meta)
         # Compute the Meta-selected field list once and reuse it for both
         # annotation synthesis and resolver attachment so the field walk
@@ -142,11 +228,31 @@ class DjangoType:
         # import back into ``types.base``.
         fields = _select_fields(meta)
         _validate_optimizer_hints_against_selected_fields(meta, fields)
+        # TODO(spec-foundation 0.0.4): build a ``DjangoTypeDefinition``
+        # from the selected fields, optimizer hints,
+        # ``has_custom_get_queryset`` flag, and the consumer-authored
+        # field set; stash it on ``cls.__django_strawberry_definition__``;
+        # call ``registry.register_definition(cls, definition)``. The
+        # three ``cls._optimizer_*`` / ``cls._is_default_get_queryset``
+        # writes below stay for one minor version as a compat mirror so
+        # the walker's ``getattr`` reads keep working without a same-slice
+        # rewrite. See ``docs/spec-foundation.md`` step 13 of the
+        # collection pseudocode.
         # B7: precompute optimizer field metadata so the walker can
         # skip _meta.get_fields() on every walk.
         cls._optimizer_field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         # B4: stash optimizer_hints for the walker to consult.
         cls._optimizer_hints = _meta_optimizer_hints(meta)
+        # TODO(spec-foundation 0.0.4): before calling _build_annotations,
+        # snapshot consumer-authored relation fields (annotation OR
+        # class-dict assignment that is not a Django manager/descriptor)
+        # and pass that frozenset into the per-field dispatch so neither
+        # placeholder synthesis nor pending-relation recording happens
+        # for those names. The set also feeds
+        # ``DjangoTypeDefinition.consumer_authored_fields`` so the
+        # finalizer's resolver-attachment phase can skip them. See
+        # ``docs/spec-foundation.md`` "Manual annotation contract for
+        # relation fields (0.0.4)".
         synthesized = _build_annotations(cls, fields)
         # Implementation detail (NOT a stable consumer-override contract
         # in 0.0.3): consumer-declared annotations are merged on top of
@@ -160,6 +266,14 @@ class DjangoType:
         existing = dict(cls.__dict__.get("__annotations__", {}))
         cls.__annotations__ = {**synthesized, **existing}
         registry.register(meta.model, cls)
+        # TODO(spec-foundation 0.0.4): REMOVE the
+        # ``_attach_relation_resolvers(cls, fields)`` call below.
+        # Resolver attachment moves to ``finalize_django_types()`` and
+        # consumes ``definition.selected_fields`` with
+        # ``skip_field_names=definition.consumer_authored_fields`` so
+        # consumer-supplied ``strawberry.field(resolver=...)`` /
+        # ``@strawberry.field`` shapes are never clobbered. See
+        # ``docs/spec-foundation.md`` "Finalization phase" Phase 2.
         # Attach cardinality-aware resolvers per relation field. Without
         # this, Strawberry's default ``getattr`` resolver returns a
         # Django ``RelatedManager`` for reverse rels / M2M and Strawberry
@@ -178,6 +292,14 @@ class DjangoType:
         # ``class CategoryType(DjangoType, relay.Node): ...``.
         name = getattr(meta, "name", None)
         description = getattr(meta, "description", None)
+        # TODO(spec-foundation 0.0.4): REMOVE this
+        # ``strawberry.type(cls, ...)`` call. Strawberry finalization
+        # moves into ``finalize_django_types()`` (new module
+        # ``types/finalizer.py``) per ``docs/spec-foundation.md``
+        # "Strawberry finalization strategy". Pinned by Spike A's
+        # five pass criteria — production code in this slice cannot
+        # land until the spike confirms deferred ``strawberry.type(cls)``
+        # is safe.
         strawberry.type(cls, name=name, description=description)
 
     @classmethod
@@ -211,6 +333,12 @@ class DjangoType:
         ``get_queryset`` whose parent declared one inherits the parent's
         ``False`` sentinel through the class hierarchy.
         """
+        # TODO(spec-foundation 0.0.4): rewrite as a thin lookup against
+        # the new definition object:
+        #   ``return cls.__django_strawberry_definition__.has_custom_get_queryset``
+        # ``walker.py:42`` keeps reading the same shape so no walker
+        # change is required in this slice. See ``docs/spec-foundation.md``
+        # "Should redo now".
         return not cls._is_default_get_queryset
 
 
@@ -374,6 +502,21 @@ def _select_fields(meta: type) -> list[Any]:
     return [f for f in all_fields if f.name in selected_names]
 
 
+# TODO(spec-foundation 0.0.4): rewrite this function as a per-field
+# dispatch that returns ``(annotations, pending)`` per
+# ``docs/spec-foundation.md`` "Collection phase" step 8. The relation
+# branch must:
+#   - skip names in the caller-provided ``consumer_authored_fields``
+#     frozenset (no synthesis, no pending record)
+#   - if ``registry.get(field.related_model)`` returns a type, install
+#     the concrete annotation immediately
+#   - otherwise append a ``PendingRelation`` to the pending list and
+#     install a sentinel placeholder annotation that the finalizer
+#     rewrites in phase 1
+# The eager ``ConfigurationError`` from ``convert_relation`` goes away;
+# the same error format moves into
+# ``finalizer._format_unresolved_targets_error`` and only fires after
+# every ``DjangoType`` has had a chance to register.
 def _build_annotations(cls: type, fields: list[Any]) -> dict[str, Any]:
     """Build the annotation dict the Strawberry type decorator consumes.
 

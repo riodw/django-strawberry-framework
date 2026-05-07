@@ -32,6 +32,21 @@ class TypeRegistry:
     ``register_enum`` from a request handler or async resolver.
     """
 
+    # TODO(spec-foundation 0.0.4): extend the registry per
+    # ``docs/spec-foundation.md`` "TypeRegistry extensions". Add three
+    # new instance attributes initialized in ``__init__``:
+    #   - ``self._definitions: dict[type, DjangoTypeDefinition] = {}``
+    #   - ``self._pending: list[PendingRelation] = []``
+    #   - ``self._finalized: bool = False``
+    # Add the methods ``register_definition``, ``get_definition``,
+    # ``iter_definitions``, ``add_pending_relation``,
+    # ``iter_pending_relations``, ``discard_pending``, ``is_finalized``,
+    # and ``mark_finalized``. ``clear`` (below) gains the matching
+    # resets for the new attributes. The lockless-mutation contract in
+    # the docstring above stays — ``finalize_django_types()`` runs
+    # during single-threaded import / app / schema setup, before any
+    # request handling begins (see
+    # ``docs/spec-foundation.md`` "Idempotency and lifecycle contract").
     def __init__(self) -> None:
         self._types: dict[type[models.Model], type] = {}
         self._models: dict[type, type[models.Model]] = {}
@@ -90,6 +105,16 @@ class TypeRegistry:
         """
         yield from self._types.items()
 
+    # TODO(spec-foundation 0.0.4): DELETE this method outright per
+    # ``docs/spec-foundation.md`` "Migration of current code" / "Must
+    # redo (not augment)". The placeholder ``NotImplementedError`` and
+    # its three-option docstring are misleading — the actual
+    # pending-relation API (``add_pending_relation`` /
+    # ``iter_pending_relations`` / ``discard_pending``) supersedes it.
+    # The error message in ``convert_relation`` that references this
+    # symbol disappears at the same time the function body of
+    # ``convert_relation`` is rewritten, so no consumer-visible string
+    # is left dangling.
     def lazy_ref(self, model: type[models.Model]) -> Any:
         """Return a forward reference resolved at schema build.
 
@@ -151,6 +176,17 @@ class TypeRegistry:
         """Return the cached enum for ``(model, field_name)``, or ``None``."""
         return self._enums.get((model, field_name))
 
+    # TODO(spec-foundation 0.0.4): EXTEND (do not redo) ``clear`` to
+    # also reset ``_definitions``, ``_pending``, and ``_finalized`` so
+    # test isolation under the autouse fixture pattern at
+    # ``tests/types/test_base.py:46-51`` does not leak pending
+    # relations or finalized markers across tests. Note: ``clear()``
+    # cannot remove ``__strawberry_definition__`` /
+    # ``__django_strawberry_definition__`` / mutated ``__annotations__``
+    # from already-finalized classes — tests must redefine their types
+    # inside the test function or fixture (see
+    # ``docs/spec-foundation.md`` "Idempotency and lifecycle contract"
+    # "Class-mutation residue").
     def clear(self) -> None:
         """Drop all registered types and enums.
 

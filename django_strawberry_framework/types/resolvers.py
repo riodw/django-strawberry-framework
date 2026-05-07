@@ -165,6 +165,27 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     return forward_resolver
 
 
+# TODO(spec-foundation 0.0.4): keep the resolver factories above, but
+# adjust this helper's signature and call site per
+# ``docs/spec-foundation.md`` "Migration of current code" /
+# "Finalization phase":
+#   - Add a ``skip_field_names: frozenset[str] = frozenset()`` keyword
+#     parameter and ``continue`` for any relation field whose name is
+#     in that set. The finalizer passes
+#     ``definition.consumer_authored_fields`` so consumer-supplied
+#     ``strawberry.field(resolver=...)`` / ``@strawberry.field`` shapes
+#     are never clobbered ("Manual annotation contract for relation
+#     fields (0.0.4)").
+#   - The call site moves from ``DjangoType.__init_subclass__`` into
+#     ``finalize_django_types()`` (new module ``types/finalizer.py``)
+#     and reads ``definition.selected_fields`` rather than receiving a
+#     fresh ``fields`` argument from a same-pipeline ``_select_fields``
+#     call.
+# Resolver bodies (``_make_relation_resolver``) need ``attname``,
+# ``related_model.DoesNotExist``, and cardinality flags, so the
+# finalizer must consume real Django field objects from
+# ``DjangoTypeDefinition.selected_fields`` — ``FieldMeta`` is not
+# sufficient.
 def _attach_relation_resolvers(cls: type, fields: list[Any]) -> None:
     """Attach a resolver per relation in the pre-selected ``fields`` list.
 

@@ -32,8 +32,9 @@ The following are the invariants every reviewer should test the design against. 
 - `registry.clear()` returns the package to a fully clean state; no test ever sees pending relations or finalized markers from a previous test.
 - Calling `finalize_django_types()` twice is a no-op on the second call.
 - A `DjangoType` whose `Meta` is omitted (intermediate abstract subclass) still skips the pipeline cleanly, exactly as today.
-## Pre-implementation spikes (gate before code)
-The biggest design risk is Strawberry finalization timing. Three throwaway scripts must run and produce passing assertions before the implementation is allowed to start. Each lives in `scripts/spikes/` and is deleted once the slice ships.
+## Pre-implementation spikes (gate before code) — Phase 0
+The biggest design risk is Strawberry finalization timing. Three throwaway scripts must run and produce passing assertions before any production code is written. Each lives in `scripts/spikes/`, is committed long enough for review, and is deleted once its conclusions are recorded in this spec and `README.md`.
+This is **Phase 0** of the phased implementation order at the bottom of this document. The numbered phases (1+) start production code; Phase 0 is the gate that blocks them.
 ### Spike A: deferred `strawberry.type(cls)` and the real finalization boundary
 Goal: prove that `strawberry.type(cls)` can be deferred from class creation to a later finalization function, and identify the *exact* call point at which `finalize_django_types()` must have run for a real schema build to succeed.
 Pass criteria (all five must succeed):
@@ -56,15 +57,22 @@ The foundation slice will commit to the following once Spike A passes (see "Pre-
 - `DjangoType.__init_subclass__` collects metadata only. It does **not** call `strawberry.type(cls)`.
 - `finalize_django_types()` is the single point that resolves pending relations, attaches relation resolvers, and calls `strawberry.type(cls, ...)` for each registered type.
 - **Earliest safe call point**: `finalize_django_types()` must run **before any `@strawberry.type` decorator processes a class that references a `DjangoType`** — including resolver return annotations such as `list[ItemType]`, field annotations such as `item: ItemType`, and any future `DjangoConnectionField(ItemType)` helper. This is *earlier* than `strawberry.Schema(...)` construction. The exact boundary is pinned by Spike A criterion 4/5 and documented in `README.md` with both a worked correct example and a worked wrong-order example so users can recognize the failure mode immediately.
-- Auto-trigger via `DjangoSchema(...)` and `DjangoConnectionField(Type)` is a later-phase wrapper around this same entry point — see `spec-rich_schema_architecture.md (670-687)`.
+- **Lifecycle window**: `finalize_django_types()` must be called **once during single-threaded import / app / schema setup, before serving requests**. It is **not** safe to call from a request thread, an async resolver, or any concurrent context. The function mutates a process-global registry **and** mutates class objects (annotations, attached fields, `__strawberry_definition__`, `__django_strawberry_definition__`); the foundation slice's registry is intentionally lockless (see `registry.py:28-33`) and concurrent finalization can produce partial Strawberry definitions. This window is restated in `README.md`.
+- **Module discovery is the consumer's responsibility**: the foundation slice does not ship `apps.py`, autodiscovery, or any helper that imports project modules on the user's behalf. Every Python module that defines a `DjangoType` must be imported (directly or transitively) **before** `finalize_django_types()` runs. A `CategoryType` that exists in code but lives in a never-imported module will be reported as unresolved by the finalizer with the standard error format. The README setup snippet must explicitly show the import boundary (e.g., `from myapp.types import *  # noqa: F401`) immediately before the finalizer call, alongside an explicit doc note that this is the most common production failure mode in 0.0.4. Autodiscovery is a later-phase wrapper concern.
+- Auto-trigger via `DjangoSchema(...)` and `DjangoConnectionField(Type)` is a later-phase wrapper around this same entry point — see `spec-rich_schema_architecture.md (670-687)`. Any future helper that auto-triggers finalization must also enforce the single-threaded-setup window: either by being constrained to schema construction time, or by acquiring a real lock around the finalizer.
 - `Annotated[..., strawberry.lazy("module.path")]` remains a documented optional override path for users who want a non-primary target type or who want to defer a relation across modules. It is not the default and not required for normal `Meta.fields = "__all__"`.
 ### Manual annotation contract for relation fields (0.0.4)
 For relation fields only, the foundation slice pins this contract:
-- If the consumer has supplied an annotation on the same Python name as a Django relation field (`items: list["ItemType"]`, `items: Annotated[list["ItemType"], strawberry.lazy("...")]`, etc.), the collection phase **skips both** placeholder synthesis and pending-relation recording for that field. The user's annotation is left untouched and flows through Strawberry's normal annotation handling at finalization time.
-- The collection phase records the field name on `DjangoTypeDefinition.consumer_annotated_relations` for diagnostics.
-- The finalizer **never** rewrites a relation annotation that was consumer-supplied.
+- **Annotation override**: if the consumer has supplied an annotation on the same Python name as a Django relation field (`items: list["ItemType"]`, `items: Annotated[list["ItemType"], strawberry.lazy("...")]`, etc.), the collection phase **skips both** placeholder synthesis and pending-relation recording for that field. The user's annotation is left untouched and flows through Strawberry's normal annotation handling at finalization time.
+- **Field / resolver override**: if the consumer assigns a Strawberry field or resolver to the same Python name (`items: list["ItemType"] = strawberry.field(resolver=custom_items)`, `@strawberry.field def items(...) -> list["ItemType"]`, or any pre-existing `cls.<field_name>` value that is not the default Django attribute), the collection phase records the field name on `DjangoTypeDefinition.consumer_authored_fields` and the **finalizer's resolver-attachment phase skips that field**. `_attach_relation_resolvers` must consult this set and `setattr(cls, field.name, ...)` only for relation fields the consumer did not author. The consumer-authored field/resolver wins; the finalizer never clobbers it.
+- **Detection rule**: a relation field is treated as consumer-authored if either (a) `field.name` is present in `cls.__dict__` and the value is not a Django manager/descriptor (i.e., it was assigned by the consumer, not by Django's class machinery), or (b) `field.name` appears in the consumer's pre-collection `__annotations__`. The two sets are unioned; both feed `consumer_authored_fields`.
+- The finalizer **never** rewrites a relation annotation that was consumer-supplied and **never** attaches a resolver to a consumer-authored relation field.
 - Validation that a consumer-supplied annotation matches the Django relation cardinality (`many_to_many` → `list[T]`, nullable FK → `T | None`, etc.) is **deferred**. The 0.0.4 contract is "trust the user's annotation; do not silently overwrite."
-- Tests cover both shapes: a class that pre-supplies `Annotated[..., strawberry.lazy(...)]` for a relation field and a class that uses the default automatic resolution.
+- Tests cover all four shapes:
+  - annotation-only override (`items: list["ItemType"]`)
+  - `Annotated[..., strawberry.lazy("...")]` cross-module override
+  - explicit `strawberry.field(resolver=...)` assignment on a relation field
+  - `@strawberry.field` decorator on a relation field
 - Manual override on *scalar* fields continues to follow the existing implementation-detail caveat at `base.py:151-159` and is not pinned in this slice.
 ## Architecture (canonical, with pseudocode)
 ### `DjangoTypeDefinition`
@@ -96,11 +104,16 @@ class DjangoTypeDefinition:
     # concrete subclasses exactly as today's _is_default_get_queryset
     # sentinel does.
     has_custom_get_queryset: bool             # was cls._is_default_get_queryset (negated)
-    # Names of relation fields whose annotation was supplied by the
-    # consumer (see "Manual annotation contract for relation fields").
-    # The collection phase populates this; the finalizer skips these
-    # field names when rewriting annotations. Diagnostic-only otherwise.
-    consumer_annotated_relations: frozenset[str] = frozenset()
+    # Names of relation fields whose annotation OR field/resolver was
+    # supplied by the consumer (see "Manual annotation contract for
+    # relation fields"). The collection phase populates this from both
+    # sources (pre-existing annotation OR pre-existing class-dict value).
+    # The finalizer's annotation-rewrite phase skips these field names
+    # when rewriting annotations, AND _attach_relation_resolvers skips
+    # them when attaching resolvers, so consumer-authored
+    # `strawberry.field(resolver=...)` / `@strawberry.field` shapes are
+    # never clobbered.
+    consumer_authored_fields: frozenset[str] = frozenset()
     # Forward-reserved slots (declared but unused in 0.0.4)
     # These exist so later subsystems plug in without reshaping the dataclass.
     # Validation in _validate_meta still rejects the matching Meta keys until
@@ -203,26 +216,35 @@ def __init_subclass__(cls, **kwargs):
     # 6. Pre-compute the field map and hints.
     field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
     optimizer_hints = _meta_optimizer_hints(meta)
-    # 7. Snapshot consumer-supplied annotations BEFORE we synthesize
-    #    anything. These names are excluded from pending-relation
-    #    recording (see "Manual annotation contract for relation fields").
+    # 7. Snapshot consumer-authored relation fields BEFORE we synthesize
+    #    anything. A field is consumer-authored if either (a) the
+    #    consumer pre-supplied an annotation on the same name, or (b)
+    #    the consumer assigned a value (typically strawberry.field(...)
+    #    or a @strawberry.field decorator result) on the same name. The
+    #    union feeds DjangoTypeDefinition.consumer_authored_fields and
+    #    is consulted by both the annotation rewrite path and the
+    #    resolver attachment path so neither overwrites consumer code.
     consumer_annotations = dict(cls.__dict__.get("__annotations__", {}))
-    consumer_annotated_relations = frozenset(
+    consumer_class_dict = cls.__dict__
+    consumer_authored_fields = frozenset(
         f.name for f in fields
-        if f.is_relation and f.name in consumer_annotations
+        if f.is_relation and (
+            f.name in consumer_annotations
+            or _is_consumer_authored_class_attr(consumer_class_dict, f.name)
+        )
     )
     # 8. Build annotations. Scalars resolve immediately; relations either
     #    resolve immediately if their target is registered, defer if the
     #    target is unknown, or get left alone if the consumer pre-supplied
-    #    an annotation.
+    #    an annotation or a field/resolver assignment.
     synthesized: dict[str, Any] = {}
     pending: list[PendingRelation] = []
     for field in fields:
         if field.is_relation:
-            if field.name in consumer_annotated_relations:
-                # Consumer wins; do not synthesize, do not record pending.
-                # The finalizer also skips this field when rewriting
-                # annotations (see finalization phase).
+            if field.name in consumer_authored_fields:
+                # Consumer wins; do not synthesize, do not record pending,
+                # and the finalizer's resolver-attachment phase will also
+                # skip this field.
                 continue
             target_type = registry.get(field.related_model)
             if target_type is not None:
@@ -246,7 +268,7 @@ def __init_subclass__(cls, **kwargs):
         field_map=field_map,
         optimizer_hints=optimizer_hints,
         has_custom_get_queryset=has_custom_get_queryset,
-        consumer_annotated_relations=consumer_annotated_relations,
+        consumer_authored_fields=consumer_authored_fields,
     )
     # 10. Register early so later siblings can resolve us.
     registry.register(meta.model, cls)
@@ -281,28 +303,45 @@ Lives at `django_strawberry_framework/types/finalizer.py` (new). Public, importa
 def finalize_django_types() -> None:
     """Resolve pending relations, attach resolvers, and finalize types.
 
-    Atomic: the function either runs all three phases successfully and
-    sets the registry to finalized, or it raises with no `definition.finalized`
-    flipped to True and no `registry.mark_finalized()` call. Annotation
-    rewrites that completed before a failure are intentionally not
-    reverted (the registry already has the resolved targets registered,
-    so a second pass produces the same annotations); callers that catch
-    ConfigurationError, register the missing target, and call
-    finalize_django_types() again get a clean retry because the second
-    pass re-rewrites every still-pending field and the still-unmarked
-    definitions are eligible to finalize.
+    Failure-atomic boundary: phase 1 (unresolved-target detection)
+    completes without mutating any class object. If phase 1 raises,
+    `registry.is_finalized()` stays False, no `definition.finalized` is
+    True, and no `_attach_relation_resolvers` / `strawberry.type(...)`
+    side effects have occurred yet. Tests catch the error, register the
+    missing target, and call this function again for a clean retry.
+
+    Phases 2 and 3 are NOT failure-atomic: `_attach_relation_resolvers`
+    sets attributes on classes, and `strawberry.type(...)` builds
+    `__strawberry_definition__` per class. If a Strawberry-side failure
+    occurs in phase 2 or 3 (forward-ref error, duplicate field, bad
+    annotation, etc.), the process is partially mutated:
+      - some classes have relation resolvers attached, others do not
+      - some types have `__strawberry_definition__` set, others do not
+      - `definition.finalized` flags reflect whichever types finalized
+        before the failure
+      - `registry.is_finalized()` stays False because
+        `mark_finalized()` runs only after phase 3 completes.
+    Recovery from a phase 2/3 failure REQUIRES calling `registry.clear()`
+    and recreating fresh `DjangoType` classes from scratch. Re-calling
+    `finalize_django_types()` on partially mutated classes is
+    unsupported. This contract is documented in the idempotency /
+    lifecycle section below and pinned by the
+    `test_phase3_strawberry_failure_requires_full_restart` acceptance
+    test.
     """
     if registry.is_finalized():
         return  # idempotent
     # Phase 1 (resolve pending relations). Skip any field whose owning
-    # DjangoTypeDefinition recorded a consumer-supplied annotation — that
+    # DjangoTypeDefinition recorded a consumer-authored relation — that
     # field's annotation was never replaced by a placeholder in
     # collection and must not be overwritten now.
     unresolved: list[PendingRelation] = []
+    resolved: list[PendingRelation] = []
     for p in registry.iter_pending_relations():
         owning_def = registry.get_definition(p.source_type)
-        if owning_def is not None and p.field_name in owning_def.consumer_annotated_relations:
-            continue  # consumer's annotation wins; do not rewrite
+        if owning_def is not None and p.field_name in owning_def.consumer_authored_fields:
+            resolved.append(p)  # consumer-authored: nothing to resolve, but not unresolved
+            continue
         target_type = registry.get(p.related_model)
         if target_type is None:
             unresolved.append(p)
@@ -310,23 +349,36 @@ def finalize_django_types() -> None:
         p.source_type.__annotations__[p.field_name] = (
             _resolved_relation_annotation_from_pending(p, target_type)
         )
-    # Phase 1 fail-loud: no resolver attachment runs and no type is
-    # marked finalized if there are unresolved targets. Atomicity
-    # invariant: registry.is_finalized() stays False on this exit, and
-    # no DjangoTypeDefinition.finalized flips to True.
+        resolved.append(p)
+    # Phase 1 fail-loud: no class mutation runs and no type is marked
+    # finalized if there are unresolved targets. This is the ONLY
+    # failure-atomic boundary in finalize_django_types(); see docstring.
     if unresolved:
         raise ConfigurationError(_format_unresolved_targets_error(unresolved))
+    # All pending relations either resolved or were claimed by the
+    # consumer-authored escape hatch. Drop them from the pending list so
+    # post-finalization diagnostics (and any retry-after-clear scenario)
+    # see an empty pending set.
+    registry.discard_pending(resolved)
     # Phase 2 (attach relation resolvers). Uses definition.selected_fields
     # — the real Django field objects — not field_map (FieldMeta), because
     # _make_relation_resolver needs `attname`, `related_model.DoesNotExist`,
-    # cardinality flags, etc. (see `types/resolvers.py:111-165`).
+    # cardinality flags, etc. (see `types/resolvers.py:111-165`). Skip
+    # any relation field whose name is in the consumer-authored set so
+    # consumer-supplied resolvers / @strawberry.field decorators are
+    # never clobbered.
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue
-        _attach_relation_resolvers(type_cls, definition.selected_fields)
-    # Phase 3 (finalize each type with strawberry.type). Only after all
-    # resolvers attached cleanly do we run finalization; this keeps the
-    # function's failure mode "all-or-nothing for the strawberry side."
+        _attach_relation_resolvers(
+            type_cls,
+            definition.selected_fields,
+            skip_field_names=definition.consumer_authored_fields,
+        )
+    # Phase 3 (finalize each type with strawberry.type). NOT atomic; see
+    # docstring. A Strawberry-side failure here leaves the registry and
+    # class objects partially mutated and requires registry.clear() +
+    # fresh class recreation to recover.
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue
@@ -400,10 +452,11 @@ Every change below is mapped to a specific symbol in the current source.
 - Multi-`DjangoType`-per-model support. Today's `register` hard-fails on duplicates; that behavior survives the slice.
 ## Idempotency and lifecycle contract
 - `finalize_django_types()` is **idempotent**. The first call resolves pending relations, attaches resolvers, calls `strawberry.type(cls, ...)` on every unfinalized type, and sets `registry._finalized = True`. Subsequent calls return immediately.
-- `finalize_django_types()` is **failure-atomic for finalized state**. A failure in phase 1 (unresolved targets) leaves `registry.is_finalized() == False` and no `definition.finalized` flipped to True. A retry after the consumer registers the missing target completes the finalization cleanly. Annotation rewrites that completed before the failure are intentionally not reverted (the registry already had the resolved targets registered, so a second pass produces the same annotations); tests can assert `registry.is_finalized() is False` after catching the error.
+- **Failure-atomicity is bounded to phase 1.** A phase 1 failure (unresolved targets) leaves `registry.is_finalized() == False`, no `definition.finalized` flipped to True, and no class mutation — the consumer can register the missing target and call `finalize_django_types()` again for a clean retry. **Phase 2 and phase 3 are not failure-atomic**: `_attach_relation_resolvers` and `strawberry.type(...)` mutate class objects in-place. A Strawberry-side failure during those phases (forward-ref error, duplicate field, bad consumer annotation, etc.) leaves the process partially mutated and the only supported recovery is `registry.clear()` followed by recreating the affected `DjangoType` classes from scratch. Re-calling `finalize_django_types()` after a phase 2/3 failure on the same classes is unsupported and may produce inconsistent Strawberry definitions.
+- **Single-threaded setup window.** `finalize_django_types()` must be called once during single-threaded import / app / schema construction, before any request handling begins. The function mutates a process-global registry **and** mutates class objects (annotations, attached fields, `__strawberry_definition__`, `__django_strawberry_definition__`); the registry is intentionally lockless (see `registry.py:28-33`) and concurrent finalization can produce partial Strawberry definitions. Calling the finalizer from a request thread, async resolver, or any other concurrent context is **not supported**. Future helpers that auto-trigger finalization must be constrained to schema construction time or must acquire a real lock around the finalizer.
 - A `DjangoType` declared **after** `finalize_django_types()` returns raises `ConfigurationError` from `__init_subclass__` with the message "`finalize_django_types()` already ran; cannot register `<TypeName>` after finalization. Call `registry.clear()` first if this is a test." This is the contract that makes test isolation predictable: tests use the autouse fixture pattern at `tests/types/test_base.py:46-51` (`registry.clear(); yield; registry.clear()`) and never see a stale pending-relation set.
-- `registry.clear()` resets every map, including `_definitions`, `_pending`, and `_finalized`, so the next test's `__init_subclass__` and `finalize_django_types()` calls behave like a fresh process.
-- `finalize_django_types()` is safe to call from any thread because tests in this package are single-threaded; production callers run it from request thread or schema construction. The function does not need a lock for the same reason `register` does not need one (`registry.py:28-33`).
+- **`registry.clear()` resets registry state for fresh type classes; it does not roll back class mutation.** `clear()` resets `_types`, `_models`, `_enums`, `_definitions`, `_pending`, and `_finalized`, so the next test's `__init_subclass__` and `finalize_django_types()` calls behave like a fresh process *for newly created classes*. It cannot remove `__strawberry_definition__` from already-finalized classes, cannot remove relation resolver attributes from mutated classes, and cannot remove `__django_strawberry_definition__` or rewritten `__annotations__`. Tests must not reuse finalized `DjangoType` classes after `clear()`; the autouse fixture pattern naturally avoids this because each test redefines its types inside the test function or fixture.
+- **Pending records are dropped after a successful resolution.** The finalizer calls `registry.discard_pending(resolved)` once phase 1 has matched every pending entry to either a target type or the consumer-authored escape hatch. Post-finalization, `registry.iter_pending_relations()` returns an empty iterator. This keeps schema-audit and diagnostic code from seeing historical records that are no longer pending.
 ## Test fixtures and acceptance criteria
 ### Fakeshop coverage gap
 The fakeshop product graph (`examples/fakeshop/fakeshop/products/models.py`) covers FK and reverse FK only:
@@ -426,12 +479,22 @@ Under `tests/types/test_definition_order.py`:
 - M2M cycle (`Author <-> Book` via `tags`); both sides resolve.
 - Multi-cycle (`Category <-> Item <-> Entry <-> Property <-> Category`) finalizes successfully and produces concrete types on every edge.
 - Unresolved target (`ItemType` declared but `CategoryType` never registered) raises `ConfigurationError` from `finalize_django_types()` with the source model, source field, and target model named.
-- Consumer-supplied relation annotation (`items: Annotated[list["ItemType"], strawberry.lazy("...")]`) survives finalization unchanged: the annotation on the class equals what the consumer wrote, no pending-relation rewrite occurs, and `DjangoTypeDefinition.consumer_annotated_relations` contains the field name.
+- **Annotation-only override**: consumer-supplied relation annotation (`items: Annotated[list["ItemType"], strawberry.lazy("...")]`) survives finalization unchanged: the annotation on the class equals what the consumer wrote, no pending-relation rewrite occurs, and `DjangoTypeDefinition.consumer_authored_fields` contains the field name.
+- **Field/resolver override**: consumer-assigned `items: list["ItemType"] = strawberry.field(resolver=custom_items)` survives finalization unchanged: `_attach_relation_resolvers` skips the field, the consumer's resolver remains attached on the class, `DjangoTypeDefinition.consumer_authored_fields` contains the field name, and an in-process schema query routes through the consumer's resolver.
+- **Decorator override**: same shape with `@strawberry.field` decorating a method; resolver attachment skips the field; the consumer's method body executes during a query.
+- **Forward-reference shapes** (one acceptance test per shape; documents which forms are supported in 0.0.4):
+  - same-module string annotation: `items: list["ItemType"]` with both `ItemType` declared in the same module.
+  - `from __future__ import annotations` stringified ref: every annotation becomes a string at class-body time.
+  - cross-module `Annotated[list["OtherType"], strawberry.lazy("other.module")]`.
+  - manual annotation referencing a non-primary target type (test pinned to skip with a clear reason if multi-type-per-model support is not yet implemented).
+  Any shape that does not work in 0.0.4 is documented as such in the test docstring and in `docs/FEATURES.md`, not silently skipped.
 ### End-to-end schema tests (new)
 Under `tests/types/test_definition_order_schema.py`:
-- Declare a cyclic `DjangoType` graph in "bad" import order, call `finalize_django_types()`, decorate a `@strawberry.type Query` with a list resolver returning `list[ItemType]`, construct `strawberry.Schema(query=Query)`, and execute a nested query (`{ allItems { name category { name } } }`). Pass when the response contains the expected nested data. This is the test that proves the foundation works for users, not just for internal metadata.
-- Same shape with the M2M cycle (`{ allBooks { title tags { name } } }`).
+- Declare a cyclic `DjangoType` graph in "bad" import order on the FK fakeshop graph (which has real database tables via the example app). Call `finalize_django_types()`, decorate a `@strawberry.type Query` with a list resolver returning `list[ItemType]`, construct `strawberry.Schema(query=Query)`, and execute a nested query (`{ allItems { name category { name } } }`) against seeded fakeshop data. Pass when the response contains the expected nested data. This is the test that proves the foundation works for users, not just for internal metadata.
+- **M2M test (metadata-only)**: the cardinality fixture's M2M models are unmanaged (`managed = False`), so a real `{ allBooks { title tags { name } } }` execution would require creating the through table at test time. The foundation slice keeps the M2M test **schema-shape-only**: it asserts that the Strawberry schema builds, the GraphQL type for `Book.tags` is `[Tag!]!`, and the introspection query (`{ __type(name: "Book") { fields { name type { kind ofType { name } } } } }`) returns the expected shape. DB-backed M2M execution belongs in a later slice that creates the through table or adds an M2M relation to fakeshop.
 - **Boundary regression**: declare a `@strawberry.type Query` *before* `finalize_django_types()`. Whether this passes or fails is decided by Spike A; the test is written to match the documented behavior. If the boundary requires finalization-before-decoration, this test asserts the documented `ConfigurationError` (or the documented Strawberry-side error).
+- **Phase 2/3 partial-mutation regression**: deliberately construct a graph that resolves cleanly in phase 1 but causes a Strawberry-side error in phase 3 (e.g., a consumer annotation that points at a type Strawberry cannot resolve). Catch the error, assert `registry.is_finalized() is False`, then assert that calling `finalize_django_types()` again on the same partially-mutated classes is **not** documented to recover — the recovery path is `registry.clear()` plus fresh class recreation. This pins the partial-mutation contract from the finalizer docstring.
+- **Module-not-imported regression**: define a `DjangoType` in a separate module that is never imported, declare a sibling type that references its model, call `finalize_django_types()`, and assert `ConfigurationError` with the unresolved-targets format. Then import the missing module, call `registry.clear()` and recreate types, and assert finalization succeeds. Pins the import-discovery contract.
 ### Optimizer regression tests (new)
 Under `tests/optimizer/test_definition_order.py`:
 - `walker.plan_relation(field, target_type, info)` returns the same `("select", "default")` / `("prefetch", "default")` / `("prefetch", "custom_get_queryset")` decisions for cyclic graphs after finalization.
@@ -443,24 +506,28 @@ The file `tests/test_registry.py` already exists (it is currently sparse; most r
 - A new `DjangoType` registered after finalization raises with the documented message ("finalize_django_types() already ran; cannot register …").
 - `registry.clear()` returns the package to a state where `finalize_django_types()` runs cleanly again on a fresh set of types.
 - A leaked `_finalized=True` from a previous test does not affect the next test (verified through paired tests where the first installs and finalizes, the autouse fixture clears, and the second declares a new type without raising).
-- **Failure-atomicity**: declare one resolvable type and one type whose relation target is intentionally never registered. Call `finalize_django_types()` and catch `ConfigurationError`. Assert `registry.is_finalized()` is `False`, no `DjangoTypeDefinition.finalized` is `True`, and a follow-up call after registering the missing target completes successfully. This protects retry behavior and prevents partial-finalize corruption.
+- **Phase 1 failure-atomicity**: declare one resolvable type and one type whose relation target is intentionally never registered. Call `finalize_django_types()` and catch `ConfigurationError`. Assert `registry.is_finalized()` is `False`, no `DjangoTypeDefinition.finalized` is `True`, and a follow-up call after registering the missing target completes successfully. This protects phase-1 retry behavior.
+- **Phase 2/3 partial-mutation contract**: declare a graph that passes phase 1 but fails phase 3, catch the Strawberry-side error, assert `registry.is_finalized()` is `False`, and assert that calling `finalize_django_types()` again on the same classes is documented as unsupported (pins the contract from the finalizer docstring; the test does not assert recovery, it asserts that the documented recovery path is `registry.clear()` + fresh class recreation).
+- **Pending-set cleanup**: after a successful `finalize_django_types()`, `list(registry.iter_pending_relations())` returns `[]`. After a phase-1 failure, the unresolved entries remain in `_pending` so the consumer can retry without re-declaring types.
+- **Class-mutation residue**: after `registry.clear()`, the previously finalized classes still carry their mutated `__strawberry_definition__` and `__django_strawberry_definition__`; the test pins this as documented behavior so contributors do not file it as a bug.
 ### Existing tests that must change
 - Any test in `tests/types/test_converters.py` and `tests/types/test_base.py` asserting that `convert_relation` raises immediately on a missing target is rewritten to assert finalization-time failure. Per the verification report this is the rewrite cost; expect 2-4 tests to be touched.
 ## Phased implementation order (within the slice)
-The slice is ordered so each step lands a passing test suite.
+The slice is ordered so each step lands a passing test suite. **Phase 0 is the spike gate; production code begins at Phase 1.**
+0. **Phase 0 — Spike gate.** Write Spike A, B, and C under `scripts/spikes/`. Run them. Record the outcome inline in this spec's "Spike outcome (gates implementation)" section and in `README.md`'s schema-setup section. Delete the spike scripts only after their conclusions are captured. **No production-code phase below begins until Spike A's five pass criteria are recorded as passed.**
 1. Add `DjangoTypeDefinition` dataclass at `types/definition.py` and the `PendingRelation` dataclass at `types/relations.py`. No behavior change yet.
-2. Extend `TypeRegistry` with `register_definition`, `get_definition`, `iter_definitions`, `add_pending_relation`, `iter_pending_relations`, `is_finalized`, `mark_finalized`, and the extended `clear`. Delete `lazy_ref`.
+2. Extend `TypeRegistry` with `register_definition`, `get_definition`, `iter_definitions`, `add_pending_relation`, `iter_pending_relations`, `discard_pending`, `is_finalized`, `mark_finalized`, and the extended `clear`. Delete `lazy_ref`.
 3. Implement `finalize_django_types()` at `types/finalizer.py`. No collection changes yet; the function runs against an empty pending list.
-4. Split `__init_subclass__` into the collection-only pseudocode. Move the `strawberry.type(cls, ...)` call out and into `finalize_django_types()`. Move `_attach_relation_resolvers` out and into `finalize_django_types()` (consuming `definition.selected_fields`). Add the post-finalization registration guard and the consumer-annotation skip.
+4. Split `__init_subclass__` into the collection-only pseudocode. Move the `strawberry.type(cls, ...)` call out and into `finalize_django_types()`. Move `_attach_relation_resolvers` out and into `finalize_django_types()` (consuming `definition.selected_fields` and skipping `definition.consumer_authored_fields`). Add the post-finalization registration guard and the consumer-authored detection (annotation OR class-dict assignment).
 5. Replace the eager `cls.__dict__` get_queryset detection with `_detect_custom_get_queryset(cls)` (MRO-aware) so abstract bases keep propagating the sentinel.
 6. Migrate `_optimizer_field_map`, `_optimizer_hints`, `_is_default_get_queryset` reads to live on the definition. Mirror them as plain class attributes in `__init_subclass__` (not `@property`) for one minor version so the walker's `getattr(type_cls, ...)` reads keep working.
 7. Add the cardinality fixture under `tests/fixtures/cardinality_models.py` (unmanaged models with explicit `app_label`; no `conftest.py` / app-registry mutation unless a spike proves it is required).
 8. Rewrite the affected `tests/types/test_converters.py` / `tests/types/test_base.py` cases (relation-target-not-registered now succeeds at class creation, fails at finalization).
 9. Add the new acceptance test files under `tests/types/test_definition_order.py`, `tests/types/test_definition_order_schema.py`, `tests/optimizer/test_definition_order.py`, and extend the existing `tests/test_registry.py` with the new idempotency / isolation / failure-atomicity sections.
 10. Update documentation:
-    - `README.md` — public-API list and the schema-setup snippet that shows the new `finalize_django_types()` call site (with both a correct example and a wrong-order example that surfaces the failure mode).
+    - `README.md` — public-API list, the schema-setup snippet that shows the new `finalize_django_types()` call site (with both a correct example and a wrong-order example that surfaces the failure mode), and an explicit "import every module that defines `DjangoType` classes before calling `finalize_django_types()`" note with the most-common-failure-mode framing.
     - `docs/README.md` — quick-start snippet.
-    - `docs/FEATURES.md` — capability catalog entry.
+    - `docs/FEATURES.md` — capability catalog entry, including which forward-reference shapes are supported in 0.0.4.
     - `TODAY.md` — capability snapshot.
     - `CHANGELOG.md` — release entry summarizing the new capability and the new public API.
 11. Update export points:
@@ -479,7 +546,9 @@ The `__django_strawberry_definition__` attribute is *not* part of the public API
 ## Failure modes and rollback
 - If Spike A fails (deferred `strawberry.type(cls)` proves unsafe), the slice pauses. The fallback is Strategy 2 (post-`__strawberry_definition__` patching). Rollback cost: rewrite the finalizer; collection phase and registry extensions are reusable.
 - If Spike B exposes a Strawberry behavior we cannot work around, the foundation slice degrades to a documented "two-pass" requirement: users call `finalize_django_types()` *before* schema construction. This is already the foundation strategy; the failure simply delays the future auto-trigger work.
-- If a reviewer can demonstrate that any of the seven invariants in "Invariants this slice must protect" is violated by the proposed design, the slice is re-planned before code lands. The eight clarifications from the verification report and the fifteen items in `docs/feedback.md` together form the checklist that must be satisfied to call the spec "perfect."
+- If a reviewer can demonstrate that any of the seven invariants in "Invariants this slice must protect" is violated by the proposed design, the slice is re-planned before code lands. The current review feedback in [`docs/feedback.md`](feedback.md) forms the live review checklist until each item is resolved; the count and wording of items is expected to evolve until the slice ships.
+## Note on source line references
+This spec includes line numbers for some current source files (e.g., `walker.py:64`, `base.py:147`). Those are accurate at the time of writing but the optimizer subsystem and `__init_subclass__` are still moving, so reviewers should treat in-repo line references as soft hints and verify against the symbol names (`_optimizer_field_map`, `_attach_relation_resolvers`, `plan_relation`, etc.). Exact line references are reliable for **external** prior-art snapshots (`strawberry_django/...`, `graphene_django/...`, `graphene/...`) because those repos are pinned. Before implementation begins, the assigned author should refresh the in-repo lines in this spec's "Migration of current code" section against `main` so the contributor's edit targets are not stale.
 ## Cross-references
 - Definition-order problem space, prior art, decision options: [`docs/spec-definition_order_independence.md`](spec-definition_order_independence.md).
 - Long-term architecture, layered subsystems, prior-art line references: [`docs/spec-rich_schema_architecture.md`](spec-rich_schema_architecture.md).

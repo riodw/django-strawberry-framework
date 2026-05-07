@@ -434,7 +434,7 @@ class DjangoModelField(StrawberryField):
     django_model: type[models.Model] | None
     model_field: models.Field | ForeignObjectRel | None
     is_relation: bool
-    relation_kind: Literal["one", "many", "reverse_one_to_one"] | None
+    relation_kind: Literal["forward_single", "many", "reverse_one_to_one"] | None  # mirrors utils.relations.RelationKind
     target_model: type[models.Model] | None
     target_type: type | None
     store: OptimizerStore
@@ -646,7 +646,7 @@ class PendingRelation:
     field_name: str
     django_field: models.Field | ForeignObjectRel
     related_model: type[models.Model]
-    relation_kind: Literal["one", "many", "reverse_one_to_one"]
+    relation_kind: Literal["forward_single", "many", "reverse_one_to_one"]  # mirrors utils.relations.RelationKind
     nullable: bool
 ```
 
@@ -922,24 +922,13 @@ If `Item.category` becomes `DjangoModelType`, users cannot naturally query:
 
 That is the core value of the package. The default must be concrete related types.
 
-Allow generic fallback only as an explicit opt-in, for example:
+### Status: deferred design idea, no card yet
+A `Meta.unresolved_relations` opt-in (with values such as `"generic"` or `"error"`) is **not** part of any accepted card and **not** part of the foundation slice. The 0.0.4 contract from `docs/spec-foundation.md` is **error-only**: every exposed relation field must resolve to a concrete registered `DjangoType` at finalization or `finalize_django_types()` raises with the unresolved-targets format.
 
-```python
-class Meta:
-    unresolved_relations = "generic"
-```
-
-Default:
-
-```python
-class Meta:
-    unresolved_relations = "error"
-```
-
-For 1.0, prefer error-only until a real use case needs generic fallback.
+If a real project surfaces a use case where error-only is too strict, this becomes a future card under `KANBAN.md` with its own design doc — not an assumption baked into Layer 3 work. Readers should not design Layer 3 subsystems against `Meta.unresolved_relations` until that card is accepted.
 
 ## Proposed module layout
-Future modules:
+Future modules. Layer 3 subsystems use the **package** layout from `KANBAN.md` and `docs/TREE.md` (e.g., `filters/` not `filters.py`); the package layout is canonical because it determines import paths, public-surface promotion, and test-tree mirroring. The flat-module names in older drafts of this spec have been migrated to packages below.
 
 - `django_strawberry_framework/types/definition.py`
 - `django_strawberry_framework/types/fields.py`
@@ -948,16 +937,14 @@ Future modules:
 - `django_strawberry_framework/schema.py`
 - `django_strawberry_framework/relay.py`
 - `django_strawberry_framework/connection.py`
-- `django_strawberry_framework/filters.py`
-- `django_strawberry_framework/filterset.py`
-- `django_strawberry_framework/filter_arguments_factory.py`
-- `django_strawberry_framework/orders.py`
-- `django_strawberry_framework/orderset.py`
-- `django_strawberry_framework/order_arguments_factory.py`
-- `django_strawberry_framework/aggregateset.py`
-- `django_strawberry_framework/aggregate_arguments_factory.py`
+- `django_strawberry_framework/filters/` — `base.py` (Filter classes), `sets.py` (FilterSet), `factories.py` (filterset + GraphQL-arguments factories), `inputs.py` (input types + adapters)
+- `django_strawberry_framework/orders/` — `base.py` (Order classes), `sets.py` (OrderSet), `factories.py` (GraphQL-arguments factory)
+- `django_strawberry_framework/aggregates/` — `base.py` (Sum/Count/Avg/Min/Max/GroupBy result types), `sets.py` (AggregateSet), `factories.py` (GraphQL-arguments factory)
 - `django_strawberry_framework/fieldset.py`
 - `django_strawberry_framework/permissions.py`
+- `django_strawberry_framework/management/commands/export_schema.py`
+
+This matches the target layout in `docs/TREE.md` and replaces the earlier flat-file proposal (`filters.py`, `filterset.py`, `filter_arguments_factory.py`, `orders.py`, `orderset.py`, `order_arguments_factory.py`, `aggregateset.py`, `aggregate_arguments_factory.py`).
 
 Existing modules to evolve:
 
@@ -968,14 +955,19 @@ Existing modules to evolve:
 - `optimizer/*`: keep current root optimizer, add field stores and connection awareness
 
 ## Migration path from current package
-### Phase 1: Foundation
-Add:
+### Phase 1: Foundation (== 0.0.4 foundation slice)
+This phase is the foundation slice defined in [`docs/spec-foundation.md`](spec-foundation.md). It ships:
 
 - `DjangoTypeDefinition`
 - pending relation registry
-- `finalize_django_types()`
-- schema helper `DjangoSchema`
-- tests for finalization order
+- `finalize_django_types()` (the only new public symbol)
+- the cardinality fixture, cyclic acceptance tests, end-to-end schema tests, and idempotency / failure-atomicity tests
+
+It does **not** ship:
+
+- `DjangoSchema` — deferred to a later wrapper phase. Earlier drafts of this spec listed `DjangoSchema` here; the foundation contract has narrowed.
+- `DjangoConnectionField`, `DjangoNodeField`
+- any Layer 3 subsystem
 
 Keep current behavior for acyclic simple types if possible.
 

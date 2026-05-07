@@ -71,7 +71,7 @@ def finalize_django_types() -> None:
         _attach_relation_resolvers(
             type_cls,
             definition.selected_fields,
-            skip_field_names=definition.consumer_authored_fields,
+            skip_field_names=definition.consumer_assigned_relation_fields,
         )
 
     for type_cls, definition in registry.iter_definitions():

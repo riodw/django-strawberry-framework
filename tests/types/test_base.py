@@ -35,14 +35,16 @@ captures the scalar-only field list used in those updated tests.
 import datetime
 
 import pytest
+import strawberry
 from django.db import models
 from fakeshop.products.models import Category, Entry, Item, Property
 
-from django_strawberry_framework import DjangoType
+from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.converters import convert_relation, convert_scalar
+from django_strawberry_framework.types.relations import PendingRelationAnnotation
 
 CATEGORY_SCALAR_FIELDS = (
     "id",
@@ -305,6 +307,7 @@ def test_category_type_is_a_strawberry_type():
             model = Category
             fields = CATEGORY_SCALAR_FIELDS
 
+    finalize_django_types()
     assert hasattr(CategoryType, "__strawberry_definition__")
     assert CategoryType.__strawberry_definition__.name == "CategoryType"
 
@@ -316,6 +319,8 @@ def test_meta_name_overrides_graphql_type_name():
             fields = CATEGORY_SCALAR_FIELDS
             name = "Category"
 
+    finalize_django_types()
+
     assert CategoryType.__strawberry_definition__.name == "Category"
 
 
@@ -325,6 +330,8 @@ def test_meta_description_threads_through_to_strawberry():
             model = Category
             fields = CATEGORY_SCALAR_FIELDS
             description = "A Faker provider."
+
+    finalize_django_types()
 
     assert CategoryType.__strawberry_definition__.description == "A Faker provider."
 
@@ -518,25 +525,95 @@ def test_relation_meta_default_when_neither_fields_nor_exclude_set():
     assert a["properties"] == list[PropertyType]
 
 
-# TODO(spec-foundation 0.0.4): rewrite this test per
-# ``docs/spec-foundation.md`` "Existing tests that must change". After
-# the slice, class creation succeeds (the unresolved target becomes a
-# pending relation) and the failure moves to ``finalize_django_types()``
-# with the canonical unresolved-targets format ("Cannot finalize Django
-# types: ... -> Category (no registered DjangoType)"). The match string
-# below shifts from ``"not yet registered"`` to ``"Cannot finalize"`` /
-# ``"no registered DjangoType"``. Coverage of definition-order success
-# (the bidirectional version of this graph) moves to the new file
-# ``tests/types/test_definition_order.py``.
 def test_relation_unregistered_target_raises():
-    """Referencing a model whose DjangoType is not yet registered raises."""
-    with pytest.raises(ConfigurationError, match="not yet registered"):
+    """Referencing an unregistered relation target raises during finalization."""
 
-        class ItemType(DjangoType):
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    assert ItemType.__annotations__["category"] is PendingRelationAnnotation
+    assert "finalize_django_types()" in repr(PendingRelationAnnotation)
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+
+    msg = str(exc_info.value)
+    assert "Cannot finalize Django types" in msg
+    assert "Item.category -> Category" in msg
+    assert "no registered DjangoType" in msg
+
+
+def test_annotation_only_relation_override_keeps_generated_resolver():
+    """Annotation-only relation overrides do not suppress generated relation resolvers."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        items: list[ItemType]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.consumer_authored_fields == frozenset({"items"})
+    assert definition.consumer_annotated_relation_fields == frozenset({"items"})
+    assert definition.consumer_assigned_relation_fields == frozenset()
+
+    finalize_django_types()
+
+    items_field = next(
+        field for field in CategoryType.__strawberry_definition__.fields if field.python_name == "items"
+    )
+    assert items_field.base_resolver is not None
+    assert items_field.base_resolver.wrapped_func.__name__ == "resolve_items"
+
+
+def test_assigned_relation_field_override_keeps_consumer_resolver():
+    """Assigned Strawberry relation fields suppress generated relation resolvers."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        @strawberry.field
+        def items(self) -> list[ItemType]:
+            return []
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.consumer_authored_fields == frozenset({"items"})
+    assert definition.consumer_annotated_relation_fields == frozenset()
+    assert definition.consumer_assigned_relation_fields == frozenset({"items"})
+
+    finalize_django_types()
+
+    items_field = next(
+        field for field in CategoryType.__strawberry_definition__.fields if field.python_name == "items"
+    )
+    assert items_field.base_resolver is not None
+    assert items_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.items")
+
+
+def test_relation_field_class_attribute_shadowing_raises():
+    """Unsupported class attributes cannot silently shadow relation fields."""
+    with pytest.raises(ConfigurationError, match="shadows a Django relation field"):
+
+        class CategoryType(DjangoType):
+            items = None
+
             class Meta:
-                model = Item
-                # Category is not registered, so the FK lookup fails.
-                fields = ("id", "name", "category")
+                model = Category
+                fields = ("id", "name", "items")
 
 
 def test_relation_full_chain_when_all_targets_registered():

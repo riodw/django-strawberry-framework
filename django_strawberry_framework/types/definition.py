@@ -26,6 +26,8 @@ class DjangoTypeDefinition:
     optimizer_hints: dict[str, OptimizerHint]
     has_custom_get_queryset: bool
     consumer_authored_fields: frozenset[str] = frozenset()
+    consumer_annotated_relation_fields: frozenset[str] = frozenset()
+    consumer_assigned_relation_fields: frozenset[str] = frozenset()
     filterset_class: Any | None = None
     orderset_class: Any | None = None
     aggregate_class: Any | None = None

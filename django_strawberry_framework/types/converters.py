@@ -236,7 +236,11 @@ def convert_relation(field: models.Field) -> Any:
     If the target type is not registered yet, return
     ``PendingRelationAnnotation``. The caller records the matching
     ``PendingRelation`` and ``finalize_django_types()`` rewrites the
-    annotation after all modules have imported.
+    annotation after all modules have imported. Callers must record a
+    ``PendingRelation`` for any field that returns
+    ``PendingRelationAnnotation``; otherwise ``finalize_django_types()``
+    cannot rewrite the annotation and Strawberry will raise during schema
+    construction.
 
     Args:
         field: A bound Django relation field or related-object descriptor.

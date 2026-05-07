@@ -23,5 +23,15 @@ class PendingRelation:
     nullable: bool
 
 
-class PendingRelationAnnotation:
+class _PendingRelationAnnotationMeta(type):
+    """Metaclass that gives the sentinel a useful schema-construction error repr."""
+
+    def __repr__(cls) -> str:
+        return (
+            "<unfinalized DjangoType relation; call finalize_django_types() before constructing "
+            "strawberry.Schema>"
+        )
+
+
+class PendingRelationAnnotation(metaclass=_PendingRelationAnnotationMeta):
     """Sentinel annotation rewritten before ``strawberry.type`` sees the class."""

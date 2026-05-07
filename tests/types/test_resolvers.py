@@ -19,7 +19,7 @@ import pytest
 import strawberry
 from fakeshop.products.models import Category, Item
 
-from django_strawberry_framework import DjangoType
+from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer.plans import resolver_key
 from django_strawberry_framework.registry import registry
 
@@ -83,6 +83,7 @@ def test_o1_forward_fk_resolves_to_related_instance():
         def all_items(self) -> list[ItemType]:
             return list(Item.objects.all())
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query)
     result = schema.execute_sync("{ allItems { name category { name } } }")
 
@@ -120,6 +121,7 @@ def test_o1_reverse_fk_resolves_without_iterability_error():
         def all_categories(self) -> list[CategoryType]:
             return list(Category.objects.all())
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query)
     result = schema.execute_sync("{ allCategories { name items { name } } }")
 
@@ -420,6 +422,7 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
         def all_categories(self) -> list[CategoryType]:
             return list(Category.objects.all())
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query)
 
     # 1 query for categories + N (=25) queries for each category's items.

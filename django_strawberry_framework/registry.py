@@ -124,8 +124,8 @@ class TypeRegistry:
 
     def discard_pending(self, resolved: Iterable[PendingRelation]) -> None:
         """Drop pending records that have been resolved successfully."""
-        resolved_ids = {id(pending) for pending in resolved}
-        self._pending = [pending for pending in self._pending if id(pending) not in resolved_ids]
+        resolved_list = list(resolved)
+        self._pending = [pending for pending in self._pending if pending not in resolved_list]
 
     def is_finalized(self) -> bool:
         """Return whether the registry has completed ``finalize_django_types()``."""

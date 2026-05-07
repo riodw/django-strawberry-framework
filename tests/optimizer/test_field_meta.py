@@ -133,7 +133,7 @@ def test_walker_produces_same_plan_with_cached_map(django_assert_num_queries):
     """B7: the walker's plan is identical whether it uses the cached map or _meta."""
     import strawberry
 
-    from django_strawberry_framework import DjangoOptimizerExtension
+    from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types
 
     services.seed_data(1)
 
@@ -155,6 +155,7 @@ def test_walker_produces_same_plan_with_cached_map(django_assert_num_queries):
 
     from types import SimpleNamespace
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
     result = schema.execute_sync(

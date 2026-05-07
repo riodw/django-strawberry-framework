@@ -173,11 +173,11 @@ def _attach_relation_resolvers(
 ) -> None:
     """Attach a resolver per relation in the pre-selected ``fields`` list.
 
-    The caller (``DjangoType.__init_subclass__``) computes
-    ``base._select_fields(meta)`` once and passes the result here so the
-    field walk is not duplicated between annotation building and resolver
-    attachment, and so this module avoids importing from ``types.base``
-    (which would create a circular dependency).
+    ``finalize_django_types()`` passes ``DjangoTypeDefinition.selected_fields``
+    here after pending relation annotations are resolved. ``skip_field_names``
+    contains consumer-assigned relation fields such as
+    ``strawberry.field(resolver=...)`` / ``@strawberry.field`` overrides, which
+    must not be clobbered by generated resolvers.
     """
     for field in fields:
         if not field.is_relation:

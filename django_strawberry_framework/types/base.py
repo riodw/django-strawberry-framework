@@ -26,6 +26,7 @@ triggers the collection pipeline, which:
 from typing import Any, ClassVar
 
 from django.db import models
+from strawberry.types.field import StrawberryField
 
 from ..exceptions import ConfigurationError
 from ..optimizer.field_meta import FieldMeta
@@ -33,9 +34,9 @@ from ..optimizer.hints import OptimizerHint
 from ..registry import registry
 from ..utils.relations import relation_kind
 from ..utils.strings import snake_case
-from .converters import convert_relation, convert_scalar
+from .converters import convert_scalar, resolved_relation_annotation
 from .definition import DjangoTypeDefinition
-from .relations import PendingRelation
+from .relations import PendingRelation, PendingRelationAnnotation
 
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
     {
@@ -92,15 +93,19 @@ class DjangoType:
 
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         optimizer_hints = _meta_optimizer_hints(meta)
-        consumer_annotations = dict(cls.__dict__.get("__annotations__", {}))
+        consumer_annotations = dict(getattr(cls, "__annotations__", {}))
+        consumer_annotated_relation_fields = frozenset(
+            field.name for field in fields if field.is_relation and field.name in consumer_annotations
+        )
+        consumer_assigned_relation_fields = _consumer_assigned_relation_fields(
+            cls.__dict__,
+            fields,
+        )
         consumer_authored_fields = frozenset(
-            field.name
-            for field in fields
-            if field.is_relation
-            and (
-                field.name in consumer_annotations
-                or _is_consumer_authored_class_attr(cls.__dict__, field.name)
-            )
+            {
+                *consumer_annotated_relation_fields,
+                *consumer_assigned_relation_fields,
+            },
         )
         synthesized, pending = _build_annotations(
             cls,
@@ -120,6 +125,8 @@ class DjangoType:
             optimizer_hints=optimizer_hints,
             has_custom_get_queryset=has_custom_get_queryset,
             consumer_authored_fields=consumer_authored_fields,
+            consumer_annotated_relation_fields=consumer_annotated_relation_fields,
+            consumer_assigned_relation_fields=consumer_assigned_relation_fields,
         )
         registry.register(meta.model, cls)
         registry.register_definition(cls, definition)
@@ -129,7 +136,6 @@ class DjangoType:
         cls.__django_strawberry_definition__ = definition
         cls._optimizer_field_map = field_map
         cls._optimizer_hints = optimizer_hints
-        cls._is_default_get_queryset = not has_custom_get_queryset
 
     @classmethod
     def get_queryset(
@@ -192,9 +198,25 @@ def _normalize_sequence_spec(value: Any) -> tuple[str, ...] | None:
     return tuple(value)
 
 
-def _is_consumer_authored_class_attr(class_dict: dict[str, Any], field_name: str) -> bool:
-    """Return whether ``field_name`` has a consumer-authored class attribute."""
-    return field_name in class_dict
+def _consumer_assigned_relation_fields(
+    class_dict: dict[str, Any],
+    fields: tuple[Any, ...],
+) -> frozenset[str]:
+    """Return relation names assigned to explicit Strawberry field objects."""
+    assigned = set()
+    for field in fields:
+        if not field.is_relation or field.name not in class_dict:
+            continue
+        value = class_dict[field.name]
+        if isinstance(value, StrawberryField):
+            assigned.add(field.name)
+            continue
+        raise ConfigurationError(
+            f"{field.model.__name__}.{field.name} shadows a Django relation field with an unsupported "
+            "class attribute. Use a type annotation for relation type overrides, or use "
+            "strawberry.field(resolver=...) / @strawberry.field for resolver overrides.",
+        )
+    return frozenset(assigned)
 
 
 def _meta_optimizer_hints(meta: type) -> dict[str, Any]:
@@ -273,7 +295,7 @@ def _validate_meta(meta: type) -> None:
             )
 
 
-def _validate_optimizer_hints_against_selected_fields(meta: type, fields: list[Any]) -> None:
+def _validate_optimizer_hints_against_selected_fields(meta: type, fields: tuple[Any, ...]) -> None:
     """Reject ``optimizer_hints`` keys that are not in the type's selected fields.
 
     ``_validate_meta`` already checks that hint keys name real Django fields
@@ -294,7 +316,7 @@ def _validate_optimizer_hints_against_selected_fields(meta: type, fields: list[A
         )
 
 
-def _select_fields(meta: type) -> list[Any]:
+def _select_fields(meta: type) -> tuple[Any, ...]:
     """Filter ``meta.model._meta.get_fields()`` per ``Meta.fields`` / ``Meta.exclude``.
 
     Called once from ``DjangoType.__init_subclass__`` and the resulting
@@ -354,12 +376,12 @@ def _select_fields(meta: type) -> list[Any]:
             )
         selected_names = valid_names - set(exclude_spec)
 
-    return [f for f in all_fields if f.name in selected_names]
+    return tuple(f for f in all_fields if f.name in selected_names)
 
 
 def _build_annotations(
     cls: type,
-    fields: list[Any],
+    fields: tuple[Any, ...],
     *,
     source_model: type[models.Model],
     consumer_authored_fields: frozenset[str] = frozenset(),
@@ -390,9 +412,12 @@ def _build_annotations(
         if field.is_relation:
             if field.name in consumer_authored_fields:
                 continue
-            if registry.get(field.related_model) is None:
+            target_type = registry.get(field.related_model)
+            if target_type is None:
                 pending.append(_record_pending_relation(cls, source_model, field))
-            annotations[field.name] = convert_relation(field)
+                annotations[field.name] = PendingRelationAnnotation
+            else:
+                annotations[field.name] = resolved_relation_annotation(field, target_type)
         else:
             annotations[field.name] = convert_scalar(field, cls.__name__)
     return annotations, pending

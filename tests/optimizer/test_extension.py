@@ -25,7 +25,7 @@ import strawberry
 from fakeshop.products import services
 from fakeshop.products.models import Category, Entry, Item, Property
 
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoType
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer import logger as optimizer_logger
 from django_strawberry_framework.optimizer.extension import (
     _optimizer_active,
@@ -68,6 +68,7 @@ def test_optimizer_applies_select_related_for_forward_fk(django_assert_num_queri
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     # 1 SQL query: SELECT items + JOIN categories via select_related.
@@ -103,6 +104,7 @@ def test_optimizer_applies_prefetch_related_for_reverse_fk(django_assert_num_que
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     # 2 queries: SELECT categories + prefetched items.
@@ -143,6 +145,7 @@ def test_optimizer_combines_select_related_and_prefetch_related(django_assert_nu
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     # 2 queries: SELECT items+categories (JOIN) + prefetched entries.
@@ -174,6 +177,7 @@ def test_optimizer_elides_forward_fk_id_only_selection(django_assert_num_queries
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
 
@@ -214,6 +218,7 @@ def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias(django_ass
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
 
@@ -259,6 +264,7 @@ def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected(django_a
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
 
@@ -301,6 +307,7 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
 
@@ -333,6 +340,7 @@ def test_optimizer_skips_when_no_relations_selected(django_assert_num_queries):
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     # 1 query, no select_related / prefetch_related applied.
@@ -359,6 +367,7 @@ def test_optimizer_passes_through_non_queryset(django_assert_num_queries):
             # optimizer's ``isinstance(result, QuerySet)`` check returns False.
             return list(Category.objects.all())
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     # The materialization issues 1 query; nothing else fires because
@@ -384,6 +393,7 @@ def test_optimizer_passes_through_unregistered_return_type(caplog):
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     # Drop the registry mid-test — schema is already built, but the optimizer
@@ -418,6 +428,7 @@ def test_resolve_model_from_return_type_unwraps_nested_wrappers():
         def categories(self) -> list[CategoryType]:
             return []
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query)
 
     # Simulate the graphql-core wrapper stack the resolve hook sees.
@@ -463,6 +474,7 @@ def test_resolve_model_returns_none_when_type_not_in_schema():
         def categories(self) -> list[CategoryType]:
             return []
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query)
 
     info = SimpleNamespace(
@@ -561,6 +573,7 @@ def test_optimize_handles_empty_field_nodes(django_assert_num_queries):
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     # Drive _optimize directly with a synthetic info that has empty field_nodes.
@@ -597,6 +610,7 @@ def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch):
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     monkeypatch.setattr(
         extension_module,
@@ -654,6 +668,7 @@ def test_cache_hit_on_repeated_query(django_assert_num_queries):
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     query = "{ allItems { name category { name } } }"
 
@@ -690,6 +705,7 @@ def test_cache_differentiates_queries(django_assert_num_queries):
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
 
     schema.execute_sync("{ allItems { name } }")
@@ -725,6 +741,7 @@ def test_cache_differentiates_same_model_root_fields(django_assert_num_queries):
         def featured_categories(self) -> list[CategoryType]:
             return Category.objects.filter(is_private=False)
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
     query = "{ allCategories { name items { name } } featuredCategories { name } }"
@@ -811,6 +828,7 @@ def test_cache_eviction_removes_old_entries(monkeypatch):
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     result = schema.execute_sync("{ allCategories { name } }")
 
@@ -843,6 +861,7 @@ def test_filter_vars_do_not_affect_cache():
         def all_items(self, limit: int = 10) -> list[ItemType]:
             return Item.objects.all()[:limit]
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     query = "query Q($limit: Int!) { allItems(limit: $limit) { name category { name } } }"
 
@@ -876,6 +895,7 @@ def test_cache_separates_operation_names_in_same_document():
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     document = "query A { allItems { name } } query B { allItems { name category { name } } }"
 
@@ -1032,6 +1052,7 @@ def test_strictness_warn_logs_unplanned_relation(caplog):
             return list(Item.objects.select_related("category").all())
 
     ext = DjangoOptimizerExtension(strictness="warn")
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
 
@@ -1068,6 +1089,7 @@ def test_strictness_off_does_not_stash_sentinel():
             return Category.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="off")
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
     result = schema.execute_sync("{ allCategories { name } }", context_value=ctx)
@@ -1098,6 +1120,7 @@ def test_strictness_warn_stashes_sentinel():
             return Item.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="warn")
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
     result = schema.execute_sync(
@@ -1133,6 +1156,7 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
             return Item.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="warn")
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
 
@@ -1195,6 +1219,7 @@ def test_strictness_warn_no_warning_for_already_loaded_relation(caplog):
             return list(Item.objects.select_related("category").all())
 
     ext = DjangoOptimizerExtension(strictness="warn")
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
 
@@ -1230,6 +1255,7 @@ def test_strictness_warn_planned_alias_no_warning(caplog):
             return Item.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="warn")
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
 
@@ -1271,6 +1297,7 @@ def test_optimizer_prefetches_nested_reverse_fk_depth_2(django_assert_num_querie
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     with django_assert_num_queries(3):
@@ -1304,6 +1331,7 @@ def test_optimizer_selects_nested_forward_fk_depth_2(django_assert_num_queries):
         def all_entries(self) -> list[EntryType]:
             return Entry.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 
     with django_assert_num_queries(1):
@@ -1338,6 +1366,7 @@ def test_optimizer_strictness_accepts_nested_planned_relation():
             return Category.objects.all()
 
     ext = DjangoOptimizerExtension(strictness="raise")
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
     result = schema.execute_sync(
@@ -1378,6 +1407,7 @@ def test_optimizer_nested_fk_id_elision_does_not_leak_to_sibling_branch(django_a
         def all_properties(self) -> list[PropertyType]:
             return Property.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
 
@@ -1425,6 +1455,7 @@ def test_optimizer_nested_prefetch_with_custom_get_queryset_marks_uncacheable():
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     query = "{ allCategories { items { entries { value } } } }"
 
@@ -1549,6 +1580,7 @@ def test_check_schema_warns_unregistered_target():
         def all_items(self) -> list[ItemType]:
             return []
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query)
     # Clear Category's registration so the audit finds a gap.
     registry._types.pop(Category, None)
@@ -1576,6 +1608,7 @@ def test_check_schema_no_warnings_when_all_covered():
         def all_items(self) -> list[ItemType]:
             return []
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query)
     warnings = DjangoOptimizerExtension.check_schema(schema)
     # category's target (Category) is registered, so no warnings for it.
@@ -1604,6 +1637,7 @@ def test_check_schema_skip_hint_suppresses_warning():
         def all_items(self) -> list[ItemType]:
             return []
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query)
     # Clear Category so the audit would normally warn — but SKIP suppresses.
     registry._types.pop(Category, None)
@@ -1628,6 +1662,7 @@ def test_check_schema_hidden_fields_not_flagged():
         def all_items(self) -> list[ItemType]:
             return []
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query)
     warnings = DjangoOptimizerExtension.check_schema(schema)
     # category is not in _optimizer_field_map so not flagged.
@@ -1663,6 +1698,7 @@ def test_optimizer_hint_skip_suppresses_relation(django_assert_num_queries):
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
     result = schema.execute_sync(
@@ -1699,6 +1735,7 @@ def test_optimizer_hint_force_prefetch(django_assert_num_queries):
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
     result = schema.execute_sync(
@@ -1776,6 +1813,7 @@ def test_plan_stashed_on_object_context(django_assert_num_queries):
         def all_items(self, info: strawberry.types.Info) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     result = schema.execute_sync("{ allItems { name category { name } } }")
     assert result.errors is None
@@ -1807,6 +1845,7 @@ def test_plan_stashed_with_select_related(django_assert_num_queries):
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     # Build a synthetic info to drive _optimize directly.
     from graphql import GraphQLList, GraphQLNonNull
@@ -1854,6 +1893,7 @@ def test_plan_stashed_with_prefetch_related(django_assert_num_queries):
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
     result = schema.execute_sync(
@@ -1957,6 +1997,7 @@ def test_empty_plan_still_stashed():
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
     result = schema.execute_sync("{ allCategories { name } }", context_value=ctx)
@@ -1989,6 +2030,7 @@ def test_optimizer_applies_only_for_selected_scalars(django_assert_num_queries):
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
     with django_assert_num_queries(1):
@@ -2039,6 +2081,7 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset(django_asse
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
 
@@ -2089,6 +2132,7 @@ def test_optimizer_does_not_cache_custom_get_queryset_prefetch_plans():
         def all_items(self) -> list[ItemType]:
             return Item.objects.all()
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
     query = "{ allItems { name category { name } } }"
 
@@ -2155,6 +2199,7 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
         def all_items(self) -> list[ItemType]:
             return Item.objects.select_related("category")
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
 
     # First request warms the plan cache. The plan is stashed pre-diff.
@@ -2214,6 +2259,7 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.prefetch_related(consumer_pf)
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[_CaptureExt()])
     ctx = SimpleNamespace()
     result = schema.execute_sync(
@@ -2263,6 +2309,7 @@ def test_b8_consumer_descendant_prefetch_does_not_raise(django_assert_num_querie
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.prefetch_related("items__entries")
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     # Query must succeed instead of raising ``'items' lookup was already
     # seen with a different queryset``.
@@ -2299,6 +2346,7 @@ def test_b8_consumer_exact_plus_descendant_prefetch_does_not_raise():
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.prefetch_related("items", "items__entries")
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     result = schema.execute_sync(
         "{ allCategories { name items { name entries { value } } } }",
@@ -2343,6 +2391,7 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
         def all_categories(self) -> list[CategoryType]:
             return Category.objects.prefetch_related("items")
 
+    finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[_CaptureExt()])
     result = schema.execute_sync(
         "{ allCategories { name items { name entries { value } } } }",

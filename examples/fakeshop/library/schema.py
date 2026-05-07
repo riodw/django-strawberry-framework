@@ -1,0 +1,98 @@
+"""GraphQL schema for library acceptance coverage."""
+
+import strawberry
+from library import models
+
+from django_strawberry_framework import DjangoType
+
+
+class LoanType(DjangoType):
+    """Loan declared before Book and Patron to exercise finalization."""
+
+    class Meta:
+        model = models.Loan
+        fields = ("id", "note", "book", "patron")
+
+
+class BookType(DjangoType):
+    """Book declared before Shelf and Genre to exercise finalization."""
+
+    class Meta:
+        model = models.Book
+        fields = ("id", "title", "subtitle", "circulation_status", "shelf", "genres", "loans")
+
+
+class ShelfType(DjangoType):
+    """Shelf declared before Branch to exercise FK finalization."""
+
+    class Meta:
+        model = models.Shelf
+        fields = ("id", "code", "topic", "branch", "books")
+
+
+class MembershipCardType(DjangoType):
+    """Card declared before Patron to exercise OneToOne finalization."""
+
+    class Meta:
+        model = models.MembershipCard
+        fields = ("id", "barcode", "patron")
+
+
+class GenreType(DjangoType):
+    """Genre with reverse M2M books."""
+
+    class Meta:
+        model = models.Genre
+        fields = ("id", "name", "books")
+
+
+class BranchType(DjangoType):
+    """Branch parent with reverse FK shelves."""
+
+    class Meta:
+        model = models.Branch
+        fields = ("id", "name", "city", "shelves")
+
+
+class PatronType(DjangoType):
+    """Patron with nullable reverse OneToOne card and reverse FK loans."""
+
+    class Meta:
+        model = models.Patron
+        fields = ("id", "name", "card", "loans")
+
+
+@strawberry.type
+class Query:
+    """Library acceptance root fields."""
+
+    @strawberry.field
+    def all_library_branches(self) -> list[BranchType]:
+        return models.Branch.objects.order_by("id")
+
+    @strawberry.field
+    def all_library_shelves(self) -> list[ShelfType]:
+        return models.Shelf.objects.order_by("id")
+
+    @strawberry.field
+    def all_library_books(self) -> list[BookType]:
+        return models.Book.objects.order_by("id")
+
+    @strawberry.field
+    def all_library_genres(self) -> list[GenreType]:
+        return models.Genre.objects.order_by("id")
+
+    @strawberry.field
+    def all_library_patrons(self) -> list[PatronType]:
+        return models.Patron.objects.order_by("id")
+
+    @strawberry.field
+    def all_library_membership_cards(self) -> list[MembershipCardType]:
+        return models.MembershipCard.objects.order_by("id")
+
+    @strawberry.field
+    def all_library_loans(self) -> list[LoanType]:
+        return models.Loan.objects.order_by("id")
+
+
+__all__ = ("Query",)

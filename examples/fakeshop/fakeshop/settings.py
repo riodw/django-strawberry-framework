@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     # Third-party
     "django_strawberry_framework",
     # Local
+    "library.apps.LibraryConfig",
     "fakeshop.products.apps.ProductsConfig",
     # Test-scoped unmanaged models used by definition-order/cardinality coverage.
     # Keep this app installed: reverse OneToOne/M2M discovery requires the

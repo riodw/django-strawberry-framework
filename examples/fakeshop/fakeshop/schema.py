@@ -11,11 +11,19 @@ and is left out for now.
 
 import strawberry
 from fakeshop.products.schema import Query as ProductsQuery
+from library.schema import Query as LibraryQuery
+
+from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types
 
 
 @strawberry.type
-class Query(ProductsQuery):
+class Query(LibraryQuery, ProductsQuery):
     """Top-level Query — extends each app's Query."""
 
 
-schema = strawberry.Schema(query=Query)
+finalize_django_types()
+
+schema = strawberry.Schema(
+    query=Query,
+    extensions=[DjangoOptimizerExtension()],
+)

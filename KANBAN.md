@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-05-05
+Last refreshed: 2026-05-07
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -25,6 +25,10 @@ For install, local development, testing, and the canonical documentation map, st
   - `tests/types/` covers `base.py`, `converters.py`, and `resolvers.py`.
   - `tests/utils/` covers utility modules.
 
+### In progress
+
+- **0.0.4 foundation slice — definition-order independence.** Implementation contract: [`docs/spec-foundation.md`](docs/spec-foundation.md). This is the current focus for the next release. The slice introduces `DjangoTypeDefinition`, the pending-relation registry, `finalize_django_types()`, the OneToOne / M2M cardinality fixture, the post-finalization registration guard, and the relation-field manual-annotation contract. It also deletes `registry.lazy_ref`, removes the eager `convert_relation` raise, and bumps the package version to `0.0.4`. Card: `IN-PROGRESS-001`.
+
 ### Still not implemented
 
 - Layer 3 public subsystems are still planned only:
@@ -39,13 +43,11 @@ For install, local development, testing, and the canonical documentation map, st
   - `utils/queryset.py`
 - Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
 - Several DjangoType contract gaps remain:
-  - definition-order independence / `registry.lazy_ref`
   - multiple `DjangoType`s per model / `Meta.primary`
-  - stable consumer override semantics
+  - stable consumer override semantics for **scalar** fields (the foundation slice pins the contract for relation fields only)
   - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
   - `Meta.interfaces` / Relay interface wiring
   - deferred scalar conversions: `BigIntegerField`, `ArrayField`, `JSONField`, `HStoreField`
-  - real M2M fixture/test coverage
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
 - The fakeshop GraphQL schema is still a placeholder; the aspirational schema block remains commented.
@@ -189,44 +191,6 @@ Notes:
 
 ## Ready
 
-### READY-001 — Definition-order independence for relation conversion
-
-Priority: high
-
-Status: ready to spec/implement
-
-Current behavior:
-
-- `convert_relation()` requires the target `DjangoType` to be registered before the source type is declared.
-- `registry.lazy_ref()` still raises `NotImplementedError`.
-
-Why it matters:
-
-- Real projects often have cyclic or cross-module model graphs.
-- Requiring strict declaration order is brittle and un-DRF-like.
-
-Likely implementation options:
-
-- string annotations rewritten after all sibling types register
-- `Annotated["TargetType", strawberry.lazy("module.path")]` for cross-module references
-- registry-tracked pending relation records plus a `finalize_types()` pass
-
-Definition of done:
-
-- Pick and document one strategy.
-- Implement `registry.lazy_ref()` or replace it with the chosen mechanism.
-- `convert_relation()` no longer raises for target types declared later when the schema can resolve them.
-- Unskip or replace `test_forward_reference_resolves_when_target_defined_later`.
-- Add cross-module and same-module tests.
-
-Files likely touched:
-
-- `django_strawberry_framework/registry.py`
-- `django_strawberry_framework/types/converters.py`
-- `django_strawberry_framework/types/base.py`
-- `tests/types/test_base.py`
-- `tests/test_registry.py`
-
 ### READY-002 — Multiple DjangoTypes per model with `Meta.primary`
 
 Priority: high
@@ -270,33 +234,35 @@ Files likely touched:
 - `tests/test_registry.py`
 - `tests/types/test_base.py`
 
-### READY-003 — Consumer override semantics
+### READY-003 — Consumer override semantics (scalar fields)
 
 Priority: high
 
 Status: ready for design, not implementation-by-assumption
 
+Note: the foundation slice (`IN-PROGRESS-001`) pins the consumer-override contract for **relation fields only** (`DjangoTypeDefinition.consumer_annotated_relations`, finalizer skip). This card now covers the remaining scalar-field override semantics.
+
 Current behavior:
 
-- `DjangoType.__init_subclass__` merges consumer annotations over synthesized annotations.
-- Strawberry later rewrites class annotation/field metadata, so the override is not a reliable public contract.
+- `DjangoType.__init_subclass__` merges consumer annotations over synthesized annotations for both scalar and relation fields, but only the relation-field path will be a stable contract after the foundation slice ships.
+- Strawberry later rewrites class annotation/field metadata for scalars, so the scalar override is not a reliable public contract.
 - `test_consumer_annotation_overrides_synthesized` remains skipped.
 
 Why it matters:
 
-- Consumers need a stable way to customize generated fields without abandoning `DjangoType`.
-- The package should not claim annotations override generated fields until it is true end-to-end.
+- Consumers need a stable way to customize generated scalar fields without abandoning `DjangoType`.
+- The package should not claim scalar-annotation overrides survive end-to-end until they actually do.
 
 Open design choices:
 
 - Use Strawberry field customization APIs.
 - Add explicit `Meta.field_overrides`.
-- Support annotation overrides by controlling the timing of Strawberry finalization.
+- Support annotation overrides by controlling the timing of Strawberry finalization (the foundation slice already moves Strawberry finalization into `finalize_django_types()`, which makes this design cheaper to land later).
 
 Definition of done:
 
 - New spec, probably `docs/spec-consumer_overrides.md`.
-- Clear supported override forms:
+- Clear supported override forms for scalars:
   - type annotation override
   - resolver override
   - field description/deprecation/default metadata
@@ -381,16 +347,16 @@ Files likely touched:
 
 Priority: medium
 
-Status: ready
+Status: ready (most of this lands as a side effect of `IN-PROGRESS-001`)
 
 Current issues:
 
-- `tests/types/test_base.py` still has skipped placeholders for M2M and forward-reference independence; those are valid, but should be named and grouped as future work rather than stale slice leftovers.
+- `tests/types/test_base.py` still has skipped placeholders for M2M and forward-reference independence. Both are removed by the foundation slice: the M2M skip is replaced by the new cardinality fixture, and the forward-reference skip is replaced by the new `tests/types/test_definition_order.py` cycle tests.
 - `docs/alpha-review-feedback.md` is now the 0.0.4 consolidation checklist, not a historical cache-key bug review.
 
 Definition of done:
 
-- Keep valid future skips for M2M and `lazy_ref`, but make their skip reasons current and concise.
+- After the foundation slice merges, audit `tests/types/test_base.py` for any remaining stale skip reasons and update them.
 - Keep `docs/alpha-review-feedback.md` focused on the current 0.0.4 consolidation pass until the archive work is done.
 - Run formatting/lint.
 
@@ -403,25 +369,25 @@ Files likely touched:
 
 Priority: medium
 
-Status: ready when preparing a release
+Status: handled inside `IN-PROGRESS-001` — the next release is `0.0.4` and the bump ships with the foundation slice.
 
 Current behavior:
 
 - `pyproject.toml` version is `0.0.3`.
 - `django_strawberry_framework/__init__.py` version is `0.0.3`.
-- 0.0.4 work has begun after documentation archive consolidation.
+- The next release is `0.0.4`, gated by the foundation slice.
 
 Definition of done:
 
-- Decide the next release version.
-- Bump `pyproject.toml` and `django_strawberry_framework/__init__.py` together.
-- Confirm README/Kanban/docs language matches the chosen release.
-- Only update `CHANGELOG.md` if explicitly requested.
+- Bump `pyproject.toml` and `django_strawberry_framework/__init__.py` to `0.0.4` as part of `IN-PROGRESS-001` (phased step 12 of `spec-foundation.md`).
+- Confirm README/Kanban/docs language matches `0.0.4` (this Kanban already does).
+- Add a `CHANGELOG.md` entry for `0.0.4` summarizing the new `finalize_django_types()` public API and the definition-order independence behavior.
 
 Files likely touched:
 
 - `pyproject.toml`
 - `django_strawberry_framework/__init__.py`
+- `CHANGELOG.md`
 - docs status text as needed
 
 ## Next up
@@ -623,23 +589,19 @@ Definition of done:
 
 Priority: medium
 
-Status: blocked on fixture/model choice
+Status: closed by `IN-PROGRESS-001` (cardinality fixture under `tests/fixtures/cardinality_models.py`).
 
 Current behavior:
 
 - Relation conversion and optimizer paths include M2M branches.
-- Fakeshop has no M2M model field, so dedicated M2M tests remain skipped.
-
-Options:
-
-- Add a small unmanaged synthetic model pair in tests.
-- Add a real M2M relation to fakeshop if it benefits the example domain.
-- Use Django auth `User.groups` only if it produces clear package-level tests without leaking example-app concerns.
+- Fakeshop has no M2M model field; the foundation slice introduces unmanaged synthetic `Author` / `Tag` / `Book` models for in-package tests rather than expanding fakeshop.
 
 Definition of done:
 
-- Unskip/replace M2M placeholder tests.
-- Cover relation conversion, resolver behavior, and optimizer prefetch behavior for M2M.
+- Unskip/replace M2M placeholder tests — done by the foundation slice's cyclic acceptance tests and optimizer regression tests.
+- Cover relation conversion, resolver behavior, and optimizer prefetch behavior for M2M — covered by `tests/types/test_definition_order.py` and `tests/optimizer/test_definition_order.py`.
+
+Note: this card is retained for traceability and will be moved to Done once the foundation slice merges.
 
 ### BACKLOG-005 — Fakeshop GraphQL schema activation
 
@@ -823,21 +785,19 @@ Test placement:
 
 ### Sequence A — Stabilize Layer 2 before Layer 3
 
-1. READY-006 — clean stale test/doc placeholders.
-2. READY-001 — definition-order independence.
-3. READY-002 — multiple types per model / `Meta.primary`.
-4. READY-003 — consumer override semantics.
-5. READY-004 — Relay / `Meta.interfaces`.
-6. READY-005 — deferred scalar conversions.
-7. BACKLOG-004 — real M2M coverage.
-8. BACKLOG-007 — stable choice enum naming override.
-9. BACKLOG-008 — model-property optimization hints.
+1. **IN-PROGRESS-001** — 0.0.4 foundation slice (definition-order independence). **Current focus.**
+2. READY-002 — multiple types per model / `Meta.primary`.
+3. READY-003 — consumer override semantics (scalar fields).
+4. READY-004 — Relay / `Meta.interfaces`.
+5. READY-005 — deferred scalar conversions.
+6. BACKLOG-007 — stable choice enum naming override.
+7. BACKLOG-008 — model-property optimization hints.
 
 Use this sequence if the goal is to make `DjangoType` feel solid before expanding the public API.
 
 ### Sequence B — Ship visible Layer 3 value sooner
 
-1. READY-006 — clean stale test/doc placeholders.
+1. **IN-PROGRESS-001** — 0.0.4 foundation slice. Layer 3 cannot land safely without finalized concrete relation metadata.
 2. NEXT-001 — `FieldSet`.
 3. NEXT-002 — filters.
 4. NEXT-003 — orders.
@@ -848,17 +808,19 @@ Use this sequence if the goal is to make `DjangoType` feel solid before expandin
 
 Use this sequence if the goal is to demonstrate the DRF-shaped API surface quickly.
 
-### Recommended hybrid
+### Recommended hybrid (current direction)
 
-1. READY-006 — remove stale noise first.
-2. READY-001 — fix `lazy_ref`; it reduces friction across almost every future subsystem.
-3. NEXT-001 — implement `FieldSet` as the smallest Layer 3 slice.
-4. NEXT-002 and NEXT-003 — filters and orders.
-5. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants.
-6. NEXT-005 and NEXT-006 — connection field and permissions.
+1. **IN-PROGRESS-001** — 0.0.4 foundation slice (definition-order independence + finalization lifecycle). Reduces friction across every future subsystem.
+2. NEXT-001 — implement `FieldSet` as the smallest Layer 3 slice.
+3. NEXT-002 and NEXT-003 — filters and orders.
+4. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants.
+5. NEXT-005 and NEXT-006 — connection field and permissions.
+6. READY-003 — finalize scalar-field consumer override semantics once the relation contract has bedded in.
 7. BACKLOG-007 — add stable choice enum naming if schema import-order friction appears in real use.
 8. BACKLOG-008 — add model-property optimization hints if computed fields start broadening queries.
 9. BACKLOG-005 — activate the real fakeshop GraphQL schema.
+
+READY-006 (stale-placeholder cleanup) runs as a side effect of IN-PROGRESS-001, not as a standalone step.
 
 ## Release readiness checklist
 

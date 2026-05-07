@@ -14,6 +14,22 @@ For install, local development, testing, and the canonical documentation map, st
 
 Most users only care about `shipped` and `planned`. The other two labels are for contributors deciding what to work on next.
 
+## Current package surface
+Status: shipped alpha.
+
+Current package version: `0.0.3`.
+
+Public exports:
+- `DjangoType`
+- `DjangoOptimizerExtension`
+- `OptimizerHint`
+- `auto`
+
+Current posture:
+- alpha-quality: suitable for internal tools and prototypes, not production
+- package-wide capabilities are cataloged in this file
+- example-specific current usage belongs in [`../TODAY.md`](../TODAY.md)
+
 ## Quick comparison
 
 | Concern | graphene-django | strawberry-graphql-django | this package |

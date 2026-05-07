@@ -9,6 +9,17 @@ Slice scope:
   unregistered-target rejection); ``_build_annotations`` dispatch on
   ``field.is_relation`` rather than filtering relations out.
 
+.. todo:: spec-foundation 0.0.4 — the "unregistered-target rejection"
+   coverage in this file flips from class-creation failure to
+   finalization failure. The ``test_relation_unregistered_target_raises``
+   case below and the ``@pytest.mark.skip``ed
+   ``test_forward_reference_resolves_when_target_defined_later`` are
+   the two slated rewrites called out in ``docs/spec-foundation.md``
+   "Existing tests that must change". The new acceptance coverage
+   moves to ``tests/types/test_definition_order.py`` /
+   ``tests/types/test_definition_order_schema.py`` per the spec's
+   "Cyclic acceptance tests" / "End-to-end schema tests" sections.
+
 The ``has_custom_get_queryset`` sentinel and override-detection have
 shipped and are tested directly. Optimizer downgrade-to-``Prefetch``
 coverage belongs in ``tests/optimizer/``; the full forward-reference /
@@ -507,6 +518,16 @@ def test_relation_meta_default_when_neither_fields_nor_exclude_set():
     assert a["properties"] == list[PropertyType]
 
 
+# TODO(spec-foundation 0.0.4): rewrite this test per
+# ``docs/spec-foundation.md`` "Existing tests that must change". After
+# the slice, class creation succeeds (the unresolved target becomes a
+# pending relation) and the failure moves to ``finalize_django_types()``
+# with the canonical unresolved-targets format ("Cannot finalize Django
+# types: ... -> Category (no registered DjangoType)"). The match string
+# below shifts from ``"not yet registered"`` to ``"Cannot finalize"`` /
+# ``"no registered DjangoType"``. Coverage of definition-order success
+# (the bidirectional version of this graph) moves to the new file
+# ``tests/types/test_definition_order.py``.
 def test_relation_unregistered_target_raises():
     """Referencing a model whose DjangoType is not yet registered raises."""
     with pytest.raises(ConfigurationError, match="not yet registered"):
@@ -579,6 +600,15 @@ def test_relation_m2m_returns_list():
     pass
 
 
+# TODO(spec-foundation 0.0.4): DELETE this skipped placeholder when the
+# foundation slice ships. The cyclic-acceptance coverage it stands in
+# for moves to ``tests/types/test_definition_order.py`` per
+# ``docs/spec-foundation.md`` "Cyclic acceptance tests" — declared in
+# either order, FK / reverse FK / OneToOne / reverse OneToOne / M2M
+# cardinalities, multi-cycle, unresolved-target failure, and the four
+# manual-annotation override shapes. The skip reason mentions
+# ``lazy_ref``; that placeholder method is being deleted in the same
+# slice (see ``registry.py`` TODO).
 @pytest.mark.skip(
     reason=(
         "Slice 3+: forward-reference / definition-order independence. The current "

@@ -6,6 +6,17 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## Quick start
 
+<!-- TODO(spec-foundation 0.0.4): when the foundation slice ships,
+update this quick-start snippet per `docs/spec-foundation.md` Phase 10
+so it shows the new `finalize_django_types()` call site at the
+Spike-A-proven safe boundary. If finalization must happen before any
+`@strawberry.type` class references a `DjangoType`, the snippet must call
+the finalizer before decorating `Query`, not merely before
+`strawberry.Schema(...)` construction. The alpha caveat below ("requires
+relation target types to be declared before fields that reference them")
+goes away in lockstep — definition-order independence is exactly what
+this slice ships. -->
+
 ```python
 import strawberry
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoType

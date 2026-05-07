@@ -17,6 +17,14 @@ Most users only care about `shipped` and `planned`. The other two labels are for
 ## Current package surface
 Status: shipped alpha.
 
+<!-- TODO(spec-foundation 0.0.4): when the foundation slice ships, bump
+the version below to `0.0.4`, add `finalize_django_types` to the public
+exports list, and document which forward-reference shapes are supported
+in 0.0.4 (same-module string annotations, `from __future__ import
+annotations`, cross-module `Annotated[..., strawberry.lazy(...)]`).
+Per `docs/spec-foundation.md` Phase 10 of the phased implementation
+order. -->
+
 Current package version: `0.0.3`.
 
 Public exports:
@@ -84,6 +92,18 @@ Current alpha constraints:
 - relation target types must be registered before relation conversion can target them
 - consumer annotation overrides are not a guaranteed public contract yet
 - real M2M model coverage is still deferred even though many-side code paths exist
+
+<!-- TODO(spec-foundation 0.0.4): when the foundation slice ships,
+remove the "relation target types must be registered before relation
+conversion can target them" bullet above and add a new shipped section
+describing definition-order independence: the `finalize_django_types()`
+entry point, fail-loud unresolved-target errors at finalization, the
+five cyclic cardinalities (FK / reverse FK / OneToOne / reverse
+OneToOne / M2M), and the manual annotation contract for relation
+fields (annotation override, field/resolver override). The "consumer
+annotation overrides are not a guaranteed public contract yet" bullet
+stays — the 0.0.4 contract is narrower (relation fields only, no
+cardinality validation). -->
 
 ## Django field conversion
 Status: shipped for common Django fields, deferred for some specialized fields.

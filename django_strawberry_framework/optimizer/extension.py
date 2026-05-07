@@ -207,6 +207,10 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
         )
         if definition is not None:
             origin = getattr(definition, "origin", None)
+            # TODO(post-foundation): after ``DjangoTypeDefinition`` is the
+            # only optimizer metadata source, identify Django types through
+            # ``registry.get_definition(origin)`` instead of the legacy
+            # ``_optimizer_field_map`` compatibility mirror.
             if origin is not None and hasattr(origin, "_optimizer_field_map"):
                 reachable.add(origin)
         # Recurse into fields.
@@ -457,6 +461,10 @@ class DjangoOptimizerExtension(SchemaExtension):
         for _model, type_cls in registry.iter_types():
             if type_cls not in reachable:
                 continue
+            # TODO(post-foundation): after the foundation compatibility
+            # window, read ``field_map`` and ``optimizer_hints`` from
+            # ``registry.get_definition(type_cls)`` instead of the legacy
+            # class-attribute mirrors.
             field_map = getattr(type_cls, "_optimizer_field_map", None)
             if field_map is None:
                 continue

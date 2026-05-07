@@ -6,6 +6,11 @@ The O2 walker reads the cached map instead of calling
 ``model._meta.get_fields()`` on every walk, eliminating per-request
 Django introspection overhead.
 """
+# TODO(spec-foundation 0.0.4): update the module docstring when
+# ``DjangoTypeDefinition`` lands. ``FieldMeta`` remains the optimizer's
+# lightweight projection, but its canonical storage moves to
+# ``DjangoTypeDefinition.field_map`` and is mirrored to
+# ``cls._optimizer_field_map`` for one minor version only.
 
 from __future__ import annotations
 

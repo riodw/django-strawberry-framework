@@ -61,6 +61,10 @@ def _resolve_field_map(model: type[models.Model]) -> tuple[type | None, dict[str
     by the walker.
     """
     type_cls = registry.get(model)
+    # TODO(post-foundation): once the one-minor compatibility mirror from
+    # ``DjangoTypeDefinition.field_map`` to ``type_cls._optimizer_field_map``
+    # is removed, read through ``registry.get_definition(type_cls)`` here
+    # instead of the legacy class attribute.
     cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
     field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
     return type_cls, field_map
@@ -127,6 +131,9 @@ def _walk_selections(
             registry.get(django_field.related_model) if django_field.related_model is not None else None
         )
 
+        # TODO(post-foundation): after the compatibility mirror is removed,
+        # read optimizer hints from ``registry.get_definition(type_cls)``
+        # instead of the legacy ``_optimizer_hints`` class attribute.
         hint = getattr(type_cls, "_optimizer_hints", {}).get(django_name) if type_cls is not None else None
         if hint is not None and _apply_hint(
             hint,

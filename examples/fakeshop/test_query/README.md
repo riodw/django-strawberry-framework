@@ -8,9 +8,9 @@ Use the sibling [`../tests/`](../tests/) directory for tests that exercise schem
 
 `test_library_api.py` is the first live API suite. It covers the `library` acceptance app through real HTTP requests, including FK and reverse-FK traversal, OneToOne nullability, M2M traversal, choice enum serialization, nullable scalar serialization, optimizer SQL shape, optimizer hints, consumer-shaped querysets, and a consumer relation override.
 
-The project schema lives at `../schema.py`. It imports each app's `Query`, composes them into the top-level `Query`, calls `finalize_django_types()`, then constructs `strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])`.
+The project schema lives at `../config/schema.py`. It imports each app's `Query`, composes them into the top-level `Query`, calls `finalize_django_types()`, then constructs `strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])`.
 
-HTTP tests in this directory should follow the `_reload_project_schema_for_acceptance_tests` fixture pattern from `test_library_api.py`: clear the global registry, reload app schema modules, reload the project schema, then reload the URLconf and clear URL caches. Package tests under `../../../tests/` clear the same global registry for isolation; without the reload pattern, cached example-schema modules can hold stale `DjangoType` classes.
+HTTP tests in this directory should follow the `_reload_project_schema_for_acceptance_tests` fixture pattern from `test_library_api.py`: clear the global registry, reload `apps.<app>.schema` modules, reload `config.schema`, then reload `config.urls` and clear URL caches. Package tests under `../../../tests/` clear the same global registry for isolation; without the reload pattern, cached example-schema modules can hold stale `DjangoType` classes.
 
 Cross-reference:
 

@@ -1,10 +1,10 @@
 """Tests for products.admin — covers the changelist_view query-param branches."""
 
 import pytest
+from apps.products.models import Category, Item
+from apps.products.services import create_users, seed_data
 from django.contrib.auth import get_user_model
 from django.test import Client
-from products.models import Category, Item
-from products.services import create_users, seed_data
 
 User = get_user_model()
 

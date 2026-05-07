@@ -2,8 +2,9 @@ from django.contrib import admin, messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.shortcuts import redirect
-from products.models import Category, Entry, Item, Property
-from products.services import create_users, delete_data, delete_users, seed_data
+
+from apps.products.models import Category, Entry, Item, Property
+from apps.products.services import create_users, delete_data, delete_users, seed_data
 
 User = get_user_model()
 

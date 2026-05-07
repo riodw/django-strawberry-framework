@@ -5,8 +5,8 @@ Covers ``FieldMeta.from_django_field``, ``_optimizer_field_map`` on
 """
 
 import pytest
-from products import services
-from products.models import Category, Item
+from apps.products import services
+from apps.products.models import Category, Item
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.optimizer.field_meta import FieldMeta

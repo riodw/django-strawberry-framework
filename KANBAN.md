@@ -234,8 +234,8 @@ Evidence:
 - `tests/types/test_definition_order_schema.py`
 - `tests/optimizer/test_definition_order.py`
 - `tests/test_registry.py`
-- `examples/fakeshop/library/models.py`
-- `examples/fakeshop/library/schema.py`
+- `examples/fakeshop/apps/library/models.py`
+- `examples/fakeshop/apps/library/schema.py`
 - `examples/fakeshop/test_query/test_library_api.py`
 - `CHANGELOG.md`
 - `docs/spec-foundation.md`
@@ -665,7 +665,7 @@ Status: closed by `DONE-006` and the testing-shift follow-up.
 
 Evidence:
 
-- `examples/fakeshop/library/models.py` defines `Book.genres` / `Genre.books` with real managed tables.
+- `examples/fakeshop/apps/library/models.py` defines `Book.genres` / `Genre.books` with real managed tables.
 - `examples/fakeshop/test_query/test_library_api.py` covers M2M traversal and M2M prefetch SQL shape through `/graphql/`.
 - `tests/types/test_definition_order.py::test_many_to_many_forward_and_reverse_relations_resolve` covers forward and reverse M2M.
 - `tests/optimizer/test_definition_order.py::test_plan_relation_decisions_match_cardinality_after_finalization` covers the optimizer's M2M planning decision.
@@ -680,7 +680,7 @@ Status: blocked on Layer 3 and Relay decisions
 
 Current behavior:
 
-- `examples/fakeshop/products/schema.py` exposes a placeholder `hello` field for the product catalog.
+- `examples/fakeshop/apps/products/schema.py` exposes a placeholder `hello` field for the product catalog.
 - The aspirational schema block depends on `DjangoConnectionField`, Relay interfaces, filters, orders, aggregates, fieldsets, and permissions.
 
 Definition of done:
@@ -814,7 +814,7 @@ Outcome:
 
 - `tests.fixtures.apps.TestsCardinalityConfig` is no longer installed by the example project.
 - The old unmanaged cardinality fixture files under `tests/fixtures/` were removed.
-- Package tests that need OneToOne / M2M / cardinality coverage now use real models from `examples/fakeshop/library/`.
+- Package tests that need OneToOne / M2M / cardinality coverage now use real models from `examples/fakeshop/apps/library/`.
 - The example project no longer references test-only Django apps from production-shaped settings.
 
 Follow-up:

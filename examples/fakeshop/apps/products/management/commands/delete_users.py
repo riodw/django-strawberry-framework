@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
-from products.services import delete_users
+
+from apps.products.services import delete_users
 
 
 class Command(BaseCommand):

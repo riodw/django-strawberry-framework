@@ -1,8 +1,8 @@
 """GraphQL schema for library acceptance coverage."""
 
 import strawberry
-from library import models
 
+from apps.library import models
 from django_strawberry_framework import DjangoType, OptimizerHint
 
 # The DjangoType declaration order is intentionally awkward. Several

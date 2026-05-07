@@ -156,6 +156,9 @@ Shipped resolver behavior:
 - reverse one-to-one resolvers return `None` when the related row does not exist
 - forward resolvers can return FK-id stubs when the optimizer safely elides a join
 - relation access cooperates with Django's prefetch and relation caches
+- consumer-authored `strawberry.field` relation overrides are preserved instead of being clobbered by generated resolvers
+
+Consumer overrides are responsible for their own queryset shape. If an override re-shapes a relation queryset with `.order_by(...)`, `.filter(...)`, or similar, it can bypass the framework's prefetched relation cache and introduce per-parent lazy queries.
 
 ## Queryset visibility hook
 Status: shipped.

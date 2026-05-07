@@ -7,9 +7,9 @@ Quick check — print the number of detected providers and methods:
 
     uv run python -c "
     import django, os
-    os.environ['DJANGO_SETTINGS_MODULE'] = 'settings'
+    os.environ['DJANGO_SETTINGS_MODULE'] = 'config.settings'
     django.setup()
-    from products.services import discover_providers
+    from apps.products.services import discover_providers
     from faker import Faker
     p = discover_providers(Faker())
     print(f'{len(p)} providers, {sum(len(m) for m in p.values())} methods')
@@ -41,7 +41,8 @@ from decimal import Decimal
 
 from faker import Faker
 from faker.providers import BaseProvider
-from products.models import Category, Entry, Item, Property
+
+from apps.products.models import Category, Entry, Item, Property
 
 
 def _is_safe_generator(fake: Faker, method_name: str) -> bool:

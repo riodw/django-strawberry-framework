@@ -5,9 +5,9 @@ GraphQL query string, never by calling resolver methods directly.
 """
 
 import strawberry
-from library import schema as library_schema
-from products.schema import Query as ProductsQuery
-from schema import schema as project_schema
+from apps.library import schema as library_schema
+from apps.products.schema import Query as ProductsQuery
+from config.schema import schema as project_schema
 
 from django_strawberry_framework import DjangoType
 

@@ -26,8 +26,8 @@ captures the scalar-only field list used in those updated tests.
 import datetime
 
 import pytest
+from apps.products.models import Category, Entry, Item, Property
 from django.db import models
-from products.models import Category, Entry, Item, Property
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError

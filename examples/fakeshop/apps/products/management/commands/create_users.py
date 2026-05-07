@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
-from products.services import TEST_USER_PASSWORD, create_users
+
+from apps.products.services import TEST_USER_PASSWORD, create_users
 
 
 class Command(BaseCommand):

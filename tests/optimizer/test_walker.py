@@ -17,9 +17,9 @@ downgrades extend this same walker surface.
 
 from types import SimpleNamespace
 
+from apps.products.models import Category, Entry, Item
 from django.db import models
 from django.db.models import Prefetch
-from products.models import Category, Entry, Item
 
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.optimizer.walker import (

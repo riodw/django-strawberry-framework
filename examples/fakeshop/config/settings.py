@@ -10,8 +10,8 @@ https://docs.djangoproject.com/en/stable/ref/settings/
 import os
 from pathlib import Path
 
-# Build paths inside the project like this: BASE_DIR / "subdir"
-BASE_DIR = Path(__file__).resolve().parent
+# Build paths inside the example project root like this: BASE_DIR / "subdir"
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 # ---------------------------------------------------------------------------
@@ -24,9 +24,9 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
-ROOT_URLCONF = "urls"
+ROOT_URLCONF = "config.urls"
 
-WSGI_APPLICATION = "wsgi.application"
+WSGI_APPLICATION = "config.wsgi.application"
 
 APPEND_SLASH = True
 
@@ -47,8 +47,8 @@ INSTALLED_APPS = [
     # Third-party
     "django_strawberry_framework",
     # Local
-    "library.apps.LibraryConfig",
-    "products.apps.ProductsConfig",
+    "apps.library.apps.LibraryConfig",
+    "apps.products.apps.ProductsConfig",
 ]
 
 MIDDLEWARE = [

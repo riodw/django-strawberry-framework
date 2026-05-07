@@ -4,7 +4,7 @@ This file is the *intended* end-state of the example schema once
 ``django-strawberry-framework`` has the ``DjangoType``,
 ``DjangoConnectionField``, and ``apply_cascade_permissions`` machinery
 built out.  Until then, the design below is fully commented so that
-``urls.py`` can still import a working (placeholder) ``schema``.
+``config.schema`` can still import a working (placeholder) ``Query``.
 
 The design is a 1-to-1 port of the ``django-graphene-filters`` cookbook
 example (``recipes/schema.py``), translated to Strawberry idioms and
@@ -27,9 +27,9 @@ for now" — until those subsystems ship.
 #     # apply_cascade_permissions,
 # )
 #
-# from . import models
-# # from . import aggregates, filters, orders
-# # from . import fields as fieldsets
+# from apps.products import models
+# # from apps.products import aggregates, filters, orders
+# # from apps.products import fields as fieldsets
 #
 #
 # # ---------------------------------------------------------------------------

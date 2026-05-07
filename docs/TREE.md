@@ -188,7 +188,7 @@ django_graphene_filters/
 ## django_strawberry_framework (current on-disk layout)
 
 The shared infrastructure plus model/type and optimizer subpackages are on disk: `types/`, `optimizer/`, and `utils/`. Query-surface modules (`filters/`, `orders/`, `aggregates/`, `fieldset.py`, `permissions.py`, `connection.py`, `apps.py`, `management/`) do not exist yet and will land as their future design slices ship.
-The fakeshop example project is intentionally flattened under `examples/fakeshop/`: project infrastructure (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`) and app packages (`products/`, `library/`) are siblings, with `pytest.ini` adding `examples/fakeshop` to `pythonpath`. This is a test-tree convenience that keeps the two example apps visually peers. Production Django projects should usually keep the conventional project-package plus app-package layout and use dotted app paths.
+The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`). `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
 
 ```text
 django_strawberry_framework/
@@ -215,9 +215,9 @@ django_strawberry_framework/
     └── typing.py            # type unwrapping (list[T], of_type, Optional[T])
 ```
 
-## django_strawberry_framework (target layout)
+## django_strawberry_framework (target package layout)
 
-The target shape adds query-surface modules on top of the current layout. It is derived from the three reference trees above and the package direction captured in [`FEATURES.md`](FEATURES.md).
+This package target layout is separate from the fakeshop example-project layout above. It adds query-surface modules on top of the current `django_strawberry_framework/` package. It is derived from the three reference trees above and the package direction captured in [`FEATURES.md`](FEATURES.md).
 
 ```text
 django_strawberry_framework/
@@ -313,6 +313,23 @@ examples/fakeshop/test_query/   # Example-project tests, LIVE /graphql HTTP
 └── test_library_api.py       # live GraphQL acceptance tests for the library app
 ```
 
+The example project code itself is organized as:
+
+```text
+examples/fakeshop/
+├── manage.py
+├── config/                  # project orchestration
+│   ├── __init__.py
+│   ├── settings.py
+│   ├── schema.py
+│   ├── urls.py
+│   └── wsgi.py
+└── apps/                    # domain apps; import as apps.<app_name>
+    ├── __init__.py
+    ├── library/
+    └── products/
+```
+
 ### Target shape (as Layer-3 subsystems land)
 
 Each new source subpackage gets a parallel directory under `tests/`; each new flat single-file module gets a `tests/test_<module>.py`. The example test trees grow new files in place — no new subdirectories needed there.
@@ -379,4 +396,4 @@ HTTP tests that import the project schema must preserve the reload pattern from 
 
 `examples/<project>/...` — **Future example projects** mirror the same two-folder split: every additional example app under `examples/` ships its own `tests/` and `test_query/` directories with the same in-process / HTTP separation. `pytest.ini`'s `testpaths` will be extended one entry per pair when a second example lands; nothing about the package or the existing fakeshop test trees changes.
 
-`examples/fakeshop/products/tests/` — **Per-Django-app convention placeholder.** Empty by design — the per-app `tests/` folder is where Django expects an app's own tests to live by convention, but the fakeshop example consolidates all example tests at the project level (`examples/fakeshop/tests/` and `examples/fakeshop/test_query/`) rather than per-app. The empty directory stays committed as documentation of the convention; do not add files there.
+`examples/fakeshop/apps/products/tests/` — **Per-Django-app convention placeholder.** Empty by design — the per-app `tests/` folder is where Django expects an app's own tests to live by convention, but the fakeshop example consolidates all example tests at the project level (`examples/fakeshop/tests/` and `examples/fakeshop/test_query/`) rather than per-app. The empty directory stays committed as documentation of the convention; do not add files there.

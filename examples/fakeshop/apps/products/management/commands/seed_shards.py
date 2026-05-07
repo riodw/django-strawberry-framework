@@ -31,7 +31,7 @@ What this command does (per shard alias)
 
 Usage
 -----
-Requires the ``FAKESHOP_SHARDED=1`` env var so ``settings.py`` registers
+Requires the ``FAKESHOP_SHARDED=1`` env var so ``config.settings`` registers
 the shard aliases::
 
     FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards
@@ -54,7 +54,8 @@ millions of rows for load testing is safe::
 from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
-from products.services import create_users, seed_data
+
+from apps.products.services import create_users, seed_data
 
 # Aliases in sharded mode.  ``default`` IS shard A (Django requires a
 # ``default`` entry in DATABASES); ``shard_b`` is the explicit secondary.
@@ -82,7 +83,7 @@ class Command(BaseCommand):
         if "shard_b" not in settings.DATABASES:
             raise CommandError(
                 "Shard alias `shard_b` not declared in DATABASES. "
-                "Set `FAKESHOP_SHARDED=1` in the environment so settings.py "
+                "Set `FAKESHOP_SHARDED=1` in the environment so config.settings "
                 "selects the sharded DATABASES layout.",
             )
 

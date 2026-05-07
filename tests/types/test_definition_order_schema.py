@@ -2,9 +2,9 @@
 
 import pytest
 import strawberry
-from library.models import Book, Genre
-from products import services
-from products.models import Category, Item
+from apps.library.models import Book, Genre
+from apps.products import services
+from apps.products.models import Category, Item
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.registry import registry

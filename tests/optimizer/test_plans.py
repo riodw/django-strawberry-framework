@@ -6,8 +6,8 @@ in ``test_walker.py`` exercise construction; these tests verify that the
 plan's own methods work correctly in isolation.
 """
 
+from apps.products.models import Category, Entry, Item, Property
 from django.db.models import Prefetch
-from products.models import Category, Entry, Item, Property
 
 from django_strawberry_framework.optimizer.plans import (
     OptimizationPlan,
@@ -104,7 +104,7 @@ class TestOptimizationPlanApply:
     def test_apply_select_related(self):
         plan = OptimizationPlan(select_related=["category"])
         # Use a model that has a FK — Item.category.
-        from products.models import Item
+        from apps.products.models import Item
 
         qs = Item.objects.all()
         result = plan.apply(qs)

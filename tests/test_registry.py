@@ -12,8 +12,8 @@ dedicated test that exercises every branch.
 from enum import Enum
 
 import pytest
+from apps.products.models import Category, Item, Property
 from django.db import models
-from products.models import Category, Item, Property
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError

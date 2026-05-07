@@ -4,11 +4,11 @@ import importlib
 import sys
 
 import pytest
+from apps.library import models
 from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches
-from library import models
 
 from django_strawberry_framework.registry import registry
 
@@ -19,24 +19,24 @@ def _reload_project_schema_for_acceptance_tests():
     # This reload is mandatory for order-independent suite isolation:
     # package tests clear the global registry, while the example project
     # schema finalizes import-time DjangoType classes. Reload only schema
-    # modules (not library.models) so Django model classes stay stable and
+    # modules (not apps.library.models) so Django model classes stay stable and
     # DjangoType subclasses are recreated against a fresh registry.
     # Hidden invariant: tests must not module-level import classes from
-    # library.schema, or they will hold stale class objects after reload.
+    # apps.library.schema, or they will hold stale class objects after reload.
     registry.clear()
-    library_schema = sys.modules.get("library.schema")
+    library_schema = sys.modules.get("apps.library.schema")
     if library_schema is None:
-        importlib.import_module("library.schema")
+        importlib.import_module("apps.library.schema")
     else:
         importlib.reload(library_schema)
 
-    project_schema = sys.modules.get("schema")
+    project_schema = sys.modules.get("config.schema")
     if project_schema is None:
-        importlib.import_module("schema")
+        importlib.import_module("config.schema")
     else:
         importlib.reload(project_schema)
 
-    urls = sys.modules.get("urls")
+    urls = sys.modules.get("config.urls")
     if urls is not None:
         importlib.reload(urls)
         clear_url_caches()
@@ -59,8 +59,8 @@ def _seed_library_graph():
     models.Loan.objects.create(book=book, patron=patron, note="first checkout")
 
 
-def _seed_branch_with_two_shelves():
-    branch = models.Branch.objects.create(name="Override", city="Boston")
+def _seed_branch_with_two_shelves(name: str = "Override"):
+    branch = models.Branch.objects.create(name=name, city="Boston")
     models.Shelf.objects.create(code="A-1", topic="First floor", branch=branch)
     models.Shelf.objects.create(code="B-2", topic="Second floor", branch=branch)
 
@@ -385,6 +385,9 @@ def test_library_consumer_prefetched_queryset_cooperates_with_optimizer_over_htt
 @pytest.mark.django_db
 def test_library_optimizer_hints_are_observable_over_http():
     _seed_library_graph()
+    book = models.Book.objects.get(title="Kindred")
+    second_patron = models.Patron.objects.create(name="Katherine")
+    models.Loan.objects.create(book=book, patron=second_patron, note="second checkout")
 
     with CaptureQueriesContext(connection) as captured_prefetch:
         prefetch_response = _post_graphql(
@@ -401,6 +404,9 @@ def test_library_optimizer_hints_are_observable_over_http():
     assert prefetch_response.json() == {
         "data": {
             "allLibraryLoans": [
+                {
+                    "book": {"title": "Kindred"},
+                },
                 {
                     "book": {"title": "Kindred"},
                 },
@@ -430,10 +436,15 @@ def test_library_optimizer_hints_are_observable_over_http():
                 {
                     "patron": {"name": "Ada"},
                 },
+                {
+                    "patron": {"name": "Katherine"},
+                },
             ],
         },
     }
-    assert len(captured_skip) == 2
+    # SKIP opts out of relation planning, so patron loads are lazy: one
+    # root query plus one lookup per Loan row seeded above.
+    assert len(captured_skip) == 3
     assert "JOIN" not in captured_skip[0]["sql"]
     assert "library_loan" in captured_skip[0]["sql"]
     assert "library_patron" in captured_skip[1]["sql"]
@@ -441,18 +452,24 @@ def test_library_optimizer_hints_are_observable_over_http():
 
 @pytest.mark.django_db
 def test_library_relation_override_shapes_http_response_data():
-    _seed_branch_with_two_shelves()
+    _seed_branch_with_two_shelves("Override")
+    _seed_branch_with_two_shelves("Override East")
 
-    _assert_graphql_data(
-        """
-        query {
-          allLibraryBranches {
-            name
-            shelves { code }
-          }
-        }
-        """,
-        {
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryBranches {
+                name
+                shelves { code }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {
             "allLibraryBranches": [
                 {
                     "name": "Override",
@@ -461,6 +478,18 @@ def test_library_relation_override_shapes_http_response_data():
                         {"code": "A-1"},
                     ],
                 },
+                {
+                    "name": "Override East",
+                    "shelves": [
+                        {"code": "B-2"},
+                        {"code": "A-1"},
+                    ],
+                },
             ],
         },
-    )
+    }
+    # The optimizer still plans the relation, but the consumer override
+    # re-shapes it with order_by("-code"), bypassing the prefetched cache.
+    # The observable baseline is root query + planned prefetch + one
+    # override manager query per Branch row.
+    assert len(captured) == 4

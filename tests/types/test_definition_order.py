@@ -2,8 +2,8 @@
 
 import pytest
 import strawberry
-from library.models import Book, Genre, MembershipCard, Patron, Shelf
-from products.models import Category, Entry, Item, Property
+from apps.library.models import Book, Genre, MembershipCard, Patron, Shelf
+from apps.products.models import Category, Entry, Item, Property
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError

@@ -5,8 +5,8 @@ hand-rolls Category/Item/Property/Entry instances.
 """
 
 import pytest
-from fakeshop.products.models import Category, Entry, Item, Property
-from fakeshop.products.services import seed_data
+from products.models import Category, Entry, Item, Property
+from products.services import seed_data
 
 
 @pytest.mark.django_db

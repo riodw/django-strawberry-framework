@@ -27,7 +27,7 @@ import datetime
 
 import pytest
 from django.db import models
-from fakeshop.products.models import Category, Entry, Item, Property
+from products.models import Category, Entry, Item, Property
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError

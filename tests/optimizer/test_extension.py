@@ -22,8 +22,8 @@ from types import SimpleNamespace
 
 import pytest
 import strawberry
-from fakeshop.products import services
-from fakeshop.products.models import Category, Entry, Item, Property
+from products import services
+from products.models import Category, Entry, Item, Property
 
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer import logger as optimizer_logger

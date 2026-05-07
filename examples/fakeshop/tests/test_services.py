@@ -1,12 +1,12 @@
-"""Tests for fakeshop.products.services — Faker-driven seeding and deletion services."""
+"""Tests for products.services — Faker-driven seeding and deletion services."""
 
 from unittest.mock import patch
 
 import pytest
 from django.contrib.auth import get_user_model
 from faker import Faker
-from fakeshop.products import services
-from fakeshop.products.models import Category, Entry, Item, Property
+from products import services
+from products.models import Category, Entry, Item, Property
 
 User = get_user_model()
 

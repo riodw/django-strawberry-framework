@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.http import HttpResponse
 from django.urls import path
-from fakeshop.schema import schema
+from schema import schema
 from strawberry.django.views import GraphQLView
 
 

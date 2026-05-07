@@ -2,7 +2,7 @@
 
 import pytest
 import strawberry
-from fakeshop.products.models import Category, Item
+from products.models import Category, Item
 
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer.walker import plan_optimizations, plan_relation

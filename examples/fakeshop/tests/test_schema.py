@@ -5,8 +5,8 @@ GraphQL query string, never by calling resolver methods directly.
 """
 
 import strawberry
-from fakeshop.products.schema import Query as ProductsQuery
-from fakeshop.schema import schema as project_schema
+from products.schema import Query as ProductsQuery
+from schema import schema as project_schema
 
 
 def test_products_schema_executes_hello():

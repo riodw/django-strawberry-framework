@@ -23,13 +23,13 @@ def _reload_project_schema_for_acceptance_tests():
     else:
         importlib.reload(library_schema)
 
-    project_schema = sys.modules.get("fakeshop.schema")
+    project_schema = sys.modules.get("schema")
     if project_schema is None:
-        importlib.import_module("fakeshop.schema")
+        importlib.import_module("schema")
     else:
         importlib.reload(project_schema)
 
-    urls = sys.modules.get("fakeshop.urls")
+    urls = sys.modules.get("urls")
     if urls is not None:
         importlib.reload(urls)
         clear_url_caches()

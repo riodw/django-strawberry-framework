@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 from django.db import models
 from django.db.models import Prefetch
-from fakeshop.products.models import Category, Entry, Item
+from products.models import Category, Entry, Item
 
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.optimizer.walker import (

@@ -17,7 +17,7 @@ be exercised without a real Django OneToOne in the example schema.
 
 import pytest
 import strawberry
-from fakeshop.products.models import Category, Item
+from products.models import Category, Item
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer.plans import resolver_key
@@ -63,7 +63,7 @@ def test_o1_forward_fk_resolves_to_related_instance():
     The test pins the behaviour stays correct after O1's resolver injection
     so a regression does not silently break forward-FK access.
     """
-    from fakeshop.products import services
+    from products import services
 
     services.seed_data(1)
 
@@ -101,7 +101,7 @@ def test_o1_reverse_fk_resolves_without_iterability_error():
     ``Expected Iterable, but did not find one for field 'CategoryType.items'``.
     The custom resolver returns ``list(manager.all())`` so iteration works.
     """
-    from fakeshop.products import services
+    from products import services
 
     services.seed_data(1)
 
@@ -402,7 +402,7 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
     returns correct results in 26 SQL queries (1 + 25): one category query
     plus one item query per category.
     """
-    from fakeshop.products import services
+    from products import services
 
     services.seed_data(1)
 

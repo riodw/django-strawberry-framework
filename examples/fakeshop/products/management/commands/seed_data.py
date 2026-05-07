@@ -1,5 +1,5 @@
 from django.core.management.base import BaseCommand
-from fakeshop.products.services import seed_data
+from products.services import seed_data
 
 
 class Command(BaseCommand):

@@ -308,7 +308,8 @@ examples/fakeshop/tests/     # Example-project tests, NO /graphql HTTP
 └── test_urls.py             # fakeshop project urls (index view)
 
 examples/fakeshop/test_query/   # Example-project tests, LIVE /graphql HTTP
-└── README.md                # placeholder; reserved for HTTP-level GraphQL tests
+├── README.md                # HTTP-test placement notes
+└── test_library_api.py       # live GraphQL acceptance tests for the library app
 ```
 
 ### Target shape (as Layer-3 subsystems land)
@@ -372,8 +373,8 @@ examples/fakeshop/test_query/   # unchanged shape; HTTP-level GraphQL tests land
 
 `examples/fakeshop/tests/` — **Example-project tests, no HTTP `/graphql/`.** The system-under-test is the fakeshop example project, exercised through real Django flows but in-process: management commands via `django.core.management.call_command`, admin actions via `django.test.Client.get("/admin/...")`, URL views via `django.test.Client.get("/")`, schema execution via `strawberry.Schema.execute_sync(...)` directly. Slow enough that they live in their own tree but fast enough not to need an HTTP server. Outside the package coverage gate (the example is example code, not shipping code) but still runs under `uv run pytest` because `pytest.ini` lists it in `testpaths`.
 
-`examples/fakeshop/test_query/` — **Example-project tests, live `/graphql/` HTTP.** The system-under-test is the same fakeshop project, but exercised end-to-end through the Django + Strawberry HTTP stack via `django.test.Client.post("/graphql/", ...)`. Verifies the full request pipeline: URL routing, view, schema execution, JSON response serialization. Currently empty (placeholder `README.md` only); fills in as the example schema gains real types and resolvers. Same coverage and discovery rules as the sibling `examples/fakeshop/tests/` tree.
+`examples/fakeshop/test_query/` — **Example-project tests, live `/graphql/` HTTP.** The system-under-test is the same fakeshop project, but exercised end-to-end through the Django + Strawberry HTTP stack via `django.test.Client.post("/graphql/", ...)`. Verifies the full request pipeline: URL routing, view, schema execution, JSON response serialization. Contains live GraphQL acceptance tests as the example schema gains real types and resolvers. Same coverage and discovery rules as the sibling `examples/fakeshop/tests/` tree.
 
 `examples/<project>/...` — **Future example projects** mirror the same two-folder split: every additional example app under `examples/` ships its own `tests/` and `test_query/` directories with the same in-process / HTTP separation. `pytest.ini`'s `testpaths` will be extended one entry per pair when a second example lands; nothing about the package or the existing fakeshop test trees changes.
 
-`examples/fakeshop/fakeshop/products/tests/` — **Per-Django-app convention placeholder.** Empty by design — the per-app `tests/` folder is where Django expects an app's own tests to live by convention, but the fakeshop example consolidates all example tests at the project level (`examples/fakeshop/tests/` and `examples/fakeshop/test_query/`) rather than per-app. The empty directory stays committed as documentation of the convention; do not add files there.
+`examples/fakeshop/products/tests/` — **Per-Django-app convention placeholder.** Empty by design — the per-app `tests/` folder is where Django expects an app's own tests to live by convention, but the fakeshop example consolidates all example tests at the project level (`examples/fakeshop/tests/` and `examples/fakeshop/test_query/`) rather than per-app. The empty directory stays committed as documentation of the convention; do not add files there.

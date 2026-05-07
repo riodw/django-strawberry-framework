@@ -54,7 +54,7 @@ millions of rows for load testing is safe::
 from django.conf import settings
 from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
-from fakeshop.products.services import create_users, seed_data
+from products.services import create_users, seed_data
 
 # Aliases in sharded mode.  ``default`` IS shard A (Django requires a
 # ``default`` entry in DATABASES); ``shard_b`` is the explicit secondary.

@@ -10,8 +10,8 @@ and is left out for now.
 """
 
 import strawberry
-from fakeshop.products.schema import Query as ProductsQuery
 from library.schema import Query as LibraryQuery
+from products.schema import Query as ProductsQuery
 
 from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types
 

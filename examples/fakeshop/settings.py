@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / "subdir"
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(__file__).resolve().parent
 
 
 # ---------------------------------------------------------------------------
@@ -24,9 +24,9 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
-ROOT_URLCONF = "fakeshop.urls"
+ROOT_URLCONF = "urls"
 
-WSGI_APPLICATION = "fakeshop.wsgi.application"
+WSGI_APPLICATION = "wsgi.application"
 
 APPEND_SLASH = True
 
@@ -48,7 +48,7 @@ INSTALLED_APPS = [
     "django_strawberry_framework",
     # Local
     "library.apps.LibraryConfig",
-    "fakeshop.products.apps.ProductsConfig",
+    "products.apps.ProductsConfig",
     # Test-scoped unmanaged models used by definition-order/cardinality coverage.
     # Keep this app installed: reverse OneToOne/M2M discovery requires the
     # models to live in Django's app registry, and tests avoid mutating

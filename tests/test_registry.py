@@ -13,7 +13,7 @@ from enum import Enum
 
 import pytest
 from django.db import models
-from fakeshop.products.models import Category, Item, Property
+from products.models import Category, Item, Property
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError

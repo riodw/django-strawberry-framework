@@ -7,7 +7,7 @@ plan's own methods work correctly in isolation.
 """
 
 from django.db.models import Prefetch
-from fakeshop.products.models import Category, Entry, Item, Property
+from products.models import Category, Entry, Item, Property
 
 from django_strawberry_framework.optimizer.plans import (
     OptimizationPlan,
@@ -104,7 +104,7 @@ class TestOptimizationPlanApply:
     def test_apply_select_related(self):
         plan = OptimizationPlan(select_related=["category"])
         # Use a model that has a FK — Item.category.
-        from fakeshop.products.models import Item
+        from products.models import Item
 
         qs = Item.objects.all()
         result = plan.apply(qs)

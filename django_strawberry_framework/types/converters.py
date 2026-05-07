@@ -27,6 +27,7 @@ from ..exceptions import ConfigurationError
 from ..registry import registry
 from ..utils.relations import relation_kind
 from ..utils.strings import pascal_case
+from .relations import PendingRelationAnnotation
 
 # TODO(future): define and export a ``BigInt`` Strawberry scalar so
 # ``BigIntegerField`` maps to a 64-bit integer that survives JSON
@@ -208,19 +209,16 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
     return enum_cls
 
 
-# TODO(spec-foundation 0.0.4): redo this function. The eager
-# ``ConfigurationError`` for unregistered targets MUST be removed; the
-# same wording moves into ``finalizer._format_unresolved_targets_error``
-# and only fires after every ``DjangoType`` has had a chance to
-# register. After the rewrite this becomes a thin helper:
-#   - If ``registry.get(field.related_model)`` returns a type, return
-#     the concrete annotation (``list[T]`` for ``many``, ``T | None``
-#     for ``reverse_one_to_one`` or nullable forward, ``T`` otherwise).
-#   - If the target is unregistered, return a sentinel placeholder and
-#     let the caller (the rewritten ``_build_annotations``) append a
-#     ``PendingRelation`` for the finalizer to rewrite.
-# See ``docs/spec-foundation.md`` "Migration of current code" / "Must
-# redo (not augment)".
+def resolved_relation_annotation(field: models.Field, target_type: type) -> Any:
+    """Return the concrete annotation for ``field`` pointing at ``target_type``."""
+    kind = relation_kind(field)
+    if kind == "many":
+        return list[target_type]
+    if kind == "reverse_one_to_one" or getattr(field, "null", False):
+        return target_type | None
+    return target_type
+
+
 def convert_relation(field: models.Field) -> Any:
     """Map a Django relation field to its target ``DjangoType``.
 
@@ -235,14 +233,10 @@ def convert_relation(field: models.Field) -> Any:
     - Reverse FK (``one_to_many``) -> ``list[target_type]``.
     - Forward / reverse M2M (``many_to_many``) -> ``list[target_type]``.
 
-    Current alpha behavior: the target's ``DjangoType`` must already be
-    registered. If it is not, ``ConfigurationError`` fires with a message
-    naming the unregistered model. Definition-order independence is
-    deferred; until then, declare related models in dependency order. The
-    ``related_name`` on Django's reverse descriptor surfaces here via
-    ``field.name`` (e.g. ``Category._meta.get_fields()`` yields a reverse
-    rel named ``items`` when ``Item.category`` declares
-    ``related_name="items"``).
+    If the target type is not registered yet, return
+    ``PendingRelationAnnotation``. The caller records the matching
+    ``PendingRelation`` and ``finalize_django_types()`` rewrites the
+    annotation after all modules have imported.
 
     Args:
         field: A bound Django relation field or related-object descriptor.
@@ -250,37 +244,9 @@ def convert_relation(field: models.Field) -> Any:
             reverse-side fields live on the related model and surface
             here via ``Model._meta.get_fields()``.
 
-    Raises:
-        ConfigurationError: target ``DjangoType`` not registered.
     """
     target_model = field.related_model
     target_type = registry.get(target_model)
-    # TODO(spec-foundation 0.0.4): replace this eager raise with a
-    # sentinel-return path. The unresolved-target error message moves
-    # to ``finalizer._format_unresolved_targets_error`` and is raised
-    # by ``finalize_django_types()`` only after every type has had a
-    # chance to register. The reference to ``TypeRegistry.lazy_ref``
-    # below is misleading already (the placeholder is being deleted in
-    # this slice) — the error message and the lazy_ref method both go
-    # away together.
     if target_type is None:
-        raise ConfigurationError(
-            f"DjangoType for {target_model.__name__} is not yet registered. "
-            "Declare it before any DjangoType that references it via FK / OneToOne / M2M, "
-            "or before any DjangoType whose model is referenced by it via a reverse rel. "
-            "Definition-order independence is tracked as future work; see "
-            "``django_strawberry_framework.registry.TypeRegistry.lazy_ref``.",
-        )
-
-    kind = relation_kind(field)
-
-    # Many-side cardinality always becomes a list at the schema level.
-    if kind == "many":
-        return list[target_type]
-
-    # Single-side cardinality: forward FK, forward OneToOne, or reverse
-    # OneToOne. Reverse OneToOne is conceptually nullable regardless of
-    # the source field's ``null`` (the reverse row may simply not exist).
-    if kind == "reverse_one_to_one" or getattr(field, "null", False):
-        return target_type | None
-    return target_type
+        return PendingRelationAnnotation
+    return resolved_relation_annotation(field, target_type)

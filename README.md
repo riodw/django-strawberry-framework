@@ -35,11 +35,11 @@ This root README is the operational entry point: install, run, seed example data
 
 ## Quick start
 
-Install the package, define `DjangoType` classes with nested `Meta`, return a Django `QuerySet`, and enable `DjangoOptimizerExtension` on your Strawberry schema.
+Install the package, define `DjangoType` classes with nested `Meta`, import every module that declares them, call `finalize_django_types()` during schema setup, return a Django `QuerySet`, and enable `DjangoOptimizerExtension` on your Strawberry schema.
 
 ```python
 import strawberry
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoType
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
 from myapp.models import Category, Item
 
 
@@ -53,6 +53,8 @@ class ItemType(DjangoType):
     class Meta:
         model = Item
         fields = ("id", "name", "category")
+
+finalize_django_types()
 
 
 @strawberry.type
@@ -69,6 +71,30 @@ schema = strawberry.Schema(
 ```
 
 The longer onboarding path lives in [`docs/README.md`](docs/README.md#quick-start).
+
+### Schema setup boundary
+
+`finalize_django_types()` must run once during single-threaded import/schema setup, after every module that defines `DjangoType` classes has been imported and before `strawberry.Schema(...)` is constructed. The most common 0.0.4 failure mode is forgetting to import a module that contains a related type before finalization.
+
+Recommended:
+
+```python
+from django_strawberry_framework import finalize_django_types
+
+from myapp import types as _types  # noqa: F401
+
+finalize_django_types()
+schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+```
+
+Wrong order:
+
+```python
+schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+finalize_django_types()
+```
+
+The second form constructs the Strawberry schema before relation targets are finalized, so exposed relations whose target type was still pending cannot be resolved into concrete `DjangoType`s.
 
 ## Installation
 

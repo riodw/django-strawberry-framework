@@ -1,4 +1,4 @@
-"""Type registry for ``DjangoType`` and choice-field enums.
+"""Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
 
 Maps Django models to their generated ``DjangoType`` and ``(model,
 field_name)`` to generated ``Enum`` classes. Used by:
@@ -13,13 +13,19 @@ is via the ``clear()`` helper, typically wired into a ``pytest`` autouse
 fixture.
 """
 
-from collections.abc import Iterator
+from __future__ import annotations
+
+from collections.abc import Iterable, Iterator
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING
 
 from django.db import models
 
 from .exceptions import ConfigurationError
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .types.definition import DjangoTypeDefinition
+    from .types.relations import PendingRelation
 
 
 class TypeRegistry:
@@ -32,25 +38,13 @@ class TypeRegistry:
     ``register_enum`` from a request handler or async resolver.
     """
 
-    # TODO(spec-foundation 0.0.4): extend the registry per
-    # ``docs/spec-foundation.md`` "TypeRegistry extensions". Add three
-    # new instance attributes initialized in ``__init__``:
-    #   - ``self._definitions: dict[type, DjangoTypeDefinition] = {}``
-    #   - ``self._pending: list[PendingRelation] = []``
-    #   - ``self._finalized: bool = False``
-    # Add the methods ``register_definition``, ``get_definition``,
-    # ``iter_definitions``, ``add_pending_relation``,
-    # ``iter_pending_relations``, ``discard_pending``, ``is_finalized``,
-    # and ``mark_finalized``. ``clear`` (below) gains the matching
-    # resets for the new attributes. The lockless-mutation contract in
-    # the docstring above stays — ``finalize_django_types()`` runs
-    # during single-threaded import / app / schema setup, before any
-    # request handling begins (see
-    # ``docs/spec-foundation.md`` "Idempotency and lifecycle contract").
     def __init__(self) -> None:
         self._types: dict[type[models.Model], type] = {}
         self._models: dict[type, type[models.Model]] = {}
         self._enums: dict[tuple[type[models.Model], str], type[Enum]] = {}
+        self._definitions: dict[type, DjangoTypeDefinition] = {}
+        self._pending: list[PendingRelation] = []
+        self._finalized: bool = False
 
     def register(self, model: type[models.Model], type_cls: type) -> None:
         """Register ``type_cls`` as the ``DjangoType`` for ``model``.
@@ -105,42 +99,41 @@ class TypeRegistry:
         """
         yield from self._types.items()
 
-    # TODO(spec-foundation 0.0.4): DELETE this method outright per
-    # ``docs/spec-foundation.md`` "Migration of current code" / "Must
-    # redo (not augment)". The placeholder ``NotImplementedError`` and
-    # its three-option docstring are misleading — the actual
-    # pending-relation API (``add_pending_relation`` /
-    # ``iter_pending_relations`` / ``discard_pending``) supersedes it.
-    # The error message in ``convert_relation`` that references this
-    # symbol disappears at the same time the function body of
-    # ``convert_relation`` is rewritten, so no consumer-visible string
-    # is left dangling.
-    def lazy_ref(self, model: type[models.Model]) -> Any:
-        """Return a forward reference resolved at schema build.
+    def register_definition(self, type_cls: type, definition: DjangoTypeDefinition) -> None:
+        """Register the collected definition object for ``type_cls``."""
+        existing = self._definitions.get(type_cls)
+        if existing is not None and existing is not definition:
+            raise ConfigurationError(f"{type_cls.__name__} already has a registered DjangoTypeDefinition")
+        self._definitions[type_cls] = definition
 
-        Current alpha behavior uses eager resolution:
-        ``convert_relation`` calls ``registry.get`` and raises
-        ``ConfigurationError`` if the target is unregistered. Lifting
-        the dependency-order constraint requires picking one of:
+    def get_definition(self, type_cls: type) -> DjangoTypeDefinition | None:
+        """Return the collected definition for ``type_cls``, or ``None``."""
+        return self._definitions.get(type_cls)
 
-        - ``Annotated["TargetType", strawberry.lazy("module.path")]`` so
-          Strawberry resolves the type via a named import at schema
-          build time. Best for cross-module references.
-        - A string annotation (``"TargetType"``) that
-          ``_build_annotations`` rewrites once all sibling types are
-          registered. Simplest for same-module references.
-        - A registry-tracked "pending relation" record that a
-          ``finalize_types()`` post-processing pass resolves after every
-          subclass has been seen.
+    def iter_definitions(self) -> Iterator[tuple[type, DjangoTypeDefinition]]:
+        """Yield ``(type_cls, definition)`` pairs in registration order."""
+        yield from self._definitions.items()
 
-        Definition-order independence is tracked as future work in the
-        project board.
-        """
-        # TODO(future): pick a forward-ref strategy from the docstring
-        # above and wire it. The string-annotation approach is simplest
-        # for same-module references; LazyType / Annotated is needed for
-        # cross-module relations.
-        raise NotImplementedError("lazy_ref pending future slice (definition-order independence)")
+    def add_pending_relation(self, pending: PendingRelation) -> None:
+        """Record a relation whose target type must be resolved during finalization."""
+        self._pending.append(pending)
+
+    def iter_pending_relations(self) -> Iterator[PendingRelation]:
+        """Yield pending relation records in collection order."""
+        yield from self._pending
+
+    def discard_pending(self, resolved: Iterable[PendingRelation]) -> None:
+        """Drop pending records that have been resolved successfully."""
+        resolved_ids = {id(pending) for pending in resolved}
+        self._pending = [pending for pending in self._pending if id(pending) not in resolved_ids]
+
+    def is_finalized(self) -> bool:
+        """Return whether the registry has completed ``finalize_django_types()``."""
+        return self._finalized
+
+    def mark_finalized(self) -> None:
+        """Mark the registry as finalized."""
+        self._finalized = True
 
     def register_enum(
         self,
@@ -176,17 +169,6 @@ class TypeRegistry:
         """Return the cached enum for ``(model, field_name)``, or ``None``."""
         return self._enums.get((model, field_name))
 
-    # TODO(spec-foundation 0.0.4): EXTEND (do not redo) ``clear`` to
-    # also reset ``_definitions``, ``_pending``, and ``_finalized`` so
-    # test isolation under the autouse fixture pattern at
-    # ``tests/types/test_base.py:46-51`` does not leak pending
-    # relations or finalized markers across tests. Note: ``clear()``
-    # cannot remove ``__strawberry_definition__`` /
-    # ``__django_strawberry_definition__`` / mutated ``__annotations__``
-    # from already-finalized classes — tests must redefine their types
-    # inside the test function or fixture (see
-    # ``docs/spec-foundation.md`` "Idempotency and lifecycle contract"
-    # "Class-mutation residue").
     def clear(self) -> None:
         """Drop all registered types and enums.
 
@@ -198,6 +180,9 @@ class TypeRegistry:
         self._types.clear()
         self._models.clear()
         self._enums.clear()
+        self._definitions.clear()
+        self._pending.clear()
+        self._finalized = False
 
 
 registry = TypeRegistry()

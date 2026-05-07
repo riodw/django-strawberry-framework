@@ -16,6 +16,13 @@ from django_strawberry_framework.registry import registry
 @pytest.fixture(autouse=True)
 def _reload_project_schema_for_acceptance_tests():
     """Recreate imported DjangoType classes if package tests cleared the registry."""
+    # This reload is mandatory for order-independent suite isolation:
+    # package tests clear the global registry, while the example project
+    # schema finalizes import-time DjangoType classes. Reload only schema
+    # modules (not library.models) so Django model classes stay stable and
+    # DjangoType subclasses are recreated against a fresh registry.
+    # Hidden invariant: tests must not module-level import classes from
+    # library.schema, or they will hold stale class objects after reload.
     registry.clear()
     library_schema = sys.modules.get("library.schema")
     if library_schema is None:
@@ -52,6 +59,12 @@ def _seed_library_graph():
     models.Loan.objects.create(book=book, patron=patron, note="first checkout")
 
 
+def _seed_branch_with_two_shelves():
+    branch = models.Branch.objects.create(name="Override", city="Boston")
+    models.Shelf.objects.create(code="A-1", topic="First floor", branch=branch)
+    models.Shelf.objects.create(code="B-2", topic="Second floor", branch=branch)
+
+
 def _post_graphql(query: str):
     client = Client()
     return client.post(
@@ -66,6 +79,10 @@ def _assert_graphql_data(query: str, expected: dict):
     assert response.status_code == 200
     assert response.json() == {"data": expected}
     return response
+
+
+def _field_type(type_info: dict, field_name: str) -> dict:
+    return next(field["type"] for field in type_info["fields"] if field["name"] == field_name)
 
 
 @pytest.mark.django_db
@@ -225,3 +242,225 @@ def test_library_optimizer_selects_book_shelf_in_http_query():
     assert "JOIN" in sql
     assert "library_book" in sql
     assert "library_shelf" in sql
+
+
+@pytest.mark.django_db
+def test_library_reverse_fk_and_m2m_prefetch_sql_shape_over_http():
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryShelves {
+                code
+                books {
+                  title
+                  genres { name }
+                }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {
+            "allLibraryShelves": [
+                {
+                    "code": "A-1",
+                    "books": [
+                        {
+                            "title": "Kindred",
+                            "genres": [{"name": "Speculative"}],
+                        },
+                    ],
+                },
+            ],
+        },
+    }
+    assert len(captured) == 3
+    sql = "\n".join(query["sql"] for query in captured)
+    assert "library_shelf" in sql
+    assert "library_book" in sql
+    assert "library_book_genres" in sql
+    assert "library_genre" in sql
+
+
+@pytest.mark.django_db
+def test_library_choice_enum_and_nullable_subtitle_are_deliberate_http_contracts():
+    _seed_library_graph()
+
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryBooks {
+            title
+            subtitle
+            circulationStatus
+          }
+        }
+        """,
+        {
+            "allLibraryBooks": [
+                {
+                    "title": "Kindred",
+                    "subtitle": None,
+                    "circulationStatus": "checked_out",
+                },
+            ],
+        },
+    )
+
+    response = _post_graphql(
+        """
+        query {
+          __type(name: "BookType") {
+            fields {
+              name
+              type {
+                kind
+                name
+                ofType { kind name }
+              }
+            }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    type_info = response.json()["data"]["__type"]
+    circulation_status_type = _field_type(type_info, "circulationStatus")
+    assert circulation_status_type["kind"] == "NON_NULL"
+    assert circulation_status_type["ofType"] == {
+        "kind": "ENUM",
+        "name": "BookTypeCirculationStatusEnum",
+    }
+    subtitle_type = _field_type(type_info, "subtitle")
+    assert subtitle_type == {
+        "kind": "SCALAR",
+        "name": "String",
+        "ofType": None,
+    }
+
+
+@pytest.mark.django_db
+def test_library_consumer_prefetched_queryset_cooperates_with_optimizer_over_http():
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryPrefetchedBooks {
+                title
+                shelf { code }
+                genres { name }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {
+            "allLibraryPrefetchedBooks": [
+                {
+                    "title": "Kindred",
+                    "shelf": {"code": "A-1"},
+                    "genres": [{"name": "Speculative"}],
+                },
+            ],
+        },
+    }
+    assert len(captured) == 2
+    root_sql = captured[0]["sql"]
+    prefetch_sql = captured[1]["sql"]
+    assert "JOIN" in root_sql
+    assert "library_shelf" in root_sql
+    assert "library_book_genres" in prefetch_sql
+    assert "library_genre" in prefetch_sql
+
+
+@pytest.mark.django_db
+def test_library_optimizer_hints_are_observable_over_http():
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured_prefetch:
+        prefetch_response = _post_graphql(
+            """
+            query {
+              allLibraryLoans {
+                book { title }
+              }
+            }
+            """,
+        )
+
+    assert prefetch_response.status_code == 200
+    assert prefetch_response.json() == {
+        "data": {
+            "allLibraryLoans": [
+                {
+                    "book": {"title": "Kindred"},
+                },
+            ],
+        },
+    }
+    assert len(captured_prefetch) == 2
+    assert "JOIN" not in captured_prefetch[0]["sql"]
+    assert "library_loan" in captured_prefetch[0]["sql"]
+    assert "library_book" in captured_prefetch[1]["sql"]
+
+    with CaptureQueriesContext(connection) as captured_skip:
+        skip_response = _post_graphql(
+            """
+            query {
+              allLibraryLoans {
+                patron { name }
+              }
+            }
+            """,
+        )
+
+    assert skip_response.status_code == 200
+    assert skip_response.json() == {
+        "data": {
+            "allLibraryLoans": [
+                {
+                    "patron": {"name": "Ada"},
+                },
+            ],
+        },
+    }
+    assert len(captured_skip) == 2
+    assert "JOIN" not in captured_skip[0]["sql"]
+    assert "library_loan" in captured_skip[0]["sql"]
+    assert "library_patron" in captured_skip[1]["sql"]
+
+
+@pytest.mark.django_db
+def test_library_relation_override_shapes_http_response_data():
+    _seed_branch_with_two_shelves()
+
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryBranches {
+            name
+            shelves { code }
+          }
+        }
+        """,
+        {
+            "allLibraryBranches": [
+                {
+                    "name": "Override",
+                    "shelves": [
+                        {"code": "B-2"},
+                        {"code": "A-1"},
+                    ],
+                },
+            ],
+        },
+    )

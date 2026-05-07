@@ -26,14 +26,14 @@ For install, local development, testing, and the canonical documentation map, st
   - Pending-relation registry (`PendingRelation`, `add_pending_relation`, `iter_pending_relations`, `discard_pending`, `is_finalized`, `mark_finalized`, extended `clear`) supports definition-order-independent FK / reverse FK / forward + reverse OneToOne / forward + reverse M2M / multi-cycle graphs.
   - Manual relation override contract (`consumer_annotated_relation_fields` vs `consumer_assigned_relation_fields`): annotation-only overrides keep the generated relation resolver; `strawberry.field(resolver=...)` / `@strawberry.field` overrides suppress it.
   - Fail-loud unresolved-target finalization error names source model, source field, and target model.
-  - OneToOne / M2M cardinality fixture lives at `tests/fixtures/cardinality_models.py` (registered via the `tests.fixtures.apps.TestsCardinalityConfig` Django app).
+  - OneToOne / M2M cardinality coverage now uses the real `library` example app; the old `tests.fixtures.apps.TestsCardinalityConfig` fixture app has been removed.
   - Package version is `0.0.4`.
 - Test suite structure has caught up with the package shape:
   - `tests/optimizer/` covers `extension.py`, `walker.py`, `plans.py`, `hints.py`, `field_meta.py`, and `definition_order.py`.
   - `tests/types/` covers `base.py`, `converters.py`, `resolvers.py`, `definition_order.py`, and `definition_order_schema.py`.
   - `tests/test_registry.py` covers idempotency / phase-1 atomicity / phase-2/3 partial-mutation / pending-set cleanup / class-mutation residue.
   - `tests/utils/` covers utility modules.
-  - 326 passed, 1 skipped, 0 failed under `uv run pytest tests --no-cov -q`.
+  - The full suite runs through `uv run pytest`, including package tests, example-project tests, and live `/graphql/` HTTP tests, with 100% package coverage.
 
 ### In progress
 
@@ -61,10 +61,8 @@ For install, local development, testing, and the canonical documentation map, st
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
   - connection-aware planning for Relay-style nested connection selections (new card `BACKLOG-012`)
-- Test/example hygiene items surfaced by the foundation slice review:
-  - durable override-test pattern that does not couple to Strawberry's `StrawberryField.base_resolver.wrapped_func` shape (`BACKLOG-011`)
-  - move the cardinality fixture's `INSTALLED_APPS` line out of the example project's production-shaped settings (`BACKLOG-010`)
-- The fakeshop GraphQL schema is still a placeholder; the aspirational schema block remains commented.
+- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract (`BACKLOG-011`).
+- The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
 
 ## Board columns
 
@@ -217,7 +215,7 @@ Scope:
 - Manual relation override contract: split `consumer_annotated_relation_fields` and `consumer_assigned_relation_fields` so annotation-only overrides keep the generated resolver while assigned-field / decorator overrides suppress it. Class-attribute shadowing of relation fields raises `ConfigurationError`.
 - `PendingRelationAnnotation` sentinel with metaclass `__repr__` that surfaces a useful `TypeError` body if `strawberry.Schema(...)` is constructed before finalization.
 - MRO-aware `_detect_custom_get_queryset` so abstract bases without `Meta` still flip the `has_custom_get_queryset` sentinel for downstream concrete subclasses.
-- Cardinality fixture under `tests/fixtures/cardinality_models.py` (`User`, `Profile(OneToOneField)`, `Author`, `Tag`, `Book(ForeignKey, M2M)`).
+- Real cardinality coverage through the `library` example app (`Patron`, `MembershipCard`, `Genre`, `Book`, `Shelf`, `Branch`, `Loan`) instead of test-only fixture models.
 - Dedicated test files: `tests/types/test_definition_order.py`, `tests/types/test_definition_order_schema.py`, `tests/optimizer/test_definition_order.py`, plus `tests/test_registry.py` extensions for idempotency / phase-1 atomicity / phase-2/3 partial-mutation contract / pending-set cleanup / class-mutation residue.
 - Documentation sweep: `README.md`, `docs/README.md`, `docs/FEATURES.md`, `TODAY.md`, and `CHANGELOG.md`.
 - Version bump to `0.0.4` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`.
@@ -236,7 +234,9 @@ Evidence:
 - `tests/types/test_definition_order_schema.py`
 - `tests/optimizer/test_definition_order.py`
 - `tests/test_registry.py`
-- `tests/fixtures/cardinality_models.py`
+- `examples/fakeshop/library/models.py`
+- `examples/fakeshop/library/schema.py`
+- `examples/fakeshop/test_query/test_library_api.py`
 - `CHANGELOG.md`
 - `docs/spec-foundation.md`
 - `docs/feedback.md`
@@ -661,14 +661,14 @@ Definition of done:
 
 Priority: completed
 
-Status: closed by `DONE-006` (cardinality fixture under `tests/fixtures/cardinality_models.py`).
+Status: closed by `DONE-006` and the testing-shift follow-up.
 
 Evidence:
 
-- `tests/fixtures/cardinality_models.py` (`Author`, `Tag`, `Book` with FK + M2M relations; `User`, `Profile` with OneToOne).
+- `examples/fakeshop/library/models.py` defines `Book.genres` / `Genre.books` with real managed tables.
+- `examples/fakeshop/test_query/test_library_api.py` covers M2M traversal and M2M prefetch SQL shape through `/graphql/`.
 - `tests/types/test_definition_order.py::test_many_to_many_forward_and_reverse_relations_resolve` covers forward and reverse M2M.
 - `tests/optimizer/test_definition_order.py::test_plan_relation_decisions_match_cardinality_after_finalization` covers the optimizer's M2M planning decision.
-- `tests/types/test_definition_order_schema.py::test_m2m_schema_shape_builds_without_database_tables` pins the schema shape for unmanaged M2M.
 
 Note: this card is retained for traceability and will be moved to Done in the next Kanban refresh.
 
@@ -680,7 +680,7 @@ Status: blocked on Layer 3 and Relay decisions
 
 Current behavior:
 
-- `examples/fakeshop/fakeshop/products/schema.py` exposes a placeholder `hello` field.
+- `examples/fakeshop/products/schema.py` exposes a placeholder `hello` field for the product catalog.
 - The aspirational schema block depends on `DjangoConnectionField`, Relay interfaces, filters, orders, aggregates, fieldsets, and permissions.
 
 Definition of done:
@@ -804,65 +804,51 @@ Files likely touched:
 - `docs/README.md`
 - `docs/FEATURES.md`
 
-### BACKLOG-010 — Move test fixture out of example settings
+### BACKLOG-010 — Move test fixture out of example settings (closed)
 
-Priority: low-medium
+Priority: completed testing-shift hygiene
 
-Status: planned (surfaced as N-2 in the round-4 foundation review)
+Status: closed
 
-Current behavior:
+Outcome:
 
-- `tests/fixtures/apps.py` is registered as a Django app via `examples/fakeshop/fakeshop/settings.py:51-52` (`"tests.fixtures.apps.TestsCardinalityConfig"`).
-- The mechanism is required because the cardinality fixture's reverse-relation discovery (M2M, OneToOne) needs Django's app registry to know about the fixture models.
-- The example project's production-shaped settings now reference test code, which is a layering concern: a downstream consumer copying `settings.py` as a starting point inherits a phantom `tests.fixtures` app reference.
-- This deviates from `docs/spec-foundation.md:476` ("No `tests/conftest.py` and no `apps.get_app_config(...)` mutation by default"); the chosen mechanism is technically distinct from `apps.get_app_config(...)` mutation but has the same practical effect.
+- `tests.fixtures.apps.TestsCardinalityConfig` is no longer installed by the example project.
+- The old unmanaged cardinality fixture files under `tests/fixtures/` were removed.
+- Package tests that need OneToOne / M2M / cardinality coverage now use real models from `examples/fakeshop/library/`.
+- The example project no longer references test-only Django apps from production-shaped settings.
 
-Potential scope:
+Follow-up:
 
-- Move the fixture's `INSTALLED_APPS` registration into a test-scoped settings file (`examples/fakeshop/fakeshop/settings_test.py` or a `pytest.ini`-controlled `DJANGO_SETTINGS_MODULE` override).
-- Or, leave it in place but add a load-bearing comment in `settings.py` explaining the line is test-scoped.
-- Either way, update `docs/spec-foundation.md` to acknowledge the chosen mechanism.
+- Keep `docs/spec-testing_shift.md`, `AGENTS.md`, and `docs/TREE.md` aligned with this real-model test substrate.
 
-Definition of done:
-
-- The example project's production-shaped settings either no longer reference `tests.fixtures`, or carry a comment explaining why they do.
-- `docs/spec-foundation.md` reflects the chosen approach (no silent drift between spec and code).
-- Tests still pass without touching `apps.get_app_config(...)` from test code.
-
-Files likely touched:
-
-- `examples/fakeshop/fakeshop/settings.py` (or new `settings_test.py`)
-- `pytest.ini` if a settings override is added
-- `docs/spec-foundation.md`
-- `tests/fixtures/apps.py` (only if relocation requires it)
-
-### BACKLOG-011 — Durable override-test pattern (avoid Strawberry-internal coupling)
+### BACKLOG-011 — Layered manual relation override tests
 
 Priority: low
 
-Status: planned (surfaced as N-3 in the round-4 foundation review)
+Status: partially addressed by the testing-shift follow-up
 
 Current behavior:
 
-- `tests/types/test_definition_order.py` asserts that override resolvers wire correctly by reading `field.base_resolver.wrapped_func.__name__` and `field.base_resolver.wrapped_func.__qualname__`.
-- These attribute paths are Strawberry-internal (`StrawberryField.base_resolver`); a Strawberry minor release that renames or wraps them breaks three tests at once with `AttributeError` rather than a useful assertion message.
-- The decorator-override test at `test_decorator_relation_field_override_routes_schema_query_through_consumer_resolver` already routes a real schema query through the consumer's resolver, demonstrating the more durable pattern.
+- Package tests in `tests/types/test_definition_order.py` intentionally inspect Strawberry internals (`field.base_resolver.wrapped_func.*`) to pin resolver-attachment details and fail early if Strawberry changes the underlying field shape.
+- The live HTTP suite in `examples/fakeshop/test_query/test_library_api.py` now also proves the consumer-visible contract: a consumer-authored relation resolver on the real `library` schema shapes `/graphql/` response data.
+- This is the chosen policy for now: package tests pin internal wiring; HTTP tests pin observable behavior.
 
 Potential scope:
 
-- Promote the annotation-only and assigned-field override tests to schema-level (construct a `strawberry.Schema(query=Query)`, run a query, observe the resolver's side effect).
-- Or, add a stable internal helper (e.g., `_resolver_callable_for_field(field)`) that hides the Strawberry-internal attribute path and gets used from both production code and tests.
-- This becomes important when `BACKLOG-011`'s deferred `DjangoModelField` custom Strawberry field class lands (rich-schema spec layer 4); production code will need a stable helper too.
+- If Strawberry internals churn becomes noisy, introduce a single named helper (production or test-only) that centralizes the `StrawberryField.base_resolver` access and documents the coupling.
+- Keep at least one HTTP assertion for consumer-authored relation override behavior so the public contract does not depend only on internals.
+- Revisit when the deferred `DjangoModelField` custom Strawberry field class lands; production code may need a stable resolver-introspection helper then.
 
 Definition of done:
 
-- Override tests no longer reach into `field.base_resolver.wrapped_func.*` directly, or do so through a single named helper that documents the coupling.
-- Tests still pin both directions of the manual relation-override contract (annotation-only keeps the generated resolver; assigned-field / decorator suppresses it).
+- Override coverage remains layered: internal attachment details are pinned in package tests, and consumer-visible override behavior is pinned through schema/HTTP response data.
+- Any future direct Strawberry-internal access is centralized or documented at the helper site.
 
 Files likely touched:
 
 - `tests/types/test_definition_order.py`
-- possibly a new helper in `django_strawberry_framework/types/resolvers.py` or a test-only helper module
+- `examples/fakeshop/test_query/test_library_api.py`
+- possibly a helper in `django_strawberry_framework/types/resolvers.py` if production code needs it
 
 ### BACKLOG-012 — Connection-aware optimizer planning
 
@@ -932,17 +918,18 @@ Rule:
 
 - Do not move a key from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` until the pipeline applies it end-to-end.
 
-### BLOCKED-003 — Example HTTP GraphQL tests
+### BLOCKED-003 — Product-catalog Layer 3 HTTP GraphQL tests
 
 Blocked by:
 
-- real fakeshop GraphQL schema
-- connection/query fields
+- activating the product-catalog fakeshop GraphQL schema
+- connection/query fields and other Layer 3 public surfaces
 
-Test placement:
+Current state:
 
-- Live `/graphql/` tests go under `examples/fakeshop/test_query/`.
-- In-process `schema.execute_sync` tests go under `examples/fakeshop/tests/`.
+- The library app already has live `/graphql/` acceptance tests under `examples/fakeshop/test_query/`.
+- Future product-catalog HTTP tests should use the same placement and schema-reload pattern.
+- In-process `schema.execute_sync` tests still go under `examples/fakeshop/tests/`.
 
 ## Suggested sequencing
 
@@ -980,9 +967,8 @@ Use this sequence if the goal is to demonstrate the DRF-shaped API surface quick
 7. READY-003 — finalize scalar-field consumer override semantics once the relation contract has bedded in.
 8. BACKLOG-007 — add stable choice enum naming if schema import-order friction appears in real use.
 9. BACKLOG-008 — add model-property optimization hints if computed fields start broadening queries.
-10. BACKLOG-010 — relocate the test fixture out of the example settings (or annotate it).
-11. BACKLOG-011 — durable override-test pattern; aligns naturally with the rich-schema-spec layer 4 `DjangoModelField` work.
-12. BACKLOG-005 — activate the real fakeshop GraphQL schema.
+10. BACKLOG-011 — keep the layered override-test policy healthy as Strawberry internals and future custom field classes evolve.
+11. BACKLOG-005 — activate the real product-catalog fakeshop GraphQL schema.
 
 `READY-006` (stale-placeholder cleanup) and `BACKLOG-004` (M2M coverage) are closed by `DONE-006`; both will be moved to Done at the next Kanban refresh.
 

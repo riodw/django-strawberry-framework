@@ -473,60 +473,45 @@ Every change below is mapped to a specific symbol in the current source.
 - **`registry.clear()` resets registry state for fresh type classes; it does not roll back class mutation.** `clear()` resets `_types`, `_models`, `_enums`, `_definitions`, `_pending`, and `_finalized`, so the next test's `__init_subclass__` and `finalize_django_types()` calls behave like a fresh process *for newly created classes*. It cannot remove `__strawberry_definition__` from already-finalized classes, cannot remove relation resolver attributes from mutated classes, and cannot remove `__django_strawberry_definition__` or rewritten `__annotations__`. Tests must not reuse finalized `DjangoType` classes after `clear()`; the autouse fixture pattern naturally avoids this because each test redefines its types inside the test function or fixture.
 - **Pending records are dropped after a successful resolution.** The finalizer calls `registry.discard_pending(resolved_pending)` once phase 1 has matched every pending entry to either a target type or the consumer-authored escape hatch. Post-finalization, `registry.iter_pending_relations()` returns an empty iterator. This keeps schema-audit and diagnostic code from seeing historical records that are no longer pending.
 ## Test fixtures and acceptance criteria
-### Fakeshop coverage gap
-The fakeshop product graph (`examples/fakeshop/fakeshop/products/models.py`) covers FK and reverse FK only:
-- `Item.category` / `Category.items`
-- `Property.category` / `Category.properties`
-- `Entry.item` / `Item.entries`
-- `Entry.property` / `Property.entries`
-It has **no OneToOne and no M2M relations**. The acceptance criteria require all five cardinalities. To close this gap, add unmanaged synthetic Django models under `tests/fixtures/cardinality_models.py`:
-- `User` and `Profile(OneToOneField(User))` — covers forward OneToOne and reverse OneToOne.
-- `Author`, `Tag`, and `Book(ForeignKey(Author), tags=ManyToManyField(Tag))` — covers forward M2M and reverse M2M.
-Implementation rules (informed by the existing in-test pattern at `tests/types/test_converters.py:41-72` and `tests/optimizer/test_field_meta.py:82-146`):
-- Each model declares an explicit `class Meta: app_label = "tests_cardinality"; managed = False`. The `managed = False` flag avoids creating database tables; resolver-execution tests that need persistence either monkeypatch a queryset or are scoped under a separate fixture (out of foundation scope).
-- Models are module-scoped so Django's app registry sees one copy each; per-test inline declarations create the model-registration warning storm visible across the rest of `tests/types/test_base.py`.
-- **No `tests/conftest.py`** and **no `apps.get_app_config(...)` mutation** by default — the existing tests work without either, and the autouse `_isolate_registry` fixture pattern at `tests/types/test_base.py:46-51` is replicated per-file. A reverse OneToOne/M2M discovery probe proved the unmanaged cardinality models must live in an installed app, so `tests.fixtures.apps.TestsCardinalityConfig` is registered in the fakeshop `INSTALLED_APPS`; this keeps models module-scoped and avoids runtime app-registry mutation.
-### Cyclic acceptance tests (new)
+### Implemented model substrate
+The foundation slice originally identified a cardinality gap in the fakeshop product graph: products covered forward FK and reverse FK, but not OneToOne or M2M. The shipped 0.0.4 state closes that gap with the real `library` example app instead of a test-only fixture app.
+`examples/fakeshop/library/models.py` now provides `Branch`, `Shelf`, `Genre`, `Book`, `Patron`, `MembershipCard`, and `Loan`. Together they cover forward FK, reverse FK, forward OneToOne, reverse OneToOne, forward M2M, reverse M2M, a choice field, and a nullable scalar field.
+Package tests that need cardinality coverage import the real example-project models from `products.models` and `library.models`. Live GraphQL acceptance tests exercise the same model surface through `/graphql/` under `examples/fakeshop/test_query/test_library_api.py`.
+The example project is flattened under `examples/fakeshop/`: project setup lives in `settings.py`, `schema.py`, `urls.py`, and `wsgi.py`, while `products/` and `library/` are sibling apps. The project schema imports all app schema modules, composes the top-level query type, calls `finalize_django_types()` once, and then constructs the Strawberry schema.
+### Cyclic acceptance tests
 Under `tests/types/test_definition_order.py`:
 - `Category` declared before `Item`; `Item.category` resolves to `CategoryType`; `Category.items` resolves to `list[ItemType]`.
-- `Item` declared before `Category`; same assertions hold.
-- `Profile` declared before its target; reverse OneToOne resolves to `target_type | None`.
-- M2M cycle (`Author <-> Book` via `tags`); both sides resolve.
-- Multi-cycle (`Category <-> Item <-> Entry <-> Property <-> Category`) finalizes successfully and produces concrete types on every edge.
-- Unresolved target (`ItemType` declared but `CategoryType` never registered) raises `ConfigurationError` from `finalize_django_types()` with the source model, source field, and target model named.
-- **Annotation-only override**: consumer-supplied relation annotation (`items: Annotated[list["ItemType"], strawberry.lazy("...")]`) survives finalization unchanged: the annotation on the class equals what the consumer wrote, no pending-relation rewrite occurs, and `DjangoTypeDefinition.consumer_authored_fields` contains the field name.
-- **Field/resolver override**: consumer-assigned `items: list["ItemType"] = strawberry.field(resolver=custom_items)` survives finalization unchanged: `_attach_relation_resolvers` skips the field, the consumer's resolver remains attached on the class, `DjangoTypeDefinition.consumer_authored_fields` contains the field name, and an in-process schema query routes through the consumer's resolver.
-- **Decorator override**: same shape with `@strawberry.field` decorating a method; resolver attachment skips the field; the consumer's method body executes during a query.
-- **Forward-reference shapes** (one acceptance test per shape; documents which forms are supported in 0.0.4):
-  - same-module string annotation: `items: list["ItemType"]` with both `ItemType` declared in the same module.
-  - `from __future__ import annotations` stringified ref: every annotation becomes a string at class-body time.
-  - cross-module `Annotated[list["OtherType"], strawberry.lazy("other.module")]`.
-  - manual annotation referencing a non-primary target type (test pinned to skip with a clear reason if multi-type-per-model support is not yet implemented).
-  Any shape that does not work in 0.0.4 is documented as such in the test docstring and in `docs/FEATURES.md`, not silently skipped.
-### End-to-end schema tests (new)
-Under `tests/types/test_definition_order_schema.py`:
-- Declare a cyclic `DjangoType` graph in "bad" import order on the FK fakeshop graph (which has real database tables via the example app). Call `finalize_django_types()`, decorate a `@strawberry.type Query` with a list resolver returning `list[ItemType]`, construct `strawberry.Schema(query=Query)`, and execute a nested query (`{ allItems { name category { name } } }`) against seeded fakeshop data. Pass when the response contains the expected nested data. This is the test that proves the foundation works for users, not just for internal metadata.
-- **M2M test (metadata-only)**: the cardinality fixture's M2M models are unmanaged (`managed = False`), so a real `{ allBooks { title tags { name } } }` execution would require creating the through table at test time. The foundation slice keeps the M2M test **schema-shape-only**: it asserts that the Strawberry schema builds, the GraphQL type for `Book.tags` is `[Tag!]!`, and the introspection query (`{ __type(name: "Book") { fields { name type { kind ofType { name } } } } }`) returns the expected shape. DB-backed M2M execution belongs in a later slice that creates the through table or adds an M2M relation to fakeshop.
-- **Boundary regression**: declare a `@strawberry.type Query` *before* `finalize_django_types()`. Whether this passes or fails is decided by Spike A; the test is written to match the documented behavior. If the boundary requires finalization-before-decoration, this test asserts the documented `ConfigurationError` (or the documented Strawberry-side error).
-- **Phase 2/3 partial-mutation regression**: deliberately construct a graph that resolves cleanly in phase 1 but causes a Strawberry-side error in phase 3 (e.g., a consumer annotation that points at a type Strawberry cannot resolve). Catch the error, assert `registry.is_finalized() is False`, then assert that calling `finalize_django_types()` again on the same partially-mutated classes is **not** documented to recover — the recovery path is `registry.clear()` plus fresh class recreation. This pins the partial-mutation contract from the finalizer docstring.
-- **Module-not-imported regression**: define a `DjangoType` in a separate module that is never imported, declare a sibling type that references its model, call `finalize_django_types()`, and assert `ConfigurationError` with the unresolved-targets format. Then import the missing module, call `registry.clear()` and recreate types, and assert finalization succeeds. Pins the import-discovery contract.
-### Optimizer regression tests (new)
+- `Item` declared before `Category`; the same assertions hold.
+- `MembershipCard` / `Patron` cover forward and reverse OneToOne.
+- `Book` / `Genre` cover forward and reverse M2M.
+- The multi-cycle product graph (`Category <-> Item <-> Entry <-> Property <-> Category`) finalizes successfully and produces concrete types on every edge.
+- Unresolved targets raise `ConfigurationError` from `finalize_django_types()` with the source model, source field, and target model named.
+- Annotation-only relation overrides preserve the consumer annotation while keeping the generated relation resolver.
+- Field/resolver and decorator overrides suppress generated resolver attachment and route execution through the consumer resolver.
+- Supported forward-reference shapes are pinned by tests and documented in the shipped feature docs.
+### End-to-end schema and HTTP tests
+Under `tests/types/test_definition_order_schema.py` and `examples/fakeshop/tests/test_schema.py`:
+- In-process schema execution proves the fakeshop query composition path still works.
+- The project schema includes the real library types.
+- The library `DjangoType` declaration order is intentionally awkward and is pinned so future reordering does not erase definition-order coverage.
+Under `examples/fakeshop/test_query/test_library_api.py`:
+- Live `/graphql/` tests cover nested traversal through `Branch -> Shelf -> Book -> Loan -> Patron`.
+- Reverse OneToOne nullability, reverse M2M traversal, choice enum wire values, and nullable scalar wire values are asserted over HTTP.
+- Forward FK, reverse FK, and M2M optimizer SQL shapes are asserted with Django query capture.
+- Consumer-shaped queryset cooperation, `OptimizerHint.prefetch_related()`, `OptimizerHint.SKIP`, and consumer-authored relation overrides are observable through the HTTP layer.
+### Optimizer regression tests
 Under `tests/optimizer/test_definition_order.py`:
 - `walker.plan_relation(field, target_type, info)` returns the same `("select", "default")` / `("prefetch", "default")` / `("prefetch", "custom_get_queryset")` decisions for cyclic graphs after finalization.
-- `DjangoOptimizerExtension.check_schema(schema)` returns no warnings for any reachable type whose relation targets are registered.
-- `_optimizer_field_map` reads via `cls.__django_strawberry_definition__.field_map` produce identical content to today's class-attribute reads.
-### Idempotency / isolation tests (extends existing `tests/test_registry.py`)
-The file `tests/test_registry.py` already exists (it is currently sparse; most registry coverage lives in `tests/types/test_base.py:55-86`). The slice **extends** that existing file with:
-- Calling `finalize_django_types()` twice mutates state once (asserts a side-effect counter incremented by the call only ticks on the first invocation).
-- A new `DjangoType` registered after finalization raises with the documented message ("finalize_django_types() already ran; cannot register …").
-- `registry.clear()` returns the package to a state where `finalize_django_types()` runs cleanly again on a fresh set of types.
-- A leaked `_finalized=True` from a previous test does not affect the next test (verified through paired tests where the first installs and finalizes, the autouse fixture clears, and the second declares a new type without raising).
-- **Phase 1 failure-atomicity**: declare one resolvable type and one type whose relation target is intentionally never registered. Call `finalize_django_types()` and catch `ConfigurationError`. Assert `registry.is_finalized()` is `False`, no `DjangoTypeDefinition.finalized` is `True`, and a follow-up call after registering the missing target completes successfully. This protects phase-1 retry behavior.
-- **Phase 2/3 partial-mutation contract**: declare a graph that passes phase 1 but fails phase 3, catch the Strawberry-side error, assert `registry.is_finalized()` is `False`, and assert that calling `finalize_django_types()` again on the same classes is documented as unsupported (pins the contract from the finalizer docstring; the test does not assert recovery, it asserts that the documented recovery path is `registry.clear()` + fresh class recreation).
-- **Pending-set cleanup**: after a successful `finalize_django_types()`, `list(registry.iter_pending_relations())` returns `[]`. After a phase-1 failure, the unresolved entries remain in `_pending` so the consumer can retry without re-declaring types.
-- **Class-mutation residue**: after `registry.clear()`, the previously finalized classes still carry their mutated `__strawberry_definition__` and `__django_strawberry_definition__`; the test pins this as documented behavior so contributors do not file it as a bug.
-### Existing tests that must change
-- Any test in `tests/types/test_converters.py` and `tests/types/test_base.py` asserting that `convert_relation` raises immediately on a missing target is rewritten to assert finalization-time failure. Per the verification report this is the rewrite cost; expect 2-4 tests to be touched.
+- `DjangoOptimizerExtension.check_schema(schema)` returns no warnings for reachable types whose relation targets are registered.
+- `_optimizer_field_map` compatibility reads match the canonical `DjangoTypeDefinition.field_map` content.
+### Idempotency / isolation tests
+`tests/test_registry.py` pins the finalizer lifecycle:
+- Calling `finalize_django_types()` twice mutates state once.
+- A new `DjangoType` registered after finalization raises with the documented message.
+- `registry.clear()` resets the package to a fresh state for newly created classes.
+- Phase 1 failure atomicity, phase 2/3 partial-mutation limits, pending-set cleanup, and class-mutation residue are all covered as explicit contracts.
+### Existing tests that changed
+Tests that used to assert eager relation-target failure now assert finalization-time failure. Package-level cardinality tests now use the real example app models, while live HTTP tests pin the consumer-visible GraphQL behavior.
 ## Phased implementation order (within the slice)
 The slice is ordered so each step lands a passing test suite. **Phase 0 is the spike gate; production code begins at Phase 1.**
 0. **Phase 0 — Spike gate.** Write Spike A, B, and C under `scripts/spikes/`. Run them. Record the outcome inline in this spec's "Spike outcome (gates implementation)" section and in `README.md`'s schema-setup section. Delete the spike scripts only after their conclusions are captured. **No production-code phase below begins until Spike A's five pass criteria are recorded as passed.**
@@ -536,7 +521,7 @@ The slice is ordered so each step lands a passing test suite. **Phase 0 is the s
 4. Split `__init_subclass__` into the collection-only pseudocode. Move the `strawberry.type(cls, ...)` call out and into `finalize_django_types()`. Move `_attach_relation_resolvers` out and into `finalize_django_types()` (consuming `definition.selected_fields` and skipping `definition.consumer_assigned_relation_fields`). Add the post-finalization registration guard and the consumer-authored detection (annotation OR class-dict assignment).
 5. Replace the eager `cls.__dict__` get_queryset detection with `_detect_custom_get_queryset(cls)` (MRO-aware) so abstract bases keep propagating the sentinel.
 6. Migrate `_optimizer_field_map`, `_optimizer_hints`, `_is_default_get_queryset` reads to live on the definition. Mirror them as plain class attributes in `__init_subclass__` (not `@property`) for one minor version so the walker's `getattr(type_cls, ...)` reads keep working.
-7. Add the cardinality fixture under `tests/fixtures/cardinality_models.py` (unmanaged models with explicit `app_label`; no `conftest.py` / app-registry mutation unless a spike proves it is required).
+7. Add real cardinality coverage through the example project model substrate. In the shipped 0.0.4 implementation this is the `library` app under `examples/fakeshop/`, not a test-only fixture app.
 8. Rewrite the affected `tests/types/test_converters.py` / `tests/types/test_base.py` cases (relation-target-not-registered now succeeds at class creation, fails at finalization).
 9. Add the new acceptance test files under `tests/types/test_definition_order.py`, `tests/types/test_definition_order_schema.py`, `tests/optimizer/test_definition_order.py`, and extend the existing `tests/test_registry.py` with the new idempotency / isolation / failure-atomicity sections.
 10. Update documentation:

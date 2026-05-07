@@ -3,7 +3,13 @@
 import strawberry
 from library import models
 
-from django_strawberry_framework import DjangoType
+from django_strawberry_framework import DjangoType, OptimizerHint
+
+# The DjangoType declaration order is intentionally awkward. Several
+# relation targets are declared after their consumers so the example schema
+# keeps exercising pending-relation resolution through the real app import
+# path. Do not reorder these classes unless the tests that pin this contract
+# are updated at the same time.
 
 
 class LoanType(DjangoType):
@@ -12,6 +18,10 @@ class LoanType(DjangoType):
     class Meta:
         model = models.Loan
         fields = ("id", "note", "book", "patron")
+        optimizer_hints = {
+            "book": OptimizerHint.prefetch_related(),
+            "patron": OptimizerHint.SKIP,
+        }
 
 
 class BookType(DjangoType):
@@ -49,6 +59,11 @@ class GenreType(DjangoType):
 class BranchType(DjangoType):
     """Branch parent with reverse FK shelves."""
 
+    @strawberry.field
+    def shelves(self) -> list[ShelfType]:
+        """Consumer-authored relation resolver used by HTTP override tests."""
+        return list(self.shelves.order_by("-code"))
+
     class Meta:
         model = models.Branch
         fields = ("id", "name", "city", "shelves")
@@ -77,6 +92,10 @@ class Query:
     @strawberry.field
     def all_library_books(self) -> list[BookType]:
         return models.Book.objects.order_by("id")
+
+    @strawberry.field
+    def all_library_prefetched_books(self) -> list[BookType]:
+        return models.Book.objects.select_related("shelf").prefetch_related("genres").order_by("id")
 
     @strawberry.field
     def all_library_genres(self) -> list[GenreType]:

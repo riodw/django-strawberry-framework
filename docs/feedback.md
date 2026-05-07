@@ -1,151 +1,220 @@
-# Review: `docs/spec-testing_shift.md`
+# Round-5 review — testing-shift implementation (4 commits)
 
-> Round-4 foundation review feedback (N-1 through N-6) is no longer in this file. Those items have moved to `KANBAN.md` under `IN-PROGRESS-002 — 0.0.4 release polish`. This file is now feedback on the testing-shift spec.
+> Round-4 foundation review (N-1 through N-6) and round-5-pre testing-shift spec review (Q-1 through Q-7) are no longer in this file; their resolution is recorded inline below.
 
-## Verdict
+Reviewed commits, oldest → newest:
 
-The shift is the right direction and the spec correctly draws the unit/integration line. The migration list is concrete and actionable. Before approving, the spec needs to resolve seven concrete questions (named "Q-1" through "Q-7" below) and tighten the migration list so genuinely package-level tests are not promoted to HTTP. The strategy section needs a per-feature add-then-remove cycle, and the new app's interaction with the existing package-test registry-isolation pattern needs a documented answer.
+- **`b0e710f`** — *Finished spec-foundation.md*: applied the round-4 `IN-PROGRESS-002` polish.
+- **`1251e07`** — *Refactor tests a bit;*: built the `library` example app and the first HTTP tests.
+- **`870d981`** — *restructure example project*: flattened `examples/fakeshop/fakeshop/*` → `examples/fakeshop/*`.
+- **`efa31fc`** — *Complete spec-testing_shift.md;*: deleted the cardinality fixture, removed it from `INSTALLED_APPS`, repointed package tests at `library.models`.
 
-## What the spec gets right
+Test suite: **395 passed, 1 skipped, 0 failed** under `uv run pytest --no-cov -q` (up from 326). The slice did meaningfully more than the spec text asked for.
 
-- Clear problem statement: tests under `tests/types/test_definition_order_schema.py` and the cardinality fixtures **work**, but they prove a public surface through synthetic apparatus rather than the real Django + Strawberry view stack. The shift is well-motivated.
-- The non-goals section ("Do not activate unshipped Layer 3 API … Do not require full production readiness") is calibrated correctly: this is an acceptance-coverage shift, not a Layer 3 expansion.
-- Test placement rules (`## Test placement rules`) cleanly partition the three trees: HTTP under `examples/fakeshop/test_query/`, in-process schema under `examples/fakeshop/tests/`, package internals under `tests/`. This matches the existing `examples/fakeshop/test_query/README.md` reservation and the `pytest.ini` `testpaths` already covers all three.
-- The list of tests that **stay** package-level (`## Tests that should stay package-level`) is the strongest part of the spec. Registry idempotency, configuration error paths, optimizer cache-key construction, and utility tests all belong where they are.
-- The risks section flags the cardinality-fixture / app-registry tension, which is the same concern tracked under `KANBAN.md` `BACKLOG-010` (cardinality fixture's `INSTALLED_APPS` line in the example settings).
+## What got addressed from prior rounds
 
-## Significant concerns
+### Round-4 foundation polish (`IN-PROGRESS-002`)
 
-### Q-1. The new app needs a name, a placement, and a one-paragraph rationale before any code lands
+All five items landed in `b0e710f`:
 
-The spec says "the name should make clear that it is a framework acceptance app rather than the product-catalog example" but leaves both the name and the placement open. Two viable options:
+- **N-1 (CHANGELOG `[0.0.4]` entry)** — addressed via `CHANGELOG.md +18 lines`.
+- **N-2 (cardinality fixture `INSTALLED_APPS` deviation)** — fully resolved by `efa31fc` deleting `tests/fixtures/` and removing the `INSTALLED_APPS` line. The `BACKLOG-010` Kanban card is now genuinely closed, not just notionally closed.
+- **N-4 (multi-pending phase-1 atomicity test)** — addressed via `tests/test_registry.py +49 lines`.
+- **N-5 (`PendingRelation` hashability comment)** — addressed in `django_strawberry_framework/types/relations.py`.
+- **N-6 (skip-reason clarity)** — addressed in `tests/types/test_base.py`.
 
-1. **In-project app**: `examples/fakeshop/fakeshop/framework/` (or `acceptance/`) with `app_label = "framework"`. Cheapest in churn; one new app entry in `INSTALLED_APPS`.
-2. **Separate example project**: `examples/framework_proving/`. Keeps the fakeshop products catalog as a clean cookbook reference (per `GOAL.md` "Cookbook parity"). More plumbing (a second `manage.py`, second `settings.py`, second `urls.py`, second `pytest` settings module).
+### Round-5-pre testing-shift spec questions
 
-I recommend option 1 with the name `framework`, on the grounds that:
-- `GOAL.md` already says fakeshop's products schema should grow into the rich-schema showcase (filters / orders / aggregates / connection fields). Mixing a tiny acceptance app *next to* that showcase is fine; growing a second project is overhead the single-maintainer team does not need yet.
-- The existing `pytest.ini` `DJANGO_SETTINGS_MODULE = examples.fakeshop.fakeshop.settings` and `testpaths` already cover this layout. Option 2 doubles every settings/test-paths change.
+- **Q-1 (app name and placement)** — settled. The app is `library` at `examples/fakeshop/library/`. Models: `Branch`, `Shelf`, `Genre`, `Book`, `Patron`, `MembershipCard`, `Loan`. Domain is internally coherent and avoids overlap with the products catalog.
+- **Q-2 (where `finalize_django_types()` is called)** — settled. `examples/fakeshop/schema.py:24` calls it between `Query` composition and `strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])`. Matches `docs/spec-foundation.md:62-63` and the README quick-start.
+- **Q-5 (query-count assertion shape)** — settled. `test_library_optimizer_selects_book_shelf_in_http_query` uses `CaptureQueriesContext(connection)` and asserts both `len(captured) == 1` and SQL substrings (`"JOIN"`, `"library_book"`, `"library_shelf"`). Exactly the recommended pattern.
+- **Q-6 (model rename to avoid `User` collision)** — settled. None of the library models collide with `django.contrib.auth.User`.
+- **Q-7 (test data + pytest style + `Client()`)** — settled. `_seed_library_graph` uses inline `Model.objects.create(...)`, tests are pytest-django functional with `@pytest.mark.django_db`, default `Client()`.
 
-Whichever option the spec picks, it needs to land in the spec **before** the migration list is touched, because the new app's name appears in every HTTP-test path written under it.
+Open from the spec review:
 
-### Q-2. Where exactly does `finalize_django_types()` get called, and what is the contract with package tests?
+- **Q-3 (filter the migration list to drop tests that cannot move to HTTP)** — the spec text was not edited. Practically, the user implemented the additive HTTP coverage and left the package-level tests intact. Defensible but the spec is now describing intent that was only partially executed; see `M-11` below.
+- **Q-4 (rewrite override tests for HTTP)** — not done. The Strawberry-internal coupling at `_strawberry_field` was retained, with a docstring added (`tests/types/test_definition_order.py:22-27`) saying the coupling is intentional ("if Strawberry changes this field shape, these tests should fail loudly"). That is a defensible posture; see `M-17` below.
 
-The spec says (under "Risks") "the schema needs to call `finalize_django_types()` exactly once after importing all example `DjangoType`s." It does not say where the call lives. The right answer per `docs/spec-foundation.md:62-63` is "after every module that defines `DjangoType` classes has been imported, and before `strawberry.Schema(...)` construction." For the proposed app, that is one of:
+## What this round got right
 
-- **In `examples/fakeshop/fakeshop/schema.py`** between the per-app Query imports and `strawberry.Schema(query=Query)` (the current shape of that file makes this a one-line addition).
-- **In the new app's `schema.py`** before the app exposes its `Query`.
-- **In an `apps.py:ready()`** hook on the new app.
+- **Implementation went past the spec.** The `library` app fully covers all five cardinalities the spec required: forward FK (`Shelf.branch`, `Book.shelf`, `Loan.book`, `Loan.patron`), reverse FK (`Branch.shelves`, `Shelf.books`, `Book.loans`, `Patron.loans`), forward OneToOne (`MembershipCard.patron`), reverse OneToOne (`Patron.card`), forward M2M (`Book.genres`), reverse M2M (`Genre.books`). Plus a multi-hop graph (`Branch → Shelf → Book → Loan → Patron`) for nested-traversal coverage.
+- **Awkward declaration order is real**, not just claimed. `library/schema.py:9-62` declares `LoanType` first, `BookType` second, `ShelfType` third, `MembershipCardType` fourth, `GenreType` fifth, `BranchType` sixth, `PatronType` last. Forward refs (`LoanType.book → Book`, `MembershipCardType.patron → Patron`) and reverse refs (`PatronType.card → MembershipCard`) cross declaration order in both directions.
+- **Schema finalization seam is correct.** `examples/fakeshop/schema.py:13-29` imports both apps' `Query` types, composes them, then calls `finalize_django_types()` once before `strawberry.Schema(...)`. Single point, single thread, before request handling — exactly the contract from `docs/spec-foundation.md`.
+- **Project flattening is mechanical and self-consistent.** `pytest.ini` was updated (`DJANGO_SETTINGS_MODULE = settings`, `pythonpath = examples/fakeshop`), `manage.py` and `wsgi.py` use `os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")`, `urls.py` does `from schema import schema`, and all package tests under `tests/` were updated to import from `library.models` and `products.models`. No drift.
+- **Cardinality fixture removal is total.** `tests/fixtures/cardinality_models.py`, `apps.py`, `models.py`, `__init__.py` are gone. The `INSTALLED_APPS` line in the example settings is gone. Every package test that used to import from `tests.fixtures.cardinality_models` now imports from `library.models`. The layering concern from `BACKLOG-010` is fully resolved.
+- **HTTP test pattern is reusable.** `_seed_library_graph()`, `_post_graphql()`, and `_assert_graphql_data()` helpers in `test_library_api.py` are the right shape for follow-up tests. Future contributors can copy the file shape.
 
-The `schema.py` placement is the only one consistent with the foundation spec's recommended pattern; the README quick-start at `README.md:80-86` already shows that shape. Pin it in the spec.
+## New observations (M-1 through M-18)
 
-This question matters more than it looks because of **package-test interaction**:
+### M-1. The example-project flattening is a substantive layout decision worth a TREE.md / AGENTS.md note
 
-- `pytest.ini` sets `DJANGO_SETTINGS_MODULE = examples.fakeshop.fakeshop.settings`. Every test process — including package tests under `tests/` — imports the fakeshop settings. If `fakeshop/schema.py` is imported during test collection, it finalizes the registry once at module import time. The registry is now finalized for the rest of the process.
-- The package tests under `tests/` rely on autouse `_isolate_registry` fixtures that call `registry.clear(); yield; registry.clear()` so each test redeclares its types. After this shift, `registry.clear()` resets the `_finalized` flag, but the new acceptance-app's `DjangoType` classes still carry their `__strawberry_definition__` mutations from the import-time finalization. They cannot be re-finalized; new test-local `DjangoType` classes can.
-- Practical implication: the `_isolate_registry` pattern keeps working for **package tests that declare their own types in the test function**. It does **not** revive the acceptance app's types. That is fine — the acceptance app's types are only used in HTTP tests, which are the *consumer* of the finalized schema, not declarers of new types.
+Before: `examples/fakeshop/fakeshop/products/...` (Django-conventional project + apps shape). After: `examples/fakeshop/products/...`, with project-level `settings.py`, `schema.py`, `urls.py`, `wsgi.py`, `manage.py` at `examples/fakeshop/`. This works because `pytest.ini` sets `pythonpath = examples/fakeshop` and the modules are imported as bare names (`schema`, `urls`, `settings`).
 
-The spec needs one paragraph documenting this contract explicitly:
+Trade-off: the example no longer looks like a copy-paste-able real Django project starting point. A consumer who copies `settings.py`/`urls.py` into their own project and tries to run will get `ModuleNotFoundError` because their project's package name is not on `sys.path`. AGENTS.md does mention "the flattened example Django project" but does not explain the trade-off. One paragraph in `docs/TREE.md` (under the "current on-disk layout" section) explaining "this layout is a test-tree convenience; production Django projects should keep the conventional project-package + apps layout" would protect future contributors and downstream copy-paste users.
 
-> The new app's `DjangoType` subclasses are declared at module import time and finalized once when `examples/fakeshop/fakeshop/schema.py` is imported. Package tests under `tests/` continue to use the autouse `_isolate_registry` fixture; that fixture clears the registry between tests, so package tests can still declare their own short-lived `DjangoType` classes. Package tests **must not** assume the acceptance app's types are present — they are not, after the first `registry.clear()`.
+### M-2. The `_reload_project_schema_for_acceptance_tests` autouse fixture is doing heavy lifting that needs an inline comment
 
-### Q-3. The migration list includes tests that fundamentally cannot move to HTTP
+`examples/fakeshop/test_query/test_library_api.py:16-35` does four things per HTTP test:
 
-Three categories must be filtered out of the "high-value migrations" section:
+1. `registry.clear()`
+2. `importlib.reload(library.schema)` (or import if not yet imported)
+3. `importlib.reload(schema)` (the project schema)
+4. `importlib.reload(urls)` + `clear_url_caches()` if `urls` was imported
 
-#### Q-3a. Declaration-order tests in `tests/types/test_definition_order.py`
+This is the *only* path that makes the package tests' `_isolate_registry` autouse fixture (`registry.clear(); yield; registry.clear()`) coexist with the example app's import-time `finalize_django_types()` call inside one pytest process. Without this fixture, after a package test runs and clears the registry, the cached `library.schema` and `schema` modules still hold references to "unregistered" `DjangoType` classes; the next HTTP request would either silently fail or hit undefined behavior.
 
-The whole point of `test_reverse_fk_resolves_when_parent_declared_before_child` and `test_reverse_fk_resolves_when_child_declared_before_parent` (and the OneToOne / M2M counterparts) is that the test functions **declare `DjangoType` subclasses inside the test body in a controlled order**. An HTTP test cannot do that — the schema has been finalized once, in whatever order the acceptance app declares its types. By the time the request hits `/graphql/`, the order question is already settled.
+Concerns to document inline (right above the fixture):
 
-The migration list cites `tests/types/test_definition_order.py:33`, `:55`, `:77`, `:96`, `:122`, `:174`, `:201`, `:230`. Of those:
+- The reload is mandatory — removing it makes the test order-dependent.
+- `library.models` is **not** reloaded; only `library.schema`. The Django model classes stay the same; the `DjangoType` subclasses are recreated. This works because the registry was cleared first.
+- **Hidden invariant**: tests anywhere in the suite must NOT module-level-import `DjangoType` classes from `library.schema` (e.g., `from library.schema import BookType`). Such an import would capture the *old* class, which the reload then replaces; the test holds a stale reference. None of today's tests do this, but the constraint is invisible without a comment.
 
-- `:33` and `:55` (parent-first vs child-first reverse FK) **must stay package-level**. The HTTP layer can prove that the acceptance app's specific order works, but cannot prove order-independence.
-- `:77` (OneToOne forward + reverse) and `:96` (M2M forward + reverse) **can move to HTTP** because the HTTP test only needs to prove the cardinality maps correctly — it does not need to permute declaration order. Keep one or two declaration-order permutation tests for these cardinalities at package level.
-- `:122` (multi-cycle) **can move to HTTP** for the same reason; keep the package-level multi-cycle test as a regression pin.
-- `:174`, `:201`, `:230` (override cases) — see Q-4 below.
+A 5-line comment above the fixture documenting these points would prevent a future contributor from removing the reload "because it's slow" and breaking suite isolation.
 
-#### Q-3b. Plan-introspection tests in `tests/optimizer/test_extension.py`
+### M-3. The "awkward declaration order" claim in `library/schema.py` is true today, but unpinned
 
-A non-trivial fraction of `test_extension.py` asserts on `info.context.dst_optimizer_plan`, `info.context.dst_optimizer_fk_id_elisions`, `info.context.dst_optimizer_planned`, FK-id elision sets, and strictness-mode raise/warn behavior. These have no JSON wire representation. The migration list at `:328`, `:1275`, `:1309`, `:1381`, `:2018`, `:2054` needs to be re-checked one by one — without seeing each test body, my read is that several of these are plan-shape assertions, not response-data assertions.
+Six of the seven `DjangoType` declarations in `library/schema.py` cross declaration order in either the forward or reverse direction. That is exactly what the spec called for. But: nothing in the test suite *asserts* the order is awkward. A future contributor reordering the classes alphabetically (or by module-of-use) silently removes the test's value — the schema would still build, the HTTP tests would still pass, but the declaration-order coverage that justifies the awkward order would be gone.
 
-Recommendation: split the migration list into two columns:
+Two cheap pins:
 
-- **Response-data tests** → migrate to HTTP.
-- **Plan-shape tests** → stay package-level.
+1. A one-line comment at the top of `library/schema.py`: `# Order is intentionally awkward to exercise pending-relation resolution; do not reorder.`
+2. A regression test in `examples/fakeshop/tests/test_schema.py` that asserts at least one `DjangoType` in `library.schema` has its target type declared *after* it (e.g., `LoanType` is at index 0 but its `book` target type `BookType` is at index 1).
 
-The spec already concedes this in its last bullet under "Risks" ("Plan-introspection assertions through `ctx.dst_optimizer_plan` do not naturally survive HTTP JSON responses"). That concession needs to flow into the migration list itself, not sit at the bottom as an afterthought.
+### M-4. The OneToOne null branch is exercised correctly
 
-#### Q-3c. Resolver-internal coupling tests
+`test_library_patron_card_and_genre_reverse_paths_over_http` seeds two patrons (Ada with a card, Grace without) and asserts:
 
-`tests/types/test_resolvers.py` includes tests that assert on `field.base_resolver.wrapped_func.__name__` and similar Strawberry-internal attribute paths. These were already flagged for follow-up in `KANBAN.md` `BACKLOG-011`. Promoting them to HTTP is the right move *only if* the test asserts on response data (which it can do once a real schema executes). Promoting them to HTTP without rewriting the assertion does nothing — the HTTP boundary cannot see resolver internals.
+```json path=null start=null
+"Ada": {"card": {"barcode": "CARD-1", ...}, ...},
+"Grace": {"card": null, "loans": [], ...}
+```
 
-### Q-4. Manual-override tests are HTTP candidates only when they assert on response data
+This is the cleanest possible HTTP test for reverse-OneToOne nullability. Solid.
 
-The spec is right that "manual relation override behavior should be proven by response data rather than Strawberry-internal resolver inspection" (`tests/types/test_definition_order.py:174`, `:201`, `:230`). Concrete check before migration:
+### M-5. The optimizer SQL-shape test is the right shape but is undercovered
 
-- `:230` (`test_decorator_relation_field_override_routes_schema_query_through_consumer_resolver`) is **already** a schema-execution test that asserts response data. Easy promotion.
-- `:174` (`test_annotation_only_relation_override_keeps_generated_resolver`) and `:201` (`test_assigned_relation_field_override_keeps_consumer_resolver`) currently assert on `base_resolver.wrapped_func.__name__`. Promoting them to HTTP requires **rewriting** the assertion to fire a query and observe whose code ran. Do not just relocate; rewrite. This is the cheapest concrete payoff for the testing shift, and it incidentally addresses `BACKLOG-011`.
+`test_library_optimizer_selects_book_shelf_in_http_query` covers the simplest case: forward FK `select_related`. It does not cover:
 
-### Q-5. Query-count assertion shape needs to be pinned
+- reverse FK `prefetch_related` (would be 2 queries with `IN (...)`)
+- M2M `prefetch_related` (2 queries through the through-table)
+- nested `Prefetch` chains (3+ queries with named through tables)
+- consumer-shaped queryset cooperation (B8 in the optimizer surface)
+- `OptimizerHint` routing
 
-The spec says "HTTP query-count assertions may include request-stack overhead. The tests should count only database queries and avoid brittle assumptions about non-ORM work." Concrete recommendation:
+These were items 5–6 in the testing-shift spec's "high-value migrations" list. The current single test is a good template; the missing cases should land as follow-up HTTP tests.
 
-- Use `django.test.utils.CaptureQueriesContext(connection)` — narrower than `assertNumQueries` because it captures only the queries that ran inside the `with` block.
-- Assert on **both** count and SQL shape. Pure count assertions pass when the optimizer regresses from one `select_related` JOIN to two sequential SELECTs (still a count of "2", but a different shape). Couple every count assertion with a substring or regex over `ctx.captured_queries[i]["sql"]` for the JOIN / LEFT OUTER JOIN / WHERE structure.
-- Do **not** wrap the entire `client.post(...)` call in a single `CaptureQueriesContext`. Wrap only the GraphQL execution step if you can isolate it; otherwise, accept that auth / session / CSRF middleware queries will be in the count and assert against the **delta** (start with a no-op POST baseline, then subtract).
+### M-6. `_seed_library_graph` is the right pattern but is over-eager for the optimizer test
 
-This belongs in the spec's "Validation expectations" section as a worked example.
+The helper seeds the full graph (Branch + Shelf + Genre + Book + Patron + MembershipCard + second Patron + Loan). The optimizer test queries only `allLibraryBooks`, which needs just `Branch + Shelf + Book`. The extra seeded rows (Genre, Patron, MembershipCard, Loan, second Patron) are no-ops for that test's assertions, but they do touch the database. Today the cost is invisible; as more tests land, separate small seed helpers (`_seed_book_with_shelf()`, `_seed_patron_without_card()`, etc.) will keep each test's setup cost minimal and its intent legible.
 
-### Q-6. The acceptance app's models need migrations and a name-collision check
+### M-7. AGENTS.md's "First step of every test: seed via services" rule needs a library carve-out
 
-`tests/fixtures/cardinality_models.py` declares `User`, `Profile`, `Author`, `Tag`, `Book` as `managed = False`. The acceptance app needs **real** managed models so the test database has actual tables for the OneToOne and M2M cases. That implies:
+AGENTS.md:18 says: "Tests touching the catalog or auth start by calling them. Do not hand-roll Category, Item, Property, Entry, or User instances test by test." The library tests do hand-roll Patron/Book/etc. via inline `Model.objects.create(...)`. This is the right choice (no Faker variance for query-count assertions), but it conflicts with the AGENTS.md rule as written. Add one sentence: "Library acceptance tests use inline `Model.objects.create(...)`; products tests continue to use `services.seed_data(...)`. The library app intentionally has no `services.py` because deterministic seed shapes matter more than convenience for the acceptance suite."
 
-- `examples/fakeshop/fakeshop/framework/models.py` (or wherever Q-1 lands)
-- `examples/fakeshop/fakeshop/framework/migrations/0001_initial.py`
-- `pytest-django`'s `django_db_setup` fixture runs the migration once per session (already wired in the existing `tests/test_definition_order_schema.py`).
+### M-8. `library/apps.py` uses `name = "library"` (no dotted path)
 
-Naming concern: the cardinality fixture's `User` model conflicts with `django.contrib.auth.User` if the acceptance app uses the same name. The fixture currently lives under `app_label = "tests_cardinality"` so there is no collision today, but a contributor renaming an acceptance-app model to `User` would shadow the auth model in admin/error messages. Recommend renaming to `Person` (or `OneToOneOwner`) in the acceptance app to avoid the trap. Pin the rename in the spec.
+This works because `pythonpath = examples/fakeshop`. Same observation as M-1: it is unusual. Production Django apps use `name = "myproject.library"`. A one-line comment in `library/apps.py` ("`name = 'library'` relies on the flattened example-project layout; in a real project use the dotted path") would prevent confusion when this is copied as a starting point.
 
-### Q-7. Test-data seeding and pytest style need explicit choices
+### M-9. `examples/fakeshop/test_query/README.md` is now stale
 
-The existing fakeshop example tests use `services.seed_data(1)` (Faker-driven). For acceptance tests, deterministic test data is better than Faker variance:
+The README still says "This directory is currently empty; live API tests will land here as the schema gains real types and resolvers." `test_library_api.py` is in that directory now. Update the README to:
 
-- **Recommended**: each test calls `Model.objects.create(...)` inline at the start of the test body. No fixtures, no factories, no Faker. Two consequences: (a) query-count assertions are stable across reruns; (b) the acceptance app does not need its own `services.py`.
-- **Alternative**: a small `factories.py` per relationship shape. More machinery, but reusable.
+- Note that `test_library_api.py` is the first live API test and what cardinalities / patterns it exercises.
+- Explain that the project schema (`examples/fakeshop/schema.py`) calls `finalize_django_types()` and constructs `strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])`.
+- Document the per-test `_reload_project_schema_for_acceptance_tests` autouse fixture pattern so future tests adopt it.
+- Cross-reference `tests/` for declaration-order-internal coverage and `examples/fakeshop/tests/` for in-process schema execution.
 
-Pin the choice in the spec.
+### M-10. `tests/fixtures/__pycache__` was orphaned by the fixture deletion
 
-Pytest style: the existing `examples/fakeshop/tests/test_schema.py` and the new HTTP files should both use **pytest-django functional style** (`@pytest.mark.django_db` plus `client = django.test.Client()` from a fixture) rather than `unittest.TestCase` subclasses. The `pytest-django` plugin is already a dev dependency. Pin this so the first HTTP test is not bikeshed material.
+`efa31fc` deleted `tests/fixtures/apps.py`, `cardinality_models.py`, `models.py`, `__init__.py` but the `__pycache__/` directory remained. Harmless but cluttered. A `rm -rf tests/fixtures/__pycache__ && rmdir tests/fixtures` cleans it up. Worth folding into a `.gitignore` sweep if not already there.
 
-CSRF: `django.test.Client()` defaults to `enforce_csrf_checks=False`, and Strawberry's `GraphQLView` accepts POSTs without CSRF tokens by default in dev. The spec should add one sentence noting that production hardening (CSRF middleware on the GraphQL endpoint) is out of scope and that acceptance tests run with default `Client()`.
+### M-11. `docs/spec-testing_shift.md` was not updated to match the implemented state
 
-## Smaller items
+The spec text is identical to the version reviewed in round-5-pre. After implementation:
 
-- **Naming**: "IRL" in the title and intro reads casually. Consider "End-to-end HTTP test shift" or "Live API test shift" for a contract document.
-- **Headings**: `## Tests that should stay package-level` and `## Test placement rules` are siblings, but conceptually the former is a subset of the latter. Consider nesting.
-- **File:line drift**: like `docs/spec-foundation.md:553-554`, this spec's migration list cites in-repo line numbers (`test_extension.py:51`, `:1275`, etc.). Add a one-sentence "line numbers may drift; verify against the symbol name before migrating" caveat at the top of the migration section.
-- **Migration grouping**: the optimizer migration list is ~12 line refs in one paragraph. Group by what each test proves (relation traversal vs `only()` projection vs FK-id elision vs queryset cooperation vs strictness mode vs hints), so reviewers can decide which groups are HTTP candidates without opening each line ref.
-- **AGENTS.md**: `examples/fakeshop/tests/test_schema.py:3-4` references AGENTS.md as the source of "schema is tested via `schema.execute_sync` … never by calling resolver methods directly". The new HTTP testing rule needs to land in AGENTS.md too, otherwise contributors will keep writing in-process schema tests for HTTP-shaped behavior.
-- **`finalize_django_types()` mention in `examples/fakeshop/tests/test_schema.py`**: today's two tests there (`test_products_schema_executes_hello`, `test_project_schema_executes_hello`) build their own `strawberry.Schema(query=ProductsQuery)` and execute it. Once the acceptance app ships a real schema, consider pruning these to a single `test_project_schema_imports_without_error` test, since `hello` becomes redundant against the new HTTP coverage.
+- `## Current state` line 8 says "the current fakeshop schema is still a placeholder in `examples/fakeshop/fakeshop/products/schema.py`" — both the path and the placeholder state are wrong now (the schema is real and lives at `examples/fakeshop/schema.py`).
+- `## Current state` line 9 references "`tests.fixtures.apps.TestsCardinalityConfig` being registered from `examples/fakeshop/fakeshop/settings.py`" — both the fixture path and the settings path are gone.
+- `## Risks` line 59 ("the schema needs to call `finalize_django_types()` exactly once after importing all example `DjangoType`s. This may require tightening registry isolation in tests so package tests and example schema imports do not fight over global state") — this risk is *resolved* by the `_reload_project_schema_for_acceptance_tests` fixture; the spec should record that resolution.
+- Migration list line:numbers will have drifted with the model-name changes (e.g., `tests/types/test_definition_order.py:77` is still the OneToOne test but the symbols are now `MembershipCardType` / `PatronType`, not `ProfileType` / `UserType`).
 
-## Recommended additions before approval
+Either:
+1. Mark the spec as "implemented" and freeze it (with a one-paragraph "Outcome" addendum), then archive it under `docs/`, OR
+2. Edit the spec in place to describe the new state (if it is going to keep being a contributor reference).
 
-1. **App name and placement** — a concrete paragraph naming the app, its `app_label`, and where it lives in the tree (Q-1).
-2. **Finalization seam contract** — one paragraph fixing where `finalize_django_types()` is called and how that interacts with the package-test `_isolate_registry` autouse fixture (Q-2).
-3. **Re-graded migration list** — split high-value migrations into "response-data" (HTTP candidates) and "plan-introspection / declaration-order / resolver-internal" (stay package-level) (Q-3, Q-4).
-4. **Query-count assertion shape** — `CaptureQueriesContext` plus SQL-shape assertions, with a worked example (Q-5).
-5. **Acceptance-app models** — model list, migration plan, and explicit `User → Person` rename (Q-6).
-6. **Test-data shape and pytest style** — inline `Model.objects.create(...)`, pytest-django functional style, default `Client()` (Q-7).
-7. **Per-feature add-then-remove migration cycle** — explicit step ordering: add app + migration → run existing suite (no regression) → add HTTP smoke test → migrate one feature category (start with reverse-FK traversal) → only then downgrade or remove the package test. The current "Migration strategy" section gestures at this but doesn't enumerate.
-8. **Cross-references** — the testing shift naturally subsumes `BACKLOG-010` (cardinality fixture's `INSTALLED_APPS` line in the example project settings) and partially addresses `BACKLOG-011` (durable override-test pattern). Add a "## Cross-references" section linking to those Kanban cards and to `GOAL.md`'s "Cookbook parity" target so the spec reads as a long-term direction, not a one-time refactor.
+The first option is consistent with the docs-process pattern AGENTS.md describes ("Completed design docs are archived after shipped behavior is folded into docs/FEATURES.md, docs/TREE.md, and KANBAN.md").
 
-## Things the spec correctly leaves out
+### M-12. Package-level definition-order tests are now coupled to the example project's models
 
-- It does not propose moving `tests/test_registry.py` to HTTP. Correct — registry idempotency, phase-1 atomicity, phase-3 partial-mutation contract, and pending-set cleanup all need direct registry access.
-- It does not propose activating Layer 3 features as part of the shift. Correct — that would conflate two unrelated changes.
-- It does not propose deleting `tests/fixtures/cardinality_models.py` immediately. Correct — package tests still use it for in-test-function declaration-order coverage.
-- It does not propose moving `tests/utils/` tests. Correct — those are pure unit tests with no Django/Strawberry involvement.
+`tests/types/test_definition_order.py:5` imports `from library.models import Book, Genre, MembershipCard, Patron, Shelf` and `from products.models import Category, Entry, Item, Property`. So the package tests now depend on whichever models live in the example project. This is the correct trade-off (one fewer fixture to maintain, real Django models are the highest-fidelity test substrate), but the implication is undocumented:
+
+- If `library/` is renamed or restructured, `tests/types/test_definition_order.py` must be updated.
+- If a `library` model is renamed (e.g., `MembershipCard` → `Card`), the package test breaks.
+- If the `library` app is deleted, the OneToOne / M2M coverage in `tests/` disappears with it.
+
+This is a real coupling. AGENTS.md should record it: "Package tests under `tests/` use models from the example project (`products.models` and `library.models`); changes to those models may require updates to package tests. Treat the example apps' model surfaces as part of the test contract, not just example code."
+
+### M-13. The choice-field path is exercised incidentally; promote it to deliberate
+
+`Book.circulation_status` is a `CharField(choices=CirculationStatus.choices)`. `BookType.Meta.fields` includes `circulation_status`. `test_library_branch_shelf_book_loan_graph_over_http` asserts `"circulationStatus": "checked_out"` in the response. So the choice-field-to-Strawberry-enum conversion path *is* covered by the HTTP layer, but as a side effect of the broader graph test.
+
+Worth a deliberate test that:
+
+- Posts an introspection query (`{ __type(name: "BookType") { fields { name type { name kind ofType { name } } } } }`) and asserts `BookCirculationStatusEnum` (or whatever the generated name is) appears.
+- Posts a query that filters or returns the enum value and asserts the wire format.
+
+This belongs under `test_library_api.py` and closes the spec's "choice enum schema shape can move later" item.
+
+### M-14. The nullable-scalar path is exercised incidentally; same treatment
+
+`Book.subtitle` is `TextField(blank=True, null=True)`. The HTTP test asserts `"subtitle": None`. ✅ Covered. Same recommendation: promote to a deliberate test or at least mention in the test docstring that this is the nullable-scalar coverage path.
+
+### M-15. Consumer-shaped queryset cooperation is not yet covered in `test_query/`
+
+All `Query.all_library_*` resolvers in `library/schema.py` return `models.X.objects.order_by("id")` — plain queryset, no `select_related`/`prefetch_related`. The optimizer's queryset-diffing behavior (B8 in `DONE-003`) is therefore not exercised by HTTP tests. The spec called this out as a high-value migration. To unblock it: add at least one resolver to `library/schema.py` that returns a pre-shaped queryset (e.g., `def all_library_prefetched_books(self) -> list[BookType]: return Book.objects.select_related("shelf").prefetch_related("genres")`), then add an HTTP test that compares the SQL count against the unshaped path.
+
+### M-16. `OptimizerHint` is not yet exercised in `test_query/`
+
+None of the library `Meta` declarations carry `optimizer_hints`. The spec called for at least one HTTP test that covers `OptimizerHint.SKIP` and `OptimizerHint.prefetch_related()`. Adding a hint to one library type (e.g., `Book.Meta.optimizer_hints = {"loans": OptimizerHint.prefetch_related()}`) plus a paired HTTP test would close this.
+
+### M-17. The override tests stayed package-level; the spec should explicitly endorse that
+
+`tests/types/test_definition_order.py:174,201` were not migrated to HTTP. Instead, the `_strawberry_field` helper got a docstring (`:22-27`) that says: "Tests intentionally inspect Strawberry internals such as `base_resolver.wrapped_func` to pin resolver attachment; if Strawberry changes this field shape, these tests should fail loudly."
+
+This is a defensible posture — it pins the contract in two layers (one Strawberry-internal, one user-visible), which catches resolver-attachment bugs earlier than HTTP tests would. But it conflicts with the spec's stated intent ("Manual relation override behavior should be proven by response data rather than Strawberry-internal resolver inspection"). Pick one and align the spec:
+
+- **Option A (recommended)**: keep the package-level coupled tests as intentional pins; add a complementary HTTP test in `test_library_api.py` that asserts a consumer-overridden relation field returns the consumer's data shape over the wire. Coverage is layered, not replaced. Update the spec text to reflect "package-level tests pin internal contract; HTTP tests pin consumer contract."
+- **Option B**: rewrite the package-level tests against the response-data observation pattern, then delete `_strawberry_field`. Clean but loses the early-warning value.
+
+`BACKLOG-011` (durable override-test pattern) in KANBAN now blocks on this decision; the card should be updated to reflect Option A or Option B.
+
+### M-18. Coverage gate exclusion: contributors will misread it
+
+AGENTS.md:15 says "[tool.coverage.run] source = ['django_strawberry_framework']. The example app is example code, not shipping code; bugs in it don't affect the published package, so it is intentionally outside the coverage gate." Correct. But: a contributor reading only that line might assume "HTTP tests don't help coverage." They actually do — they cover **package code** (the Strawberry view path, the optimizer, the resolvers, the registry) by exercising it through Django + Strawberry. Only the **library app code** (its `models.py`, `schema.py`, `apps.py`) is uncovered, and that's intentional.
+
+One sentence in AGENTS.md: "HTTP tests under `examples/fakeshop/test_query/` cover the *package* via real Django + Strawberry execution; the example apps' own files (`library/`, `products/`) are intentionally outside the coverage gate."
+
+## Recommended priority order for follow-up
+
+1. **M-9** — update `test_query/README.md` to reflect the live test (5 minutes).
+2. **M-11** — decide whether to archive `spec-testing_shift.md` or update its `## Current state` and `## Risks` sections (10 minutes).
+3. **M-2** — add the inline comment block above `_reload_project_schema_for_acceptance_tests` (10 minutes).
+4. **M-3** — add the "do not reorder" comment in `library/schema.py` and the regression-pin test (15 minutes).
+5. **M-7, M-12, M-18** — three small AGENTS.md edits (15 minutes total).
+6. **M-17** — pick Option A or Option B for override-test policy; update `BACKLOG-011` (10 minutes for the decision; Option A adds one HTTP test, Option B deletes a helper).
+7. **M-13, M-14** — promote choice-field and nullable-scalar coverage to deliberate HTTP tests (20 minutes each).
+8. **M-15, M-16** — add consumer-shaped queryset and `OptimizerHint` HTTP coverage (45 minutes each).
+9. **M-1, M-8** — flattening trade-off comments (10 minutes total).
+10. **M-10** — clean up `tests/fixtures/__pycache__` and the empty `tests/fixtures/` directory (1 minute).
+
+Items 1–6 are documentation and low-cost test additions; items 7–8 grow the HTTP test surface to match the original spec migration list.
+
+## Things that did not come up in the prior reviews
+
+- The `urls.py` admin landing page (`examples/fakeshop/urls.py:11-40`) still points at `/admin/products/item/?...` query-param triggers. These survived the flattening because the admin URL routing is per-app, not per-project-package. ✅ Coincidentally correct; worth noting in commit messages or docs that the flattening preserved the admin trigger paths.
+- `examples/fakeshop/tests/test_schema.py` still tests the project-level `Query` and `ProductsQuery` schemas via `schema.execute_sync` (`{ hello }`). The project schema now also includes `LibraryQuery`, but the test does not exercise any library types. Worth one tiny addition: assert the project schema's `__type` introspection includes `BookType` (or any library type). It catches "library failed to wire into the project schema" without requiring a full HTTP round-trip.
+- The pytest run also surfaces a warning from `test_seed_shards_command_runs_when_shard_alias_present` overriding `DATABASES`. Pre-existing, unrelated to this shift, but a passing-with-warnings status is sometimes hard to spot. Worth a quick `@override_settings(DATABASES=...)` rewrite on that test if it bothers anybody.
 
 ## Closing note
 
-The shift will be a net win for both confidence and contributor onboarding — a cookbook-parity acceptance suite is the right shape for proving the framework end-to-end. The current spec is roughly 70% there. The seven Q-items above are mostly local clarifications, not architecture changes; the spec can close them in one editing pass.
+This is the largest single round of progress so far. The foundation slice is functionally complete and shipped. The acceptance-test layer exists and its first HTTP tests are landed. The cardinality fixture is gone. The example project layout is consistent. The remaining work is widening the HTTP coverage surface (M-5, M-13, M-14, M-15, M-16) and tightening contributor-facing documentation (M-1, M-2, M-3, M-7, M-9, M-11, M-12, M-17, M-18). None of it is architecturally hard.

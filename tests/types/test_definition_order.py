@@ -2,12 +2,12 @@
 
 import pytest
 import strawberry
+from library.models import Book, Genre, MembershipCard, Patron, Shelf
 from products.models import Category, Entry, Item, Property
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
-from tests.fixtures.cardinality_models import Author, Book, Profile, Tag, User
 
 
 @pytest.fixture(autouse=True)
@@ -77,20 +77,20 @@ def test_reverse_fk_resolves_when_child_declared_before_parent():
 def test_one_to_one_forward_and_reverse_relations_resolve():
     """Forward OneToOne and reverse OneToOne get concrete final annotations."""
 
-    class ProfileType(DjangoType):
+    class MembershipCardType(DjangoType):
         class Meta:
-            model = Profile
-            fields = ("id", "bio", "user")
+            model = MembershipCard
+            fields = ("id", "barcode", "patron")
 
-    class UserType(DjangoType):
+    class PatronType(DjangoType):
         class Meta:
-            model = User
-            fields = ("id", "name", "profile")
+            model = Patron
+            fields = ("id", "name", "card")
 
     finalize_django_types()
 
-    assert ProfileType.__annotations__["user"] is UserType
-    assert UserType.__annotations__["profile"] == (ProfileType | None)
+    assert MembershipCardType.__annotations__["patron"] is PatronType
+    assert PatronType.__annotations__["card"] == (MembershipCardType | None)
 
 
 def test_many_to_many_forward_and_reverse_relations_resolve():
@@ -99,24 +99,24 @@ def test_many_to_many_forward_and_reverse_relations_resolve():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "author", "tags")
+            fields = ("id", "title", "shelf", "genres")
 
-    class TagType(DjangoType):
+    class GenreType(DjangoType):
         class Meta:
-            model = Tag
+            model = Genre
             fields = ("id", "name", "books")
 
-    class AuthorType(DjangoType):
+    class ShelfType(DjangoType):
         class Meta:
-            model = Author
-            fields = ("id", "name", "books")
+            model = Shelf
+            fields = ("id", "code", "books")
 
     finalize_django_types()
 
-    assert BookType.__annotations__["author"] is AuthorType
-    assert BookType.__annotations__["tags"] == list[TagType]
-    assert TagType.__annotations__["books"] == list[BookType]
-    assert AuthorType.__annotations__["books"] == list[BookType]
+    assert BookType.__annotations__["shelf"] is ShelfType
+    assert BookType.__annotations__["genres"] == list[GenreType]
+    assert GenreType.__annotations__["books"] == list[BookType]
+    assert ShelfType.__annotations__["books"] == list[BookType]
 
 
 def test_multi_cycle_finalizes_every_edge():

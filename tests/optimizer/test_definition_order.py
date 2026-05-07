@@ -2,12 +2,12 @@
 
 import pytest
 import strawberry
+from library.models import Book, Genre, MembershipCard, Patron
 from products.models import Category, Item
 
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer.walker import plan_optimizations, plan_relation
 from django_strawberry_framework.registry import registry
-from tests.fixtures.cardinality_models import Book, Profile, Tag, User
 
 
 @pytest.fixture(autouse=True)
@@ -49,56 +49,58 @@ def test_plan_relation_decisions_match_cardinality_after_finalization():
             model = Item
             fields = ("id", "name", "category")
 
-    class ProfileType(DjangoType):
+    class MembershipCardType(DjangoType):
         class Meta:
-            model = Profile
-            fields = ("id", "bio", "user")
+            model = MembershipCard
+            fields = ("id", "barcode", "patron")
 
-    class UserType(DjangoType):
+    class PatronType(DjangoType):
         class Meta:
-            model = User
-            fields = ("id", "name", "profile")
+            model = Patron
+            fields = ("id", "name", "card")
 
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "tags")
+            fields = ("id", "title", "genres")
 
-    class TagType(DjangoType):
+    class GenreType(DjangoType):
         class Meta:
-            model = Tag
+            model = Genre
             fields = ("id", "name", "books")
 
     finalize_django_types()
 
     assert plan_relation(_model_field(Item, "category"), CategoryType, info=None) == ("select", "default")
     assert plan_relation(_model_field(Category, "items"), ItemType, info=None) == ("prefetch", "default")
-    assert plan_relation(_model_field(Profile, "user"), UserType, info=None) == ("select", "default")
-    assert plan_relation(_model_field(User, "profile"), ProfileType, info=None) == ("select", "default")
-    assert plan_relation(_model_field(Book, "tags"), TagType, info=None) == ("prefetch", "default")
-    assert plan_relation(_model_field(Tag, "books"), BookType, info=None) == ("prefetch", "default")
+    assert plan_relation(_model_field(MembershipCard, "patron"), PatronType, info=None) == (
+        "select",
+        "default",
+    )
+    assert plan_relation(_model_field(Patron, "card"), MembershipCardType, info=None) == ("select", "default")
+    assert plan_relation(_model_field(Book, "genres"), GenreType, info=None) == ("prefetch", "default")
+    assert plan_relation(_model_field(Genre, "books"), BookType, info=None) == ("prefetch", "default")
 
 
 def test_plan_relation_downgrades_custom_get_queryset_target_after_finalization():
     """A custom target get_queryset still forces Prefetch after finalization."""
 
-    class ProfileType(DjangoType):
+    class MembershipCardType(DjangoType):
         class Meta:
-            model = Profile
-            fields = ("id", "bio", "user")
+            model = MembershipCard
+            fields = ("id", "barcode", "patron")
 
         @classmethod
         def get_queryset(cls, queryset, info, **kwargs):
             return queryset
 
-    class UserType(DjangoType):
+    class PatronType(DjangoType):
         class Meta:
-            model = User
-            fields = ("id", "name", "profile")
+            model = Patron
+            fields = ("id", "name", "card")
 
     finalize_django_types()
-
-    assert plan_relation(_model_field(User, "profile"), ProfileType, info=None) == (
+    assert plan_relation(_model_field(Patron, "card"), MembershipCardType, info=None) == (
         "prefetch",
         "custom_get_queryset",
     )

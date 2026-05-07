@@ -2,12 +2,12 @@
 
 import pytest
 import strawberry
+from library.models import Book, Genre
 from products import services
 from products.models import Category, Item
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.registry import registry
-from tests.fixtures.cardinality_models import Book, Tag
 
 
 @pytest.fixture(autouse=True)
@@ -48,17 +48,17 @@ def test_schema_executes_nested_query_when_query_declared_before_finalization():
     assert all(item["category"]["name"] for item in result.data["allItems"])
 
 
-def test_m2m_schema_shape_builds_without_database_tables():
-    """Unmanaged M2M fixtures are schema-shape-only in the foundation slice."""
+def test_m2m_schema_shape_builds_with_real_library_models():
+    """The real library app provides schema-shape coverage for M2M fields."""
 
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "tags")
+            fields = ("id", "title", "genres")
 
-    class TagType(DjangoType):
+    class GenreType(DjangoType):
         class Meta:
-            model = Tag
+            model = Genre
             fields = ("id", "name")
 
     @strawberry.type
@@ -69,9 +69,8 @@ def test_m2m_schema_shape_builds_without_database_tables():
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
-
-    tags_field = schema._schema.type_map["BookType"].fields["tags"]
-    assert str(tags_field.type) == "[TagType!]!"
+    genres_field = schema._schema.type_map["BookType"].fields["genres"]
+    assert str(genres_field.type) == "[GenreType!]!"
 
 
 def test_manual_strawberry_type_before_finalization_surfaces_sentinel_repr():

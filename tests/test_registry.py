@@ -19,7 +19,8 @@ from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import TypeRegistry, registry
 from django_strawberry_framework.types import finalizer as finalizer_module
-from django_strawberry_framework.types.relations import PendingRelationAnnotation
+from django_strawberry_framework.types.relations import PendingRelation, PendingRelationAnnotation
+from django_strawberry_framework.utils.relations import relation_kind
 
 
 @pytest.fixture
@@ -199,6 +200,25 @@ def test_iter_types_empty_on_fresh_registry(fresh_registry):
     assert list(fresh_registry.iter_types()) == []
 
 
+def test_register_definition_rejects_different_definition_for_same_type(fresh_registry):
+    """A type class cannot be rebound to a different collected definition."""
+
+    class CategoryType:
+        pass
+
+    original_definition = object()
+    fresh_registry.register_definition(CategoryType, original_definition)
+    fresh_registry.register_definition(CategoryType, original_definition)
+
+    with pytest.raises(
+        ConfigurationError,
+        match="CategoryType already has a registered DjangoTypeDefinition",
+    ):
+        fresh_registry.register_definition(CategoryType, object())
+
+    assert fresh_registry.get_definition(CategoryType) is original_definition
+
+
 def test_global_registry_is_a_type_registry_instance():
     """The ``registry`` module-level singleton is a ``TypeRegistry``."""
     assert isinstance(registry, TypeRegistry)
@@ -227,6 +247,82 @@ def test_finalize_is_idempotent(monkeypatch):
     finalize_django_types()
 
     assert calls == [CategoryType]
+
+
+def test_finalize_discards_consumer_authored_pending_relation_without_rewriting_annotation():
+    """Consumer-authored relation annotations are not rewritten if a stale pending record exists."""
+
+    try:
+
+        class ManualPendingCategoryType(DjangoType):
+            items: list["ManualPendingItemType"]
+
+            class Meta:
+                model = Category
+                fields = ("id", "name", "items")
+
+        definition = registry.get_definition(ManualPendingCategoryType)
+        assert definition is not None
+        assert definition.consumer_authored_fields == frozenset({"items"})
+
+        field = Category._meta.get_field("items")
+        kind = relation_kind(field)
+        registry.add_pending_relation(
+            PendingRelation(
+                source_type=ManualPendingCategoryType,
+                source_model=Category,
+                field_name="items",
+                django_field=field,
+                related_model=Item,
+                relation_kind=kind,
+                nullable=kind == "reverse_one_to_one" or bool(getattr(field, "null", False)),
+            ),
+        )
+
+        class ManualPendingItemType(DjangoType):
+            class Meta:
+                model = Item
+                fields = ("id", "name")
+
+        globals()["ManualPendingItemType"] = ManualPendingItemType
+
+        finalize_django_types()
+
+        annotation = ManualPendingCategoryType.__annotations__["items"]
+        assert getattr(annotation, "__args__", ()) == ("ManualPendingItemType",)
+        assert list(registry.iter_pending_relations()) == []
+    finally:
+        globals().pop("ManualPendingItemType", None)
+
+
+def test_finalize_skips_definitions_marked_finalized_when_registry_is_unfinalized(monkeypatch):
+    """Definition-level finalized flags prevent duplicate resolver and Strawberry mutation."""
+    attach_calls = []
+    type_calls = []
+
+    def counting_attach(*args, **kwargs):
+        attach_calls.append((args, kwargs))
+
+    def counting_type(type_cls, **kwargs):
+        type_calls.append((type_cls, kwargs))
+
+    monkeypatch.setattr(finalizer_module, "_attach_relation_resolvers", counting_attach)
+    monkeypatch.setattr(finalizer_module.strawberry, "type", counting_type)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    definition = registry.get_definition(CategoryType)
+    assert definition is not None
+    definition.finalized = True
+
+    finalize_django_types()
+
+    assert attach_calls == []
+    assert type_calls == []
+    assert registry.is_finalized() is True
 
 
 def test_registering_concrete_type_after_finalization_raises():

@@ -33,6 +33,7 @@ from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
+from django_strawberry_framework.types.base import _detect_custom_get_queryset
 from django_strawberry_framework.types.converters import convert_relation, convert_scalar
 from django_strawberry_framework.types.relations import PendingRelationAnnotation
 
@@ -101,6 +102,16 @@ def test_subclass_without_meta_passes_through():
 
     assert registry.get(Category) is None
     assert not hasattr(AbstractType, "__strawberry_definition__")
+    assert AbstractType.has_custom_get_queryset() is False
+
+
+def test_detect_custom_get_queryset_returns_false_for_non_djangotype_class():
+    """The helper is defensive for classes outside the DjangoType hierarchy."""
+
+    class PlainType:
+        pass
+
+    assert _detect_custom_get_queryset(PlainType) is False
 
 
 def test_meta_required_model_raises_when_missing():
@@ -532,6 +543,13 @@ def test_relation_unregistered_target_raises():
     assert "Cannot finalize Django types" in msg
     assert "Item.category -> Category" in msg
     assert "no registered DjangoType" in msg
+
+
+def test_convert_relation_returns_pending_annotation_for_unregistered_target():
+    """The direct converter returns the pending sentinel when the target type is absent."""
+    item_category = Item._meta.get_field("category")
+
+    assert convert_relation(item_category) is PendingRelationAnnotation
 
 
 def test_relation_full_chain_when_all_targets_registered():

@@ -15,8 +15,10 @@ import pytest
 from django.db import models
 from fakeshop.products.models import Category, Item
 
+from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import TypeRegistry, registry
+from django_strawberry_framework.types import finalizer as finalizer_module
 
 
 @pytest.fixture
@@ -202,3 +204,174 @@ def test_global_registry_is_a_type_registry_instance():
     # Sanity: still bound to the Django models module (smoke check that
     # the type signature didn't drift to a different shape).
     assert isinstance(Category, type) and issubclass(Category, models.Model)
+
+
+def test_finalize_is_idempotent(monkeypatch):
+    """Calling finalize twice mutates type classes only once."""
+    calls = []
+    original_type = finalizer_module.strawberry.type
+
+    def counting_type(type_cls, **kwargs):
+        calls.append(type_cls)
+        return original_type(type_cls, **kwargs)
+
+    monkeypatch.setattr(finalizer_module.strawberry, "type", counting_type)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    finalize_django_types()
+
+    assert calls == [CategoryType]
+
+
+def test_registering_concrete_type_after_finalization_raises():
+    """A finalized registry rejects new concrete DjangoType classes."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+
+    with pytest.raises(ConfigurationError, match=r"finalize_django_types\(\) already ran"):
+
+        class ItemType(DjangoType):
+            class Meta:
+                model = Item
+                fields = ("id", "name")
+
+
+def test_registry_clear_allows_fresh_type_classes_to_finalize_again():
+    """clear() resets registry state for newly declared type classes."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    registry.clear()
+
+    class FreshCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+
+    assert registry.is_finalized() is True
+    assert registry.get(Category) is FreshCategoryType
+
+
+def test_phase_1_failure_is_atomic_and_retryable_after_missing_target_registers():
+    """Unresolved targets fail before class mutation and can retry after the target appears."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    with pytest.raises(ConfigurationError):
+        finalize_django_types()
+
+    definition = registry.get_definition(ItemType)
+    assert registry.is_finalized() is False
+    assert definition is not None
+    assert definition.finalized is False
+    assert not hasattr(ItemType, "__strawberry_definition__")
+    assert list(registry.iter_pending_relations())
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+
+    assert registry.is_finalized() is True
+    assert ItemType.__annotations__["category"] is CategoryType
+    assert list(registry.iter_pending_relations()) == []
+
+
+def test_phase_3_failure_leaves_registry_unfinalized_and_requires_fresh_classes(monkeypatch):
+    """A Strawberry-side failure is recovered by clear() plus fresh class recreation."""
+    original_type = finalizer_module.strawberry.type
+
+    def failing_type(type_cls, **kwargs):
+        type_cls.__partial_strawberry_mutation__ = True
+        raise TypeError("simulated Strawberry failure")
+
+    monkeypatch.setattr(finalizer_module.strawberry, "type", failing_type)
+
+    class BrokenCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    with pytest.raises(TypeError):
+        finalize_django_types()
+
+    definition = registry.get_definition(BrokenCategoryType)
+    assert registry.is_finalized() is False
+    assert definition is not None
+    assert definition.finalized is False
+    assert BrokenCategoryType.__partial_strawberry_mutation__ is True
+
+    registry.clear()
+    monkeypatch.setattr(finalizer_module.strawberry, "type", original_type)
+
+    class FreshCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+
+    assert registry.get(Category) is FreshCategoryType
+    assert registry.is_finalized() is True
+
+
+def test_pending_set_is_cleaned_after_success_and_retained_after_phase_1_failure():
+    """Pending records remain after unresolved failure but disappear after success."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    with pytest.raises(ConfigurationError):
+        finalize_django_types()
+
+    assert [pending.field_name for pending in registry.iter_pending_relations()] == ["category"]
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+
+    assert ItemType.__annotations__["category"] is CategoryType
+    assert list(registry.iter_pending_relations()) == []
+
+
+def test_clear_does_not_remove_mutation_from_previously_finalized_classes():
+    """clear() resets the registry, not already-mutated class objects."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    definition = CategoryType.__django_strawberry_definition__
+    registry.clear()
+
+    assert registry.is_finalized() is False
+    assert hasattr(CategoryType, "__strawberry_definition__")
+    assert CategoryType.__django_strawberry_definition__ is definition

@@ -17,20 +17,13 @@ Most users only care about `shipped` and `planned`. The other two labels are for
 ## Current package surface
 Status: shipped alpha.
 
-<!-- TODO(spec-foundation 0.0.4): when the foundation slice ships, bump
-the version below to `0.0.4`, add `finalize_django_types` to the public
-exports list, and document which forward-reference shapes are supported
-in 0.0.4 (same-module string annotations, `from __future__ import
-annotations`, cross-module `Annotated[..., strawberry.lazy(...)]`).
-Per `docs/spec-foundation.md` Phase 10 of the phased implementation
-order. -->
-
-Current package version: `0.0.3`.
+Current package version: `0.0.4`.
 
 Public exports:
 - `DjangoType`
 - `DjangoOptimizerExtension`
 - `OptimizerHint`
+- `finalize_django_types`
 - `auto`
 
 Current posture:
@@ -69,7 +62,7 @@ Planned:
 - `Meta.search_fields`
 - `Meta.interfaces`
 - `Meta.primary` for multiple GraphQL types over the same Django model
-- stable consumer field override mechanisms
+- stable consumer field override mechanisms for scalar fields
 
 ## Django model to Strawberry type generation
 Status: shipped with alpha constraints.
@@ -85,25 +78,37 @@ Shipped today:
 - choice enum generation
 - relation resolver generation
 - type registry registration
+- definition-order-independent relation finalization with `finalize_django_types()`
 - abstract/intermediate base support when a subclass has no `Meta`
 
 Current alpha constraints:
 - one `DjangoType` per Django model
-- relation target types must be registered before relation conversion can target them
-- consumer annotation overrides are not a guaranteed public contract yet
-- real M2M model coverage is still deferred even though many-side code paths exist
+- manual override validation for relation cardinality is deferred; 0.0.4 trusts relation-field annotations supplied by the consumer
 
-<!-- TODO(spec-foundation 0.0.4): when the foundation slice ships,
-remove the "relation target types must be registered before relation
-conversion can target them" bullet above and add a new shipped section
-describing definition-order independence: the `finalize_django_types()`
-entry point, fail-loud unresolved-target errors at finalization, the
-five cyclic cardinalities (FK / reverse FK / OneToOne / reverse
-OneToOne / M2M), and the manual annotation contract for relation
-fields (annotation override, field/resolver override). The "consumer
-annotation overrides are not a guaranteed public contract yet" bullet
-stays — the 0.0.4 contract is narrower (relation fields only, no
-cardinality validation). -->
+### Definition-order independence
+Status: shipped.
+
+`DjangoType` collection is split from Strawberry finalization. Class creation records Django metadata and pending relation targets, while `finalize_django_types()` resolves those pending relations, attaches generated relation resolvers, and decorates each collected type with `strawberry.type`.
+
+Call `finalize_django_types()` once during single-threaded schema setup, after every module that defines `DjangoType` classes has been imported and before `strawberry.Schema(...)` is constructed. Calling it a second time is a no-op. Declaring a new concrete `DjangoType` after finalization raises `ConfigurationError`; tests should use `registry.clear()` and fresh type classes when they need a new registry lifecycle.
+
+Supported relation cycles:
+- forward FK and reverse FK
+- forward OneToOne and reverse OneToOne
+- forward and reverse M2M
+- multi-cycle graphs that combine those relation shapes
+
+Unresolved relation targets fail during finalization with an error that names the source model, source field, and target model. The most common cause is that a Python module containing the target `DjangoType` was never imported before finalization.
+
+Supported forward-reference/manual relation shapes in 0.0.4:
+- generated relation annotations for target types declared before or after the source type
+- same-module string annotations such as `items: list["ItemType"]`
+- stringified annotations from `from __future__ import annotations`
+- cross-module `Annotated[..., strawberry.lazy("module.path")]` annotations when the consumer wants Strawberry's explicit lazy import path
+- annotation-only relation overrides, which keep the generated resolver
+- `strawberry.field(resolver=...)` and `@strawberry.field` relation overrides, which keep the consumer resolver
+
+Validation that a manual relation annotation matches the Django relation cardinality is deferred. Manual scalar-field override semantics remain an implementation detail.
 
 ## Django field conversion
 Status: shipped for common Django fields, deferred for some specialized fields.
@@ -363,13 +368,11 @@ Future migration advantage:
 
 ## Deferred and future work
 Tracked in the contributor/maintainer board, [`../KANBAN.md`](../KANBAN.md):
-- definition-order independence
 - multiple types per model
-- consumer override semantics
+- consumer override semantics for scalar fields
 - stable choice enum naming
 - Relay interfaces and `GlobalID`
 - specialized scalar conversions
-- real M2M coverage
 - filters, orders, aggregates, fieldsets, connections, and permissions
 - model-property and cached-property optimizer hints
 

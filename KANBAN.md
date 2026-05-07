@@ -373,8 +373,8 @@ Status: handled inside `IN-PROGRESS-001` — the next release is `0.0.4` and the
 
 Current behavior:
 
-- `pyproject.toml` version is `0.0.3`.
-- `django_strawberry_framework/__init__.py` version is `0.0.3`.
+- `pyproject.toml` version is `0.0.4`.
+- `django_strawberry_framework/__init__.py` version is `0.0.4`.
 - The next release is `0.0.4`, gated by the foundation slice.
 
 Definition of done:

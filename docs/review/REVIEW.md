@@ -20,9 +20,9 @@ Worker 0 creates the active review plan from these instructions and [Worker 0's 
 1. Read `pyproject.toml` and `django_strawberry_framework/__init__.py`.
 2. Confirm both version values match.
 3. Convert the release version from dots to underscores.
-   - `0.0.3` becomes `0_0_3`.
+   - `0.0.4` becomes `0_0_4`.
 4. Create `docs/review/review-<0_0_X>.md`.
-   - For the current `0.0.3` release, create `docs/review/review-0_0_3.md`.
+   - For the current `0.0.4` release, create `docs/review/review-0_0_4.md`.
 5. The plan file is the canonical checklist for the whole release review and is committed alongside the review-cycle source changes. It is kept in git as the permanent record of the cycle.
 
 If the version values do not match, stop and record that mismatch in the plan before any file review starts.
@@ -63,7 +63,7 @@ Then it must include a tree-like checklist for the package. Every file and every
 ### Template shape:
 
 ```text
-# Package review plan: 0.0.3
+# Package review plan: 0.0.4
 
 Source root: `django_strawberry_framework/`
 Review rule: one file or folder-summary pass at a time.

@@ -13,7 +13,7 @@
 
 Meta classes, not decorators. [Strawberry GraphQL](https://github.com/strawberry-graphql/strawberry) on Django, with an N+1 optimizer that cooperates with your existing querysets. Filters / orders / aggregates / permissions are on the roadmap.
 
-> **Status: 0.0.3, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `auto` — are intended to remain stable through `0.1.0`. API names are the stability promise; correctness and edge-case behavior are still hardening. Coming features — filters, orders, aggregates, connections, permissions, and more `Meta` keys — do not ship yet.
+> **Status: 0.0.4, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto` — are intended to remain stable through `0.1.0`. API names are the stability promise; correctness and edge-case behavior are still hardening. Coming features — filters, orders, aggregates, connections, permissions, and more `Meta` keys — do not ship yet.
 
 #### This package takes inspiration from:
 

@@ -48,6 +48,8 @@ INSTALLED_APPS = [
     "django_strawberry_framework",
     # Local
     "fakeshop.products.apps.ProductsConfig",
+    # Test fixtures
+    "tests.fixtures.apps.TestsCardinalityConfig",
 ]
 
 MIDDLEWARE = [

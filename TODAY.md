@@ -9,7 +9,7 @@ For the package-wide capability catalog, shipped/planned feature status, optimiz
 - `examples/fakeshop/fakeshop/products/schema.py` still exposes a placeholder `hello` field.
 - The large commented design in `examples/fakeshop/fakeshop/products/schema.py` is intentionally ahead of the shipped package.
 - The package can support a practical list-based schema for the fakeshop product models today.
-- The best current fakeshop shape is forward-relation focused: root list fields for each model, with forward FK traversal from `Item`, `Property`, and `Entry`.
+- The best current fakeshop shape is a bidirectional list-based graph: root list fields for each model, with FK and reverse-FK traversal across `Category`, `Item`, `Property`, and `Entry`.
 
 The commented rich fakeshop design is not directly usable yet because it depends on unshipped APIs and features:
 
@@ -24,21 +24,8 @@ The commented rich fakeshop design is not directly usable yet because it depends
 - Relay node and connection integration
 
 ## What to put in `examples/fakeshop/fakeshop/products/schema.py` today
-
-<!-- TODO(spec-foundation 0.0.4): when the foundation slice ships,
-refresh the example schema below to show definition-order-independent
-bidirectional relations (Category.items + Item.category on the same
-types) and add the `finalize_django_types()` call site at the
-Spike-A-proven safe boundary. If finalization must happen before any
-`@strawberry.type` query class references these `DjangoType`s, the
-example should be reorganized so the finalizer runs before that query
-decorator, not merely before `strawberry.Schema(...)` construction. Per
-`docs/spec-foundation.md` Phase 10 of the phased implementation order. -->
-
 Replace the placeholder with list-based Strawberry query fields using `DjangoType` and manual root resolvers that return Django `QuerySet`s.
-
-Use this forward-relation schema first:
-
+Use this bidirectional schema:
 ```python
 import strawberry
 
@@ -54,6 +41,8 @@ class CategoryType(DjangoType):
             "id",
             "name",
             "description",
+            "items",
+            "properties",
             "is_private",
             "created_date",
             "updated_date",
@@ -68,6 +57,7 @@ class ItemType(DjangoType):
             "name",
             "description",
             "category",
+            "entries",
             "is_private",
             "created_date",
             "updated_date",
@@ -82,6 +72,7 @@ class PropertyType(DjangoType):
             "name",
             "description",
             "category",
+            "entries",
             "is_private",
             "created_date",
             "updated_date",
@@ -126,14 +117,15 @@ __all__ = ("Query",)
 ```
 
 ## What to put in `examples/fakeshop/fakeshop/schema.py` today
-
-Enable the optimizer at the project schema boundary:
-
+Enable the optimizer at the project schema boundary and finalize all imported `DjangoType`s before constructing the Strawberry schema:
 ```python
 import strawberry
 from fakeshop.products.schema import Query as ProductsQuery
 
-from django_strawberry_framework import DjangoOptimizerExtension
+from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types
+
+
+finalize_django_types()
 
 
 @strawberry.type
@@ -148,24 +140,23 @@ schema = strawberry.Schema(
 ```
 
 ## What fakeshop model fields work today
-
 For the fakeshop product models, `DjangoType` can currently generate:
-
 - `BigAutoField` and IDs -> `int`
 - `TextField` -> `str`
 - `BooleanField` -> `bool`
 - `DateTimeField` -> `datetime.datetime`
 - `ForeignKey` -> related `DjangoType`
-- reverse FK -> `list[RelatedType]`, with the definition-order limitation below
+- reverse FK -> `list[RelatedType]`
 
-Use these forward relations in the current fakeshop schema:
-
+Use these bidirectional relations in the current fakeshop schema:
 - `Item.category`
 - `Property.category`
 - `Entry.item`
 - `Entry.property`
-
-Avoid exposing both sides of each bidirectional relation on the primary fakeshop types until definition-order independence lands.
+- `Category.items`
+- `Category.properties`
+- `Item.entries`
+- `Property.entries`
 
 ## Optimized fakeshop queries that work today
 
@@ -239,29 +230,9 @@ class Query:
 
 Relation traversal to a type with custom `get_queryset` is handled by the optimizer with a `Prefetch` downgrade, so target visibility filters are not bypassed by raw joins.
 
-## Main fakeshop limitation today: definition-order independence
-
-Definition-order independence is not implemented.
-
-That matters for bidirectional fakeshop relations:
-
-- `Item.category` needs `CategoryType` registered before `ItemType`.
-- `Category.items` needs `ItemType` registered before `CategoryType`.
-
-Both cannot be true at Python class-definition time.
-
-Practical choices today:
-
-1. Forward-relation schema: define `CategoryType` scalar-only first, then `ItemType`, `PropertyType`, and `EntryType` with forward relations.
-2. Reverse-relation schema: define `ItemType` and `PropertyType` scalar-only first, then `CategoryType` with `items` and `properties`; those item/property types cannot also expose `category`.
-
-For the fakeshop example, start with option 1. Expose root lists for all four models and use forward relations. That gives a working GraphQL schema and exercises the shipped optimizer without requiring the unshipped connection/filter/permission stack.
-
 ## What the fakeshop example should wait for
 
 Do not turn the commented rich fakeshop design into active code until the features it depends on ship. In practice, that means waiting for:
-
-- definition-order independence for rich bidirectional model graphs
 - `DjangoConnectionField`
 - Relay node and connection support
 - filters, ordering, aggregates, and fieldsets

@@ -6,24 +6,15 @@ Slice scope:
 - Slice 2 — Meta validation, scalar field synthesis, default ``get_queryset``,
   Strawberry finalization, ``convert_scalar`` direct unit coverage.
 - Slice 3 — relation conversion (forward FK, reverse FK, nullable widening,
-  unregistered-target rejection); ``_build_annotations`` dispatch on
+  finalization-time unregistered-target rejection); ``_build_annotations`` dispatch on
   ``field.is_relation`` rather than filtering relations out.
-
-.. todo:: spec-foundation 0.0.4 — the "unregistered-target rejection"
-   coverage in this file flips from class-creation failure to
-   finalization failure. The ``test_relation_unregistered_target_raises``
-   case below and the ``@pytest.mark.skip``ed
-   ``test_forward_reference_resolves_when_target_defined_later`` are
-   the two slated rewrites called out in ``docs/spec-foundation.md``
-   "Existing tests that must change". The new acceptance coverage
-   moves to ``tests/types/test_definition_order.py`` /
-   ``tests/types/test_definition_order_schema.py`` per the spec's
-   "Cyclic acceptance tests" / "End-to-end schema tests" sections.
 
 The ``has_custom_get_queryset`` sentinel and override-detection have
 shipped and are tested directly. Optimizer downgrade-to-``Prefetch``
 coverage belongs in ``tests/optimizer/``; the full forward-reference /
-definition-order independence path remains ``@pytest.mark.skip``.
+definition-order independence path is covered in
+``tests/types/test_definition_order.py`` and
+``tests/types/test_definition_order_schema.py``.
 
 Where Slice 2 tests originally used ``fields = \"__all__\"`` on ``Category``,
 they now either declare related types up front (so the registry resolves
@@ -35,7 +26,6 @@ captures the scalar-only field list used in those updated tests.
 import datetime
 
 import pytest
-import strawberry
 from django.db import models
 from fakeshop.products.models import Category, Entry, Item, Property
 
@@ -544,78 +534,6 @@ def test_relation_unregistered_target_raises():
     assert "no registered DjangoType" in msg
 
 
-def test_annotation_only_relation_override_keeps_generated_resolver():
-    """Annotation-only relation overrides do not suppress generated relation resolvers."""
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-
-    class CategoryType(DjangoType):
-        items: list[ItemType]
-
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    definition = CategoryType.__django_strawberry_definition__
-    assert definition.consumer_authored_fields == frozenset({"items"})
-    assert definition.consumer_annotated_relation_fields == frozenset({"items"})
-    assert definition.consumer_assigned_relation_fields == frozenset()
-
-    finalize_django_types()
-
-    items_field = next(
-        field for field in CategoryType.__strawberry_definition__.fields if field.python_name == "items"
-    )
-    assert items_field.base_resolver is not None
-    assert items_field.base_resolver.wrapped_func.__name__ == "resolve_items"
-
-
-def test_assigned_relation_field_override_keeps_consumer_resolver():
-    """Assigned Strawberry relation fields suppress generated relation resolvers."""
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-
-    class CategoryType(DjangoType):
-        @strawberry.field
-        def items(self) -> list[ItemType]:
-            return []
-
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    definition = CategoryType.__django_strawberry_definition__
-    assert definition.consumer_authored_fields == frozenset({"items"})
-    assert definition.consumer_annotated_relation_fields == frozenset()
-    assert definition.consumer_assigned_relation_fields == frozenset({"items"})
-
-    finalize_django_types()
-
-    items_field = next(
-        field for field in CategoryType.__strawberry_definition__.fields if field.python_name == "items"
-    )
-    assert items_field.base_resolver is not None
-    assert items_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.items")
-
-
-def test_relation_field_class_attribute_shadowing_raises():
-    """Unsupported class attributes cannot silently shadow relation fields."""
-    with pytest.raises(ConfigurationError, match="shadows a Django relation field"):
-
-        class CategoryType(DjangoType):
-            items = None
-
-            class Meta:
-                model = Category
-                fields = ("id", "name", "items")
-
-
 def test_relation_full_chain_when_all_targets_registered():
     """Every fakeshop relation resolves cleanly when types are declared in order."""
 
@@ -665,32 +583,3 @@ def test_convert_relation_nullable_fk_widens_to_optional(monkeypatch):
     monkeypatch.setattr(item_category, "null", True)
     annotation = convert_relation(item_category)
     assert annotation == (CategoryType | None)
-
-
-# ---------------------------------------------------------------------------
-# Slice 3 — placeholders for paths fakeshop does not yet exercise
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.skip(reason="Slice 3+: M2M relation — fakeshop has no M2M field; deferred.")
-def test_relation_m2m_returns_list():
-    pass
-
-
-# TODO(spec-foundation 0.0.4): DELETE this skipped placeholder when the
-# foundation slice ships. The cyclic-acceptance coverage it stands in
-# for moves to ``tests/types/test_definition_order.py`` per
-# ``docs/spec-foundation.md`` "Cyclic acceptance tests" — declared in
-# either order, FK / reverse FK / OneToOne / reverse OneToOne / M2M
-# cardinalities, multi-cycle, unresolved-target failure, and the four
-# manual-annotation override shapes. The skip reason mentions
-# ``lazy_ref``; that placeholder method is being deleted in the same
-# slice (see ``registry.py`` TODO).
-@pytest.mark.skip(
-    reason=(
-        "Slice 3+: forward-reference / definition-order independence. The current "
-        "implementation requires targets to be registered first; lazy_ref is pending."
-    ),
-)
-def test_forward_reference_resolves_when_target_defined_later():
-    pass

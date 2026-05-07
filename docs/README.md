@@ -6,33 +6,24 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## Quick start
 
-<!-- TODO(spec-foundation 0.0.4): when the foundation slice ships,
-update this quick-start snippet per `docs/spec-foundation.md` Phase 10
-so it shows the new `finalize_django_types()` call site at the
-Spike-A-proven safe boundary. If finalization must happen before any
-`@strawberry.type` class references a `DjangoType`, the snippet must call
-the finalizer before decorating `Query`, not merely before
-`strawberry.Schema(...)` construction. The alpha caveat below ("requires
-relation target types to be declared before fields that reference them")
-goes away in lockstep — definition-order independence is exactly what
-this slice ships. -->
-
 ```python
 import strawberry
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoType
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
 from myapp.models import Category, Item
 
 
 class CategoryType(DjangoType):
     class Meta:
         model = Category
-        fields = ("id", "name")
+        fields = ("id", "name", "items")
 
 
 class ItemType(DjangoType):
     class Meta:
         model = Item
         fields = ("id", "name", "category")
+
+finalize_django_types()
 
 
 @strawberry.type
@@ -48,7 +39,7 @@ schema = strawberry.Schema(
 )
 ```
 
-That is the shipped surface: `class Meta` configures the type, and the optimizer extension turns nested selections into Django ORM `select_related`, `prefetch_related`, and `only` calls. The current alpha requires relation target types to be declared before fields that reference them; definition-order independence is planned.
+That is the shipped surface: `class Meta` configures the type, `finalize_django_types()` resolves relations after all `DjangoType` modules are imported, and the optimizer extension turns nested selections into Django ORM `select_related`, `prefetch_related`, and `only` calls. Relation fields can point at target types declared earlier or later, as long as every target type is registered before finalization.
 
 ## What just happened?
 
@@ -68,6 +59,7 @@ Today:
 - `DjangoType` for model-backed Strawberry types
 - scalar, relation, and choice-enum conversion
 - generated relation resolvers
+- definition-order-independent relation finalization via `finalize_django_types`
 - `get_queryset` visibility hook
 - model/type registry
 - `DjangoOptimizerExtension` for automatic ORM optimization
@@ -103,7 +95,7 @@ Shipped optimizer value:
 
 ## Status
 
-**Status: 0.0.3, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `auto` — are intended to remain stable through `0.1.0`. API names are the stability promise; correctness and edge-case behavior are still hardening.
+**Status: 0.0.4, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto` — are intended to remain stable through `0.1.0`. API names are the stability promise; correctness and edge-case behavior are still hardening.
 
 Expect the deferred `Meta` keys (`filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `interfaces`) to move from rejected to accepted as their subsystems ship. The registry will gain `Meta.primary` for multiple `DjangoType`s per model. None of those changes break code that uses today's surface.
 

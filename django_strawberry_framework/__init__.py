@@ -11,7 +11,7 @@ from .optimizer import DjangoOptimizerExtension
 from .optimizer.hints import OptimizerHint
 from .types import DjangoType, finalize_django_types
 
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 
 __all__ = (
     "DjangoOptimizerExtension",

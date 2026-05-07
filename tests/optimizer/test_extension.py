@@ -2166,11 +2166,6 @@ def test_plan_relation_returns_prefetch_for_custom_get_queryset():
     assert reason == "custom_get_queryset"
 
 
-@pytest.mark.skip(reason="Slice 4+: M2M relation — fakeshop has no M2M field; deferred.")
-def test_optimizer_applies_prefetch_related_for_m2m():
-    pass
-
-
 # ---------------------------------------------------------------------------
 # B8: queryset optimization diffing
 # ---------------------------------------------------------------------------

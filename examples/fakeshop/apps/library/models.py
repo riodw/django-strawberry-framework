@@ -1,6 +1,32 @@
 """Managed models for library acceptance coverage."""
 
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.models import ContentType
 from django.db import models
+
+
+class TaggedItem(models.Model):
+    """A generic tag attached to any library-domain object."""
+
+    tag = models.SlugField()
+    content_type = models.ForeignKey(
+        ContentType,
+        related_name="library_tagged_items",
+        on_delete=models.CASCADE,
+    )
+    object_id = models.PositiveIntegerField()
+    content_object = GenericForeignKey("content_type", "object_id")
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["content_type", "object_id"],
+                name="library_tagged_lookup_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return self.tag
 
 
 class Branch(models.Model):
@@ -8,6 +34,11 @@ class Branch(models.Model):
 
     name = models.TextField(unique=True)
     city = models.TextField(blank=True, default="")
+    # Test substrate: package tests use this virtual relation to pin
+    # GenericRelation support without exposing it in the public example schema.
+    tags = GenericRelation(
+        TaggedItem,
+    )
 
     class Meta:
         verbose_name = "Branch"

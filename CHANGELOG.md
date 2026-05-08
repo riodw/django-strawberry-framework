@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `DjangoType` subclass creation now collects metadata and pending relations only; Strawberry type finalization and relation resolver attachment happen in `finalize_django_types()`.
 - Optimizer metadata now lives on `DjangoTypeDefinition`, with `_optimizer_field_map`, `_optimizer_hints`, and `_is_default_get_queryset` mirrored on classes for compatibility.
 - `registry.clear()` now resets definitions, pending relations, and finalized state in addition to type/model/enum maps.
+- `DjangoType` now raises `ConfigurationError` at class-creation time when a selected relation field has no concrete target model, such as `GenericForeignKey`; previously this surfaced later as an `AttributeError` during `finalize_django_types()`. Use `Meta.exclude` or an explicit annotation/resolver for these fields.
 
 ### Removed
 - Removed the unused `TypeRegistry.lazy_ref` placeholder in favor of the package-owned pending-relation registry.

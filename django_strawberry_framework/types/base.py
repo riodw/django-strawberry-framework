@@ -404,7 +404,8 @@ def _build_annotations(
 
     Raises:
         ConfigurationError: an unsupported scalar field type is encountered
-            (raised by ``convert_scalar``).
+            (raised by ``convert_scalar``), or a selected relation has no
+            concrete related model to map to a GraphQL type.
     """
     annotations: dict[str, Any] = {}
     pending: list[PendingRelation] = []
@@ -412,6 +413,13 @@ def _build_annotations(
         if field.is_relation:
             if field.name in consumer_authored_fields:
                 continue
+            if getattr(field, "related_model", None) is None:
+                raise ConfigurationError(
+                    f"{source_model.__name__}.{field.name} is a GenericForeignKey or other "
+                    "relation without a concrete related model. It cannot be auto-mapped to "
+                    "a single GraphQL type. Exclude it via Meta.exclude, or supply an "
+                    "explicit annotation or resolver.",
+                )
             target_type = registry.get(field.related_model)
             if target_type is None:
                 pending.append(_record_pending_relation(cls, source_model, field))

@@ -6,23 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-### Changed
-- Consolidated completed design-doc content into the user-facing docs, added code-first onboarding, and archived the completed spec files.
 
-## [0.0.4] - 2026-05-07
+## [0.0.4] - 2026-05-08
 ### Added
-- `finalize_django_types()` public API for resolving pending Django relations after all `DjangoType` modules are imported and before Strawberry schema construction.
-- Definition-order-independent relation finalization for FK, reverse FK, OneToOne, reverse OneToOne, and M2M fields, including cyclic graphs declared in either order.
-- `DjangoTypeDefinition` as the canonical per-type metadata object for selected fields, optimizer metadata, lifecycle state, and future subsystem slots.
-- Fail-loud unresolved-target diagnostics that name each source model, field, and missing target model during finalization.
-- Relation-field override contract: consumer annotations are preserved, and consumer-assigned Strawberry fields/resolvers are not clobbered by generated relation resolvers.
-- Registry lifecycle coverage for idempotent finalization, post-finalization registration errors, phase-1 retry behavior, and class-mutation residue after `registry.clear()`.
+- `finalize_django_types()` public API and `DjangoTypeDefinition` metadata layer for definition-order-independent relation finalization before Strawberry schema construction.
+- Relation finalization support for FK, reverse FK, OneToOne, reverse OneToOne, and M2M fields, including cyclic graphs and target types declared in either order.
+- Fail-loud relation diagnostics that name unresolved targets, unsupported relation fields, and duplicate registry/choice-enum collisions instead of surfacing later as vague runtime errors.
+- Relation-field override support that preserves consumer annotations, `strawberry.field` resolvers, and generated resolvers where appropriate.
+- A restructured `examples/fakeshop` project with a real API-testing app, migrations, schema examples, and query tests for validating the package against Django behavior.
 
 ### Changed
-- `DjangoType` subclass creation now collects metadata and pending relations only; Strawberry type finalization and relation resolver attachment happen in `finalize_django_types()`.
-- Optimizer metadata now lives on `DjangoTypeDefinition`, with `_optimizer_field_map`, `_optimizer_hints`, and `_is_default_get_queryset` mirrored on classes for compatibility.
-- `registry.clear()` now resets definitions, pending relations, and finalized state in addition to type/model/enum maps.
-- `DjangoType` now raises `ConfigurationError` at class-creation time when a selected relation field has no concrete target model, such as `GenericForeignKey`; previously this surfaced later as an `AttributeError` during `finalize_django_types()`. Use `Meta.exclude` or an explicit annotation/resolver for these fields.
+- `DjangoType` subclass creation now collects model metadata and pending relations only; Strawberry decoration and generated relation resolver attachment happen during finalization.
+- Optimizer metadata now lives on `DjangoTypeDefinition`, with compatibility mirrors retained on generated classes.
+- Optimizer internals were hardened around context propagation, cache-key generation, field-map resolution, relation-kind classification, prefetch typing, lazy-load detection, and aliased selections with divergent arguments.
+- Settings reload now mutates the existing singleton instance in place, and `registry.clear()` resets definitions, pending relations, finalized state, and class-mutation residue.
+- User-facing docs were consolidated into code-first onboarding, a current feature catalog, architecture notes, testing guidance, and review/inspection documentation.
+- Tests were expanded across settings, registry lifecycle, choice conversion, relation resolution, definition-order cycles, generic foreign keys, optimizer hints, plans, walker behavior, and the fakeshop example.
+
+### Fixed
+- `OptimizerHint` now rejects conflicting flag combinations, and `Meta.optimizer_hints` keys must refer to selected fields.
+- Choice enum conversion now raises `ConfigurationError` for name collisions that would otherwise silently lose values.
+- Unsupported relation fields such as `GenericForeignKey` now raise `ConfigurationError` during annotation building with guidance to exclude or override the field.
+- Relation cache checks now handle single-valued and synthetic Django relation objects more reliably.
 
 ### Removed
 - Removed the unused `TypeRegistry.lazy_ref` placeholder in favor of the package-owned pending-relation registry.

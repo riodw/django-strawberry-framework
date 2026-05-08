@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-05-07
+Last refreshed: 2026-05-08
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -96,7 +96,7 @@ Notes:
 
 - The public shape is intentionally narrow and explicit.
 - Deferred Meta keys are rejected, not silently accepted.
-- Definition-order independence is not part of this completed card; see READY-001.
+- Definition-order independence is now covered by `DONE-006`.
 
 ### DONE-002 — Optimizer O1-O6 foundation
 
@@ -176,7 +176,7 @@ Notes:
 
 - User-facing docs avoid internal slice shorthand; maintainer docs can still use it where useful.
 
-### DONE-005 — 0.0.4 onboarding docs and completed-spec archive
+### DONE-005 — 0.0.4 onboarding docs and spec consolidation
 
 Priority: completed docs cleanup
 
@@ -186,8 +186,8 @@ Scope:
 - `docs/README.md` is code-first: quickstart, three-minute path, optimizer behavior, and status.
 - `docs/FEATURES.md` is the capability catalog with value-led optimizer language and comparison table.
 - `docs/TREE.md` is the detailed layout/test-tree reference.
-- `CHANGELOG.md` is condensed and no longer points at archived design docs.
-- Completed design docs are removed after shipped behavior is folded into docs and future work is preserved here.
+- `CHANGELOG.md` is condensed and no longer relies on design-doc pointers for release context.
+- Completed design-doc content is folded into durable docs, while remaining specs preserve design history and follow-up work.
 
 Evidence:
 
@@ -199,7 +199,7 @@ Evidence:
 
 Notes:
 
-- Future in-flight design docs still use the `docs/spec-<topic>.md` convention, then get folded into durable docs and archived when shipped.
+- Future in-flight design docs still use the `docs/spec-<topic>.md` convention, then get folded into durable docs when shipped.
 
 ### DONE-006 — 0.0.4 foundation slice (definition-order independence)
 
@@ -219,7 +219,7 @@ Scope:
 - Dedicated test files: `tests/types/test_definition_order.py`, `tests/types/test_definition_order_schema.py`, `tests/optimizer/test_definition_order.py`, plus `tests/test_registry.py` extensions for idempotency / phase-1 atomicity / phase-2/3 partial-mutation contract / pending-set cleanup / class-mutation residue.
 - Documentation sweep: `README.md`, `docs/README.md`, `docs/FEATURES.md`, `TODAY.md`, and `CHANGELOG.md`.
 - Version bump to `0.0.4` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`.
-- Deletion of `TypeRegistry.lazy_ref`; removal of the eager `convert_relation` `ConfigurationError` (failure moved into the finalizer).
+- Deletion of `TypeRegistry.lazy_ref`; unsupported and unresolved relations now fail with explicit `ConfigurationError` messages at annotation-building or finalization time.
 
 Evidence:
 
@@ -246,6 +246,81 @@ Notes:
 - The forward-reserved slots on `DjangoTypeDefinition` are the architectural seam where the cookbook-shaped Layer 3 subsystems plug in (each subsystem moves its `Meta` key out of `DEFERRED_META_KEYS`, populates the matching slot in collection, and consumes it during finalization or in `DjangoConnectionField`).
 - The pending-resolution pattern (record at class creation, resolve at finalization, fail loud on missing target with named source model / field / target) generalizes directly to lazy related class references for `RelatedFilter`, `RelatedOrder`, and `RelatedAggregate`.
 - The previous foundation-slice in-progress cards have been retired; this card is their successor in Done.
+
+### DONE-007 — Stale placeholder cleanup
+
+Priority: completed testing/doc cleanup
+
+Status: complete.
+
+Scope:
+
+- Replaced stale M2M and forward-reference skips with definition-order tests.
+- Kept the remaining scalar override skip documented as a separate scalar-field concern under `READY-003`.
+
+Evidence:
+
+- `tests/types/test_definition_order.py`
+- `tests/types/test_definition_order_schema.py`
+- `tests/optimizer/test_definition_order.py`
+- `READY-003`
+
+### DONE-008 — 0.0.4 version and release alignment
+
+Priority: completed release alignment
+
+Status: complete.
+
+Scope:
+
+- Package metadata, runtime version, lockfile, tests, and changelog now agree on `0.0.4`.
+- The changelog entry is condensed for the pre-alpha release and covers the actual commit range through 2026-05-08.
+
+Evidence:
+
+- `pyproject.toml`
+- `django_strawberry_framework/__init__.py`
+- `tests/base/test_init.py`
+- `uv.lock`
+- `CHANGELOG.md`
+
+### DONE-009 — Real M2M coverage
+
+Priority: completed testing-shift hygiene
+
+Status: complete.
+
+Scope:
+
+- Replaced test-only M2M/cardinality fixtures with real managed models in the `library` example app.
+- Added package-level and HTTP-level coverage for M2M traversal and optimizer planning.
+
+Evidence:
+
+- `examples/fakeshop/apps/library/models.py`
+- `examples/fakeshop/test_query/test_library_api.py`
+- `tests/types/test_definition_order.py`
+- `tests/optimizer/test_definition_order.py`
+
+### DONE-010 — Move test fixture out of example settings
+
+Priority: completed testing-shift hygiene
+
+Status: complete.
+
+Scope:
+
+- Removed `tests.fixtures.apps.TestsCardinalityConfig` from the example project.
+- Removed the old unmanaged cardinality fixture files under `tests/fixtures/`.
+- Package tests that need OneToOne / M2M / cardinality coverage now use real models from `examples/fakeshop/apps/library/`.
+
+Evidence:
+
+- `examples/fakeshop/config/settings.py`
+- `examples/fakeshop/apps/library/models.py`
+- `docs/spec-testing_shift.md`
+- `AGENTS.md`
+- `docs/TREE.md`
 
 ## In progress
 No active cards.
@@ -305,7 +380,7 @@ Note: the foundation slice (`DONE-006`) pins the consumer-override contract for 
 
 Current behavior:
 
-- `DjangoType.__init_subclass__` merges consumer annotations over synthesized annotations for both scalar and relation fields, but only the relation-field path will be a stable contract after the foundation slice ships.
+- `DjangoType.__init_subclass__` merges consumer annotations over synthesized annotations for both scalar and relation fields, but only the relation-field path is part of the stable 0.0.4 contract.
 - Strawberry later rewrites class annotation/field metadata for scalars, so the scalar override is not a reliable public contract.
 - `test_consumer_annotation_overrides_synthesized` remains skipped.
 
@@ -404,29 +479,6 @@ Files likely touched:
 - `django_strawberry_framework/types/converters.py`
 - `tests/types/test_converters.py`
 
-### READY-006 — Test/doc cleanup for stale placeholders
-
-Priority: completed
-
-Status: closed by `DONE-006`. The M2M and forward-reference skips were replaced by `tests/types/test_definition_order.py`, `tests/types/test_definition_order_schema.py`, and `tests/optimizer/test_definition_order.py`. The remaining skipped scalar-override test (`test_consumer_annotation_overrides_synthesized`) is documented as a separate scalar-field concern under `READY-003`.
-
-Note: this card is retained for traceability and will be moved to Done in the next Kanban refresh.
-
-### READY-007 — Version and release alignment
-
-Priority: completed
-
-Status: closed by `DONE-006`. The version bump and `[0.0.4]` changelog entry are both complete.
-
-Current behavior:
-
-- `pyproject.toml` version is `0.0.4`.
-- `django_strawberry_framework/__init__.py` version is `0.0.4`.
-- `tests/base/test_init.py` asserts `"0.0.4"`.
-- `uv.lock` is synced.
-- `KANBAN.md` `RELEASE-002` (this card) and `docs/review/REVIEW.md` reference `0.0.4` / `0_0_4`.
-
-Note: the bullet list above is preserved for the historical record.
 
 ## Next up
 
@@ -657,20 +709,6 @@ Definition of done:
 - Add only when at least one shipped feature needs it.
 - Add mirrored `tests/utils/test_queryset.py`.
 
-### BACKLOG-004 — Real M2M coverage
-
-Priority: completed
-
-Status: closed by `DONE-006` and the testing-shift follow-up.
-
-Evidence:
-
-- `examples/fakeshop/apps/library/models.py` defines `Book.genres` / `Genre.books` with real managed tables.
-- `examples/fakeshop/test_query/test_library_api.py` covers M2M traversal and M2M prefetch SQL shape through `/graphql/`.
-- `tests/types/test_definition_order.py::test_many_to_many_forward_and_reverse_relations_resolve` covers forward and reverse M2M.
-- `tests/optimizer/test_definition_order.py::test_plan_relation_decisions_match_cardinality_after_finalization` covers the optimizer's M2M planning decision.
-
-Note: this card is retained for traceability and will be moved to Done in the next Kanban refresh.
 
 ### BACKLOG-005 — Fakeshop GraphQL schema activation
 
@@ -699,7 +737,7 @@ Status: ongoing
 
 Current behavior:
 
-- Top-level exports currently include `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `auto`, and `__version__`.
+- Top-level exports currently include `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto`, and `__version__`.
 - Future names must follow the public-surface promotion discipline in this card.
 - README/TREE language should use the public-surface status vocabulary: `shipped`, `partial`, `experimental`, `planned`, `in flight`, `deferred`, and `aspirational`.
 
@@ -804,22 +842,6 @@ Files likely touched:
 - `docs/README.md`
 - `docs/FEATURES.md`
 
-### BACKLOG-010 — Move test fixture out of example settings (closed)
-
-Priority: completed testing-shift hygiene
-
-Status: closed
-
-Outcome:
-
-- `tests.fixtures.apps.TestsCardinalityConfig` is no longer installed by the example project.
-- The old unmanaged cardinality fixture files under `tests/fixtures/` were removed.
-- Package tests that need OneToOne / M2M / cardinality coverage now use real models from `examples/fakeshop/apps/library/`.
-- The example project no longer references test-only Django apps from production-shaped settings.
-
-Follow-up:
-
-- Keep `docs/spec-testing_shift.md`, `AGENTS.md`, and `docs/TREE.md` aligned with this real-model test substrate.
 
 ### BACKLOG-011 — Layered manual relation override tests
 
@@ -970,7 +992,6 @@ Use this sequence if the goal is to demonstrate the DRF-shaped API surface quick
 10. BACKLOG-011 — keep the layered override-test policy healthy as Strawberry internals and future custom field classes evolve.
 11. BACKLOG-005 — activate the real product-catalog fakeshop GraphQL schema.
 
-`READY-006` (stale-placeholder cleanup) and `BACKLOG-004` (M2M coverage) are closed by `DONE-006`; both will be moved to Done at the next Kanban refresh.
 
 ## Release readiness checklist
 

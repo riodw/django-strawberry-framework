@@ -1024,7 +1024,7 @@ def test_strictness_invalid_value_raises():
 
 @pytest.mark.django_db
 def test_strictness_warn_logs_unplanned_relation(caplog):
-    """B3: strictness='warn' logs a warning for unplanned relation access."""
+    """B3: strictness='warn' logs a warning for unplanned uncached relation access."""
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -1041,35 +1041,22 @@ def test_strictness_warn_logs_unplanned_relation(caplog):
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            # Return a plain list so the optimizer does NOT fire
-            # (no QuerySet -> no plan -> no planned paths).
-            # But strictness sentinel IS stashed because the
-            # optimizer runs _optimize which checks isinstance.
-            # To trigger the warning we need the optimizer to run
-            # but produce a plan that does NOT include "category".
-            # Easiest: query only scalars at root so plan is empty,
-            # then access a relation Strawberry resolves anyway.
-            return list(Item.objects.select_related("category").all())
+            return list(Item.objects.all()[:1])
 
-    ext = DjangoOptimizerExtension(strictness="warn")
     finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[ext])
-    ctx = SimpleNamespace()
+    schema = strawberry.Schema(query=Query)
+    ctx = SimpleNamespace(
+        dst_optimizer_planned=set(),
+        dst_optimizer_strictness="warn",
+    )
 
     caplog.set_level("WARNING", logger="django_strawberry_framework")
-    # Query only scalars — the optimizer produces an empty plan.
-    # But Strawberry still resolves the "category" field via our
-    # resolver, which checks the sentinel.
     result = schema.execute_sync(
         "{ allItems { name category { name } } }",
         context_value=ctx,
     )
     assert result.errors is None
-    # The plan includes "category" because the walker saw the selection.
-    # So no warning should fire for a planned relation.
-    # To test the warning path, we need an UNPLANNED relation.
-    # Verify no warning for planned relation:
-    assert not any("Potential N+1" in r.message for r in caplog.records)
+    assert any("Potential N+1 on category" in r.message for r in caplog.records)
 
 
 @pytest.mark.django_db
@@ -1172,11 +1159,49 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
 
 
 def test_will_lazy_load_false_when_cached():
-    """B3: _will_lazy_load returns False when the relation is already in __dict__."""
+    """B3: pin the __dict__ compatibility seam used by synthetic test doubles."""
     from django_strawberry_framework.types.resolvers import _will_lazy_load
 
     root = SimpleNamespace(category="cached_value")
     assert _will_lazy_load(root, "category") is False
+
+
+def test_will_lazy_load_false_when_in_fields_cache():
+    """B3: _will_lazy_load returns False when a relation is in _state.fields_cache."""
+    from django_strawberry_framework.types.resolvers import _will_lazy_load
+
+    root = SimpleNamespace(_state=SimpleNamespace(fields_cache={"card": "cached"}))
+    assert _will_lazy_load(root, "card") is False
+
+
+@pytest.mark.django_db
+def test_will_lazy_load_false_for_real_forward_fk_in_fields_cache():
+    """B3: real forward FKs cache in _state.fields_cache, not __dict__."""
+    from django_strawberry_framework.types.resolvers import _will_lazy_load
+
+    services.seed_data(1)
+    item = Item.objects.select_related("category").first()
+
+    assert item is not None
+    assert "category" not in item.__dict__
+    assert "category" in item._state.fields_cache
+    assert _will_lazy_load(item, "category") is False
+
+
+@pytest.mark.django_db
+def test_will_lazy_load_false_for_real_reverse_one_to_one_in_fields_cache():
+    """B3: real reverse OneToOne relations also cache in _state.fields_cache."""
+    from apps.library.models import MembershipCard, Patron
+
+    from django_strawberry_framework.types.resolvers import _will_lazy_load
+
+    patron = Patron.objects.create(name="Rio")
+    MembershipCard.objects.create(patron=patron, barcode="1234")
+    cached_patron = Patron.objects.select_related("card").get(pk=patron.pk)
+
+    assert "card" not in cached_patron.__dict__
+    assert "card" in cached_patron._state.fields_cache
+    assert _will_lazy_load(cached_patron, "card") is False
 
 
 def test_will_lazy_load_true_when_not_cached():
@@ -1197,8 +1222,8 @@ def test_will_lazy_load_false_when_prefetched():
 
 
 @pytest.mark.django_db
-def test_strictness_warn_no_warning_for_already_loaded_relation(caplog):
-    """B3: strictness='warn' does NOT warn when the relation is already loaded."""
+def test_strictness_raise_accepts_unplanned_cached_forward_fk():
+    """B3: strictness='raise' accepts an unplanned forward FK that is already loaded."""
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -1215,22 +1240,67 @@ def test_strictness_warn_no_warning_for_already_loaded_relation(caplog):
     class Query:
         @strawberry.field
         def all_items(self) -> list[ItemType]:
-            # select_related pre-loads category -> no lazy load.
-            return list(Item.objects.select_related("category").all())
+            return list(Item.objects.select_related("category").all()[:1])
 
-    ext = DjangoOptimizerExtension(strictness="warn")
     finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[ext])
-    ctx = SimpleNamespace()
+    schema = strawberry.Schema(query=Query)
+    ctx = SimpleNamespace(
+        dst_optimizer_planned=set(),
+        dst_optimizer_strictness="raise",
+    )
 
-    caplog.set_level("WARNING", logger="django_strawberry_framework")
     result = schema.execute_sync(
         "{ allItems { name category { name } } }",
         context_value=ctx,
     )
     assert result.errors is None
-    # No warning because select_related pre-loaded the relation.
-    assert not any("Potential N+1" in r.message for r in caplog.records)
+    assert result.data["allItems"][0]["category"]["name"]
+
+
+@pytest.mark.django_db
+def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
+    """B3: strictness='raise' accepts an unplanned reverse OneToOne already loaded."""
+    from apps.library.models import MembershipCard, Patron
+
+    patron = Patron.objects.create(name="Rio")
+    MembershipCard.objects.create(patron=patron, barcode="1234")
+
+    class CardType(DjangoType):
+        class Meta:
+            model = MembershipCard
+            fields = ("id", "barcode")
+
+    class PatronType(DjangoType):
+        class Meta:
+            model = Patron
+            fields = ("id", "name", "card")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_patrons(self) -> list[PatronType]:
+            return list(Patron.objects.select_related("card").all())
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    ctx = SimpleNamespace(
+        dst_optimizer_planned=set(),
+        dst_optimizer_strictness="raise",
+    )
+
+    result = schema.execute_sync(
+        "{ allPatrons { name card { barcode } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    assert result.data == {
+        "allPatrons": [
+            {
+                "name": "Rio",
+                "card": {"barcode": "1234"},
+            },
+        ],
+    }
 
 
 @pytest.mark.django_db

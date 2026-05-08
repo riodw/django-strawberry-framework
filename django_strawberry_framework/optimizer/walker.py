@@ -486,7 +486,10 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
         key = snake_case(sel.name)
         if key in seen:
             merged = seen[key]
-            merged.selections = list(merged.selections) + list(sel.selections)
+            # Keep duplicate selections as defensive as the first-seen
+            # construction below; Strawberry currently provides a list here,
+            # but some tests and future integration shims may omit it.
+            merged.selections = list(merged.selections) + list(getattr(sel, "selections", None) or [])
             response_key = _response_key(sel)
             if response_key not in merged._optimizer_response_keys:
                 merged._optimizer_response_keys.append(response_key)

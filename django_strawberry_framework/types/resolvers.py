@@ -68,14 +68,22 @@ def _will_lazy_load(root: Any, field_name: str) -> bool:
     """Return ``True`` if accessing ``field_name`` on ``root`` would trigger a query.
 
     Checks Django's caching mechanisms:
-    - Forward FK / OneToOne: cached if ``field_name`` is in ``root.__dict__``
-      (Django stores the loaded related object there after the first access
-      or after ``select_related``).
+    - Single-valued relations (forward FK, forward OneToOne, and reverse
+      OneToOne): real Django model instances cache loaded related objects in
+      ``root._state.fields_cache``.
     - Many-side (reverse FK, M2M): cached if ``field_name`` is in
       ``root._prefetched_objects_cache`` (populated by ``prefetch_related``).
+    - Plain ``__dict__`` values are treated as already loaded for synthetic
+      resolver tests and consumer-provided objects that are not standard
+      Django model instances.
     """
-    # Forward FK / OneToOne: Django caches the related instance in __dict__.
+    # Compatibility for test doubles and non-standard objects. Real Django
+    # relation descriptors cache single-valued relations in _state.fields_cache.
     if field_name in getattr(root, "__dict__", {}):
+        return False
+    state = getattr(root, "_state", None)
+    fields_cache = getattr(state, "fields_cache", {})
+    if field_name in fields_cache:
         return False
     # Many-side: Django caches prefetched querysets in _prefetched_objects_cache.
     prefetch_cache = getattr(root, "_prefetched_objects_cache", {})

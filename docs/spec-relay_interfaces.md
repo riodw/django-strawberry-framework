@@ -4,6 +4,104 @@ Status: final, primary spec for the `0.0.5` slice. This document is the merged, 
 Owner: package maintainer.
 Predecessors: `docs/FEATURES.md`, `GOAL.md`, `KANBAN.md` card `READY-004`.
 Influences: the local checkouts referenced from `docs/TREE.md` — `/Users/riordenweber/projects/strawberry-django-main/strawberry_django` and `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters`.
+## Slice checklist
+Each top-level item maps to one of the five commits in the "Implementation plan" section. Indented items are the discrete sub-parts to complete inside that slice.
+- [ ] Slice 1: Validation + storage
+  - [ ] Keep `"interfaces"` in `DEFERRED_META_KEYS` (`types/base.py:41-56`); promotion deferred to Slice 5
+  - [ ] Extend `_validate_meta` (`types/base.py:243-295`) with the interface validator (Decision 4)
+    - [ ] Tuple / list normalization; reject non-sequence values (sets, generators, single classes)
+    - [ ] Each entry satisfies `hasattr(entry, "__strawberry_definition__") and entry.__strawberry_definition__.is_interface`
+    - [ ] Reject string entries
+    - [ ] Reject `DjangoType` self-reference and other `DjangoType` subclasses
+    - [ ] Reject duplicates
+    - [ ] Composite-pk pre-check when `relay.Node` is present (Decision 2)
+  - [ ] Pass `interfaces=tuple(getattr(meta, "interfaces", ()))` to `DjangoTypeDefinition` at `types/base.py:116-130`
+  - [ ] Validation and lifecycle tests in `tests/types/test_relay_interfaces.py`
+    - [ ] `test_meta_interfaces_accepted`
+    - [ ] `test_meta_interfaces_rejects_non_sequence`
+    - [ ] `test_meta_interfaces_rejects_string_entries`
+    - [ ] `test_meta_interfaces_rejects_non_interface_classes`
+    - [ ] `test_meta_interfaces_rejects_djangotype_self_reference`
+    - [ ] `test_meta_interfaces_rejects_duplicates`
+    - [ ] `test_meta_interfaces_empty_tuple_treated_as_unset`
+    - [ ] `test_meta_interfaces_stored_on_definition`
+    - [ ] `test_class_already_inherits_relay_node_directly`
+    - [ ] `test_relay_node_with_composite_pk_raises`
+- [ ] Slice 2: `is_type_of` injection
+  - [ ] Add `install_is_type_of` helper in new `django_strawberry_framework/types/relay.py`
+  - [ ] Invoke from `DjangoType.__init_subclass__` (`types/base.py:77-138`) for every `DjangoType` subclass
+  - [ ] Preserve consumer-declared `is_type_of` (do not overwrite when present)
+  - [ ] Test: `test_is_type_of_injected_for_all_djangotypes`
+- [ ] Slice 3: `id` suppression
+  - [ ] In `_build_annotations` (`types/base.py:382-431`), drop the `id` key from the synthesized annotations dict when `relay.Node` is among `Meta.interfaces`
+  - [ ] Keep the primary-key field in `DjangoTypeDefinition.field_map` (Decision 7) so the optimizer still sees `id` as a connector column
+  - [ ] Tests
+    - [ ] `test_relay_node_strips_django_id_annotation`
+    - [ ] `test_non_relay_type_keeps_id_int`
+- [ ] Slice 4: Interface base-class injection + Relay resolver defaults
+  - [ ] Populate `django_strawberry_framework/types/relay.py` with the four `_resolve_*_default` implementations
+    - [ ] `_resolve_id_attr_default(cls)` (sync; `super().resolve_id_attr()` with `"pk"` fallback)
+    - [ ] `_resolve_id_default(cls, root, info)` (sync; `__dict__` cache check then `getattr`)
+    - [ ] `_resolve_node_default(cls, info, node_id, required=False)` (sync + async paths per Decision 9)
+    - [ ] `_resolve_nodes_default(cls, info, node_ids=None, required=False)` (sync + async paths per Decision 9)
+  - [ ] Add the helper surface in `types/relay.py`
+    - [ ] `apply_interfaces(type_cls, definition)`
+    - [ ] `implements_relay_node(type_cls)`
+    - [ ] `install_relay_node_resolvers(type_cls)` (uses the `__func__` identity test from Decision 3)
+  - [ ] Insert Phase 2.5 in `finalize_django_types()` (`types/finalizer.py:31-83`) between Phase 2 and Phase 3
+    - [ ] Inject each entry of `definition.interfaces` into `cls.__bases__` (skip those already in `cls.__mro__`)
+    - [ ] Surface `TypeError` from base assignment as `ConfigurationError` naming the offending interface
+    - [ ] Run the composite-pk check when `relay.Node` is among the resolved bases
+    - [ ] Inject the four `resolve_*` defaults via the `__func__` identity test
+  - [ ] Relay Node behavior tests (`tests/types/test_relay_interfaces.py`)
+    - [ ] `test_relay_node_injects_default_resolvers`
+    - [ ] `test_resolve_id_attr_falls_back_to_pk`
+    - [ ] `test_resolve_id_uses_dict_cache`
+    - [ ] `test_resolve_id_falls_back_to_getattr`
+    - [ ] `test_resolve_node_applies_get_queryset`
+    - [ ] `test_resolve_nodes_preserves_order_and_missing`
+    - [ ] `test_resolve_nodes_required_raises_for_missing`
+    - [ ] `test_resolve_node_async_context`
+    - [ ] `test_resolve_nodes_async_context`
+    - [ ] `test_consumer_async_resolve_node_wins`
+    - [ ] `test_consumer_resolve_id_attr_wins`
+    - [ ] `test_consumer_resolve_id_wins`
+    - [ ] `test_consumer_resolve_node_wins`
+    - [ ] `test_consumer_resolve_nodes_wins`
+    - [ ] `test_node_id_annotation_overrides_default_id_attr`
+    - [ ] `test_non_relay_interface_works`
+  - [ ] Optimizer / projection tests (`tests/optimizer/`, Decision 7)
+    - [ ] `test_relay_id_only_projection_includes_pk_attname`
+    - [ ] `test_relay_id_does_not_trigger_lazy_load`
+    - [ ] `test_relay_target_relation_planning_unchanged`
+    - [ ] `test_relay_resolve_id_uses_loaded_pk`
+  - [ ] Schema-construction extensions (`tests/types/test_definition_order_schema.py`)
+    - [ ] Schema includes `Node` interface and `id: GlobalID!` on Relay-declared types
+    - [ ] Mixed Relay / non-Relay types introspect cleanly (no interface bleed)
+  - [ ] Registry idempotency extension (`tests/test_registry.py`): redefining a Relay-declared `DjangoType` after `registry.clear()` works
+  - [ ] HTTP test in `examples/fakeshop/test_query/test_library_api.py` (one `library` model declares `interfaces = (relay.Node,)`; `/graphql/` query selects `id` and a scalar; assert GlobalID round-trip)
+- [ ] Slice 5: Promotion + docs + version
+  - [ ] Move `"interfaces"` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` (`types/base.py:41-56`)
+  - [ ] Doc updates
+    - [ ] `docs/FEATURES.md` — move `Meta.interfaces` and Relay GlobalID mapping from deferred to shipped; add the "Relay Node integration" subsection; update version mention
+    - [ ] `docs/README.md` — add the gated "Relay Node" subsection with a short example next to the quick start
+    - [ ] `TODAY.md` — drop `Meta.interfaces` and `Relay node` from the "wait for" list; update fakeshop guidance if a `library` schema starts using `relay.Node`
+    - [ ] `KANBAN.md` — move `IN-PROGRESS-001` to `DONE-011` with shipped scope, borrowed patterns, and test-file evidence; advance the recommended hybrid sequence past Relay
+    - [ ] `CHANGELOG.md` — `[0.0.5]` Added/Changed entries (see Doc updates section); version bump line
+  - [ ] Version bump
+    - [ ] `pyproject.toml:4`
+    - [ ] `django_strawberry_framework/__init__.py:14`
+    - [ ] `tests/base/test_init.py` assertion
+    - [ ] Regenerate `uv.lock` via `uv lock`
+  - [ ] Cleanup
+    - [ ] Delete `docs/spec-relay_interfaces-1.md`
+    - [ ] Delete `docs/spec-relay_interfaces-2.md`
+    - [ ] Delete `docs/spec-relay_interfaces-3.md`
+  - [ ] Final gates
+    - [ ] `uv run ruff format .` passes
+    - [ ] `uv run ruff check --fix .` passes
+    - [ ] `uv run pytest` passes with 100% package coverage (`fail_under = 100`)
+    - [ ] No new public exports (Definition of done item 11)
 ## Problem statement
 `DjangoType` users cannot declare GraphQL interfaces (Relay `Node` or otherwise) through `class Meta`. Today `Meta.interfaces` is rejected with `ConfigurationError` because the package does not apply it end-to-end. The result is that:
 - `GOAL.md`'s target API (`interfaces = (relay.Node,)`) is unreachable today.

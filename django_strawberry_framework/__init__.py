@@ -12,6 +12,8 @@ from .optimizer.hints import OptimizerHint
 from .types import DjangoType, finalize_django_types
 
 __version__ = "0.0.4"
+# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+# ship Relay interfaces without adding public exports; only the version changes.
 
 __all__ = (
     "DjangoOptimizerExtension",

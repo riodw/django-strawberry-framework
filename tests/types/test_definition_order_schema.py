@@ -9,6 +9,10 @@ from apps.products.models import Category, Item
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.registry import registry
 
+# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+# extend schema-construction coverage so Relay-declared types expose the Node
+# interface and ``id: GlobalID!`` without leaking interfaces to non-Relay types.
+
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():

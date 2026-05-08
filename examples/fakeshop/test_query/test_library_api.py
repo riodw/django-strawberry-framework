@@ -12,6 +12,10 @@ from django.urls import clear_url_caches
 
 from django_strawberry_framework.registry import registry
 
+# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+# add a live HTTP acceptance test for a library DjangoType declaring
+# ``interfaces = (relay.Node,)``; query ``id`` plus a scalar and assert the
+# GlobalID round-trips to the expected database id.
 
 @pytest.fixture(autouse=True)
 def _reload_project_schema_for_acceptance_tests():

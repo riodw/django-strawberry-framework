@@ -22,6 +22,10 @@ from django_strawberry_framework.types import finalizer as finalizer_module
 from django_strawberry_framework.types.relations import PendingRelation, PendingRelationAnnotation
 from django_strawberry_framework.utils.relations import relation_kind
 
+# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+# extend registry lifecycle coverage so ``registry.clear()`` permits fresh
+# Relay-declared DjangoType classes to finalize and register Node metadata.
+
 
 @pytest.fixture
 def fresh_registry() -> TypeRegistry:

@@ -103,6 +103,52 @@ class UpdateItem(DjangoMutation):
 **Why it matters**: production GraphQL APIs need breaking-change detection on every PR. Today teams bolt on `graphql-inspector` (Node.js) or hand-rolled scripts. Nobody in the Django+Python+GraphQL stack ships this. Owning the CI gate is a real CI/CD posture for the package.
 
 **Suggested target**: `0.1.0` or earlier as a standalone management command.
+### 15. Content-versioned Node types with response-extensions gossip
+**What `graphene-django` does**: nothing first-class. Consumers add `version` or `etag` fields manually if they want them; cache invalidation is per-team plumbing.
+
+**What `strawberry-graphql-django` does**: same — nothing declarative. `version` is just a regular field consumers wire up themselves.
+
+**What we'd do**: a declarative `Meta.version` key plus an opt-in Strawberry extension that emits per-Node freshness gossip in the spec-blessed `extensions` envelope. The GlobalID stays stable for identity (Relay-compliant). The `version` field answers "is my cached copy stale?" without breaking any client.
+
+```python path=null start=null
+class ItemType(DjangoType):
+    class Meta:
+        model = Item
+        interfaces = (relay.Node,)
+        version = ("updated_at",)        # tuple of fields to hash, or
+        # version = "auto"               # hash all selected scalar fields, or
+        # version = lambda row: ...      # fully custom callable
+```
+
+Behavior:
+- Auto-adds `version: String!` to the Strawberry type.
+- Default impl: short SHA-256 of the joined values of declared fields (`updated_at` ISO is fine, content hash is fine, monotonic version column is fine).
+- Optional `DjangoVersionExtension` populates `extensions["dst.versions"] = {globalid: version}` for every Node in the response, so freshness info is available even for objects whose `version` field wasn't selected.
+- Optional 30-line Apollo Link reads `extensions["dst.versions"]` and surgically evicts stale cache entries via `cache.evict()`.
+
+**Spec compliance**: the `version` field is a regular `String!`. The `extensions` block is the GraphQL spec's documented vendor extension envelope. Stock Apollo Client without any custom config sees a normal field and a normal response.
+
+**Why it matters**: Apollo and other normalized caches solve "is this the same object?" with `id`. They do not solve "is my cached version stale?" — that's still per-team plumbing. Declarative content versioning is a real production concern that nobody in the Django + GraphQL stack ships first-class. Combined with the Relay slice (`0.0.5`), this gives consumers automatic identity *and* automatic freshness from one Meta declaration.
+
+**Server-side opt-out (the feature is off by default at every layer; it must be turned on intentionally)**:
+- **Per-type**: omit `Meta.version` entirely or set `Meta.version = None`. No `version` field is added; that type is skipped in the extensions gossip even when the extension is installed.
+- **Per-field hash exclusion**: `Meta.version = "auto"` plus `Meta.version_exclude = ("last_login", "view_count")` to skip noisy fields that would make every row look stale every minute.
+- **Per-schema (extension)**: omit `DjangoVersionExtension` from `extensions=[...]`. The `version` field on individual types still works for clients that explicitly query it; no `extensions["dst.versions"]` block is emitted.
+- **Per-request directive**: a `@dstNoVersions` operation directive turns the gossip off for one query. Saves payload bytes for one-shot queries that don't care about freshness.
+- **Per-request header**: `X-DST-Versions: off` for clients that can't easily add operation directives.
+- **Per-resolver**: a `@no_version` decorator on a custom resolver suppresses gossip for that response branch (useful for ephemeral or generated objects that shouldn't pollute the cache).
+- **Per-permission scope**: gossip respects the same field/row visibility filters from item 1; a viewer who can't see a row never sees its version.
+
+**Client-side opt-out (default zero-cost; consumers add features as they need them)**:
+- **Default behavior**: don't query `version`. Standard GraphQL field selection — cost zero, no bytes on the wire, no client work.
+- **Don't install the Apollo Link**: the `extensions["dst.versions"]` block is in the response but Apollo ignores it. The only cost is the response payload size, which can be turned off server-side per the above.
+- **Selective subscription**: the Apollo Link can be configured with `types: ["ItemType", "OrderType"]` to act on specific types only.
+- **Operation-scoped opt-in**: the Link reads a context flag (`context: { dstVersions: false }`) so list/feed queries can skip eviction even when the Link is installed globally.
+- **Eviction policy**: the Link supports `policy: "evict" | "refetch" | "warn"` so consumers choose between dropping the cache entry, re-issuing the query, or just logging the staleness.
+
+Defaults at every layer: feature is **opt-in**. A consumer who never declares `Meta.version` and never installs the extension sees zero behavior change. A consumer who declares `Meta.version` but never installs the extension just gets a queryable `version` field. A consumer who installs the extension but never adds the Apollo Link gets the gossip on the wire but no client-side action. Each layer composes independently so consumers can dial in exactly the cost/benefit they want.
+
+**Suggested target**: `0.0.7` or `0.0.8`. Composes naturally with item 7 (explain extension; same `extensions`-block delivery channel), item 14 (computed fields; the version field is itself a computed field), and item 1 (permissions; gossip respects field-level visibility).
 ## Tier 2: quality-of-life nobody nails
 ### 6. Built-in OpenTelemetry / span integration
 **What `graphene-django` does**: nothing first-class; consumers wire DataDog / Sentry / OTEL by hand around the view.
@@ -204,14 +250,14 @@ class UpdateItem(DjangoMutation):
 For maximum strategic impact after `0.0.5` (Relay) ships:
 
 1. `0.0.6` — Filters / Orders / Aggregates / FieldSets / Connection field. Parity with `django-graphene-filters` / `KANBAN.md` `NEXT-001` through `NEXT-005`. **No `BETTER.md` items yet** — first reach roadmap parity.
-2. `0.0.7` — `Meta.field_overrides` (item 13), `Meta.computed_fields` (item 14), Selection-aware annotations (item 2), Optimizer "explain" extension (item 7). Low-cost ergonomic wins that make `0.0.6` parity feel polished.
+2. `0.0.7` — `Meta.field_overrides` (item 13), `Meta.computed_fields` (item 14), Selection-aware annotations (item 2), Optimizer "explain" extension (item 7), Content-versioned Node types (item 15). Low-cost ergonomic wins that make `0.0.6` parity feel polished. Items 7 and 15 share the `extensions`-block delivery channel and can ship together.
 3. `0.0.8` — Unified permission system (item 1). `KANBAN.md` `NEXT-006` slot.
 4. `0.0.9` — DRF Serializer-driven mutations (item 3). The killer migration story for graphene-django + DRF teams.
 5. `0.1.0` — Polymorphic + GFK support (item 4) + Schema diff CLI (item 5). Production-grade differentiation; first stable release.
 6. `0.1.x` — Soft-delete (item 12), Persisted queries (item 10), OpenTelemetry (item 6), broader Async-native push (item 9).
 7. `0.2.x` — Subscriptions (item 8), Multi-tenant schema variants (item 11). Big bets that need the rest of the foundation.
 
-Items 1, 3, 4, and 5 are the four that, combined, make this package **strictly better** than both competitors rather than just on-par. Everything else is incremental polish layered on top.
+Items 1, 3, 4, 5, and 15 are the five that, combined, make this package **strictly better** than both competitors rather than just on-par. Item 15 in particular pairs with the `0.0.5` Relay foundation to give consumers automatic identity *and* automatic freshness from one declarative Meta surface. Everything else is incremental polish layered on top.
 ## How to use this file
 - When scheduling the next slice after parity items land, pull the highest-priority `BETTER.md` item that isn't already on `KANBAN.md`.
 - Promote it to a `KANBAN.md` `NEXT-NNN` or `READY-NNN` card.

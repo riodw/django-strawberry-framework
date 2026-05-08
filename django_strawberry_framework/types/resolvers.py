@@ -41,6 +41,9 @@ from ..utils.relations import relation_kind
 
 def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
     """Return ``True`` if B2 marked this forward relation as FK-id elided."""
+    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+    # keep Relay GlobalID handling isolated from forward-relation FK-id
+    # elision; Relay id resolution belongs in ``types.relay``.
     elisions = _get_context_value(
         getattr(info, "context", None),
         DST_OPTIMIZER_FK_ID_ELISIONS,

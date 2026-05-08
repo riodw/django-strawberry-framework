@@ -33,5 +33,8 @@ class DjangoTypeDefinition:
     aggregate_class: Any | None = None
     fields_class: Any | None = None
     search_fields: tuple[str, ...] = ()
+    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+    # populate this from accepted ``Meta.interfaces`` and keep it as the
+    # finalizer's source of truth for Phase 2.5 base injection.
     interfaces: tuple[type, ...] = ()
     finalized: bool = field(default=False)

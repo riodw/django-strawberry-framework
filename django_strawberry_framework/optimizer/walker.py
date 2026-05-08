@@ -115,6 +115,10 @@ def _walk_selections(
         if django_field is None:
             continue
         if not django_field.is_relation:
+            # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+            # selecting Relay ``id`` on a Relay-declared DjangoType must still
+            # project the concrete pk attname so ``resolve_id`` can read the
+            # loaded value without lazy loading.
             _append_unique(plan.only_fields, f"{prefix}{django_name}")
             continue
 

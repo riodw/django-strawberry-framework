@@ -73,6 +73,11 @@ def finalize_django_types() -> None:
             definition.selected_fields,
             skip_field_names=definition.consumer_assigned_relation_fields,
         )
+    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+    # insert Phase 2.5 here: apply ``definition.interfaces`` to
+    # ``type_cls.__bases__``, surface incompatible interfaces as
+    # ConfigurationError, reject composite-pk Relay nodes, and install Relay
+    # ``resolve_*`` defaults before Strawberry decorates the class.
 
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:

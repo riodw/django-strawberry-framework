@@ -14,7 +14,6 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
     - [ ] Reject string entries
     - [ ] Reject `DjangoType` self-reference and other `DjangoType` subclasses
     - [ ] Reject duplicates
-    - [ ] Composite-pk pre-check when `relay.Node` is present (Decision 2)
   - [ ] Pass `interfaces=tuple(getattr(meta, "interfaces", ()))` to `DjangoTypeDefinition` at `types/base.py:116-130`
   - [ ] Validation and lifecycle tests in `tests/types/test_relay_interfaces.py`
     - [ ] `test_meta_interfaces_accepted`
@@ -328,7 +327,7 @@ Validation rules:
 - Passing `DjangoType` itself (or another consumer `DjangoType` subclass) as an interface entry raises `ConfigurationError`. `DjangoType` is not a Strawberry interface.
 - Duplicates raise `ConfigurationError`. The `__bases__` injection step can no-op idempotently, but tolerating duplicates here would let typos hide.
 - A class that already inherits from one of the listed interfaces directly (e.g. consumer wrote `class Foo(DjangoType, relay.Node): class Meta: interfaces = (relay.Node,)`) is accepted — the base-injection step is then a structural no-op (`relay.Node in cls.__bases__` is already true).
-- When `relay.Node` is among the interfaces and the model declares a composite primary key (Django 5.2+), `ConfigurationError` is raised at finalization (Decision 2). Validation runs against `meta.model._meta.pk`.
+- The composite-pk constraint from Decision 2 is **not** enforced inside `_validate_meta`. It is enforced once during Phase 2.5 (Decision 5), which runs after `cls.__bases__` is resolved and therefore catches both `Meta.interfaces = (relay.Node,)` consumers and consumers who write `class Foo(DjangoType, relay.Node)` directly. Centralizing the check there avoids duplicating the `model._meta.pk` inspection.
 
 Composition with `Meta.optimizer_hints`: the two keys are independent. `optimizer_hints` continues to apply unchanged. Suppressing the synthesized `id` annotation when `relay.Node` is declared has no effect on the optimizer field map (`FieldMeta` is keyed off Django's field selection, not Strawberry's annotations) — `id` is still selected as the connector column.
 ### Decision 5: lifecycle and idempotency
@@ -429,7 +428,7 @@ The exact public method signatures attached to the class must match Strawberry's
 The slice is small enough to implement as a single PR but easier to review as five commits. Each commit cites the exact `file:line` touched.
 1. **Validation + storage**
    - `types/base.py:41-56`: keep `"interfaces"` in `DEFERRED_META_KEYS` for now (promotion is the last step).
-   - `types/base.py:243-295` (`_validate_meta`): add the interface tuple/duplicate/Strawberry-interface check from Decision 4 (including string-entry rejection, `DjangoType` self-reference rejection, and composite-pk pre-check when `relay.Node` is present).
+   - `types/base.py:243-295` (`_validate_meta`): add the interface tuple/duplicate/Strawberry-interface check from Decision 4 (including string-entry rejection and `DjangoType` self-reference rejection). The composite-pk check is **not** done here — it lives in Phase 2.5 (Slice 4) so a single check site catches both `Meta.interfaces = (relay.Node,)` consumers and consumers who write `class Foo(DjangoType, relay.Node)` directly.
    - `types/base.py:116-130` (the `DjangoTypeDefinition(...)` construction): pass `interfaces=tuple(getattr(meta, "interfaces", ()))` through to the existing `interfaces` slot at `types/definition.py:36`.
    No new slot on `DjangoTypeDefinition`. Justification: Decision 3 explicitly relies on Strawberry's `NodeID` annotation rather than a per-type `id_attr` Meta key, so the slot would be dead state.
 

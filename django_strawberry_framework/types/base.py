@@ -51,6 +51,10 @@ DEFERRED_META_KEYS: frozenset[str] = frozenset(
         # not landed yet. Accepting the key without applying it would
         # silently produce types that look interface-bearing but are
         # not, which is exactly the alpha posture we want to avoid.
+        # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+        # move ``interfaces`` to ALLOWED_META_KEYS only after validation,
+        # storage, base injection, Relay resolver defaults, id suppression,
+        # tests, docs, and the version bump all land.
         "interfaces",
     },
 )
@@ -77,6 +81,9 @@ class DjangoType:
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect model/type metadata without finalizing the Strawberry type."""
         super().__init_subclass__(**kwargs)
+        # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+        # call ``types.relay.install_is_type_of(cls)`` here for every
+        # DjangoType subclass while preserving consumer-declared ``is_type_of``.
         has_custom_get_queryset = _detect_custom_get_queryset(cls)
         cls._is_default_get_queryset = not has_custom_get_queryset
         meta = cls.__dict__.get("Meta")
@@ -113,6 +120,9 @@ class DjangoType:
             source_model=meta.model,
             consumer_authored_fields=consumer_authored_fields,
         )
+        # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+        # pass normalized ``Meta.interfaces`` through to
+        # ``DjangoTypeDefinition.interfaces`` once the key is accepted.
         definition = DjangoTypeDefinition(
             origin=cls,
             model=meta.model,
@@ -272,6 +282,11 @@ def _validate_meta(meta: type) -> None:
     if unknown:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
 
+    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+    # validate ``Meta.interfaces`` as a tuple/list of real Strawberry
+    # interfaces, rejecting strings, non-sequences, duplicates, and
+    # DjangoType self-references before Strawberry decoration.
+
     # B4: validate optimizer_hints field names and value types.
     hints = _meta_optimizer_hints(meta)
     if hints:
@@ -427,6 +442,10 @@ def _build_annotations(
             else:
                 annotations[field.name] = resolved_relation_annotation(field, target_type)
         else:
+            # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+            # when ``relay.Node`` is declared in ``Meta.interfaces``, suppress
+            # the synthesized Django ``id`` annotation while preserving the pk
+            # field in ``DjangoTypeDefinition.field_map`` for optimizer use.
             annotations[field.name] = convert_scalar(field, cls.__name__)
     return annotations, pending
 

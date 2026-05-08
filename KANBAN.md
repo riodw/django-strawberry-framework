@@ -37,7 +37,8 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- No active 0.0.4 foundation tasks. The final release-polish feedback has been applied; optional follow-ups remain tracked in the backlog.
+- `0.0.5` Relay slice has kicked off — card `IN-PROGRESS-001`. Spec is final at [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md); implementation has not started yet. Three superseded drafts (`docs/spec-relay_interfaces-1.md`, `-2.md`, `-3.md`) will be deleted as part of the slice.
+- Strategic differentiation roadmap (post-`0.0.5`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
 
@@ -52,11 +53,11 @@ For install, local development, testing, and the canonical documentation map, st
   - `management/commands/export_schema.py`
   - `utils/queryset.py`
 - Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
+- `Meta.interfaces` / Relay interface wiring is now the active `0.0.5` slice (`IN-PROGRESS-001`); the foundation seam (finalizer phase 3, before `strawberry.type(cls)`, with the slot already on `DjangoTypeDefinition`) is the insertion point pinned in [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md).
 - Several DjangoType contract gaps remain:
   - multiple `DjangoType`s per model / `Meta.primary`
   - stable consumer override semantics for **scalar** fields (the foundation slice pinned the contract for relation fields only)
   - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
-  - `Meta.interfaces` / Relay interface wiring (insertion point: finalizer phase 3, before `strawberry.type(cls)`; the slot is already on `DjangoTypeDefinition`)
   - deferred scalar conversions: `BigIntegerField`, `ArrayField`, `JSONField`, `HStoreField`
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
@@ -323,7 +324,58 @@ Evidence:
 - `docs/TREE.md`
 
 ## In progress
-No active cards.
+
+### IN-PROGRESS-001 — Relay interfaces and Node foundation (`0.0.5`)
+
+Priority: high
+
+Status: spec final, implementation kicking off
+
+Successor of: `READY-004` (retired into this card; the recommended hybrid sequence had this as the next slice).
+
+Spec: [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md). The spec is the merged result of three superseded drafts (`docs/spec-relay_interfaces-1.md`, `-2.md`, `-3.md`); those drafts will be deleted as part of this slice.
+
+Scope (per the spec's Goals):
+
+- Accept `Meta.interfaces` end-to-end so a `DjangoType` can declare any Strawberry-compatible interface.
+- Make `interfaces = (relay.Node,)` produce a working Relay-Node-shaped GraphQL type with `id: GlobalID!` and the four `resolve_*` defaults wired through `cls.get_queryset` and the optimizer extension.
+- Preserve the existing relation-finalization, optimizer, and override contracts shipped in `0.0.4`.
+- `is_type_of` injection for every `DjangoType` (not just Relay-declared ones).
+- Both sync and async paths for `_resolve_node_default` / `_resolve_nodes_default` (Decision 9).
+- Reject composite primary keys with a clear `ConfigurationError` when combined with `relay.Node`.
+- Promote `Meta.interfaces` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only after end-to-end implementation.
+
+Out of scope (tracked elsewhere): `DjangoConnectionField` (`NEXT-005`), cascade permissions (`NEXT-006`), connection-aware optimizer planning (`BACKLOG-012`), `Meta.primary` (`READY-002`), scalar overrides (`READY-003`), and the broader strategic differentiators captured in [`BETTER.md`](BETTER.md).
+
+Definition of done: all 12 items in the spec's "Definition of done" section. Headlines:
+
+- `"interfaces"` moved to `ALLOWED_META_KEYS` and validated per Decision 4.
+- New module `django_strawberry_framework/types/relay.py` with `_resolve_id_attr_default`, `_resolve_id_default`, `_resolve_node_default`, `_resolve_nodes_default`, `apply_interfaces`, `implements_relay_node`, `install_relay_node_resolvers`, `install_is_type_of`.
+- Phase 2.5 added to `finalize_django_types()` between `_attach_relation_resolvers` and `strawberry.type(cls, ...)`.
+- New tests in `tests/types/test_relay_interfaces.py`; extensions in `tests/types/test_definition_order_schema.py`, `tests/optimizer/`, `tests/test_registry.py`, and `examples/fakeshop/test_query/test_library_api.py`.
+- Doc updates to `docs/FEATURES.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, and `CHANGELOG.md`.
+- Version bumped to `0.0.5` and `uv.lock` regenerated.
+- Coverage stays at 100%.
+- No new public exports.
+
+Files likely touched:
+
+- `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/types/finalizer.py`
+- `django_strawberry_framework/types/relay.py` (new)
+- `django_strawberry_framework/types/converters.py`
+- `django_strawberry_framework/types/definition.py`
+- `tests/types/test_relay_interfaces.py` (new)
+- `tests/types/test_definition_order_schema.py`
+- `tests/optimizer/` (extensions)
+- `tests/test_registry.py`
+- `examples/fakeshop/test_query/test_library_api.py`
+- `examples/fakeshop/apps/library/` (at least one model declares `interfaces = (relay.Node,)`)
+- `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`
+- `docs/FEATURES.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, `CHANGELOG.md`
+- Deletion: `docs/spec-relay_interfaces-1.md`, `docs/spec-relay_interfaces-2.md`, `docs/spec-relay_interfaces-3.md`
+
+Successor card: when this lands, move to `DONE-011` (next available `DONE-NNN`) and update the recommended hybrid sequence to advance past Relay.
 
 ## Ready
 
@@ -411,40 +463,6 @@ Files likely touched:
 - `django_strawberry_framework/types/base.py`
 - `django_strawberry_framework/types/resolvers.py`
 - `tests/types/test_base.py`
-
-### READY-004 — Relay and `Meta.interfaces`
-
-Priority: medium-high
-
-Status: blocked on relay design
-
-Current behavior:
-
-- `Meta.interfaces` is rejected as a deferred key.
-- Consumers can subclass Strawberry interfaces directly, but the Meta key is not wired.
-- Primary keys map to `int`, not Relay `GlobalID`.
-
-Why it matters:
-
-- The aspirational fakeshop schema uses `relay.Node`.
-- `DjangoConnectionField` will need a coherent Relay story.
-
-Definition of done:
-
-- New Relay/interface spec.
-- Decide whether `Meta.interfaces` injects bases before `strawberry.type`.
-- Decide whether `AutoField` / `BigAutoField` / `SmallAutoField` mapping for Relay types is automatic, tied to `Meta.interfaces`, or controlled by a `MAP_AUTO_ID_AS_GLOBAL_ID`-style setting.
-- Implement and test `relay.Node` integration.
-- Define how Relay interfaces interact with future connection fields and any future polymorphic-interface story.
-- Move `interfaces` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when it is applied end-to-end.
-
-Files likely touched:
-
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/types/converters.py`
-- future `django_strawberry_framework/connection.py`
-- `tests/types/test_base.py`
-- future connection/relay tests
 
 ### READY-005 — Deferred scalar conversions
 
@@ -912,14 +930,14 @@ Files likely touched:
 
 Blocked by:
 
-- `Meta.interfaces` design
-- `GlobalID` mapping decision
-- `DjangoConnectionField` design
+- `Meta.interfaces` design (in flight as `IN-PROGRESS-001`, `0.0.5`)
+- `GlobalID` mapping decision (resolved in [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md) Decision 2; ships with `IN-PROGRESS-001`)
+- `DjangoConnectionField` design (pending; `NEXT-005`)
 
 Unblocks:
 
 - fakeshop aspirational schema activation
-- Relay node queries
+- Relay node queries (`IN-PROGRESS-001` ships the Node-only half)
 - connection field public surface
 
 ### BLOCKED-002 — Layer 3 Meta key promotion
@@ -959,7 +977,7 @@ Current state:
 
 1. READY-002 — multiple types per model / `Meta.primary`.
 2. READY-003 — consumer override semantics (scalar fields).
-3. READY-004 — Relay / `Meta.interfaces`.
+3. ~~READY-004~~ — Relay / `Meta.interfaces` is now active as `IN-PROGRESS-001` (`0.0.5`).
 4. READY-005 — deferred scalar conversions.
 5. BACKLOG-007 — stable choice enum naming override.
 6. BACKLOG-008 — model-property optimization hints.
@@ -980,7 +998,7 @@ Use this sequence if the goal is to demonstrate the DRF-shaped API surface quick
 
 ### Recommended hybrid (current direction)
 
-1. READY-004 — Relay / `Meta.interfaces`. The forward-reserved slot already exists on `DjangoTypeDefinition` and the finalizer's phase-3 insertion point is ready; this is the cheapest cookbook-shaped feature to land first.
+1. **Active** — `IN-PROGRESS-001` Relay / `Meta.interfaces` (`0.0.5`). Spec final at [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md); implementation kicking off. The forward-reserved slot already exists on `DjangoTypeDefinition` and the finalizer's phase-3 insertion point is ready; this is the cheapest cookbook-shaped feature to land first.
 2. NEXT-001 — `FieldSet`. Smallest Layer 3 slice.
 3. NEXT-002 and NEXT-003 — filters and orders. Both reuse the pending-resolution pattern from the foundation slice for lazy related-class references.
 4. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants (also interacts with the filter input-type factory namespace decision in `NEXT-002`).
@@ -1012,3 +1030,4 @@ Before a release:
 - When a card moves to Done, update the evidence and remove stale blocker language.
 - When a future spec creates a new subsystem, add it here as a card with a definition of done.
 - Keep `CHANGELOG.md` out of routine updates unless explicitly requested.
+- Strategic differentiation candidates (features neither `graphene-django` nor `strawberry-graphql-django` ship cleanly) live in [`BETTER.md`](BETTER.md). When a `BETTER.md` item is scheduled, promote it to a `NEXT-NNN` or `READY-NNN` card here and cross-reference back.

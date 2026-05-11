@@ -1,0 +1,9 @@
+# Python diff review feedback
+
+## Findings
+
+1. `django_strawberry_framework/optimizer/extension.py:295` removes the `**kwargs` path and calls `super().__init__()` without accepting Strawberry's `execution_context` keyword. Strawberry instantiates extension classes with `ext(execution_context=None)`, so `strawberry.Schema(..., extensions=[DjangoOptimizerExtension])` now fails with `TypeError: DjangoOptimizerExtension.__init__() got an unexpected keyword argument 'execution_context'`. This was supported by the previous `**kwargs` pass-through. Keep unknown consumer kwargs rejected, but explicitly accept `execution_context` and forward it to `SchemaExtension.__init__`.
+
+2. `tests/test_registry.py:510` says it pins identity-based `discard_pending`, but the two records are not equal by value because they use different dynamically-created `source_type` classes at lines 521 and 530. An equality-based implementation using `set(resolved)` would also keep `record_b`, so this test would pass against the old behavior. Reuse the same `source_type` for both records, or otherwise make the two `PendingRelation` instances equal by dataclass value while remaining distinct objects.
+
+3. `django_strawberry_framework/conf.py:17` documents that consumer-supplied `None` for `DJANGO_STRAWBERRY_FRAMEWORK` is misconfiguration, but `Settings.user_settings` still coerces it to `{}` at line 62. `django_strawberry_framework/types/base.py:252` does the same for `Meta.optimizer_hints = None`. Either make these paths raise the documented configuration error, or adjust the new docstring/tests so the accepted behavior is unambiguous.

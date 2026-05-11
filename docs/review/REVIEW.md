@@ -2,6 +2,10 @@
 
 This document defines the reusable process for reviewing every file under `django_strawberry_framework/`. It does not track a specific review run. A review run is tracked in a versioned plan file under `docs/review/`.
 
+!!IMPORTANT!!
+Begin by reading README.md and docs/README.md and docs/TREE.md and docs/FEATURES.md and GOAL.md
+Begin by reading README.md and docs/README.md and docs/TREE.md and docs/FEATURES.md and GOAL.md
+
 The standing worker instructions live beside this overview:
 
 - [Worker 0: review coordinator](worker-0.md)

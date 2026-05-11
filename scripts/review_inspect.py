@@ -3,6 +3,10 @@
 The target file is parsed as text/AST only. It is never imported or executed,
 so this helper is safe for files that touch Django settings, registries, or
 Strawberry type creation at import time.
+
+The generated shadow file strips comments and string-literal contents so review
+passes can focus on executable structure. With ``--strip-docstrings``, docstring
+statements are removed entirely instead of being replaced by ``...``.
 """
 
 from __future__ import annotations
@@ -62,6 +66,8 @@ CALLS_OF_INTEREST = {
     "setattr",
     "tuple",
 }
+_FSTRING_START = getattr(tokenize, "FSTRING_START", -1)
+_FSTRING_END = getattr(tokenize, "FSTRING_END", -1)
 
 
 @dataclass(frozen=True)
@@ -135,6 +141,15 @@ class _DocstringRange(NamedTuple):
 
     start: int
     end: int
+
+
+class _TokenRange(NamedTuple):
+    """Source range occupied by a token or token group."""
+
+    start_line: int
+    start_col: int
+    end_line: int
+    end_col: int
 
 
 class _StaticVisitor(ast.NodeVisitor):
@@ -305,7 +320,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--strip-docstrings",
         action="store_true",
-        help="Also strip module/class/function docstrings from the generated shadow file.",
+        help="Remove module/class/function docstring statements entirely from the generated shadow file.",
     )
     parser.add_argument(
         "--outline-only",
@@ -377,6 +392,60 @@ def _strip_comments(source: str) -> str:
     # inline-comment removal does not leave whitespace garbage.  Line
     # numbers are preserved because we rebuild line-for-line.
     return "\n".join(line.rstrip() for line in rebuilt.split("\n"))
+
+
+def _strip_string_literals(source: str) -> str:
+    """Replace string literal tokens with ``...`` in a shadow source file.
+
+    The helper intentionally preserves operators, names, and container shape:
+    ``__all__ = ("A", "B")`` becomes ``__all__ = (..., ...)`` instead of
+    losing the tuple structure. Multiline strings keep the original line count
+    by replacing the first line with ``...`` and blanking the remaining span.
+    """
+    lines = source.splitlines(keepends=True)
+    ranges: list[_TokenRange] = []
+    reader = io.StringIO(source).readline
+    fstring_depth = 0
+    fstring_start: tuple[int, int] | None = None
+    for token in tokenize.generate_tokens(reader):
+        if token.type == tokenize.STRING:
+            ranges.append(_TokenRange(token.start[0], token.start[1], token.end[0], token.end[1]))
+            continue
+        if token.type == _FSTRING_START:
+            if fstring_depth == 0:
+                fstring_start = token.start
+            fstring_depth += 1
+            continue
+        if fstring_depth:
+            if token.type == _FSTRING_START:
+                fstring_depth += 1
+            elif token.type == _FSTRING_END:
+                fstring_depth -= 1
+                if fstring_depth == 0 and fstring_start is not None:
+                    ranges.append(
+                        _TokenRange(fstring_start[0], fstring_start[1], token.end[0], token.end[1]),
+                    )
+                    fstring_start = None
+            continue
+    for token_range in sorted(ranges, reverse=True):
+        _replace_range_with_ellipsis(lines, token_range)
+    return "".join(lines)
+
+
+def _replace_range_with_ellipsis(lines: list[str], token_range: _TokenRange) -> None:
+    """Replace ``token_range`` in ``lines`` with ``...`` while preserving line count."""
+    start_index = token_range.start_line - 1
+    end_index = token_range.end_line - 1
+    if start_index == end_index:
+        lines[start_index] = (
+            f"{lines[start_index][: token_range.start_col]}...{lines[start_index][token_range.end_col :]}"
+        )
+        return
+
+    suffix = lines[end_index][token_range.end_col :]
+    lines[start_index] = f"{lines[start_index][: token_range.start_col]}...{suffix}"
+    for index in range(start_index + 1, end_index + 1):
+        lines[index] = "\n" if lines[index].endswith("\n") else ""
 
 
 def _strip_docstrings(source: str, tree: ast.AST) -> str:
@@ -647,6 +716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     stripped = _strip_comments(source)
     if args.strip_docstrings:
         stripped = _strip_docstrings(stripped, tree)
+    stripped = _strip_string_literals(stripped)
 
     source_lines = source.splitlines()
     visitor = _StaticVisitor(

@@ -81,3 +81,40 @@ def test_reload_settings_updates_already_imported_reference(settings):
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "second"}
     assert bound_settings.FILTER_KEY == "second"
     assert bound_settings is conf.settings
+
+
+# ---------------------------------------------------------------------------
+# Dunder lookups + reload() helper + idempotent signal connect
+# ---------------------------------------------------------------------------
+
+
+def test_settings_dunder_lookup_raises_plain_attributeerror():
+    """Dunder probes from introspection tools must not surface as 'Invalid setting'."""
+    s = Settings({})
+    with pytest.raises(AttributeError) as exc:
+        s.__wrapped__
+    assert "Invalid setting" not in str(exc.value)
+
+
+def test_settings_reload_replaces_cached_mapping():
+    s = Settings({"A": 1})
+    s.reload({"B": 2})
+    assert s.user_settings == {"B": 2}
+
+
+def test_settings_reload_with_none_restores_lazy_load():
+    s = Settings({"A": 1})
+    s.reload(None)
+    assert s._user_settings is None
+
+
+def test_setting_changed_receiver_uses_dispatch_uid():
+    """Re-connecting with the same dispatch_uid must be a no-op."""
+    from django.test.signals import setting_changed
+
+    from django_strawberry_framework.conf import _DISPATCH_UID, reload_settings
+
+    before = len(setting_changed.receivers)
+    setting_changed.connect(reload_settings, dispatch_uid=_DISPATCH_UID)
+    after = len(setting_changed.receivers)
+    assert before == after

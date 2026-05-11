@@ -1,6 +1,6 @@
 # Spec: Relay Interfaces and Node Foundation
 Target release: `0.0.5`.
-Status: final, primary spec for the `0.0.5` slice. This document is the merged, canonical result of three superseded drafts (`docs/spec-relay_interfaces-1.md`, `docs/spec-relay_interfaces-2.md`, `docs/spec-relay_interfaces-3.md`). When this spec is approved, those three drafts are deleted and this file becomes the single source of truth for the `READY-004` slice.
+Status: final, primary spec for the `0.0.5` slice. This document is the merged, canonical result of three superseded drafts; drafts `-1.md` and `-2.md` have already been removed and only `docs/spec-relay_interfaces-3.md` remains to be deleted as part of this slice, after which this file becomes the single source of truth for the `READY-004` slice.
 Owner: package maintainer.
 Predecessors: `docs/FEATURES.md`, `GOAL.md`, `KANBAN.md` card `READY-004`.
 Influences: the local checkouts referenced from `docs/TREE.md` — `/Users/riordenweber/projects/strawberry-django-main/strawberry_django` and `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters`.
@@ -93,9 +93,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
     - [ ] `tests/base/test_init.py` assertion
     - [ ] Regenerate `uv.lock` via `uv lock`
   - [ ] Cleanup
-    - [ ] Delete `docs/spec-relay_interfaces-1.md`
-    - [ ] Delete `docs/spec-relay_interfaces-2.md`
-    - [ ] Delete `docs/spec-relay_interfaces-3.md`
+    - [ ] Delete `docs/spec-relay_interfaces-3.md` (drafts `-1.md` and `-2.md` were already removed in an earlier cleanup)
   - [ ] Final gates
     - [ ] `uv run ruff format .` passes
     - [ ] `uv run ruff check --fix .` passes

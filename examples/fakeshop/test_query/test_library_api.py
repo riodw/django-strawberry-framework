@@ -17,6 +17,7 @@ from django_strawberry_framework.registry import registry
 # ``interfaces = (relay.Node,)``; query ``id`` plus a scalar and assert the
 # GlobalID round-trips to the expected database id.
 
+
 @pytest.fixture(autouse=True)
 def _reload_project_schema_for_acceptance_tests():
     """Recreate imported DjangoType classes if package tests cleared the registry."""

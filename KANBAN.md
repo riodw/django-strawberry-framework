@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-05-08
+Last refreshed: 2026-05-11
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -37,7 +37,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.5` Relay slice has kicked off — card `IN-PROGRESS-001`. Spec is final at [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md); implementation has not started yet. Three superseded drafts (`docs/spec-relay_interfaces-1.md`, `-2.md`, `-3.md`) will be deleted as part of the slice.
+- `0.0.5` Relay slice is the active work item — card `IN-PROGRESS-001`. Spec is final at [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md), and the Kanban card mirrors the spec's slice checklist so implementation can be tracked from either document. The remaining superseded draft (`docs/spec-relay_interfaces-3.md`) will be deleted as part of the slice.
 - Strategic differentiation roadmap (post-`0.0.5`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -329,11 +329,11 @@ Evidence:
 
 Priority: high
 
-Status: spec final, implementation kicking off
+Status: active implementation issue; spec final and checklist mirrored below
 
 Successor of: `READY-004` (retired into this card; the recommended hybrid sequence had this as the next slice).
 
-Spec: [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md). The spec is the merged result of three superseded drafts (`docs/spec-relay_interfaces-1.md`, `-2.md`, `-3.md`); those drafts will be deleted as part of this slice.
+Spec: [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md). The spec is the merged result of three superseded drafts; the remaining one (`docs/spec-relay_interfaces-3.md`) will be deleted as part of this slice.
 
 Scope (per the spec's Goals):
 
@@ -344,6 +344,42 @@ Scope (per the spec's Goals):
 - Both sync and async paths for `_resolve_node_default` / `_resolve_nodes_default` (Decision 9).
 - Reject composite primary keys with a clear `ConfigurationError` when combined with `relay.Node`.
 - Promote `Meta.interfaces` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only after end-to-end implementation.
+
+Spec checklist mirror:
+
+- Slice 1 — validation and storage:
+  - Keep `"interfaces"` in `DEFERRED_META_KEYS` until promotion in Slice 5.
+  - Extend `_validate_meta` with `Meta.interfaces` validation.
+  - Normalize only tuple/list input; reject sets, generators, and a single class value.
+  - Require every entry to be a real Strawberry interface.
+  - Reject string entries, self-reference to the current `DjangoType`, any other `DjangoType` subclass, and duplicates.
+  - Store the normalized interfaces tuple on `DjangoTypeDefinition`.
+  - Add `tests/types/test_relay_interfaces.py` coverage for validation, storage, deferred-key lifecycle, and non-Relay interface declaration.
+- Slice 2 — `is_type_of` injection:
+  - Add `install_is_type_of`.
+  - Invoke it from `DjangoType.__init_subclass__` for every `DjangoType`.
+  - Preserve a consumer-authored `is_type_of`.
+  - Add `test_is_type_of_injected_for_all_djangotypes`.
+- Slice 3 — `id` suppression for Relay Node types:
+  - Suppress the synthesized Django `id` annotation when a type implements `relay.Node`.
+  - Keep the model primary-key field in `field_map` so optimizer/projection logic can still reason about it.
+  - Add `test_relay_node_strips_django_id_annotation` and `test_non_relay_type_keeps_id_int`.
+- Slice 4 — interface base-class injection and Relay resolver defaults:
+  - Implement `_resolve_id_attr_default`, `_resolve_id_default`, `_resolve_node_default`, and `_resolve_nodes_default`.
+  - Add `apply_interfaces`, `implements_relay_node`, and `install_relay_node_resolvers`.
+  - Add finalizer phase 2.5 before `strawberry.type(cls, ...)` for base injection, Strawberry `TypeError` to `ConfigurationError` translation, composite-pk rejection, and Relay resolver injection.
+  - Add Relay Node behavior tests covering schema construction, GlobalID shape, sync/async single-node lookup, sync/async multi-node lookup, missing nodes, and `get_queryset` filtering.
+  - Add optimizer/projection tests for Relay Node selections, `id`-only projections, relation selections under Relay types, and `get_queryset`-aware node lookup.
+  - Extend schema construction tests for relation finalization plus interface injection.
+  - Extend registry idempotency tests for repeated finalization with interfaces.
+  - Add a live HTTP GlobalID round-trip in `examples/fakeshop/test_query/test_library_api.py`.
+- Slice 5 — promotion, docs, and release:
+  - Move `"interfaces"` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
+  - Update `docs/FEATURES.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, and `CHANGELOG.md`.
+  - Bump the version in `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
+  - Delete `docs/spec-relay_interfaces-3.md` (the remaining superseded draft).
+  - Run final gates: `uv run ruff format .`, `uv run ruff check --fix .`, and `uv run pytest` with 100% package coverage.
+  - Confirm no new public exports.
 
 Out of scope (tracked elsewhere): `DjangoConnectionField` (`NEXT-005`), cascade permissions (`NEXT-006`), connection-aware optimizer planning (`BACKLOG-012`), `Meta.primary` (`READY-002`), scalar overrides (`READY-003`), and the broader strategic differentiators captured in [`BETTER.md`](BETTER.md).
 
@@ -373,7 +409,7 @@ Files likely touched:
 - `examples/fakeshop/apps/library/` (at least one model declares `interfaces = (relay.Node,)`)
 - `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`
 - `docs/FEATURES.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, `CHANGELOG.md`
-- Deletion: `docs/spec-relay_interfaces-1.md`, `docs/spec-relay_interfaces-2.md`, `docs/spec-relay_interfaces-3.md`
+- Deletion: `docs/spec-relay_interfaces-3.md`
 
 Successor card: when this lands, move to `DONE-011` (next available `DONE-NNN`) and update the recommended hybrid sequence to advance past Relay.
 
@@ -998,7 +1034,7 @@ Use this sequence if the goal is to demonstrate the DRF-shaped API surface quick
 
 ### Recommended hybrid (current direction)
 
-1. **Active** — `IN-PROGRESS-001` Relay / `Meta.interfaces` (`0.0.5`). Spec final at [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md); implementation kicking off. The forward-reserved slot already exists on `DjangoTypeDefinition` and the finalizer's phase-3 insertion point is ready; this is the cheapest cookbook-shaped feature to land first.
+1. **Active** — `IN-PROGRESS-001` Relay / `Meta.interfaces` (`0.0.5`). Spec final at [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md); checklist mirrored in the active card. The forward-reserved slot already exists on `DjangoTypeDefinition` and the finalizer's phase-3 insertion point is ready; this is the cheapest cookbook-shaped feature to land first.
 2. NEXT-001 — `FieldSet`. Smallest Layer 3 slice.
 3. NEXT-002 and NEXT-003 — filters and orders. Both reuse the pending-resolution pattern from the foundation slice for lazy related-class references.
 4. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants (also interacts with the filter input-type factory namespace decision in `NEXT-002`).

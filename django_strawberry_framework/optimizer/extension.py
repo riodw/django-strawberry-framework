@@ -52,7 +52,7 @@ from ._context import (
 from ._context import (
     stash_on_context as _stash_on_context,
 )
-from .hints import OptimizerHint
+from .hints import hint_is_skip
 from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
 from .walker import plan_optimizations, plan_relation
 
@@ -83,7 +83,7 @@ def _collect_directive_var_names(
     named fragments are included in the cache key.
     """
     names: set[str] = set()
-    _walk_directives(node, names, fragments or {})
+    _walk_directives(node, names, fragments or {}, set())
     return frozenset(names)
 
 
@@ -91,6 +91,7 @@ def _walk_directives(
     node: Any,
     names: set[str],
     fragments: dict[str, Any],
+    visited_fragments: set[str],
 ) -> None:
     """Recursive helper: descend into selections and collect directive var names.
 
@@ -121,12 +122,18 @@ def _walk_directives(
             # Always recurse into the child first so directives attached
             # to the child itself are collected (FragmentSpreadNode has
             # no ``selection_set`` so this is just the directive sweep).
-            _walk_directives(child, names, fragments)
+            _walk_directives(child, names, fragments, visited_fragments)
             if isinstance(child, FragmentSpreadNode):
                 frag_name = child.name.value if child.name else None
-                frag_def = fragments.get(frag_name) if frag_name else None
-                if frag_def is not None:
-                    _walk_directives(frag_def, names, fragments)
+                if frag_name is None or frag_name in visited_fragments:
+                    continue
+                frag_def = fragments.get(frag_name)
+                if frag_def is None:
+                    continue
+                # Mark before descending so a sibling spread of the same
+                # fragment in this operation does not re-walk the subtree.
+                visited_fragments.add(frag_name)
+                _walk_directives(frag_def, names, fragments, visited_fragments)
 
 
 class CacheInfo(NamedTuple):
@@ -152,6 +159,18 @@ _printed_ast_cache: ContextVar[dict[int, str] | None] = ContextVar(
     "django_strawberry_framework_optimizer_printed_ast_cache",
     default=None,
 )
+
+
+def _unwrap_gql_type(gql_type: Any) -> Any:
+    """Peel graphql-core ``GraphQLNonNull`` / ``GraphQLList`` wrappers.
+
+    Centralises the ``while hasattr(t, "of_type")`` loop so the
+    schema-reachability walker and the return-type tracer share one
+    implementation.
+    """
+    while hasattr(gql_type, "of_type"):
+        gql_type = gql_type.of_type
+    return gql_type
 
 
 def _strawberry_schema_from_schema(schema: Any) -> Any:
@@ -192,9 +211,7 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
 
     def _walk_gql_type(gql_type: Any) -> None:
         """Recursively collect DjangoType origins from a graphql-core type."""
-        # Unwrap NonNull / List wrappers.
-        while hasattr(gql_type, "of_type"):
-            gql_type = gql_type.of_type
+        gql_type = _unwrap_gql_type(gql_type)
         type_name = getattr(gql_type, "name", None)
         if type_name is None or type_name in visited_type_names:
             return
@@ -207,10 +224,11 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
         )
         if definition is not None:
             origin = getattr(definition, "origin", None)
-            # TODO(post-foundation): after ``DjangoTypeDefinition`` is the
-            # only optimizer metadata source, identify Django types through
-            # ``registry.get_definition(origin)`` instead of the legacy
-            # ``_optimizer_field_map`` compatibility mirror.
+            # TODO(spec-fieldmeta-mirror-retirement): after
+            # ``DjangoTypeDefinition`` is the only optimizer metadata source,
+            # identify Django types through ``registry.get_definition(origin)``
+            # instead of the legacy ``_optimizer_field_map`` compatibility
+            # mirror.
             if origin is not None and hasattr(origin, "_optimizer_field_map"):
                 reachable.add(origin)
         # Recurse into fields.
@@ -239,9 +257,7 @@ def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
     leaf, missing schema backref). The caller treats ``None`` as
     "nothing to optimize" and passes the queryset through unchanged.
     """
-    rt = info.return_type
-    while hasattr(rt, "of_type"):
-        rt = rt.of_type
+    rt = _unwrap_gql_type(info.return_type)
     type_name = getattr(rt, "name", None)
     if type_name is None:
         return None
@@ -279,9 +295,16 @@ class DjangoOptimizerExtension(SchemaExtension):
     def __init__(
         self,
         strictness: str = "off",
-        **kwargs: Any,
+        *,
+        execution_context: Any = None,
     ) -> None:
-        super().__init__(**kwargs)
+        # Explicitly accept ``execution_context`` because Strawberry
+        # instantiates extension classes with that keyword when an
+        # extension *class* (not an instance) is passed in
+        # ``extensions=[...]``. Unknown consumer kwargs still raise
+        # ``TypeError`` at construction so typos (``strict=True``) surface
+        # at the call site rather than being silently absorbed.
+        super().__init__(execution_context=execution_context)
         if strictness not in ("off", "warn", "raise"):
             msg = f"strictness must be 'off', 'warn', or 'raise', got {strictness!r}"
             raise ValueError(msg)
@@ -461,9 +484,9 @@ class DjangoOptimizerExtension(SchemaExtension):
         for _model, type_cls in registry.iter_types():
             if type_cls not in reachable:
                 continue
-            # TODO(post-foundation): after the foundation compatibility
-            # window, read ``field_map`` and ``optimizer_hints`` from
-            # ``registry.get_definition(type_cls)`` instead of the legacy
+            # TODO(spec-fieldmeta-mirror-retirement): after the foundation
+            # compatibility window, read ``field_map`` and ``optimizer_hints``
+            # from ``registry.get_definition(type_cls)`` instead of the legacy
             # class-attribute mirrors.
             field_map = getattr(type_cls, "_optimizer_field_map", None)
             if field_map is None:
@@ -473,8 +496,7 @@ class DjangoOptimizerExtension(SchemaExtension):
                 if not meta.is_relation:
                     continue
                 # Skip fields opted out via OptimizerHint.SKIP.
-                hint = hints.get(field_name)
-                if hint is not None and (hint is OptimizerHint.SKIP or hint.skip):
+                if hint_is_skip(hints.get(field_name)):
                     continue
                 if meta.related_model is not None and registry.get(meta.related_model) is None:
                     warnings.append(

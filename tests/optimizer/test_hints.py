@@ -162,3 +162,16 @@ class TestConflictingFlagsRejected:
 
         with pytest.raises(ConfigurationError, match="prefetch_obj"):
             OptimizerHint(prefetch_obj=Prefetch("items"), force_prefetch=True)
+
+    def test_prefetch_obj_rejects_non_prefetch_value(self) -> None:
+        """Pins ``rev-optimizer__hints.md`` Medium: ``prefetch(obj)`` must
+        receive a ``Prefetch`` instance; the previous ``obj: Any`` factory
+        signature let strings or other shapes through ``__post_init__`` and
+        crash later in the walker.  Reject at construction time instead.
+        """
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="Prefetch"):
+            OptimizerHint.prefetch("entries__items")  # type: ignore[arg-type]
+        with pytest.raises(ConfigurationError, match="Prefetch"):
+            OptimizerHint(prefetch_obj="entries__items")  # type: ignore[arg-type]

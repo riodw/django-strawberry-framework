@@ -125,6 +125,82 @@ class TestOptimizationPlanApply:
         assert is_deferred is False
 
 
+class TestOptimizationPlanFinalize:
+    """``finalize`` swaps mutable list fields for tuples so post-handoff mutation raises."""
+
+    def test_finalize_returns_tuples_for_list_fields(self):
+        plan = OptimizationPlan(
+            select_related=["category"],
+            prefetch_related=["items"],
+            only_fields=["name"],
+            fk_id_elisions=["ItemType.category@x"],
+            planned_resolver_keys=["ItemType.entries@x"],
+        )
+        finalized = plan.finalize()
+        assert isinstance(finalized.select_related, tuple)
+        assert isinstance(finalized.prefetch_related, tuple)
+        assert isinstance(finalized.only_fields, tuple)
+        assert isinstance(finalized.fk_id_elisions, tuple)
+        assert isinstance(finalized.planned_resolver_keys, tuple)
+
+    def test_finalize_preserves_values_and_cacheable_flag(self):
+        plan = OptimizationPlan(select_related=["a", "b"], cacheable=False)
+        finalized = plan.finalize()
+        assert finalized.select_related == ("a", "b")
+        assert finalized.cacheable is False
+
+    def test_finalize_blocks_post_handoff_append_on_cache_isolation(self):
+        plan = OptimizationPlan(prefetch_related=["items"]).finalize()
+        # Tuple has no ``append``; mutation attempts raise AttributeError
+        # rather than silently poisoning the plan-cache entry for the
+        # next request.
+        import pytest
+
+        with pytest.raises(AttributeError):
+            plan.prefetch_related.append("new")  # type: ignore[attr-defined]
+
+    def test_finalize_is_idempotent(self):
+        plan = OptimizationPlan(select_related=["a"]).finalize()
+        again = plan.finalize()
+        assert again.select_related == ("a",)
+        assert isinstance(again.select_related, tuple)
+
+    def test_apply_works_on_finalized_plan(self):
+        plan = OptimizationPlan(select_related=["category"]).finalize()
+        qs = Item.objects.all()
+        result = plan.apply(qs)
+        assert "category" in result.query.select_related
+
+
+class TestPlanHelperRelocations:
+    """``append_unique`` / ``append_unique_many`` / ``append_prefetch_unique`` live with the plan shape."""
+
+    def test_append_unique_skips_existing_value(self):
+        from django_strawberry_framework.optimizer.plans import append_unique
+
+        values: list[str] = ["a"]
+        append_unique(values, "a")
+        append_unique(values, "b")
+        assert values == ["a", "b"]
+
+    def test_append_unique_many_iterates_tuple(self):
+        from django_strawberry_framework.optimizer.plans import append_unique_many
+
+        values: list[str] = []
+        append_unique_many(values, ("a", "b", "a"))
+        assert values == ["a", "b"]
+
+    def test_append_prefetch_unique_dedupes_by_lookup_path(self):
+        from django_strawberry_framework.optimizer.plans import append_prefetch_unique
+
+        first = Prefetch("items", queryset=Item.objects.all())
+        second = Prefetch("items", queryset=Item.objects.filter(pk__gt=0))
+        values: list = []
+        append_prefetch_unique(values, first)
+        append_prefetch_unique(values, second)
+        assert values == [first]
+
+
 class TestFlattenSelectRelated:
     """``_flatten_select_related`` normalizes Django's three select_related shapes."""
 
@@ -162,7 +238,7 @@ class TestDiffPlanForQueryset:
         qs = Item.objects.select_related("category")
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
         assert delta_plan is not plan
-        assert delta_plan.select_related == []
+        assert delta_plan.select_related == ()
         assert delta_qs is qs
         # Original plan is untouched — B1 caches it across requests.
         assert plan.select_related == ["category"]
@@ -171,7 +247,7 @@ class TestDiffPlanForQueryset:
         plan = OptimizationPlan(select_related=["item__category"])
         qs = Entry.objects.select_related("item__category")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.select_related == []
+        assert delta_plan.select_related == ()
 
     def test_wildcard_select_related_does_not_drop_explicit_entries(self):
         # P2: ``select_related()`` follows only non-null FKs; the
@@ -187,20 +263,20 @@ class TestDiffPlanForQueryset:
         plan = OptimizationPlan(prefetch_related=["items"])
         qs = Category.objects.prefetch_related("items")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == []
+        assert delta_plan.prefetch_related == ()
         assert plan.prefetch_related == ["items"]
 
     def test_consumer_prefetch_object_suppresses_plan_string(self):
         plan = OptimizationPlan(prefetch_related=["items"])
         qs = Category.objects.prefetch_related(Prefetch("items", queryset=Item.objects.all()))
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == []
+        assert delta_plan.prefetch_related == ()
 
     def test_partial_overlap_keeps_remaining_entries(self):
         plan = OptimizationPlan(select_related=["item", "property"])
         qs = Entry.objects.select_related("item")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.select_related == ["property"]
+        assert delta_plan.select_related == ("property",)
         assert plan.select_related == ["item", "property"]
 
     def test_carries_over_metadata_fields(self):
@@ -213,9 +289,9 @@ class TestDiffPlanForQueryset:
         )
         qs = Item.objects.select_related("category")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.only_fields == ["name"]
-        assert delta_plan.fk_id_elisions == ["ItemType.category@allItems.category"]
-        assert delta_plan.planned_resolver_keys == ["ItemType.category@allItems.category"]
+        assert delta_plan.only_fields == ("name",)
+        assert delta_plan.fk_id_elisions == ("ItemType.category@allItems.category",)
+        assert delta_plan.planned_resolver_keys == ("ItemType.category@allItems.category",)
         assert delta_plan.cacheable is False
 
     def test_consumer_descendant_string_absorbed_by_optimizer_prefetch(self):
@@ -230,7 +306,7 @@ class TestDiffPlanForQueryset:
         plan = OptimizationPlan(prefetch_related=[outer])
         qs = Category.objects.prefetch_related("items__entries")
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == [outer]
+        assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
         assert delta_qs._prefetch_related_lookups == ()
 
@@ -245,7 +321,7 @@ class TestDiffPlanForQueryset:
         plan = OptimizationPlan(prefetch_related=[outer])
         qs = Category.objects.prefetch_related("items", "items__entries")
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == [outer]
+        assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
         assert delta_qs._prefetch_related_lookups == ()
 
@@ -258,7 +334,7 @@ class TestDiffPlanForQueryset:
         plan = OptimizationPlan(prefetch_related=[outer])
         qs = Category.objects.prefetch_related("items__entries")
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == []
+        assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
         assert {getattr(e, "prefetch_to", e) for e in delta_qs._prefetch_related_lookups} == {
             "items__entries",
@@ -273,7 +349,7 @@ class TestDiffPlanForQueryset:
         plan = OptimizationPlan(prefetch_related=[outer])
         qs = Category.objects.prefetch_related("items__entries", "items__properties")
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == []
+        assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
 
     def test_consumer_descendant_with_custom_prefetch_drops_optimizer(self):
@@ -287,7 +363,7 @@ class TestDiffPlanForQueryset:
         consumer_descendant = Prefetch("items__entries", queryset=Entry.objects.all())
         qs = Category.objects.prefetch_related(consumer_descendant)
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == []
+        assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
         assert delta_qs._prefetch_related_lookups == (consumer_descendant,)
 
@@ -302,7 +378,7 @@ class TestDiffPlanForQueryset:
         plan = OptimizationPlan(prefetch_related=[outer])
         qs = Category.objects.prefetch_related("items")
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == [outer]
+        assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
         assert delta_qs._prefetch_related_lookups == ()
 
@@ -316,7 +392,7 @@ class TestDiffPlanForQueryset:
         unrelated = Prefetch("properties", queryset=Property.objects.all())
         qs = Category.objects.prefetch_related("items", unrelated)
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == [outer]
+        assert delta_plan.prefetch_related == (outer,)
         assert delta_qs is not qs
         assert delta_qs._prefetch_related_lookups == (unrelated,)
 
@@ -330,6 +406,6 @@ class TestDiffPlanForQueryset:
         plan = OptimizationPlan(prefetch_related=[opt_pf])
         qs = Category.objects.prefetch_related(consumer_pf)
         delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
-        assert delta_plan.prefetch_related == []
+        assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
         assert delta_qs._prefetch_related_lookups == (consumer_pf,)

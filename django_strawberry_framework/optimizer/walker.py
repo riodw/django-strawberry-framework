@@ -12,8 +12,15 @@ from ..registry import registry
 from ..utils.relations import relation_kind
 from ..utils.strings import snake_case
 from . import logger
-from .hints import OptimizerHint
-from .plans import OptimizationPlan, _lookup_path, resolver_key, runtime_path_from_info
+from .hints import OptimizerHint, hint_is_skip
+from .plans import (
+    OptimizationPlan,
+    append_prefetch_unique,
+    append_unique,
+    append_unique_many,
+    resolver_key,
+    runtime_path_from_info,
+)
 
 
 def plan_optimizations(
@@ -30,7 +37,11 @@ def plan_optimizations(
         info=info,
         runtime_prefixes=(runtime_path_from_info(info),),
     )
-    return plan
+    # Finalise at handoff: list fields become tuples so post-walker
+    # mutation (by callers, the plan cache, or downstream resolvers)
+    # raises ``AttributeError`` instead of silently corrupting the
+    # cached plan for subsequent requests.
+    return plan.finalize()
 
 
 def plan_relation(
@@ -46,7 +57,7 @@ def plan_relation(
             target_type.__name__,
         )
         return ("prefetch", "custom_get_queryset")
-    if relation_kind(field) == "many":
+    if relation_kind(field) in ("many", "reverse_many_to_one"):
         return ("prefetch", "default")
     return ("select", "default")
 
@@ -61,10 +72,11 @@ def _resolve_field_map(model: type[models.Model]) -> tuple[type | None, dict[str
     by the walker.
     """
     type_cls = registry.get(model)
-    # TODO(post-foundation): once the one-minor compatibility mirror from
-    # ``DjangoTypeDefinition.field_map`` to ``type_cls._optimizer_field_map``
-    # is removed, read through ``registry.get_definition(type_cls)`` here
-    # instead of the legacy class attribute.
+    # TODO(spec-fieldmeta-mirror-retirement): once the one-minor compatibility
+    # mirror from ``DjangoTypeDefinition.field_map`` to
+    # ``type_cls._optimizer_field_map`` is removed, read through
+    # ``registry.get_definition(type_cls)`` here instead of the legacy class
+    # attribute.
     cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
     field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
     return type_cls, field_map
@@ -119,7 +131,7 @@ def _walk_selections(
             # selecting Relay ``id`` on a Relay-declared DjangoType must still
             # project the concrete pk attname so ``resolve_id`` can read the
             # loaded value without lazy loading.
-            _append_unique(plan.only_fields, f"{prefix}{django_name}")
+            append_unique(plan.only_fields, f"{prefix}{django_name}")
             continue
 
         full_path = f"{prefix}{django_name}"
@@ -135,10 +147,12 @@ def _walk_selections(
             registry.get(django_field.related_model) if django_field.related_model is not None else None
         )
 
-        # TODO(post-foundation): after the compatibility mirror is removed,
-        # read optimizer hints from ``registry.get_definition(type_cls)``
-        # instead of the legacy ``_optimizer_hints`` class attribute.
-        hint = getattr(type_cls, "_optimizer_hints", {}).get(django_name) if type_cls is not None else None
+        # TODO(spec-fieldmeta-mirror-retirement): after the compatibility
+        # mirror is removed, read optimizer hints from
+        # ``registry.get_definition(type_cls)`` instead of the legacy
+        # ``_optimizer_hints`` class attribute.
+        hints_map = getattr(type_cls, "_optimizer_hints", None) or {} if type_cls is not None else {}
+        hint = hints_map.get(django_name)
         if hint is not None and _apply_hint(
             hint,
             sel=sel,
@@ -200,7 +214,7 @@ def _plan_select_relation(
     """Plan a same-query single-valued relation traversal."""
     attname = getattr(django_field, "attname", None)
     if attname is not None:
-        _append_unique(plan.only_fields, f"{prefix}{attname}")
+        append_unique(plan.only_fields, f"{prefix}{attname}")
     target_pk_name = _target_pk_name(django_field)
     if (
         _can_elide_fk_id(django_field)
@@ -208,11 +222,11 @@ def _plan_select_relation(
         and not _has_custom_id_resolver(target_type, target_pk_name)
         and _selected_scalar_names(sel.selections, django_field.related_model) == {target_pk_name}
     ):
-        _append_unique_many(plan.fk_id_elisions, resolver_identities)
-        _append_unique_many(plan.planned_resolver_keys, resolver_identities)
+        append_unique_many(plan.fk_id_elisions, resolver_identities)
+        append_unique_many(plan.planned_resolver_keys, resolver_identities)
         return
-    _append_unique_many(plan.planned_resolver_keys, resolver_identities)
-    _append_unique(plan.select_related, full_path)
+    append_unique_many(plan.planned_resolver_keys, resolver_identities)
+    append_unique(plan.select_related, full_path)
     if django_field.related_model is not None:
         _walk_selections(
             sel.selections,
@@ -238,13 +252,13 @@ def _plan_prefetch_relation(
     """Plan a queryset-boundary relation traversal with optional child optimization."""
     attname = getattr(django_field, "attname", None)
     if attname is not None:
-        _append_unique(plan.only_fields, f"{prefix}{attname}")
-    _append_unique_many(plan.planned_resolver_keys, resolver_identities)
+        append_unique(plan.only_fields, f"{prefix}{attname}")
+    append_unique_many(plan.planned_resolver_keys, resolver_identities)
     has_custom_get_queryset = target_type is not None and target_type.has_custom_get_queryset()
     if has_custom_get_queryset:
         plan.cacheable = False
     if django_field.related_model is None:
-        _append_unique(plan.prefetch_related, full_path)
+        append_unique(plan.prefetch_related, full_path)
         return
 
     child_plan = OptimizationPlan()
@@ -263,7 +277,7 @@ def _plan_prefetch_relation(
     child_queryset = child_plan.apply(
         _build_child_queryset(django_field, target_type, info, has_custom_qs=has_custom_get_queryset),
     )
-    _append_prefetch_unique(plan.prefetch_related, Prefetch(full_path, queryset=child_queryset))
+    append_prefetch_unique(plan.prefetch_related, Prefetch(full_path, queryset=child_queryset))
 
 
 def _apply_hint(
@@ -291,14 +305,20 @@ def _apply_hint(
     rejects conflicting flag combinations, so the priority order here
     is documentation, not collision arbitration.
     """
-    if hint is OptimizerHint.SKIP or hint.skip:
+    if hint_is_skip(hint):
         return True
     if hint.prefetch_obj is not None:
         attname = getattr(django_field, "attname", None)
         if attname is not None:
-            _append_unique(plan.only_fields, f"{prefix}{attname}")
-        _append_unique_many(plan.planned_resolver_keys, resolver_identities)
-        plan.prefetch_related.append(hint.prefetch_obj)
+            append_unique(plan.only_fields, f"{prefix}{attname}")
+        append_unique_many(plan.planned_resolver_keys, resolver_identities)
+        # Consumer-supplied Prefetch objects commonly close over a queryset
+        # built with request- or user-scoped filters; matching the
+        # has_custom_get_queryset discipline in _plan_prefetch_relation, mark
+        # the plan non-cacheable so the plan cache cannot serve one
+        # request's queryset to the next.
+        plan.cacheable = False
+        append_prefetch_unique(plan.prefetch_related, hint.prefetch_obj)
         return True
     if hint.force_select:
         _plan_select_relation(
@@ -334,9 +354,9 @@ def _apply_hint(
 def _merge_child_plan_metadata(parent_plan: OptimizationPlan, child_plan: OptimizationPlan) -> None:
     """Propagate resolver metadata from a child queryset plan to the root plan."""
     for key in child_plan.fk_id_elisions:
-        _append_unique(parent_plan.fk_id_elisions, key)
+        append_unique(parent_plan.fk_id_elisions, key)
     for key in child_plan.planned_resolver_keys:
-        _append_unique(parent_plan.planned_resolver_keys, key)
+        append_unique(parent_plan.planned_resolver_keys, key)
 
 
 def _selected_scalar_names(
@@ -435,32 +455,12 @@ def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> 
     else:
         attname = parent_field.related_model._meta.pk.attname
     if attname is not None:
-        _append_unique(plan.only_fields, attname)
+        append_unique(plan.only_fields, attname)
         return
     logger.debug(
         "Optimizer: could not resolve connector column for Prefetch %s; only() may be less precise.",
         getattr(parent_field, "name", parent_field),
     )
-
-
-def _append_unique(values: list[Any], value: Any) -> None:
-    """Append ``value`` to ``values`` if it is not already present."""
-    if value not in values:
-        values.append(value)
-
-
-def _append_unique_many(values: list[Any], new_values: tuple[Any, ...]) -> None:
-    """Append each value in ``new_values`` if it is not already present."""
-    for value in new_values:
-        _append_unique(values, value)
-
-
-def _append_prefetch_unique(values: list[Any], prefetch: Prefetch) -> None:
-    """Append ``prefetch`` unless a lookup for the same path already exists."""
-    lookup_path = _lookup_path(prefetch)
-    if any(_lookup_path(value) == lookup_path for value in values):
-        return
-    values.append(prefetch)
 
 
 def _should_include(selection: Any) -> bool:

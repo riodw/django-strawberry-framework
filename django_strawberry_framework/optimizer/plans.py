@@ -29,10 +29,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-if TYPE_CHECKING:  # pragma: no cover
-    from django.db.models import Prefetch
+from django.db.models import Prefetch
 
 
 @dataclass
@@ -88,6 +87,31 @@ class OptimizationPlan:
             and not self.only_fields
             and not self.fk_id_elisions
             and not self.planned_resolver_keys
+        )
+
+    def finalize(self) -> OptimizationPlan:
+        """Swap mutable list fields for tuples so post-handoff mutation raises.
+
+        Called once at walker exit (``plan_optimizations`` return) and at
+        every ``dataclasses.replace`` site that publishes a derived plan
+        (e.g. ``diff_plan_for_queryset``). Enforces the documented
+        "immutable-after-handoff" cache invariant: appending to the
+        cached plan's ``prefetch_related`` after finalisation raises
+        ``AttributeError`` instead of silently poisoning the plan cache
+        for subsequent requests.
+
+        Idempotent: re-finalising a plan that already carries tuples
+        leaves it unchanged. Use ``dataclasses.replace`` to derive a
+        modified plan from a finalised one (the walker still owns the
+        construction-time mutation path).
+        """
+        return replace(
+            self,
+            select_related=tuple(self.select_related),
+            prefetch_related=tuple(self.prefetch_related),
+            only_fields=tuple(self.only_fields),
+            fk_id_elisions=tuple(self.fk_id_elisions),
+            planned_resolver_keys=tuple(self.planned_resolver_keys),
         )
 
     def apply(self, queryset: Any) -> Any:
@@ -181,6 +205,37 @@ def _flatten_select_related(sr: Any) -> set[str]:
 
     _walk(sr, "")
     return paths
+
+
+def append_unique(values: list[Any], value: Any) -> None:
+    """Append ``value`` to ``values`` if it is not already present.
+
+    Plan-shape mutator: lives next to ``OptimizationPlan`` so the dedupe
+    discipline is a property of the plan list shape rather than a
+    walker-local convention.
+    """
+    if value not in values:
+        values.append(value)
+
+
+def append_unique_many(values: list[Any], new_values: tuple[Any, ...]) -> None:
+    """Append each value in ``new_values`` if it is not already present."""
+    for value in new_values:
+        append_unique(values, value)
+
+
+def append_prefetch_unique(values: list[Any], prefetch: Prefetch) -> None:
+    """Append ``prefetch`` unless a lookup for the same path already exists.
+
+    Compares lookup paths via ``_lookup_path`` so a hint-supplied
+    ``Prefetch(obj)`` and a walker-generated ``Prefetch`` for the same
+    Django lookup are recognised as duplicates regardless of queryset
+    identity.
+    """
+    lookup_path = _lookup_path(prefetch)
+    if any(_lookup_path(value) == lookup_path for value in values):
+        return
+    values.append(prefetch)
 
 
 def _lookup_path(entry: Any) -> str:
@@ -290,7 +345,7 @@ def diff_plan_for_queryset(
     ):
         return plan, queryset
     return (
-        replace(plan, select_related=new_select, prefetch_related=new_prefetch),
+        replace(plan, select_related=new_select, prefetch_related=new_prefetch).finalize(),
         new_queryset,
     )
 

@@ -86,23 +86,23 @@ def _fragment_spread(name, type_condition, selections=None, directives=None):
 def test_plan_returns_empty_for_scalar_only_selection():
     """Selecting only scalars produces an ``only()`` projection but no relations."""
     plan = plan_optimizations([_sel("name"), _sel("id")], Category)
-    assert plan.select_related == []
-    assert plan.prefetch_related == []
-    assert plan.only_fields == ["name", "id"]
+    assert plan.select_related == ()
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ("name", "id")
 
 
 def test_plan_dispatches_forward_fk_to_select_related():
     """A forward FK selection routes to ``select_related``."""
     plan = plan_optimizations([_sel("category")], Item)
-    assert plan.select_related == ["category"]
-    assert plan.prefetch_related == []
-    assert plan.only_fields == ["category_id"]
+    assert plan.select_related == ("category",)
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ("category_id",)
 
 
 def test_plan_dispatches_reverse_fk_to_prefetch_related():
     """A reverse FK selection routes to ``prefetch_related``."""
     plan = plan_optimizations([_sel("items")], Category)
-    assert plan.select_related == []
+    assert plan.select_related == ()
     prefetch = _prefetch_entry(plan)
     assert prefetch.prefetch_to == "items"
 
@@ -113,10 +113,10 @@ def test_plan_dispatches_mixed_relations():
         [_sel("category"), _sel("entries")],
         Item,
     )
-    assert plan.select_related == ["category"]
+    assert plan.select_related == ("category",)
     prefetch = _prefetch_entry(plan)
     assert prefetch.prefetch_to == "entries"
-    assert plan.only_fields == ["category_id"]
+    assert plan.only_fields == ("category_id",)
 
 
 def test_plan_skips_unknown_selections():
@@ -144,8 +144,8 @@ def test_plan_prefetches_relation_with_missing_related_model_defensively():
 
     plan = plan_optimizations([_sel("generic")], FakeModel)
 
-    assert plan.prefetch_related == ["generic"]
-    assert plan.planned_resolver_keys == ["generic@generic"]
+    assert plan.prefetch_related == ("generic",)
+    assert plan.planned_resolver_keys == ("generic@generic",)
 
 
 def test_plan_select_relation_with_missing_related_model_is_not_elided():
@@ -167,9 +167,9 @@ def test_plan_select_relation_with_missing_related_model_is_not_elided():
 
     plan = plan_optimizations([_sel("relation", selections=[_sel("id")])], FakeModel)
 
-    assert plan.select_related == ["relation"]
-    assert plan.only_fields == ["relation_id"]
-    assert plan.fk_id_elisions == []
+    assert plan.select_related == ("relation",)
+    assert plan.only_fields == ("relation_id",)
+    assert plan.fk_id_elisions == ()
 
 
 def test_selected_scalar_names_returns_none_without_model():
@@ -420,7 +420,7 @@ def test_plan_merges_aliased_selections():
     )
     prefetch = _prefetch_entry(plan)
     assert prefetch.prefetch_to == "items"
-    assert plan.planned_resolver_keys == ["items@first", "items@second"]
+    assert plan.planned_resolver_keys == ("items@first", "items@second")
 
 
 # ---------------------------------------------------------------------------
@@ -431,9 +431,9 @@ def test_plan_merges_aliased_selections():
 def test_plan_collects_only_fields_for_selected_scalars():
     """O5: scalar selections are collected into ``only_fields``."""
     plan = plan_optimizations([_sel("id"), _sel("name")], Category)
-    assert plan.only_fields == ["id", "name"]
-    assert plan.select_related == []
-    assert plan.prefetch_related == []
+    assert plan.only_fields == ("id", "name")
+    assert plan.select_related == ()
+    assert plan.prefetch_related == ()
 
 
 def test_plan_includes_fk_columns_in_only_fields():
@@ -442,8 +442,8 @@ def test_plan_includes_fk_columns_in_only_fields():
         [_sel("name"), _sel("category", selections=[_sel("name")])],
         Item,
     )
-    assert plan.select_related == ["category"]
-    assert plan.only_fields == ["name", "category_id", "category__name"]
+    assert plan.select_related == ("category",)
+    assert plan.only_fields == ("name", "category_id", "category__name")
 
 
 def test_plan_collects_related_scalar_only_fields_from_fragment():
@@ -462,7 +462,7 @@ def test_plan_collects_related_scalar_only_fields_from_fragment():
         ],
         Item,
     )
-    assert plan.only_fields == ["category_id", "category__id", "category__name"]
+    assert plan.only_fields == ("category_id", "category__id", "category__name")
 
 
 # ---------------------------------------------------------------------------
@@ -476,11 +476,11 @@ def test_plan_elides_forward_fk_when_child_selection_is_id_only():
         [_sel("name"), _sel("category", selections=[_sel("id")])],
         Item,
     )
-    assert plan.select_related == []
-    assert plan.prefetch_related == []
-    assert plan.only_fields == ["name", "category_id"]
-    assert plan.fk_id_elisions == ["category@category"]
-    assert plan.planned_resolver_keys == ["category@category"]
+    assert plan.select_related == ()
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ("name", "category_id")
+    assert plan.fk_id_elisions == ("category@category",)
+    assert plan.planned_resolver_keys == ("category@category",)
 
 
 def test_plan_elides_forward_fk_id_only_selection_for_each_alias():
@@ -492,10 +492,10 @@ def test_plan_elides_forward_fk_id_only_selection_for_each_alias():
         ],
         Item,
     )
-    assert plan.select_related == []
-    assert plan.only_fields == ["category_id"]
-    assert plan.fk_id_elisions == ["category@first", "category@second"]
-    assert plan.planned_resolver_keys == ["category@first", "category@second"]
+    assert plan.select_related == ()
+    assert plan.only_fields == ("category_id",)
+    assert plan.fk_id_elisions == ("category@first", "category@second")
+    assert plan.planned_resolver_keys == ("category@first", "category@second")
 
 
 def test_plan_does_not_elide_forward_fk_when_extra_target_scalar_selected():
@@ -504,10 +504,10 @@ def test_plan_does_not_elide_forward_fk_when_extra_target_scalar_selected():
         [_sel("category", selections=[_sel("id"), _sel("name")])],
         Item,
     )
-    assert plan.select_related == ["category"]
-    assert plan.prefetch_related == []
-    assert plan.only_fields == ["category_id", "category__id", "category__name"]
-    assert plan.fk_id_elisions == []
+    assert plan.select_related == ("category",)
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ("category_id", "category__id", "category__name")
+    assert plan.fk_id_elisions == ()
 
 
 def test_plan_elides_forward_fk_id_only_selection_inside_fragment():
@@ -523,9 +523,9 @@ def test_plan_elides_forward_fk_id_only_selection_inside_fragment():
         ],
         Item,
     )
-    assert plan.select_related == []
-    assert plan.only_fields == ["category_id"]
-    assert plan.fk_id_elisions == ["category@category"]
+    assert plan.select_related == ()
+    assert plan.only_fields == ("category_id",)
+    assert plan.fk_id_elisions == ("category@category",)
 
 
 def test_plan_does_not_elide_when_fragment_contains_relation_selection():
@@ -541,9 +541,9 @@ def test_plan_does_not_elide_when_fragment_contains_relation_selection():
         ],
         Item,
     )
-    assert plan.select_related == ["category"]
-    assert plan.only_fields == ["category_id"]
-    assert plan.fk_id_elisions == []
+    assert plan.select_related == ("category",)
+    assert plan.only_fields == ("category_id",)
+    assert plan.fk_id_elisions == ()
 
 
 def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
@@ -568,9 +568,9 @@ def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
     finally:
         registry.clear()
 
-    assert plan.select_related == []
-    assert plan.fk_id_elisions == []
-    assert plan.only_fields == ["category_id"]
+    assert plan.select_related == ()
+    assert plan.fk_id_elisions == ()
+    assert plan.only_fields == ("category_id",)
     assert len(plan.prefetch_related) == 1
     assert isinstance(plan.prefetch_related[0], Prefetch)
 
@@ -597,9 +597,9 @@ def test_plan_elides_forward_fk_when_target_pk_is_not_named_id():
         [_sel("target", selections=[_sel("uuid")])],
         UuidSource,
     )
-    assert plan.select_related == []
-    assert plan.only_fields == ["target_id"]
-    assert plan.fk_id_elisions == ["target@target"]
+    assert plan.select_related == ()
+    assert plan.only_fields == ("target_id",)
+    assert plan.fk_id_elisions == ("target@target",)
 
 
 def test_plan_does_not_elide_fk_to_non_pk_to_field():
@@ -628,9 +628,9 @@ def test_plan_does_not_elide_fk_to_non_pk_to_field():
         [_sel("target", selections=[_sel("id")])],
         CodeSource,
     )
-    assert plan.select_related == ["target"]
-    assert plan.fk_id_elisions == []
-    assert plan.only_fields == ["target_id", "target__id"]
+    assert plan.select_related == ("target",)
+    assert plan.fk_id_elisions == ()
+    assert plan.only_fields == ("target_id", "target__id")
 
 
 def test_plan_does_not_elide_when_target_type_has_custom_id_resolver():
@@ -667,9 +667,9 @@ def test_plan_does_not_elide_when_target_type_has_custom_id_resolver():
     finally:
         registry.clear()
 
-    assert plan.select_related == ["target"]
-    assert plan.fk_id_elisions == []
-    assert plan.only_fields == ["target_id", "target__id"]
+    assert plan.select_related == ("target",)
+    assert plan.fk_id_elisions == ()
+    assert plan.only_fields == ("target_id", "target__id")
 
 
 # ---------------------------------------------------------------------------
@@ -704,8 +704,8 @@ def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     finally:
         registry.clear()
 
-    assert plan.select_related == []
-    assert plan.only_fields == ["category_id"]
+    assert plan.select_related == ()
+    assert plan.only_fields == ("category_id",)
     assert plan.cacheable is False
     assert len(plan.prefetch_related) == 1
     prefetch = plan.prefetch_related[0]
@@ -734,9 +734,9 @@ def test_plan_keeps_select_related_when_target_uses_default_get_queryset():
     finally:
         registry.clear()
 
-    assert plan.select_related == ["category"]
-    assert plan.prefetch_related == []
-    assert plan.only_fields == ["category_id", "category__name"]
+    assert plan.select_related == ("category",)
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ("category_id", "category__name")
     assert plan.cacheable is True
 
 
@@ -761,7 +761,7 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
     finally:
         registry.clear()
 
-    assert plan.select_related == []
+    assert plan.select_related == ()
     assert plan.cacheable is False
     assert len(plan.prefetch_related) == 1
     prefetch = plan.prefetch_related[0]
@@ -830,9 +830,9 @@ def test_plan_emits_nested_select_related_chain_depth_2():
         Entry,
     )
 
-    assert plan.select_related == ["item", "item__category"]
-    assert plan.prefetch_related == []
-    assert plan.only_fields == ["item_id", "item__category_id", "item__category__name"]
+    assert plan.select_related == ("item", "item__category")
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ("item_id", "item__category_id", "item__category__name")
 
 
 def test_plan_combines_prefetch_boundary_with_inner_select_related():
@@ -924,7 +924,7 @@ def test_plan_honors_prefetch_obj_hint_does_not_walk_inner_selections():
     finally:
         registry.clear()
 
-    assert plan.prefetch_related == [explicit]
+    assert plan.prefetch_related == (explicit,)
 
 
 def test_plan_prefetch_obj_hint_on_forward_fk_adds_connector_column():
@@ -945,9 +945,9 @@ def test_plan_prefetch_obj_hint_on_forward_fk_adds_connector_column():
     finally:
         registry.clear()
 
-    assert plan.prefetch_related == [explicit]
-    assert plan.only_fields == ["category_id"]
-    assert plan.planned_resolver_keys == ["ItemType.category@category"]
+    assert plan.prefetch_related == (explicit,)
+    assert plan.only_fields == ("category_id",)
+    assert plan.planned_resolver_keys == ("ItemType.category@category",)
 
 
 def test_plan_force_select_hint_uses_select_recursion():
@@ -970,9 +970,9 @@ def test_plan_force_select_hint_uses_select_recursion():
     finally:
         registry.clear()
 
-    assert plan.select_related == ["category"]
-    assert plan.only_fields == ["category_id", "category__name"]
-    assert plan.planned_resolver_keys == ["ItemType.category@category", "items@category.items"]
+    assert plan.select_related == ("category",)
+    assert plan.only_fields == ("category_id", "category__name")
+    assert plan.planned_resolver_keys == ("ItemType.category@category", "items@category.items")
     prefetch = _prefetch_entry(plan)
     assert prefetch.prefetch_to == "category__items"
     fields, is_deferred = prefetch.queryset.query.deferred_loading
@@ -1006,8 +1006,8 @@ def test_plan_no_flag_hint_falls_through_to_default_dispatch():
         registry.clear()
 
     # Forward FK with non-id-only child → default dispatch picks select_related.
-    assert plan.select_related == ["category"]
-    assert plan.only_fields == ["category_id", "category__name"]
+    assert plan.select_related == ("category",)
+    assert plan.only_fields == ("category_id", "category__name")
 
 
 def test_plan_records_nested_fk_id_elision_with_resolver_key():
@@ -1019,7 +1019,7 @@ def test_plan_records_nested_fk_id_elision_with_resolver_key():
 
     outer = _prefetch_entry(plan)
     assert outer.prefetch_to == "items"
-    assert plan.fk_id_elisions == ["category@items.category"]
+    assert plan.fk_id_elisions == ("category@items.category",)
     assert "category@items.category" in plan.planned_resolver_keys
 
 
@@ -1063,7 +1063,12 @@ def test_plan_nested_prefetch_respects_fragment_alias_and_directive_shapes():
 
 def test_ensure_connector_only_fields_adds_m2m_target_pk():
     """Connector injection supports M2M-style relation metadata."""
-    plan = plan_optimizations([_sel("name")], Category)
+    # ``_ensure_connector_only_fields`` runs during walker construction,
+    # before ``plan_optimizations`` finalises the plan into tuples.
+    # Build a fresh mutable plan to mirror the walker-internal call site.
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    plan = OptimizationPlan(only_fields=["name"])
     fake_related_model = SimpleNamespace(
         _meta=SimpleNamespace(pk=SimpleNamespace(attname="id")),
     )
@@ -1092,5 +1097,99 @@ def test_ensure_connector_only_fields_logs_when_connector_unknown(caplog):
     caplog.set_level("DEBUG", logger=logger.name)
     _ensure_connector_only_fields(plan, fake_parent_field)
 
-    assert plan.only_fields == ["name"]
+    assert plan.only_fields == ("name",)
     assert any("could not resolve connector column" in r.message for r in caplog.records)
+
+
+def test_plan_prefetch_obj_hint_marks_plan_non_cacheable():
+    """B4: consumer-supplied Prefetch may close over request-scoped state; plan must not be cacheable.
+
+    The hint.prefetch_obj queryset commonly carries user-scoped filters; serving
+    the cached Prefetch across requests would leak the first request's state.
+    Mirrors the has_custom_get_queryset cache-safety flip in _plan_prefetch_relation.
+    """
+    registry.clear()
+    explicit = Prefetch("items", queryset=Item.objects.only("name"))
+
+    class CategoryType:
+        _optimizer_hints = {"items": OptimizerHint.prefetch(explicit)}
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Category, CategoryType)
+    try:
+        plan = plan_optimizations(
+            [_sel("items", selections=[_sel("name")])],
+            Category,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.cacheable is False
+    assert plan.prefetch_related == (explicit,)
+
+
+def test_plan_prefetch_obj_hint_dedupes_repeat_lookups():
+    """B4: hint.prefetch_obj routes through append_prefetch_unique so the same lookup is not appended twice.
+
+    Without the dedupe, a re-walk over the same selection (e.g. fragment spread
+    expanding the same field, or duplicate selections) yields two Prefetch
+    entries for the same lookup path; Django's later attach replaces the first
+    and silently drops the consumer's queryset depending on order.
+    """
+    registry.clear()
+    explicit = Prefetch("items", queryset=Item.objects.only("name"))
+
+    class CategoryType:
+        _optimizer_hints = {"items": OptimizerHint.prefetch(explicit)}
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Category, CategoryType)
+    try:
+        # Two sibling selections of the same field; _merge_aliased_selections
+        # collapses them, but the dedupe guard is the load-bearing invariant
+        # here — assert there is exactly one prefetch entry on the plan.
+        plan = plan_optimizations(
+            [
+                _sel("items", selections=[_sel("name")]),
+                _sel("items", selections=[_sel("name")]),
+            ],
+            Category,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.prefetch_related == (explicit,)
+
+
+def test_plan_tolerates_optimizer_hints_set_to_none():
+    """Shape guard: type_cls._optimizer_hints = None must not raise.
+
+    The legacy class-attribute mirror documents "dict or absent"; defending
+    the intersection ``set to None`` keeps the reader robust against
+    misbehaving writers and matches the ``getattr(..., None) or {}`` pattern
+    used elsewhere in the package.
+    """
+    registry.clear()
+
+    class ItemType:
+        _optimizer_hints = None
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Item, ItemType)
+    try:
+        plan = plan_optimizations([_sel("category", selections=[_sel("name")])], Item)
+    finally:
+        registry.clear()
+
+    # With no hints, default dispatch picks select_related for a forward FK
+    # with a non-id-only child selection.
+    assert plan.select_related == ("category",)

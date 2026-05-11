@@ -190,10 +190,10 @@ def test_optimizer_elides_forward_fk_id_only_selection(django_assert_num_queries
     assert len(result.data["allItems"]) == 25
     assert all(item["category"]["id"] for item in result.data["allItems"])
     plan = ctx.dst_optimizer_plan
-    assert plan.select_related == []
-    assert plan.prefetch_related == []
-    assert plan.only_fields == ["name", "category_id"]
-    assert plan.fk_id_elisions == ["ItemType.category@allItems.category"]
+    assert plan.select_related == ()
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ("name", "category_id")
+    assert plan.fk_id_elisions == ("ItemType.category@allItems.category",)
     assert ctx.dst_optimizer_fk_id_elisions == {"ItemType.category@allItems.category"}
 
 
@@ -230,13 +230,13 @@ def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias(django_ass
     assert result.errors is None
     assert all(item["first"]["id"] == item["second"]["id"] for item in result.data["allItems"])
     plan = ctx.dst_optimizer_plan
-    assert plan.select_related == []
-    assert plan.prefetch_related == []
-    assert plan.only_fields == ["category_id"]
-    assert plan.fk_id_elisions == [
+    assert plan.select_related == ()
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ("category_id",)
+    assert plan.fk_id_elisions == (
         "ItemType.category@allItems.first",
         "ItemType.category@allItems.second",
-    ]
+    )
     assert ctx.dst_optimizer_fk_id_elisions == {
         "ItemType.category@allItems.first",
         "ItemType.category@allItems.second",
@@ -275,9 +275,9 @@ def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected(django_a
         )
     assert result.errors is None
     plan = ctx.dst_optimizer_plan
-    assert plan.select_related == ["category"]
-    assert plan.fk_id_elisions == []
-    assert plan.only_fields == ["name", "category_id", "category__id", "category__name"]
+    assert plan.select_related == ("category",)
+    assert plan.fk_id_elisions == ()
+    assert plan.only_fields == ("name", "category_id", "category__id", "category__name")
 
 
 @pytest.mark.django_db
@@ -318,9 +318,9 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
         )
     assert result.errors is None
     plan = ctx.dst_optimizer_plan
-    assert plan.select_related == []
-    assert plan.fk_id_elisions == []
-    assert plan.only_fields == ["name", "category_id"]
+    assert plan.select_related == ()
+    assert plan.fk_id_elisions == ()
+    assert plan.only_fields == ("name", "category_id")
     assert len(plan.prefetch_related) == 1
 
 
@@ -753,7 +753,7 @@ def test_cache_differentiates_same_model_root_fields(django_assert_num_queries):
     assert ext.cache_info().hits == 0
     assert ext.cache_info().misses == 2
     assert ext.cache_info().size == 2
-    assert ctx.dst_optimizer_plan.prefetch_related == []
+    assert ctx.dst_optimizer_plan.prefetch_related == ()
 
 
 def test_cache_key_includes_root_runtime_path_for_same_model_fields():
@@ -971,8 +971,46 @@ def test_walk_directives_ignores_non_directive_objects():
 
     names: set[str] = set()
     node = SimpleNamespace(directives=[object(), *field.directives], selection_set=None)
-    _walk_directives(node, names, fragments={})
+    _walk_directives(node, names, fragments={}, visited_fragments=set())
     assert names == {"v"}
+
+
+def test_walk_directives_visits_each_fragment_once_across_sibling_spreads():
+    """Sibling spreads of the same fragment do not re-walk the fragment subtree."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _walk_directives
+
+    doc = parse(
+        "query Q($v: Boolean!) { "
+        "a: items { ...F } "
+        "b: items { ...F } "
+        "} "
+        "fragment F on Item { name @skip(if: $v) }",
+    )
+    operation = doc.definitions[0]
+    fragments = {d.name.value: d for d in doc.definitions[1:]}
+    names: set[str] = set()
+    visited: set[str] = set()
+    _walk_directives(operation, names, fragments, visited)
+    assert names == {"v"}
+    # Fragment F was descended exactly once even though it was spread twice.
+    assert visited == {"F"}
+
+
+def test_walk_directives_handles_unresolved_fragment_name():
+    """A spread referencing an unknown fragment name is skipped silently."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _walk_directives
+
+    doc = parse("query Q { items { ...Missing } }")
+    operation = doc.definitions[0]
+    names: set[str] = set()
+    visited: set[str] = set()
+    _walk_directives(operation, names, fragments={}, visited_fragments=visited)
+    assert names == set()
+    assert visited == set()
 
 
 def test_collect_directive_var_names_ignores_other_directives():
@@ -1160,24 +1198,24 @@ def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
 
 def test_will_lazy_load_false_when_cached():
     """B3: pin the __dict__ compatibility seam used by synthetic test doubles."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load
+    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
     root = SimpleNamespace(category="cached_value")
-    assert _will_lazy_load(root, "category") is False
+    assert _will_lazy_load_single(root, "category") is False
 
 
 def test_will_lazy_load_false_when_in_fields_cache():
-    """B3: _will_lazy_load returns False when a relation is in _state.fields_cache."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load
+    """B3: _will_lazy_load_single returns False when a relation is in _state.fields_cache."""
+    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
     root = SimpleNamespace(_state=SimpleNamespace(fields_cache={"card": "cached"}))
-    assert _will_lazy_load(root, "card") is False
+    assert _will_lazy_load_single(root, "card") is False
 
 
 @pytest.mark.django_db
 def test_will_lazy_load_false_for_real_forward_fk_in_fields_cache():
     """B3: real forward FKs cache in _state.fields_cache, not __dict__."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load
+    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
     services.seed_data(1)
     item = Item.objects.select_related("category").first()
@@ -1185,7 +1223,7 @@ def test_will_lazy_load_false_for_real_forward_fk_in_fields_cache():
     assert item is not None
     assert "category" not in item.__dict__
     assert "category" in item._state.fields_cache
-    assert _will_lazy_load(item, "category") is False
+    assert _will_lazy_load_single(item, "category") is False
 
 
 @pytest.mark.django_db
@@ -1193,7 +1231,7 @@ def test_will_lazy_load_false_for_real_reverse_one_to_one_in_fields_cache():
     """B3: real reverse OneToOne relations also cache in _state.fields_cache."""
     from apps.library.models import MembershipCard, Patron
 
-    from django_strawberry_framework.types.resolvers import _will_lazy_load
+    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
     patron = Patron.objects.create(name="Rio")
     MembershipCard.objects.create(patron=patron, barcode="1234")
@@ -1201,24 +1239,24 @@ def test_will_lazy_load_false_for_real_reverse_one_to_one_in_fields_cache():
 
     assert "card" not in cached_patron.__dict__
     assert "card" in cached_patron._state.fields_cache
-    assert _will_lazy_load(cached_patron, "card") is False
+    assert _will_lazy_load_single(cached_patron, "card") is False
 
 
 def test_will_lazy_load_true_when_not_cached():
-    """B3: _will_lazy_load returns True when the relation is not cached."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load
+    """B3: _will_lazy_load_single returns True when the relation is not cached."""
+    from django_strawberry_framework.types.resolvers import _will_lazy_load_single
 
     root = SimpleNamespace()
-    assert _will_lazy_load(root, "category") is True
+    assert _will_lazy_load_single(root, "category") is True
 
 
 def test_will_lazy_load_false_when_prefetched():
-    """B3: _will_lazy_load returns False when the relation is in _prefetched_objects_cache."""
-    from django_strawberry_framework.types.resolvers import _will_lazy_load
+    """B3: _will_lazy_load_many returns False when relation is in _prefetched_objects_cache."""
+    from django_strawberry_framework.types.resolvers import _will_lazy_load_many
 
     root = SimpleNamespace()
     root._prefetched_objects_cache = {"items": [1, 2, 3]}
-    assert _will_lazy_load(root, "items") is False
+    assert _will_lazy_load_many(root, "items") is False
 
 
 @pytest.mark.django_db
@@ -1782,6 +1820,48 @@ def test_optimizer_hint_skip_suppresses_relation(django_assert_num_queries):
 
 
 @pytest.mark.django_db
+def test_optimizer_hint_skip_routes_through_hint_is_skip():
+    """Pins ``rev-optimizer__hints.md`` Medium: the walker dispatches
+    skip directives through ``hint_is_skip`` rather than open-coding the
+    ``hint is SKIP or hint.skip`` test. A non-sentinel ``skip=True``
+    instance must still be honoured.
+    """
+    from django_strawberry_framework import OptimizerHint
+
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            # Construct a fresh skip-shaped hint instead of OptimizerHint.SKIP
+            # so the dispatch path cannot rely on identity-equality alone.
+            optimizer_hints = {"category": OptimizerHint(skip=True)}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    plan = ctx.dst_optimizer_plan
+    assert "category" not in plan.select_related
+
+
+@pytest.mark.django_db
 def test_optimizer_hint_force_prefetch(django_assert_num_queries):
     """B4: OptimizerHint.prefetch_related() forces prefetch on a forward FK."""
     from django_strawberry_framework import OptimizerHint
@@ -2051,6 +2131,29 @@ def test_stash_falls_back_to_setitem_on_typeerror():
     assert ctx["dst_optimizer_plan"] is plan
 
 
+def test_stash_does_not_swallow_unexpected_exceptions_from_setitem():
+    """rev-optimizer__context: narrow the dict-fallback ``except`` to ``TypeError``.
+
+    A mapping subclass that raises a non-``TypeError`` from ``__setitem__``
+    (e.g. a guarded TypedDict-like mapping) must surface the error rather
+    than be silently swallowed. ``KeyError`` is no longer caught — a real
+    ``dict`` never raises ``KeyError`` on assignment, so catching it was
+    dead defensive code that risked hiding bugs in custom mappings.
+    """
+    from django_strawberry_framework.optimizer._context import stash_on_context
+
+    class GuardedMapping(dict):
+        def __setattr__(self, _key: str, _value: object) -> None:
+            raise TypeError("no attribute writes")
+
+        def __setitem__(self, _key: str, _value: object) -> None:
+            raise RuntimeError("guarded write rejected")
+
+    ctx = GuardedMapping()
+    with pytest.raises(RuntimeError, match="guarded write rejected"):
+        stash_on_context(ctx, "dst_optimizer_plan", object())
+
+
 @pytest.mark.django_db
 def test_empty_plan_still_stashed():
     """B5/O5: even when no relations are selected, the scalar-only plan is stashed."""
@@ -2074,9 +2177,9 @@ def test_empty_plan_still_stashed():
     assert result.errors is None
     plan = getattr(ctx, "dst_optimizer_plan", None)
     assert plan is not None
-    assert plan.only_fields == ["name"]
-    assert plan.select_related == []
-    assert plan.prefetch_related == []
+    assert plan.only_fields == ("name",)
+    assert plan.select_related == ()
+    assert plan.prefetch_related == ()
 
 
 # ---------------------------------------------------------------------------
@@ -2110,9 +2213,9 @@ def test_optimizer_applies_only_for_selected_scalars(django_assert_num_queries):
         )
     assert result.errors is None
     plan = ctx.dst_optimizer_plan
-    assert plan.only_fields == ["name"]
-    assert plan.select_related == []
-    assert plan.prefetch_related == []
+    assert plan.only_fields == ("name",)
+    assert plan.select_related == ()
+    assert plan.prefetch_related == ()
 
 
 # ---------------------------------------------------------------------------
@@ -2163,7 +2266,7 @@ def test_optimizer_downgrades_select_related_for_custom_get_queryset(django_asse
     assert result.errors is None
     assert calls
     plan = ctx.dst_optimizer_plan
-    assert plan.select_related == []
+    assert plan.select_related == ()
     assert "category_id" in plan.only_fields
     assert "category__name" not in plan.only_fields
     assert plan.cacheable is False
@@ -2275,7 +2378,7 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
     )
     assert result1.errors is None
     cached_plan = ctx1.dst_optimizer_plan
-    assert cached_plan.select_related == ["category"]
+    assert cached_plan.select_related == ("category",)
     assert ext.cache_info().hits == 0
     assert ext.cache_info().misses == 1
 
@@ -2288,7 +2391,7 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
     )
     assert result2.errors is None
     assert ctx2.dst_optimizer_plan is cached_plan
-    assert cached_plan.select_related == ["category"]
+    assert cached_plan.select_related == ("category",)
     assert ext.cache_info().hits == 1
 
 
@@ -2473,3 +2576,43 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
     assert items_pf.prefetch_to == "items"
     nested = items_pf.queryset._prefetch_related_lookups
     assert any(getattr(entry, "prefetch_to", entry) == "entries" for entry in nested)
+
+
+# ---------------------------------------------------------------------------
+# Construction surface — unknown kwargs raise loudly
+# ---------------------------------------------------------------------------
+
+
+def test_extension_rejects_unknown_kwargs_at_construction():
+    """Misspelled config (e.g. ``strict=`` instead of ``strictness=``) raises TypeError."""
+    with pytest.raises(TypeError):
+        DjangoOptimizerExtension(strict=True)  # type: ignore[call-arg]
+
+
+def test_extension_accepts_strawberry_execution_context_kwarg():
+    """Strawberry instantiates extension *classes* with ``execution_context=...``.
+
+    ``strawberry.Schema(..., extensions=[DjangoOptimizerExtension])`` (note:
+    class, not instance) calls ``ext(execution_context=None)`` internally.
+    The extension must accept that keyword without ``TypeError``.
+    """
+    ext = DjangoOptimizerExtension(execution_context=None)
+    assert ext.strictness == "off"
+
+
+# ---------------------------------------------------------------------------
+# hint_is_skip — centralised hint-shape dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes():
+    """``hint_is_skip`` returns the documented bool for every supported shape."""
+    from django_strawberry_framework.optimizer.hints import OptimizerHint, hint_is_skip
+
+    assert hint_is_skip(None) is False
+    assert hint_is_skip(OptimizerHint.SKIP) is True
+    assert hint_is_skip(OptimizerHint(skip=True)) is True
+    assert hint_is_skip(OptimizerHint.select_related()) is False
+    # Unknown shape with no ``.skip`` attribute must not raise — the
+    # schema audit's "never raises" contract depends on this.
+    assert hint_is_skip(object()) is False

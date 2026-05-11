@@ -26,12 +26,17 @@ top-level ``__init__.py`` so the import path stays short.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import Any, ClassVar
+
+from django.db.models import Prefetch
 
 from ..exceptions import ConfigurationError
 
-if TYPE_CHECKING:  # pragma: no cover
-    from django.db.models import Prefetch
+# ``Prefetch`` is imported at runtime (not under ``TYPE_CHECKING``) because
+# ``__post_init__`` performs an ``isinstance(..., Prefetch)`` validation;
+# the field annotation ``Prefetch | None`` is also string-deferred by
+# ``from __future__ import annotations``, but the runtime check is the
+# load-bearing surface here.
 
 
 @dataclass(frozen=True)
@@ -77,16 +82,23 @@ class OptimizerHint:
         """
         if self.skip and (self.force_select or self.force_prefetch or self.prefetch_obj is not None):
             raise ConfigurationError(
-                "OptimizerHint(skip=True) cannot be combined with "
-                "force_select, force_prefetch, or prefetch_obj.",
+                "OptimizerHint.SKIP (skip=True) cannot be combined with "
+                "select_related(), prefetch_related(), or prefetch(obj).",
             )
         if self.force_select and self.force_prefetch:
             raise ConfigurationError(
-                "OptimizerHint cannot set both force_select and force_prefetch.",
+                "OptimizerHint cannot set both force_select and force_prefetch "
+                "(use either select_related() or prefetch_related(), not both).",
+            )
+        if self.prefetch_obj is not None and not isinstance(self.prefetch_obj, Prefetch):
+            raise ConfigurationError(
+                "OptimizerHint.prefetch(obj) requires a django.db.models.Prefetch "
+                f"instance; got {type(self.prefetch_obj).__name__}.",
             )
         if self.prefetch_obj is not None and (self.force_select or self.force_prefetch):
             raise ConfigurationError(
-                "OptimizerHint(prefetch_obj=...) cannot be combined with force_select or force_prefetch.",
+                "OptimizerHint.prefetch(obj) (prefetch_obj=...) cannot be combined "
+                "with select_related() or prefetch_related().",
             )
 
     # ------------------------------------------------------------------
@@ -104,7 +116,7 @@ class OptimizerHint:
         return cls(force_prefetch=True)
 
     @classmethod
-    def prefetch(cls, obj: Any) -> OptimizerHint:
+    def prefetch(cls, obj: Prefetch) -> OptimizerHint:
         """Use a specific ``Prefetch`` object for this field.
 
         This is a leaf operation. The consumer-provided queryset is the
@@ -112,6 +124,28 @@ class OptimizerHint:
         walked by the optimizer.
         """
         return cls(prefetch_obj=obj)
+
+
+def hint_is_skip(hint: Any) -> bool:
+    """Return ``True`` if ``hint`` represents a "skip this relation" directive.
+
+    Centralises the hint-shape contract so callers (the walker, the
+    schema audit) never duplicate the ``hint is OptimizerHint.SKIP or
+    hint.skip`` dispatch.  Defensively handles unexpected hint shapes by
+    returning ``False`` rather than raising ``AttributeError``, so the
+    schema audit can keep its "never raises" contract even if a future
+    hint surface lands that does not expose a ``.skip`` attribute.
+    """
+    # ``None`` is unreachable through the documented call sites (the
+    # walker iterates ``hints.items()`` and the extension audit calls
+    # this only after a non-``None`` lookup), but kept as a defensive
+    # short-circuit so the helper has the same shape consumers expect
+    # from ``getattr``-style probes.
+    if hint is None:
+        return False
+    if hint is OptimizerHint.SKIP:
+        return True
+    return bool(getattr(hint, "skip", False))
 
 
 # Sentinel instance — must be created after the class body so the

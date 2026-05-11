@@ -15,6 +15,16 @@ Centralizing the dispatch here means a future broadening (a new
 context shape, a new exception class to swallow on write) only has to
 land in one place rather than across ``optimizer/extension.py`` and
 ``types/resolvers.py``.
+
+Defensive-coerce stance (package-wide). Reflective shape reads off
+Strawberry / graphql-core / Django descriptors throughout the
+optimizer subpackage use the pattern ``getattr(obj, name, None) or
+{}`` (or ``or ()`` / ``or set()``). This is *correct* here because the
+upstream contract genuinely allows the attribute to be absent or
+``None`` on legitimate shapes (e.g., ``SelectedField.directives``).
+That posture is the opposite of the one taken for consumer-supplied
+input — see ``conf.py`` module docstring — and the two should not
+be conflated when refactoring.
 """
 
 from __future__ import annotations
@@ -37,6 +47,10 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
     """
     if context is None:
         return default
+    # Dispatch order matters: ``dict`` is checked before the ``getattr``
+    # fallback so that a ``dict`` subclass that *also* exposes attribute
+    # access (e.g., a ``Box``-style mapping) takes the mapping branch,
+    # which matches Strawberry's normal usage.  Do not reverse the order.
     if isinstance(context, dict):
         return context.get(key, default)
     return getattr(context, key, default)
@@ -66,5 +80,10 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
         pass
     try:
         context[key] = value
-    except (TypeError, KeyError):
+    except TypeError:
+        # ``MappingProxyType`` and other frozen mappings raise ``TypeError``
+        # on ``__setitem__``.  Narrow to ``TypeError`` only — a real ``dict``
+        # never raises ``KeyError`` from assignment, and a future mapping
+        # subclass that raises a custom error should surface, not be silently
+        # swallowed.
         return

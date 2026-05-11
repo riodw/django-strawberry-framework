@@ -5,10 +5,12 @@ Covers ``FieldMeta.from_django_field``, ``_optimizer_field_map`` on
 """
 
 import pytest
+from apps.library.models import Book, Genre, MembershipCard, Patron
 from apps.products import services
 from apps.products.models import Category, Item
 
 from django_strawberry_framework import DjangoType
+from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.registry import registry
 
@@ -61,6 +63,56 @@ def test_from_django_field_reverse_fk():
     fm = FieldMeta.from_django_field(items_field)
     assert fm.is_relation is True
     assert fm.one_to_many is True
+
+
+def test_from_django_field_many_to_many():
+    """M2M forward field sets many_to_many=True, is_relation=True, related_model."""
+    genres_field = Book._meta.get_field("genres")
+    fm = FieldMeta.from_django_field(genres_field)
+    assert fm.name == "genres"
+    assert fm.is_relation is True
+    assert fm.many_to_many is True
+    assert fm.related_model is Genre
+    assert fm.one_to_many is False
+    assert fm.one_to_one is False
+
+
+def test_from_django_field_one_to_one():
+    """Forward OneToOne sets one_to_one=True with attname and target field."""
+    patron_field = MembershipCard._meta.get_field("patron")
+    fm = FieldMeta.from_django_field(patron_field)
+    assert fm.name == "patron"
+    assert fm.is_relation is True
+    assert fm.one_to_one is True
+    assert fm.related_model is Patron
+    assert fm.attname == "patron_id"
+    assert fm.target_field_name == "id"
+    assert fm.target_field_attname == "id"
+
+
+def test_from_django_field_rejects_non_django_input():
+    """Inputs missing 'name'/'is_relation' raise OptimizerError at the call site.
+
+    Without the guard, the failure mode would be ``AttributeError`` deep
+    inside the optimizer walker's class-creation path. The typed
+    exception makes the contract violation explicit.
+    """
+
+    class NotAField:
+        pass
+
+    with pytest.raises(OptimizerError, match="expected a Django field descriptor"):
+        FieldMeta.from_django_field(NotAField())  # type: ignore[arg-type]
+
+
+def test_from_django_field_rejects_partial_shape():
+    """An input with 'name' but missing 'is_relation' still raises OptimizerError."""
+
+    class PartialField:
+        name = "x"
+
+    with pytest.raises(OptimizerError):
+        FieldMeta.from_django_field(PartialField())  # type: ignore[arg-type]
 
 
 def test_field_meta_is_frozen():

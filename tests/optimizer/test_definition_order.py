@@ -164,6 +164,6 @@ def test_annotation_only_relation_override_still_plans_prefetch():
 
     plan = plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
 
-    assert plan.select_related == []
+    assert plan.select_related == ()
     assert getattr(plan.prefetch_related[0], "prefetch_to", None) == "items"
-    assert plan.planned_resolver_keys == ["CategoryType.items@items"]
+    assert plan.planned_resolver_keys == ("CategoryType.items@items",)

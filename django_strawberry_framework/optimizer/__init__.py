@@ -11,16 +11,14 @@ module paths (``optimizer.plans`` and ``optimizer.walker``) and are
 not re-exported here — they are internal implementation details
 consumed by ``extension.py`` and tests, not consumer-facing API.
 
-The ``logger`` is defined here (rather than per-module) so the
-"django_strawberry_framework" string only appears once in the
-subpackage; ``extension.py`` and ``walker.py`` both ``from . import
-logger`` to avoid duplicating the literal.
+The canonical ``logger`` is declared at the top-level package
+(``django_strawberry_framework/__init__.py``); this module re-exports
+it so the ``"django_strawberry_framework"`` literal lives in exactly
+one source location and future subpackages (filters, orders,
+aggregates) can pick it up the same way.
 """
 
-import logging
-
-logger = logging.getLogger("django_strawberry_framework")
-
-from .extension import DjangoOptimizerExtension  # noqa: E402  # logger must exist before this import
+from .. import logger
+from .extension import DjangoOptimizerExtension
 
 __all__ = ("DjangoOptimizerExtension", "logger")

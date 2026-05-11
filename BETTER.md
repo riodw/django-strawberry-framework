@@ -9,6 +9,36 @@ For each item: what `graphene-django` does, what `strawberry-graphql-django` doe
 The Relay slice has an explicit Goal #4: "Stay tight: no `DjangoConnectionField`, no cascade permissions, no FK redaction sentinels, no node-aware filters, and no broad node-aware optimizer feature work beyond preserving primary-key projection for Relay `id`." None of the items below are part of the Relay machinery; each is a self-contained slice with its own design surface. Putting them in the Relay spec would expand its scope past "make `Meta.interfaces` and Relay Node work" and risks shipping nothing on time.
 
 The one async-related item that **does** have a Relay-specific angle (sync/async support for the four new `resolve_*` defaults) was added to the Relay spec as Decision 9. The broader async-native ORM posture is described below as item 9, because it touches every resolver in the package, not just the Relay ones.
+## Relay/interface parking lot from the `0.0.5` discussion
+The `0.0.5` spec deliberately stays limited to `Meta.interfaces`, type-level `relay.Node`, Relay `id: GlobalID!`, and the four default `resolve_*` methods. These ideas came up while stress-testing the API and should be reconsidered after the foundation lands. Some are parity or roadmap items rather than strict differentiators; keep them here until they graduate into `KANBAN.md` or a dedicated `docs/spec-<topic>.md`.
+### Root node and connection surface
+- Add a schema-level root `node(id:)` field, probably as `DjangoNodeField`, after type-level Node support is proven.
+- Add `DjangoConnectionField`, edge / page-info / list-connection wiring, reverse FK and M2M connection upgrades, pagination semantics, and query-count tests under the existing connection-field roadmap.
+- Keep `relay.GlobalID`, `relay.NodeID[...]`, `relay.Connection`, `relay.ListConnection`, `relay.Edge`, and `relay.PageInfo` out of `Meta.interfaces`; those are scalar helpers, annotations, or connection field types, not interfaces a `DjangoType` should inherit.
+### Custom Relay ID ergonomics
+- First document the Strawberry-native route for non-pk IDs: `id: relay.NodeID[...]` when the backing field is a slug / UUID / other stable value, or a consumer-authored `resolve_id_attr` for custom lookup.
+- Reconsider a DRF-shaped `Meta.id_field = "slug"` or `Meta.relay_id_field = "slug"` only if the native route proves too noisy after real use. Do not add that surface to `0.0.5`.
+- Add reusable GlobalID encode/decode test helpers once root node fields and connection fields start needing repeated round-trip assertions.
+### Friendly API shortcuts to evaluate later
+- Revisit `Meta.relay = True` or `Meta.node = True` as aliases for `interfaces = (relay.Node,)` only after the explicit `Meta.interfaces` contract is stable.
+- Keep the current single-interface normalization (`interfaces = relay.Node` and `interfaces = (relay.Node)`) as the only `0.0.5` convenience shortcut.
+- Avoid new top-level public exports for Relay helpers until there is a concrete field or extension object consumers need to import.
+### GlobalID stability and safety
+- Treat published GraphQL type names as part of the GlobalID compatibility contract. Before `1.0`, add docs or tooling for type renames so cached IDs and persisted client data do not break silently.
+- Document that GlobalIDs are opaque identifiers, not secrets and not authorization. `get_queryset`, future permissions, and cascade visibility rules must still enforce access on every lookup.
+- Consider migration tooling for GlobalID format changes if `Meta.primary`, composite primary keys, or multiple GraphQL types per model introduce more than one valid encoding.
+### Interface validation and schema diagnostics
+- Add targeted `ConfigurationError` messages when consumers put non-interface Relay helpers in `Meta.interfaces`, especially `relay.GlobalID`, `relay.NodeID[...]`, `relay.Connection`, `relay.ListConnection`, `relay.Edge`, and `relay.PageInfo`.
+- Add earlier diagnostics for interface field mismatches and nullability conflicts before Strawberry finalization where feasible, especially for non-Relay interfaces.
+- Keep string / lazy interface references out until real-world pressure justifies a resolver; eager validation is easier to reason about for the first stable interface API.
+### Relay-aware permissions and cache freshness
+- Integrate `resolve_node`, future root `node(id:)`, and connection lookups with cascade permissions, redaction, and optimizer `Prefetch` downgrades once the permissions slice lands.
+- Pair Relay Node identity with content-versioned Node types (item 15) so clients can get both stable identity and stale-cache detection from declarative Meta options.
+- Make optimizer explain output (item 7) show Relay lookup decisions, permission filters, selected primary-key columns, and any GlobalID decode path once those features exist.
+### Composite primary keys and multiple type variants
+- Design deterministic composite-primary-key GlobalID encoding / decoding after Django's composite-pk API stabilizes; `0.0.5` should only reject this case loudly.
+- Resolve how Node lookup chooses a GraphQL type once `Meta.primary` permits multiple `DjangoType`s for the same Django model.
+- Revisit whether one model can expose multiple Relay IDs for different public/admin/list/detail variants without breaking client cache identity.
 ## Tier 1: differentiators no competitor ships cleanly
 ### 1. Unified declarative permission system in `Meta`
 **What `graphene-django` does**: row-level visibility by overriding `get_queryset`; field-level via decorators on resolvers; cascade is a manual permission filter at every relation boundary the consumer writes.

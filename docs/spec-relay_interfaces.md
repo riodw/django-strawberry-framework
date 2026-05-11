@@ -9,14 +9,15 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
 - [ ] Slice 1: Validation + storage
   - [ ] Keep `"interfaces"` in `DEFERRED_META_KEYS` (`types/base.py:41-56`); promotion deferred to Slice 5
   - [ ] Extend `_validate_meta` (`types/base.py:243-295`) with the interface validator (Decision 4)
-    - [ ] Tuple / list normalization; reject non-sequence values (sets, generators, single classes)
+    - [ ] Normalize tuple/list input and a single real Strawberry interface class; reject strings, sets, generators, and other invalid non-sequence values
     - [ ] Each entry satisfies `hasattr(entry, "__strawberry_definition__") and entry.__strawberry_definition__.is_interface`
     - [ ] Reject string entries
     - [ ] Reject `DjangoType` self-reference and other `DjangoType` subclasses
     - [ ] Reject duplicates
-  - [ ] Pass `interfaces=tuple(getattr(meta, "interfaces", ()))` to `DjangoTypeDefinition` at `types/base.py:116-130`
+  - [ ] Pass the normalized interfaces tuple to `DjangoTypeDefinition` at `types/base.py:116-130`
   - [ ] Validation and lifecycle tests in `tests/types/test_relay_interfaces.py`
     - [ ] `test_meta_interfaces_accepted`
+    - [ ] `test_meta_interfaces_accepts_single_interface_class`
     - [ ] `test_meta_interfaces_rejects_non_sequence`
     - [ ] `test_meta_interfaces_rejects_string_entries`
     - [ ] `test_meta_interfaces_rejects_non_interface_classes`
@@ -189,6 +190,7 @@ class BookType(DjangoType):
 
 finalize_django_types()
 ```
+`interfaces = (relay.Node,)` is the canonical spelling. For user ergonomics, `interfaces = relay.Node` and the common missing-comma spelling `interfaces = (relay.Node)` are also accepted and normalized to `(relay.Node,)` when the value is a real Strawberry interface class.
 
 Expected GraphQL behavior:
 - `BookType` implements the Relay `Node` interface.
@@ -318,7 +320,7 @@ We do not import strawberry-django at runtime; we copy the patterns and cite the
 
 Validation rules:
 
-- `interfaces` must be a tuple (or list, normalized to a tuple). Strings, sets, generators, single classes, and other non-sequence values raise `ConfigurationError`.
+- `interfaces` may be a tuple/list of interface classes or a single real Strawberry interface class. Tuple/list values are normalized to a tuple as-is; a single interface class such as `interfaces = relay.Node` (or the common missing-comma spelling `interfaces = (relay.Node)`) is normalized to `(relay.Node,)`. Strings, sets, generators, and other invalid non-sequence values raise `ConfigurationError`.
 - An empty tuple is the same as not declaring the key at all (no-op, identical to `0.0.4` behavior bit-for-bit).
 - Each entry must satisfy `hasattr(entry, "__strawberry_definition__") and entry.__strawberry_definition__.is_interface`. `relay.Node` already satisfies this — it is decorated with `@interface(...)` upstream — so no special-casing is required. Justification: writing the check this way is robust against future Strawberry changes to `relay.Node` and forces every accepted entry to be a real Strawberry interface.
 - String entries (e.g. `interfaces = ("Node",)`) raise `ConfigurationError`. Lazy/forward-reference interface lookup is out of scope for `0.0.5`.
@@ -426,8 +428,8 @@ The exact public method signatures attached to the class must match Strawberry's
 The slice is small enough to implement as a single PR but easier to review as five commits. Each commit cites the exact `file:line` touched.
 1. **Validation + storage**
    - `types/base.py:41-56`: keep `"interfaces"` in `DEFERRED_META_KEYS` for now (promotion is the last step).
-   - `types/base.py:243-295` (`_validate_meta`): add the interface tuple/duplicate/Strawberry-interface check from Decision 4 (including string-entry rejection and `DjangoType` self-reference rejection). The composite-pk check is **not** done here — it lives in Phase 2.5 (Slice 4) so a single check site catches both `Meta.interfaces = (relay.Node,)` consumers and consumers who write `class Foo(DjangoType, relay.Node)` directly.
-   - `types/base.py:116-130` (the `DjangoTypeDefinition(...)` construction): pass `interfaces=tuple(getattr(meta, "interfaces", ()))` through to the existing `interfaces` slot at `types/definition.py:36`.
+   - `types/base.py:243-295` (`_validate_meta`): add the interface normalization / duplicate / Strawberry-interface check from Decision 4, including support for a single real interface class (`interfaces = relay.Node` or `interfaces = (relay.Node)`), string-entry rejection, and `DjangoType` self-reference rejection. The composite-pk check is **not** done here — it lives in Phase 2.5 (Slice 4) so a single check site catches both `Meta.interfaces = (relay.Node,)` consumers and consumers who write `class Foo(DjangoType, relay.Node)` directly.
+   - `types/base.py:116-130` (the `DjangoTypeDefinition(...)` construction): pass the normalized interfaces tuple through to the existing `interfaces` slot at `types/definition.py:36`.
    No new slot on `DjangoTypeDefinition`. Justification: Decision 3 explicitly relies on Strawberry's `NodeID` annotation rather than a per-type `id_attr` Meta key, so the slot would be dead state.
 
 2. **`is_type_of` injection**
@@ -463,7 +465,8 @@ Package-internal tests, system-under-test is `django_strawberry_framework`.
 Validation and lifecycle:
 
 - `test_meta_interfaces_accepted` — declaring `Meta.interfaces = (relay.Node,)` does not raise.
-- `test_meta_interfaces_rejects_non_sequence` — non-sequence values (single class, set, generator) raise `ConfigurationError`.
+- `test_meta_interfaces_accepts_single_interface_class` — `interfaces = relay.Node` and `interfaces = (relay.Node)` normalize to `(relay.Node,)` so the missing-comma case is forgiving.
+- `test_meta_interfaces_rejects_non_sequence` — invalid non-sequence values, sets, and generators raise `ConfigurationError`.
 - `test_meta_interfaces_rejects_string_entries` — string entries raise `ConfigurationError`.
 - `test_meta_interfaces_rejects_non_interface_classes` — passing a plain class raises `ConfigurationError`.
 - `test_meta_interfaces_rejects_djangotype_self_reference` — passing `DjangoType` (or another `DjangoType` subclass) raises `ConfigurationError`.
@@ -570,7 +573,7 @@ The `0.0.5` slice is complete when all of the following are true:
 
 1. `"interfaces"` is in `ALLOWED_META_KEYS` (`types/base.py:58-67`), validated by `_validate_meta` per Decision 4, and stored on the existing `DjangoTypeDefinition.interfaces` slot at `types/definition.py:36`. No new fields are added to `DjangoTypeDefinition`.
 2. `finalize_django_types()` (`types/finalizer.py:31-83`) injects declared interfaces into `cls.__bases__` and runs the `relay.Node` resolver injection (Decision 3) before the existing `strawberry.type(cls, ...)` Phase 3 loop. `0.0.4` behavior is preserved bit-for-bit for types that omit `Meta.interfaces`, verified by the existing test suite passing unchanged.
-3. Declaring `interfaces = (relay.Node,)` produces a working Relay-Node GraphQL type with `id: GlobalID!`, the four injected `resolve_*` methods, the `is_type_of` virtual subclass behavior, and consumer override support per Decision 6.
+3. Declaring `interfaces = (relay.Node,)` produces a working Relay-Node GraphQL type with `id: GlobalID!`, the four injected `resolve_*` methods, the `is_type_of` virtual subclass behavior, and consumer override support per Decision 6. The single-interface forms `interfaces = relay.Node` and `interfaces = (relay.Node)` normalize to the same stored tuple.
 4. Composite-pk models combined with `relay.Node` raise `ConfigurationError` at finalization with a message that names the model and proposes a remediation path.
 5. Optimizer invariants in Decision 7 hold: `only()` includes the pk attname when Relay `id` is selected, `resolve_id` does not trigger an avoidable lazy load, and relation traversal across Relay-declared targets is unchanged.
 6. Tests in `tests/types/test_relay_interfaces.py` (new), and the extensions to `tests/types/test_definition_order_schema.py`, `tests/optimizer/`, `tests/test_registry.py`, and `examples/fakeshop/test_query/test_library_api.py` listed in the Test plan all pass.

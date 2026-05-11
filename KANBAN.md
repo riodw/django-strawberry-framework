@@ -350,7 +350,7 @@ Spec checklist mirror:
 - Slice 1 — validation and storage:
   - Keep `"interfaces"` in `DEFERRED_META_KEYS` until promotion in Slice 5.
   - Extend `_validate_meta` with `Meta.interfaces` validation.
-  - Normalize only tuple/list input; reject sets, generators, and a single class value.
+  - Normalize tuple/list input and a single real Strawberry interface class; reject strings, sets, generators, and invalid non-sequence values.
   - Require every entry to be a real Strawberry interface.
   - Reject string entries, self-reference to the current `DjangoType`, any other `DjangoType` subclass, and duplicates.
   - Store the normalized interfaces tuple on `DjangoTypeDefinition`.

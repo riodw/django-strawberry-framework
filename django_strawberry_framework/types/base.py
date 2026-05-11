@@ -304,8 +304,9 @@ def _validate_meta(meta: type) -> None:
 
     # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
     # validate ``Meta.interfaces`` as a tuple/list of real Strawberry
-    # interfaces, rejecting strings, non-sequences, duplicates, and
-    # DjangoType self-references before Strawberry decoration.
+    # interfaces, or as one real Strawberry interface class normalized
+    # to a one-item tuple. Reject strings, invalid non-sequences,
+    # duplicates, and DjangoType self-references before Strawberry decoration.
 
 
 def _validate_optimizer_hints(meta: type, fields: tuple[Any, ...]) -> None:

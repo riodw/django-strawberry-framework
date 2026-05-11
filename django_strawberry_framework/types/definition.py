@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from django.db import models
@@ -28,6 +28,10 @@ class DjangoTypeDefinition:
     consumer_authored_fields: frozenset[str] = frozenset()
     consumer_annotated_relation_fields: frozenset[str] = frozenset()
     consumer_assigned_relation_fields: frozenset[str] = frozenset()
+    consumer_assigned_scalar_fields: frozenset[str] = frozenset()
+    # TODO(deferred specs; see docs/FEATURES.md): tighten ``Any | None`` to the
+    # concrete classes once filtersets/ordersets/aggregates/fields/search ship;
+    # update or remove this anchor in the same change that lands each slice.
     filterset_class: Any | None = None
     orderset_class: Any | None = None
     aggregate_class: Any | None = None
@@ -37,4 +41,4 @@ class DjangoTypeDefinition:
     # populate this from accepted ``Meta.interfaces`` and keep it as the
     # finalizer's source of truth for Phase 2.5 base injection.
     interfaces: tuple[type, ...] = ()
-    finalized: bool = field(default=False)
+    finalized: bool = False

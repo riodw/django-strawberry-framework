@@ -270,6 +270,52 @@ def test_relation_field_class_attribute_shadowing_raises():
                 fields = ("id", "name", "items")
 
 
+def test_assigned_scalar_field_override_keeps_consumer_resolver():
+    """A ``strawberry.field(resolver=...)`` assigned to a scalar column wins.
+
+    Pins the Medium fix from ``rev-types__base.md``: previously
+    ``_consumer_assigned_relation_fields`` only collected relation
+    names, so a consumer assigning a ``StrawberryField`` to a scalar
+    column (e.g. ``name``) was silently overwritten by the auto-
+    synthesized ``str`` annotation. The widened guard collects scalar
+    assignments too and ``_build_annotations`` skips them.
+    """
+
+    class CategoryType(DjangoType):
+        @strawberry.field
+        def name(self) -> str:
+            return "overridden"
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.consumer_assigned_scalar_fields == frozenset({"name"})
+    assert "name" in definition.consumer_authored_fields
+    # The synthesized scalar annotation must not shadow the consumer
+    # assignment — the field name does not appear in the generated
+    # annotations dict.
+    assert "name" not in CategoryType.__annotations__
+
+    finalize_django_types()
+    name_field = _strawberry_field(CategoryType, "name")
+    assert name_field.base_resolver is not None
+    assert name_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.name")
+
+
+def test_scalar_field_class_attribute_shadowing_raises():
+    """Unsupported class attributes cannot silently shadow scalar fields either."""
+    with pytest.raises(ConfigurationError, match="shadows a Django scalar field"):
+
+        class CategoryType(DjangoType):
+            name = 42
+
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+
+
 def test_same_module_string_forward_reference_annotation_survives_finalization():
     """A same-module string relation override is resolved by Strawberry after finalization."""
 

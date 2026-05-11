@@ -26,6 +26,7 @@ import strawberry
 from django.db import router
 from strawberry.types import Info
 
+from ..exceptions import OptimizerError
 from ..optimizer import logger as _resolver_logger
 from ..optimizer._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
@@ -38,6 +39,10 @@ from ..optimizer._context import (
 from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..utils.relations import relation_kind
 
+# Module-level immutable sentinel for the "no elisions registered" branch so
+# the forward-resolver dispatch does not allocate a fresh empty set per call.
+_EMPTY_FROZENSET: frozenset[str] = frozenset()
+
 
 def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
     """Return ``True`` if B2 marked this forward relation as FK-id elided."""
@@ -47,7 +52,7 @@ def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None
     elisions = _get_context_value(
         getattr(info, "context", None),
         DST_OPTIMIZER_FK_ID_ELISIONS,
-        set(),
+        _EMPTY_FROZENSET,
     )
     key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
     return key in elisions
@@ -67,28 +72,35 @@ def _build_fk_id_stub(root: Any, field: Any) -> Any:
     return stub
 
 
-def _will_lazy_load(root: Any, field_name: str) -> bool:
-    """Return ``True`` if accessing ``field_name`` on ``root`` would trigger a query.
+def _will_lazy_load_single(root: Any, field_name: str) -> bool:
+    """Return ``True`` if a single-valued relation access would trigger a query.
 
-    Checks Django's caching mechanisms:
-    - Single-valued relations (forward FK, forward OneToOne, and reverse
-      OneToOne): real Django model instances cache loaded related objects in
-      ``root._state.fields_cache``.
-    - Many-side (reverse FK, M2M): cached if ``field_name`` is in
-      ``root._prefetched_objects_cache`` (populated by ``prefetch_related``).
-    - Plain ``__dict__`` values are treated as already loaded for synthetic
-      resolver tests and consumer-provided objects that are not standard
-      Django model instances.
+    Forward FK, forward OneToOne, and reverse OneToOne. Django's
+    descriptor populates ``root._state.fields_cache`` after a load and
+    also stamps ``root.__dict__`` on some access paths (e.g. when the
+    related instance has been assigned). Both paths count as cached.
+    Synthetic test doubles that pre-populate ``__dict__`` are therefore
+    treated as already loaded — matching the resolver's existing
+    "compatibility for test doubles" contract.
     """
-    # Compatibility for test doubles and non-standard objects. Real Django
-    # relation descriptors cache single-valued relations in _state.fields_cache.
     if field_name in getattr(root, "__dict__", {}):
         return False
     state = getattr(root, "_state", None)
     fields_cache = getattr(state, "fields_cache", {})
-    if field_name in fields_cache:
-        return False
-    # Many-side: Django caches prefetched querysets in _prefetched_objects_cache.
+    return field_name not in fields_cache
+
+
+def _will_lazy_load_many(root: Any, field_name: str) -> bool:
+    """Return ``True`` if a many-side relation access would trigger a query.
+
+    Reverse FK and M2M. The only Django-supported cache for the many
+    side is ``root._prefetched_objects_cache``; setting
+    ``root.<field_name>`` directly does not populate any cache and
+    accessing the descriptor still hits the database. The
+    ``__dict__`` short-circuit used for single-valued relations is
+    intentionally NOT applied here — it would silently exempt the
+    many-side strictness path from the optimizer's N+1 contract.
+    """
     prefetch_cache = getattr(root, "_prefetched_objects_cache", {})
     return field_name not in prefetch_cache
 
@@ -98,10 +110,17 @@ def _check_n1(
     root: Any,
     field_name: str,
     parent_type: type | None = None,
+    *,
+    kind: str | None = None,
 ) -> None:
-    """B3: warn or raise if the relation is not planned and would lazy-load."""
-    from ..exceptions import OptimizerError
+    """B3: warn or raise if the relation is not planned and would lazy-load.
 
+    ``kind`` is the ``relation_kind`` of the field being resolved
+    (``"many"``, ``"reverse_one_to_one"``, ``"forward"``). When it is
+    ``None`` (legacy direct calls in tests), the function falls back to
+    the single-valued cache check, which is the conservative shape that
+    used to be the only branch.
+    """
     context = getattr(info, "context", None)
     planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
     if planned is None:
@@ -109,14 +128,27 @@ def _check_n1(
     key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
     if key in planned:
         return
-    # Only warn/raise if the access would actually trigger a lazy load.
-    if not _will_lazy_load(root, field_name):
+    if kind == "many":
+        lazy = _will_lazy_load_many(root, field_name)
+    else:
+        lazy = _will_lazy_load_single(root, field_name)
+    if not lazy:
         return
     strictness = _get_context_value(context, DST_OPTIMIZER_STRICTNESS, "off")
     if strictness == "raise":
         raise OptimizerError(f"Unplanned N+1: {field_name}")
     if strictness == "warn":
         _resolver_logger.warning("Potential N+1 on %s", field_name)
+
+
+def _name_resolver(resolver: Any, field_name: str) -> Any:
+    """Stamp ``resolver.__name__`` to ``resolve_<field_name>``.
+
+    Keeps GraphiQL traces readable and centralises the three
+    cardinality-branch rename calls in ``_make_relation_resolver``.
+    """
+    resolver.__name__ = f"resolve_{field_name}"
+    return resolver
 
 
 def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
@@ -137,43 +169,54 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
     B3: all resolvers now accept ``info`` (Strawberry injects it
     automatically) and call ``_check_n1`` when a strictness sentinel
-    is present on ``info.context``.
+    is present on ``info.context``. ``_check_n1`` receives the
+    field's ``relation_kind`` so the many-side dispatch uses
+    ``_prefetched_objects_cache`` exclusively and does not mis-classify
+    a consumer-assigned attribute as "already loaded".
     """
+    # TODO(spec-fieldmeta-ssot): read cardinality and ``attname`` from
+    # ``DjangoTypeDefinition.field_map[field_name]`` (a ``FieldMeta``)
+    # instead of re-deriving via ``relation_kind(field)`` and raw
+    # ``getattr(field, "attname", None)`` below. ``FieldMeta`` is the
+    # canonical SSoT for relation shape — see
+    # ``optimizer/field_meta.py`` module docstring.
     field_name = field.name
     kind = relation_kind(field)
 
-    if kind == "many":
+    if kind in ("many", "reverse_many_to_one"):
 
         def many_resolver(root: Any, info: Info) -> Any:
-            _check_n1(info, root, field_name, parent_type)
+            _check_n1(info, root, field_name, parent_type, kind="many")
             return list(getattr(root, field_name).all())
 
-        many_resolver.__name__ = f"resolve_{field_name}"
-        return many_resolver
+        return _name_resolver(many_resolver, field_name)
 
     if kind == "reverse_one_to_one":
         related_does_not_exist = field.related_model.DoesNotExist
 
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
-            _check_n1(info, root, field_name, parent_type)
+            _check_n1(info, root, field_name, parent_type, kind="reverse_one_to_one")
             try:
                 return getattr(root, field_name)
             except related_does_not_exist:
                 return None
 
-        reverse_one_to_one_resolver.__name__ = f"resolve_{field_name}"
-        return reverse_one_to_one_resolver
+        return _name_resolver(reverse_one_to_one_resolver, field_name)
 
+    # SSoT note: relation shape (kind, attname) is canonically derived by
+    # ``optimizer/field_meta.py:FieldMeta``. This resolver builder currently
+    # consumes the raw Django field directly; consolidating onto ``FieldMeta``
+    # is the folder-pass DRY candidate tracked in ``docs/review/rev-types.md``
+    # (Medium "attname / relation-shape derivation is duplicated").
     attname = getattr(field, "attname", None)
 
     def forward_resolver(root: Any, info: Info) -> Any:
         if attname is not None and _is_fk_id_elided(info, field_name, parent_type):
             return _build_fk_id_stub(root, field)
-        _check_n1(info, root, field_name, parent_type)
+        _check_n1(info, root, field_name, parent_type, kind="forward")
         return getattr(root, field_name)
 
-    forward_resolver.__name__ = f"resolve_{field_name}"
-    return forward_resolver
+    return _name_resolver(forward_resolver, field_name)
 
 
 def _attach_relation_resolvers(

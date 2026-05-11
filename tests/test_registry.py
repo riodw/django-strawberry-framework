@@ -507,6 +507,105 @@ def test_pending_set_is_cleaned_after_success_and_retained_after_phase_1_failure
     assert list(registry.iter_pending_relations()) == []
 
 
+def test_discard_pending_uses_identity_match_with_real_pending_relation(fresh_registry):
+    """``discard_pending`` removes the exact records handed back by the caller.
+
+    Pins the identity-based contract so this module does not couple to
+    ``PendingRelation``'s ``__eq__``/``__hash__`` semantics.  Builds two
+    equal-by-value records and asserts that discarding one leaves the
+    other in place.
+    """
+    field = Category._meta.get_field("items")
+    kind = relation_kind(field)
+    source_type = type("SharedSource", (), {})
+    common_kwargs = {
+        "source_type": source_type,
+        "source_model": Category,
+        "field_name": "items",
+        "django_field": field,
+        "related_model": Item,
+        "relation_kind": kind,
+        "nullable": False,
+    }
+    record_a = PendingRelation(**common_kwargs)
+    record_b = PendingRelation(**common_kwargs)
+    # Sanity-check: distinct objects, equal by dataclass value. This is
+    # the shape that would let an equality-based ``discard_pending`` drop
+    # both — the identity contract drops only the exact instance passed.
+    assert record_a is not record_b
+    assert record_a == record_b
+    fresh_registry.add_pending_relation(record_a)
+    fresh_registry.add_pending_relation(record_b)
+    fresh_registry.discard_pending([record_a])
+    remaining = list(fresh_registry.iter_pending_relations())
+    assert len(remaining) == 1
+    assert remaining[0] is record_b
+
+
+def test_pending_relation_rejects_non_hashable_django_field():
+    """``PendingRelation.__post_init__`` surfaces non-hashable ``django_field``.
+
+    The frozen-dataclass auto-``__hash__`` hashes every field, and
+    ``TypeRegistry.discard_pending()`` coerces records into a ``set``. A
+    non-hashable surrogate threaded into ``django_field`` would otherwise
+    fail with ``TypeError`` deep inside finalization; the ``__post_init__``
+    probe fails it at construction instead.
+    """
+
+    class _NonHashableField:
+        __hash__ = None  # type: ignore[assignment]
+
+    with pytest.raises(TypeError):
+        PendingRelation(
+            source_type=type("Src", (), {}),
+            source_model=Category,
+            field_name="items",
+            django_field=_NonHashableField(),  # type: ignore[arg-type]
+            related_model=Item,
+            relation_kind="reverse_many_to_one",
+            nullable=False,
+        )
+
+
+def test_mutators_reject_calls_after_mark_finalized(fresh_registry):
+    """After ``mark_finalized``, every mutator raises ``ConfigurationError``.
+
+    Defense-in-depth: ``DjangoType.__init_subclass__`` already rejects
+    new subclasses post-finalization, but the registry boundary itself
+    must also fail loud so out-of-band mutators (late imports, manual
+    test harnesses) cannot silently corrupt the finalized snapshot.
+    """
+
+    class CategoryType:
+        pass
+
+    class Status(Enum):
+        ACTIVE = "active"
+
+    fresh_registry.mark_finalized()
+    field = Category._meta.get_field("items")
+    pending = PendingRelation(
+        source_type=CategoryType,
+        source_model=Category,
+        field_name="items",
+        django_field=field,
+        related_model=Item,
+        relation_kind=relation_kind(field),
+        nullable=False,
+    )
+
+    with pytest.raises(ConfigurationError, match="finalized"):
+        fresh_registry.register(Category, CategoryType)
+    with pytest.raises(ConfigurationError, match="finalized"):
+        fresh_registry.register_definition(CategoryType, object())
+    with pytest.raises(ConfigurationError, match="finalized"):
+        fresh_registry.add_pending_relation(pending)
+    with pytest.raises(ConfigurationError, match="finalized"):
+        fresh_registry.discard_pending([pending])
+    with pytest.raises(ConfigurationError, match="finalized"):
+        fresh_registry.register_enum(Category, "status", Status)
+
+
 def test_clear_does_not_remove_mutation_from_previously_finalized_classes():
     """clear() resets the registry, not already-mutated class objects."""
 
@@ -522,3 +621,31 @@ def test_clear_does_not_remove_mutation_from_previously_finalized_classes():
     assert registry.is_finalized() is False
     assert hasattr(CategoryType, "__strawberry_definition__")
     assert CategoryType.__django_strawberry_definition__ is definition
+
+
+def test_register_with_definition_rolls_back_register_on_definition_failure(fresh_registry):
+    """``register_with_definition`` is atomic across the pair.
+
+    If ``register_definition`` raises after ``register`` succeeded, the
+    model->type mapping must not persist. Otherwise a subsequent attempt
+    to register the type would surface "already registered" instead of
+    the real underlying failure.
+    """
+
+    class CategoryType:
+        pass
+
+    sentinel = object()
+    fresh_registry.register_definition(CategoryType, sentinel)
+
+    with pytest.raises(ConfigurationError, match="already has a registered DjangoTypeDefinition"):
+        fresh_registry.register_with_definition(Category, CategoryType, object())
+
+    assert fresh_registry.get(Category) is None
+    assert fresh_registry.model_for_type(CategoryType) is None
+    # The pre-existing definition pin survives the rollback.
+    assert fresh_registry.get_definition(CategoryType) is sentinel
+
+    # Re-registration after the rollback now sees a clean slate for the model.
+    fresh_registry.register_with_definition(Category, CategoryType, sentinel)
+    assert fresh_registry.get(Category) is CategoryType

@@ -12,7 +12,13 @@ from .resolvers import _attach_relation_resolvers
 
 
 def _format_unresolved_targets_error(unresolved: list[PendingRelation]) -> str:
-    """Return the canonical unresolved relation target error message."""
+    """Return the canonical unresolved relation target error message.
+
+    Sibling convention: ``types/base.py:_format_unknown_fields_error`` owns the
+    other consumer-surface ``Meta.fields`` / ``Meta.exclude`` / ``Meta.optimizer_hints``
+    error strings. If consumer-surface ``Meta.*`` keys are renamed or supplemented,
+    update both formatters together.
+    """
     lines = []
     for pending in unresolved:
         lines.append(

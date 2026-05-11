@@ -102,7 +102,17 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
             ``field.choices`` is in Django's grouped form (raised from
             ``convert_choices_to_enum``).
     """
-    py_type = SCALAR_MAP.get(type(field))
+    py_type: Any = None
+    # Walk the field's MRO so consumer-defined subclasses of a supported
+    # Django field (e.g. ``class TrimmedCharField(models.CharField)`` or
+    # third-party encrypted/money field subclasses that ultimately store
+    # to a supported column type) resolve to the parent's scalar instead
+    # of raising. Exact-type lookup would force every subclass to be
+    # registered in ``SCALAR_MAP`` explicitly.
+    for klass in type(field).__mro__:
+        if klass in SCALAR_MAP:
+            py_type = SCALAR_MAP[klass]
+            break
     if py_type is None:
         raise ConfigurationError(
             f"Unsupported Django field type {type(field).__name__!r} on "
@@ -211,8 +221,13 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
 
 def resolved_relation_annotation(field: models.Field, target_type: type) -> Any:
     """Return the concrete annotation for ``field`` pointing at ``target_type``."""
+    # TODO(spec-fieldmeta-ssot): read cardinality + nullable from a
+    # ``FieldMeta`` instead of ``relation_kind(field)`` + raw
+    # ``getattr(field, "null", False)``. ``FieldMeta`` is the canonical
+    # SSoT for relation shape — see ``optimizer/field_meta.py``
+    # module docstring.
     kind = relation_kind(field)
-    if kind == "many":
+    if kind in ("many", "reverse_many_to_one"):
         return list[target_type]
     if kind == "reverse_one_to_one" or getattr(field, "null", False):
         return target_type | None

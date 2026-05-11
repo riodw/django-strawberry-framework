@@ -346,6 +346,129 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog):
     assert any("Potential N+1 on category" in r.message for r in caplog.records)
 
 
+def test_check_n1_planned_absent_is_silent():
+    """B3 branch: no planned sentinel on context → optimizer is not engaged."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class ItemType:
+        pass
+
+    fake_info = SimpleNamespace(context={}, path=_path("allItems", 0, "category"))
+    # No exception, no log, no side effect — strictness is irrelevant when the
+    # optimizer never set DST_OPTIMIZER_PLANNED.
+    _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind="forward")
+
+
+def test_check_n1_planned_hit_is_silent():
+    """B3 branch: planned key present → resolver is a no-op regardless of strictness."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class ItemType:
+        pass
+
+    key = resolver_key(ItemType, "category", ("allItems", "category"))
+    fake_info = SimpleNamespace(
+        context={
+            "dst_optimizer_planned": {key},
+            "dst_optimizer_strictness": "raise",
+        },
+        path=_path("allItems", 0, "category"),
+    )
+    _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind="forward")
+
+
+def test_check_n1_default_strictness_off_is_silent_on_lazy_load():
+    """B3 branch: strictness defaults to ``off`` and an unplanned lazy load is silent."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class ItemType:
+        pass
+
+    fake_info = SimpleNamespace(
+        context={"dst_optimizer_planned": set()},
+        path=_path("allItems", 0, "category"),
+    )
+    _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind="forward")
+
+
+def test_check_n1_raise_strictness_raises_on_lazy_load():
+    """B3 branch: strictness=raise + unplanned + lazy → OptimizerError."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.exceptions import OptimizerError
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class ItemType:
+        pass
+
+    fake_info = SimpleNamespace(
+        context={
+            "dst_optimizer_planned": set(),
+            "dst_optimizer_strictness": "raise",
+        },
+        path=_path("allItems", 0, "category"),
+    )
+    with pytest.raises(OptimizerError, match="Unplanned N\\+1: category"):
+        _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind="forward")
+
+
+def test_check_n1_many_kind_treats_consumer_set_attribute_as_lazy():
+    """B3: many-side ignores ``__dict__`` short-circuit.
+
+    A consumer (or test double) setting ``root.<field>`` directly does
+    not populate Django's prefetch cache, so the many-side resolver
+    must still treat the access as lazy. Pinned via strictness=raise.
+    """
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.exceptions import OptimizerError
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class CategoryType:
+        pass
+
+    fake_info = SimpleNamespace(
+        context={
+            "dst_optimizer_planned": set(),
+            "dst_optimizer_strictness": "raise",
+        },
+        path=_path("allCategories", 0, "items"),
+    )
+    # ``items`` is set directly on the root — that would short-circuit the
+    # single-valued cache check via ``__dict__`` membership but must NOT
+    # short-circuit the many-side check.
+    root = SimpleNamespace(items=["not-a-real-prefetch"])
+    with pytest.raises(OptimizerError, match="Unplanned N\\+1: items"):
+        _check_n1(fake_info, root, "items", CategoryType, kind="many")
+
+
+def test_check_n1_many_kind_respects_prefetched_objects_cache():
+    """B3: many-side recognises ``_prefetched_objects_cache`` as the only valid cache."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class CategoryType:
+        pass
+
+    fake_info = SimpleNamespace(
+        context={
+            "dst_optimizer_planned": set(),
+            "dst_optimizer_strictness": "raise",
+        },
+        path=_path("allCategories", 0, "items"),
+    )
+    root = SimpleNamespace(_prefetched_objects_cache={"items": []})
+    # No raise — the relation is prefetched, so the strictness branch is skipped.
+    _check_n1(fake_info, root, "items", CategoryType, kind="many")
+
+
 def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
     """O4: runtime response paths preserve aliases and omit list indexes."""
     from types import SimpleNamespace

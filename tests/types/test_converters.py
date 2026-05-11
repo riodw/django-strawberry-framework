@@ -29,6 +29,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.converters import (
     _sanitize_member_name,
     convert_choices_to_enum,
+    convert_scalar,
 )
 
 
@@ -269,3 +270,74 @@ def test_convert_choices_to_enum_raises_on_keyword_prefix_collision(choice_fixtu
     finally:
         field.choices = original
         registry.clear()
+
+
+# ---------------------------------------------------------------------------
+# SCALAR_MAP subclass resolution (High fix from rev-types__converters.md)
+# ---------------------------------------------------------------------------
+
+
+class _TrimmedCharField(models.CharField):
+    """Consumer-style subclass of ``CharField``.
+
+    Subclassing a Django field is the normal extension path; exact-type
+    ``SCALAR_MAP`` lookup would reject this even though the column still
+    stores ``str``.
+    """
+
+
+class _NullableTrimmedCharField(models.CharField):
+    """Same shape but with ``null=True`` to exercise widening on a subclass."""
+
+
+def test_convert_scalar_resolves_subclass_of_supported_field_to_parent_scalar():
+    """A consumer subclass of ``CharField`` resolves to ``str`` via MRO walk.
+
+    Pins the High fix from ``rev-types__converters.md``: exact-type
+    ``SCALAR_MAP`` lookup misses subclasses, breaking the standard Django
+    extension path. The walker must find ``models.CharField`` on the
+    subclass MRO and return its mapped scalar.
+    """
+
+    class _Owner(models.Model):
+        slug = _TrimmedCharField(max_length=32)
+
+        class Meta:
+            app_label = "test_choice_enums"
+
+    field = _Owner._meta.get_field("slug")
+    assert convert_scalar(field, "OwnerType") is str
+
+
+def test_convert_scalar_subclass_with_null_widens_through_mro_resolution():
+    """The MRO-resolved scalar still flows through the ``null=True`` widening branch."""
+
+    class _Owner(models.Model):
+        slug = _NullableTrimmedCharField(max_length=32, null=True)
+
+        class Meta:
+            app_label = "test_choice_enums"
+
+    field = _Owner._meta.get_field("slug")
+    assert convert_scalar(field, "OwnerType") == (str | None)
+
+
+def test_convert_scalar_unknown_field_type_still_raises():
+    """A field whose MRO does not intersect ``SCALAR_MAP`` still raises.
+
+    Guard against the MRO walk accidentally swallowing the unsupported
+    case: ``object`` is on every MRO but is not in ``SCALAR_MAP``.
+    """
+
+    class _UnsupportedField(models.Field):
+        pass
+
+    class _Owner(models.Model):
+        weird = _UnsupportedField()
+
+        class Meta:
+            app_label = "test_choice_enums"
+
+    field = _Owner._meta.get_field("weird")
+    with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
+        convert_scalar(field, "OwnerType")

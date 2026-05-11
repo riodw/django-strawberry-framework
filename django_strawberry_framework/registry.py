@@ -46,6 +46,31 @@ class TypeRegistry:
         self._pending: list[PendingRelation] = []
         self._finalized: bool = False
 
+    def _check_mutable(self) -> None:
+        """Defense-in-depth guard: refuse mutation after ``mark_finalized``.
+
+        ``DjangoType.__init_subclass__`` already rejects new subclasses
+        once the registry is finalized; this check pins the same contract
+        at the registry boundary so any out-of-band mutator (e.g., a late
+        import triggered from a request handler) fails loud instead of
+        silently corrupting the post-finalization snapshot.
+        """
+        if self._finalized:
+            raise ConfigurationError(
+                "TypeRegistry is finalized; mutators are import-time only "
+                "(call registry.clear() before registering new types)",
+            )
+
+    @staticmethod
+    def _already_registered(label: str, name: str, existing_name: str) -> ConfigurationError:
+        """Build the canonical "already registered" ``ConfigurationError``.
+
+        Centralizes the phrasing so the three mutator collision messages
+        (``register`` forward, ``register`` reverse, ``register_enum``)
+        stay grep-stable for tests and consumer error matching.
+        """
+        return ConfigurationError(f"{name} is already registered {label} {existing_name}")
+
     def register(self, model: type[models.Model], type_cls: type) -> None:
         """Register ``type_cls`` as the ``DjangoType`` for ``model``.
 
@@ -54,20 +79,17 @@ class TypeRegistry:
 
         Raises:
             ConfigurationError: ``model`` already has a registered type,
-                or ``type_cls`` is already registered against a different
-                model.  The error message names the conflicting class or
-                model so the consumer can identify the duplicate at
-                import time.
+                ``type_cls`` is already registered against a different
+                model, or the registry is finalized.  The error message
+                names the conflicting class or model so the consumer can
+                identify the duplicate at import time.
         """
+        self._check_mutable()
         if model in self._types:
-            raise ConfigurationError(
-                f"{model.__name__} is already registered as {self._types[model].__name__}",
-            )
+            raise self._already_registered("as", model.__name__, self._types[model].__name__)
         existing_model = self._models.get(type_cls)
         if existing_model is not None and existing_model is not model:
-            raise ConfigurationError(
-                f"{type_cls.__name__} is already registered against {existing_model.__name__}",
-            )
+            raise self._already_registered("against", type_cls.__name__, existing_model.__name__)
         self._types[model] = type_cls
         self._models[type_cls] = model
 
@@ -100,11 +122,42 @@ class TypeRegistry:
         yield from self._types.items()
 
     def register_definition(self, type_cls: type, definition: DjangoTypeDefinition) -> None:
-        """Register the collected definition object for ``type_cls``."""
+        """Register the collected definition object for ``type_cls``.
+
+        Asymmetry note: ``type_cls`` is not required to be present in
+        ``_types``/``_models`` first.  The caller (``DjangoType.__init_subclass__``
+        in ``types/base.py``) is responsible for ordering — it calls
+        ``register`` before ``register_definition`` for every concrete
+        ``DjangoType`` subclass.  Definitions for un-modelled wrapper
+        classes are not a supported entry point.
+        """
+        self._check_mutable()
         existing = self._definitions.get(type_cls)
         if existing is not None and existing is not definition:
             raise ConfigurationError(f"{type_cls.__name__} already has a registered DjangoTypeDefinition")
         self._definitions[type_cls] = definition
+
+    def register_with_definition(
+        self,
+        model: type[models.Model],
+        type_cls: type,
+        definition: DjangoTypeDefinition,
+    ) -> None:
+        """Atomic ``register`` + ``register_definition`` pair.
+
+        If ``register_definition`` raises after ``register`` succeeded,
+        the model->type mapping is rolled back so the consumer sees the
+        real underlying error on the next re-import or test rerun
+        instead of "already registered". ``DjangoType.__init_subclass__``
+        is the only intended caller; see ``types/base.py``.
+        """
+        self.register(model, type_cls)
+        try:
+            self.register_definition(type_cls, definition)
+        except Exception:
+            self._types.pop(model, None)
+            self._models.pop(type_cls, None)
+            raise
 
     def get_definition(self, type_cls: type) -> DjangoTypeDefinition | None:
         """Return the collected definition for ``type_cls``, or ``None``."""
@@ -116,16 +169,31 @@ class TypeRegistry:
 
     def add_pending_relation(self, pending: PendingRelation) -> None:
         """Record a relation whose target type must be resolved during finalization."""
+        self._check_mutable()
         self._pending.append(pending)
 
     def iter_pending_relations(self) -> Iterator[PendingRelation]:
-        """Yield pending relation records in collection order."""
+        """Yield pending relation records in collection order.
+
+        ``discard_pending`` may be called between yields by the finalizer;
+        callers that materialize the iterator and then trigger discards
+        will observe a stale view.  Typical consumers (the finalizer
+        itself) drain into a list before mutating.
+        """
         yield from self._pending
 
     def discard_pending(self, resolved: Iterable[PendingRelation]) -> None:
-        """Drop pending records that have been resolved successfully."""
-        resolved_set = set(resolved)
-        self._pending = [pending for pending in self._pending if pending not in resolved_set]
+        """Drop pending records that have been resolved successfully.
+
+        Identity-matched (``id()``) rather than equality-matched: the
+        finalizer hands back the very ``PendingRelation`` instances it
+        received from ``iter_pending_relations``, so identity is a
+        stronger contract than ``__eq__`` and avoids coupling this
+        module to ``PendingRelation``'s hashability.
+        """
+        self._check_mutable()
+        resolved_ids = {id(record) for record in resolved}
+        self._pending = [pending for pending in self._pending if id(pending) not in resolved_ids]
 
     def is_finalized(self) -> bool:
         """Return whether the registry has completed ``finalize_django_types()``."""
@@ -153,11 +221,14 @@ class TypeRegistry:
                 normal ``get_enum``-then-``register_enum`` cache pattern
                 in ``convert_choices_to_enum`` still works under retry.
         """
+        self._check_mutable()
         key = (model, field_name)
         existing = self._enums.get(key)
         if existing is not None and existing is not enum_cls:
-            raise ConfigurationError(
-                f"{model.__name__}.{field_name} is already registered as {existing.__name__}",
+            raise self._already_registered(
+                "as",
+                f"{model.__name__}.{field_name}",
+                existing.__name__,
             )
         self._enums[key] = enum_cls
 

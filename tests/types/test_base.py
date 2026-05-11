@@ -218,7 +218,7 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
     """
     from django_strawberry_framework.optimizer.hints import OptimizerHint
 
-    with pytest.raises(ConfigurationError, match="not in the type's selected fields"):
+    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
 
         class T(DjangoType):
             class Meta:

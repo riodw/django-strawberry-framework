@@ -96,7 +96,7 @@ class DjangoType:
             )
         _validate_meta(meta)
         fields = _select_fields(meta)
-        _validate_optimizer_hints_against_selected_fields(meta, fields)
+        _validate_optimizer_hints(meta, fields)
 
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         optimizer_hints = _meta_optimizer_hints(meta)
@@ -104,7 +104,7 @@ class DjangoType:
         consumer_annotated_relation_fields = frozenset(
             field.name for field in fields if field.is_relation and field.name in consumer_annotations
         )
-        consumer_assigned_relation_fields = _consumer_assigned_relation_fields(
+        consumer_assigned_relation_fields, consumer_assigned_scalar_fields = _consumer_assigned_fields(
             cls.__dict__,
             fields,
         )
@@ -112,6 +112,7 @@ class DjangoType:
             {
                 *consumer_annotated_relation_fields,
                 *consumer_assigned_relation_fields,
+                *consumer_assigned_scalar_fields,
             },
         )
         synthesized, pending = _build_annotations(
@@ -137,13 +138,17 @@ class DjangoType:
             consumer_authored_fields=consumer_authored_fields,
             consumer_annotated_relation_fields=consumer_annotated_relation_fields,
             consumer_assigned_relation_fields=consumer_assigned_relation_fields,
+            consumer_assigned_scalar_fields=consumer_assigned_scalar_fields,
         )
-        registry.register(meta.model, cls)
-        registry.register_definition(cls, definition)
+        registry.register_with_definition(meta.model, cls, definition)
         for pending_relation in pending:
             registry.add_pending_relation(pending_relation)
         cls.__annotations__ = {**synthesized, **consumer_annotations}
         cls.__django_strawberry_definition__ = definition
+        # TODO(spec-fieldmeta-mirror-retirement): retire these class-attribute
+        # mirrors; the optimizer should read ``DjangoTypeDefinition.field_map`` /
+        # ``optimizer_hints`` directly. Reader sites in ``optimizer/walker.py``
+        # and ``optimizer/field_meta.py`` carry the matching anchor.
         cls._optimizer_field_map = field_map
         cls._optimizer_hints = optimizer_hints
 
@@ -208,25 +213,40 @@ def _normalize_sequence_spec(value: Any) -> tuple[str, ...] | None:
     return tuple(value)
 
 
-def _consumer_assigned_relation_fields(
+def _consumer_assigned_fields(
     class_dict: dict[str, Any],
     fields: tuple[Any, ...],
-) -> frozenset[str]:
-    """Return relation names assigned to explicit Strawberry field objects."""
-    assigned = set()
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Return (relation, scalar) names assigned to explicit Strawberry field objects.
+
+    Walks every selected Django field, not just relations. A consumer
+    who writes ``name = strawberry.field(resolver=...)`` on a scalar
+    column gets the same treatment as the relation case: their
+    Strawberry field object is preserved and ``_build_annotations``
+    skips synthesizing an annotation for that name. Any non-
+    ``StrawberryField`` shadow of a Django field name raises the same
+    ``ConfigurationError`` shape so the failure mode is consistent
+    across scalar and relation columns.
+    """
+    relation_assigned: set[str] = set()
+    scalar_assigned: set[str] = set()
     for field in fields:
-        if not field.is_relation or field.name not in class_dict:
+        if field.name not in class_dict:
             continue
         value = class_dict[field.name]
         if isinstance(value, StrawberryField):
-            assigned.add(field.name)
+            if field.is_relation:
+                relation_assigned.add(field.name)
+            else:
+                scalar_assigned.add(field.name)
             continue
+        kind = "relation" if field.is_relation else "scalar"
         raise ConfigurationError(
-            f"{field.model.__name__}.{field.name} shadows a Django relation field with an unsupported "
-            "class attribute. Use a type annotation for relation type overrides, or use "
+            f"{field.model.__name__}.{field.name} shadows a Django {kind} field with an unsupported "
+            "class attribute. Use a type annotation for type overrides, or use "
             "strawberry.field(resolver=...) / @strawberry.field for resolver overrides.",
         )
-    return frozenset(assigned)
+    return frozenset(relation_assigned), frozenset(scalar_assigned)
 
 
 def _meta_optimizer_hints(meta: type) -> dict[str, Any]:
@@ -287,47 +307,54 @@ def _validate_meta(meta: type) -> None:
     # interfaces, rejecting strings, non-sequences, duplicates, and
     # DjangoType self-references before Strawberry decoration.
 
-    # B4: validate optimizer_hints field names and value types.
-    hints = _meta_optimizer_hints(meta)
-    if hints:
-        model = meta.model
-        valid_field_names = {f.name for f in model._meta.get_fields()}
-        unknown_hint_fields = sorted(set(hints) - valid_field_names)
-        if unknown_hint_fields:
-            raise ConfigurationError(
-                _format_unknown_fields_error(
-                    model=model,
-                    attr="optimizer_hints",
-                    unknown=unknown_hint_fields,
-                    available=valid_field_names,
-                ),
-            )
-        bad_values = sorted(k for k, v in hints.items() if not isinstance(v, OptimizerHint))
-        if bad_values:
-            raise ConfigurationError(
-                f"optimizer_hints values must be OptimizerHint instances, "
-                f"got non-OptimizerHint for: {bad_values}",
-            )
 
+def _validate_optimizer_hints(meta: type, fields: tuple[Any, ...]) -> None:
+    """Validate ``Meta.optimizer_hints`` keys and values in one pass.
 
-def _validate_optimizer_hints_against_selected_fields(meta: type, fields: tuple[Any, ...]) -> None:
-    """Reject ``optimizer_hints`` keys that are not in the type's selected fields.
+    Combines the three checks that previously lived in two helpers:
 
-    ``_validate_meta`` already checks that hint keys name real Django fields
-    on ``meta.model``.  This second check catches the silent-dead-code
-    case where the field is real but excluded from the GraphQL type via
-    ``Meta.fields`` / ``Meta.exclude`` — the walker never visits it, so
-    the consumer's optimization intent is lost.
+    1. Every hint key names a field on ``meta.model`` (typo guard).
+    2. Every hint key is in the type's *selected* field set (excluded
+       fields silently drop optimizer intent otherwise — the walker
+       never visits them).
+    3. Every hint value is an ``OptimizerHint`` instance.
+
+    All three error sites route through ``_format_unknown_fields_error``
+    so the consumer-visible shape is identical to ``Meta.fields`` /
+    ``Meta.exclude`` typo guards.
     """
     hints = _meta_optimizer_hints(meta)
     if not hints:
         return
+    model = meta.model
+    valid_field_names = {f.name for f in model._meta.get_fields()}
     selected_names = {f.name for f in fields}
+
+    unknown_hint_fields = sorted(set(hints) - valid_field_names)
+    if unknown_hint_fields:
+        raise ConfigurationError(
+            _format_unknown_fields_error(
+                model=model,
+                attr="optimizer_hints",
+                unknown=unknown_hint_fields,
+                available=valid_field_names,
+            ),
+        )
     excluded_hint_fields = sorted(set(hints) - selected_names)
     if excluded_hint_fields:
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.optimizer_hints names fields not in the type's "
-            f"selected fields: {excluded_hint_fields}.  Selected: {sorted(selected_names)}.",
+            _format_unknown_fields_error(
+                model=model,
+                attr="optimizer_hints",
+                unknown=excluded_hint_fields,
+                available=selected_names,
+            ),
+        )
+    bad_values = sorted(k for k, v in hints.items() if not isinstance(v, OptimizerHint))
+    if bad_values:
+        raise ConfigurationError(
+            f"optimizer_hints values must be OptimizerHint instances, "
+            f"got non-OptimizerHint for: {bad_values}",
         )
 
 
@@ -442,6 +469,13 @@ def _build_annotations(
             else:
                 annotations[field.name] = resolved_relation_annotation(field, target_type)
         else:
+            if field.name in consumer_authored_fields:
+                # A consumer-assigned ``StrawberryField`` (or annotation) on a
+                # scalar column wins over the auto-synthesized annotation so
+                # ``strawberry.field(resolver=...)`` overrides survive
+                # collection. Relation override symmetry: see the
+                # ``field.is_relation`` branch above.
+                continue
             # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
             # when ``relay.Node`` is declared in ``Meta.interfaces``, suppress
             # the synthesized Django ``id`` annotation while preserving the pk
@@ -456,6 +490,12 @@ def _record_pending_relation(
     field: Any,
 ) -> PendingRelation:
     """Build a pending relation record from a selected Django relation field."""
+    # TODO(spec-fieldmeta-ssot): the ``nullable`` derivation inlines
+    # ``kind == "reverse_one_to_one" or bool(getattr(field, "null",
+    # False))`` instead of reading from a ``FieldMeta`` already built
+    # for ``field`` at the call site. ``FieldMeta`` is the canonical
+    # SSoT for relation shape — see ``optimizer/field_meta.py``
+    # module docstring.
     kind = relation_kind(field)
     return PendingRelation(
         source_type=cls,

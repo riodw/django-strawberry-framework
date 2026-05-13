@@ -554,7 +554,16 @@ def _build_annotations(
     """
     annotations: dict[str, Any] = {}
     pending: list[PendingRelation] = []
-    suppress_pk_annotation = relay.Node in interfaces
+    # Suppress the synthesized scalar ``id`` annotation whenever the type will
+    # participate in the Relay ``Node`` interface — either through
+    # ``Meta.interfaces`` (the canonical path) or through direct inheritance
+    # (``class Foo(DjangoType, relay.Node)``). Without the direct-inheritance
+    # branch a Strawberry-native consumer would land in Phase 3
+    # ``strawberry.type(...)`` decoration with both the synthesized ``id: int``
+    # and the interface-supplied ``id: GlobalID!`` and the schema build would
+    # blow up with ``NodeIDAnnotationError`` (review feedback ``feedback.md``
+    # § High "Direct relay.Node inheritance bypasses Relay finalization").
+    suppress_pk_annotation = relay.Node in interfaces or issubclass(cls, relay.Node)
     pk_attname = source_model._meta.pk.name if suppress_pk_annotation else None
     for field in fields:
         if field.is_relation:

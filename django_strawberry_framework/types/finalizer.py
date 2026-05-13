@@ -96,9 +96,15 @@ def finalize_django_types() -> None:
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue
-        if not definition.interfaces:
-            continue
-        apply_interfaces(type_cls, definition)
+        # ``apply_interfaces`` is the only step that depends on a non-empty
+        # ``Meta.interfaces`` tuple. The Relay-node gate and resolver injection
+        # are keyed off the resolved MRO (``implements_relay_node``) so they
+        # also catch consumers who wrote ``class Foo(DjangoType, relay.Node)``
+        # directly without ``Meta.interfaces`` (review feedback
+        # ``feedback.md`` § High "Direct relay.Node inheritance bypasses Relay
+        # finalization").
+        if definition.interfaces:
+            apply_interfaces(type_cls, definition)
         if implements_relay_node(type_cls):
             _check_composite_pk_for_relay_node(type_cls)
             install_relay_node_resolvers(type_cls)

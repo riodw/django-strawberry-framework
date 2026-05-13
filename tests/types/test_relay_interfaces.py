@@ -477,6 +477,37 @@ def test_resolve_node_applies_get_queryset():
 
 
 @pytest.mark.django_db
+def test_resolve_node_accepts_strawberry_positional_call_shape():
+    """Strawberry calls ``cls.resolve_node(node_id, info=info)`` — positional ``node_id``.
+
+    Pins the review-feedback regression (``feedback.md`` § High
+    ``resolve_node`` default has the wrong bound signature): Strawberry's
+    Relay machinery passes ``node_id`` positionally and ``info`` as a
+    keyword. With the corrected signature ``(cls, node_id, *, info,
+    required=False)`` this call shape lands correctly; with the previous
+    ``(cls, info, node_id, ...)`` shape Python raised ``TypeError: got
+    multiple values for argument 'info'``.
+    """
+    services.seed_data(1)
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    target = Category.objects.first()
+    assert target is not None
+    # Positional node_id matches Strawberry's bound call site exactly.
+    result = CategoryNode.resolve_node(str(target.pk), info=None)
+    assert result is not None and result.pk == target.pk
+    # required=True via positional node_id keeps the same shape.
+    required_result = CategoryNode.resolve_node(str(target.pk), info=None, required=True)
+    assert required_result.pk == target.pk
+
+
+@pytest.mark.django_db
 def test_resolve_node_required_raises_for_missing():
     """``required=True`` raises ``Model.DoesNotExist`` when no row matches."""
     services.seed_data(1)
@@ -910,6 +941,99 @@ def test_install_relay_node_resolvers_idempotent():
     # module-level constants in ``types/relay.py``.
     for attr in snapshot:
         assert after[attr].__func__ is snapshot[attr].__func__
+
+
+# ---------------------------------------------------------------------------
+# Regression: direct ``relay.Node`` inheritance (no ``Meta.interfaces``)
+# ---------------------------------------------------------------------------
+
+
+def test_direct_relay_node_inheritance_suppresses_id_annotation():
+    """Direct ``class Foo(DjangoType, relay.Node)`` suppresses the synthesized pk.
+
+    Pins the review-feedback regression (``feedback.md`` § High "Direct
+    ``relay.Node`` inheritance bypasses Relay finalization"): when a
+    consumer follows Strawberry's native inheritance style without
+    declaring ``Meta.interfaces``, the package must still drop the
+    synthesized ``id: int`` annotation so the interface-supplied ``id:
+    GlobalID!`` is not shadowed.
+
+    Exercises ``_build_annotations`` at the unit boundary against a host
+    class that itself inherits ``relay.Node``, with ``interfaces=()`` to
+    isolate the direct-inheritance branch from the ``Meta.interfaces``
+    branch.
+    """
+    fields = tuple(Category._meta.get_fields())
+
+    class _Host(relay.Node):
+        pass
+
+    synthesized, _ = _build_annotations(
+        _Host,
+        fields,
+        source_model=Category,
+        interfaces=(),
+    )
+    assert "id" not in synthesized
+    # Non-pk scalars still receive their synthesized annotations.
+    assert "name" in synthesized
+
+
+@pytest.mark.django_db
+def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
+    """End-to-end: ``class Foo(DjangoType, relay.Node)`` finalizes the Relay shape.
+
+    Pins the review-feedback regression (``feedback.md`` § High "Direct
+    ``relay.Node`` inheritance bypasses Relay finalization"): Phase 2.5
+    must run the composite-pk gate and the four ``resolve_*`` defaults
+    for every class whose resolved MRO includes ``relay.Node``, not only
+    for classes with a non-empty ``Meta.interfaces`` tuple. Without this
+    fix the consumer's class still inherits ``relay.Node``'s defaults
+    (which call into Strawberry's GlobalID encoder) but never receives
+    the framework's ``get_queryset``-aware overrides.
+    """
+    services.seed_data(1)
+
+    class CategoryNode(DjangoType, relay.Node):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    assert relay.Node in CategoryNode.__mro__
+    # ``Meta.interfaces`` was empty — the definition stores the empty tuple.
+    assert CategoryNode.__django_strawberry_definition__.interfaces == ()
+    # All four resolver defaults landed on the class itself.
+    for attr in ("resolve_id", "resolve_id_attr", "resolve_node", "resolve_nodes"):
+        assert attr in CategoryNode.__dict__, f"{attr} was not injected"
+        assert isinstance(CategoryNode.__dict__[attr], classmethod)
+    # The synthesized ``id`` annotation was dropped so the interface-supplied
+    # ``id: GlobalID!`` field wins at Strawberry decoration time.
+    assert "id" not in CategoryNode.__annotations__
+    # Sanity: the injected defaults actually fetch by pk through ``get_queryset``.
+    target = Category.objects.first()
+    assert target is not None
+    assert CategoryNode.resolve_node(str(target.pk), info=None).pk == target.pk
+
+
+def test_direct_relay_node_inheritance_composite_pk_raises(monkeypatch):
+    """Direct ``relay.Node`` inheritance + composite pk raises at finalization.
+
+    Pins the review-feedback regression (``feedback.md`` § High): the
+    composite-pk gate must fire for every Relay-shaped type, including
+    consumers who inherit ``relay.Node`` directly without declaring
+    ``Meta.interfaces``. Detection uses Phase 2.5's
+    ``isinstance(model._meta.pk, CompositePrimaryKey)``.
+    """
+
+    class CategoryNode(DjangoType, relay.Node):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
+    with pytest.raises(ConfigurationError, match="composite primary key"):
+        finalize_django_types()
 
 
 def test_install_relay_node_resolvers_preserves_consumer_override():

@@ -145,8 +145,14 @@ def _resolve_id_attr_default(cls: type) -> str:
         return "pk"
 
 
-def _resolve_id_default(cls: type, root: models.Model, info: Any) -> str:
+def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:
     """Default ``Node.resolve_id`` with a ``__dict__`` cache check.
+
+    Signature mirrors ``strawberry.relay.Node.resolve_id`` after
+    ``classmethod`` binding: ``(cls, root, *, info)``. ``info`` is
+    keyword-only so Strawberry's Relay machinery, which calls
+    ``cls.resolve_id(root, info=info)``, lands at the right slot without
+    a positional collision (review feedback ``feedback.md`` § High).
 
     Calls ``cls.resolve_id_attr()`` to derive the column name (handles
     consumer ``relay.NodeID[...]`` overrides and the ``"pk"`` fallback),
@@ -240,11 +246,20 @@ def _order_nodes(
 
 def _resolve_node_default(
     cls: type,
-    info: Any,
     node_id: Any,
+    *,
+    info: Any,
     required: bool = False,
 ) -> Any:
     """Default ``Node.resolve_node`` — ``get_queryset`` aware.
+
+    Signature mirrors ``strawberry.relay.Node.resolve_node`` after
+    ``classmethod`` binding: ``(cls, node_id, *, info, required=False)``.
+    ``info`` is keyword-only so Strawberry's runtime call shape
+    (``cls.resolve_node(node_id, info=info, required=...)``) lands
+    correctly. An earlier draft used ``(cls, info, node_id, ...)`` which
+    Strawberry's machinery turned into ``TypeError: got multiple values
+    for argument 'info'`` (review feedback ``feedback.md`` § High).
 
     Returns the single matching row (``qs.get()`` when ``required``,
     ``qs.first()`` otherwise). Async path detected via
@@ -261,11 +276,19 @@ def _resolve_node_default(
 
 def _resolve_nodes_default(
     cls: type,
+    *,
     info: Any,
     node_ids: Any = None,
     required: bool = False,
 ) -> Any:
     """Default ``Node.resolve_nodes`` — order-preserving, missing-aware.
+
+    Signature mirrors ``strawberry.relay.Node.resolve_nodes`` after
+    ``classmethod`` binding: ``(cls, *, info, node_ids, required=False)``.
+    ``node_ids`` defaults to ``None`` here (Strawberry's upstream slot is
+    a required keyword argument) so the package can offer the bulk-fetch
+    "no ids -> full queryset" path documented in the spec without
+    forcing callers to thread ``node_ids=None`` explicitly.
 
     When ``node_ids`` is ``None`` returns the full filtered queryset (the
     caller materializes via ``async for`` / iteration as needed; the

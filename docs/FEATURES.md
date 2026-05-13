@@ -66,7 +66,7 @@ Planned:
 ### Relay Node integration
 Status: shipped.
 
-`Meta.interfaces` accepts a tuple of Strawberry interface classes; when `relay.Node` is among them, the `DjangoType` becomes a Relay-node-shaped GraphQL type with `id: GlobalID!` and the four `resolve_*` defaults wired through `cls.get_queryset` and the optimizer extension.
+`Meta.interfaces` accepts a tuple of Strawberry interface classes; when `relay.Node` is among them, the `DjangoType` becomes a Relay-node-shaped GraphQL type with `id: GlobalID!` and the four `resolve_*` defaults wired through `cls.get_queryset` (the model's default manager plus the type's visibility hook). Optimizer-extension cooperation on the node-lookup path is deferred to a follow-up slice; root-level list resolvers continue to receive full `DjangoOptimizerExtension` treatment.
 
 ```python
 import strawberry

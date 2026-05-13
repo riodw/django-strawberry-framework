@@ -1,5 +1,6 @@
 """Live GraphQL HTTP tests for the library acceptance app."""
 
+import base64
 import importlib
 import sys
 
@@ -11,11 +12,7 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches
 
 from django_strawberry_framework.registry import registry
-
-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-# add a live HTTP acceptance test for a library DjangoType declaring
-# ``interfaces = (relay.Node,)``; query ``id`` plus a scalar and assert the
-# GlobalID round-trips to the expected database id.
+from tests._relay_bypass import stage_relay_definition
 
 
 @pytest.fixture(autouse=True)
@@ -498,3 +495,81 @@ def test_library_relation_override_shapes_http_response_data():
     # The observable baseline is root query + planned prefetch + one
     # override manager query per Branch row.
     assert len(captured) == 4
+
+
+def _decode_global_id(global_id: str) -> tuple[str, str]:
+    """Decode a Strawberry Relay ``GlobalID`` string into ``(type_name, node_id)``.
+
+    Strawberry encodes ``GlobalID`` as ``base64("TypeName:nodeId")``; this
+    test decodes it manually so the HTTP path stays Strawberry-agnostic
+    on the assert side.
+    """
+    decoded = base64.b64decode(global_id.encode()).decode()
+    type_name, _, node_id = decoded.partition(":")
+    return type_name, node_id
+
+
+def _reload_with_library_relay_node():
+    """Reload schema modules with ``GenreType`` staged as a Relay-declared type.
+
+    Mirrors the autouse fixture's reload chain but interleaves the shared
+    bypass helper (``tests._relay_bypass.stage_relay_definition``) between
+    the library-schema reload (which registers the definition) and the
+    project-schema reload (which finalizes types and builds the Strawberry
+    schema). Slice 4 still keeps ``"interfaces"`` in ``DEFERRED_META_KEYS``
+    so the consumer-facing ``Meta.interfaces = (relay.Node,)`` path is not
+    yet usable — Slice 5 promotes the key.
+    """
+    registry.clear()
+    library_schema = sys.modules.get("apps.library.schema")
+    if library_schema is None:
+        library_schema = importlib.import_module("apps.library.schema")
+    else:
+        importlib.reload(library_schema)
+
+    stage_relay_definition(library_schema.GenreType)
+
+    project_schema = sys.modules.get("config.schema")
+    if project_schema is None:
+        importlib.import_module("config.schema")
+    else:
+        importlib.reload(project_schema)
+
+    urls = sys.modules.get("config.urls")
+    if urls is not None:
+        importlib.reload(urls)
+        clear_url_caches()
+
+
+@pytest.mark.django_db
+def test_library_relay_node_global_id_round_trips():
+    """A library ``GenreType`` declared as a Relay node returns a decodable GlobalID.
+
+    Staged via the bypass scaffolding because ``"interfaces"`` is still
+    in ``DEFERRED_META_KEYS`` for Slice 4. Slice 5 will promote the key
+    and unlock the end-to-end consumer-facing declaration, after which
+    this test continues to pass without changes (the bypass remains a
+    no-op for an already-staged interface).
+    """
+    _reload_with_library_relay_node()
+    genre = models.Genre.objects.create(name="Speculative")
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenres {
+            id
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    genres = payload["data"]["allLibraryGenres"]
+    assert len(genres) == 1
+    type_name, node_id = _decode_global_id(genres[0]["id"])
+    assert type_name == "GenreType"
+    assert node_id == str(genre.pk)
+    assert genres[0]["name"] == "Speculative"

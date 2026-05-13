@@ -12,8 +12,10 @@ dedicated test that exercises every branch.
 from enum import Enum
 
 import pytest
+import strawberry
 from apps.products.models import Category, Item, Property
 from django.db import models
+from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -21,10 +23,7 @@ from django_strawberry_framework.registry import TypeRegistry, registry
 from django_strawberry_framework.types import finalizer as finalizer_module
 from django_strawberry_framework.types.relations import PendingRelation, PendingRelationAnnotation
 from django_strawberry_framework.utils.relations import relation_kind
-
-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-# extend registry lifecycle coverage so ``registry.clear()`` permits fresh
-# Relay-declared DjangoType classes to finalize and register Node metadata.
+from tests._relay_bypass import stage_relay_definition
 
 
 @pytest.fixture
@@ -367,6 +366,54 @@ def test_registry_clear_allows_fresh_type_classes_to_finalize_again():
 
     assert registry.is_finalized() is True
     assert registry.get(Category) is FreshCategoryType
+
+
+def test_registry_clear_allows_fresh_relay_declared_type_to_finalize():
+    """``registry.clear()`` lets a fresh Relay-declared ``DjangoType`` finalize cleanly.
+
+    Pins the lifecycle contract that the same model can be re-bound to a
+    fresh Relay-declared type after the previous one was dropped via
+    ``clear()``. The fresh class must end up with ``relay.Node`` in its
+    MRO plus the four ``resolve_*`` classmethods injected.
+    """
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    stage_relay_definition(CategoryNode)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryNode]:
+            return []
+
+    finalize_django_types()
+    strawberry.Schema(query=Query)
+    registry.clear()
+
+    class FreshCategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    stage_relay_definition(FreshCategoryNode)
+
+    @strawberry.type
+    class Query2:
+        @strawberry.field
+        def all_categories(self) -> list[FreshCategoryNode]:
+            return []
+
+    finalize_django_types()
+    strawberry.Schema(query=Query2)
+    assert registry.is_finalized() is True
+    assert registry.get(Category) is FreshCategoryNode
+    assert relay.Node in FreshCategoryNode.__mro__
+    for attr in ("resolve_id", "resolve_id_attr", "resolve_node", "resolve_nodes"):
+        assert attr in FreshCategoryNode.__dict__
 
 
 def test_phase_1_failure_is_atomic_and_retryable_after_missing_target_registers():

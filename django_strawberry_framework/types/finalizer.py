@@ -8,6 +8,12 @@ from ..exceptions import ConfigurationError
 from ..registry import registry
 from .converters import resolved_relation_annotation
 from .relations import PendingRelation
+from .relay import (
+    _check_composite_pk_for_relay_node,
+    apply_interfaces,
+    implements_relay_node,
+    install_relay_node_resolvers,
+)
 from .resolvers import _attach_relation_resolvers
 
 
@@ -41,6 +47,13 @@ def finalize_django_types() -> None:
     mutating any class object. Phase 2 resolver attachment and Phase 3
     ``strawberry.type(...)`` calls mutate classes in place; a Strawberry-side
     failure there requires ``registry.clear()`` and fresh class recreation.
+
+    Phase 2.5 (between Phase 2 and Phase 3) applies declared interfaces to
+    ``cls.__bases__``, gates Relay-node-declared classes against composite
+    primary keys, and injects the four ``resolve_*`` defaults that
+    ``relay.Node`` would otherwise inherit from the upstream Strawberry
+    interface. Runs before Phase 3 so the ``strawberry.type(...)`` decorator
+    sees the mutated bases and the injected classmethods at decoration time.
     """
     if registry.is_finalized():
         return
@@ -79,11 +92,16 @@ def finalize_django_types() -> None:
             definition.selected_fields,
             skip_field_names=definition.consumer_assigned_relation_fields,
         )
-    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-    # insert Phase 2.5 here: apply ``definition.interfaces`` to
-    # ``type_cls.__bases__``, surface incompatible interfaces as
-    # ConfigurationError, reject composite-pk Relay nodes, and install Relay
-    # ``resolve_*`` defaults before Strawberry decorates the class.
+
+    for type_cls, definition in registry.iter_definitions():
+        if definition.finalized:
+            continue
+        if not definition.interfaces:
+            continue
+        apply_interfaces(type_cls, definition)
+        if implements_relay_node(type_cls):
+            _check_composite_pk_for_relay_node(type_cls)
+            install_relay_node_resolvers(type_cls)
 
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:

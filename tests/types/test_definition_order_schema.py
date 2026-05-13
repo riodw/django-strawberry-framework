@@ -8,10 +8,7 @@ from apps.products.models import Category, Item
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.registry import registry
-
-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-# extend schema-construction coverage so Relay-declared types expose the Node
-# interface and ``id: GlobalID!`` without leaking interfaces to non-Relay types.
+from tests._relay_bypass import stage_relay_definition
 
 
 @pytest.fixture(autouse=True)
@@ -99,3 +96,65 @@ def test_manual_strawberry_type_before_finalization_surfaces_sentinel_repr():
     msg = str(exc_info.value)
     assert "Unexpected type" in msg
     assert "finalize_django_types()" in msg
+
+
+def test_relay_declared_type_emits_node_interface_and_global_id():
+    """A Relay-declared ``DjangoType`` exposes ``id: GlobalID!`` via the ``Node`` interface."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    stage_relay_definition(CategoryNode)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryNode]:
+            return []
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    gql_type = schema._schema.type_map["CategoryNode"]
+    interface_names = {iface.name for iface in gql_type.interfaces}
+    assert "Node" in interface_names
+    id_field = gql_type.fields["id"]
+    assert str(id_field.type) == "ID!"
+
+
+def test_mixed_relay_and_non_relay_types_introspect_cleanly():
+    """A non-Relay ``DjangoType`` does NOT implement ``Node`` (no interface bleed)."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    stage_relay_definition(CategoryNode)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryNode]:
+            return []
+
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return []
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    relay_gql_type = schema._schema.type_map["CategoryNode"]
+    plain_gql_type = schema._schema.type_map["ItemType"]
+    relay_interfaces = {iface.name for iface in relay_gql_type.interfaces}
+    plain_interfaces = {iface.name for iface in plain_gql_type.interfaces}
+    assert "Node" in relay_interfaces
+    assert "Node" not in plain_interfaces
+    # The plain type's id is still the synthesized ``Int!`` field, not a GlobalID.
+    assert str(plain_gql_type.fields["id"].type) == "Int!"

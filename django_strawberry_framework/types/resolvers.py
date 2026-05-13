@@ -45,10 +45,13 @@ _EMPTY_FROZENSET: frozenset[str] = frozenset()
 
 
 def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
-    """Return ``True`` if B2 marked this forward relation as FK-id elided."""
-    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-    # keep Relay GlobalID handling isolated from forward-relation FK-id
-    # elision; Relay id resolution belongs in ``types.relay``.
+    """Return ``True`` if B2 marked this forward relation as FK-id elided.
+
+    Relay ``GlobalID`` handling is intentionally kept out of this path —
+    Relay id resolution lives in ``types/relay.py`` (``_resolve_id_default``
+    and friends). Forward-relation FK-id elision continues to see only the
+    Django primary-key column it always saw (spec Decision 7, line 357).
+    """
     elisions = _get_context_value(
         getattr(info, "context", None),
         DST_OPTIMIZER_FK_ID_ELISIONS,

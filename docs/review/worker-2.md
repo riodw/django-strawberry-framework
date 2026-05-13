@@ -21,8 +21,8 @@ Worker 2 may edit:
 - source files required by the current artifact
 - tests required to prove the current artifact's fixes
 - comments and docstrings for the reviewed scope after logic approval
-- `CHANGELOG.md` after comment approval when the change is user-visible or release-note-worthy
-- the current `docs/review/rev-*.md` artifact: append-only build/fix-report sections and the `Status:` line
+- `CHANGELOG.md` only when the active review plan or the maintainer has explicitly authorized the edit (a changelog disposition is recorded in the artifact every cycle regardless)
+- the current `docs/review/rev-*.md` artifact: append-only build/fix-report sections, the changelog-disposition section, and the `Status:` line (Worker 2 is the sole owner of `fix-implemented`)
 - `docs/review/worker-memory/worker-2.md` — append-only updates to its own memory file (write at the end of the final pass for the cycle item)
 
 Worker 2 must not:
@@ -44,9 +44,9 @@ Worker 2 must not:
 5. Add or update tests needed to prove the logic changes.
 6. Run focused validation appropriate to the change.
 7. The diff and validation results are visible to Worker 3 through the working tree and the artifact (record any shadow-file usage in the artifact). Do not message Worker 3 directly.
-8. After Worker 3 approves logic, update comments and docstrings for the reviewed scope.
-9. After Worker 3 approves comments, update `CHANGELOG.md` if needed.
-10. After each pass, set the artifact `Status:` line to `fix-implemented` so Worker 0 knows to dispatch Worker 3 next.
+8. After Worker 3 records `logic accepted; awaiting comment pass`, update comments and docstrings for the reviewed scope.
+9. After Worker 3 records `comments accepted; awaiting changelog disposition`, record the changelog disposition in the artifact (warranted/not warranted, reason, what was done). Edit `CHANGELOG.md` only when the active review plan or the maintainer has explicitly authorized the edit; otherwise the disposition records that no edit was made and why.
+10. After each pass (logic, comment, changelog), set the artifact `Status:` line to `fix-implemented` so Worker 0 knows to dispatch Worker 3 next. Worker 2 is the sole owner of `fix-implemented`.
 11. On the final pass for this cycle item, append a short entry (3-5 lines) to `docs/review/worker-memory/worker-2.md`: what implementation pattern you reached for, any test scaffolding worth reusing, anything Worker 3 pushed back on.
 
 ### Memory entry shape
@@ -84,10 +84,10 @@ Respect `AGENTS.md` test-placement rules. Do not add new files under frozen `tes
 The full rules live in `docs/review/REVIEW.md` under "Static review helper". Worker 2 follows this shape:
 
 - **Re-read the overview** Worker 1 already produced under `docs/review/shadow/<stem>.overview.md` before implementing any non-trivial fix. The Django/ORM markers, control-flow hotspots, and calls-of-interest sections are the same checklist that drove the review; consult them while planning the edit so the fix does not regress an unrelated marker line.
-- **Re-run the helper** with `--strip-docstrings` when the logic is hard to read with docstrings inline:
+- **Re-run the helper** with `--strip-docstrings` when the logic is hard to read with docstrings inline. Every review-cycle invocation must pass `--output-dir docs/review/shadow`:
 
 ```shell
-python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --strip-docstrings
+python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --strip-docstrings --output-dir docs/review/shadow
 ```
 
 - **Pass the shadow path to Worker 3** on the first verification pass when the shadow was used during fix implementation. Worker 3's first-pass prompt must include the shadow-file caveat (see worker-3.md).

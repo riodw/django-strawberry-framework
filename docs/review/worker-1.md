@@ -19,6 +19,7 @@ If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` 
 Worker 1 may create or replace:
 
 - `docs/review/rev-<folder__file_name>.md` — the current planned review artifact
+- `docs/review/rev-final.md` — the final test-run gate artifact (Worker 1 owns this end-to-end; Worker 3 has no role)
 - `docs/review/worker-memory/worker-1.md` — append-only updates to its own memory file
 
 Worker 1 must not:
@@ -115,10 +116,22 @@ Quick rules:
 Example:
 
 ```shell
-python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py
+python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/review/shadow
 ```
 
-The helper writes ignored shadow byproducts under `docs/review/shadow/`. The tracked, committed review artifact is the `docs/review/rev-<folder__file_name>.md` file you produce.
+Every review-cycle helper invocation must pass `--output-dir docs/review/shadow`. The helper writes ignored shadow byproducts under that path. The tracked, committed review artifact is the `docs/review/rev-<folder__file_name>.md` file you produce.
+
+## Final test-run gate job
+
+When Worker 0 dispatches Worker 1 to produce `docs/review/rev-final.md`:
+
+1. Run `uv run pytest` (full sweep across all three test trees per `AGENTS.md`).
+2. Record the command output and pass/fail result in `rev-final.md`.
+3. Do **not** inspect line coverage; the gate's only requirement is that existing tests still pass.
+4. On pass, set `Status: verified`. Worker 0 marks the final checklist box.
+5. On fail, set `Status: revision-needed`, record the failing tests in the artifact, and stop. Worker 0 will dispatch the owning cycle item again before re-running the gate.
+
+Worker 2 and Worker 3 are **not** involved in the final test-run gate. The artifact uses the same `Status:` line as ordinary `rev-*.md` artifacts but bypasses the normal Worker 2 → Worker 3 loop.
 
 ## Artifact dicta
 

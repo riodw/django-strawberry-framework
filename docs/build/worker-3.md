@@ -78,12 +78,13 @@ Recommend the most readable reusable shape, not the most abstract shape.
 
 ## Static helper use
 
-Run `scripts/review_inspect.py` with `--output-dir docs/build/shadow` when:
+Run `scripts/review_inspect.py` with `--output-dir docs/build/shadow` per the canonical rules in `docs/build/BUILD.md` "When to run the helper during build":
 
-- the slice adds a new `.py` file
-- the slice touches `django_strawberry_framework/types/` or `django_strawberry_framework/optimizer/`
-- the slice adds more than ~50 lines of new logic to any file
-- you need repeated-literal or import-boundary evidence for a DRY finding
+- The slice adds a new `.py` file of any size, **unless** it is a pure-class-definition module (only `class` declarations with docstrings, no logic). For pure-class modules, skip the helper and record the skip and reason in the artifact.
+- The slice touches an existing `.py` file under `django_strawberry_framework/optimizer/` or `django_strawberry_framework/types/`.
+- The slice adds 30 or more lines of new logic to any file under `django_strawberry_framework/`.
+- The slice adds 50 or more lines of new logic to any file outside `django_strawberry_framework/` (e.g. tests or example projects).
+- You need repeated-literal or import-boundary evidence for a DRY finding.
 
 Use original source-file line numbers in the artifact. Shadow-file line numbers are not canonical.
 

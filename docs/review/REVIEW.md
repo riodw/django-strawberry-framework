@@ -259,19 +259,26 @@ How the DRY analysis items were resolved or carried forward.
 
 ### Verification outcome
 
-`verified` (every finding addressed or intentionally rejected with reason) or `revision-needed`. Setting this also updates the top-level `Status:` line.
+One of:
+
+- `logic accepted; awaiting comment pass` — the logic pass is internally acceptable; cycle continues to comments. Top-level `Status:` does **not** advance to `verified` yet.
+- `comments accepted; awaiting changelog disposition` — the comment pass is internally acceptable; cycle continues to the changelog disposition pass.
+- `cycle accepted; verified` — every High/Medium/Low finding addressed or intentionally rejected with reason, **and** logic + comments + validation + changelog disposition are all accepted. Worker 3 sets top-level `Status: verified` and marks the checklist box.
+- `revision-needed` — Worker 3 rejected the current sub-pass. Worker 3 sets top-level `Status: revision-needed`.
+
+Interim sub-pass acceptances are recorded as prose in this section and do not change the top-level `Status:` line. Only `cycle accepted; verified` or `revision-needed` change the top-level `Status:`.
 
 ---
 
 ## Comment/docstring pass
 
-After the logic verification reaches `verified`, Worker 2 returns for a comment/docstring pass and records the updates here. Worker 3 verifies and appends acceptance or feedback. The status moves back to `fix-implemented` for the comment pass and to `verified` again on acceptance.
+After Worker 3 records `logic accepted; awaiting comment pass`, Worker 2 returns for a comment/docstring pass and records the updates here. Worker 2 ends the pass with `Status: fix-implemented` (Worker 2 is the sole owner of `fix-implemented`). Worker 3 then verifies the comment pass and records either `comments accepted; awaiting changelog disposition` (or `cycle accepted; verified` if no changelog edit is needed and the disposition is already recorded) or `revision-needed`.
 
 ---
 
 ## Changelog disposition
 
-Worker 2 records whether a `CHANGELOG.md` entry is warranted and whether it was made. Edits to `CHANGELOG.md` are made only when the active review plan or the maintainer has explicitly authorized them. If no edit was made, record why (not user-visible, deferred to maintainer, etc.). Worker 3 verifies this disposition before final `verified`.
+After Worker 3 records `comments accepted; awaiting changelog disposition`, Worker 2 records the **changelog disposition** here regardless of whether an edit was made: warranted/not warranted, reason, and what was done. Edits to `CHANGELOG.md` are made only when the active review plan or the maintainer has explicitly authorized them; otherwise the disposition records that no edit was made and why (e.g. not user-visible, deferred to maintainer). Worker 2 sets `Status: fix-implemented`. Worker 3 verifies and records `cycle accepted; verified` (setting top-level `Status: verified`) or `revision-needed`.
 
 ---
 
@@ -572,8 +579,8 @@ Worker 3 should:
 - create temp test files under `docs/review/temp-tests/<scope>/` to verify behavior during review when in-process or HTTP-stack confirmation is faster than reading the diff alone; record the disposition in the artifact and flag bugs caught this way as Medium findings so Worker 2 can promote the test to the permanent suite under the correct `AGENTS.md` test tree
 - review comment/docstring updates after logic is approved
 - request another Worker 2 pass if needed (recorded in the artifact's verification feedback section — Worker 3 does not message Worker 2 directly)
-- update the artifact's `Status:` line as the cycle advances (`fix-implemented` after Worker 2 returns, `revision-needed` on rejection, `verified` on full acceptance)
-- mark the corresponding checkbox `- [x]` in `docs/review/review-<0_0_X>.md` only after logic, comments, validation, and changelog updates are complete and the artifact status is `verified`
+- read the incoming `Status: fix-implemented` (Worker 2 owns that value; Worker 3 never writes it) and set the top-level `Status:` line only on a terminal outcome: `verified` when the entire cycle is accepted (logic + comments + validation + changelog disposition) or `revision-needed` on any rejection. Interim sub-pass acceptances are recorded as prose in `## Verification (Worker 3)`.
+- mark the corresponding ordinary checkbox `- [x]` in `docs/review/review-<0_0_X>.md` only after the cycle reaches top-level `Status: verified`. (The final test-run gate's checkbox is the exception: Worker 0 marks it.)
 - append a short entry to `docs/review/worker-memory/worker-3.md` capturing what to carry into the next cycle
 
 ### Maintainer checkpoint

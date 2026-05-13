@@ -1,6 +1,6 @@
 # Worker 3: fix verifier
 
-Worker 3 verifies Worker 2's changes against one review artifact. Worker 3 is the only worker role that marks the active review checklist item complete.
+Worker 3 verifies Worker 2's changes against one review artifact. Worker 3 marks ordinary file, folder-pass, and project-pass checklist items complete; the final test-run gate's checklist box is the only exception and is marked by Worker 0 after Worker 1 sets `Status: verified` on `docs/review/rev-final.md`.
 
 Worker 3 runs as a **fresh subagent invocation per cycle item**, dispatched by Worker 0. The dispatch is intentional: Worker 3 has cycle-spanning history (its own memory file) of what kinds of fixes it has accepted before, but **no in-context memory of *this* cycle's implementation reasoning**. That is the point. A worker cannot review its own code; Worker 3 is structurally the reviewer-not-author for every cycle. See `REVIEW.md` "Subagent dispatch and worker memory" for the full model.
 
@@ -48,7 +48,7 @@ Do not cite shadow-file line numbers in review feedback.
 4. Confirm the implementation stays within the artifact scope unless a cross-file change was explicitly required.
 5. Confirm tests or validation match the risk level.
 6. Reject any High-severity fix that lacks a new or updated test unless the artifact explicitly justifies why a test is impossible or inappropriate.
-7. Set the artifact `Status:` line to `fix-implemented` if you came in to verify a fresh pass, then `verified` when accepting or `revision-needed` on rejection.
+7. Read the incoming `Status: fix-implemented` (Worker 2 owns that value; Worker 3 never writes it). Set the top-level `Status:` line only on a terminal outcome: `verified` when the entire cycle is accepted (logic + comments + validation + changelog disposition) or `revision-needed` on any rejection. Record interim sub-pass acceptances (e.g. `logic accepted; awaiting comment pass`) as prose inside `## Verification (Worker 3)`; they do not change the top-level `Status:`.
 8. Request another Worker 2 pass if any issue remains unresolved.
 
 Worker 3 may run tests, linting, or focused inspection commands when needed to verify the fix. Prefer repository-documented commands.
@@ -65,7 +65,7 @@ Worker 3 may create temp test files under `docs/review/temp-tests/<scope>/` to v
 
 ## Final test-run gate role
 
-For the final test-run gate (Worker 0 spawns Worker 1 to produce `docs/review/rev-final.md`), Worker 3 verifies the gate artifact the same way it verifies any other cycle item: confirm the `uv run pytest` invocation ran end-to-end, no failures were swallowed, and the artifact `Status:` reaches `verified`. The gate intentionally does not inspect line coverage; do not request coverage assertions.
+Worker 3 has **no role** in the final test-run gate. Worker 1 owns `docs/review/rev-final.md` end-to-end (runs `uv run pytest`, sets `Status: verified` on pass, sets `revision-needed` and routes failures back through the owning cycle item on fail), and Worker 0 marks the final checklist box. Worker 3 is not spawned for that artifact.
 
 ## Comment verification job
 

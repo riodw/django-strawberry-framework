@@ -24,7 +24,7 @@ Worker 0 may edit:
 - `docs/review/worker-*.md`
 - `docs/review/worker-memory/` (create at plan time, delete at closeout) and `docs/review/temp-tests/` (delete at closeout)
 - `docs/review/worker-memory/worker-0.md` — append-only updates to its own memory file
-- `CHANGELOG.md` during closeout consolidation
+- `CHANGELOG.md` during closeout consolidation **only when the maintainer explicitly authorizes the consolidation**
 - source or tests only when the maintainer explicitly asks Worker 0 to implement closeout fixes
 
 Worker 0 must not:
@@ -46,8 +46,8 @@ Create the active release review plan.
 4. Convert the version dots to underscores.
 5. Create `docs/review/review-<0_0_X>.md`.
 6. Build the package tree from tracked files under `django_strawberry_framework/`.
-7. Add an artifact list for every file, every folder pass, and the final project-level pass.
-8. Add the tree-like checklist in review order.
+7. Add an artifact list for every file, every folder pass, the final project-level pass, and the final test-run gate (`docs/review/rev-final.md`).
+8. Add the tree-like checklist in review order, including a `- [ ] final test-run gate: \`uv run pytest\` -> \`docs/review/rev-final.md\`` entry as the last item.
 9. Create the per-worker scratch memory directory and seed four empty files:
    - `docs/review/worker-memory/worker-0.md`
    - `docs/review/worker-memory/worker-1.md`
@@ -87,9 +87,10 @@ The generated plan must include:
 - source root
 - date created
 - the one-file-at-a-time rule
+- a short DRY-first rule (every `rev-*.md` artifact must include a `## DRY analysis` section)
 - links to `docs/review/REVIEW.md` and `docs/review/worker-*.md`
-- the complete artifact list
-- the complete tree checklist
+- the complete artifact list, including `docs/review/rev-final.md`
+- the complete tree checklist, including the final test-run gate item
 - severity definitions
 - logic-first, comment-second review order
 - folder-level and project-level pass requirements

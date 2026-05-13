@@ -28,8 +28,9 @@ If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` 
 
 Worker 3 may edit:
 
-- `docs/review/rev-<folder__file_name>.md` to record verification feedback
+- `docs/review/rev-<folder__file_name>.md` to record verification feedback and update the `Status:` line
 - `docs/review/review-<0_0_X>.md` to mark the item complete after all gates pass
+- temp test files under `docs/review/temp-tests/<scope>/` (gitignored; never permanent)
 - `docs/review/worker-memory/worker-3.md` — append-only updates to its own memory file
 
 Worker 3 must not:
@@ -37,7 +38,7 @@ Worker 3 must not:
 - implement Worker 2's source changes
 - approve unrelated cleanup
 - mark the checkbox complete before logic, comments, validation, and changelog handling are complete
-- read or edit `docs/review/worker-memory/worker-1.md` or `worker-2.md`
+- read or edit `docs/review/worker-memory/worker-0.md`, `worker-1.md`, or `worker-2.md`
 - truncate or rewrite history in `worker-memory/worker-3.md` — append only (consolidate via merge if the file exceeds ~50 lines)
 - commit unless the maintainer explicitly asks
 
@@ -57,9 +58,24 @@ Do not cite shadow-file line numbers in review feedback.
 4. Confirm the implementation stays within the artifact scope unless a cross-file change was explicitly required.
 5. Confirm tests or validation match the risk level.
 6. Reject any High-severity fix that lacks a new or updated test unless the artifact explicitly justifies why a test is impossible or inappropriate.
-7. Request another Worker 2 pass if any issue remains unresolved.
+7. Set the artifact `Status:` line to `fix-implemented` if you came in to verify a fresh pass, then `verified` when accepting or `revision-needed` on rejection.
+8. Request another Worker 2 pass if any issue remains unresolved.
 
 Worker 3 may run tests, linting, or focused inspection commands when needed to verify the fix. Prefer repository-documented commands.
+
+## Temp test rules
+
+Worker 3 may create temp test files under `docs/review/temp-tests/<scope>/` to verify behavior during a cycle. The directory is gitignored.
+
+- Use temp tests to prove a verification suspicion quickly (e.g. that a fix really plugs the reported branch).
+- Cite the temp test paths in the artifact's verification feedback section.
+- If a temp test catches a real behavior bug or important edge case, flag it as a Medium or High finding and require Worker 2 to promote it to the permanent suite under the correct `AGENTS.md` test tree before accepting the cycle.
+- Do not leave temp tests as the only proof of shipped behavior.
+- Worker 0 deletes `docs/review/temp-tests/` at cycle closeout.
+
+## Final test-run gate role
+
+For the final test-run gate (Worker 0 spawns Worker 1 to produce `docs/review/rev-final.md`), Worker 3 verifies the gate artifact the same way it verifies any other cycle item: confirm the `uv run pytest` invocation ran end-to-end, no failures were swallowed, and the artifact `Status:` reaches `verified`. The gate intentionally does not inspect line coverage; do not request coverage assertions.
 
 ## Comment verification job
 
@@ -95,6 +111,7 @@ Mark the corresponding checkbox `- [x]` in `docs/review/review-<0_0_X>.md` only 
 - focused validation has passed or failures are documented and accepted
 - comments/docstrings have been reviewed after logic approval
 - `CHANGELOG.md` has been updated or intentionally left unchanged
+- the artifact `Status:` line reads `verified`
 
 After marking the checkbox, append a short entry (3-5 lines) to `docs/review/worker-memory/worker-3.md`: what kind of fix you accepted, what almost made you reject, and any pattern worth carrying into the next cycle.
 

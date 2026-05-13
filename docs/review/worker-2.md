@@ -29,6 +29,7 @@ Worker 2 may edit:
 - tests required to prove the current artifact's fixes
 - comments and docstrings for the reviewed scope after logic approval
 - `CHANGELOG.md` after comment approval when the change is user-visible or release-note-worthy
+- the current `docs/review/rev-*.md` artifact: append-only build/fix-report sections and the `Status:` line
 - `docs/review/worker-memory/worker-2.md` — append-only updates to its own memory file (write at the end of the final pass for the cycle item)
 
 Worker 2 must not:
@@ -44,7 +45,7 @@ Worker 2 must not:
 ## Job
 
 1. Read your memory file `docs/review/worker-memory/worker-2.md`.
-2. Read the artifact and identify each High, Medium, and Low issue. The artifact is the only thing you know about Worker 1's reasoning — if it is ambiguous, surface that as a question in the artifact's verification feedback section rather than guessing intent.
+2. Read the artifact and identify each High, Medium, and Low issue plus the `## DRY analysis` section. The artifact is the only thing you know about Worker 1's reasoning — if it is ambiguous, surface that as a question in the artifact's verification feedback section rather than guessing intent.
 3. Review the target source and existing tests.
 4. Implement approved logic fixes first.
 5. Add or update tests needed to prove the logic changes.
@@ -52,7 +53,8 @@ Worker 2 must not:
 7. The diff and validation results are visible to Worker 3 through the working tree and the artifact (record any shadow-file usage in the artifact). Do not message Worker 3 directly.
 8. After Worker 3 approves logic, update comments and docstrings for the reviewed scope.
 9. After Worker 3 approves comments, update `CHANGELOG.md` if needed.
-10. On the final pass for this cycle item, append a short entry (3-5 lines) to `docs/review/worker-memory/worker-2.md`: what implementation pattern you reached for, any test scaffolding worth reusing, anything Worker 3 pushed back on.
+10. After each pass, set the artifact `Status:` line to `fix-implemented` so Worker 0 knows to dispatch Worker 3 next.
+11. On the final pass for this cycle item, append a short entry (3-5 lines) to `docs/review/worker-memory/worker-2.md`: what implementation pattern you reached for, any test scaffolding worth reusing, anything Worker 3 pushed back on.
 
 ### Memory entry shape
 

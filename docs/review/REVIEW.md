@@ -6,6 +6,9 @@ This document defines the reusable process for reviewing every file under `djang
 Begin by reading README.md and docs/README.md and docs/TREE.md and docs/FEATURES.md and GOAL.md
 Begin by reading README.md and docs/README.md and docs/TREE.md and docs/FEATURES.md and GOAL.md
 
+!!IMPORTANT — DRY FIRST!!
+Every review pass, every fix, every verification must answer one question before anything else: **is the change moving the package toward the maximally DRY shape that stays readable?** Duplicated logic, parallel data flows, near-copies between modules, and repeated string/key/tuple literals are review-time defects. Worker 1 flags DRY findings in every artifact; Worker 2 implements them like any other finding; Worker 3 enforces DRY before accepting a fix; Worker 1 re-checks DRY across files at every folder pass and at the project pass.
+
 The standing worker instructions live beside this overview:
 
 - [Worker 0: review coordinator](worker-0.md)
@@ -13,7 +16,7 @@ The standing worker instructions live beside this overview:
 - [Worker 2: fix implementer](worker-2.md)
 - [Worker 3: fix verifier](worker-3.md)
 
-The per-release plan file and every per-file / per-folder / project-pass `rev-*.md` review artifact under `docs/review/` are committed to git and kept as the permanent record of the review cycle. They are not deleted at the end of the cycle. The only files under `docs/review/` that are not tracked are static-analysis shadow byproducts under `docs/review/shadow/`, which are gitignored.
+Permanent workflow files under `docs/review/` are tracked: `REVIEW.md`, `worker-*.md`, `review-*.md`, and every `rev-*.md` review artifact. They are committed to git and kept as the permanent record of the review cycle. The only intentionally untracked paths are generated scratch directories: `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`.
 
 `AGENTS.md` and `START.md` still apply during review runs. This review workflow adds the per-worker artifact discipline on top; it does not override standing validation, test-running, commit, or test-placement rules.
 
@@ -135,6 +138,16 @@ Every `docs/review/rev-<folder__file_name>.md` file must use this structure:
 ````text
 # Review: `django_strawberry_framework/optimizer/walker.py`
 
+Status: under-review | fix-implemented | revision-needed | verified
+
+## DRY analysis
+
+- Existing patterns reused: which functions, classes, validators, or test fixtures already exist that the reviewed file calls or extends? Cite `path/file.py:NN-MM`. If none, say so explicitly.
+- New helpers a fix might justify: name the single responsibility and the call sites it would serve.
+- Duplication risk in the current file: cite repeated literals, near-copies, or branches that already drift from a sibling module.
+
+If any answer is "none", say so explicitly. Silence on DRY is not acceptance.
+
 ## High:
 
 ### Issue name
@@ -178,6 +191,17 @@ Add a short summary here.
 ````
 
 If a severity has no issues, keep the heading and write `None.` under it. Do not include speculative issues. If a concern depends on package-wide context that is not yet available, put it in the summary as a follow-up for the folder or project-level pass rather than presenting it as a file-local defect.
+
+## Artifact status legend
+
+Every `rev-*.md` artifact carries a `Status:` line that Worker 0 reads to drive dispatch and that Worker 3 updates as the cycle advances. Possible values:
+
+- `under-review` — Worker 1 has produced the artifact; ready for Worker 2.
+- `fix-implemented` — Worker 2 has applied a logic or comment pass; ready for Worker 3.
+- `revision-needed` — Worker 3 found issues; ready for another Worker 2 pass.
+- `verified` — Worker 3 has accepted logic, comments, validation, and changelog handling. Worker 3 then marks the checklist `- [x]` in the plan.
+
+Worker 0 never writes to `Status:`. Worker 0 only reads it to drive dispatch. Worker 1 sets the initial `under-review` value when creating the artifact. If the field is missing or ambiguous, treat that as a stop condition.
 
 ## Severity definitions
 
@@ -334,6 +358,7 @@ A single agent role-playing all three workers can convince itself a fix is suffi
 
 Each worker keeps a private scratch memory file that **persists across cycles within a single release** but is invisible to every other worker:
 
+- `docs/review/worker-memory/worker-0.md` — Worker 0's coordination notebook (mostly progress notes, re-spawn counts, blockers raised).
 - `docs/review/worker-memory/worker-1.md` — Worker 1's review notebook
 - `docs/review/worker-memory/worker-2.md` — Worker 2's implementation notebook
 - `docs/review/worker-memory/worker-3.md` — Worker 3's verification notebook
@@ -342,6 +367,7 @@ These files are gitignored. Worker 0 creates the directory at plan time and dele
 
 **What a worker writes to its memory.** At the end of each cycle, the worker appends a short entry — typically 3-5 lines — capturing what to carry into the next cycle:
 
+- Worker 0: which cycle item closed, any maintainer follow-ups, friction noticed in dispatch.
 - Worker 1: recurring patterns being flagged, severity calibration ("after seeing this in three files I'm calling it Medium not Low"), reusable phrasing for common findings.
 - Worker 2: implementation patterns that worked (validation guard shapes, test scaffolding, comment polish style), maintainer pushback to remember.
 - Worker 3: kinds of fixes that passed muster, kinds that bit later, calibration on when to reject vs accept.
@@ -350,10 +376,10 @@ Entries are append-only. If a worker's memory exceeds ~50 lines, the worker must
 
 **Read isolation rules.** A worker may read **only** its own memory file:
 
-- Worker 1 may not read `worker-2.md` or `worker-3.md`.
-- Worker 2 may not read `worker-1.md` or `worker-3.md`. (Worker 2 reads the *artifact* Worker 1 produced — that is the contract — but never Worker 1's running notes.)
-- Worker 3 may not read `worker-1.md` or `worker-2.md`. (Worker 3 reads the *artifact* and the *diff* — those are the contract — but never the other workers' running notes.)
-- Worker 0 may read all memory files at closeout to seed the retrospective, but never edits them.
+- Worker 0 may not read worker-1/2/3 memory during the cycle (it may read all four at closeout for the retrospective).
+- Worker 1 may not read `worker-0.md`, `worker-2.md`, or `worker-3.md`.
+- Worker 2 may not read `worker-0.md`, `worker-1.md`, or `worker-3.md`. (Worker 2 reads the *artifact* Worker 1 produced — that is the contract — but never Worker 1's running notes.)
+- Worker 3 may not read `worker-0.md`, `worker-1.md`, or `worker-2.md`. (Worker 3 reads the *artifact* and the *diff* — those are the contract — but never the other workers' running notes.)
 
 **Write isolation rules.** A worker writes only to its own memory file. The main thread (Worker 0) never edits a worker's memory.
 
@@ -369,9 +395,9 @@ Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.
 
 **Lifecycle.**
 
-- Worker 0 creates `docs/review/worker-memory/` and seeds three empty files (`worker-1.md`, `worker-2.md`, `worker-3.md`) at plan-creation time.
-- Workers 1/2/3 read their own file at the start of every spawn and append at the end.
-- Worker 0 deletes `docs/review/worker-memory/` at cycle closeout, after the retrospective is written.
+- Worker 0 creates `docs/review/worker-memory/` and seeds four empty files (`worker-0.md`, `worker-1.md`, `worker-2.md`, `worker-3.md`) at plan-creation time.
+- Workers 0/1/2/3 read their own file at the start of every spawn and append at the end.
+- Worker 0 deletes `docs/review/worker-memory/` and `docs/review/temp-tests/` at cycle closeout, after the retrospective is written.
 
 ## Worker process
 
@@ -415,7 +441,9 @@ After Worker 3 approves the logic changes, Worker 2 updates comments/docstrings 
 
 At the end of its final pass for a cycle item, Worker 2 appends a short entry to `docs/review/worker-memory/worker-2.md`.
 
-When a review artifact has no High-severity issues, Worker 2 and Worker 3 may be the same agent invocation if the maintainer explicitly chooses that lower-ceremony path for the item — but this defeats the isolation guarantee and should be reserved for trivial cycles.
+### Isolation is non-waivable
+
+Worker 2 and Worker 3 must always run as separate subagent invocations. The review cycle does not allow combining them — even for cycles with no High-severity findings, even for trivial cycles. Combining them would let the agent that wrote the fix also approve it, which defeats the dispatch's only guarantee.
 
 ### Worker 3: verify fixes
 
@@ -428,20 +456,22 @@ Worker 3 should:
 - confirm each High/Medium/Low issue was addressed or intentionally rejected with reason
 - check that tests or validation match the risk level
 - reject any High-severity fix that does not add or update tests pinning the corrected behavior, unless the artifact explicitly explains why a test is impossible or inappropriate
+- create temp test files under `docs/review/temp-tests/<scope>/` to verify behavior during review when in-process or HTTP-stack confirmation is faster than reading the diff alone; record the disposition in the artifact and flag bugs caught this way as Medium findings so Worker 2 can promote the test to the permanent suite under the correct `AGENTS.md` test tree
 - review comment/docstring updates after logic is approved
 - request another Worker 2 pass if needed (recorded in the artifact's verification feedback section — Worker 3 does not message Worker 2 directly)
-- mark the corresponding checkbox `- [x]` in `docs/review/review-<0_0_X>.md` only after logic, comments, validation, and changelog updates are complete
+- update the artifact's `Status:` line as the cycle advances (`fix-implemented` after Worker 2 returns, `revision-needed` on rejection, `verified` on full acceptance)
+- mark the corresponding checkbox `- [x]` in `docs/review/review-<0_0_X>.md` only after logic, comments, validation, and changelog updates are complete and the artifact status is `verified`
 - append a short entry to `docs/review/worker-memory/worker-3.md` capturing what to carry into the next cycle
 
 ### Maintainer checkpoint
 
 After Worker 3 marks the item done:
 
-1. The maintainer reviews the result.
-2. Worker 1 is informed that the fix was applied.
-3. Worker 1 checks the full diff and verifies the reviewed concern is complete.
-4. The maintainer commits the source changes together with the corresponding `docs/review/rev-<folder__file_name>.md` artifact and the updated `docs/review/review-<0_0_X>.md` checkbox so the review record is preserved in git.
-5. Worker 1 moves to the next unchecked item.
+1. The maintainer is notified the cycle item is `verified`.
+2. Worker 1 is informed that the fix was applied and re-reads the full diff plus the artifact to confirm nothing slipped through (per-cycle verification was Worker 3's job; this re-check is the cycle-closing audit).
+3. If Worker 1's re-check finds anything missed, Worker 1 sets the artifact status back to `revision-needed` and Worker 0 dispatches a Worker 2 / Worker 3 loop again.
+4. If Worker 1's re-check is clean, the maintainer may request any final adjustments, then commits the source changes together with the corresponding `docs/review/rev-<folder__file_name>.md` artifact and the updated `docs/review/review-<0_0_X>.md` checkbox so the review record is preserved in git.
+5. Worker 0 moves on to the next unchecked item.
 
 No worker should commit unless the maintainer explicitly asks.
 
@@ -477,17 +507,42 @@ Focus on:
 - package-wide test gaps
 - recurring bug classes
 
+## Temp test rules
+
+Worker 3 may create temp test files under `docs/review/temp-tests/<scope>/` to verify behavior during a cycle. The directory is gitignored and is NOT part of the permanent test suite.
+
+- Use temp tests to prove a review suspicion or a fix concern quickly.
+- Cite the temp test in the artifact's verification feedback section.
+- If a temp test catches a real behavior bug or important edge case, flag it as a Medium or High finding so Worker 2 promotes it to the permanent suite under the correct `AGENTS.md` test tree.
+- Do not leave a temp test as the only proof of shipped behavior.
+- Worker 0 deletes `docs/review/temp-tests/` at cycle closeout.
+
+## Final test-run gate
+
+After every per-file, folder, and project-level checkbox is `- [x]`, Worker 0 spawns Worker 1 once more for a final test-run gate and Worker 1 produces `docs/review/rev-final.md`.
+
+The gate is intentionally narrow:
+
+- Run `uv run pytest` (full sweep across all three test trees per `AGENTS.md`).
+- **Do NOT inspect or assert line coverage at this stage.** The only requirement is that the existing test suite passes. Coverage gating belongs to CI (`pyproject.toml` `[tool.coverage.report] fail_under = 100`) and to the maintainer, not to this gate.
+- If failures appear, record them in `rev-final.md`, then re-loop through whichever cycle item owns the failing behavior (Worker 1 re-issues a finding, Worker 0 dispatches Worker 2 to fix, Worker 0 dispatches Worker 3 to verify, Worker 1 re-runs the gate).
+- The gate's artifact uses the same `Status:` line as ordinary `rev-*.md` artifacts; it closes at `verified`.
+
+The gate closes the review cycle. Worker 0 then proceeds to closeout.
+
 ## Cleanup and closeout
 
-When all checklist items are marked `- [x]`:
+When all checklist items are marked `- [x]` (every file, folder pass, project pass, and the final test-run gate):
 
 1. Worker 0 scans all review-cycle commit diffs.
-2. Worker 0 provides final feedback.
-3. Worker 0 and the maintainer make any last changes needed.
-4. Worker 0 implements approved closeout changes.
-5. Worker 0 reads `CHANGELOG.md` and consolidates entries if needed.
-6. Worker 0 updates `docs/review/REVIEW.md` or the worker role files with a general retrospective:
+2. Worker 0 reads all four worker-memory files (one-time read at closeout) to surface patterns the workers themselves noticed across the cycle.
+3. Worker 0 provides final feedback.
+4. Worker 0 and the maintainer make any last changes needed.
+5. Worker 0 implements approved closeout changes.
+6. Worker 0 reads `CHANGELOG.md` and consolidates entries if needed.
+7. Worker 0 updates `docs/review/REVIEW.md` or the worker role files with a general retrospective:
    - recurring issue types found
    - workflow stumbling blocks
    - review checklist improvements for the next release
-7. The maintainer commits the updated `docs/review/` workflow docs along with the now-completed `docs/review/review-<0_0_X>.md` plan and any remaining `docs/review/rev-*.md` artifacts to finish the review cycle. The plan and artifacts stay in git as the permanent record of the release review.
+8. Worker 0 deletes `docs/review/worker-memory/` and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes — the scratch memory and temp tests have served their purpose.
+9. The maintainer commits the updated `docs/review/` workflow docs along with the now-completed `docs/review/review-<0_0_X>.md` plan and any remaining `docs/review/rev-*.md` artifacts to finish the review cycle. The plan and artifacts stay in git as the permanent record of the release review.

@@ -48,11 +48,21 @@ Worker 1 must not:
 2. Read the active plan.
 3. Find the first checklist item not marked `- [x]` (or use the item Worker 0's spawn prompt named explicitly).
 4. Review only that file, folder pass, or final project pass.
-5. Create the exact artifact named by the plan.
+5. Create the exact artifact named by the plan, including a `Status: under-review` line at the top and a `## DRY analysis` section that answers the three questions in the artifact template.
 6. Append a short entry (3-5 lines) to `docs/review/worker-memory/worker-1.md`: what kind of review this was, what patterns or severity calibrations are worth carrying forward, anything you noticed that the next cycle should pay attention to.
 7. Stop.
 
 The artifact is the only inter-worker output. Your memory entry is for your own future spawns, never for Worker 2 or Worker 3.
+
+### DRY analysis shape
+
+The `## DRY analysis` section in the artifact answers three explicit bullets, each citing file paths and line ranges:
+
+- **Existing patterns reused.** Which functions, classes, validators, or test fixtures already exist that the reviewed file calls or extends? Cite `path/file.py:NN-MM`.
+- **New helpers a fix might justify.** Name the single responsibility and the call sites the helper would serve.
+- **Duplication risk in the current file.** Cite repeated literals, near-copies, or branches that already drift from a sibling module.
+
+If any answer is "none", say so explicitly. Silence on DRY is not acceptance.
 
 ### Memory entry shape
 

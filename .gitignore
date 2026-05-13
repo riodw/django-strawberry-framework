@@ -170,6 +170,10 @@ docs/review/shadow/
 # The tracked permanent record is the rev-*.md artifacts, never these notes.
 docs/review/worker-memory/
 
+# Temp test files Worker 3 may create to verify behavior during a review cycle.
+# Deleted by Worker 0 at closeout; permanent tests live under the AGENTS.md trees.
+docs/review/temp-tests/
+
 # Build workflow shadow files (static-analysis byproducts).
 # Build artifacts, plan files, and worker instructions under docs/build/ are tracked.
 docs/build/shadow/

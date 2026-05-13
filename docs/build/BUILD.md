@@ -333,11 +333,13 @@ Reading the helper output is how Worker 1 confirms the new logic lands where sim
 
 Worker 3 **must run** the helper during review when:
 
-- The slice adds a new `.py` file of any size.
+- The slice adds a new `.py` file of any size, **unless** it is a pure-class-definition module (only `class` declarations with docstrings, no logic). For low-surface files like that, Worker 3 skips the helper and records the skip and reason in the artifact.
 - The slice touches an existing `.py` file under `optimizer/` or `types/`.
-- The slice adds more than ~50 lines of new logic to any file.
+- The slice adds 50 or more lines of new logic to any file.
 
 Worker 3 uses the **Repeated string literals** and **Imports** sections to catch duplication and boundary leaks. The **Django/ORM markers** section is the audit checklist for ORM-heavy slices.
+
+Worker 1 and Worker 3 may also skip the helper for files where the artifact will be a "no review-worthy logic" disposition (pure re-exports, single-line constants, etc.). When the helper is skipped, the artifact must say so explicitly with a short reason.
 
 Worker 2 **may re-run** the helper with `--strip-docstrings` when the logic is hard to read with docstrings inline. If Worker 2 used the shadow file during implementation, that must be noted in the artifact's "Notes for Worker 3" section.
 
@@ -507,24 +509,38 @@ If review tests catch a bug worth preserving, Worker 3 flags it as a Medium issu
 
 After Worker 0 marks a slice done:
 
-1. The maintainer may inspect the slice diff and the artifact.
-2. The maintainer may request another iteration if something was missed.
-3. The maintainer commits the source changes together with the corresponding `bld-*.md` artifact, the spec edits (if any), and the updated build-plan checkbox.
+1. The maintainer is notified the slice is `final-accepted`.
+2. Worker 1 is informed that the slice closed and re-reads the full diff for the slice plus the artifact to confirm nothing slipped through (final-verification was per-pass; this re-check is the cycle-closing audit).
+3. If Worker 1's re-check finds anything missed, Worker 1 sets the artifact status back to `revision-needed` and Worker 0 dispatches a Worker 2 / Worker 3 loop again.
+4. If Worker 1's re-check is clean, the maintainer may request any final adjustments, then commits the source changes together with the corresponding `bld-*.md` artifact, the spec edits (if any), and the updated build-plan checkbox.
+5. Worker 0 moves on to the next unchecked slice.
 
 No worker should commit unless the maintainer explicitly asks.
+
+### Isolation is non-waivable
+
+Worker 2 and Worker 3 must always run as separate subagent invocations. The build cycle does not allow combining them — even for slices with no High-severity findings, even for trivial slices. Combining them would let the agent that wrote the code also approve it, which defeats the dispatch's only guarantee. If the cycle feels ceremonious for a small slice, that is the intended cost.
 
 ## Cross-slice integration pass
 
 After every slice in the spec is checked complete, Worker 1 runs the integration pass and produces `docs/build/bld-integration.md`.
 
-The integration pass should check:
+Before writing `bld-integration.md`, Worker 1 must:
+
+1. Read every prior `docs/build/bld-slice-*.md` artifact for the build, in slice order. No "as needed" — every artifact is required context for the cross-slice DRY scan.
+2. Confirm the static inspection helper has been run on every Python file the build touched (overviews exist under `docs/build/shadow/`). If any are missing, run the helper before continuing.
+3. Compare the **Repeated string literals** sections across every shadow overview. A literal that appears in two or more files is a cross-slice DRY candidate; record it in the integration artifact.
+4. Compare the **Imports** sections across every shadow overview to confirm one-way dependency direction inside the new code and to spot a sibling that has started importing from outside the documented boundary.
+5. Walk every accepted slice artifact's `What looks solid` and `DRY findings` sections to catch any deferred follow-up that should land in this pass.
+
+The integration pass itself should check:
 
 - duplicated helpers across slices
 - inconsistent naming or error handling between slices
 - repeated ORM/queryset patterns that should be centralized
 - misplaced responsibilities between modules touched by different slices
 - missing or too-broad exports introduced by the build
-- repeated string literals / dictionary keys / tuple shapes across slices (use the shadow overviews for every file the build touched)
+- repeated string literals / dictionary keys / tuple shapes across slices
 - whether comments now tell one coherent story across the new code
 
 If DRY opportunities are found, Worker 1 records them in `bld-integration.md` and asks Worker 0 to dispatch Worker 2 for a consolidation pass and Worker 3 for a review pass. The results are recorded as additional sections in `bld-integration.md`. Repeat until the integration pass is clean.

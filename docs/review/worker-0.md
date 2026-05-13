@@ -4,19 +4,14 @@ Worker 0 owns the release review plan and the final closeout pass. Worker 0 does
 
 ## Required reading
 
-Read these before acting:
+Read the docs marked `yes` in the **W0** column of the Required reading per worker table in `docs/review/REVIEW.md`.
 
-- `AGENTS.md`
-- `START.md`
-- `docs/review/REVIEW.md`
-- `pyproject.toml`
-- `django_strawberry_framework/__init__.py`
+For closeout only, additionally read:
 
-For closeout, also read:
-
-- `CHANGELOG.md`
 - the completed `docs/review/review-<0_0_X>.md`
+- every completed `docs/review/rev-*.md` artifact for the cycle
 - the review-cycle commit diffs or maintainer-provided diff range
+- all four worker-memory files (one-time read at closeout)
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
@@ -122,7 +117,7 @@ After every per-file, folder, and project-level checkbox is `- [x]`, Worker 0 sp
 - Worker 1 runs `uv run pytest` once (full sweep across all three test trees per `AGENTS.md`).
 - **Do NOT inspect or assert line coverage.** Only that existing tests still pass.
 - If failures appear, Worker 1 records them in `rev-final.md`. Worker 0 then dispatches the owning cycle item again (Worker 1 → Worker 2 → Worker 3) and re-runs the gate.
-- Mark the final checkbox `- [x]` only after `rev-final.md` reaches `verified`.
+- Worker 1 (not Worker 3) sets `Status: verified` on `rev-final.md` when tests pass. **Worker 0 then marks the final checklist box** `- [x]` in `docs/review/review-<0_0_X>.md`. This is the only checkbox Worker 0 marks directly; all other boxes are marked by Worker 3 after a `verified` status.
 
 ## Closeout job
 
@@ -131,14 +126,13 @@ After all checklist items are marked complete (every file, folder pass, project 
 1. Read the completed plan and review artifacts.
 2. Scan the review-cycle diffs using the maintainer-provided commit range. If no range is provided, ask for it instead of guessing.
 3. Read all four worker-memory files (`docs/review/worker-memory/worker-{0,1,2,3}.md`) to surface patterns the workers themselves noticed across the cycle. This is the only step where Worker 0 reads the other workers' memory; per-cycle dispatch never does.
-4. Identify unresolved risk, repeated bug classes, repeated DRY opportunities, and workflow stumbling blocks.
-5. Provide final feedback to the maintainer.
-6. Implement closeout fixes only after maintainer approval.
-7. Read `CHANGELOG.md` and consolidate review-cycle entries if needed.
-8. Update `docs/review/REVIEW.md` or `docs/review/worker-*.md` with general retrospective notes.
-9. Delete `docs/review/worker-memory/` and `docs/review/temp-tests/` once the retrospective is committed. The tracked permanent record is the `rev-*.md` artifacts; the scratch memory and temp tests have served their purpose.
+4. Identify recurring issue types, repeated bug classes, repeated DRY opportunities, and workflow stumbling blocks.
+5. Provide a brief retrospective to the maintainer.
+6. After maintainer approval, apply approved closeout changes to `docs/review/REVIEW.md` or `docs/review/worker-*.md` — describing recurring patterns and workflow improvements **without naming specific already-fixed defects**.
+7. May inspect and consolidate `CHANGELOG.md` review-cycle entries only if the maintainer explicitly authorizes the consolidation.
+8. Delete `docs/review/worker-memory/` and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes; the scratch memory and temp tests have served their purpose.
 
-Retrospective notes must stay general. Describe recurring issue types, stumbling blocks, and workflow improvements without naming specific already-fixed defects.
+The maintainer then commits the updated workflow docs along with the now-completed plan and artifacts.
 
 ## Memory entry shape
 

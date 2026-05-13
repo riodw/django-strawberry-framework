@@ -6,21 +6,11 @@ Worker 3 runs as a **fresh subagent invocation per cycle item**, dispatched by W
 
 ## Required reading
 
-Read these before acting:
+Read the docs marked `yes` in the **W3** column of the Required reading per worker table in `docs/review/REVIEW.md`. Read `docs/review/worker-memory/worker-3.md` first — the calibration on what to accept and what bit you later is the carry-forward that makes you a useful reviewer rather than a fresh one every time.
 
-- `AGENTS.md`
-- `START.md`
-- `docs/review/REVIEW.md`
-- `docs/review/worker-3.md`
-- the active `docs/review/review-<0_0_X>.md`
-- `docs/review/worker-memory/worker-3.md` — your own running notes from prior cycles in this release. Read first; the calibration on what to accept and what bit you later is the carry-forward that makes you a useful reviewer rather than a fresh one every time.
-- the current `docs/review/rev-<folder__file_name>.md` — the contract Worker 1 produced and Worker 2 implemented against. This is the only contract you verify against.
-- Worker 2's diff
-- the target source file and relevant tests
+Worker 2's diff and the relevant source files and tests are the cycle inputs you must compare against the slice artifact. If Worker 2 used a shadow file, also read the shadow overview or stripped file as a control-flow aid only.
 
-If Worker 2 used a shadow file, also read the shadow overview or stripped file as a control-flow aid only.
-
-**Forbidden reads.** Worker 3 must not read `docs/review/worker-memory/worker-1.md` or `docs/review/worker-memory/worker-2.md`. The artifact and the diff are the contract; the other workers' running notes (their reasoning, their alternative considerations, their internal calibration) are private. If you find yourself wishing you had access, that's a signal the artifact is under-specified — flag that as verification feedback.
+**Forbidden reads.** Worker 3 must not read `docs/review/worker-memory/worker-0.md`, `worker-1.md`, or `worker-2.md`. The artifact and the diff are the contract; the other workers' running notes (their reasoning, their alternative considerations, their internal calibration) are private. If you find yourself wishing you had access, that's a signal the artifact is under-specified — flag that as verification feedback.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 

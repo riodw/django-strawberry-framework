@@ -18,9 +18,34 @@ The standing worker instructions live beside this overview:
 
 Permanent workflow files under `docs/review/` are tracked: `REVIEW.md`, `worker-*.md`, `review-*.md`, and every `rev-*.md` review artifact. They are committed to git and kept as the permanent record of the review cycle. The only intentionally untracked paths are generated scratch directories: `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`.
 
-`AGENTS.md` and `START.md` still apply during review runs. This review workflow adds the per-worker artifact discipline on top; it does not override standing validation, test-running, commit, or test-placement rules.
+`AGENTS.md` and `START.md` still apply during review runs. This review workflow adds the per-worker artifact discipline on top; it does not override standing validation, formatting, test-running, commit, or test-placement rules.
 
 Only the maintainer commits. Workers never commit, even if asked. Workers may stage edits and produce artifacts; pushing those edits to git is a maintainer-exclusive action.
+
+## Required reading per worker
+
+Every worker reads the standing project docs and its own role file before acting. The matrix below is the single source of truth; worker role sections and the standalone `worker-*.md` files reference it instead of re-listing.
+
+| Document | W0 | W1 | W2 | W3 |
+|---|---|---|---|---|
+| `AGENTS.md` | yes | yes | yes | yes |
+| `START.md` | yes | yes | yes | yes |
+| `docs/review/REVIEW.md` | yes | yes | yes | yes |
+| `docs/review/worker-0.md` | yes | — | — | — |
+| `docs/review/worker-1.md` | — | yes | — | — |
+| `docs/review/worker-2.md` | — | — | yes | — |
+| `docs/review/worker-3.md` | — | — | — | yes |
+| `pyproject.toml` | yes (plan + closeout) | — | — | — |
+| `django_strawberry_framework/__init__.py` | yes (plan + closeout) | — | — | — |
+| `CHANGELOG.md` | yes (closeout only) | — | yes (when the plan or maintainer authorizes a changelog pass) | yes (verifies changelog handling) |
+| active `docs/review/review-<0_0_X>.md` | yes (owns) | yes | yes | yes |
+| current `docs/review/rev-*.md` artifact | yes (read-only) | yes (owns findings + DRY analysis) | yes (writes fix reports + comment pass + changelog disposition) | yes (writes verification + sets `Status:`) |
+| sibling `docs/review/rev-*.md` artifacts for folder/project pass | — | yes (read-only) | — | — |
+| own `docs/review/worker-memory/worker-N.md` | yes | yes | yes | yes |
+| target source / tests | — | yes (read-only) | yes (writes) | yes (read-only) |
+| Worker 2's diff | — | — | — | yes |
+
+Workers never read another worker's memory file during the cycle; see "Subagent dispatch and worker memory" below. Adding a new standing doc is a one-line change to this table.
 
 ## Versioned review plan
 
@@ -61,12 +86,13 @@ The generated `docs/review/review-<0_0_X>.md` file must begin with:
 - source root: `django_strawberry_framework/`
 - date created
 - a short copy of the one-file-at-a-time rule
-- a list of every review artifact that will be created
+- a short copy of the DRY-first rule (every artifact must include a `## DRY analysis` section)
+- a list of every review artifact that will be created, including `docs/review/rev-final.md` for the final test-run gate
 
-Then it must include a tree-like checklist for the package. Every file and every folder-level pass must have:
+Then it must include a tree-like checklist for the package. Every file, every folder-level pass, the final project-level pass, and the final test-run gate must have:
 
 - a checkbox
-- the source path being reviewed
+- the source path or pass description
 - the exact review artifact file to create
 
 ### Template shape:
@@ -76,6 +102,7 @@ Then it must include a tree-like checklist for the package. Every file and every
 
 Source root: `django_strawberry_framework/`
 Review rule: one file or folder-summary pass at a time.
+DRY rule: every `rev-*.md` artifact must include a `## DRY analysis` section before merging.
 
 ## Artifact list
 
@@ -83,6 +110,7 @@ Review rule: one file or folder-summary pass at a time.
 - `docs/review/rev-optimizer__field_meta.md`
 - `docs/review/rev-optimizer.md`
 - `docs/review/rev-django_strawberry_framework.md`
+- `docs/review/rev-final.md`
 
 ## Checklist
 
@@ -92,6 +120,7 @@ Review rule: one file or folder-summary pass at a time.
     - [ ] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
     - [ ] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
   - [ ] project-level pass: `django_strawberry_framework/` -> `docs/review/rev-django_strawberry_framework.md`
+- [ ] final test-run gate: `uv run pytest` -> `docs/review/rev-final.md`
 ```
 
 Use the actual on-disk package tree when creating the plan. Do not invent files. Skip every non-`.py` file (e.g. `py.typed`) and every `__init__.py` — they are out of scope per the rules above; the subpackage `__init__.py` and the top-level package `__init__.py` are covered by the folder pass and the project pass respectively. Keep the checklist in review order.
@@ -135,7 +164,7 @@ Worker 1 creates exactly one `docs/review/rev-<folder__file_name>.md` file for t
 
 ## Review artifact template
 
-Every `docs/review/rev-<folder__file_name>.md` file must use this structure:
+Every `docs/review/rev-<folder__file_name>.md` file must use this structure. The artifact is the inter-worker contract; every cycle hand-off appends to it.
 
 ````text
 # Review: `django_strawberry_framework/optimizer/walker.py`
@@ -185,25 +214,102 @@ Relevant excerpt or pseudo-diff context.
 - List thing one.
 - List thing two.
 
+### Summary
+
+Worker 1's short summary of the review (one paragraph).
+
 ---
 
-### Summary:
+## Fix report (Worker 2)
 
-Add a short summary here.
+### Files touched
+
+- `path/to/file.py` — what changed and why
+
+### Tests added or updated
+
+- `tests/path/test_x.py::test_name` — what it pins
+
+### Validation run
+
+- `uv run ruff format .` — pass/fail
+- `uv run ruff check --fix .` — pass/fail
+- Focused tests or validation appropriate to the finding, if any
+
+### Notes for Worker 3
+
+Anything Worker 3 should know before verifying (shadow file used, intentionally-rejected findings with reason, etc.).
+
+---
+
+## Verification (Worker 3)
+
+### Logic verification outcome
+
+Every High/Medium/Low finding: addressed, or intentionally rejected with a recorded reason.
+
+### DRY findings disposition
+
+How the DRY analysis items were resolved or carried forward.
+
+### Temp test verification
+
+- Temp test files used (cite paths under `docs/review/temp-tests/<scope>/`).
+- Disposition: promoted to permanent, deleted, or noted as Medium finding for promotion.
+
+### Verification outcome
+
+`verified` (every finding addressed or intentionally rejected with reason) or `revision-needed`. Setting this also updates the top-level `Status:` line.
+
+---
+
+## Comment/docstring pass
+
+After the logic verification reaches `verified`, Worker 2 returns for a comment/docstring pass and records the updates here. Worker 3 verifies and appends acceptance or feedback. The status moves back to `fix-implemented` for the comment pass and to `verified` again on acceptance.
+
+---
+
+## Changelog disposition
+
+Worker 2 records whether a `CHANGELOG.md` entry is warranted and whether it was made. Edits to `CHANGELOG.md` are made only when the active review plan or the maintainer has explicitly authorized them. If no edit was made, record why (not user-visible, deferred to maintainer, etc.). Worker 3 verifies this disposition before final `verified`.
+
+---
+
+## Iteration log
+
+Each Worker 2 re-pass appends a `## Fix report (Worker 2, pass <N>)` section here. Each Worker 3 re-verification appends a `## Verification (Worker 3, pass <N>)` section here. Do not edit prior entries; append.
 ````
 
 If a severity has no issues, keep the heading and write `None.` under it. Do not include speculative issues. If a concern depends on package-wide context that is not yet available, put it in the summary as a follow-up for the folder or project-level pass rather than presenting it as a file-local defect.
 
 ## Artifact status legend
 
-Every `rev-*.md` artifact carries a `Status:` line that Worker 0 reads to drive dispatch and that Worker 3 updates as the cycle advances. Possible values:
+Every `rev-*.md` artifact carries a `Status:` line. Status transitions are owned by exactly one worker per value:
 
-- `under-review` — Worker 1 has produced the artifact; ready for Worker 2.
-- `fix-implemented` — Worker 2 has applied a logic or comment pass; ready for Worker 3.
-- `revision-needed` — Worker 3 found issues; ready for another Worker 2 pass.
-- `verified` — Worker 3 has accepted logic, comments, validation, and changelog handling. Worker 3 then marks the checklist `- [x]` in the plan.
+- `under-review` — Worker 1 sets this when creating the artifact. The status field never starts empty; new artifacts always have `Status: under-review`.
+- `fix-implemented` — Worker 2 sets this at the end of every fix/comment/changelog pass, including no-op passes for files with no findings. The status returns to `fix-implemented` whenever Worker 2 finishes a pass, signaling Worker 0 to spawn Worker 3 next.
+- `revision-needed` — Worker 3 sets this on rejection of any pass. The maintainer-checkpoint Worker 1 re-check may also set this from `verified` back to `revision-needed` if the closing audit finds something Worker 3 missed.
+- `verified` — Worker 3 sets this after accepting logic, comments, validation, and changelog handling for the cycle item. Worker 3 then marks the checklist `- [x]` in the plan. Exception: for `docs/review/rev-final.md`, Worker 1 sets `verified` after the test-run gate passes, and Worker 0 marks the final checklist box.
 
-Worker 0 never writes to `Status:`. Worker 0 only reads it to drive dispatch. Worker 1 sets the initial `under-review` value when creating the artifact. If the field is missing or ambiguous, treat that as a stop condition.
+Worker 0 never writes to `Status:`. Worker 0 reads it to drive dispatch. If the field is missing or ambiguous, treat that as a stop condition.
+
+## No-op and skip lifecycle
+
+Three cycle shapes exit the loop without any source changes:
+
+### Normal file review with no findings
+
+Worker 1 produces an artifact with all severities `None.` and a brief summary explaining there is nothing to fix. Status starts at `under-review`. Worker 2 is still spawned and appends a `## Fix report (Worker 2)` recording the no-op disposition plus the mandatory `uv run ruff format .` and `uv run ruff check --fix .` runs (both should be pass/no-changes), then sets `Status: fix-implemented`. Worker 3 verifies that the no-findings disposition matches the source, sets `Status: verified`, and marks the checklist box.
+
+### Skip artifact for low-surface logic
+
+Worker 1 produces a skip artifact explaining why the file has no review-worthy logic (e.g. a pure-class-definition module like `exceptions.py`). All severities are `None.` and the `What looks solid` section records why the helper was skipped. The flow proceeds the same as the no-findings case above.
+
+### Folder or project pass with no findings
+
+Same as the no-findings file case: Worker 1 writes the folder/project artifact with `None.` severities, Worker 2 records a no-op `Fix report` pass, Worker 3 verifies and marks the checkbox.
+
+In all three shapes, the artifact still carries the full template structure; the workers simply note `None.` or "no-op" in each section. The artifact remains the inter-worker contract.
 
 ## Severity definitions
 
@@ -285,8 +391,10 @@ Worker 2 **must re-read** the overview already written by Worker 1 before implem
 From the repository root:
 
 ```shell
-python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py
+python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/review/shadow
 ```
+
+Every review-cycle helper invocation must pass `--output-dir docs/review/shadow` so generated artifacts land inside the review sandbox and never collide with other workflows' shadow output.
 
 Useful flags:
 
@@ -294,6 +402,9 @@ Useful flags:
 - `--outline-only` — overview keeps only Imports, Symbols, Control-flow hotspots, and Django/ORM markers. Use for a fast-scan pass on a file you have already reviewed.
 - `--stdout` — print the overview to stdout in addition to writing it. Useful for quick triage from the terminal.
 - `--marker NAME` — add a custom marker to the Django/ORM marker table. Repeatable. Use when a file traffics in a name (e.g., `Connection`, `relay`) the default marker list does not cover.
+- `--long-function-lines N` and `--long-function-branches N` — raise or lower the control-flow hotspot thresholds (defaults: 40 lines, 8 branches).
+- `--first-party-prefix PREFIX` — add a first-party import prefix; defaults to `django_strawberry_framework`. Repeatable.
+- `--literal-min-length N` — minimum length for repeated string literals to surface (default 8).
 
 #### Output files
 
@@ -439,7 +550,7 @@ Worker 2 should:
 - add or update tests when the logic change needs proof
 - run focused validation appropriate to the change
 
-After Worker 3 approves the logic changes, Worker 2 updates comments/docstrings for the reviewed scope. After Worker 3 approves comments, Worker 2 updates `CHANGELOG.md` if the change is user-visible or release-note-worthy. Each Worker 2 pass is a fresh subagent spawn — Worker 2 only knows about the previous pass through what it wrote in the artifact and in `worker-memory/worker-2.md`.
+After Worker 3 approves the logic changes, Worker 2 updates comments/docstrings for the reviewed scope. After Worker 3 approves comments, Worker 2 records the **changelog disposition** in the artifact (whether an entry is warranted, why, and what was done). `CHANGELOG.md` is edited only when the active review plan or the maintainer has explicitly authorized it; otherwise the disposition records that no edit was made and why. Each Worker 2 pass is a fresh subagent spawn — Worker 2 only knows about the previous pass through what it wrote in the artifact and in `worker-memory/worker-2.md`.
 
 At the end of its final pass for a cycle item, Worker 2 appends a short entry to `docs/review/worker-memory/worker-2.md`.
 
@@ -497,7 +608,7 @@ The folder-level artifact uses the same High/Medium/Low template. It may cite mu
 
 After every file and folder pass is complete, Worker 1 creates `docs/review/rev-django_strawberry_framework.md`.
 
-This pass should update `docs/review/review-<0_0_X>.md` with any package-wide DRY or structure potentials discovered after seeing the whole project.
+Record all package-wide DRY or structure findings inside `rev-django_strawberry_framework.md`. Do **not** write findings into `docs/review/review-<0_0_X>.md`; the plan is the canonical checklist and progress tracker, not a findings log. The only edits to the plan file are checklist/status progress and newly required artifacts (e.g., adding an entry if a project-pass finding warrants a new follow-up artifact).
 
 Focus on:
 
@@ -528,7 +639,7 @@ The gate is intentionally narrow:
 - Run `uv run pytest` (full sweep across all three test trees per `AGENTS.md`).
 - **Do NOT inspect or assert line coverage at this stage.** The only requirement is that the existing test suite passes. Coverage gating belongs to CI (`pyproject.toml` `[tool.coverage.report] fail_under = 100`) and to the maintainer, not to this gate.
 - If failures appear, record them in `rev-final.md`, then re-loop through whichever cycle item owns the failing behavior (Worker 1 re-issues a finding, Worker 0 dispatches Worker 2 to fix, Worker 0 dispatches Worker 3 to verify, Worker 1 re-runs the gate).
-- The gate's artifact uses the same `Status:` line as ordinary `rev-*.md` artifacts; it closes at `verified`.
+- Worker 1 owns this artifact end-to-end: Worker 1 writes the gate output, sets `Status: verified` once tests pass, and **Worker 0 marks the final checklist box** in `docs/review/review-<0_0_X>.md`. Worker 3 is not part of this gate.
 
 The gate closes the review cycle. Worker 0 then proceeds to closeout.
 
@@ -536,15 +647,11 @@ The gate closes the review cycle. Worker 0 then proceeds to closeout.
 
 When all checklist items are marked `- [x]` (every file, folder pass, project pass, and the final test-run gate):
 
-1. Worker 0 scans all review-cycle commit diffs.
+1. Worker 0 scans all review-cycle commit diffs (using the maintainer-provided commit range).
 2. Worker 0 reads all four worker-memory files (one-time read at closeout) to surface patterns the workers themselves noticed across the cycle.
-3. Worker 0 provides final feedback.
-4. Worker 0 and the maintainer make any last changes needed.
-5. Worker 0 implements approved closeout changes.
-6. Worker 0 reads `CHANGELOG.md` and consolidates entries if needed.
-7. Worker 0 updates `docs/review/REVIEW.md` or the worker role files with a general retrospective:
-   - recurring issue types found
-   - workflow stumbling blocks
-   - review checklist improvements for the next release
-8. Worker 0 deletes `docs/review/worker-memory/` and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes — the scratch memory and temp tests have served their purpose.
-9. The maintainer commits the updated `docs/review/` workflow docs along with the now-completed `docs/review/review-<0_0_X>.md` plan and any remaining `docs/review/rev-*.md` artifacts to finish the review cycle. The plan and artifacts stay in git as the permanent record of the release review.
+3. Worker 0 identifies recurring issue types, repeated bug classes, repeated DRY opportunities, and workflow stumbling blocks.
+4. Worker 0 provides a brief retrospective to the maintainer.
+5. After maintainer approval, Worker 0 applies approved closeout changes to `docs/review/REVIEW.md` or the worker role files — describing recurring patterns and workflow improvements **without naming specific already-fixed defects**.
+6. Worker 0 may inspect `CHANGELOG.md` review-cycle entries and consolidate them only if the maintainer explicitly authorizes that consolidation.
+7. Worker 0 deletes `docs/review/worker-memory/` and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes — the scratch memory and temp tests have served their purpose.
+8. The maintainer commits the updated `docs/review/` workflow docs along with the now-completed `docs/review/review-<0_0_X>.md` plan and any remaining `docs/review/rev-*.md` artifacts to finish the review cycle. The plan and artifacts stay in git as the permanent record of the release review.

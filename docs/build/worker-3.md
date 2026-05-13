@@ -45,7 +45,7 @@ Worker 3 must not:
 7. Run `scripts/review_inspect.py` with `--output-dir docs/build/shadow` when `BUILD.md` requires it.
 8. Create temp tests under `docs/build/temp-tests/<slice>/` only when they help verify behavior during review.
 9. Append a `Review (Worker 3)` section, or `Review (Worker 3, pass N)` on re-review.
-10. Set the artifact `Status:` line to `review-accepted` (no remaining High/Medium findings) or `revision-needed` (any High/Medium finding, or a Low finding the artifact does not justify accepting as-is).
+10. Set the artifact `Status:` line to `review-accepted` (every High/Medium/Low finding addressed or intentionally rejected with a recorded reason) or `revision-needed`.
 11. Append a memory entry only when the pass reaches an accepted state.
 
 ### Acceptance gate
@@ -53,12 +53,13 @@ Worker 3 must not:
 Set `review-accepted` only when:
 
 - every spec-required behavior is reflected in the diff or intentionally rejected with a recorded reason
+- every High, Medium, and Low finding has been addressed or intentionally rejected with a recorded reason
 - DRY findings have all been addressed or recorded as a deferred follow-up Worker 1 will weigh during final verification
 - tests pin every High-severity behavior change
 - temp tests that catch a real bug have either been promoted to permanent tests or recorded as a Medium finding so Worker 2 will promote them
 - shadow-file usage and any helper invocations are explicitly noted in the artifact
 
-Otherwise, set `revision-needed`. Never accept a slice with unresolved High or Medium findings.
+Otherwise, set `revision-needed`. Never accept a slice with unresolved High, Medium, or Low findings that lack a recorded rejection reason.
 
 ## DRY enforcement
 

@@ -255,7 +255,7 @@ Flag anything Worker 1 should weigh during final verification (spec ambiguity, p
 
 ### Review outcome
 
-`review-accepted` (no remaining High/Medium findings) or `revision-needed`. Setting this also updates the artifact's top-level `Status:` line.
+`review-accepted` (every High/Medium/Low finding addressed or intentionally rejected with a recorded reason) or `revision-needed`. Setting this also updates the artifact's top-level `Status:` line.
 
 ---
 

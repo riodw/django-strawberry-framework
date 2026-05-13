@@ -6,19 +6,11 @@ Worker 1 runs as a **fresh subagent invocation per cycle item**, dispatched by W
 
 ## Required reading
 
-Read these before acting:
+Read the docs marked `yes` in the **W1** column of the Required reading per worker table in `docs/review/REVIEW.md`. Read `docs/review/worker-memory/worker-1.md` first — the patterns and calibration you flagged in earlier cycles inform how you read this one.
 
-- `AGENTS.md`
-- `START.md`
-- `docs/review/REVIEW.md`
-- `docs/review/worker-1.md`
-- the active `docs/review/review-<0_0_X>.md`
-- `docs/review/worker-memory/worker-1.md` — your own running notes from prior cycles in this release. Read first; the patterns and calibration you flagged in earlier cycles inform how you read this one.
-- the target source file or folder
+For folder-level passes, also read every sibling `docs/review/rev-*.md` artifact for that folder. For the final project-level pass, read the completed folder and file artifacts needed to understand package-wide patterns. For the final test-run gate, only `rev-final.md` is in scope.
 
-For folder-level passes, also read every sibling `docs/review/rev-*.md` artifact for that folder. For the final project-level pass, read the completed folder and file artifacts needed to understand package-wide patterns.
-
-**Forbidden reads.** Worker 1 must not read `docs/review/worker-memory/worker-2.md` or `docs/review/worker-memory/worker-3.md`. Those files are private to their respective workers; reading them defeats the isolation that makes the cycle's verification independent.
+**Forbidden reads.** Worker 1 must not read `docs/review/worker-memory/worker-0.md`, `worker-2.md`, or `worker-3.md`. Those files are private to their respective workers; reading them defeats the isolation that makes the cycle's verification independent.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 

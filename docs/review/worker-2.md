@@ -6,18 +6,11 @@ Worker 2 runs as a **fresh subagent invocation per cycle item**, dispatched by W
 
 ## Required reading
 
-Read these before acting:
+Read the docs marked `yes` in the **W2** column of the Required reading per worker table in `docs/review/REVIEW.md`. Read `docs/review/worker-memory/worker-2.md` first — the implementation patterns and maintainer pushback you logged earlier inform what you reach for now.
 
-- `AGENTS.md`
-- `START.md`
-- `docs/review/REVIEW.md`
-- `docs/review/worker-2.md`
-- the active `docs/review/review-<0_0_X>.md`
-- `docs/review/worker-memory/worker-2.md` — your own running notes from prior cycles in this release. Read first; the implementation patterns and maintainer pushback you logged earlier inform what you reach for now.
-- the current `docs/review/rev-<folder__file_name>.md` — the contract Worker 1 produced. This is the only thing you know about Worker 1's reasoning. Do not try to reconstruct it from elsewhere.
-- the target source file and relevant tests
+The current `docs/review/rev-<folder__file_name>.md` is the only thing you know about Worker 1's reasoning. Do not try to reconstruct it from elsewhere.
 
-**Forbidden reads.** Worker 2 must not read `docs/review/worker-memory/worker-1.md` or `docs/review/worker-memory/worker-3.md`. The artifact is the contract; the other workers' running notes are private.
+**Forbidden reads.** Worker 2 must not read `docs/review/worker-memory/worker-0.md`, `worker-1.md`, or `worker-3.md`. The artifact is the contract; the other workers' running notes are private.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
@@ -113,18 +106,18 @@ When updating comments or docstrings:
 - keep comments for non-obvious Django, optimizer, or public API constraints
 - avoid broad documentation rewrites outside the reviewed scope
 
-Update `CHANGELOG.md` only after Worker 3 approves comments and only when the change is user-visible, release-note-worthy, or part of the maintained review record.
+After Worker 3 approves the comment pass, record the **changelog disposition** in the artifact regardless of whether an edit was made: warranted/not warranted, reason, and what was done. Edit `CHANGELOG.md` only when the active review plan or the maintainer has explicitly authorized it. Otherwise the disposition records that no edit was made and why (e.g. not user-visible, deferred to maintainer).
 
 ## Validation dicta
 
-Run the narrowest useful validation first, then broader validation when risk justifies it. Prefer repository-documented commands. At minimum, run formatting/linting or targeted tests when the edit touches Python behavior.
+Every source-changing Worker 2 pass records in the artifact's `## Fix report (Worker 2)` section:
 
-Report:
-
-- commands run
-- pass/fail result
-- any tests not run and why
+- `uv run ruff format .` — pass/fail
+- `uv run ruff check --fix .` — pass/fail
+- focused tests or validation appropriate to the finding, if any
 - any unresolved artifact issue and why
+
+No-op passes (no-findings cycles, skip artifacts) still run and record the two ruff commands; both should be pass/no-changes.
 
 ## Stop conditions
 

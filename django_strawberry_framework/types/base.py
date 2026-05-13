@@ -26,6 +26,7 @@ triggers the collection pipeline, which:
 from typing import Any, ClassVar
 
 from django.db import models
+from strawberry import relay
 from strawberry.types.field import StrawberryField
 
 from ..exceptions import ConfigurationError
@@ -118,6 +119,7 @@ class DjangoType:
             fields,
             source_model=meta.model,
             consumer_authored_fields=consumer_authored_fields,
+            interfaces=interfaces,
         )
         definition = DjangoTypeDefinition(
             origin=cls,
@@ -522,6 +524,7 @@ def _build_annotations(
     *,
     source_model: type[models.Model],
     consumer_authored_fields: frozenset[str] = frozenset(),
+    interfaces: tuple[type, ...] = (),
 ) -> tuple[dict[str, Any], list[PendingRelation]]:
     """Build the annotation dict the Strawberry type decorator consumes.
 
@@ -530,11 +533,28 @@ def _build_annotations(
     ``convert_scalar`` otherwise. The caller pre-computes the list with
     ``_select_fields(meta)`` so this function does not need ``meta``.
 
+    When ``relay.Node`` appears in ``interfaces``, the primary-key field's
+    synthesized scalar annotation is dropped from the returned dict so
+    Strawberry's interface-supplied ``id: GlobalID!`` is not shadowed by a
+    Django ``int`` field. The pk field stays in ``fields`` so the
+    optimizer's ``DjangoTypeDefinition.field_map`` continues to see it as a
+    connector column (spec Decision 7, line 361).
+
     Args:
         cls: The consumer-facing ``DjangoType`` subclass (its ``__name__``
             threads into ``convert_scalar`` so generated choice enums
             carry a stable name).
         fields: The Meta-filtered list of Django field objects.
+        source_model: The Django model the type wraps. Used to resolve the
+            primary-key attname when ``relay.Node`` suppression is active.
+        consumer_authored_fields: Names of fields whose annotation /
+            ``StrawberryField`` assignment is owned by the consumer. The
+            synthesized annotation is skipped for these names so consumer
+            overrides survive collection.
+        interfaces: The validated ``Meta.interfaces`` tuple. When
+            ``relay.Node`` is among them, the primary-key field's
+            synthesized scalar annotation is suppressed so Strawberry's
+            interface-supplied ``id: GlobalID!`` is not shadowed.
 
     Returns:
         A tuple of ``(annotations, pending_relations)``.
@@ -546,6 +566,8 @@ def _build_annotations(
     """
     annotations: dict[str, Any] = {}
     pending: list[PendingRelation] = []
+    suppress_pk_annotation = relay.Node in interfaces
+    pk_attname = source_model._meta.pk.name if suppress_pk_annotation else None
     for field in fields:
         if field.is_relation:
             if field.name in consumer_authored_fields:
@@ -571,10 +593,13 @@ def _build_annotations(
                 # collection. Relation override symmetry: see the
                 # ``field.is_relation`` branch above.
                 continue
-            # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-            # when ``relay.Node`` is declared in ``Meta.interfaces``, suppress
-            # the synthesized Django ``id`` annotation while preserving the pk
-            # field in ``DjangoTypeDefinition.field_map`` for optimizer use.
+            if suppress_pk_annotation and field.name == pk_attname:
+                # ``relay.Node`` supplies ``id: GlobalID!`` via the interface;
+                # dropping the synthesized scalar annotation here keeps the
+                # Strawberry surface clean. The pk field stays in ``fields``
+                # so the optimizer's field map still sees it as a connector
+                # column (spec Decision 7, line 361).
+                continue
             annotations[field.name] = convert_scalar(field, cls.__name__)
     return annotations, pending
 

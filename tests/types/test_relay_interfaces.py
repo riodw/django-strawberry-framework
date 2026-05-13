@@ -17,7 +17,7 @@ from strawberry import relay
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.types.base import _validate_interfaces
+from django_strawberry_framework.types.base import _build_annotations, _validate_interfaces
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 
 
@@ -252,3 +252,61 @@ def test_consumer_declared_is_type_of_is_preserved():
 
     assert CustomNode.__dict__["is_type_of"] is consumer_is_type_of
     assert CustomNode.__dict__["is_type_of"](Category(), info=None) is sentinel
+
+
+# ---------------------------------------------------------------------------
+# Slice 3 — id suppression
+# ---------------------------------------------------------------------------
+
+
+def test_relay_node_strips_django_id_annotation():
+    """``relay.Node`` in ``interfaces`` drops the synthesized pk annotation.
+
+    Spec Decision 2 (lines 278-285): when ``relay.Node`` is declared the
+    synthesized scalar ``id`` annotation must not shadow Strawberry's
+    interface-supplied ``id: GlobalID!``. The field stays in ``fields`` so
+    ``DjangoTypeDefinition.field_map`` and the optimizer still see the pk
+    as a connector column (Decision 7, line 361).
+
+    ``"interfaces"`` is still in ``DEFERRED_META_KEYS`` until Slice 5
+    promotes it, so the unit-level test calls ``_build_annotations``
+    directly with a synthetic host class. Matches Slice 1's testing
+    approach for the same reason.
+    """
+    fields = tuple(Category._meta.get_fields())
+
+    class _Host:
+        pass
+
+    synthesized, _ = _build_annotations(
+        _Host,
+        fields,
+        source_model=Category,
+        interfaces=(relay.Node,),
+    )
+    assert "id" not in synthesized
+    # Control: a non-pk scalar still receives its synthesized annotation so
+    # the suppression is scoped to the primary key, not to all scalars.
+    assert "name" in synthesized
+
+
+def test_non_relay_type_keeps_id_int():
+    """Without ``relay.Node`` declared, the synthesized ``id: int`` is preserved.
+
+    Regression guard for the suppression branch: a future drift that
+    accidentally strips ``id`` for non-Relay types must surface here. The
+    ``interfaces=()`` default is the ``0.0.4``-identical path.
+    """
+    fields = tuple(Category._meta.get_fields())
+
+    class _Host:
+        pass
+
+    synthesized, _ = _build_annotations(
+        _Host,
+        fields,
+        source_model=Category,
+        interfaces=(),
+    )
+    assert "id" in synthesized
+    assert synthesized["id"] is int

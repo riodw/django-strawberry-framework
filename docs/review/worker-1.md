@@ -40,7 +40,7 @@ Worker 1 must not:
 - produce a separate narrative response after the artifact is created
 - read or edit `docs/review/worker-memory/worker-2.md` or `worker-3.md`
 - truncate or rewrite history in `worker-memory/worker-1.md` — append only (consolidate via merge if the file exceeds ~50 lines)
-- commit unless the maintainer explicitly asks
+- commit. Only the maintainer commits; Worker 1 never commits, even if asked
 
 ## Job
 

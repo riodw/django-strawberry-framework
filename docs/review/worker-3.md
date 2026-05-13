@@ -40,7 +40,7 @@ Worker 3 must not:
 - mark the checkbox complete before logic, comments, validation, and changelog handling are complete
 - read or edit `docs/review/worker-memory/worker-0.md`, `worker-1.md`, or `worker-2.md`
 - truncate or rewrite history in `worker-memory/worker-3.md` — append only (consolidate via merge if the file exceeds ~50 lines)
-- commit unless the maintainer explicitly asks
+- commit. Only the maintainer commits; Worker 3 never commits, even if asked
 
 ## Shadow-file dicta
 

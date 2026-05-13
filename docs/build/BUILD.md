@@ -22,19 +22,44 @@ Permanent workflow files under `docs/build/` are tracked: `BUILD.md`, `worker-*.
 
 `AGENTS.md` and `START.md` still apply during build runs. This workflow adds the per-worker artifact discipline on top; it does not override standing validation, formatting, commit, or test-placement rules.
 
+Only the maintainer commits. Workers never commit, even if asked. Workers may stage edits and produce artifacts; pushing those edits to git is a maintainer-exclusive action.
+
+## Required reading per worker
+
+Every worker reads the standing project docs and its own role file before acting. The matrix below is the single source of truth; worker role sections and the standalone `worker-*.md` files reference it instead of re-listing.
+
+| Document | W0 | W1 | W2 | W3 |
+|---|---|---|---|---|
+| `AGENTS.md` | yes | yes | yes | yes |
+| `START.md` | yes | yes | yes | yes |
+| `docs/build/BUILD.md` | yes | yes | yes | yes |
+| `docs/build/worker-0.md` | yes | — | — | — |
+| `docs/build/worker-1.md` | — | yes | — | — |
+| `docs/build/worker-2.md` | — | — | yes | — |
+| `docs/build/worker-3.md` | — | — | — | yes |
+| `GOAL.md` | yes | yes | — | — |
+| `docs/FEATURES.md` | yes | yes | — | — |
+| `CHANGELOG.md` | — | yes | — | — |
+| `docs/TREE.md` | — | — | yes | — |
+| `docs/README.md` | — | — | — | yes |
+| `examples/fakeshop/test_query/README.md` | — | — | — | yes |
+| active `docs/spec-<topic>.md` | yes | yes | yes | yes |
+| active `docs/build/build-<topic>-<0_0_X>.md` | yes (owns) | yes | yes | yes |
+| current `docs/build/bld-*.md` artifact | yes (read-only) | yes (owns plan + final sections) | yes (writes build reports) | yes (writes review section) |
+| own `docs/build/worker-memory/worker-N.md` | yes | yes | yes | yes |
+| relevant source / tests | — | yes (read-only) | yes (writes) | yes (read-only) |
+| Worker 2's diff | — | — | — | yes |
+
+Workers never read another worker's memory file during the cycle; see "Subagent dispatch and worker memory" below. Adding a new standing doc (e.g., a future `docs/ARCHITECTURE.md`) is a one-line change to this table.
+
 ## Versioned build plan
 
-Worker 0 is **handed** the active spec file (e.g. `docs/spec-relay_interfaces.md`) at the start of the cycle. Worker 0 does not write the spec; Worker 0 derives the build plan from it.
+Worker 0 is **handed** the active spec file (e.g. `docs/spec-<topic>.md`) at the start of the cycle. Worker 0 does not write the spec; Worker 0 derives the build plan from it.
 
 1. Read the active spec file at `docs/spec-<topic>.md`.
-2. Confirm `pyproject.toml` and `django_strawberry_framework/__init__.py` agree on the current package version.
-3. Read the spec's target release version and record whether the build includes a final version-bump slice. The target version may be newer than the current package version; that is expected for a feature build.
-4. If the current package versions differ, or if the spec target is already shipped, stop and record the blocker in the plan before any build work starts.
-5. Convert the target release version from dots to underscores.
-   - `0.0.5` becomes `0_0_5`.
-6. Create `docs/build/build-<topic>-<0_0_X>.md`.
-   - For the active relay-interfaces slice targeting `0.0.5`, this would be `docs/build/build-relay_interfaces-0_0_5.md`.
-7. The plan file is the canonical checklist for the whole build and is committed alongside the implementation changes. It is kept in git as the permanent record of the cycle.
+2. Identify the spec's topic slug and target release version from the spec itself; convert the target release dots to underscores (e.g. `0.0.5` becomes `0_0_5`). Version-bump correctness is the maintainer's responsibility — Worker 0 does not validate `pyproject.toml`, `__init__.py`, or the shipped-status of the target version.
+3. Create `docs/build/build-<topic>-<0_0_X>.md`. For an `example_topic` spec targeting `0.0.X`, this is `docs/build/build-example_topic-0_0_X.md`.
+4. The plan file is the canonical checklist for the whole build and is committed alongside the implementation changes. It is kept in git as the permanent record of the cycle.
 
 If the spec is missing, malformed, or its slice checklist cannot be parsed, stop and record that mismatch in the plan before any slice work starts.
 
@@ -68,31 +93,29 @@ Then it must include a slice-level checklist for the build. Every slice and ever
 
 ### Template shape:
 
-```text
-# Package build plan: relay_interfaces / 0.0.5
+The block below is a **fictional placeholder**. Substitute the active spec's topic, target version, and actual slice titles when generating the real plan; do not treat any of these names as referencing a current or past build.
 
-Spec source: `docs/spec-relay_interfaces.md`
-Target release: `0.0.5`
+```text
+# Package build plan: example_topic / 0.0.X
+
+Spec source: `docs/spec-example_topic.md`
+Target release: `0.0.X`
 Build rule: one slice at a time. Plan first, build second, review third, reconcile fourth.
 DRY rule: every slice must justify shared/duplicated patterns before merging.
 
 ## Artifact list
 
-- `docs/build/bld-slice-1-validation_and_storage.md`
-- `docs/build/bld-slice-2-is_type_of.md`
-- `docs/build/bld-slice-3-id_suppression.md`
-- `docs/build/bld-slice-4-interface_injection_and_resolvers.md`
-- `docs/build/bld-slice-5-promotion_and_docs.md`
+- `docs/build/bld-slice-1-<short_slug>.md`
+- `docs/build/bld-slice-2-<short_slug>.md`
+- `docs/build/bld-slice-3-<short_slug>.md`
 - `docs/build/bld-integration.md`
 - `docs/build/bld-final.md`
 
 ## Checklist
 
-- [ ] Slice 1: Validation + storage -> `docs/build/bld-slice-1-validation_and_storage.md`
-- [ ] Slice 2: `is_type_of` injection -> `docs/build/bld-slice-2-is_type_of.md`
-- [ ] Slice 3: `id` suppression -> `docs/build/bld-slice-3-id_suppression.md`
-- [ ] Slice 4: Interface injection + Relay resolver defaults -> `docs/build/bld-slice-4-interface_injection_and_resolvers.md`
-- [ ] Slice 5: Promotion + docs + version -> `docs/build/bld-slice-5-promotion_and_docs.md`
+- [ ] Slice 1: <slice title from spec> -> `docs/build/bld-slice-1-<short_slug>.md`
+- [ ] Slice 2: <slice title from spec> -> `docs/build/bld-slice-2-<short_slug>.md`
+- [ ] Slice 3: <slice title from spec> -> `docs/build/bld-slice-3-<short_slug>.md`
 - [ ] Cross-slice integration pass -> `docs/build/bld-integration.md`
 - [ ] Final test-run gate -> `docs/build/bld-final.md`
 ```
@@ -111,10 +134,10 @@ Naming rules:
 - For the final test-run gate: `docs/build/bld-final.md`.
 - End with `.md`.
 
-Examples:
+Examples (fictional placeholders, not a real spec):
 
-- Spec slice 1 ("Validation + storage") -> `docs/build/bld-slice-1-validation_and_storage.md`
-- Spec slice 4 ("Interface base-class injection + Relay resolver defaults") -> `docs/build/bld-slice-4-interface_injection_and_resolvers.md`
+- Spec slice 1 ("<slice title>") -> `docs/build/bld-slice-1-<short_slug>.md`
+- Spec slice 4 ("<slice title>") -> `docs/build/bld-slice-4-<short_slug>.md`
 - Integration pass -> `docs/build/bld-integration.md`
 - Final pass -> `docs/build/bld-final.md`
 
@@ -123,6 +146,18 @@ The generated `docs/build/build-<topic>-<0_0_X>.md` file must list every artifac
 ## Build artifact template
 
 Every `docs/build/bld-<slice>.md` file accumulates the full back-and-forth for that slice. The artifact is the contract that flows between workers; everything inter-worker happens through this file plus the working-tree diff.
+
+### Status field ownership
+
+The artifact's `Status:` line is set by exactly one worker per transition:
+
+- `planned` — Worker 1 sets this when the artifact is first created (the planning pass writes the `Plan (Worker 1)` section and `Status: planned`). The status field never starts empty; new artifacts always have `Status: planned`.
+- `built` — Worker 2 sets this at the end of every build pass (including re-passes after a Worker 3 rejection). The status returns to `built` whenever Worker 2 finishes implementing, signaling Worker 0 to spawn Worker 3 next.
+- `revision-needed` — set by Worker 3 (after the review pass surfaces unresolved High/Medium findings) or by Worker 1 (when the final-verification pass rejects). Either case triggers Worker 0 to spawn Worker 2 again.
+- `review-accepted` — set by Worker 3 when accepting the diff at the review-pass exit; signals Worker 0 to spawn Worker 1 for final verification.
+- `final-accepted` — set by Worker 1 at the end of final verification; signals Worker 0 to mark the checklist box and advance.
+
+Worker 0 never writes to `Status:`. Worker 0 reads it to drive dispatch.
 
 ````text
 # Build: Slice <N> — <slice title>
@@ -335,7 +370,8 @@ Worker 3 **must run** the helper during review when:
 
 - The slice adds a new `.py` file of any size, **unless** it is a pure-class-definition module (only `class` declarations with docstrings, no logic). For low-surface files like that, Worker 3 skips the helper and records the skip and reason in the artifact.
 - The slice touches an existing `.py` file under `optimizer/` or `types/`.
-- The slice adds 50 or more lines of new logic to any file.
+- The slice adds 30 or more lines of new logic to any file under `django_strawberry_framework/`.
+- The slice adds 50 or more lines of new logic to any file outside `django_strawberry_framework/` (e.g. tests or example projects).
 
 Worker 3 uses the **Repeated string literals** and **Imports** sections to catch duplication and boundary leaks. The **Django/ORM markers** section is the audit checklist for ORM-heavy slices.
 
@@ -448,16 +484,16 @@ Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.
 
 Worker 0 is the lightest-touch role. Worker 0 does not plan, does not write code, does not review code, does not edit the spec. Worker 0:
 
-- reads `GOAL.md`, `docs/FEATURES.md`, and the active `docs/spec-<topic>.md` to understand intent
-- reads `BUILD.md` and `worker-0.md`
+- reads per the **Required reading per worker** table
 - creates `docs/build/build-<topic>-<0_0_X>.md` from the spec's slice checklist
 - creates `docs/build/worker-memory/` and seeds the four memory files
 - dispatches the per-slice subagent sequence described above
 - routes Worker 3's review feedback to Worker 2 by re-spawning Worker 2 with the updated artifact
-- marks `- [x]` on the build plan after Worker 1's final verification accepts a slice
+- marks `- [x]` on the build plan after Worker 1's final verification sets the artifact to `final-accepted`
 - runs the closeout pass after every slice is checked, including the integration pass and the final test-run gate
 - never edits the spec
 - never marks an item complete on its own assessment
+- never commits
 
 If something stalls — Worker 3 keeps rejecting, Worker 1 keeps finding cross-slice DRY issues, or the spec needs maintainer-level adjudication — Worker 0 surfaces the blocker to the maintainer and waits.
 
@@ -465,13 +501,14 @@ If something stalls — Worker 3 keeps rejecting, Worker 1 keeps finding cross-s
 
 Worker 1 is the central hub of every cycle. Worker 1:
 
-- reads `CHANGELOG.md`, `AGENTS.md`, `START.md`, `BUILD.md`, `worker-1.md`, the active spec, and the active build plan
+- reads per the **Required reading per worker** table
 - plans each slice **DRY-first**: every plan entry must cite which existing helpers/modules it reuses or extends, and must justify any new helper as load-bearing-and-shared
-- produces the "Plan (Worker 1)" section of each `bld-slice-N-<...>.md` artifact
+- produces the "Plan (Worker 1)" section of each `bld-slice-N-<...>.md` artifact and sets the artifact's initial `Status: planned`
 - is the **only** worker authorized to edit the active spec file (`docs/spec-<topic>.md`); spec edits are recorded in the artifact's "Spec changes made" section
-- runs slice-level final verification after Worker 3 accepts (existing tests still pass; DRY check vs. prior slices)
+- runs slice-level final verification after Worker 3 reaches `review-accepted` and sets the artifact to `final-accepted` or `revision-needed`
 - runs the integration pass after every slice is built — looks for cross-slice DRY opportunities, repeated literals, and inconsistent shapes between slices; may ask Worker 0 to dispatch a second-loop refactor cycle through Worker 2 / Worker 3
 - runs the final test-run gate at the end of the build (existing tests still pass; **do NOT check coverage line-by-line — only that existing tests still pass**)
+- never commits
 
 Worker 1 may iterate the whole pipeline (re-plan → re-build → re-review) when integration-pass DRY findings warrant it.
 
@@ -479,14 +516,15 @@ Worker 1 may iterate the whole pipeline (re-plan → re-build → re-review) whe
 
 Worker 2 reads the plan section of the active artifact and the target source, then implements. Worker 2:
 
-- reads `docs/TREE.md`, `AGENTS.md`, `START.md`, `BUILD.md`, `worker-2.md`, the active spec, the active plan, and the slice artifact
+- reads per the **Required reading per worker** table
 - implements the plan's steps in order
 - adds or updates tests in the same change
 - runs `uv run ruff format .` and `uv run ruff check --fix .` (per `START.md`); does NOT run `pytest` (per `START.md`)
-- appends a "Build report (Worker 2)" section to the slice artifact
+- appends a "Build report (Worker 2)" section to the slice artifact and sets the artifact `Status:` line to `built` at the end of every pass
 - on a re-pass after Worker 3 review, appends a "Build report (Worker 2, pass N)" section — never edits prior reports
 - never edits the spec
 - never marks the checkbox
+- never commits
 
 When Worker 3 hands back review findings, Worker 2 applies the changes and reports back via a new build-report entry.
 
@@ -494,14 +532,15 @@ When Worker 3 hands back review findings, Worker 2 applies the changes and repor
 
 Worker 3 reviews Worker 2's diff against the slice artifact and the spec. Worker 3:
 
-- reads `docs/README.md`, `examples/fakeshop/test_query/README.md`, `AGENTS.md`, `START.md`, `BUILD.md`, `worker-3.md`, the active spec, the active plan, the slice artifact, and Worker 2's diff
+- reads per the **Required reading per worker** table
 - runs `scripts/review_inspect.py` per the "When to run the helper during build" rules above
 - focuses on DRY violations as the primary review lens, then correctness, then performance, then bugs
 - may create temp test files under `docs/build/temp-tests/<slice>/` to verify behavior; temp tests are gitignored and the disposition is recorded in the artifact
-- appends a "Review (Worker 3)" section to the slice artifact (or "Review (Worker 3, pass N)" on re-review)
+- appends a "Review (Worker 3)" section to the slice artifact (or "Review (Worker 3, pass N)" on re-review) and sets the artifact `Status:` line to `review-accepted` or `revision-needed`
 - never edits source files (Worker 2 applies changes after Worker 3's feedback)
 - never edits the spec
 - never marks the checkbox
+- never commits
 
 If review tests catch a bug worth preserving, Worker 3 flags it as a Medium issue with a recommendation to promote the test to the permanent suite under the correct `AGENTS.md` test-placement tree.
 
@@ -512,10 +551,10 @@ After Worker 0 marks a slice done:
 1. The maintainer is notified the slice is `final-accepted`.
 2. Worker 1 is informed that the slice closed and re-reads the full diff for the slice plus the artifact to confirm nothing slipped through (final-verification was per-pass; this re-check is the cycle-closing audit).
 3. If Worker 1's re-check finds anything missed, Worker 1 sets the artifact status back to `revision-needed` and Worker 0 dispatches a Worker 2 / Worker 3 loop again.
-4. If Worker 1's re-check is clean, the maintainer may request any final adjustments, then commits the source changes together with the corresponding `bld-*.md` artifact, the spec edits (if any), and the updated build-plan checkbox.
+4. If Worker 1's re-check is clean, the maintainer may request any final adjustments. The **maintainer** then commits the source changes together with the corresponding `bld-*.md` artifact, the spec edits (if any), and the updated build-plan checkbox.
 5. Worker 0 moves on to the next unchecked slice.
 
-No worker should commit unless the maintainer explicitly asks.
+Only the maintainer commits. Workers never commit, even if asked.
 
 ### Isolation is non-waivable
 

@@ -39,7 +39,7 @@ Worker 0 must not:
 - bypass the one-file-at-a-time review cycle
 - bypass per-cycle subagent dispatch by inlining a worker's job
 - read or edit `docs/review/worker-memory/worker-1.md`, `worker-2.md`, or `worker-3.md` during the active cycle (closeout-only)
-- commit unless the maintainer explicitly asks
+- commit. Only the maintainer commits; Worker 0 never commits, even if asked
 
 ## Initial plan job
 

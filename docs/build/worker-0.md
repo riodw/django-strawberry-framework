@@ -6,24 +6,13 @@ Worker 0 stays in the main thread. Workers 1, 2, and 3 run as fresh subagent inv
 
 ## Required reading
 
-Read these before acting:
+Read the docs marked `yes` in the **Worker 0** column of the Required reading per worker table in `docs/build/BUILD.md`.
 
-- `AGENTS.md`
-- `START.md`
-- `docs/build/BUILD.md`
-- `docs/build/worker-0.md`
-- `GOAL.md`
-- `docs/FEATURES.md`
-- the active spec file, e.g. `docs/spec-relay_interfaces.md`
-- `pyproject.toml`
-- `django_strawberry_framework/__init__.py`
+For closeout only, additionally read:
 
-For closeout, also read:
-
-- the completed `docs/build/build-<topic>-<0_0_X>.md`
 - every completed `docs/build/bld-*.md` artifact for the build
 - the build-cycle commit diffs or maintainer-provided diff range
-- all four worker-memory files, once and only at closeout
+- all four worker-memory files (one-time read at closeout)
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
@@ -45,7 +34,7 @@ Worker 0 must not:
 - bypass per-slice subagent dispatch by inlining a worker's job
 - read Worker 1/2/3 memory during the active cycle
 - edit any worker's memory file except its own
-- commit unless the maintainer explicitly asks
+- commit. Only the maintainer commits; Worker 0 never commits, even if asked
 
 ## Slice status legend
 
@@ -61,23 +50,22 @@ Worker 0 never writes to `Status:`. Worker 0 only reads it to drive dispatch. If
 
 ## Initial plan job
 
-Create the active build plan from the spec.
+Create the active build plan from the spec. Version-bump correctness is the maintainer's responsibility — Worker 0 does not validate `pyproject.toml`, `__init__.py`, or whether the spec target is already shipped.
 
-1. Read the active spec and identify its topic slug and target release.
-2. Confirm `pyproject.toml` and `django_strawberry_framework/__init__.py` agree on the current package version.
-3. Confirm the spec target is newer than or equal to the current version and not already shipped.
-4. Create `docs/build/build-<topic>-<0_0_X>.md`.
-5. Mirror the spec's slice checklist exactly; do not invent slices.
-6. Add `bld-slice-<N>-<slug>.md` artifacts for every spec slice.
-7. Add `docs/build/bld-integration.md` and `docs/build/bld-final.md`.
-8. Leave every checkbox unchecked.
-9. Create `docs/build/worker-memory/` and seed:
+1. Read the active spec and identify its topic slug and target release version.
+2. Convert the target release dots to underscores (e.g. `0.0.5` becomes `0_0_5`).
+3. Create `docs/build/build-<topic>-<0_0_X>.md`.
+4. Mirror the spec's slice checklist exactly; do not invent slices.
+5. Add `bld-slice-<N>-<slug>.md` artifacts for every spec slice.
+6. Add `docs/build/bld-integration.md` and `docs/build/bld-final.md`.
+7. Leave every checkbox unchecked.
+8. Create `docs/build/worker-memory/` and seed four empty files:
    - `docs/build/worker-memory/worker-0.md`
    - `docs/build/worker-memory/worker-1.md`
    - `docs/build/worker-memory/worker-2.md`
    - `docs/build/worker-memory/worker-3.md`
 
-The memory directory is gitignored. The tracked record is the build plan and `bld-*.md` artifacts.
+   The directory and files are gitignored. They persist across cycles within this build; Worker 0 deletes them at closeout (see "Closeout job" below).
 
 ## Per-slice dispatch
 
@@ -149,8 +137,7 @@ Retrospective notes must stay general. Describe recurring issue types and workfl
 Stop and report the blocker if:
 
 - the active spec file is missing or ambiguous
-- the spec target release cannot be determined
-- package versions in `pyproject.toml` and `django_strawberry_framework/__init__.py` do not match
+- the spec target release cannot be determined from the spec itself
 - an existing build plan would be overwritten
 - Worker 1 does not set the artifact status clearly
 - a worker attempts to pass information outside the artifact/diff contract

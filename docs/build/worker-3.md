@@ -8,20 +8,9 @@ The dispatch is intentional: Worker 3 has cycle-spanning history (its own memory
 
 ## Required reading
 
-Read these before acting:
+Read the docs marked `yes` in the **Worker 3** column of the Required reading per worker table in `docs/build/BUILD.md`.
 
-- `AGENTS.md`
-- `START.md`
-- `docs/build/BUILD.md`
-- `docs/build/worker-3.md`
-- `docs/README.md`
-- `examples/fakeshop/test_query/README.md`
-- the active spec file, e.g. `docs/spec-relay_interfaces.md`
-- the active `docs/build/build-<topic>-<0_0_X>.md`
-- the current `docs/build/bld-*.md` artifact
-- Worker 2's diff
-- relevant source files and tests
-- `docs/build/worker-memory/worker-3.md`
+Worker 2's diff and the relevant source files and tests are the cycle inputs you must compare against the slice artifact.
 
 **Forbidden reads.** Worker 3 must not read `docs/build/worker-memory/worker-0.md`, `worker-1.md`, or `worker-2.md`. The artifact and diff are the contract. If the artifact does not explain enough to review the diff, record that as a review finding.
 
@@ -43,7 +32,7 @@ Worker 3 must not:
 - edit Worker 0/1/2 memory
 - mark build-plan checkboxes
 - approve unrelated cleanup
-- commit unless the maintainer explicitly asks
+- commit. Only the maintainer commits; Worker 3 never commits, even if asked
 
 ## Review job
 

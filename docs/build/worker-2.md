@@ -6,18 +6,9 @@ Worker 2 runs as a fresh subagent invocation per build or re-build pass. Its onl
 
 ## Required reading
 
-Read these before acting:
+Read the docs marked `yes` in the **Worker 2** column of the Required reading per worker table in `docs/build/BUILD.md`.
 
-- `AGENTS.md`
-- `START.md`
-- `docs/build/BUILD.md`
-- `docs/build/worker-2.md`
-- `docs/TREE.md`
-- the active spec file, e.g. `docs/spec-relay_interfaces.md`
-- the active `docs/build/build-<topic>-<0_0_X>.md`
-- the current `docs/build/bld-*.md` artifact
-- `docs/build/worker-memory/worker-2.md`
-- source files and tests named by the artifact
+Additionally read the source files and tests named by the active slice artifact.
 
 **Forbidden reads.** Worker 2 must not read `docs/build/worker-memory/worker-0.md`, `worker-1.md`, or `worker-3.md`. The slice artifact is the contract from Worker 1 and Worker 3.
 
@@ -42,7 +33,7 @@ Worker 2 must not:
 - edit prior artifact sections except to append a new build report
 - make unrelated cleanup
 - broaden the slice beyond Worker 1's plan
-- commit unless the maintainer explicitly asks
+- commit. Only the maintainer commits; Worker 2 never commits, even if asked
 
 ## Build job
 

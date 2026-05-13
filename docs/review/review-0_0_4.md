@@ -20,7 +20,7 @@ Standing docs:
 - `__init__.py` files and non-`.py` files (e.g. `py.typed`) are out of scope as standalone artifacts.
 - Shadow files under `docs/review/shadow/` are gitignored; their line numbers are NOT canonical — cite original source-file line numbers.
 - High-severity fixes must add or update tests pinning the corrected behavior unless the artifact explicitly explains why a test is impossible.
-- No worker commits unless the maintainer explicitly asks.
+- Only the maintainer commits. Workers never commit, even if asked.
 
 ## Severity definitions
 

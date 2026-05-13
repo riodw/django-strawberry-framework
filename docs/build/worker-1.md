@@ -6,28 +6,11 @@ Worker 1 runs as a fresh subagent invocation per planning, integration, and fina
 
 ## Required reading
 
-Read these before acting:
+Read the docs marked `yes` in the **Worker 1** column of the Required reading per worker table in `docs/build/BUILD.md`.
 
-- `AGENTS.md`
-- `START.md`
-- `docs/build/BUILD.md`
-- `docs/build/worker-1.md`
-- `GOAL.md`
-- `docs/FEATURES.md`
-- `CHANGELOG.md`
-- the active spec file, e.g. `docs/spec-relay_interfaces.md`
-- the active `docs/build/build-<topic>-<0_0_X>.md`
-- `docs/build/worker-memory/worker-1.md`
+For planning a slice, also read the relevant source files, tests, and docs named by the spec slice. For integration and final verification, read every prior `docs/build/bld-*.md` artifact (per the strict-reading rule in BUILD.md's "Cross-slice integration pass" section).
 
-For planning a slice, also read the relevant source files, tests, and docs named by the spec slice. For integration and final verification, read all prior `docs/build/bld-*.md` artifacts needed to understand cross-slice patterns.
-
-Optional context when relevant:
-
-- `TODAY.md`
-- `BETTER.md`
-- `docs/README.md`
-- `docs/TREE.md`
-- `examples/fakeshop/test_query/README.md`
+Optional supplementary context when relevant: `TODAY.md`, `BETTER.md`, `docs/README.md`, `docs/TREE.md`, `examples/fakeshop/test_query/README.md`.
 
 **Forbidden reads.** Worker 1 must not read `docs/build/worker-memory/worker-0.md`, `worker-2.md`, or `worker-3.md`.
 
@@ -51,7 +34,7 @@ Worker 1 must not:
 - mark build-plan checkboxes
 - implement Worker 3 findings
 - create unrelated spec scope
-- commit unless the maintainer explicitly asks
+- commit. Only the maintainer commits; Worker 1 never commits, even if asked
 
 ## Planning job
 

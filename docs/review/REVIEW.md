@@ -20,6 +20,8 @@ Permanent workflow files under `docs/review/` are tracked: `REVIEW.md`, `worker-
 
 `AGENTS.md` and `START.md` still apply during review runs. This review workflow adds the per-worker artifact discipline on top; it does not override standing validation, test-running, commit, or test-placement rules.
 
+Only the maintainer commits. Workers never commit, even if asked. Workers may stage edits and produce artifacts; pushing those edits to git is a maintainer-exclusive action.
+
 ## Versioned review plan
 
 Worker 0 creates the active review plan from these instructions and [Worker 0's role instructions](worker-0.md).
@@ -470,10 +472,10 @@ After Worker 3 marks the item done:
 1. The maintainer is notified the cycle item is `verified`.
 2. Worker 1 is informed that the fix was applied and re-reads the full diff plus the artifact to confirm nothing slipped through (per-cycle verification was Worker 3's job; this re-check is the cycle-closing audit).
 3. If Worker 1's re-check finds anything missed, Worker 1 sets the artifact status back to `revision-needed` and Worker 0 dispatches a Worker 2 / Worker 3 loop again.
-4. If Worker 1's re-check is clean, the maintainer may request any final adjustments, then commits the source changes together with the corresponding `docs/review/rev-<folder__file_name>.md` artifact and the updated `docs/review/review-<0_0_X>.md` checkbox so the review record is preserved in git.
+4. If Worker 1's re-check is clean, the maintainer may request any final adjustments. The **maintainer** then commits the source changes together with the corresponding `docs/review/rev-<folder__file_name>.md` artifact and the updated `docs/review/review-<0_0_X>.md` checkbox so the review record is preserved in git.
 5. Worker 0 moves on to the next unchecked item.
 
-No worker should commit unless the maintainer explicitly asks.
+Only the maintainer commits. Workers never commit, even if asked.
 
 ## Folder-level passes
 

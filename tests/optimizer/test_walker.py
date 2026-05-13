@@ -32,10 +32,6 @@ from django_strawberry_framework.optimizer.walker import (
 )
 from django_strawberry_framework.registry import registry
 
-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-# extend optimizer coverage for Relay id projection, no avoidable lazy loads,
-# unchanged relation planning across Relay targets, and loaded-pk resolve_id.
-
 # ---------------------------------------------------------------------------
 # Helpers: synthetic selection factories
 # ---------------------------------------------------------------------------

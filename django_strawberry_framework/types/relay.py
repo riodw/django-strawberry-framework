@@ -22,6 +22,7 @@ package is not imported at runtime.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -172,39 +173,79 @@ def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:
         return str(getattr(root, id_attr))
 
 
-def _assemble_node_queryset(
-    cls: type,
-    info: Any,
+def _apply_get_queryset_sync(cls: type, qs: models.QuerySet, info: Any) -> models.QuerySet:
+    """Run ``cls.get_queryset`` in a sync context; reject async hooks loudly.
+
+    Decision 9 makes a consumer's ``DjangoType.get_queryset`` allowed to
+    be sync or async, but a sync resolver context cannot await an async
+    hook safely (event-loop edge cases dominate the bridge). On the sync
+    path we therefore close the unawaited coroutine to silence the
+    "coroutine was never awaited" warning and raise a named
+    ``ConfigurationError`` that points the consumer at the async resolver
+    path or a sync ``get_queryset`` rewrite (review feedback
+    ``feedback.md`` § High "Async ``get_queryset`` is not awaited in
+    Relay node defaults").
+    """
+    result = cls.get_queryset(qs, info)
+    if inspect.iscoroutine(result):
+        result.close()
+        raise ConfigurationError(
+            f"{cls.__name__}.get_queryset returned a coroutine in a sync "
+            "resolver context. The Relay node defaults only await async "
+            "get_queryset hooks on the async branch; either invoke the "
+            "Relay node default from an async resolver, or redefine "
+            "get_queryset as a sync method.",
+        )
+    return result
+
+
+async def _apply_get_queryset_async(cls: type, qs: models.QuerySet, info: Any) -> models.QuerySet:
+    """Run ``cls.get_queryset`` in an async context, awaiting awaitables.
+
+    Sync ``get_queryset`` returns the queryset directly and is passed
+    through. Async ``get_queryset`` returns a coroutine which is awaited
+    here before the id filter runs — the Decision 9 contract that the
+    previous implementation broke (it called the hook synchronously then
+    invoked ``.filter`` on a coroutine).
+    """
+    result = cls.get_queryset(qs, info)
+    if inspect.isawaitable(result):
+        result = await result
+    return result
+
+
+def _apply_node_filter(
+    qs: models.QuerySet,
     id_attr: str,
     *,
     node_id: Any = None,
     node_ids: list[Any] | None = None,
 ) -> models.QuerySet:
-    """Build the per-node-fetch queryset through the documented steps.
+    """Apply the Relay-id filter to ``qs`` (sync; no get_queryset involvement).
 
-    Steps (mirror ``strawberry_django/relay/utils.py:223-279`` and
-    ``:144-170``):
-
-    1. ``cls.__django_strawberry_definition__.model._default_manager.all()``
-    2. ``cls.get_queryset(qs, info)``
-    3. ``qs.filter(...)`` on ``id_attr`` (single ``node_id``) or
-       ``id_attr__in`` (``node_ids``)
-
-    The Relay-node-lookup path is not yet on the optimizer's hot path in
-    ``0.0.5``; Decision 7's list-path invariants flow through the existing
-    root-gated ``DjangoOptimizerExtension``. A future slice can wire an
-    optimizer-extension lookup here without changing the four-step shape.
+    Single source of truth for the GlobalID coercion and the
+    ``id_attr`` / ``id_attr__in`` filter shape. The post-``get_queryset``
+    queryset is sync-iterable (or async-iterable in the async branch);
+    the filter itself is a pure ORM operation and identical across both
+    paths.
     """
-    model = cls.__django_strawberry_definition__.model
-    qs = model._default_manager.all()
-    qs = cls.get_queryset(qs, info)
     if node_id is not None:
         coerced = node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
-        qs = qs.filter(**{id_attr: coerced})
-    elif node_ids is not None:
+        return qs.filter(**{id_attr: coerced})
+    if node_ids is not None:
         coerced_ids = [(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
-        qs = qs.filter(**{f"{id_attr}__in": coerced_ids})
+        return qs.filter(**{f"{id_attr}__in": coerced_ids})
     return qs
+
+
+def _initial_queryset(cls: type) -> models.QuerySet:
+    """Return ``model._default_manager.all()`` for the declared model.
+
+    Centralizes the ``cls.__django_strawberry_definition__.model``
+    lookup so both the sync and async assembly paths share one source of
+    truth for step 1 of the Decision 3 four-step shape.
+    """
+    return cls.__django_strawberry_definition__.model._default_manager.all()
 
 
 def _order_nodes(
@@ -262,16 +303,43 @@ def _resolve_node_default(
     for argument 'info'`` (review feedback ``feedback.md`` § High).
 
     Returns the single matching row (``qs.get()`` when ``required``,
-    ``qs.first()`` otherwise). Async path detected via
-    ``strawberry.utils.inspect.in_async_context``; uses ``aget`` /
-    ``afirst`` directly (Django 5.2+ is the project's lower bound and
-    ships both, per ``pyproject.toml``).
+    ``qs.first()`` otherwise). Async detection uses
+    ``strawberry.utils.inspect.in_async_context``; on the async branch
+    the returned coroutine awaits ``get_queryset`` (so async
+    ``get_queryset`` hooks are honored), applies the id filter, and
+    awaits ``aget``/``afirst``. On the sync branch a coroutine returned
+    from ``get_queryset`` is rejected with ``ConfigurationError`` rather
+    than silently producing ``AttributeError: 'coroutine' object has no
+    attribute 'filter'`` (review feedback ``feedback.md`` § High "Async
+    ``get_queryset`` is not awaited in Relay node defaults").
     """
     id_attr = cls.resolve_id_attr()
-    qs = _assemble_node_queryset(cls, info, id_attr, node_id=node_id)
     if in_async_context():
-        return qs.aget() if required else qs.afirst()
+        return _resolve_node_async(cls, id_attr, node_id, info=info, required=required)
+    qs = _apply_get_queryset_sync(cls, _initial_queryset(cls), info)
+    qs = _apply_node_filter(qs, id_attr, node_id=node_id)
     return qs.get() if required else qs.first()
+
+
+async def _resolve_node_async(
+    cls: type,
+    id_attr: str,
+    node_id: Any,
+    *,
+    info: Any,
+    required: bool,
+) -> Any:
+    """Async sibling of ``_resolve_node_default``.
+
+    Awaits the ``get_queryset`` hook (regardless of whether the consumer
+    declared it ``def`` or ``async def``) before applying the id filter
+    and the final ``aget``/``afirst``. Decision 9 of the spec promises
+    both shapes; this is the awaitable that actually delivers on that
+    contract.
+    """
+    qs = await _apply_get_queryset_async(cls, _initial_queryset(cls), info)
+    qs = _apply_node_filter(qs, id_attr, node_id=node_id)
+    return await (qs.aget() if required else qs.afirst())
 
 
 def _resolve_nodes_default(
@@ -290,28 +358,55 @@ def _resolve_nodes_default(
     "no ids -> full queryset" path documented in the spec without
     forcing callers to thread ``node_ids=None`` explicitly.
 
-    When ``node_ids`` is ``None`` returns the full filtered queryset (the
-    caller materializes via ``async for`` / iteration as needed; the
-    queryset itself is lazy and sync-safe in both contexts). When
-    ``node_ids`` is provided, returns a list whose indexes correspond 1:1
-    with ``node_ids``: ``required=False`` yields ``None`` for missing
-    ids, ``required=True`` raises the model's ``DoesNotExist`` for missing
+    When ``node_ids`` is ``None`` returns the filtered queryset (the
+    caller materializes via iteration as needed). When ``node_ids`` is
+    provided, returns a list whose indexes correspond 1:1 with
+    ``node_ids``: ``required=False`` yields ``None`` for missing ids,
+    ``required=True`` raises the model's ``DoesNotExist`` for missing
     ids (homogeneous with ``_resolve_node_default``'s ``qs.get()``).
+
+    Async detection routes through ``in_async_context`` so async
+    ``get_queryset`` hooks are awaited before the id filter; in the
+    async branch the caller must ``await`` the call to obtain either
+    the queryset (``node_ids=None``) or the order-preserving list
+    (``node_ids`` provided). Sync resolver contexts cannot await an
+    async ``get_queryset`` hook and surface ``ConfigurationError``
+    instead (review feedback ``feedback.md`` § High).
     """
     id_attr = cls.resolve_id_attr()
-    if node_ids is None:
-        return _assemble_node_queryset(cls, info, id_attr)
-    node_ids_list = list(node_ids)
-    coerced_keys = [str(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids_list]
-    qs = _assemble_node_queryset(cls, info, id_attr, node_ids=node_ids_list)
     if in_async_context():
-
-        async def _materialize() -> list:
-            results = [obj async for obj in qs]
-            return _order_nodes(cls, results, coerced_keys, id_attr, required=required)
-
-        return _materialize()
+        return _resolve_nodes_async(cls, id_attr, node_ids, info=info, required=required)
+    qs = _apply_get_queryset_sync(cls, _initial_queryset(cls), info)
+    qs = _apply_node_filter(qs, id_attr, node_ids=node_ids)
+    if node_ids is None:
+        return qs
+    coerced_keys = [str(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
     return _order_nodes(cls, list(qs), coerced_keys, id_attr, required=required)
+
+
+async def _resolve_nodes_async(
+    cls: type,
+    id_attr: str,
+    node_ids: Any,
+    *,
+    info: Any,
+    required: bool,
+) -> Any:
+    """Async sibling of ``_resolve_nodes_default``.
+
+    Awaits the ``get_queryset`` hook before applying the id filter so
+    async ``get_queryset`` hooks are honored. Returns the queryset
+    directly when ``node_ids`` is ``None`` (the caller materializes via
+    ``async for``); when ``node_ids`` is provided, materializes via
+    ``async for`` and returns the order-preserving list shape.
+    """
+    qs = await _apply_get_queryset_async(cls, _initial_queryset(cls), info)
+    qs = _apply_node_filter(qs, id_attr, node_ids=node_ids)
+    if node_ids is None:
+        return qs
+    coerced_keys = [str(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
+    results = [obj async for obj in qs]
+    return _order_nodes(cls, results, coerced_keys, id_attr, required=required)
 
 
 # Single source of truth for the four Relay resolver method names plus the

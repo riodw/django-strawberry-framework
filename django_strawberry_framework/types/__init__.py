@@ -16,7 +16,4 @@ shared primitives belong in ``optimizer/`` or in a sibling utility module.
 from .base import DjangoType
 from .finalizer import finalize_django_types
 
-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-# keep ``types.relay`` internal; do not re-export Relay helper functions.
-
 __all__ = ("DjangoType", "finalize_django_types")

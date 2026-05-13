@@ -1,90 +1,124 @@
 # Review: docs/diff-spec-relay_interfaces.diff
 Status: revision-needed
+
 ## DRY analysis
-- Existing patterns reused: The diff extends the existing `DjangoType.__init_subclass__` collection pipeline rather than adding a parallel registration path: validation, field selection, annotation synthesis, `DjangoTypeDefinition` construction, registry registration, and class mirrors remain centralized in `django_strawberry_framework/types/base.py:73-137`. The new interface validator follows the existing Meta validation/error-shape locality around `_format_unknown_fields_error` and `_validate_meta` in `django_strawberry_framework/types/base.py:251-393`. Finalization reuses the established `registry.iter_definitions()` phase-loop shape and keeps relation resolver attachment in `_attach_relation_resolvers` instead of introducing a second relation path, matching `django_strawberry_framework/types/finalizer.py:84-112` and `django_strawberry_framework/types/resolvers.py:225-245`. Optimizer compatibility is preserved by continuing to rely on the precomputed field map resolved through `django_strawberry_framework/optimizer/walker.py:65-74`.
-- New helpers a fix might justify: A small Phase 2.5 helper with one responsibility, for example `apply_relay_node_contract(type_cls)`, would serve `finalize_django_types()` after optional interface injection and would run the composite-pk check plus resolver injection whenever `implements_relay_node(type_cls)` is true. That avoids repeating the resolved-base check while fixing the direct-inheritance bypass. No new helper is required for the `resolve_node` signature bug; the installed function signature and tests should be corrected in place.
-- Duplication risk in the current file: `tests/types/test_relay_interfaces.py` repeats the same local `CategoryNode` declaration with `model = Category`, `fields = ("id", "name")`, and `interfaces = (relay.Node,)` across most behavior tests. A local factory such as `build_category_node(...)` would reduce fixture drift and would have made it easier to add the missing Strawberry-call-shape tests. There is also documentation drift: `docs/FEATURES.md:66` says Relay defaults are wired through the optimizer extension, while `django_strawberry_framework/types/relay.py:187-190` explicitly defers node-lookup optimizer cooperation.
+
+- Existing patterns reused: `DjangoType.__init_subclass__` remains the collection point and now threads normalized interfaces into `DjangoTypeDefinition` (`django_strawberry_framework/types/base.py:73-132`); the existing finalizer registry loops are extended with Phase 2.5 instead of adding a second finalization entry point (`django_strawberry_framework/types/finalizer.py:83-106`); the reserved `DjangoTypeDefinition.interfaces` slot is used rather than adding parallel state (`django_strawberry_framework/types/definition.py:13-43`); registry-isolation fixtures and the library schema reload fixture are reused for package and HTTP coverage (`tests/types/test_relay_interfaces.py:25-39`, `examples/fakeshop/test_query/test_library_api.py:18-40`); scalar projection continues through the existing optimizer walker path (`django_strawberry_framework/optimizer/walker.py:122-134`).
+- New helpers a fix might justify: one helper with the single responsibility “run `DjangoType.get_queryset` and return a concrete `QuerySet` in the current sync/async resolver context.” It would serve `_resolve_node_default` and `_resolve_nodes_default`; the async path should await an awaitable `get_queryset` result before applying `.filter(...)`, while the sync path should either bridge deliberately or raise a clear `ConfigurationError` if an async hook is used from sync execution.
+- Duplication risk in the current file: Relay resolver method names are centralized in `_RELAY_RESOLVER_DEFAULTS`, so no issue there. The current duplication risk is stale shipped-slice TODO anchors that now repeat old 0.0.5 work in multiple places (`django_strawberry_framework/types/__init__.py:19-20`, `django_strawberry_framework/optimizer/walker.py:130-132`, `tests/optimizer/test_walker.py:35-37`) and can drift from the actual shipped state.
+
 ## High:
-### `resolve_node` default has the wrong bound signature
-`relay.Node.resolve_node` in Strawberry is called as `resolve_node(node_id, *, info, required=False)`. The installed classmethod wraps `_resolve_node_default(cls, info, node_id, required=False)`, so a Strawberry-style call passes the node id positionally into `info` and then passes `info` again as a keyword, raising `TypeError: _resolve_node_default() got multiple values for argument 'info'`. The current tests call `CategoryNode.resolve_node(info=None, node_id=...)`, which exercises a friendly keyword-only shape but not Strawberry's runtime shape.
-Why it matters: Node lookups through Strawberry's Relay machinery will fail even though list-field `id` selection and direct helper calls pass. This violates `docs/spec-relay_interfaces.md`'s requirement that the attached public method signatures match Strawberry's `relay.Node` expectations.
-Recommended change: Change the default signatures to mirror Strawberry exactly after `classmethod` binding, especially `def _resolve_node_default(cls, node_id, *, info, required=False)`. Prefer also aligning `resolve_id` and `resolve_nodes` to `def _resolve_id_default(cls, root, *, info)` and `def _resolve_nodes_default(cls, *, info, node_ids=None, required=False)`. Add regression tests that call `CategoryNode.resolve_node(str(pk), info=None)` and, ideally, one schema-level Relay node lookup path.
-```django_strawberry_framework/types/relay.py:241:259
-def _resolve_node_default(
-    cls: type,
-    info: Any,
-    node_id: Any,
-    required: bool = False,
-) -> Any:
-    ...
-    qs = _assemble_node_queryset(cls, info, id_attr, node_id=node_id)
-    if in_async_context():
-        return qs.aget() if required else qs.afirst()
-    return qs.get() if required else qs.first()
+
+### Async `get_queryset` is not awaited in Relay node defaults
+
+Decision 9 says the node resolvers must support async resolver contexts and notes that a consumer `DjangoType.get_queryset` may itself be sync or async. The implementation switches to async ORM execution with `in_async_context()`, but `_assemble_node_queryset` calls `cls.get_queryset(qs, info)` synchronously before that branch. If a consumer defines `async def get_queryset`, `qs` becomes a coroutine and the next `.filter(...)` call fails. I verified this with a minimal async `CategoryNode.get_queryset`, which produced `AttributeError: 'coroutine' object has no attribute 'filter'` plus an unawaited-coroutine warning.
+
+Recommended change: split queryset assembly into sync and async helpers, or make `_assemble_node_queryset` await-aware. In async resolver context, await the result of `cls.get_queryset(qs, info)` when it is awaitable before filtering/executing. Add tests for async `get_queryset` with both `resolve_node` and `resolve_nodes`. In sync resolver context, decide explicitly whether an async `get_queryset` is bridged with `async_to_sync` or rejected with `ConfigurationError`.
+
+```django_strawberry_framework/types/relay.py:198:207
+model = cls.__django_strawberry_definition__.model
+qs = model._default_manager.all()
+qs = cls.get_queryset(qs, info)
+if node_id is not None:
+    coerced = node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
+    qs = qs.filter(**{id_attr: coerced})
+elif node_ids is not None:
+    coerced_ids = [(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
+    qs = qs.filter(**{f"{id_attr}__in": coerced_ids})
+return qs
 ```
-```django_strawberry_framework/types/relay.py:324:330
-for attr, default_impl in _RELAY_RESOLVER_DEFAULTS:
-    existing = getattr(type_cls, attr, None)
-    node_default = getattr(relay.Node, attr, None)
-    existing_func = getattr(existing, "__func__", None)
-    node_func = getattr(node_default, "__func__", None)
-    if existing is None or (existing_func is not None and existing_func is node_func):
-        setattr(type_cls, attr, classmethod(default_impl))
-```
-### Direct `relay.Node` inheritance bypasses Relay finalization
-The spec accepts `class Foo(DjangoType, relay.Node)` as a no-op duplicate when `Meta.interfaces` is also declared, and Decision 4 says the composite-pk check belongs in Phase 2.5 so it catches both `Meta.interfaces = (relay.Node,)` and direct `relay.Node` inheritance. The implementation short-circuits Phase 2.5 when `definition.interfaces` is empty, so a class that directly inherits `relay.Node` but omits `Meta.interfaces` keeps `relay.Node` in its MRO but never receives the composite-pk gate or the four resolver defaults. It also never suppresses the synthesized Django pk annotation, so schema construction can fail with Strawberry's `NodeIDAnnotationError`.
-Why it matters: The resolved-base behavior is inconsistent. A consumer following Strawberry's native inheritance style gets a broken Relay type instead of either full support or a loud framework error. Composite-pk direct inheritance also misses the required `ConfigurationError`.
-Recommended change: In Phase 2.5, run `apply_interfaces(...)` only when `definition.interfaces` is non-empty, but run `implements_relay_node(type_cls)` / composite-pk / resolver injection for every non-finalized definition after that. For id suppression, include direct inheritance in the collection-time predicate, for example `relay.Node in interfaces or issubclass(cls, relay.Node)`, or explicitly reject direct `relay.Node` inheritance without `Meta.interfaces` during validation. The former matches the spec more closely.
-```django_strawberry_framework/types/finalizer.py:96:104
-for type_cls, definition in registry.iter_definitions():
-    if definition.finalized:
-        continue
-    if not definition.interfaces:
-        continue
-    apply_interfaces(type_cls, definition)
-    if implements_relay_node(type_cls):
-        _check_composite_pk_for_relay_node(type_cls)
-        install_relay_node_resolvers(type_cls)
-```
-```django_strawberry_framework/types/base.py:557:584
-suppress_pk_annotation = relay.Node in interfaces
-pk_attname = source_model._meta.pk.name if suppress_pk_annotation else None
+
+```django_strawberry_framework/types/relay.py:270:314
+id_attr = cls.resolve_id_attr()
+qs = _assemble_node_queryset(cls, info, id_attr, node_id=node_id)
+if in_async_context():
+    return qs.aget() if required else qs.afirst()
+return qs.get() if required else qs.first()
+
 ...
-if suppress_pk_annotation and field.name == pk_attname:
-    continue
-annotations[field.name] = convert_scalar(field, cls.__name__)
+
+qs = _assemble_node_queryset(cls, info, id_attr, node_ids=node_ids_list)
+if in_async_context():
+
+    async def _materialize() -> list:
+        results = [obj async for obj in qs]
+        return _order_nodes(cls, results, coerced_keys, id_attr, required=required)
+
+    return _materialize()
+return _order_nodes(cls, list(qs), coerced_keys, id_attr, required=required)
 ```
+
 ## Medium:
-### Relay Node docs overstate optimizer-extension integration
-The feature docs say the four Relay defaults are wired through `cls.get_queryset` and the optimizer extension, but the implementation deliberately does not consult the optimizer extension in `_assemble_node_queryset`; the spec diff also changed Decision 3 to defer optimizer-extension consultation for node lookup. The docs should match the shipped behavior.
-Why it matters: Consumers may expect node lookups to receive the same optimizer treatment as root list resolvers, but the current implementation only applies the default manager, `get_queryset`, and id filtering.
-Recommended change: Update `docs/FEATURES.md` and any release/changelog wording that says node resolvers are optimizer-extension-backed. Phrase it as `get_queryset`-aware, with optimizer cooperation deferred to a follow-up slice.
-```docs/FEATURES.md:66:66
-Meta.interfaces accepts a tuple of Strawberry interface classes; when relay.Node is among them, the DjangoType becomes a Relay-node-shaped GraphQL type with id: GlobalID! and the four resolve_* defaults wired through cls.get_queryset and the optimizer extension.
+
+### `DONE-011` is still under the Kanban “In progress” column
+
+The spec checklist says to move the Relay card to Done. The snapshot says no slice is active, but the detailed board still has `DONE-011` under `## In progress`, which keeps the board structurally inconsistent.
+
+Recommended change: move the whole `DONE-011` card above the `## In progress` heading into the Done column, or rename/remove the `## In progress` heading so it no longer contains a completed card.
+
+```KANBAN.md:326:332
+## In progress
+
+### DONE-011 — 0.0.5 Relay interfaces and Node foundation
+
+Priority: completed Relay Node foundation
+
+Status: complete.
 ```
-```django_strawberry_framework/types/relay.py:187:190
-The Relay-node-lookup path is not yet on the optimizer's hot path in
-``0.0.5``; Decision 7's list-path invariants flow through the existing
-root-gated ``DjangoOptimizerExtension``. A future slice can wire an
-optimizer-extension lookup here without changing the four-step shape.
-```
+
 ## Low:
-### Unrelated `.gitignore` change makes root build artifacts trackable
-The Relay interfaces spec does not call for packaging-ignore changes, but the diff removes `/build/` from `.gitignore`. That makes root build artifacts eligible for accidental commits while `pyproject.toml` still excludes `build` from Ruff and the repository already adds several docs under `docs/builder/` explicitly.
-Why it matters: This is unrelated release-surface churn and can cause future packaging artifacts to appear in `git status`.
-Recommended change: Keep `/build/` ignored unless there is a separate, documented reason to start tracking root build outputs.
-```.gitignore:17:21
-# Distribution / packaging
-.Python
--/build/
-develop-eggs/
-dist/
-downloads/
+
+### Shipped 0.0.5 TODO anchors remain in source and tests
+
+Project rules say spec TODO anchors for a future slice should be removed in the same change that ships the slice. Relay support has shipped, but source/test comments still carry `TODO(0.0.5 relay interfaces...)` anchors. These no longer represent future work: the public-surface decision is implemented, and the optimizer coverage now lives in `tests/optimizer/test_relay_id_projection.py`.
+
+Recommended change: delete these TODO blocks or convert any still-useful statement into a non-TODO explanatory comment.
+
+```django_strawberry_framework/types/__init__.py:19:20
+# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+# keep ``types.relay`` internal; do not re-export Relay helper functions.
 ```
+
+```django_strawberry_framework/optimizer/walker.py:130:132
+# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+# selecting Relay ``id`` on a Relay-declared DjangoType must still
+# project the concrete pk attname so ``resolve_id`` can read the
+```
+
+```tests/optimizer/test_walker.py:35:37
+# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+# extend optimizer coverage for Relay id projection, no avoidable lazy loads,
+# unchanged relation planning across Relay targets, and loaded-pk resolve_id.
+```
+
+### Unrelated `.gitignore` hunk is in the review diff
+
+The Relay spec does not call for packaging-ignore changes, but the review diff starts with a `.gitignore` hunk removing `/build/`. The working tree currently shows this as a change from `/build/` to `build/`; either way it is unrelated to Relay interfaces and should not ride along unless there is a separate packaging reason.
+
+Recommended change: revert the `.gitignore` hunk from this slice, or document the packaging rationale separately.
+
+```docs/diff-spec-relay_interfaces.diff:1:10
+diff --git a/.gitignore b/.gitignore
+index bed0eb9..fb04949 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -17,7 +17,6 @@ __pycache__/
+
+ # Distribution / packaging
+ .Python
+-/build/
+```
+
 ## What looks solid
-- The full repository test suite passes with the current checkout: `516 passed, 1 skipped`, and package coverage remains at 100%.
-- `Meta.interfaces` validation is thorough for the intended `class Meta` path: single interface classes normalize correctly, invalid shapes are rejected, duplicate entries are rejected, and accepted interfaces are stored on `DjangoTypeDefinition`.
-- The implementation preserves the important optimizer invariant that the Django pk remains in `DjangoTypeDefinition.field_map` even when the GraphQL `id` annotation is suppressed for `relay.Node`.
-- The `is_type_of` injection is scoped and consumer-preserving, and the four resolver names are centralized in `_RELAY_RESOLVER_DEFAULTS` rather than duplicated across the installer.
+
+- `Meta.interfaces` is promoted, validated, normalized, stored on `DjangoTypeDefinition`, and covered by package tests.
+- Interface base injection happens before `strawberry.type(...)`, and direct `relay.Node` inheritance is also handled by MRO checks.
+- Relay `id` suppression keeps the primary key in `field_map`, and optimizer projection tests cover Relay `id`, lazy-load avoidance, and relation planning across Relay targets.
+- Resolver signatures match Strawberry’s positional/keyword call shapes, and consumer overrides for `resolve_id_attr`, `resolve_id`, `resolve_node`, and `resolve_nodes` are preserved.
+- The example library HTTP test exercises a real `GenreType` with `interfaces = (relay.Node,)` and validates GlobalID round-trip behavior.
+- Version bumps and public-export discipline are in place: `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock` agree on `0.0.5`, and `__all__` did not widen.
+- Validation commands: the full `uv run pytest` gate passed with `520 passed, 1 skipped` and `100.00%` package coverage; `uv run ruff format --check . && uv run ruff check .` also passed. The targeted Relay/schema/HTTP subset itself passed (`102 passed`) but exits nonzero under the global coverage threshold when run alone, which is expected for a subset.
+
 ### Summary
-The implementation is close and the standard suite is green, but it needs revision before verification. The two blocking fixes are to make the injected `resolve_node` signature match Strawberry's actual call contract and to apply Relay-node finalization to direct `relay.Node` inheritance, not only to classes with a non-empty stored `Meta.interfaces` tuple. After those fixes, update the optimizer wording in the docs and restore the unrelated `/build/` ignore unless intentionally changed.
+
+Most of the Relay interfaces checklist is implemented and covered. The remaining revision blocker is async `get_queryset` support in the Relay node defaults, because the current implementation supports async ORM execution only after a synchronous `get_queryset` call. The remaining Medium/Low items are documentation/cleanup issues around Kanban placement, shipped-slice TODO anchors, and an unrelated `.gitignore` hunk.

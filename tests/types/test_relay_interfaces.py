@@ -656,15 +656,153 @@ async def test_resolve_nodes_async_context():
 async def test_resolve_nodes_async_context_no_ids_returns_queryset():
     """``_resolve_nodes_default(node_ids=None)`` under async returns the lazy queryset.
 
-    The contract is that the caller materializes via ``async for``; the
-    returned queryset is sync-safe (lazy) and async-iterable. Pins the
-    spec line 491 "node_ids=None" branch of Decision 9.
+    Async-branch contract (post-async-``get_queryset`` fix): the call
+    returns a coroutine that yields the queryset once ``get_queryset``
+    has been awaited. The caller awaits the resolver call to obtain the
+    queryset, then iterates with ``async for``. Pins the spec line 491
+    "node_ids=None" branch of Decision 9 under the corrected awaitable
+    contract described in ``feedback.md`` § High.
     """
     CategoryNode = await sync_to_async(_build_seeded_category_node)()
-    qs = CategoryNode.resolve_nodes(info=None)
+    qs = await CategoryNode.resolve_nodes(info=None)
     assert qs.model is Category
     rows = [row async for row in qs]
     assert len(rows) == await Category.objects.acount()
+
+
+def _build_seeded_category_node_with_async_get_queryset():
+    """Sync helper: seed catalog state, register a Relay-declared ``CategoryNode`` with an async hook.
+
+    The hook filters out ``is_private=True`` rows. Used by the async
+    ``get_queryset`` tests below to prove that the async branch awaits
+    the hook before applying the id filter.
+    """
+    services.seed_data(1)
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.filter(is_private=False)
+
+    finalize_django_types()
+    return CategoryNode
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_resolve_node_async_awaits_async_get_queryset():
+    """Async ``get_queryset`` is awaited before the id filter on the async branch.
+
+    Pins the review-feedback regression (``feedback.md`` § High): the
+    previous implementation called ``cls.get_queryset(qs, info)``
+    synchronously and then invoked ``.filter`` on the resulting
+    coroutine, raising ``AttributeError``. The corrected async branch
+    awaits the hook, then applies the id filter, then awaits
+    ``aget``/``afirst``.
+    """
+    CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
+    public_row = await Category.objects.filter(is_private=False).afirst()
+    private_row = await Category.objects.filter(is_private=True).afirst()
+    assert public_row is not None and private_row is not None
+
+    public_result = await CategoryNode.resolve_node(public_row.pk, info=None)
+    assert public_result is not None and public_result.pk == public_row.pk
+    # Rows the async hook filters out are invisible to the node lookup.
+    assert await CategoryNode.resolve_node(private_row.pk, info=None) is None
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_resolve_nodes_async_awaits_async_get_queryset():
+    """Async ``get_queryset`` is awaited on the async ``resolve_nodes`` branch too.
+
+    Mirrors ``test_resolve_node_async_awaits_async_get_queryset`` for
+    the bulk-fetch path: the async branch awaits the hook before applying
+    the ``id_attr__in`` filter, and the order-preserving missing-id
+    contract still emits ``None`` at the indexes the hook filtered out.
+    """
+    CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
+    public_rows = [row async for row in Category.objects.filter(is_private=False).order_by("id")[:2]]
+    private_row = await Category.objects.filter(is_private=True).afirst()
+    assert len(public_rows) == 2 and private_row is not None
+    a, b = public_rows
+
+    result = await CategoryNode.resolve_nodes(
+        info=None,
+        node_ids=[a.pk, private_row.pk, b.pk],
+        required=False,
+    )
+    # The private row is filtered out by the async hook, so its slot is None.
+    assert [obj.pk if obj is not None else None for obj in result] == [a.pk, None, b.pk]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_resolve_nodes_async_no_ids_awaits_async_get_queryset():
+    """Async ``resolve_nodes(node_ids=None)`` awaits the async hook and returns the filtered queryset.
+
+    Pins the ``node_ids=None`` branch under async ``get_queryset``: the
+    coroutine returned by ``resolve_nodes`` awaits the hook, applies no
+    id filter, and yields the filtered queryset. Material rows reflect
+    the hook's predicate.
+    """
+    CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
+    qs = await CategoryNode.resolve_nodes(info=None)
+    rows = [row async for row in qs]
+    # Every returned row must satisfy the async hook's predicate.
+    assert rows
+    assert all(row.is_private is False for row in rows)
+
+
+def test_resolve_node_sync_with_async_get_queryset_raises():
+    """Sync ``resolve_node`` + ``async def get_queryset`` raises ``ConfigurationError``.
+
+    The sync branch cannot await an async hook; rather than letting
+    ``.filter`` blow up on a coroutine, the framework closes the
+    unawaited coroutine and raises a named ``ConfigurationError``
+    pointing the consumer at the async resolver path or a sync hook
+    rewrite (review feedback ``feedback.md`` § High).
+    """
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset
+
+    finalize_django_types()
+    with pytest.raises(ConfigurationError, match="returned a coroutine"):
+        CategoryNode.resolve_node(1, info=None)
+
+
+def test_resolve_nodes_sync_with_async_get_queryset_raises():
+    """Sync ``resolve_nodes`` + ``async def get_queryset`` raises ``ConfigurationError``.
+
+    Same contract as ``test_resolve_node_sync_with_async_get_queryset_raises``
+    but for the bulk-fetch path. Both Relay node defaults must reject
+    the sync-context + async-hook combination homogeneously so consumers
+    see one error shape.
+    """
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset
+
+    finalize_django_types()
+    with pytest.raises(ConfigurationError, match="returned a coroutine"):
+        CategoryNode.resolve_nodes(info=None)
 
 
 async def test_consumer_async_resolve_node_wins():

@@ -94,7 +94,7 @@ class DjangoType:
                 f"finalize_django_types() already ran; cannot register {cls.__name__} "
                 "after finalization. Call registry.clear() first if this is a test.",
             )
-        _validate_meta(meta)
+        interfaces = _validate_meta(meta)
         fields = _select_fields(meta)
         _validate_optimizer_hints(meta, fields)
 
@@ -121,9 +121,6 @@ class DjangoType:
             source_model=meta.model,
             consumer_authored_fields=consumer_authored_fields,
         )
-        # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-        # pass normalized ``Meta.interfaces`` through to
-        # ``DjangoTypeDefinition.interfaces`` once the key is accepted.
         definition = DjangoTypeDefinition(
             origin=cls,
             model=meta.model,
@@ -139,6 +136,7 @@ class DjangoType:
             consumer_annotated_relation_fields=consumer_annotated_relation_fields,
             consumer_assigned_relation_fields=consumer_assigned_relation_fields,
             consumer_assigned_scalar_fields=consumer_assigned_scalar_fields,
+            interfaces=interfaces,
         )
         registry.register_with_definition(meta.model, cls, definition)
         for pending_relation in pending:
@@ -270,7 +268,98 @@ def _format_unknown_fields_error(*, model: type, attr: str, unknown: list[str], 
     return f"{model.__name__}.Meta.{attr} names unknown fields: {unknown}. Available: {sorted(available)}."
 
 
-def _validate_meta(meta: type) -> None:
+_INTERFACES_SHAPE_ERROR_LEAD_IN = (
+    "Meta.interfaces must be a tuple/list of Strawberry interface classes or a single interface class"
+)
+
+
+def _interfaces_shape_error(meta: type, got_suffix: str) -> str:
+    """Format the top-level ``Meta.interfaces`` shape-rejection message.
+
+    Both raise sites (string-typed raw, other non-sequence raw) share the
+    long lead-in defined in ``_INTERFACES_SHAPE_ERROR_LEAD_IN``; this
+    helper localizes the wording so the two sites cannot drift.
+    """
+    return f"{meta.model.__name__}.{_INTERFACES_SHAPE_ERROR_LEAD_IN}, got {got_suffix}."
+
+
+def _validate_interfaces(meta: type) -> tuple[type, ...]:
+    """Validate and normalize ``Meta.interfaces`` per Decision 4.
+
+    Returns a normalized ``tuple[type, ...]`` ready to pass through to
+    ``DjangoTypeDefinition.interfaces``. Returns ``()`` when the key is
+    absent or set to an empty tuple/list (Decision 4 line 324).
+
+    Validation rules (spec lines 322-330):
+
+    - Accepts a tuple/list of interface classes, or a single real
+      Strawberry interface class (e.g. ``interfaces = relay.Node``).
+    - Rejects strings, sets, generators, dicts, ints, and other
+      non-sequence values.
+    - Each entry must satisfy
+      ``hasattr(entry, "__strawberry_definition__") and
+      entry.__strawberry_definition__.is_interface``.
+    - Rejects string entries (no lazy/forward-reference lookup).
+    - Rejects ``DjangoType`` self-reference and other ``DjangoType``
+      subclasses.
+    - Rejects duplicates.
+
+    The composite-pk constraint and ``relay.Node`` MRO inspection live
+    in Slice 4's Phase 2.5; this helper only validates the shape and
+    contents of the ``Meta.interfaces`` tuple itself.
+    """
+    raw = getattr(meta, "interfaces", None)
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        raise ConfigurationError(_interfaces_shape_error(meta, "a string"))
+    if isinstance(raw, type):
+        entries: tuple[type, ...] = (raw,)
+    elif isinstance(raw, (tuple, list)):
+        entries = tuple(raw)
+    else:
+        raise ConfigurationError(_interfaces_shape_error(meta, type(raw).__name__))
+    if entries == ():
+        return ()
+    seen_ids: set[int] = set()
+    duplicates: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            raise ConfigurationError(
+                f"{meta.model.__name__}.Meta.interfaces must contain interface classes, "
+                f"not strings (got {entry!r}). Lazy/forward-reference interface lookup is "
+                "out of scope for 0.0.5.",
+            )
+        if not isinstance(entry, type):
+            raise ConfigurationError(
+                f"{meta.model.__name__}.Meta.interfaces must contain interface classes, got {entry!r}.",
+            )
+        if issubclass(entry, DjangoType):
+            raise ConfigurationError(
+                f"{meta.model.__name__}.Meta.interfaces may not contain DjangoType or "
+                f"DjangoType subclasses (got {entry.__name__}). DjangoType is not a "
+                "Strawberry interface.",
+            )
+        definition = getattr(entry, "__strawberry_definition__", None)
+        if definition is None or not getattr(definition, "is_interface", False):
+            raise ConfigurationError(
+                f"{meta.model.__name__}.Meta.interfaces entry {entry.__name__} is not a "
+                "Strawberry interface. Use @strawberry.interface or one of the "
+                "strawberry.relay interface classes.",
+            )
+        entry_id = id(entry)
+        if entry_id in seen_ids:
+            duplicates.append(entry.__name__)
+        else:
+            seen_ids.add(entry_id)
+    if duplicates:
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.interfaces contains duplicate entries: {sorted(duplicates)}.",
+        )
+    return entries
+
+
+def _validate_meta(meta: type) -> tuple[type, ...]:
     """Validate a ``DjangoType`` subclass's nested ``Meta`` class.
 
     Validation order:
@@ -280,6 +369,16 @@ def _validate_meta(meta: type) -> None:
     3. Any key in ``DEFERRED_META_KEYS`` raises with a clear message.
     4. Any non-dunder key on ``meta`` not in ``ALLOWED_META_KEYS |
        DEFERRED_META_KEYS`` raises (typo guard).
+    5. If ``Meta.interfaces`` is declared, validate it per
+       ``_validate_interfaces`` (Decision 4) and return the normalized
+       tuple. The deferred-key check above runs first while
+       ``"interfaces"`` remains in ``DEFERRED_META_KEYS``, so this step
+       only executes end-to-end once Slice 5 promotes the key.
+
+    Returns:
+        The normalized ``Meta.interfaces`` tuple, or ``()`` when the key
+        is absent or empty. The caller threads this through to
+        ``DjangoTypeDefinition.interfaces``.
 
     Raises:
         ConfigurationError: any of the above violations.
@@ -302,11 +401,7 @@ def _validate_meta(meta: type) -> None:
     if unknown:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
 
-    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-    # validate ``Meta.interfaces`` as a tuple/list of real Strawberry
-    # interfaces, or as one real Strawberry interface class normalized
-    # to a one-item tuple. Reject strings, invalid non-sequences,
-    # duplicates, and DjangoType self-references before Strawberry decoration.
+    return _validate_interfaces(meta)
 
 
 def _validate_optimizer_hints(meta: type, fields: tuple[Any, ...]) -> None:

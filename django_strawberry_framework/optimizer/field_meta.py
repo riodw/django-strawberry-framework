@@ -29,7 +29,14 @@ mirror written in ``django_strawberry_framework/types/base.py`` is
 retained for the 0.0.x line for backward compatibility with the
 walker's pre-definition reads; remove the mirror writer and this
 docstring paragraph in the same change that ships the retirement
-slice. The walker already prefers ``DjangoTypeDefinition.field_map``.
+slice. The walker still reads ``cls._optimizer_field_map`` today
+(``optimizer/walker.py:_resolve_field_map``); ``BACKLOG-014`` in
+``KANBAN.md`` tracks the move to
+``registry.get_definition(type_cls).field_map`` and enumerates the
+five ``TODO(spec-fieldmeta-mirror-retirement)`` anchor sites that
+close with it. The sibling ``TODO(spec-fieldmeta-ssot)`` family
+(three reader sites that re-derive relation shape) is tracked under
+``BACKLOG-013`` in the same file.
 """
 
 from __future__ import annotations

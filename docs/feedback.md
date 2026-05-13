@@ -1,124 +1,93 @@
-# Review: docs/diff-spec-relay_interfaces.diff
-Status: revision-needed
+# Python TODO Comment Audit
 
-## DRY analysis
+Status: reviewed
 
-- Existing patterns reused: `DjangoType.__init_subclass__` remains the collection point and now threads normalized interfaces into `DjangoTypeDefinition` (`django_strawberry_framework/types/base.py:73-132`); the existing finalizer registry loops are extended with Phase 2.5 instead of adding a second finalization entry point (`django_strawberry_framework/types/finalizer.py:83-106`); the reserved `DjangoTypeDefinition.interfaces` slot is used rather than adding parallel state (`django_strawberry_framework/types/definition.py:13-43`); registry-isolation fixtures and the library schema reload fixture are reused for package and HTTP coverage (`tests/types/test_relay_interfaces.py:25-39`, `examples/fakeshop/test_query/test_library_api.py:18-40`); scalar projection continues through the existing optimizer walker path (`django_strawberry_framework/optimizer/walker.py:122-134`).
-- New helpers a fix might justify: one helper with the single responsibility “run `DjangoType.get_queryset` and return a concrete `QuerySet` in the current sync/async resolver context.” It would serve `_resolve_node_default` and `_resolve_nodes_default`; the async path should await an awaitable `get_queryset` result before applying `.filter(...)`, while the sync path should either bridge deliberately or raise a clear `ConfigurationError` if an async hook is used from sync execution.
-- Duplication risk in the current file: Relay resolver method names are centralized in `_RELAY_RESOLVER_DEFAULTS`, so no issue there. The current duplication risk is stale shipped-slice TODO anchors that now repeat old 0.0.5 work in multiple places (`django_strawberry_framework/types/__init__.py:19-20`, `django_strawberry_framework/optimizer/walker.py:130-132`, `tests/optimizer/test_walker.py:35-37`) and can drift from the actual shipped state.
+## Scope
 
-## High:
+- Audited TODO occurrences in project `.py` files.
+- Current actionable count is 13 actual `# TODO...` comment blocks.
+- Raw `TODO` string count is 18 when including docstrings/string literals.
+- I do not see 21 actionable TODO comments in the current working tree. The old count appears to include stale Relay TODOs that are now already removed or rewritten in the working tree.
 
-### Async `get_queryset` is not awaited in Relay node defaults
+## Still valid TODOs
 
-Decision 9 says the node resolvers must support async resolver contexts and notes that a consumer `DjangoType.get_queryset` may itself be sync or async. The implementation switches to async ORM execution with `in_async_context()`, but `_assemble_node_queryset` calls `cls.get_queryset(qs, info)` synchronously before that branch. If a consumer defines `async def get_queryset`, `qs` becomes a coroutine and the next `.filter(...)` call fails. I verified this with a minimal async `CategoryNode.get_queryset`, which produced `AttributeError: 'coroutine' object has no attribute 'filter'` plus an unawaited-coroutine warning.
+### Deferred scalar conversions
 
-Recommended change: split queryset assembly into sync and async helpers, or make `_assemble_node_queryset` await-aware. In async resolver context, await the result of `cls.get_queryset(qs, info)` when it is awaitable before filtering/executing. Add tests for async `get_queryset` with both `resolve_node` and `resolve_nodes`. In sync resolver context, decide explicitly whether an async `get_queryset` is bridged with `async_to_sync` or rejected with `ConfigurationError`.
+These remain correct and map to documented deferred scalar-conversion work in `docs/FEATURES.md` and `KANBAN.md`.
 
-```django_strawberry_framework/types/relay.py:198:207
-model = cls.__django_strawberry_definition__.model
-qs = model._default_manager.all()
-qs = cls.get_queryset(qs, info)
-if node_id is not None:
-    coerced = node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
-    qs = qs.filter(**{id_attr: coerced})
-elif node_ids is not None:
-    coerced_ids = [(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
-    qs = qs.filter(**{f"{id_attr}__in": coerced_ids})
-return qs
-```
+- `django_strawberry_framework/types/converters.py:32` — `BigIntegerField` → JSON-safe `BigInt`.
+- `django_strawberry_framework/types/converters.py:41` — `ArrayField` conversion.
+- `django_strawberry_framework/types/converters.py:45` — `JSONField` / `HStoreField` conversion.
 
-```django_strawberry_framework/types/relay.py:270:314
-id_attr = cls.resolve_id_attr()
-qs = _assemble_node_queryset(cls, info, id_attr, node_id=node_id)
-if in_async_context():
-    return qs.aget() if required else qs.afirst()
-return qs.get() if required else qs.first()
+### Deferred Layer 3 metadata typing
 
-...
+- `django_strawberry_framework/types/definition.py:32` — tighten `Any | None` slots once filter/order/aggregate/fieldset/search features ship.
 
-qs = _assemble_node_queryset(cls, info, id_attr, node_ids=node_ids_list)
-if in_async_context():
+This is still valid. Those Meta subsystems are still planned/deferred, not shipped.
 
-    async def _materialize() -> list:
-        results = [obj async for obj in qs]
-        return _order_nodes(cls, results, coerced_keys, id_attr, required=required)
+### FieldMeta single-source-of-truth cleanup
 
-    return _materialize()
-return _order_nodes(cls, list(qs), coerced_keys, id_attr, required=required)
-```
+These remain valid. The code still re-derives relation shape/cardinality/nullability via `relation_kind(...)` and raw Django field attributes instead of consistently reading `FieldMeta`.
 
-## Medium:
+- `django_strawberry_framework/types/base.py:610`
+- `django_strawberry_framework/types/converters.py:224`
+- `django_strawberry_framework/types/resolvers.py:180`
 
-### `DONE-011` is still under the Kanban “In progress” column
+### FieldMeta mirror-retirement cleanup
 
-The spec checklist says to move the Relay card to Done. The snapshot says no slice is active, but the detailed board still has `DONE-011` under `## In progress`, which keeps the board structurally inconsistent.
+These remain valid. The code still writes/reads `_optimizer_field_map` and `_optimizer_hints` compatibility mirrors.
 
-Recommended change: move the whole `DONE-011` card above the `## In progress` heading into the Done column, or rename/remove the `## In progress` heading so it no longer contains a completed card.
+- `django_strawberry_framework/types/base.py:137`
+- `django_strawberry_framework/optimizer/extension.py:227`
+- `django_strawberry_framework/optimizer/extension.py:487`
+- `django_strawberry_framework/optimizer/walker.py:75`
+- `django_strawberry_framework/optimizer/walker.py:153`
 
-```KANBAN.md:326:332
-## In progress
+## Valid concept, but cleanup recommended
 
-### DONE-011 — 0.0.5 Relay interfaces and Node foundation
+### `optimizer/field_meta.py` docstring is inaccurate
 
-Priority: completed Relay Node foundation
+- `django_strawberry_framework/optimizer/field_meta.py:27`
 
-Status: complete.
-```
+The mirror-retirement TODO is conceptually valid, but the docstring says: “The walker already prefers `DjangoTypeDefinition.field_map`.” That is not true in the current code: `optimizer/walker.py:75` still prefers `_optimizer_field_map`.
 
-## Low:
+Recommended change: either fix the docstring wording or actually move the walker to `registry.get_definition(type_cls).field_map`.
 
-### Shipped 0.0.5 TODO anchors remain in source and tests
+### `optimizer/field_meta.py` cross-reference is not actionable
 
-Project rules say spec TODO anchors for a future slice should be removed in the same change that ships the slice. Relay support has shipped, but source/test comments still carry `TODO(0.0.5 relay interfaces...)` anchors. These no longer represent future work: the public-surface decision is implemented, and the optimizer coverage now lives in `tests/optimizer/test_relay_id_projection.py`.
+- `django_strawberry_framework/optimizer/field_meta.py:12`
 
-Recommended change: delete these TODO blocks or convert any still-useful statement into a non-TODO explanatory comment.
+This is not an actionable TODO comment. It is a docstring cross-reference to the SSoT TODOs. It is okay to keep, but it contributes to raw `TODO` line counts.
 
-```django_strawberry_framework/types/__init__.py:19:20
-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-# keep ``types.relay`` internal; do not re-export Relay helper functions.
-```
+## Vague / aspirational TODO
 
-```django_strawberry_framework/optimizer/walker.py:130:132
-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-# selecting Relay ``id`` on a Relay-declared DjangoType must still
-# project the concrete pk attname so ``resolve_id`` can read the
-```
+### Product filters permission TODO
 
-```tests/optimizer/test_walker.py:35:37
-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-# extend optimizer coverage for Relay id projection, no avoidable lazy loads,
-# unchanged relation planning across Relay targets, and loaded-pk resolve_id.
-```
+- `examples/fakeshop/apps/products/filters.py:47`
 
-### Unrelated `.gitignore` hunk is in the review diff
+`# TODO: Implement permission check?` is not a missed current implementation. Filters and permissions are still unshipped, and this file uses aspirational APIs.
 
-The Relay spec does not call for packaging-ignore changes, but the review diff starts with a `.gitignore` hunk removing `/build/`. The working tree currently shows this as a change from `/build/` to `build/`; either way it is unrelated to Relay interfaces and should not ride along unless there is a separate packaging reason.
+Recommended change: rewrite this as a proper anchored comment pointing to the future filters/permissions specs/cards, or remove it until the filters/permissions slice is active. The current wording is too vague to be useful.
 
-Recommended change: revert the `.gitignore` hunk from this slice, or document the packaging rationale separately.
+## Not real TODO comments
 
-```docs/diff-spec-relay_interfaces.diff:1:10
-diff --git a/.gitignore b/.gitignore
-index bed0eb9..fb04949 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -17,7 +17,6 @@ __pycache__/
+These are string/code references for the review-inspection script’s own output and require no action.
 
- # Distribution / packaging
- .Python
--/build/
-```
+- `scripts/review_inspect.py:662`
+- `scripts/review_inspect.py:665`
+- `scripts/review_inspect.py:668`
 
-## What looks solid
+## Missed current implementation check
 
-- `Meta.interfaces` is promoted, validated, normalized, stored on `DjangoTypeDefinition`, and covered by package tests.
-- Interface base injection happens before `strawberry.type(...)`, and direct `relay.Node` inheritance is also handled by MRO checks.
-- Relay `id` suppression keeps the primary key in `field_map`, and optimizer projection tests cover Relay `id`, lazy-load avoidance, and relation planning across Relay targets.
-- Resolver signatures match Strawberry’s positional/keyword call shapes, and consumer overrides for `resolve_id_attr`, `resolve_id`, `resolve_node`, and `resolve_nodes` are preserved.
-- The example library HTTP test exercises a real `GenreType` with `interfaces = (relay.Node,)` and validates GlobalID round-trip behavior.
-- Version bumps and public-export discipline are in place: `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock` agree on `0.0.5`, and `__all__` did not widen.
-- Validation commands: the full `uv run pytest` gate passed with `520 passed, 1 skipped` and `100.00%` package coverage; `uv run ruff format --check . && uv run ruff check .` also passed. The targeted Relay/schema/HTTP subset itself passed (`102 passed`) but exits nonzero under the global coverage threshold when run alone, which is expected for a subset.
+One previously missed implementation item has already been addressed in the current working tree:
 
-### Summary
+- Relay async `get_queryset` handling is now implemented in `django_strawberry_framework/types/relay.py`.
+- The focused test file passes with `uv run pytest tests/types/test_relay_interfaces.py --no-cov` (`59 passed`).
 
-Most of the Relay interfaces checklist is implemented and covered. The remaining revision blocker is async `get_queryset` support in the Relay node defaults, because the current implementation supports async ORM execution only after a synchronous `get_queryset` call. The remaining Medium/Low items are documentation/cleanup issues around Kanban placement, shipped-slice TODO anchors, and an unrelated `.gitignore` hunk.
+No other current TODO indicates work accidentally missed from the Relay implementation.
+
+## Recommended next actions
+
+1. Fix the inaccurate sentence in `django_strawberry_framework/optimizer/field_meta.py` about the walker already preferring `DjangoTypeDefinition.field_map`.
+2. Decide whether to create/anchor a real `spec-fieldmeta-*` document/card for the FieldMeta SSoT and mirror-retirement TODO family.
+3. Rewrite or remove the vague TODO in `examples/fakeshop/apps/products/filters.py`.

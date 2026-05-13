@@ -44,7 +44,15 @@ class ItemFilter(filters.AdvancedFilterSet):
             "category__name": ["exact"],
         }
 
-    # TODO: Implement permission check?
+    # TODO(NEXT-006 permissions; see KANBAN.md):
+    #   Per-field ``check_<field>_permission`` hooks are owned by the
+    #   permissions slice (``NEXT-006``) and compose with the filter
+    #   subsystem (``NEXT-002``). The commented method below is the
+    #   target shape: scope ``queryset`` based on the request user so
+    #   non-staff callers cannot filter by ``Item.entries``. Uncomment
+    #   in the same change that lands the hook contract and exempt this
+    #   pseudo-code block from ERA001 per AGENTS.md's TODO-pseudo-code
+    #   rule.
     # def check_entries_permission(self, queryset, request):
     #     """Only staff users may filter by Item.entries."""
     #     user = getattr(request, "user", None)

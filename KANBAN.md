@@ -882,6 +882,79 @@ Files likely touched:
 - `examples/fakeshop/test_query/test_library_api.py`
 - possibly a helper in `django_strawberry_framework/types/resolvers.py` if production code needs it
 
+### BACKLOG-013 — FieldMeta SSoT consolidation
+
+Priority: low
+
+Status: planned
+
+Current behavior:
+
+- `FieldMeta` (`django_strawberry_framework/optimizer/field_meta.py`) is the canonical relation-shape single source of truth: cardinality flags, `attname`, `related_model`, FK target columns.
+- Three sites still re-derive relation shape via `relation_kind(field)` + raw `getattr(field, ...)` instead of reading the `FieldMeta` already on `DjangoTypeDefinition.field_map`:
+  - `django_strawberry_framework/types/base.py:_record_pending_relation` — anchored with `TODO(spec-fieldmeta-ssot)`.
+  - `django_strawberry_framework/types/converters.py:resolved_relation_annotation` — anchored with `TODO(spec-fieldmeta-ssot)`.
+  - `django_strawberry_framework/types/resolvers.py:_make_relation_resolver` — anchored with `TODO(spec-fieldmeta-ssot)`.
+- The `optimizer/field_meta.py` module docstring enumerates the three reader sites as cross-references back to `FieldMeta`.
+
+Why it matters:
+
+- Three shape-derivation paths can drift when Django adds a relation flag or when reverse-relation descriptor attributes change.
+- Routing every reader through one `FieldMeta` instance removes the raw Django-private `getattr` calls from production code and shrinks the drift surface to one place.
+
+Definition of done:
+
+- Each anchored site reads its `FieldMeta` from `DjangoTypeDefinition.field_map` (keyed by `field.name` / `snake_case(field.name)`) instead of recomputing.
+- The three `TODO(spec-fieldmeta-ssot)` anchors are removed in the same change.
+- The `optimizer/field_meta.py` module docstring paragraph listing the three reader sites is trimmed accordingly.
+- Tests cover all current cardinalities (forward FK, OneToOne, reverse OneToOne, reverse FK, M2M) so the three readers still produce identical annotations / pending-relation records / resolvers.
+- Coverage stays at 100%; no new public surface.
+
+Files likely touched:
+
+- `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/types/converters.py`
+- `django_strawberry_framework/types/resolvers.py`
+- `django_strawberry_framework/optimizer/field_meta.py`
+- `tests/types/`
+
+### BACKLOG-014 — FieldMeta mirror retirement
+
+Priority: low
+
+Status: planned
+
+Current behavior:
+
+- `DjangoType.__init_subclass__` writes legacy class-attribute mirrors (`cls._optimizer_field_map`, `cls._optimizer_hints`) in addition to populating the canonical `DjangoTypeDefinition.field_map` / `optimizer_hints`. The writer is at `django_strawberry_framework/types/base.py:137`, anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
+- The optimizer still reads the legacy mirrors at four sites:
+  - `django_strawberry_framework/optimizer/walker.py:_resolve_field_map` — anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
+  - `django_strawberry_framework/optimizer/walker.py:_walk_selections` (hints read) — anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
+  - `django_strawberry_framework/optimizer/extension.py:_collect_schema_reachable_types` — anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
+  - `django_strawberry_framework/optimizer/extension.py:check_schema` — anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
+- The `optimizer/field_meta.py` module docstring documents the mirror and cross-references this card.
+
+Why it matters:
+
+- The mirror is dead weight after the foundation slice put `DjangoTypeDefinition` on the canonical metadata path; the optimizer should reach the same data through `registry.get_definition(type_cls)` so there is one source of truth and no compatibility shim.
+- Removing the mirror also removes a class-attribute residue that survives `registry.clear()`, which today is documented as a non-issue for tests that recreate classes but is still extra surface.
+
+Definition of done:
+
+- All four reader sites read `field_map` / `optimizer_hints` from `registry.get_definition(type_cls)` (or accept a missing definition gracefully where the walker tolerates an unregistered model today).
+- The mirror writer at `django_strawberry_framework/types/base.py` is removed in the same change.
+- The five `TODO(spec-fieldmeta-mirror-retirement)` anchors are deleted.
+- The `optimizer/field_meta.py` module docstring paragraph documenting the mirror is removed.
+- Coverage stays at 100% with the existing optimizer/fakeshop tests; no new public surface.
+
+Files likely touched:
+
+- `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/optimizer/walker.py`
+- `django_strawberry_framework/optimizer/extension.py`
+- `django_strawberry_framework/optimizer/field_meta.py`
+- `tests/optimizer/`
+
 ### BACKLOG-012 — Connection-aware optimizer planning
 
 Priority: medium (gated on `NEXT-005` / Relay decisions)

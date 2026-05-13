@@ -1,19 +1,9 @@
 """Tests for the 0.0.5 Relay interfaces slice.
 
-Slice 1 covers validation and storage: ``_validate_interfaces`` normalizes
-and validates ``Meta.interfaces``, and the normalized tuple is threaded
-through to ``DjangoTypeDefinition.interfaces``. End-to-end ``_validate_meta``
-coverage with ``Meta.interfaces`` declared lands in Slice 5 once the key is
-promoted out of ``DEFERRED_META_KEYS``; until then the deferred-key check
-short-circuits before the interface validator runs, so Slice 1 calls
-``_validate_interfaces`` directly.
-
-Slice 4 covers interface base-class injection and the four Relay node
-resolver defaults. Until Slice 5 promotes ``"interfaces"`` out of
-``DEFERRED_META_KEYS``, the Slice 4 tests stage the interfaces tuple on
-``DjangoTypeDefinition.interfaces`` after registration (via
-``stage_relay_definition`` in ``tests/_relay_bypass.py``) rather than
-declaring it through ``Meta.interfaces``.
+Covers ``Meta.interfaces`` validation, ``is_type_of`` injection, id
+suppression, interface base-class injection, and the four Relay node
+resolver defaults (``resolve_id_attr``, ``resolve_id``, ``resolve_node``,
+``resolve_nodes``).
 """
 
 import pytest
@@ -38,7 +28,6 @@ from django_strawberry_framework.types.relay import (
     implements_relay_node,
     install_relay_node_resolvers,
 )
-from tests._relay_bypass import stage_relay_definition
 
 
 @pytest.fixture(autouse=True)
@@ -181,6 +170,25 @@ def test_meta_interfaces_stored_on_definition():
     assert definition.interfaces == (relay.Node,)
 
 
+def test_meta_interfaces_end_to_end_accepted_in_validate_meta():
+    """End-to-end ``class Meta: interfaces = (relay.Node,)`` flows through ``_validate_meta``.
+
+    Slice 5 promoted ``"interfaces"`` from ``DEFERRED_META_KEYS`` to
+    ``ALLOWED_META_KEYS``, so the deferred-key check no longer
+    short-circuits the validator. This test pins that the full
+    ``__init_subclass__`` path accepts the declaration and stores the
+    normalized tuple on ``DjangoTypeDefinition``.
+    """
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    assert CategoryNode.__django_strawberry_definition__.interfaces == (relay.Node,)
+
+
 def test_class_already_inherits_relay_node_directly():
     """``_validate_interfaces`` accepts a Meta whose host class already inherits ``relay.Node``.
 
@@ -215,8 +223,8 @@ def test_relay_node_with_composite_pk_raises(monkeypatch):
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
     with pytest.raises(ConfigurationError, match="composite primary key"):
         finalize_django_types()
@@ -232,10 +240,8 @@ def test_is_type_of_injected_for_all_djangotypes():
 
     Decision 6 (spec line 351) is that injection is unconditional — it
     happens for every ``DjangoType`` subclass with a ``Meta`` regardless
-    of whether ``Meta.interfaces`` is declared. Until Slice 5 promotes
-    ``"interfaces"`` out of ``DEFERRED_META_KEYS`` we cannot declare it
-    end-to-end here; the "Relay path" coverage is instead the assertion
-    that a plain non-Relay ``DjangoType`` still receives the injection.
+    of whether ``Meta.interfaces`` is declared. The non-Relay
+    ``DjangoType`` here exercises that unconditional path.
 
     The assertion uses ``cls.__dict__`` membership (not ``getattr``) so a
     method inherited from a base would not satisfy the contract; the
@@ -303,10 +309,10 @@ def test_relay_node_strips_django_id_annotation():
     ``DjangoTypeDefinition.field_map`` and the optimizer still see the pk
     as a connector column (Decision 7, line 361).
 
-    ``"interfaces"`` is still in ``DEFERRED_META_KEYS`` until Slice 5
-    promotes it, so the unit-level test calls ``_build_annotations``
-    directly with a synthetic host class. Matches Slice 1's testing
-    approach for the same reason.
+    The unit-level test calls ``_build_annotations`` directly with a
+    synthetic host class to keep the boundary tight. End-to-end
+    coverage of the same suppression path lives in
+    ``tests/types/test_definition_order_schema.py``.
     """
     fields = tuple(Category._meta.get_fields())
 
@@ -381,8 +387,8 @@ def test_relay_node_injects_default_resolvers():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     assert relay.Node in CategoryNode.__mro__
     for attr in ("resolve_id", "resolve_id_attr", "resolve_node", "resolve_nodes"):
@@ -398,8 +404,8 @@ def test_resolve_id_attr_falls_back_to_pk():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     assert CategoryNode.resolve_id_attr() == "pk"
     # Direct helper exercise: the fallback fires when ``NodeIDAnnotationError`` raises.
@@ -415,8 +421,8 @@ def test_resolve_id_uses_dict_cache():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     row = Category.objects.only("id", "name").first()
     assert row is not None
@@ -439,8 +445,8 @@ def test_resolve_id_falls_back_to_getattr():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     fake = _build_fake_root(42)
     assert "id" not in fake.__dict__
@@ -456,12 +462,12 @@ def test_resolve_node_applies_get_queryset():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
         @classmethod
         def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
             return queryset.filter(is_private=False)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     public_row = Category.objects.filter(is_private=False).first()
     private_row = Category.objects.filter(is_private=True).first()
@@ -479,8 +485,8 @@ def test_resolve_node_required_raises_for_missing():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     with pytest.raises(Category.DoesNotExist):
         CategoryNode.resolve_node(info=None, node_id=99999, required=True)
@@ -495,8 +501,8 @@ def test_resolve_nodes_preserves_order_and_missing():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     rows = list(Category.objects.order_by("id")[:2])
     a, b = rows[0], rows[1]
@@ -525,8 +531,8 @@ def test_resolve_nodes_required_raises_for_missing():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     a = Category.objects.first()
     assert a is not None
@@ -547,8 +553,8 @@ def test_resolve_nodes_without_ids_returns_full_queryset():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     qs = CategoryNode.resolve_nodes(info=None)
     assert qs.model is Category
@@ -570,8 +576,8 @@ def _build_seeded_category_node():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     return CategoryNode
 
@@ -638,12 +644,12 @@ async def test_consumer_async_resolve_node_wins():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
         @classmethod
         async def resolve_node(cls, info, node_id, required=False):  # noqa: ARG003
             return sentinel
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
 
     assert await CategoryNode.resolve_node(info=None, node_id="anything") is sentinel
@@ -656,12 +662,12 @@ def test_consumer_resolve_id_attr_wins():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
         @classmethod
         def resolve_id_attr(cls) -> str:
             return "name"
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     assert CategoryNode.resolve_id_attr() == "name"
 
@@ -674,12 +680,12 @@ def test_consumer_resolve_id_wins():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
         @classmethod
         def resolve_id(cls, root, info) -> str:  # noqa: ARG003
             return sentinel_id
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     assert CategoryNode.resolve_id(None, info=None) == sentinel_id
 
@@ -692,12 +698,12 @@ def test_consumer_resolve_node_wins():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
         @classmethod
         def resolve_node(cls, info, node_id, required=False):  # noqa: ARG003
             return sentinel
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     assert CategoryNode.resolve_node(info=None, node_id="x") is sentinel
 
@@ -710,12 +716,12 @@ def test_consumer_resolve_nodes_wins():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
         @classmethod
         def resolve_nodes(cls, info, node_ids=None, required=False):  # noqa: ARG003
             return sentinel
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     assert CategoryNode.resolve_nodes(info=None) is sentinel
 
@@ -741,8 +747,8 @@ def test_node_id_annotation_overrides_default_id_attr():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     assert CategoryNode.resolve_id_attr() == "name"
 
@@ -758,8 +764,8 @@ def test_non_relay_interface_works():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (Auditable,)
 
-    stage_relay_definition(CategoryNode, interfaces=(Auditable,))
     finalize_django_types()
     assert Auditable in CategoryNode.__mro__
     # No Relay node injection on the consumer class.
@@ -821,8 +827,8 @@ def test_resolve_id_default_unit_dict_cache_and_getattr_branches():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     # Dict-cache hit: explicitly seed ``__dict__``.
     inst = Category(id=7, name="x")
@@ -843,8 +849,8 @@ def test_resolve_node_default_invoked_via_helper():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     target = Category.objects.first()
     assert target is not None
@@ -861,8 +867,8 @@ def test_resolve_nodes_default_invoked_via_helper():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     target = Category.objects.first()
     assert target is not None
@@ -884,8 +890,8 @@ def test_install_relay_node_resolvers_idempotent():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
     snapshot = {
         attr: CategoryNode.__dict__[attr]
@@ -922,13 +928,13 @@ def test_install_relay_node_resolvers_preserves_consumer_override():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
         @classmethod
         def resolve_id_attr(cls) -> str:
             return sentinel_value
 
     consumer_func = CategoryNode.__dict__["resolve_id_attr"].__func__
-    stage_relay_definition(CategoryNode)
     # Manually drive the host class through Phase 2.5 without finalizing the
     # whole registry (the goal is to exercise the install helper directly).
     CategoryNode.__bases__ = (*CategoryNode.__bases__, relay.Node)

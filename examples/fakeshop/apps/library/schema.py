@@ -1,6 +1,7 @@
 """GraphQL schema for library acceptance coverage."""
 
 import strawberry
+from strawberry import relay
 
 from apps.library import models
 from django_strawberry_framework import DjangoType, OptimizerHint
@@ -54,6 +55,7 @@ class GenreType(DjangoType):
     class Meta:
         model = models.Genre
         fields = ("id", "name", "books")
+        interfaces = (relay.Node,)
 
 
 class BranchType(DjangoType):

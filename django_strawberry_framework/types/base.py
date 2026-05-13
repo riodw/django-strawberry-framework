@@ -47,17 +47,6 @@ DEFERRED_META_KEYS: frozenset[str] = frozenset(
         "aggregate_class",
         "fields_class",
         "search_fields",
-        # ``interfaces`` is in the deferred set rather than the allowed
-        # set because the relay-interface application pass
-        # (``cls.__bases__`` injection before ``strawberry.type``) has
-        # not landed yet. Accepting the key without applying it would
-        # silently produce types that look interface-bearing but are
-        # not, which is exactly the alpha posture we want to avoid.
-        # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-        # move ``interfaces`` to ALLOWED_META_KEYS only after validation,
-        # storage, base injection, Relay resolver defaults, id suppression,
-        # tests, docs, and the version bump all land.
-        "interfaces",
     },
 )
 
@@ -69,6 +58,7 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "name",
         "description",
         "optimizer_hints",
+        "interfaces",
     },
 )
 
@@ -372,9 +362,7 @@ def _validate_meta(meta: type) -> tuple[type, ...]:
        DEFERRED_META_KEYS`` raises (typo guard).
     5. If ``Meta.interfaces`` is declared, validate it per
        ``_validate_interfaces`` (Decision 4) and return the normalized
-       tuple. The deferred-key check above runs first while
-       ``"interfaces"`` remains in ``DEFERRED_META_KEYS``, so this step
-       only executes end-to-end once Slice 5 promotes the key.
+       tuple.
 
     Returns:
         The normalized ``Meta.interfaces`` tuple, or ``()`` when the key

@@ -11,17 +11,17 @@ For the package-wide capability catalog, shipped/planned feature status, optimiz
 - The package can support a practical list-based schema for the fakeshop product models today.
 - The best current fakeshop shape is a bidirectional list-based graph: root list fields for each model, with FK and reverse-FK traversal across `Category`, `Item`, `Property`, and `Entry`.
 
+The library example app's `GenreType` declares `interfaces = (relay.Node,)` and its live `/graphql/` HTTP test in `examples/fakeshop/test_query/test_library_api.py::test_library_relay_node_global_id_round_trips` exercises the end-to-end Relay GlobalID round trip. The products-catalog list-based schema below stays non-Relay.
+
 The commented rich fakeshop design is not directly usable yet because it depends on unshipped APIs and features:
 
 - `DjangoConnectionField`
 - `apply_cascade_permissions`
-- `Meta.interfaces`
 - `Meta.filterset_class`
 - `Meta.orderset_class`
 - `Meta.aggregate_class`
 - `Meta.fields_class`
 - `Meta.search_fields`
-- Relay node and connection integration
 
 ## What to put in `examples/fakeshop/apps/products/schema.py` today
 Replace the placeholder with list-based Strawberry query fields using `DjangoType` and manual root resolvers that return Django `QuerySet`s.
@@ -235,7 +235,6 @@ Relation traversal to a type with custom `get_queryset` is handled by the optimi
 
 Do not turn the commented rich fakeshop design into active code until the features it depends on ship. In practice, that means waiting for:
 - `DjangoConnectionField`
-- Relay node and connection support
 - filters, ordering, aggregates, and fieldsets
 - search fields
 - permission cascade helpers

@@ -41,6 +41,29 @@ schema = strawberry.Schema(
 
 That is the shipped surface: `class Meta` configures the type, `finalize_django_types()` resolves relations after all `DjangoType` modules are imported, and the optimizer extension turns nested selections into Django ORM `select_related`, `prefetch_related`, and `only` calls. Relation fields can point at target types declared earlier or later, as long as every target type is registered before finalization.
 
+### Relay Node
+
+Add `Meta.interfaces = (relay.Node,)` to declare a Relay-node-shaped type. The package wires `id: GlobalID!`, the four `resolve_*` defaults, and `is_type_of` injection without any decorators on the consumer class.
+
+```python
+import strawberry
+from strawberry import relay
+from django_strawberry_framework import DjangoType, finalize_django_types
+from myapp.models import Category
+
+
+class CategoryNode(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name")
+        interfaces = (relay.Node,)
+
+
+finalize_django_types()
+```
+
+See [`FEATURES.md`'s Relay Node integration subsection](FEATURES.md#relay-node-integration) for the resolver list, composite-pk constraint, and the `is_type_of` injection contract.
+
 ## What just happened?
 
 - `class Meta` tells the package which Django model and fields become a Strawberry type.
@@ -95,9 +118,9 @@ Shipped optimizer value:
 
 ## Status
 
-**Status: 0.0.4, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto` — are intended to remain stable through `0.1.0`. API names are the stability promise; correctness and edge-case behavior are still hardening.
+**Status: 0.0.5, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto` — are intended to remain stable through `0.1.0`. API names are the stability promise; correctness and edge-case behavior are still hardening.
 
-Expect the deferred `Meta` keys (`filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `interfaces`) to move from rejected to accepted as their subsystems ship. The registry will gain `Meta.primary` for multiple `DjangoType`s per model. None of those changes break code that uses today's surface.
+Expect the deferred `Meta` keys (`filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`) to move from rejected to accepted as their subsystems ship. The registry will gain `Meta.primary` for multiple `DjangoType`s per model. None of those changes break code that uses today's surface.
 
 ## Contributor notes
 

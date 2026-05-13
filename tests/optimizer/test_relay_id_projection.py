@@ -1,16 +1,10 @@
-"""Optimizer invariants for Relay-declared ``DjangoType`` classes (Slice 4).
+"""Optimizer invariants for Relay-declared ``DjangoType`` classes.
 
 Pins Decision 7 (spec lines 352-361): when a Relay-declared type selects
 ``id`` the optimizer's ``only()`` projection must still include the
 concrete pk attname; ``_resolve_id_default`` must read from the loaded
 ``__dict__`` cache without triggering a lazy load; and relation traversal
 across Relay-declared targets must remain unchanged.
-
-Slice 4 cannot declare ``Meta.interfaces = (relay.Node,)`` end-to-end —
-``"interfaces"`` is still in ``DEFERRED_META_KEYS`` until Slice 5
-promotes it — so these tests stage the interfaces tuple directly on
-``DjangoTypeDefinition.interfaces`` after registration (and strip the
-synthesized ``id`` annotation Slice 3 would have stripped).
 """
 
 from types import SimpleNamespace
@@ -21,10 +15,10 @@ from apps.products import services
 from apps.products.models import Category, Item
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from strawberry import relay
 
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
 from django_strawberry_framework.registry import registry
-from tests._relay_bypass import stage_relay_definition
 
 
 @pytest.fixture(autouse=True)
@@ -44,8 +38,7 @@ def test_relay_id_only_projection_includes_pk_attname(django_assert_num_queries)
         class Meta:
             model = Category
             fields = ("id", "name")
-
-    stage_relay_definition(CategoryNode)
+            interfaces = (relay.Node,)
 
     @strawberry.type
     class Query:
@@ -72,8 +65,7 @@ def test_relay_id_does_not_trigger_lazy_load():
         class Meta:
             model = Category
             fields = ("id", "name")
-
-    stage_relay_definition(CategoryNode)
+            interfaces = (relay.Node,)
 
     @strawberry.type
     class Query:
@@ -99,13 +91,12 @@ def test_relay_target_relation_planning_unchanged(django_assert_num_queries):
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name", "category")
-
-    stage_relay_definition(CategoryNode)
 
     @strawberry.type
     class Query:
@@ -136,8 +127,8 @@ def test_relay_resolve_id_uses_loaded_pk():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
-    stage_relay_definition(CategoryNode)
     finalize_django_types()
 
     row = Category.objects.only("id", "name").first()

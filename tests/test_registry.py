@@ -23,7 +23,6 @@ from django_strawberry_framework.registry import TypeRegistry, registry
 from django_strawberry_framework.types import finalizer as finalizer_module
 from django_strawberry_framework.types.relations import PendingRelation, PendingRelationAnnotation
 from django_strawberry_framework.utils.relations import relation_kind
-from tests._relay_bypass import stage_relay_definition
 
 
 @pytest.fixture
@@ -381,8 +380,7 @@ def test_registry_clear_allows_fresh_relay_declared_type_to_finalize():
         class Meta:
             model = Category
             fields = ("id", "name")
-
-    stage_relay_definition(CategoryNode)
+            interfaces = (relay.Node,)
 
     @strawberry.type
     class Query:
@@ -398,8 +396,7 @@ def test_registry_clear_allows_fresh_relay_declared_type_to_finalize():
         class Meta:
             model = Category
             fields = ("id", "name")
-
-    stage_relay_definition(FreshCategoryNode)
+            interfaces = (relay.Node,)
 
     @strawberry.type
     class Query2:

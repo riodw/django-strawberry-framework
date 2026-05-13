@@ -5,10 +5,10 @@ import strawberry
 from apps.library.models import Book, Genre
 from apps.products import services
 from apps.products.models import Category, Item
+from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.registry import registry
-from tests._relay_bypass import stage_relay_definition
 
 
 @pytest.fixture(autouse=True)
@@ -105,8 +105,7 @@ def test_relay_declared_type_emits_node_interface_and_global_id():
         class Meta:
             model = Category
             fields = ("id", "name")
-
-    stage_relay_definition(CategoryNode)
+            interfaces = (relay.Node,)
 
     @strawberry.type
     class Query:
@@ -130,13 +129,12 @@ def test_mixed_relay_and_non_relay_types_introspect_cleanly():
         class Meta:
             model = Category
             fields = ("id", "name")
+            interfaces = (relay.Node,)
 
     class ItemType(DjangoType):
         class Meta:
             model = Item
             fields = ("id", "name")
-
-    stage_relay_definition(CategoryNode)
 
     @strawberry.type
     class Query:

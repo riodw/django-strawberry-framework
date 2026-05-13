@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-05-13
+### Added
+- Relay Node interface support: `Meta.interfaces` accepted for any Strawberry interface (Relay `Node` or `@strawberry.interface`-decorated classes).
+- Default `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` classmethods injected on every `DjangoType` whose `Meta.interfaces` declares `relay.Node`; consumer-declared overrides are preserved via Strawberry's `__func__` identity test (matches `strawberry-django`).
+- Automatic synthesized `id: int!` suppression when `relay.Node` is in `Meta.interfaces`; the Relay-supplied `id: GlobalID!` from the interface is used instead. The Django primary key remains selected as a connector column for the optimizer.
+- `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
+- Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise `ConfigurationError` at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
+- Both sync and async paths for `_resolve_node_default` / `_resolve_nodes_default`; `_resolve_id_attr_default` and `_resolve_id_default` are sync.
+
+### Changed
+- `Meta.interfaces` promoted from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
+
 ## [0.0.4] - 2026-05-08
 ### Added
 - `finalize_django_types()` public API and `DjangoTypeDefinition` metadata layer for definition-order-independent relation finalization before Strawberry schema construction.

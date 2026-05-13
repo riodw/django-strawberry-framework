@@ -17,7 +17,7 @@ Most users only care about `shipped` and `planned`. The other two labels are for
 ## Current package surface
 Status: shipped alpha.
 
-Current package version: `0.0.4`.
+Current package version: `0.0.5`.
 
 Public exports:
 - `DjangoType`
@@ -60,9 +60,35 @@ Planned:
 - `Meta.aggregate_class`
 - `Meta.fields_class`
 - `Meta.search_fields`
-- `Meta.interfaces`
 - `Meta.primary` for multiple GraphQL types over the same Django model
 - stable consumer field override mechanisms for scalar fields
+
+### Relay Node integration
+Status: shipped.
+
+`Meta.interfaces` accepts a tuple of Strawberry interface classes; when `relay.Node` is among them, the `DjangoType` becomes a Relay-node-shaped GraphQL type with `id: GlobalID!` and the four `resolve_*` defaults wired through `cls.get_queryset` and the optimizer extension.
+
+```python
+import strawberry
+from strawberry import relay
+from django_strawberry_framework import DjangoType
+from myapp.models import Category
+
+
+class CategoryNode(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name")
+        interfaces = (relay.Node,)
+```
+
+Shipped behavior:
+- Default `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` classmethods are injected when `relay.Node` is declared; consumer-declared overrides are preserved via Strawberry's `__func__` identity test (matches `strawberry-django`).
+- When `relay.Node` is in `Meta.interfaces`, the synthesized Django `id: int!` annotation is suppressed and the Relay-supplied `id: GlobalID!` from the interface is used instead. The Django primary key remains selected as a connector column for the optimizer.
+- Both sync and async paths for `resolve_node` and `resolve_nodes`; `resolve_id_attr` and `resolve_id` are sync.
+- `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
+- Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise `ConfigurationError` at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
+- Non-Relay Strawberry interfaces (`@strawberry.interface`-decorated classes) are accepted without Relay-specific wiring.
 
 ## Django model to Strawberry type generation
 Status: shipped with alpha constraints.
@@ -124,6 +150,7 @@ Shipped scalar support:
 - binary fields to `bytes`
 - file and image fields to string path/URL values
 - `null=True` to `T | None`
+- Relay `GlobalID` mapping for auto IDs when `Meta.interfaces = (relay.Node,)` is declared
 
 Shipped choice support:
 - Django choices generate Strawberry enums
@@ -136,7 +163,6 @@ Deferred field conversion:
 - PostgreSQL `ArrayField`
 - `JSONField`
 - PostgreSQL `HStoreField`
-- Relay `GlobalID` mapping for auto IDs
 - stable explicit choice enum naming override
 
 ## Relation handling
@@ -374,7 +400,6 @@ Tracked in the contributor/maintainer board, [`../KANBAN.md`](../KANBAN.md):
 - multiple types per model
 - consumer override semantics for scalar fields
 - stable choice enum naming
-- Relay interfaces and `GlobalID`
 - specialized scalar conversions
 - filters, orders, aggregates, fieldsets, connections, and permissions
 - model-property and cached-property optimizer hints

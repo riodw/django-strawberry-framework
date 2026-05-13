@@ -21,12 +21,7 @@ from .optimizer import DjangoOptimizerExtension  # noqa: E402
 from .optimizer.hints import OptimizerHint  # noqa: E402
 from .types import DjangoType, finalize_django_types  # noqa: E402
 
-__version__ = "0.0.4"
-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-# ship Relay interfaces without adding public exports. The only line in
-# this file that changes is ``__version__`` (paired with the matching
-# bump in ``pyproject.toml`` per AGENTS.md "Versioning"); ``__all__``
-# stays at its current six names.
+__version__ = "0.0.5"
 
 __all__ = (
     "DjangoOptimizerExtension",

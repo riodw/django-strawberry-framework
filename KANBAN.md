@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-05-11
+Last refreshed: 2026-05-13
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -13,8 +13,8 @@ For install, local development, testing, and the canonical documentation map, st
 - Layer 1 shared infrastructure is in place: `conf.py`, `exceptions.py`, `registry.py`, `utils/strings.py`, `utils/typing.py`, `py.typed`.
 - The package builds directly on `strawberry-graphql` and does not depend on `strawberry-graphql-django`; that dependency boundary is intentional so this package controls its DRF-shaped API surface end-to-end.
 - `DjangoType` is usable today for model-backed Strawberry types:
-  - Meta validation for `model`, `fields`, `exclude`, `name`, `description`, and `optimizer_hints`.
-  - Deferred Meta keys are rejected loudly: `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `interfaces`.
+  - Meta validation for `model`, `fields`, `exclude`, `name`, `description`, `optimizer_hints`, and `interfaces`.
+  - Deferred Meta keys are rejected loudly: `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`.
   - Scalar conversion, relation conversion, choice-enum generation, generated relation resolvers, and `get_queryset` sentinel detection are implemented.
 - `DjangoOptimizerExtension` is usable today:
   - O1 through O6 are implemented: relation resolvers, root-gated planning, nested prefetch chains, `only()` projection, and `get_queryset`-aware `Prefetch` downgrade.
@@ -27,7 +27,7 @@ For install, local development, testing, and the canonical documentation map, st
   - Manual relation override contract (`consumer_annotated_relation_fields` vs `consumer_assigned_relation_fields`): annotation-only overrides keep the generated relation resolver; `strawberry.field(resolver=...)` / `@strawberry.field` overrides suppress it.
   - Fail-loud unresolved-target finalization error names source model, source field, and target model.
   - OneToOne / M2M cardinality coverage now uses the real `library` example app; the old `tests.fixtures.apps.TestsCardinalityConfig` fixture app has been removed.
-  - Package version is `0.0.4`.
+  - Package version is `0.0.5`.
 - Test suite structure has caught up with the package shape:
   - `tests/optimizer/` covers `extension.py`, `walker.py`, `plans.py`, `hints.py`, `field_meta.py`, and `definition_order.py`.
   - `tests/types/` covers `base.py`, `converters.py`, `resolvers.py`, `definition_order.py`, and `definition_order_schema.py`.
@@ -37,7 +37,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.5` Relay slice is the active work item — card `IN-PROGRESS-001`. Spec is final at [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md), and the Kanban card mirrors the spec's slice checklist so implementation can be tracked from either document. The remaining superseded draft (`docs/spec-relay_interfaces-3.md`) will be deleted as part of the slice.
+- No slice is currently active. The `0.0.5` Relay Node slice shipped as `DONE-011`.
 - Strategic differentiation roadmap (post-`0.0.5`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -53,7 +53,7 @@ For install, local development, testing, and the canonical documentation map, st
   - `management/commands/export_schema.py`
   - `utils/queryset.py`
 - Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
-- `Meta.interfaces` / Relay interface wiring is now the active `0.0.5` slice (`IN-PROGRESS-001`); the foundation seam (finalizer phase 3, before `strawberry.type(cls)`, with the slot already on `DjangoTypeDefinition`) is the insertion point pinned in [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md).
+- `Meta.interfaces` and Relay Node wiring shipped in `0.0.5` (`DONE-011`); the foundation seam (finalizer phase 2.5, before `strawberry.type(cls)`, with the slot already on `DjangoTypeDefinition`) is the insertion point now applied.
 - Several DjangoType contract gaps remain:
   - multiple `DjangoType`s per model / `Meta.primary`
   - stable consumer override semantics for **scalar** fields (the foundation slice pinned the contract for relation fields only)
@@ -325,93 +325,47 @@ Evidence:
 
 ## In progress
 
-### IN-PROGRESS-001 — Relay interfaces and Node foundation (`0.0.5`)
+### DONE-011 — 0.0.5 Relay interfaces and Node foundation
 
-Priority: high
+Priority: completed Relay Node foundation
 
-Status: active implementation issue; spec final and checklist mirrored below
+Status: complete.
 
-Successor of: `READY-004` (retired into this card; the recommended hybrid sequence had this as the next slice).
+Scope:
 
-Spec: [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md). The spec is the merged result of three superseded drafts; the remaining one (`docs/spec-relay_interfaces-3.md`) will be deleted as part of this slice.
+- `Meta.interfaces` accepted end-to-end for any Strawberry interface.
+- Four Relay node resolver defaults injected when `relay.Node` is declared (canonical order: `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes`); consumer-declared overrides are preserved via Strawberry's `__func__` identity test.
+- Automatic synthesized `id: int!` suppression when `relay.Node` is in `Meta.interfaces`; the Relay-supplied `id: GlobalID!` is used instead.
+- `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
+- Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise `ConfigurationError` at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
+- Both sync and async paths for `_resolve_node_default` / `_resolve_nodes_default`.
+- `Meta.interfaces` promoted from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
+- Package version bumped to `0.0.5` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
 
-Scope (per the spec's Goals):
-
-- Accept `Meta.interfaces` end-to-end so a `DjangoType` can declare any Strawberry-compatible interface.
-- Make `interfaces = (relay.Node,)` produce a working Relay-Node-shaped GraphQL type with `id: GlobalID!` and the four `resolve_*` defaults wired through `cls.get_queryset` and the optimizer extension.
-- Preserve the existing relation-finalization, optimizer, and override contracts shipped in `0.0.4`.
-- `is_type_of` injection for every `DjangoType` (not just Relay-declared ones).
-- Both sync and async paths for `_resolve_node_default` / `_resolve_nodes_default` (Decision 9).
-- Reject composite primary keys with a clear `ConfigurationError` when combined with `relay.Node`.
-- Promote `Meta.interfaces` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only after end-to-end implementation.
-
-Spec checklist mirror:
-
-- Slice 1 — validation and storage:
-  - Keep `"interfaces"` in `DEFERRED_META_KEYS` until promotion in Slice 5.
-  - Extend `_validate_meta` with `Meta.interfaces` validation.
-  - Normalize tuple/list input and a single real Strawberry interface class; reject strings, sets, generators, and invalid non-sequence values.
-  - Require every entry to be a real Strawberry interface.
-  - Reject string entries, self-reference to the current `DjangoType`, any other `DjangoType` subclass, and duplicates.
-  - Store the normalized interfaces tuple on `DjangoTypeDefinition`.
-  - Add `tests/types/test_relay_interfaces.py` coverage for validation, storage, deferred-key lifecycle, and non-Relay interface declaration.
-- Slice 2 — `is_type_of` injection:
-  - Add `install_is_type_of`.
-  - Invoke it from `DjangoType.__init_subclass__` for every `DjangoType`.
-  - Preserve a consumer-authored `is_type_of`.
-  - Add `test_is_type_of_injected_for_all_djangotypes`.
-- Slice 3 — `id` suppression for Relay Node types:
-  - Suppress the synthesized Django `id` annotation when a type implements `relay.Node`.
-  - Keep the model primary-key field in `field_map` so optimizer/projection logic can still reason about it.
-  - Add `test_relay_node_strips_django_id_annotation` and `test_non_relay_type_keeps_id_int`.
-- Slice 4 — interface base-class injection and Relay resolver defaults:
-  - Implement `_resolve_id_attr_default`, `_resolve_id_default`, `_resolve_node_default`, and `_resolve_nodes_default`.
-  - Add `apply_interfaces`, `implements_relay_node`, and `install_relay_node_resolvers`.
-  - Add finalizer phase 2.5 before `strawberry.type(cls, ...)` for base injection, Strawberry `TypeError` to `ConfigurationError` translation, composite-pk rejection, and Relay resolver injection.
-  - Add Relay Node behavior tests covering schema construction, GlobalID shape, sync/async single-node lookup, sync/async multi-node lookup, missing nodes, and `get_queryset` filtering.
-  - Add optimizer/projection tests for Relay Node selections, `id`-only projections, relation selections under Relay types, and `get_queryset`-aware node lookup.
-  - Extend schema construction tests for relation finalization plus interface injection.
-  - Extend registry idempotency tests for repeated finalization with interfaces.
-  - Add a live HTTP GlobalID round-trip in `examples/fakeshop/test_query/test_library_api.py`.
-- Slice 5 — promotion, docs, and release:
-  - Move `"interfaces"` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
-  - Update `docs/FEATURES.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, and `CHANGELOG.md`.
-  - Bump the version in `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
-  - Delete `docs/spec-relay_interfaces-3.md` (the remaining superseded draft).
-  - Run final gates: `uv run ruff format .`, `uv run ruff check --fix .`, and `uv run pytest` with 100% package coverage.
-  - Confirm no new public exports.
-
-Out of scope (tracked elsewhere): `DjangoConnectionField` (`NEXT-005`), cascade permissions (`NEXT-006`), connection-aware optimizer planning (`BACKLOG-012`), `Meta.primary` (`READY-002`), scalar overrides (`READY-003`), and the broader strategic differentiators captured in [`BETTER.md`](BETTER.md).
-
-Definition of done: all 12 items in the spec's "Definition of done" section. Headlines:
-
-- `"interfaces"` moved to `ALLOWED_META_KEYS` and validated per Decision 4.
-- New module `django_strawberry_framework/types/relay.py` with `_resolve_id_attr_default`, `_resolve_id_default`, `_resolve_node_default`, `_resolve_nodes_default`, `apply_interfaces`, `implements_relay_node`, `install_relay_node_resolvers`, `install_is_type_of`.
-- Phase 2.5 added to `finalize_django_types()` between `_attach_relation_resolvers` and `strawberry.type(cls, ...)`.
-- New tests in `tests/types/test_relay_interfaces.py`; extensions in `tests/types/test_definition_order_schema.py`, `tests/optimizer/`, `tests/test_registry.py`, and `examples/fakeshop/test_query/test_library_api.py`.
-- Doc updates to `docs/FEATURES.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, and `CHANGELOG.md`.
-- Version bumped to `0.0.5` and `uv.lock` regenerated.
-- Coverage stays at 100%.
-- No new public exports.
-
-Files likely touched:
+Evidence:
 
 - `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/types/relay.py`
 - `django_strawberry_framework/types/finalizer.py`
-- `django_strawberry_framework/types/relay.py` (new)
-- `django_strawberry_framework/types/converters.py`
-- `django_strawberry_framework/types/definition.py`
-- `tests/types/test_relay_interfaces.py` (new)
+- `tests/types/test_relay_interfaces.py`
 - `tests/types/test_definition_order_schema.py`
-- `tests/optimizer/` (extensions)
+- `tests/optimizer/test_relay_id_projection.py`
 - `tests/test_registry.py`
 - `examples/fakeshop/test_query/test_library_api.py`
-- `examples/fakeshop/apps/library/` (at least one model declares `interfaces = (relay.Node,)`)
-- `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`
-- `docs/FEATURES.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, `CHANGELOG.md`
-- Deletion: `docs/spec-relay_interfaces-3.md`
+- `examples/fakeshop/apps/library/schema.py` (`GenreType` declares `Meta.interfaces = (relay.Node,)`)
+- `CHANGELOG.md`
+- `docs/FEATURES.md`
+- `docs/README.md`
+- `TODAY.md`
+- `pyproject.toml`
+- `django_strawberry_framework/__init__.py`
+- `tests/base/test_init.py`
+- `uv.lock`
 
-Successor card: when this lands, move to `DONE-011` (next available `DONE-NNN`) and update the recommended hybrid sequence to advance past Relay.
+Notes:
+
+- Borrowed patterns from `strawberry-django` (spec "Borrowing posture", Decision 3). The override discriminator triad stays distinct across the three injection sites: `__dict__` membership for `is_type_of`, tuple membership for id suppression, `__func__` identity for the four `resolve_*` defaults.
+- `Meta.interfaces` is the first `0.0.4`-reserved `DjangoTypeDefinition` slot that ships end-to-end through finalizer phase 2.5; subsequent Layer 3 subsystems plug into the same architectural seam.
 
 ## Ready
 
@@ -964,17 +918,20 @@ Files likely touched:
 
 ### BLOCKED-001 — Full Relay story
 
-Blocked by:
+Resolved blockers (Node half shipped in `DONE-011`, `0.0.5`):
 
-- `Meta.interfaces` design (in flight as `IN-PROGRESS-001`, `0.0.5`)
-- `GlobalID` mapping decision (resolved in [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md) Decision 2; ships with `IN-PROGRESS-001`)
+- ~~`Meta.interfaces` design~~ — shipped as `DONE-011`.
+- ~~`GlobalID` mapping decision~~ — shipped as `DONE-011` (Decision 2 of [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md)).
+
+Remaining blocker (Connection half still blocked):
+
 - `DjangoConnectionField` design (pending; `NEXT-005`)
 
 Unblocks:
 
-- fakeshop aspirational schema activation
-- Relay node queries (`IN-PROGRESS-001` ships the Node-only half)
-- connection field public surface
+- Relay node queries (shipped via `DONE-011`).
+- fakeshop aspirational schema activation (Connection half still blocked).
+- connection field public surface (Connection half still blocked).
 
 ### BLOCKED-002 — Layer 3 Meta key promotion
 
@@ -1013,7 +970,7 @@ Current state:
 
 1. READY-002 — multiple types per model / `Meta.primary`.
 2. READY-003 — consumer override semantics (scalar fields).
-3. ~~READY-004~~ — Relay / `Meta.interfaces` is now active as `IN-PROGRESS-001` (`0.0.5`).
+3. ~~READY-004~~ — Relay / `Meta.interfaces` shipped as `DONE-011` (`0.0.5`).
 4. READY-005 — deferred scalar conversions.
 5. BACKLOG-007 — stable choice enum naming override.
 6. BACKLOG-008 — model-property optimization hints.
@@ -1034,17 +991,16 @@ Use this sequence if the goal is to demonstrate the DRF-shaped API surface quick
 
 ### Recommended hybrid (current direction)
 
-1. **Active** — `IN-PROGRESS-001` Relay / `Meta.interfaces` (`0.0.5`). Spec final at [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md); checklist mirrored in the active card. The forward-reserved slot already exists on `DjangoTypeDefinition` and the finalizer's phase-3 insertion point is ready; this is the cheapest cookbook-shaped feature to land first.
-2. NEXT-001 — `FieldSet`. Smallest Layer 3 slice.
-3. NEXT-002 and NEXT-003 — filters and orders. Both reuse the pending-resolution pattern from the foundation slice for lazy related-class references.
-4. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants (also interacts with the filter input-type factory namespace decision in `NEXT-002`).
-5. NEXT-005 and NEXT-006 — connection field and permissions. `BACKLOG-012` runs alongside `NEXT-005` to keep the optimizer aware of Relay-shaped selections.
-6. NEXT-004 — aggregates.
-7. READY-003 — finalize scalar-field consumer override semantics once the relation contract has bedded in.
-8. BACKLOG-007 — add stable choice enum naming if schema import-order friction appears in real use.
-9. BACKLOG-008 — add model-property optimization hints if computed fields start broadening queries.
-10. BACKLOG-011 — keep the layered override-test policy healthy as Strawberry internals and future custom field classes evolve.
-11. BACKLOG-005 — activate the real product-catalog fakeshop GraphQL schema.
+1. **Next** — `NEXT-001` `FieldSet`. Smallest Layer 3 slice.
+2. NEXT-002 and NEXT-003 — filters and orders. Both reuse the pending-resolution pattern from the foundation slice for lazy related-class references.
+3. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants (also interacts with the filter input-type factory namespace decision in `NEXT-002`).
+4. NEXT-005 and NEXT-006 — connection field and permissions. `BACKLOG-012` runs alongside `NEXT-005` to keep the optimizer aware of Relay-shaped selections.
+5. NEXT-004 — aggregates.
+6. READY-003 — finalize scalar-field consumer override semantics once the relation contract has bedded in.
+7. BACKLOG-007 — add stable choice enum naming if schema import-order friction appears in real use.
+8. BACKLOG-008 — add model-property optimization hints if computed fields start broadening queries.
+9. BACKLOG-011 — keep the layered override-test policy healthy as Strawberry internals and future custom field classes evolve.
+10. BACKLOG-005 — activate the real product-catalog fakeshop GraphQL schema.
 
 
 ## Release readiness checklist

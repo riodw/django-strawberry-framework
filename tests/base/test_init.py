@@ -8,7 +8,7 @@ from django_strawberry_framework.optimizer import logger as optimizer_logger
 
 
 def test_version():
-    assert __version__ == "0.0.4"
+    assert __version__ == "0.0.5"
 
 
 def test_logger_name_is_django_strawberry_framework():
@@ -29,9 +29,9 @@ def test_optimizer_subpackage_reexports_top_level_logger():
 
 def test_public_api_surface_is_pinned():
     # Pin ``__all__`` so silent surface widening (e.g., accidental
-    # re-export of an internal name) shows up at test time. The relay
-    # slice promises only ``__version__`` bumps, never new exports,
-    # until a future spec ships a new public name.
+    # re-export of an internal name) shows up at test time. New public
+    # names only land when a future spec adds them; routine slices
+    # bump ``__version__`` without widening the surface.
     assert set(django_strawberry_framework.__all__) == {
         "DjangoOptimizerExtension",
         "DjangoType",

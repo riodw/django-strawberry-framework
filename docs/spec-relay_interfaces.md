@@ -1,6 +1,6 @@
 # Spec: Relay Interfaces and Node Foundation
 Target release: `0.0.5`.
-Status: final, primary spec for the `0.0.5` slice. This document is the merged, canonical result of three superseded drafts; drafts `-1.md` and `-2.md` have already been removed and only `docs/spec-relay_interfaces-3.md` remains to be deleted as part of this slice, after which this file becomes the single source of truth for the `READY-004` slice.
+Status: final, primary spec for the `0.0.5` slice. This document is the merged, canonical result of three superseded drafts (`-1.md`, `-2.md`, and `-3.md`), all of which have been deleted; this file is the single source of truth for the `READY-004` slice.
 Owner: package maintainer.
 Predecessors: `docs/FEATURES.md`, `GOAL.md`, `KANBAN.md` card `READY-004`.
 Influences: the local checkouts referenced from `docs/TREE.md` — `/Users/riordenweber/projects/strawberry-django-main/strawberry_django` and `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters`.

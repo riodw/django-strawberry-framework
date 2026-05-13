@@ -74,6 +74,26 @@ Rules:
 - After all in-spec slices are built, perform one cross-slice **integration pass** for cross-cutting DRY opportunities, redundant helpers, repeated literals, and inconsistent shapes between slices. The integration pass is Worker 1's job; it may trigger a second-loop refactor cycle through Worker 2 and Worker 3 if DRY opportunities are found.
 - The build closes with one final test-run gate (existing tests must still pass) handled by Worker 1.
 
+## Coverage is the maintainer's gate, not a worker's tool
+
+Workers do not run `pytest` with coverage flags. `--cov=...`, `--cov-report=...`, `--cov-config=...`, `--no-cov`, and any equivalent invocations are forbidden in every worker pass — planning, build, apply-changes, review, re-review, final verification, integration, and the final test-run gate.
+
+This is non-negotiable for two reasons:
+
+- **Separation of concerns.** Coverage enforcement is CI's job (`pyproject.toml [tool.coverage.report] fail_under = 100`) and the maintainer's job. A worker that runs coverage is acting as a CI gate inside the build cycle, which dilutes both roles and turns review/verification passes into coverage chases.
+- **Gap-finding is a reading exercise.** Missing test branches are caught by comparing the diff against the spec — "Decision 4 says X must be rejected; is there a test that asserts X is rejected?" — and against the code's branch structure. The reading discipline produces better findings than the tool does and stays inside the artifact-as-contract model.
+
+Tests themselves are still in scope:
+
+- Worker 1 plans which tests must exist for the slice.
+- Worker 2 writes them in the same change as the code.
+- Worker 3 verifies they exercise the right branches by reading the diff and comparing against the spec; Worker 3 may run them focused (without coverage flags) to confirm pass/fail when the artifact contract requires it.
+- Worker 1's final test-run gate runs the full `uv run pytest` once at the end of the build (without coverage flags) and only checks that the suite passes.
+
+If a worker believes coverage data is necessary to resolve a review finding, the answer is to add the missing test that pins the spec contract — not to run coverage to discover what is missing. If gap-discovery feels intractable, escalate to the maintainer rather than running coverage.
+
+Apply-changes passes that respond to a coverage-shaped finding from a prior review are also bound by this rule: Worker 2 reads the diff and the failing/missing assertion shape from the artifact, adds the test, and verifies pass/fail with a focused `pytest` call **without** `--cov` flags.
+
 ## Required plan structure
 
 The generated `docs/build/build-<topic>-<0_0_X>.md` file must begin with:
@@ -179,14 +199,18 @@ Status: planned | built | revision-needed | review-accepted | final-accepted
 2. Step two.
 3. ...
 
+Line numbers are pin-at-write-time navigational hints. Verify against the current source before editing — another worker's pass may have shifted the file since this plan was written.
+
 ### Test additions / updates
 
 - Which tests prove the slice? Pin the path and assertion shape.
 - Are temp/scratch tests appropriate for development? Note them here for Worker 3.
 
-### Open questions for Worker 2
+### Implementation discretion items
 
-List any ambiguities the plan leaves to Worker 2's discretion.
+Items where Worker 1 has **assessed the design and decided** the choice is at Worker 2's discretion (e.g. a stylistic preference between two equally valid shapes, a private kwarg name, the order of two independent setup steps). This section is the planner's last attempt to make discretion explicit, not an architectural escape hatch.
+
+If Worker 1 cannot resolve a question by reading the spec and the codebase, **do not** delegate it here. Stop the planning pass and escalate to the maintainer. Worker 2 implements; Worker 2 does not architect.
 
 ---
 
@@ -205,7 +229,13 @@ List any ambiguities the plan leaves to Worker 2's discretion.
 
 - `uv run ruff format .` — pass/fail
 - `uv run ruff check --fix .` — pass/fail
-- Focused test commands run, if any
+- Focused test commands run, if any (without `--cov*` flags — see "Coverage is the maintainer's gate, not a worker's tool")
+
+### Implementation notes
+
+Design choices made during implementation that the plan did not explicitly fix — e.g. `__dict__` vs `vars()`, the shape of a shared helper, the test fixture pattern chosen, a tuple-of-pairs vs parallel-list constant, the precise import path of a third-party utility. One bullet per non-trivial decision with a one-line "why this shape." Worker 3 reads these to follow the reasoning without reverse-engineering the diff; Worker 1 reads them during final verification to spot drift from the plan.
+
+If a decision is structural enough to count as plan-vs-implementation drift (see `worker-2.md` "Plan-vs-implementation drift"), surface it in `### Notes for Worker 1 (spec reconciliation)` instead — that is the louder signal.
 
 ### Notes for Worker 3
 
@@ -239,6 +269,21 @@ Relevant excerpt or pseudo-diff context.
 - Repeated literal / key / tuple
 - Near-copy of existing helper that should be consolidated
 
+### Public-surface check
+
+Confirm `git diff -- django_strawberry_framework/__init__.py` does not change `__all__` or the re-export list, OR confirm any change is authorized by the active spec (cite the spec line that authorizes the new export). Definition-of-done items typically pin "no new public exports"; this check makes that explicit per review.
+
+### CHANGELOG sanity (only when the slice touches `CHANGELOG.md`)
+
+If the slice's diff includes a change to `CHANGELOG.md`, read the new entry end-to-end and confirm:
+
+- the version line matches `pyproject.toml` and `django_strawberry_framework/__init__.py`
+- `### Added` / `### Changed` / `### Fixed` / `### Removed` headings used are the ones the active spec authorizes
+- the wording matches the canonical phrasings the plan committed to (or, if there was no plan-level commitment, that the wording reads coherently against the actual behavior shipped)
+- nothing in the entry overstates or understates the change
+
+If the slice does not touch `CHANGELOG.md`, write `Not applicable; slice did not modify CHANGELOG.md.`.
+
 ### What looks solid
 
 - Thing one.
@@ -259,9 +304,9 @@ Flag anything Worker 1 should weigh during final verification (spec ambiguity, p
 
 ---
 
-## Iteration log
+## Re-pass sections
 
-Each Worker 2 re-pass appends a "Build report (Worker 2, pass <N>)" section here. Each Worker 3 re-review appends a "Review (Worker 3, pass <N>)" section here. Do not edit prior entries; append.
+Each Worker 2 re-pass appends a `## Build report (Worker 2, pass <N>)` section at the same top level (NOT inside a sub-heading). Each Worker 3 re-review appends a `## Review (Worker 3, pass <N>)` section the same way. The artifact reads as a linear sequence of pass / review / pass / review entries; do not edit prior entries.
 
 ---
 
@@ -478,6 +523,30 @@ Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.
 - Workers read their own file at the start of every spawn and append at the end.
 - Worker 0 deletes `docs/build/worker-memory/` at cycle closeout, after the retrospective is written.
 
+### Recovery from interrupted subagent runs
+
+A subagent may fail mid-run for environmental reasons (transient API errors, network failures, time-outs). When this happens:
+
+- The on-disk diff captures whatever the worker had already changed.
+- The artifact captures whatever sections were already appended; the `Status:` line reflects the most recent transition the worker completed before the error.
+- Any new files (test scaffolding, temp tests, new modules) are on disk under their target paths.
+
+To recover, Worker 0 dispatches a **fresh subagent of the same role** with explicit "pick up where the prior pass left off" context. The new subagent's prompt names:
+
+- the partial artifact and which section is missing (e.g. "the build report hasn't been appended yet")
+- the current working-tree diff as the authoritative source of what was already done
+- the worker's own memory file (the prior pass may have appended to it; re-read before adding more)
+- the original task contract (the artifact's plan section, the prior review findings, etc.)
+
+The recovery is not a re-pass. The new subagent does NOT append a "pass N+1" report; it finishes the original pass's report. Specifically:
+
+- If Worker 2 was on its build pass and errored before appending the build report → the new Worker 2 spawn writes the `Build report (Worker 2)` section (no "pass 2" suffix) and sets `Status: built`.
+- If Worker 2 was on an apply-changes pass that already had its prior `Build report (Worker 2, pass N)` section → the new spawn finishes that same pass's section, not a new one.
+- If Worker 3 was mid-review → the new Worker 3 spawn finishes the same review section.
+- If Worker 1 was mid-final-verification → the new Worker 1 spawn finishes the same final-verification section.
+
+If the on-disk diff is unsalvageable (e.g. a partially-applied refactor left the tree in a broken state that cannot be reasoned about), Worker 0 escalates to the maintainer rather than guessing at rollback.
+
 ## Worker process
 
 ### Worker 0: project manager
@@ -519,7 +588,7 @@ Worker 2 reads the plan section of the active artifact and the target source, th
 - reads per the **Required reading per worker** table
 - implements the plan's steps in order
 - adds or updates tests in the same change
-- runs `uv run ruff format .` and `uv run ruff check --fix .` (per `START.md`); does NOT run `pytest` (per `START.md`)
+- runs `uv run ruff format .` and `uv run ruff check --fix .` (per `START.md`); does NOT run `pytest` (per `START.md`), and never with `--cov*` flags (per "Coverage is the maintainer's gate, not a worker's tool")
 - appends a "Build report (Worker 2)" section to the slice artifact and sets the artifact `Status:` line to `built` at the end of every pass
 - on a re-pass after Worker 3 review, appends a "Build report (Worker 2, pass N)" section — never edits prior reports
 - never edits the spec
@@ -527,6 +596,13 @@ Worker 2 reads the plan section of the active artifact and the target source, th
 - never commits
 
 When Worker 3 hands back review findings, Worker 2 applies the changes and reports back via a new build-report entry.
+
+**Plan-vs-implementation drift.** When implementation reveals that the plan's approach is not quite right (e.g. a planned helper should be removed entirely, a chosen detection mechanism does not exist in the dependency surface, a Decision-cited file path has moved), Worker 2 has two paths:
+
+- **Small drift.** If the right answer is mechanically obvious and stays within the slice contract, implement it AND record the deviation prominently in `### Notes for Worker 1 (spec reconciliation)` so Worker 1 catches it during final verification and either keeps the implementation or edits the spec to match.
+- **Structural drift.** If the right answer changes a plan-level architectural call (e.g. deleting a helper the plan explicitly listed as part of the slice's helper surface), do NOT decide unilaterally. Stop, record the situation in `### Notes for Worker 1 (spec reconciliation)`, set `Status: revision-needed` with a one-line note in the build report explaining the pause, and let Worker 0 re-dispatch Worker 1 for a plan revision before continuing.
+
+The artifact-as-contract model only works if architectural decisions stay with Worker 1.
 
 ### Worker 3: code reviewer and DRY enforcer
 
@@ -541,8 +617,11 @@ Worker 3 reviews Worker 2's diff against the slice artifact and the spec. Worker
 - never edits the spec
 - never marks the checkbox
 - never commits
+- never runs `pytest` with `--cov*` flags (per "Coverage is the maintainer's gate, not a worker's tool")
 
 If review tests catch a bug worth preserving, Worker 3 flags it as a Medium issue with a recommendation to promote the test to the permanent suite under the correct `AGENTS.md` test-placement tree.
+
+**Gap-finding is a reading exercise.** Worker 3 catches missing test branches by comparing the spec's decisions against the diff and the test file's assertion shapes. Pattern: list every spec-required behavior (e.g. "Decision 4 rejects strings, sets, generators, and other invalid non-sequence values"), then walk the test file and confirm each behavior has an assertion. If a branch in the diff has no matching test assertion, that is a finding of the appropriate severity (typically Medium for missing branch coverage, High if the missing branch is the spec's main rejection path). Do not run `pytest --cov` to discover this; the spec + diff + test file together carry enough signal to find the gap by reading.
 
 ### Maintainer checkpoint
 
@@ -590,10 +669,16 @@ After the integration pass is clean, Worker 1 runs the final test-run gate and p
 
 The gate is intentionally narrow:
 
-- Run `uv run pytest` (full sweep across all three test trees per `AGENTS.md`).
-- **Do NOT inspect or assert line coverage at this stage.** The only requirement is that the existing test suite passes. Coverage gating belongs to CI (`pyproject.toml` `[tool.coverage.report] fail_under = 100`) and to the maintainer, not to this gate.
+- Run `uv run pytest` (full sweep across all three test trees per `AGENTS.md`). No `--cov*` flags — see "Coverage is the maintainer's gate, not a worker's tool" above.
+- Run Django's own consistency checks against the example project:
+  - `uv run python examples/fakeshop/manage.py check`
+  - `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run`
+  These catch model/admin/url-config drift that `pytest` does not. Record their pass/fail in `bld-final.md`. If either fails, route the fix through the owning slice loop the same way a `pytest` failure is routed.
+- The only `pytest`-side requirement is that the existing test suite passes. Do NOT inspect or assert line coverage at this stage. Coverage gating belongs to CI (`pyproject.toml` `[tool.coverage.report] fail_under = 100`) and to the maintainer, not to this gate.
 - If failures appear, record them in `bld-final.md`, then re-loop through whichever slice owns the failing behavior (Worker 1 plans the fix, Worker 0 dispatches Worker 2 to implement, Worker 0 dispatches Worker 3 to review, Worker 1 re-runs the gate).
 - If the build added user-visible behavior, `CHANGELOG.md` is edited only when the active spec explicitly includes that work or the maintainer explicitly authorizes it. Worker 1 checks the changelog contract; Worker 2 applies the edit when the plan says so.
+
+`bld-final.md` must also include a `### Deferred work catalog` subsection. Walk every per-slice and integration artifact's spec-reconciliation notes and `What looks solid` / `Notes for Worker 1` sections; surface every item that was explicitly deferred to a future slice, future spec, or maintainer follow-up. One bullet per deferral with: the artifact and section it came from, the spec line that licenses the deferral (if any), and a one-line description. If nothing was deferred, write `No deferred work; the build delivered the spec end-to-end.`. The catalog is the next spec author's reading list — its absence forces them to re-derive deferrals from scattered artifacts.
 
 The gate closes the build cycle. Worker 0 then marks the final checkbox `- [x]`.
 

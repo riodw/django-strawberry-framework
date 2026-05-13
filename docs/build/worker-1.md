@@ -34,24 +34,36 @@ Worker 1 must not:
 - mark build-plan checkboxes
 - implement Worker 3 findings
 - create unrelated spec scope
+- run `pytest` with `--cov*` flags (planning, integration, final-verification, or the final test-run gate). Coverage is the maintainer's gate, not a worker's tool — see `docs/build/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool"
 - commit. Only the maintainer commits; Worker 1 never commits, even if asked
+
+## Spec status-line re-verification (every Worker 1 spawn)
+
+At the start of every Worker 1 spawn (planning, integration, final-verification, or final-test-run gate), read the spec's status/header lines (typically lines 1-5: title, target release, status, owner, predecessors). Confirm they still describe the current state of the spec relative to the build:
+
+- If the build has shipped slices that the status line still describes as "not yet shipped" or "remains to be …", edit the status line to reflect reality.
+- If predecessor docs the spec references have been deleted by the build, update or remove the reference.
+- Record any edit under `### Spec changes made (Worker 1 only)` in whichever artifact is active.
+
+Stale status lines compound across slices. Catching them per-spawn is cheap; catching them only at final-verification means downstream readers see a stale header for the whole build cycle.
 
 ## Planning job
 
 For the current slice:
 
 1. Read your memory file.
-2. Read the active build plan and target slice.
-3. Read the active spec section for the slice and any referenced decisions.
-4. Read existing source/tests/docs around the slice until you can place the change in the most DRY location.
-5. Run `scripts/review_inspect.py` with `--output-dir docs/build/shadow` when `BUILD.md` requires it.
-6. Create or update the slice artifact, including the `Status:` line set to `planned` after the plan is written.
-7. Fill the `Plan (Worker 1)` section.
-8. Include a DRY analysis that cites existing files/helpers to reuse or extend.
-9. Include implementation steps with file paths and line anchors where practical.
-10. Include required tests and temporary-test opportunities for Worker 3.
-11. Record any ambiguity for Worker 2 under `Open questions for Worker 2`.
-12. Append a short memory entry.
+2. Re-verify the spec's status/header lines (see "Spec status-line re-verification" above).
+3. Read the active build plan and target slice.
+4. Read the active spec section for the slice and any referenced decisions.
+5. Read existing source/tests/docs around the slice until you can place the change in the most DRY location.
+6. Run `scripts/review_inspect.py` with `--output-dir docs/build/shadow` when `BUILD.md` requires it.
+7. Create or update the slice artifact, including the `Status:` line set to `planned` after the plan is written.
+8. Fill the `Plan (Worker 1)` section.
+9. Include a DRY analysis that cites existing files/helpers to reuse or extend.
+10. Include implementation steps with file paths and line anchors where practical. Mark line numbers as pin-at-write-time hints (per `BUILD.md` Implementation steps note).
+11. Include required tests and temporary-test opportunities for Worker 3.
+12. Use `Implementation discretion items` only when you have **assessed and decided** the choice belongs to Worker 2 (style, naming, equivalent-shape preference). Do not delegate architectural questions there; if you cannot resolve one by reading the spec and codebase, escalate to the maintainer instead.
+13. Append a short memory entry.
 
 The plan must prefer small, reusable helpers over duplicated local logic. If a helper would be premature, say why and name the condition that would justify extracting it later.
 
@@ -85,8 +97,8 @@ After Worker 3 has accepted the slice:
 2. Read the current diff for the slice.
 3. Confirm every planned step was implemented or intentionally rejected with reason.
 4. Check the slice against prior accepted slices for new duplication, repeated literals, or inconsistent helper shape.
-5. Run the focused existing tests relevant to the slice when the plan calls for it.
-6. Do not inspect line coverage; only record whether the existing tests run for this gate pass.
+5. Run the focused existing tests relevant to the slice when the plan calls for it. Never with `--cov*` flags — coverage is the maintainer's gate, not yours.
+6. Do not inspect line coverage; only record whether the existing tests run for this gate pass. If you find yourself wanting to know which lines are uncovered, the answer is to compare the spec's decisions against the diff and test file by reading, not by running coverage.
 7. Reconcile the spec if needed.
 8. Set artifact status to `final-accepted` or `revision-needed`.
 9. Append a short memory entry.
@@ -112,7 +124,15 @@ If consolidation is needed, record the work and ask Worker 0 to dispatch Worker 
 
 Produce `docs/build/bld-final.md`.
 
-Run `uv run pytest` once as the final existing-test gate. Do not inspect line coverage or run coverage-specific commands. If the command fails, record the failing tests and route the fix back through the owning slice loop.
+Run, in order:
+
+1. `uv run pytest` — full sweep across all three test trees. **No `--cov*` flags.** Do not inspect line coverage or run coverage-specific commands. The package's `fail_under = 100` gate is enforced by CI and the maintainer, not by this pass.
+2. `uv run python examples/fakeshop/manage.py check` — Django's system-check framework against the example project. Catches model/admin/url drift that `pytest` does not.
+3. `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` — confirms model state is migration-consistent without producing migration files.
+
+Record each command's pass/fail in `bld-final.md`. If any fails, record the failing item and route the fix back through the owning slice loop.
+
+The artifact must also include a `### Deferred work catalog` subsection. Walk every per-slice and integration artifact's spec-reconciliation notes; surface every explicit deferral (to a future slice, future spec, or maintainer follow-up) as a single bullet citing the source artifact section and a one-line description. The catalog is the next spec author's reading list. If nothing was deferred, write `No deferred work; the build delivered the spec end-to-end.`.
 
 ## Memory entry
 
@@ -131,7 +151,7 @@ Capture per pass:
 - DRY patterns or spec corrections worth carrying forward
 - test or changelog considerations to remember
 
-Entries are append-only. If the memory file grows beyond ~50 lines, consolidate similar entries into one pattern observation before adding more.
+Entries are append-only. If the memory file grows beyond ~50 lines, **consolidate before appending the next entry** — merge similar slice-level observations into a single pattern note. Acknowledging the cap and continuing to append is not consolidation; do the merge first.
 
 ## Stop conditions
 

@@ -32,6 +32,7 @@ Worker 3 must not:
 - edit Worker 0/1/2 memory
 - mark build-plan checkboxes
 - approve unrelated cleanup
+- run `pytest` with `--cov*` flags. Coverage is the maintainer's gate, not a worker's tool — see `docs/build/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool". Gap-finding is a reading exercise (see below)
 - commit. Only the maintainer commits; Worker 3 never commits, even if asked
 
 ## Review job
@@ -58,8 +59,41 @@ Set `review-accepted` only when:
 - tests pin every High-severity behavior change
 - temp tests that catch a real bug have either been promoted to permanent tests or recorded as a Medium finding so Worker 2 will promote them
 - shadow-file usage and any helper invocations are explicitly noted in the artifact
+- the public-surface check below has been performed
+- the CHANGELOG sanity check below has been performed (when applicable)
 
 Otherwise, set `revision-needed`. Never accept a slice with unresolved High, Medium, or Low findings that lack a recorded rejection reason.
+
+### Public-surface check (every review)
+
+Run `git diff -- django_strawberry_framework/__init__.py` and confirm `__all__` and the re-export list are unchanged, OR confirm any change is authorized by the active spec (cite the spec line). The Definition of Done for most slices includes "no new public exports"; making this an explicit per-review item prevents drift from compounding silently. Record the result in the artifact under `### Public-surface check`.
+
+### CHANGELOG sanity check (only when the slice touches `CHANGELOG.md`)
+
+If the diff includes `CHANGELOG.md`, read the new entry end-to-end and confirm:
+
+- the version line matches `pyproject.toml` and `django_strawberry_framework/__init__.py`
+- the `### Added` / `### Changed` / `### Fixed` / `### Removed` headings match what the active spec authorizes
+- the wording matches the canonical phrasings the plan committed to (or, if no plan-level commitment, reads coherently against the actual shipped behavior)
+- nothing overstates or understates the change
+
+If the slice does not modify `CHANGELOG.md`, write `Not applicable; slice did not modify CHANGELOG.md.` in the artifact's `### CHANGELOG sanity` subsection.
+
+## Gap-finding is a reading exercise
+
+Missing test branches are caught by **reading**, not by running `pytest --cov`. Coverage tooling is the maintainer's CI gate (`pyproject.toml` `[tool.coverage.report] fail_under = 100`); Worker 3 must not duplicate that work inside the build cycle, because:
+
+- It dilutes the role split. Workers write code and tests; CI enforces the gate.
+- It produces low-quality findings. A `--cov-report=term-missing` output says "line 325 is uncovered" without saying which spec contract was missed. A reading-driven finding says "Decision 4 line 323 says strings, sets, generators, AND `other invalid non-sequence values` are rejected. The diff at `base.py:325` rejects a fourth shape — a non-class entry — but no test in `test_relay_interfaces.py` exercises it." The second finding is actionable; the first is a coverage chase.
+
+The reading discipline:
+
+1. Walk every spec decision relevant to the slice. List each behavior the decision requires.
+2. Walk the diff. Identify every branch in the new code.
+3. Walk the test file. For each decision-required behavior, locate the test that pins it. For each new branch in the diff, locate the test that exercises it.
+4. If anything is missing — a decision without a pinning test, a branch without exercising assertion — flag at the appropriate severity (typically Medium for a missing branch, High if it's the decision's main rejection or main success path).
+
+Focused `pytest` runs without `--cov*` flags are fine when the artifact requires confirming pass/fail of an asserted behavior. Never use them to discover what is uncovered.
 
 ## DRY enforcement
 
@@ -142,7 +176,7 @@ Capture per accepted review:
 - what nearly caused rejection
 - DRY patterns to watch in future slices
 
-Entries are append-only. Do not append memory on a rejection-only pass; wait until the slice reaches an accepted review state. If the memory file grows beyond ~50 lines, consolidate similar entries into one pattern observation before adding more.
+Entries are append-only. Do not append memory on a rejection-only pass; wait until the slice reaches an accepted review state. If the memory file grows beyond ~50 lines, **consolidate before appending the next entry** — merge similar slice-level observations into a single pattern note. Acknowledging the cap and continuing to append is not consolidation; do the merge first.
 
 ## Stop conditions
 

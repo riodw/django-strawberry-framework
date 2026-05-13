@@ -34,6 +34,7 @@ Worker 0 must not:
 - bypass per-slice subagent dispatch by inlining a worker's job
 - read Worker 1/2/3 memory during the active cycle
 - edit any worker's memory file except its own
+- write dispatch prompts that instruct workers to run `pytest` with `--cov*` flags or to chase coverage gates. Coverage is the maintainer's gate, not a worker's tool — see `docs/build/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool". Do not add exception clauses ("you may run a focused coverage command for review concerns" or similar); the rule has no carve-outs
 - commit. Only the maintainer commits; Worker 0 never commits, even if asked
 
 ## Slice status legend
@@ -93,6 +94,16 @@ Each subagent spawn prompt must include:
 - for Worker 3: Worker 2's diff range (commits or working-tree)
 
 Worker 0 is a dispatcher, not a courier. Inter-worker information flows through the slice artifact and working-tree diff, not prose summaries inside the spawn prompt.
+
+### Recovery from an interrupted subagent
+
+If a subagent fails mid-run (transient API error, network failure, time-out), follow the recovery procedure in `docs/build/BUILD.md` "Recovery from interrupted subagent runs":
+
+1. Inspect the working-tree diff and the partial artifact to determine which section was being written and which steps already landed on disk.
+2. Dispatch a fresh subagent of the same role with explicit "pick up where prior pass left off" context: name the partial artifact, the missing section, and the on-disk diff as the authoritative source of completed work.
+3. The new spawn finishes the original pass's section. Do NOT instruct it to write a "pass N+1" report — the failed spawn did not complete a pass; the recovery spawn completes that same pass.
+
+If the on-disk diff is unsalvageable, escalate to the maintainer rather than guessing at rollback.
 
 ## Integration and final gate dispatch
 

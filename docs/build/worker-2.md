@@ -33,6 +33,8 @@ Worker 2 must not:
 - edit prior artifact sections except to append a new build report
 - make unrelated cleanup
 - broaden the slice beyond Worker 1's plan
+- run `pytest` with `--cov*` flags during build or apply-changes passes. Coverage is the maintainer's gate, not a worker's tool — see `docs/build/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool"
+- decide alone to abandon, replace, or delete a helper or module the plan explicitly listed (see "Plan-vs-implementation drift" below)
 - commit. Only the maintainer commits; Worker 2 never commits, even if asked
 
 ## Build job
@@ -46,7 +48,7 @@ Worker 2 must not:
 7. If Worker 3 supplied a temp test that should become permanent, promote it to the correct test tree rather than leaving it under `docs/build/temp-tests/`.
 8. Run `uv run ruff format .`.
 9. Run `uv run ruff check --fix .`.
-10. Do not run `pytest` unless the artifact explicitly instructs you to run a focused test as part of the pass; Worker 1 owns the normal test gates.
+10. Do not run `pytest` unless the artifact explicitly instructs you to run a focused test as part of the pass; Worker 1 owns the normal test gates. When the artifact does require a focused `pytest`, run it **without** `--cov*` flags. Use the focused run only to confirm pass/fail of the assertions you wrote; never to chase coverage.
 11. Append a `Build report (Worker 2)` section, or `Build report (Worker 2, pass N)` on re-pass.
 12. Set the artifact `Status:` line to `built` so Worker 0 knows to dispatch Worker 3 next.
 13. Append a short memory entry when the pass is complete.
@@ -57,6 +59,15 @@ Worker 2 must not:
 - Re-pass after a Worker 3 review with findings: section header `Build report (Worker 2, pass <N>)`, status `built` again.
 - Re-pass after Worker 1 final verification flagged `revision-needed`: same naming convention; address the verification feedback directly.
 - Never edit prior `Build report` sections. Always append a new one.
+
+## Plan-vs-implementation drift
+
+When implementation reveals that the plan's approach is not quite right (a planned helper turns out to be unnecessary, a chosen detection mechanism does not exist in the dependency surface, a Decision-cited line number has moved, an algorithm the plan sketched does not handle a corner case), you have two paths depending on the size of the deviation:
+
+- **Small, mechanically obvious drift.** If the right answer stays within the slice's contract and is small enough to evaluate from the diff alone (e.g. swap a tuple for a frozenset, rename a private kwarg, choose `__dict__` over `vars()`), implement it AND record the deviation prominently in `### Notes for Worker 1 (spec reconciliation)`. Worker 1 catches it during final verification and either keeps the implementation or edits the spec to match.
+- **Structural drift.** If the right answer changes a plan-level architectural call (deleting a helper the plan explicitly listed as part of the helper surface, choosing a different detection mechanism than the plan named, restructuring a phase the plan scoped), do NOT decide unilaterally. Stop. Record the situation in `### Notes for Worker 1 (spec reconciliation)`, set `Status: revision-needed` with a one-line note in the build report explaining the pause, and let Worker 0 re-dispatch Worker 1 for a plan revision before continuing.
+
+The artifact-as-contract model only works if architectural decisions stay with Worker 1. A unilateral structural call by Worker 2 forces Worker 1 to reverse-engineer the decision during final verification, which is not what final verification is for.
 
 ## DRY implementation rules
 
@@ -83,9 +94,12 @@ Every report must include:
 - files touched and why
 - tests added or updated
 - formatting/lint commands run and pass/fail result
-- focused tests run only if explicitly requested
+- focused tests run only if explicitly requested (and without `--cov*` flags)
+- **implementation notes** — design choices made during implementation that the plan did not explicitly fix. One bullet per non-trivial decision with a one-line "why this shape." Examples worth recording: `__dict__` vs `vars()`, the shape of a shared helper, the test fixture pattern chosen, the precise import path of a third-party utility, a tuple-of-pairs vs parallel-list constant shape. Do NOT record decisions the plan already pinned — only the deltas.
 - any intentionally skipped plan item and why
 - notes for Worker 3, including shadow-file usage
+
+Implementation notes vs `Notes for Worker 1 (spec reconciliation)`: small design choices stay in the implementation-notes bullet list. Decisions large enough to count as plan-vs-implementation drift (see "Plan-vs-implementation drift" above) go in the spec-reconciliation notes — that is the louder signal Worker 1 reads during final verification.
 
 Do not describe private reasoning that is not reflected in the code or artifact. Worker 3 reviews the diff and artifact, not your memory.
 
@@ -106,7 +120,7 @@ Capture per completed pass:
 - reusable helper/test pattern worth carrying forward
 - Worker 3 feedback applied, if this was a re-pass
 
-Entries are append-only. If the memory file grows beyond ~50 lines, consolidate similar entries into one pattern observation before adding more.
+Entries are append-only. If the memory file grows beyond ~50 lines, **consolidate before appending the next entry** — merge similar slice-level observations into a single pattern note. Acknowledging the cap and continuing to append is not consolidation; do the merge first.
 
 ## Stop conditions
 

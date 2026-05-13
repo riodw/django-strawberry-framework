@@ -17,7 +17,7 @@ __pycache__/
 
 # Distribution / packaging
 .Python
-build/
+/build/
 develop-eggs/
 dist/
 downloads/
@@ -169,6 +169,19 @@ docs/review/shadow/
 # Created by Worker 0 at plan time; deleted by Worker 0 at closeout.
 # The tracked permanent record is the rev-*.md artifacts, never these notes.
 docs/review/worker-memory/
+
+# Build workflow shadow files (static-analysis byproducts).
+# Build artifacts, plan files, and worker instructions under docs/build/ are tracked.
+docs/build/shadow/
+
+# Per-worker scratch memory used during an active build cycle.
+# Created by Worker 0 at plan time; deleted by Worker 0 at closeout.
+# The tracked permanent record is the bld-*.md artifacts, never these notes.
+docs/build/worker-memory/
+
+# Temp test files Worker 3 may create to verify behavior during a build cycle.
+# Deleted by Worker 0 at closeout; permanent tests live under the AGENTS.md trees.
+docs/build/temp-tests/
 
 # LSP config files
 pyrightconfig.json

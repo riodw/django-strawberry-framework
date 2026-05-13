@@ -11,7 +11,7 @@ short-circuits before the interface validator runs, so Slice 1 calls
 
 import pytest
 import strawberry
-from apps.products.models import Category
+from apps.products.models import Category, Item
 from strawberry import relay
 
 from django_strawberry_framework import DjangoType
@@ -185,3 +185,70 @@ def test_class_already_inherits_relay_node_directly():
 )
 def test_relay_node_with_composite_pk_raises():
     """Reserved for Slice 4 to unskip and implement."""
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 — is_type_of injection
+# ---------------------------------------------------------------------------
+
+
+def test_is_type_of_injected_for_all_djangotypes():
+    """``is_type_of`` is installed on every concrete ``DjangoType`` subclass.
+
+    Decision 6 (spec line 351) is that injection is unconditional — it
+    happens for every ``DjangoType`` subclass with a ``Meta`` regardless
+    of whether ``Meta.interfaces`` is declared. Until Slice 5 promotes
+    ``"interfaces"`` out of ``DEFERRED_META_KEYS`` we cannot declare it
+    end-to-end here; the "Relay path" coverage is instead the assertion
+    that a plain non-Relay ``DjangoType`` still receives the injection.
+
+    The assertion uses ``cls.__dict__`` membership (not ``getattr``) so a
+    method inherited from a base would not satisfy the contract; the
+    injection must land on the class itself.
+    """
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    for type_cls, model_cls, other_model_cls in (
+        (CategoryNode, Category, Item),
+        (ItemNode, Item, Category),
+    ):
+        assert "is_type_of" in type_cls.__dict__
+        is_type_of = type_cls.__dict__["is_type_of"]
+        assert is_type_of(model_cls(), info=None) is True
+        assert is_type_of(other_model_cls(), info=None) is False
+        assert is_type_of(object(), info=None) is False
+
+
+def test_consumer_declared_is_type_of_is_preserved():
+    """A consumer-declared ``is_type_of`` on the class survives ``__init_subclass__``.
+
+    Decision 6 (spec line 351): "If the consumer declares their own
+    ``is_type_of``, we do not overwrite it." The discriminator is
+    ``cls.__dict__`` membership, matching ``strawberry_django/type.py:204-211``.
+    The sentinel return value proves the consumer's callable is the one
+    that survives — not merely that some callable named ``is_type_of``
+    is attached to the class.
+    """
+    sentinel = object()
+
+    def consumer_is_type_of(obj, info):
+        return sentinel
+
+    class CustomNode(DjangoType):
+        is_type_of = consumer_is_type_of
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    assert CustomNode.__dict__["is_type_of"] is consumer_is_type_of
+    assert CustomNode.__dict__["is_type_of"](Category(), info=None) is sentinel

@@ -37,6 +37,7 @@ from ..utils.strings import snake_case
 from .converters import convert_scalar, resolved_relation_annotation
 from .definition import DjangoTypeDefinition
 from .relations import PendingRelation, PendingRelationAnnotation
+from .relay import install_is_type_of
 
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
     {
@@ -81,9 +82,6 @@ class DjangoType:
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect model/type metadata without finalizing the Strawberry type."""
         super().__init_subclass__(**kwargs)
-        # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
-        # call ``types.relay.install_is_type_of(cls)`` here for every
-        # DjangoType subclass while preserving consumer-declared ``is_type_of``.
         has_custom_get_queryset = _detect_custom_get_queryset(cls)
         cls._is_default_get_queryset = not has_custom_get_queryset
         meta = cls.__dict__.get("Meta")
@@ -143,6 +141,7 @@ class DjangoType:
             registry.add_pending_relation(pending_relation)
         cls.__annotations__ = {**synthesized, **consumer_annotations}
         cls.__django_strawberry_definition__ = definition
+        install_is_type_of(cls)
         # TODO(spec-fieldmeta-mirror-retirement): retire these class-attribute
         # mirrors; the optimizer should read ``DjangoTypeDefinition.field_map`` /
         # ``optimizer_hints`` directly. Reader sites in ``optimizer/walker.py``

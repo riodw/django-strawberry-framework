@@ -60,13 +60,13 @@ No discriminator was collapsed into a generic helper. Each answers a structurall
 
 ### Helper-script confirmation
 
-Re-ran `scripts/review_inspect.py --output-dir docs/build/shadow` on every production source file the build touched, regenerating the shadow overviews at integration-pass time so the "Repeated string literals" / "Imports" sections reflect the post-Slice-5 state:
+Re-ran `scripts/review_inspect.py --output-dir docs/builder/shadow` on every production source file the build touched, regenerating the shadow overviews at integration-pass time so the "Repeated string literals" / "Imports" sections reflect the post-Slice-5 state:
 
 - `django_strawberry_framework/types/base.py` — re-run (overview pre-Slice-5 was from Slice 1's planning pass; needed refresh after Slice 5's promotion + comment-block removal). Fresh overview confirms `4x optimizer_hints`, `2x description`, `2x interfaces` — all intra-file intentional.
 - `django_strawberry_framework/types/relay.py` — re-run. Confirms `2x __func__` only; the four resolver names are each `1x` (Slice 4 pass-2 consolidation held through Slice 5).
 - `django_strawberry_framework/types/finalizer.py` — re-run. No repeated literals.
 - `django_strawberry_framework/types/resolvers.py` — re-run. `2x reverse_one_to_one` is pre-existing, not introduced by the Relay build.
-- `django_strawberry_framework/types/definition.py` — re-run (was missing entirely from `docs/build/shadow/` because Slice 1's storage change was small and the helper was not run on it during slice planning; Slice 1's plan ran the helper on `base.py` only). Fresh overview confirms no repeated literals and one-way dependency (imports `FieldMeta`, `OptimizerHint` from `..optimizer`; no upward imports). Skip recorded for Slice 1: the original skip was acceptable because the change was a single-line comment update on the `interfaces` slot at line 42, but the integration pass needs the overview for cross-file scanning, so the helper was run here.
+- `django_strawberry_framework/types/definition.py` — re-run (was missing entirely from `docs/builder/shadow/` because Slice 1's storage change was small and the helper was not run on it during slice planning; Slice 1's plan ran the helper on `base.py` only). Fresh overview confirms no repeated literals and one-way dependency (imports `FieldMeta`, `OptimizerHint` from `..optimizer`; no upward imports). Skip recorded for Slice 1: the original skip was acceptable because the change was a single-line comment update on the `interfaces` slot at line 42, but the integration pass needs the overview for cross-file scanning, so the helper was run here.
 
 Skip recorded for `django_strawberry_framework/__init__.py`: per BUILD.md "no review-worthy logic" allowance, the Slice 5 edit was one `__version__` line bump plus removal of a satisfied TODO anchor comment (no logic, no new imports, no exports). `__all__` and the import block are unchanged from `0.0.4`. The static-inspection helper is skipped for this file.
 
@@ -103,7 +103,7 @@ No prose drift across the five docs.
 
 ### Notes for Worker 0 / closeout
 
-- Status flipped directly to `final-accepted`; no consolidation cycle needed. Worker 0 can mark the integration-pass checkbox in `docs/build/build-relay_interfaces-0_0_5.md` and dispatch Worker 1 for `bld-final.md` next (the final test-run gate).
+- Status flipped directly to `final-accepted`; no consolidation cycle needed. Worker 0 can mark the integration-pass checkbox in `docs/builder/build-relay_interfaces-0_0_5.md` and dispatch Worker 1 for `bld-final.md` next (the final test-run gate).
 - The four-discriminator architecture is intact and the bypass-deletion refactor (Slice 5) did not collapse, hoist, or generalize any of them. Carry forward to `bld-final.md`'s focus: the full `uv run pytest` sweep is the cycle's only remaining gate; coverage line-by-line inspection is out of scope per BUILD.md "Final test-run gate."
 - Note for `bld-final.md`: Slice 4 added `pytest-asyncio>=1.0.0` to `[dependency-groups] dev` and `asyncio_mode = auto` to `pytest.ini`. Only the five intentional Slice-4 async tests under `tests/types/test_relay_interfaces.py` (lines 586, 598, 610, 625, 639) use `async def`; no accidental sync test was annotated `async` and no other test tree is affected. The full sweep should run cleanly.
 - Note for `bld-final.md`: Slice 5 deleted `tests/_relay_bypass.py` and `docs/spec-relay_interfaces-3.md`. Cross-tree `grep` for `_relay_bypass` and `stage_relay_definition` returns zero matches; `docs/spec-relay_interfaces-3.md` is absent from disk. No orphan imports.
@@ -112,7 +112,7 @@ No prose drift across the five docs.
 ## Final verification (Worker 1)
 
 - Cross-slice DRY clean: **Y**.
-- Helper coverage confirmed: **Y** (every production source file the build touched has a fresh shadow overview under `docs/build/shadow/`; one helper skip recorded for `__init__.py` per BUILD.md "no review-worthy logic" allowance).
+- Helper coverage confirmed: **Y** (every production source file the build touched has a fresh shadow overview under `docs/builder/shadow/`; one helper skip recorded for `__init__.py` per BUILD.md "no review-worthy logic" allowance).
 - Canonical phrasings consistent: **Y** (five canonical strings landed verbatim across the five docs per Slice 5's DRY analysis).
 
 ### Summary

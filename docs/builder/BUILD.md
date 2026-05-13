@@ -1,6 +1,6 @@
 # Package build workflow
 
-This document defines the reusable process for **building a feature from a spec doc** under `docs/spec-<topic>.md`. It does not track a specific build run. A build run is tracked in a per-spec plan file under `docs/build/`.
+This document defines the reusable process for **building a feature from a spec doc** under `docs/spec-<topic>.md`. It does not track a specific build run. A build run is tracked in a per-spec plan file under `docs/builder/`.
 
 The build is driven by a given spec — `docs/spec-<topic>.md` is the input contract delivered to Worker 0, not something Worker 0 invents. Worker 0 turns the spec's slice checklist into a build plan. Worker 1 is the only worker authorized to mutate the spec when implementation reveals pitfalls or conflicts that need to be reconciled.
 
@@ -18,7 +18,7 @@ The standing worker instructions live beside this overview:
 - [Worker 2: builder / implementer](worker-2.md)
 - [Worker 3: code reviewer and DRY enforcer](worker-3.md)
 
-Permanent workflow files under `docs/build/` are tracked: `BUILD.md`, `worker-*.md`, `build-*.md`, and every `bld-*.md` build artifact. They are committed to git and kept as the permanent record of the build cycle. The only intentionally untracked paths are generated scratch directories: `docs/build/shadow/`, `docs/build/worker-memory/`, and `docs/build/temp-tests/`.
+Permanent workflow files under `docs/builder/` are tracked: `BUILD.md`, `worker-*.md`, `build-*.md`, and every `bld-*.md` build artifact. They are committed to git and kept as the permanent record of the build cycle. The only intentionally untracked paths are generated scratch directories: `docs/builder/shadow/`, `docs/builder/worker-memory/`, and `docs/builder/temp-tests/`.
 
 `AGENTS.md` and `START.md` still apply during build runs. This workflow adds the per-worker artifact discipline on top; it does not override standing validation, formatting, commit, or test-placement rules.
 
@@ -32,11 +32,11 @@ Every worker reads the standing project docs and its own role file before acting
 |---|---|---|---|---|
 | `AGENTS.md` | yes | yes | yes | yes |
 | `START.md` | yes | yes | yes | yes |
-| `docs/build/BUILD.md` | yes | yes | yes | yes |
-| `docs/build/worker-0.md` | yes | — | — | — |
-| `docs/build/worker-1.md` | — | yes | — | — |
-| `docs/build/worker-2.md` | — | — | yes | — |
-| `docs/build/worker-3.md` | — | — | — | yes |
+| `docs/builder/BUILD.md` | yes | yes | yes | yes |
+| `docs/builder/worker-0.md` | yes | — | — | — |
+| `docs/builder/worker-1.md` | — | yes | — | — |
+| `docs/builder/worker-2.md` | — | — | yes | — |
+| `docs/builder/worker-3.md` | — | — | — | yes |
 | `GOAL.md` | yes | yes | — | — |
 | `docs/FEATURES.md` | yes | yes | — | — |
 | `CHANGELOG.md` | — | yes | — | — |
@@ -44,9 +44,9 @@ Every worker reads the standing project docs and its own role file before acting
 | `docs/README.md` | — | — | — | yes |
 | `examples/fakeshop/test_query/README.md` | — | — | — | yes |
 | active `docs/spec-<topic>.md` | yes | yes | yes | yes |
-| active `docs/build/build-<topic>-<0_0_X>.md` | yes (owns) | yes | yes | yes |
-| current `docs/build/bld-*.md` artifact | yes (read-only) | yes (owns plan + final sections) | yes (writes build reports) | yes (writes review section) |
-| own `docs/build/worker-memory/worker-N.md` | yes | yes | yes | yes |
+| active `docs/builder/build-<topic>-<0_0_X>.md` | yes (owns) | yes | yes | yes |
+| current `docs/builder/bld-*.md` artifact | yes (read-only) | yes (owns plan + final sections) | yes (writes build reports) | yes (writes review section) |
+| own `docs/builder/worker-memory/worker-N.md` | yes | yes | yes | yes |
 | relevant source / tests | — | yes (read-only) | yes (writes) | yes (read-only) |
 | Worker 2's diff | — | — | — | yes |
 
@@ -58,7 +58,7 @@ Worker 0 is **handed** the active spec file (e.g. `docs/spec-<topic>.md`) at the
 
 1. Read the active spec file at `docs/spec-<topic>.md`.
 2. Identify the spec's topic slug and target release version from the spec itself; convert the target release dots to underscores (e.g. `0.0.5` becomes `0_0_5`). Version-bump correctness is the maintainer's responsibility — Worker 0 does not validate `pyproject.toml`, `__init__.py`, or the shipped-status of the target version.
-3. Create `docs/build/build-<topic>-<0_0_X>.md`. For an `example_topic` spec targeting `0.0.X`, this is `docs/build/build-example_topic-0_0_X.md`.
+3. Create `docs/builder/build-<topic>-<0_0_X>.md`. For an `example_topic` spec targeting `0.0.X`, this is `docs/builder/build-example_topic-0_0_X.md`.
 4. The plan file is the canonical checklist for the whole build and is committed alongside the implementation changes. It is kept in git as the permanent record of the cycle.
 
 If the spec is missing, malformed, or its slice checklist cannot be parsed, stop and record that mismatch in the plan before any slice work starts.
@@ -96,7 +96,7 @@ Apply-changes passes that respond to a coverage-shaped finding from a prior revi
 
 ## Required plan structure
 
-The generated `docs/build/build-<topic>-<0_0_X>.md` file must begin with:
+The generated `docs/builder/build-<topic>-<0_0_X>.md` file must begin with:
 
 - spec source path
 - target release version
@@ -125,47 +125,47 @@ DRY rule: every slice must justify shared/duplicated patterns before merging.
 
 ## Artifact list
 
-- `docs/build/bld-slice-1-<short_slug>.md`
-- `docs/build/bld-slice-2-<short_slug>.md`
-- `docs/build/bld-slice-3-<short_slug>.md`
-- `docs/build/bld-integration.md`
-- `docs/build/bld-final.md`
+- `docs/builder/bld-slice-1-<short_slug>.md`
+- `docs/builder/bld-slice-2-<short_slug>.md`
+- `docs/builder/bld-slice-3-<short_slug>.md`
+- `docs/builder/bld-integration.md`
+- `docs/builder/bld-final.md`
 
 ## Checklist
 
-- [ ] Slice 1: <slice title from spec> -> `docs/build/bld-slice-1-<short_slug>.md`
-- [ ] Slice 2: <slice title from spec> -> `docs/build/bld-slice-2-<short_slug>.md`
-- [ ] Slice 3: <slice title from spec> -> `docs/build/bld-slice-3-<short_slug>.md`
-- [ ] Cross-slice integration pass -> `docs/build/bld-integration.md`
-- [ ] Final test-run gate -> `docs/build/bld-final.md`
+- [ ] Slice 1: <slice title from spec> -> `docs/builder/bld-slice-1-<short_slug>.md`
+- [ ] Slice 2: <slice title from spec> -> `docs/builder/bld-slice-2-<short_slug>.md`
+- [ ] Slice 3: <slice title from spec> -> `docs/builder/bld-slice-3-<short_slug>.md`
+- [ ] Cross-slice integration pass -> `docs/builder/bld-integration.md`
+- [ ] Final test-run gate -> `docs/builder/bld-final.md`
 ```
 
 Use the actual slice list from the spec when creating the plan. Do not invent slices. Keep the checklist in the spec's declared slice order.
 
 ## Build artifact naming
 
-Per-slice, integration, and final build artifacts are tracked Markdown files under `docs/build/`. They are committed alongside the source changes they describe and form a permanent record of the build cycle.
+Per-slice, integration, and final build artifacts are tracked Markdown files under `docs/builder/`. They are committed alongside the source changes they describe and form a permanent record of the build cycle.
 
 Naming rules:
 
-- Start with `docs/build/bld-`.
+- Start with `docs/builder/bld-`.
 - For a spec slice: `bld-slice-<N>-<short_slug>.md` where `N` is the 1-indexed slice number from the spec and `<short_slug>` is a lowercase underscore-separated summary of the slice title.
-- For the cross-slice integration pass: `docs/build/bld-integration.md`.
-- For the final test-run gate: `docs/build/bld-final.md`.
+- For the cross-slice integration pass: `docs/builder/bld-integration.md`.
+- For the final test-run gate: `docs/builder/bld-final.md`.
 - End with `.md`.
 
 Examples (fictional placeholders, not a real spec):
 
-- Spec slice 1 ("<slice title>") -> `docs/build/bld-slice-1-<short_slug>.md`
-- Spec slice 4 ("<slice title>") -> `docs/build/bld-slice-4-<short_slug>.md`
-- Integration pass -> `docs/build/bld-integration.md`
-- Final pass -> `docs/build/bld-final.md`
+- Spec slice 1 ("<slice title>") -> `docs/builder/bld-slice-1-<short_slug>.md`
+- Spec slice 4 ("<slice title>") -> `docs/builder/bld-slice-4-<short_slug>.md`
+- Integration pass -> `docs/builder/bld-integration.md`
+- Final pass -> `docs/builder/bld-final.md`
 
-The generated `docs/build/build-<topic>-<0_0_X>.md` file must list every artifact before build work starts.
+The generated `docs/builder/build-<topic>-<0_0_X>.md` file must list every artifact before build work starts.
 
 ## Build artifact template
 
-Every `docs/build/bld-<slice>.md` file accumulates the full back-and-forth for that slice. The artifact is the contract that flows between workers; everything inter-worker happens through this file plus the working-tree diff.
+Every `docs/builder/bld-<slice>.md` file accumulates the full back-and-forth for that slice. The artifact is the contract that flows between workers; everything inter-worker happens through this file plus the working-tree diff.
 
 ### Status field ownership
 
@@ -396,7 +396,7 @@ Worker 3 reviews Worker 2's diff and the resulting working tree. Worker 3 focuse
 - whether tests exercise the right branches
 - Two Scoops of Django structure: small focused modules, explicit queryset boundaries, minimal magic, reusable utilities only when genuinely shared
 
-Worker 3 may create **temp test files** under `docs/build/temp-tests/<slice-name>/` to verify behavior during review. Temp tests are gitignored and are NOT part of the permanent test suite. If a temp test pins a bug or important behavior, Worker 3 records it as a Medium finding so Worker 2 can promote it to the permanent test suite under the correct `AGENTS.md` test-placement tree.
+Worker 3 may create **temp test files** under `docs/builder/temp-tests/<slice-name>/` to verify behavior during review. Temp tests are gitignored and are NOT part of the permanent test suite. If a temp test pins a bug or important behavior, Worker 3 records it as a Medium finding so Worker 2 can promote it to the permanent test suite under the correct `AGENTS.md` test-placement tree.
 
 ### Static inspection helper: `scripts/review_inspect.py`
 
@@ -429,10 +429,10 @@ Worker 2 **may re-run** the helper with `--strip-docstrings` when the logic is h
 From the repository root:
 
 ```shell
-python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/build/shadow
+python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/builder/shadow
 ```
 
-Every build-cycle helper invocation must pass `--output-dir docs/build/shadow` so generated artifacts land inside the build sandbox.
+Every build-cycle helper invocation must pass `--output-dir docs/builder/shadow` so generated artifacts land inside the build sandbox.
 
 Useful flags:
 
@@ -456,12 +456,12 @@ Useful flags:
 
 #### Output files
 
-Two files land under `docs/build/shadow/<stable-stem>`:
+Two files land under `docs/builder/shadow/<stable-stem>`:
 
 - `<stem>.stripped.py` — target source with `#` comments removed.
 - `<stem>.overview.md` — static AST overview.
 
-`docs/build/shadow/` is gitignored.
+`docs/builder/shadow/` is gitignored.
 
 #### Shadow-file line numbers are NOT canonical
 
@@ -479,10 +479,10 @@ A single agent role-playing every worker can convince itself a build is sufficie
 
 Each worker keeps a private scratch memory file that **persists across slices within a single build** but is invisible to every other worker:
 
-- `docs/build/worker-memory/worker-0.md` — Worker 0's coordination notebook (lighter than the other workers — mostly progress notes)
-- `docs/build/worker-memory/worker-1.md` — Worker 1's planning, spec-reconciliation, and final-QA notebook
-- `docs/build/worker-memory/worker-2.md` — Worker 2's implementation notebook
-- `docs/build/worker-memory/worker-3.md` — Worker 3's review notebook
+- `docs/builder/worker-memory/worker-0.md` — Worker 0's coordination notebook (lighter than the other workers — mostly progress notes)
+- `docs/builder/worker-memory/worker-1.md` — Worker 1's planning, spec-reconciliation, and final-QA notebook
+- `docs/builder/worker-memory/worker-2.md` — Worker 2's implementation notebook
+- `docs/builder/worker-memory/worker-3.md` — Worker 3's review notebook
 
 These files are gitignored. Worker 0 creates the directory at plan time and deletes it at closeout. The tracked permanent record is the `bld-*.md` artifacts and the spec edits, never these notes.
 
@@ -508,10 +508,10 @@ Entries are append-only. If a worker's memory exceeds ~50 lines, the worker must
 
 1. Worker 1 subagent (planning pass) — produces the plan section of the artifact, appends to `worker-1.md`, returns.
 2. Worker 2 subagent (build pass) — implements the slice, appends a build report to the artifact, appends to `worker-2.md`, returns.
-3. Worker 3 subagent (review pass) — reviews, appends review section to the artifact, may create temp tests under `docs/build/temp-tests/<slice>/`, appends to `worker-3.md`, returns.
+3. Worker 3 subagent (review pass) — reviews, appends review section to the artifact, may create temp tests under `docs/builder/temp-tests/<slice>/`, appends to `worker-3.md`, returns.
 4. If Worker 3 found issues: Worker 0 re-spawns Worker 2 (apply-changes pass) — implements the fixes, appends a new build report to the artifact, returns. Then Worker 0 re-spawns Worker 3 (re-review pass). Repeat until Worker 3 has no unresolved High/Medium/Low findings or all remaining findings are intentionally rejected with a recorded reason.
 5. Worker 1 subagent (final-verification pass) — runs the slice-local checks, reconciles the spec if needed, appends final verification section to the artifact, appends to `worker-1.md`, returns.
-6. Worker 0 marks the slice's checkbox `- [x]` in `docs/build/build-<topic>-<0_0_X>.md` only if Worker 1 set the artifact status to `final-accepted`, then appends progress to `worker-0.md`.
+6. Worker 0 marks the slice's checkbox `- [x]` in `docs/builder/build-<topic>-<0_0_X>.md` only if Worker 1 set the artifact status to `final-accepted`, then appends progress to `worker-0.md`.
 
 Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.md`, `BUILD.md`, the worker's own role file), the active build plan, the active spec, the cycle's artifact, and the worker's own memory file contents. The subagent's prompt must explicitly forbid reading the other workers' memory files.
 
@@ -519,9 +519,9 @@ Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.
 
 **Lifecycle.**
 
-- Worker 0 creates `docs/build/worker-memory/` and seeds four empty files (one per worker) at plan-creation time.
+- Worker 0 creates `docs/builder/worker-memory/` and seeds four empty files (one per worker) at plan-creation time.
 - Workers read their own file at the start of every spawn and append at the end.
-- Worker 0 deletes `docs/build/worker-memory/` at cycle closeout, after the retrospective is written.
+- Worker 0 deletes `docs/builder/worker-memory/` at cycle closeout, after the retrospective is written.
 
 ### Recovery from interrupted subagent runs
 
@@ -554,8 +554,8 @@ If the on-disk diff is unsalvageable (e.g. a partially-applied refactor left the
 Worker 0 is the lightest-touch role. Worker 0 does not plan, does not write code, does not review code, does not edit the spec. Worker 0:
 
 - reads per the **Required reading per worker** table
-- creates `docs/build/build-<topic>-<0_0_X>.md` from the spec's slice checklist
-- creates `docs/build/worker-memory/` and seeds the four memory files
+- creates `docs/builder/build-<topic>-<0_0_X>.md` from the spec's slice checklist
+- creates `docs/builder/worker-memory/` and seeds the four memory files
 - dispatches the per-slice subagent sequence described above
 - routes Worker 3's review feedback to Worker 2 by re-spawning Worker 2 with the updated artifact
 - marks `- [x]` on the build plan after Worker 1's final verification sets the artifact to `final-accepted`
@@ -611,7 +611,7 @@ Worker 3 reviews Worker 2's diff against the slice artifact and the spec. Worker
 - reads per the **Required reading per worker** table
 - runs `scripts/review_inspect.py` per the "When to run the helper during build" rules above
 - focuses on DRY violations as the primary review lens, then correctness, then performance, then bugs
-- may create temp test files under `docs/build/temp-tests/<slice>/` to verify behavior; temp tests are gitignored and the disposition is recorded in the artifact
+- may create temp test files under `docs/builder/temp-tests/<slice>/` to verify behavior; temp tests are gitignored and the disposition is recorded in the artifact
 - appends a "Review (Worker 3)" section to the slice artifact (or "Review (Worker 3, pass N)" on re-review) and sets the artifact `Status:` line to `review-accepted` or `revision-needed`
 - never edits source files (Worker 2 applies changes after Worker 3's feedback)
 - never edits the spec
@@ -641,12 +641,12 @@ Worker 2 and Worker 3 must always run as separate subagent invocations. The buil
 
 ## Cross-slice integration pass
 
-After every slice in the spec is checked complete, Worker 1 runs the integration pass and produces `docs/build/bld-integration.md`.
+After every slice in the spec is checked complete, Worker 1 runs the integration pass and produces `docs/builder/bld-integration.md`.
 
 Before writing `bld-integration.md`, Worker 1 must:
 
-1. Read every prior `docs/build/bld-slice-*.md` artifact for the build, in slice order. No "as needed" — every artifact is required context for the cross-slice DRY scan.
-2. Confirm the static inspection helper has been run on every Python file the build touched (overviews exist under `docs/build/shadow/`). If any are missing, run the helper before continuing.
+1. Read every prior `docs/builder/bld-slice-*.md` artifact for the build, in slice order. No "as needed" — every artifact is required context for the cross-slice DRY scan.
+2. Confirm the static inspection helper has been run on every Python file the build touched (overviews exist under `docs/builder/shadow/`). If any are missing, run the helper before continuing.
 3. Compare the **Repeated string literals** sections across every shadow overview. A literal that appears in two or more files is a cross-slice DRY candidate; record it in the integration artifact.
 4. Compare the **Imports** sections across every shadow overview to confirm one-way dependency direction inside the new code and to spot a sibling that has started importing from outside the documented boundary.
 5. Walk every accepted slice artifact's `What looks solid` and `DRY findings` sections to catch any deferred follow-up that should land in this pass.
@@ -665,7 +665,7 @@ If DRY opportunities are found, Worker 1 records them in `bld-integration.md` an
 
 ## Final test-run gate
 
-After the integration pass is clean, Worker 1 runs the final test-run gate and produces `docs/build/bld-final.md`.
+After the integration pass is clean, Worker 1 runs the final test-run gate and produces `docs/builder/bld-final.md`.
 
 The gate is intentionally narrow:
 
@@ -708,6 +708,6 @@ When all checklist items are marked `- [x]` (every slice plus integration plus f
 2. Worker 0 reads all four worker-memory files (one-time read at closeout) to surface patterns the workers themselves noticed across the build.
 3. Worker 0 identifies recurring DRY patterns, repeated bug classes, and workflow stumbling blocks.
 4. Worker 0 provides a brief retrospective to the maintainer.
-5. After maintainer approval, Worker 0 updates `docs/build/BUILD.md` or the worker role files with general retrospective notes — describing recurring patterns and workflow improvements **without naming specific already-shipped fixes**.
-6. Worker 0 deletes `docs/build/worker-memory/` and `docs/build/temp-tests/`. The tracked permanent record is the `bld-*.md` artifacts, the build plan, and the spec edits — the scratch memory and temp tests have served their purpose.
-7. The maintainer commits the updated `docs/build/` workflow docs along with the now-completed `docs/build/build-<topic>-<0_0_X>.md` plan and any remaining `bld-*.md` artifacts to finish the build cycle. The plan and artifacts stay in git as the permanent record of the build.
+5. After maintainer approval, Worker 0 updates `docs/builder/BUILD.md` or the worker role files with general retrospective notes — describing recurring patterns and workflow improvements **without naming specific already-shipped fixes**.
+6. Worker 0 deletes `docs/builder/worker-memory/` and `docs/builder/temp-tests/`. The tracked permanent record is the `bld-*.md` artifacts, the build plan, and the spec edits — the scratch memory and temp tests have served their purpose.
+7. The maintainer commits the updated `docs/builder/` workflow docs along with the now-completed `docs/builder/build-<topic>-<0_0_X>.md` plan and any remaining `bld-*.md` artifacts to finish the build cycle. The plan and artifacts stay in git as the permanent record of the build.

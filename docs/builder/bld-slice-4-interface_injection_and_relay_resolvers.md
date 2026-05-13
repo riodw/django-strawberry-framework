@@ -9,7 +9,7 @@ Status: final-accepted
 
 Worker-memory carry-forwards governing Slice 4:
 
-- `docs/build/worker-memory/worker-1.md:14-17,32-36,46-49,55-58` pin three structural splits Slice 4 must preserve. Slice 2's `__dict__` membership vs. Slice 4's `__func__` identity vs. Slice 3's tuple-membership are **three different override discriminators**, each at its own lifecycle phase. They must remain independent — collapsing any pair into a generic `override_check(...)` helper is a DRY false positive (worker-memory line 34).
+- `docs/builder/worker-memory/worker-1.md:14-17,32-36,46-49,55-58` pin three structural splits Slice 4 must preserve. Slice 2's `__dict__` membership vs. Slice 4's `__func__` identity vs. Slice 3's tuple-membership are **three different override discriminators**, each at its own lifecycle phase. They must remain independent — collapsing any pair into a generic `override_check(...)` helper is a DRY false positive (worker-memory line 34).
 - Slice 1 stored the validated `interfaces` tuple on `DjangoTypeDefinition.interfaces`. Slice 4's Phase 2.5 reads from that slot; it must not re-validate (worker-memory line 5, line 15-16).
 - `__django_strawberry_definition__.model` is the canonical read for the Django model in Relay helpers (worker-memory line 35, spec line 314). Slice 4's `_resolve_node_default` reads from the same slot.
 
@@ -644,7 +644,7 @@ Async dispatch mechanism: `strawberry.utils.inspect.in_async_context()` is the s
 
 `install_relay_node_resolvers` idempotency: after the first install the four `cls.__dict__` entries are `classmethod` descriptors wrapping the module-level `_resolve_*_default` callables. A second call sees `existing.__func__` is identical to the framework default's `__func__` (because both bind the same underlying callable) and re-writes the same classmethod. The test pins this by snapshotting `cls.__dict__[attr]` before the second call and asserting `after[attr].__func__ is before[attr].__func__`. Note: a fresh classmethod wrapper is created on every install (`setattr(cls, attr, classmethod(default))`), so `after[attr]` is a different object than `before[attr]`; the `__func__` identity is what matters and what the spec's discriminator (`existing.__func__ is relay.Node.<attr>.__func__`) actually checks.
 
-The shadow-file static-inspection helper was NOT run by Worker 2. Per `docs/build/BUILD.md` lines 380-381 the helper is Worker 2's optional aid (`--strip-docstrings` for hard-to-read control flow); Worker 3 must run the helper on every new file (Worker 3 rules at lines 369-373). The new file is `django_strawberry_framework/types/relay.py` (extended from 1 symbol to 13 symbols, all with docstrings and small control flow) and `tests/optimizer/test_relay_id_projection.py` (new file under `tests/optimizer/`, a Worker 3 trigger per line 371).
+The shadow-file static-inspection helper was NOT run by Worker 2. Per `docs/builder/BUILD.md` lines 380-381 the helper is Worker 2's optional aid (`--strip-docstrings` for hard-to-read control flow); Worker 3 must run the helper on every new file (Worker 3 rules at lines 369-373). The new file is `django_strawberry_framework/types/relay.py` (extended from 1 symbol to 13 symbols, all with docstrings and small control flow) and `tests/optimizer/test_relay_id_projection.py` (new file under `tests/optimizer/`, a Worker 3 trigger per line 371).
 
 ### Notes for Worker 1 (spec reconciliation)
 
@@ -662,13 +662,13 @@ The shadow-file static-inspection helper was NOT run by Worker 2. Per `docs/buil
 
 ## Review (Worker 3)
 
-Static helper invocations (per `docs/build/BUILD.md` "When to run the helper during build"):
+Static helper invocations (per `docs/builder/BUILD.md` "When to run the helper during build"):
 
-- `django_strawberry_framework/types/relay.py` — required (under `types/`); overview at `docs/build/shadow/django_strawberry_framework__types__relay.overview.md`.
-- `django_strawberry_framework/types/finalizer.py` — required (under `types/`); overview at `docs/build/shadow/django_strawberry_framework__types__finalizer.overview.md`.
-- `django_strawberry_framework/types/resolvers.py` — required (under `types/`); overview at `docs/build/shadow/django_strawberry_framework__types__resolvers.overview.md`.
-- `tests/optimizer/test_relay_id_projection.py` — required (new file, > 50 lines, not a pure-class module); overview at `docs/build/shadow/tests__optimizer__test_relay_id_projection.overview.md`.
-- `tests/types/test_relay_interfaces.py` — required (> 50 lines new logic outside `django_strawberry_framework/`); overview at `docs/build/shadow/tests__types__test_relay_interfaces.overview.md`.
+- `django_strawberry_framework/types/relay.py` — required (under `types/`); overview at `docs/builder/shadow/django_strawberry_framework__types__relay.overview.md`.
+- `django_strawberry_framework/types/finalizer.py` — required (under `types/`); overview at `docs/builder/shadow/django_strawberry_framework__types__finalizer.overview.md`.
+- `django_strawberry_framework/types/resolvers.py` — required (under `types/`); overview at `docs/builder/shadow/django_strawberry_framework__types__resolvers.overview.md`.
+- `tests/optimizer/test_relay_id_projection.py` — required (new file, > 50 lines, not a pure-class module); overview at `docs/builder/shadow/tests__optimizer__test_relay_id_projection.overview.md`.
+- `tests/types/test_relay_interfaces.py` — required (> 50 lines new logic outside `django_strawberry_framework/`); overview at `docs/builder/shadow/tests__types__test_relay_interfaces.overview.md`.
 
 Focused coverage run executed: `uv run pytest tests/types/test_relay_interfaces.py tests/optimizer/test_relay_id_projection.py tests/types/test_definition_order_schema.py tests/test_registry.py --cov=django_strawberry_framework.types.relay --cov=django_strawberry_framework.types.finalizer --cov-report=term-missing`. Result: **5 failed, 80 passed**; `types/relay.py` coverage 96% (lines 224, 271-272, 303 uncovered); `types/finalizer.py` 100%.
 
@@ -947,8 +947,8 @@ The pass-1 build-report's five spec-reconciliation notes still stand. Pass 2 clo
 
 Static helper invocations:
 
-- `django_strawberry_framework/types/relay.py` — re-run; overview at `docs/build/shadow/django_strawberry_framework__types__relay.overview.md`. Repeated-string-literals section now reports `2x __func__` only (the four method names previously at `2x` are now `1x`, confirming the `_RELAY_RESOLVER_DEFAULTS` consolidation).
-- `django_strawberry_framework/types/finalizer.py` — re-run; overview at `docs/build/shadow/django_strawberry_framework__types__finalizer.overview.md`. No new repeated-literal concerns.
+- `django_strawberry_framework/types/relay.py` — re-run; overview at `docs/builder/shadow/django_strawberry_framework__types__relay.overview.md`. Repeated-string-literals section now reports `2x __func__` only (the four method names previously at `2x` are now `1x`, confirming the `_RELAY_RESOLVER_DEFAULTS` consolidation).
+- `django_strawberry_framework/types/finalizer.py` — re-run; overview at `docs/builder/shadow/django_strawberry_framework__types__finalizer.overview.md`. No new repeated-literal concerns.
 - `tests/types/test_relay_interfaces.py` and `tests/_relay_bypass.py` — helper skipped. Reason: pass-2 test-side changes are extensions of an already-inspected file (`tests/types/test_relay_interfaces.py`) plus a tiny new bypass module (`tests/_relay_bypass.py`, 58 lines, single helper function, primarily docstring) with no fresh ORM markers or import-boundary surprises. The full file's diff was read in-line during the prior pass.
 
 Focused coverage run executed: `uv run pytest tests/types/test_relay_interfaces.py tests/optimizer/test_relay_id_projection.py tests/types/test_definition_order_schema.py tests/test_registry.py --cov=django_strawberry_framework.types.relay --cov=django_strawberry_framework.types.finalizer --cov-report=term-missing`. Result: **88 passed**, 0 failed. Coverage on `django_strawberry_framework/types/relay.py`: **100%** (95/95). Coverage on `django_strawberry_framework/types/finalizer.py`: **100%** (56/56). The overall focused-scope coverage of 70.02% is expected (the focused command intentionally narrows the scope — the full-sweep coverage gate is Worker 1's domain).

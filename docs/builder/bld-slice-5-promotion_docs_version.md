@@ -117,7 +117,7 @@ Status: final-accepted
 
 - **Bypass deletion verification.** No new test. The bypass deletion is verified by `uv run pytest` passing on the converted call sites — if any conversion missed a site, the test fails with `ModuleNotFoundError: No module named 'tests._relay_bypass'` or `NameError: name 'stage_relay_definition' is not defined`. The build pipeline catches this without a dedicated test.
 
-- **Temp-test note for Worker 3.** Worker 3 may want to construct a temp test under `docs/build/temp-tests/slice-5/` that asserts `"interfaces"` is now in `ALLOWED_META_KEYS` and absent from `DEFERRED_META_KEYS` as a literal-tuple membership test — a one-line sanity check. Optional; the bigger end-to-end test in `tests/types/test_relay_interfaces.py` covers the same ground at a higher level.
+- **Temp-test note for Worker 3.** Worker 3 may want to construct a temp test under `docs/builder/temp-tests/slice-5/` that asserts `"interfaces"` is now in `ALLOWED_META_KEYS` and absent from `DEFERRED_META_KEYS` as a literal-tuple membership test — a one-line sanity check. Optional; the bigger end-to-end test in `tests/types/test_relay_interfaces.py` covers the same ground at a higher level.
 
 ### Open questions for Worker 2
 
@@ -235,7 +235,7 @@ None.
 
 ### Temp test verification
 
-No temp tests were needed. The plan offered an optional one-line `"interfaces" in ALLOWED_META_KEYS` membership check at `docs/build/temp-tests/slice-5/`, but the existing `tests/types/test_relay_interfaces.py::test_meta_interfaces_end_to_end_accepted_in_validate_meta` covers the same surface at a higher level (the end-to-end declaration path proves the literal landed in the allowed set). No temp-test directory was created.
+No temp tests were needed. The plan offered an optional one-line `"interfaces" in ALLOWED_META_KEYS` membership check at `docs/builder/temp-tests/slice-5/`, but the existing `tests/types/test_relay_interfaces.py::test_meta_interfaces_end_to_end_accepted_in_validate_meta` covers the same surface at a higher level (the end-to-end declaration path proves the literal landed in the allowed set). No temp-test directory was created.
 
 ### Notes for Worker 1 (spec reconciliation)
 

@@ -70,7 +70,7 @@ optimizer-extension lookup here without changing the four-step shape.
 ```
 ## Low:
 ### Unrelated `.gitignore` change makes root build artifacts trackable
-The Relay interfaces spec does not call for packaging-ignore changes, but the diff removes `/build/` from `.gitignore`. That makes root build artifacts eligible for accidental commits while `pyproject.toml` still excludes `build` from Ruff and the repository already adds several docs under `docs/build/` explicitly.
+The Relay interfaces spec does not call for packaging-ignore changes, but the diff removes `/build/` from `.gitignore`. That makes root build artifacts eligible for accidental commits while `pyproject.toml` still excludes `build` from Ruff and the repository already adds several docs under `docs/builder/` explicitly.
 Why it matters: This is unrelated release-surface churn and can cause future packaging artifacts to appear in `git status`.
 Recommended change: Keep `/build/` ignored unless there is a separate, documented reason to start tracking root build outputs.
 ```.gitignore:17:21

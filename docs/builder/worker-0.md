@@ -2,15 +2,15 @@
 
 Worker 0 owns the active build plan and dispatches the worker cycle. Worker 0 does not plan implementation details, write source code, review code, or edit the active spec.
 
-Worker 0 stays in the main thread. Workers 1, 2, and 3 run as fresh subagent invocations per slice. The split exists so Worker 3 reviews only the artifact and diff, not Worker 2's implementation reasoning. See `docs/build/BUILD.md` "Subagent dispatch and worker memory" for the full model.
+Worker 0 stays in the main thread. Workers 1, 2, and 3 run as fresh subagent invocations per slice. The split exists so Worker 3 reviews only the artifact and diff, not Worker 2's implementation reasoning. See `docs/builder/BUILD.md` "Subagent dispatch and worker memory" for the full model.
 
 ## Required reading
 
-Read the docs marked `yes` in the **Worker 0** column of the Required reading per worker table in `docs/build/BUILD.md`.
+Read the docs marked `yes` in the **Worker 0** column of the Required reading per worker table in `docs/builder/BUILD.md`.
 
 For closeout only, additionally read:
 
-- every completed `docs/build/bld-*.md` artifact for the build
+- every completed `docs/builder/bld-*.md` artifact for the build
 - the build-cycle commit diffs or maintainer-provided diff range
 - all four worker-memory files (one-time read at closeout)
 
@@ -20,26 +20,26 @@ If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` 
 
 Worker 0 may edit:
 
-- `docs/build/build-<topic>-<0_0_X>.md`
-- `docs/build/worker-memory/worker-0.md`
-- `docs/build/worker-memory/` at lifecycle boundaries (create at plan time, delete at closeout)
-- `docs/build/BUILD.md` and `docs/build/worker-*.md` only for closeout retrospective improvements after maintainer approval
+- `docs/builder/build-<topic>-<0_0_X>.md`
+- `docs/builder/worker-memory/worker-0.md`
+- `docs/builder/worker-memory/` at lifecycle boundaries (create at plan time, delete at closeout)
+- `docs/builder/BUILD.md` and `docs/builder/worker-*.md` only for closeout retrospective improvements after maintainer approval
 
 Worker 0 must not:
 
 - edit the active spec file
 - edit source code or tests
-- create or fill ordinary `docs/build/bld-*.md` slice artifacts
+- create or fill ordinary `docs/builder/bld-*.md` slice artifacts
 - mark a build-plan checkbox complete before Worker 1 sets the artifact status to `final-accepted`
 - bypass per-slice subagent dispatch by inlining a worker's job
 - read Worker 1/2/3 memory during the active cycle
 - edit any worker's memory file except its own
-- write dispatch prompts that instruct workers to run `pytest` with `--cov*` flags or to chase coverage gates. Coverage is the maintainer's gate, not a worker's tool — see `docs/build/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool". Do not add exception clauses ("you may run a focused coverage command for review concerns" or similar); the rule has no carve-outs
+- write dispatch prompts that instruct workers to run `pytest` with `--cov*` flags or to chase coverage gates. Coverage is the maintainer's gate, not a worker's tool — see `docs/builder/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool". Do not add exception clauses ("you may run a focused coverage command for review concerns" or similar); the rule has no carve-outs
 - commit. Only the maintainer commits; Worker 0 never commits, even if asked
 
 ## Slice status legend
 
-Every `docs/build/bld-*.md` artifact carries a `Status:` line that Worker 0 reads to decide what to do next. Possible values:
+Every `docs/builder/bld-*.md` artifact carries a `Status:` line that Worker 0 reads to decide what to do next. Possible values:
 
 - `planned` — Worker 1 wrote the plan; ready for Worker 2.
 - `built` — Worker 2 finished a build pass; ready for Worker 3.
@@ -55,16 +55,16 @@ Create the active build plan from the spec. Version-bump correctness is the main
 
 1. Read the active spec and identify its topic slug and target release version.
 2. Convert the target release dots to underscores (e.g. `0.0.5` becomes `0_0_5`).
-3. Create `docs/build/build-<topic>-<0_0_X>.md`.
+3. Create `docs/builder/build-<topic>-<0_0_X>.md`.
 4. Mirror the spec's slice checklist exactly; do not invent slices.
 5. Add `bld-slice-<N>-<slug>.md` artifacts for every spec slice.
-6. Add `docs/build/bld-integration.md` and `docs/build/bld-final.md`.
+6. Add `docs/builder/bld-integration.md` and `docs/builder/bld-final.md`.
 7. Leave every checkbox unchecked.
-8. Create `docs/build/worker-memory/` and seed four empty files:
-   - `docs/build/worker-memory/worker-0.md`
-   - `docs/build/worker-memory/worker-1.md`
-   - `docs/build/worker-memory/worker-2.md`
-   - `docs/build/worker-memory/worker-3.md`
+8. Create `docs/builder/worker-memory/` and seed four empty files:
+   - `docs/builder/worker-memory/worker-0.md`
+   - `docs/builder/worker-memory/worker-1.md`
+   - `docs/builder/worker-memory/worker-2.md`
+   - `docs/builder/worker-memory/worker-3.md`
 
    The directory and files are gitignored. They persist across cycles within this build; Worker 0 deletes them at closeout (see "Closeout job" below).
 
@@ -78,13 +78,13 @@ For each unchecked slice, drive the loop by reading the artifact `Status:` field
 4. `revision-needed` (from Worker 3) → spawn Worker 2 (apply-changes pass). On return, status should be `built` again.
 5. `review-accepted` → spawn Worker 1 (final-verification pass). On return, status should be `final-accepted` or `revision-needed`.
 6. `revision-needed` (from Worker 1) → spawn Worker 2 (apply-changes pass). Loop returns to step 3.
-7. `final-accepted` → mark the slice checkbox `- [x]` in the build plan and append a short progress note to `docs/build/worker-memory/worker-0.md`.
+7. `final-accepted` → mark the slice checkbox `- [x]` in the build plan and append a short progress note to `docs/builder/worker-memory/worker-0.md`.
 
 ### Spawn-prompt contents
 
 Each subagent spawn prompt must include:
 
-- `AGENTS.md`, `START.md`, `docs/build/BUILD.md`, and the worker's own role file
+- `AGENTS.md`, `START.md`, `docs/builder/BUILD.md`, and the worker's own role file
 - the active build plan path
 - the active spec path
 - the slice artifact path
@@ -97,7 +97,7 @@ Worker 0 is a dispatcher, not a courier. Inter-worker information flows through 
 
 ### Recovery from an interrupted subagent
 
-If a subagent fails mid-run (transient API error, network failure, time-out), follow the recovery procedure in `docs/build/BUILD.md` "Recovery from interrupted subagent runs":
+If a subagent fails mid-run (transient API error, network failure, time-out), follow the recovery procedure in `docs/builder/BUILD.md` "Recovery from interrupted subagent runs":
 
 1. Inspect the working-tree diff and the partial artifact to determine which section was being written and which steps already landed on disk.
 2. Dispatch a fresh subagent of the same role with explicit "pick up where prior pass left off" context: name the partial artifact, the missing section, and the on-disk diff as the authoritative source of completed work.
@@ -109,16 +109,16 @@ If the on-disk diff is unsalvageable, escalate to the maintainer rather than gue
 
 After every spec slice is checked:
 
-1. Spawn Worker 1 for `docs/build/bld-integration.md`.
+1. Spawn Worker 1 for `docs/builder/bld-integration.md`.
 2. If Worker 1 records cross-slice DRY findings, dispatch Worker 2 and Worker 3 for a consolidation loop, then return to Worker 1.
 3. Mark the integration checkbox only after Worker 1 sets `bld-integration.md` to `final-accepted`.
-4. Spawn Worker 1 for `docs/build/bld-final.md`.
+4. Spawn Worker 1 for `docs/builder/bld-final.md`.
 5. If final tests fail, dispatch the owning slice loop again.
 6. Mark the final checkbox only after Worker 1 sets `bld-final.md` to `final-accepted`.
 
 ## Memory entry shape
 
-Worker 0 appends a brief block to `docs/build/worker-memory/worker-0.md` after closing each slice. Example:
+Worker 0 appends a brief block to `docs/builder/worker-memory/worker-0.md` after closing each slice. Example:
 
 ```
 ## 2026-05-13 — Slice 2 (is_type_of injection)
@@ -139,7 +139,7 @@ After all build-plan checkboxes are complete:
 4. Identify recurring DRY patterns, repeated bug classes, and workflow stumbling blocks.
 5. Provide final feedback to the maintainer.
 6. Implement workflow-doc closeout improvements only after maintainer approval.
-7. Delete `docs/build/worker-memory/` and `docs/build/temp-tests/`.
+7. Delete `docs/builder/worker-memory/` and `docs/builder/temp-tests/`.
 
 Retrospective notes must stay general. Describe recurring issue types and workflow improvements without naming specific already-fixed defects.
 
@@ -152,4 +152,4 @@ Stop and report the blocker if:
 - an existing build plan would be overwritten
 - Worker 1 does not set the artifact status clearly
 - a worker attempts to pass information outside the artifact/diff contract
-- requested work would violate `AGENTS.md`, `START.md`, or `docs/build/BUILD.md`
+- requested work would violate `AGENTS.md`, `START.md`, or `docs/builder/BUILD.md`

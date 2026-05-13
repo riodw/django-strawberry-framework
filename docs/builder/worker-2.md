@@ -2,15 +2,15 @@
 
 Worker 2 implements one build artifact at a time. Worker 2 does not decide the slice is complete; Worker 3 reviews the implementation and Worker 1 performs final verification.
 
-Worker 2 runs as a fresh subagent invocation per build or re-build pass. Its only carry-forward is `docs/build/worker-memory/worker-2.md`. See `docs/build/BUILD.md` "Subagent dispatch and worker memory" for the full model.
+Worker 2 runs as a fresh subagent invocation per build or re-build pass. Its only carry-forward is `docs/builder/worker-memory/worker-2.md`. See `docs/builder/BUILD.md` "Subagent dispatch and worker memory" for the full model.
 
 ## Required reading
 
-Read the docs marked `yes` in the **Worker 2** column of the Required reading per worker table in `docs/build/BUILD.md`.
+Read the docs marked `yes` in the **Worker 2** column of the Required reading per worker table in `docs/builder/BUILD.md`.
 
 Additionally read the source files and tests named by the active slice artifact.
 
-**Forbidden reads.** Worker 2 must not read `docs/build/worker-memory/worker-0.md`, `worker-1.md`, or `worker-3.md`. The slice artifact is the contract from Worker 1 and Worker 3.
+**Forbidden reads.** Worker 2 must not read `docs/builder/worker-memory/worker-0.md`, `worker-1.md`, or `worker-3.md`. The slice artifact is the contract from Worker 1 and Worker 3.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
@@ -22,8 +22,8 @@ Worker 2 may edit:
 - tests required by the current artifact
 - docs required by the current artifact
 - `CHANGELOG.md` only when the active spec explicitly includes changelog work or the maintainer explicitly authorizes it through the artifact
-- the current `docs/build/bld-*.md` artifact, appending build-report sections only
-- `docs/build/worker-memory/worker-2.md`
+- the current `docs/builder/bld-*.md` artifact, appending build-report sections only
+- `docs/builder/worker-memory/worker-2.md`
 
 Worker 2 must not:
 
@@ -33,7 +33,7 @@ Worker 2 must not:
 - edit prior artifact sections except to append a new build report
 - make unrelated cleanup
 - broaden the slice beyond Worker 1's plan
-- run `pytest` with `--cov*` flags during build or apply-changes passes. Coverage is the maintainer's gate, not a worker's tool — see `docs/build/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool"
+- run `pytest` with `--cov*` flags during build or apply-changes passes. Coverage is the maintainer's gate, not a worker's tool — see `docs/builder/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool"
 - decide alone to abandon, replace, or delete a helper or module the plan explicitly listed (see "Plan-vs-implementation drift" below)
 - commit. Only the maintainer commits; Worker 2 never commits, even if asked
 
@@ -45,7 +45,7 @@ Worker 2 must not:
 4. Inspect the target source and tests.
 5. Implement the plan in the most DRY readable shape available.
 6. Add or update permanent tests required by the plan, using `AGENTS.md` test-placement rules.
-7. If Worker 3 supplied a temp test that should become permanent, promote it to the correct test tree rather than leaving it under `docs/build/temp-tests/`.
+7. If Worker 3 supplied a temp test that should become permanent, promote it to the correct test tree rather than leaving it under `docs/builder/temp-tests/`.
 8. Run `uv run ruff format .`.
 9. Run `uv run ruff check --fix .`.
 10. Do not run `pytest` unless the artifact explicitly instructs you to run a focused test as part of the pass; Worker 1 owns the normal test gates. When the artifact does require a focused `pytest`, run it **without** `--cov*` flags. Use the focused run only to confirm pass/fail of the assertions you wrote; never to chase coverage.
@@ -83,7 +83,7 @@ New helpers must have one clear reason to exist. Do not extract helpers just to 
 
 ## Static helper use
 
-Use `scripts/review_inspect.py` when the plan or prior review asks for it. Always pass `--output-dir docs/build/shadow`.
+Use `scripts/review_inspect.py` when the plan or prior review asks for it. Always pass `--output-dir docs/builder/shadow`.
 
 If you used a shadow file or overview to implement the fix, record that in the artifact's `Notes for Worker 3` section. Cite original source-file line numbers, never shadow-file line numbers.
 
@@ -111,7 +111,7 @@ Append 3-5 lines per completed pass. Example:
 ## 2026-05-13 — Slice 2 (is_type_of injection)
 - Added `install_is_type_of` helper in types/relay.py; wired into __init_subclass__ in types/base.py.
 - Pattern that worked: detected consumer override with `vars(cls).get("is_type_of") is None` rather than `hasattr(cls, ...)` to avoid catching inherited defaults.
-- Worker 3 pushback: required the helper to be a no-op when `relay` is missing on the class; promoted a temp test from docs/build/temp-tests/ into tests/types/test_relay.py.
+- Worker 3 pushback: required the helper to be a no-op when `relay` is missing on the class; promoted a temp test from docs/builder/temp-tests/ into tests/types/test_relay.py.
 ```
 
 Capture per completed pass:

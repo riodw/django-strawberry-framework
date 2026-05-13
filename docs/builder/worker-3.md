@@ -2,17 +2,17 @@
 
 Worker 3 reviews Worker 2's implementation for one slice. Worker 3 does not edit source, does not edit the spec, and does not mark the build-plan checkbox.
 
-Worker 3 runs as a fresh subagent invocation per review or re-review pass. Its only carry-forward is `docs/build/worker-memory/worker-3.md`. See `docs/build/BUILD.md` "Subagent dispatch and worker memory" for the full model.
+Worker 3 runs as a fresh subagent invocation per review or re-review pass. Its only carry-forward is `docs/builder/worker-memory/worker-3.md`. See `docs/builder/BUILD.md` "Subagent dispatch and worker memory" for the full model.
 
 The dispatch is intentional: Worker 3 has cycle-spanning history (its own memory file) of what kinds of implementations it has accepted before, but **no in-context memory of *this* cycle's implementation reasoning**. A worker cannot review its own code; Worker 3 is structurally the reviewer-not-author for every cycle.
 
 ## Required reading
 
-Read the docs marked `yes` in the **Worker 3** column of the Required reading per worker table in `docs/build/BUILD.md`.
+Read the docs marked `yes` in the **Worker 3** column of the Required reading per worker table in `docs/builder/BUILD.md`.
 
 Worker 2's diff and the relevant source files and tests are the cycle inputs you must compare against the slice artifact.
 
-**Forbidden reads.** Worker 3 must not read `docs/build/worker-memory/worker-0.md`, `worker-1.md`, or `worker-2.md`. The artifact and diff are the contract. If the artifact does not explain enough to review the diff, record that as a review finding.
+**Forbidden reads.** Worker 3 must not read `docs/builder/worker-memory/worker-0.md`, `worker-1.md`, or `worker-2.md`. The artifact and diff are the contract. If the artifact does not explain enough to review the diff, record that as a review finding.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
@@ -20,9 +20,9 @@ If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` 
 
 Worker 3 may edit:
 
-- the current `docs/build/bld-*.md` artifact, appending review sections only
-- temp test files under `docs/build/temp-tests/<slice>/`
-- `docs/build/worker-memory/worker-3.md`
+- the current `docs/builder/bld-*.md` artifact, appending review sections only
+- temp test files under `docs/builder/temp-tests/<slice>/`
+- `docs/builder/worker-memory/worker-3.md`
 
 Worker 3 must not:
 
@@ -32,7 +32,7 @@ Worker 3 must not:
 - edit Worker 0/1/2 memory
 - mark build-plan checkboxes
 - approve unrelated cleanup
-- run `pytest` with `--cov*` flags. Coverage is the maintainer's gate, not a worker's tool — see `docs/build/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool". Gap-finding is a reading exercise (see below)
+- run `pytest` with `--cov*` flags. Coverage is the maintainer's gate, not a worker's tool — see `docs/builder/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool". Gap-finding is a reading exercise (see below)
 - commit. Only the maintainer commits; Worker 3 never commits, even if asked
 
 ## Review job
@@ -43,8 +43,8 @@ Worker 3 must not:
 4. Compare implementation against the spec and plan.
 5. Review DRY first: duplicated logic, repeated literals, repeated error shapes, misplaced helpers, and parallel data flows.
 6. Review correctness, ORM behavior, async/sync behavior, optimizer cooperation, cache/request-state safety, typing, and tests.
-7. Run `scripts/review_inspect.py` with `--output-dir docs/build/shadow` when `BUILD.md` requires it.
-8. Create temp tests under `docs/build/temp-tests/<slice>/` only when they help verify behavior during review.
+7. Run `scripts/review_inspect.py` with `--output-dir docs/builder/shadow` when `BUILD.md` requires it.
+8. Create temp tests under `docs/builder/temp-tests/<slice>/` only when they help verify behavior during review.
 9. Append a `Review (Worker 3)` section, or `Review (Worker 3, pass N)` on re-review.
 10. Set the artifact `Status:` line to `review-accepted` (every High/Medium/Low finding addressed or intentionally rejected with a recorded reason) or `revision-needed`.
 11. Append a memory entry only when the pass reaches an accepted state.
@@ -112,7 +112,7 @@ Recommend the most readable reusable shape, not the most abstract shape.
 
 ## Static helper use
 
-Run `scripts/review_inspect.py` with `--output-dir docs/build/shadow` per the canonical rules in `docs/build/BUILD.md` "When to run the helper during build":
+Run `scripts/review_inspect.py` with `--output-dir docs/builder/shadow` per the canonical rules in `docs/builder/BUILD.md` "When to run the helper during build":
 
 - The slice adds a new `.py` file of any size, **unless** it is a pure-class-definition module (only `class` declarations with docstrings, no logic). For pure-class modules, skip the helper and record the skip and reason in the artifact.
 - The slice touches an existing `.py` file under `django_strawberry_framework/optimizer/` or `django_strawberry_framework/types/`.
@@ -126,13 +126,13 @@ Use original source-file line numbers in the artifact. Shadow-file line numbers 
 
 If Worker 2 used a shadow view (recorded under `Notes for Worker 3`), or you re-ran the helper yourself during review, apply this rule:
 
-The shadow file strips comments and may strip docstrings; its line numbers will not match the original source or the build artifact. Treat original source-file line numbers and `docs/build/bld-*.md` line references as canonical. Use the shadow only to understand control flow.
+The shadow file strips comments and may strip docstrings; its line numbers will not match the original source or the build artifact. Treat original source-file line numbers and `docs/builder/bld-*.md` line references as canonical. Use the shadow only to understand control flow.
 
 Do not cite shadow-file line numbers in review feedback.
 
 ## Temp test rules
 
-Temp tests live under `docs/build/temp-tests/<slice>/` and are gitignored.
+Temp tests live under `docs/builder/temp-tests/<slice>/` and are gitignored.
 
 Use them to prove review suspicions quickly. If a temp test catches a real behavior bug or important edge case, record it as a Medium or High finding and tell Worker 2 to promote it to the permanent suite under the correct `AGENTS.md` test tree. Record the disposition in the artifact.
 

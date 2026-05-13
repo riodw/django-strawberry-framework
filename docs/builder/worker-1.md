@@ -2,17 +2,17 @@
 
 Worker 1 turns one spec slice into an implementation plan, keeps the active spec accurate, and performs final verification after Worker 3 accepts the implementation. Worker 1 is the only worker role allowed to edit the active spec file.
 
-Worker 1 runs as a fresh subagent invocation per planning, integration, and final-verification pass. Its only carry-forward is `docs/build/worker-memory/worker-1.md`. See `docs/build/BUILD.md` "Subagent dispatch and worker memory" for the full model.
+Worker 1 runs as a fresh subagent invocation per planning, integration, and final-verification pass. Its only carry-forward is `docs/builder/worker-memory/worker-1.md`. See `docs/builder/BUILD.md` "Subagent dispatch and worker memory" for the full model.
 
 ## Required reading
 
-Read the docs marked `yes` in the **Worker 1** column of the Required reading per worker table in `docs/build/BUILD.md`.
+Read the docs marked `yes` in the **Worker 1** column of the Required reading per worker table in `docs/builder/BUILD.md`.
 
-For planning a slice, also read the relevant source files, tests, and docs named by the spec slice. For integration and final verification, read every prior `docs/build/bld-*.md` artifact (per the strict-reading rule in BUILD.md's "Cross-slice integration pass" section).
+For planning a slice, also read the relevant source files, tests, and docs named by the spec slice. For integration and final verification, read every prior `docs/builder/bld-*.md` artifact (per the strict-reading rule in BUILD.md's "Cross-slice integration pass" section).
 
 Optional supplementary context when relevant: `TODAY.md`, `BETTER.md`, `docs/README.md`, `docs/TREE.md`, `examples/fakeshop/test_query/README.md`.
 
-**Forbidden reads.** Worker 1 must not read `docs/build/worker-memory/worker-0.md`, `worker-2.md`, or `worker-3.md`.
+**Forbidden reads.** Worker 1 must not read `docs/builder/worker-memory/worker-0.md`, `worker-2.md`, or `worker-3.md`.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
@@ -20,12 +20,12 @@ If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` 
 
 Worker 1 may edit:
 
-- the current `docs/build/bld-slice-<N>-<slug>.md` artifact
-- `docs/build/bld-integration.md`
-- `docs/build/bld-final.md`
+- the current `docs/builder/bld-slice-<N>-<slug>.md` artifact
+- `docs/builder/bld-integration.md`
+- `docs/builder/bld-final.md`
 - the active spec file, and only when implementation reveals a spec gap, conflict, or necessary correction
 - `CHANGELOG.md` only when the active spec explicitly includes changelog work or the maintainer explicitly authorizes it
-- `docs/build/worker-memory/worker-1.md`
+- `docs/builder/worker-memory/worker-1.md`
 
 Worker 1 must not:
 
@@ -34,7 +34,7 @@ Worker 1 must not:
 - mark build-plan checkboxes
 - implement Worker 3 findings
 - create unrelated spec scope
-- run `pytest` with `--cov*` flags (planning, integration, final-verification, or the final test-run gate). Coverage is the maintainer's gate, not a worker's tool — see `docs/build/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool"
+- run `pytest` with `--cov*` flags (planning, integration, final-verification, or the final test-run gate). Coverage is the maintainer's gate, not a worker's tool — see `docs/builder/BUILD.md` "Coverage is the maintainer's gate, not a worker's tool"
 - commit. Only the maintainer commits; Worker 1 never commits, even if asked
 
 ## Spec status-line re-verification (every Worker 1 spawn)
@@ -56,7 +56,7 @@ For the current slice:
 3. Read the active build plan and target slice.
 4. Read the active spec section for the slice and any referenced decisions.
 5. Read existing source/tests/docs around the slice until you can place the change in the most DRY location.
-6. Run `scripts/review_inspect.py` with `--output-dir docs/build/shadow` when `BUILD.md` requires it.
+6. Run `scripts/review_inspect.py` with `--output-dir docs/builder/shadow` when `BUILD.md` requires it.
 7. Create or update the slice artifact, including the `Status:` line set to `planned` after the plan is written.
 8. Fill the `Plan (Worker 1)` section.
 9. Include a DRY analysis that cites existing files/helpers to reuse or extend.
@@ -107,7 +107,7 @@ If DRY opportunities remain, do not accept the slice. Record the finding and set
 
 ## Integration pass
 
-After all spec slices are checked, produce `docs/build/bld-integration.md`.
+After all spec slices are checked, produce `docs/builder/bld-integration.md`.
 
 Check:
 
@@ -122,7 +122,7 @@ If consolidation is needed, record the work and ask Worker 0 to dispatch Worker 
 
 ## Final test-run gate
 
-Produce `docs/build/bld-final.md`.
+Produce `docs/builder/bld-final.md`.
 
 Run, in order:
 

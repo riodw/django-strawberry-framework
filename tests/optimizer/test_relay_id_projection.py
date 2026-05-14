@@ -13,7 +13,7 @@ import pytest
 import strawberry
 from apps.products import services
 from apps.products.models import Category, Item
-from django.db import connection
+from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from strawberry import relay
 
@@ -138,3 +138,75 @@ def test_relay_resolve_id_uses_loaded_pk():
         assert CategoryNode.resolve_id(row, info=None) == expected
     # The dict-cache hit on the loaded pk avoids any additional query.
     assert len(captured) == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_queries):
+    """End-to-end regression for ``docs/feedback.md`` § custom-pk Relay projection.
+
+    A Relay-declared ``DjangoType`` backed by a model whose pk attname is
+    not ``"id"`` must produce exactly one query for ``{ id name }`` —
+    the walker resolves the configured ``id_attr``, projects the real
+    pk column into ``only()``, and ``_resolve_id_default`` reads the
+    loaded value from ``root.__dict__`` instead of falling back to
+    ``getattr`` and triggering a per-row pk fetch (Decision 7).
+
+    Uses the ``managed=False`` + manual ``schema_editor`` pattern from
+    ``test_walker.py::test_plan_elides_forward_fk_when_target_pk_is_not_named_id``
+    so the model exists for ``_meta.pk.attname`` introspection AND the
+    table exists for a real query — no fakeshop model addition needed.
+    """
+
+    class CustomPKItem(models.Model):
+        uuid = models.CharField(max_length=32, primary_key=True)
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    with connection.schema_editor() as schema_editor:
+        schema_editor.create_model(CustomPKItem)
+    try:
+        CustomPKItem.objects.create(uuid="abc-123", name="widget")
+
+        class CustomPKItemNode(DjangoType):
+            class Meta:
+                model = CustomPKItem
+                # ``Meta.fields`` lists Django field names; the model's pk
+                # is ``uuid`` (not ``id``), so the user must include
+                # ``"uuid"`` here. Slice 3's id-suppression then strips
+                # the synthesized ``uuid`` annotation so the schema
+                # surface is ``id: GlobalID!`` (from ``relay.Node``)
+                # plus ``name``, without leaking ``uuid: str!``.
+                fields = ("uuid", "name")
+                interfaces = (relay.Node,)
+
+        @strawberry.type
+        class Query:
+            @strawberry.field
+            def all_items(self) -> list[CustomPKItemNode]:
+                return CustomPKItem.objects.all()
+
+        finalize_django_types()
+        schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+        ctx = SimpleNamespace()
+        with django_assert_num_queries(1):
+            result = schema.execute_sync("{ allItems { id name } }", context_value=ctx)
+
+        assert result.errors is None
+        plan = ctx.dst_optimizer_plan
+        # The walker projected the real pk attname (``uuid``), not the
+        # GraphQL literal ``id`` — this is the fix from
+        # ``docs/feedback.md`` § High "Optimizer misses projecting custom
+        # primary keys for Relay nodes".
+        assert "uuid" in plan.only_fields
+        assert "id" not in plan.only_fields
+        assert result.data == {"allItems": [{"id": result.data["allItems"][0]["id"], "name": "widget"}]}
+        # The Relay GlobalID round-trip carries the custom-pk value.
+        node_id = relay.GlobalID.from_id(result.data["allItems"][0]["id"])
+        assert node_id.type_name == "CustomPKItemNode"
+        assert node_id.node_id == "abc-123"
+    finally:
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(CustomPKItem)

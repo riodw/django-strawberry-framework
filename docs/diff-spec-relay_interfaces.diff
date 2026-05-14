@@ -1,0 +1,3614 @@
+diff --git a/django_strawberry_framework/__init__.py b/django_strawberry_framework/__init__.py
+index 077c974..030bd9d 100644
+--- a/django_strawberry_framework/__init__.py
++++ b/django_strawberry_framework/__init__.py
+@@ -21,12 +21,7 @@ from .optimizer import DjangoOptimizerExtension  # noqa: E402
+ from .optimizer.hints import OptimizerHint  # noqa: E402
+ from .types import DjangoType, finalize_django_types  # noqa: E402
+ 
+-__version__ = "0.0.4"
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# ship Relay interfaces without adding public exports. The only line in
+-# this file that changes is ``__version__`` (paired with the matching
+-# bump in ``pyproject.toml`` per AGENTS.md "Versioning"); ``__all__``
+-# stays at its current six names.
++__version__ = "0.0.5"
+ 
+ __all__ = (
+     "DjangoOptimizerExtension",
+diff --git a/django_strawberry_framework/conf.py b/django_strawberry_framework/conf.py
+index ae30e2d..c70a7d5 100644
+--- a/django_strawberry_framework/conf.py
++++ b/django_strawberry_framework/conf.py
+@@ -14,61 +14,113 @@ instance is mutated in place — the module global is *not* rebound — so
+ references bound via ``from .conf import settings`` see the change
+ immediately.
+ 
+-Defensive-coerce stance (package-wide). Two top-level consumer-input
+-seams currently coerce ``None`` to an empty mapping rather than
+-raising: ``DJANGO_STRAWBERRY_FRAMEWORK = None`` (this module, treated
+-as "no settings configured") and ``Meta.optimizer_hints = None`` in
+-``types/base.py`` (treated as "no hints configured"). Both behave
+-identically to omitting the value entirely. Tightening either to
+-raise a configuration error is tracked as future-slice work; until
+-then the empty-mapping coercion is the documented contract. Reflective
+-shape reads off Strawberry / graphql-core / Django descriptors
+-(``getattr(obj, name, None) or {}`` and friends in the optimizer
+-subpackage) are a *separate* case — there the upstream contract
+-genuinely allows the attribute to be absent or ``None`` on legitimate
+-shapes, and coercion is unconditionally correct. Do not unify the two.
++Defensive ``None`` stance (package-wide). Two top-level
++consumer-input seams coerce ``None`` (and the missing-key case) to an
++empty mapping rather than raising: ``DJANGO_STRAWBERRY_FRAMEWORK =
++None`` (this module, treated as "no settings configured") and
++``Meta.optimizer_hints = None`` in ``types/base.py`` (treated as "no
++hints configured"). Both behave identically to omitting the value
++entirely. Tightening the ``None`` cases to raise is tracked as
++future-slice work; until then the empty-mapping coercion is the
++documented contract for ``None``. *Other* invalid shapes are no longer
++defensively coerced here: a non-mapping ``DJANGO_STRAWBERRY_FRAMEWORK``
++value raises ``ConfigurationError`` through
++``_normalize_user_settings`` before attribute lookup, rather than the
++old ``or {}`` collapse that silently absorbed every falsy value.
++Reflective shape reads off Strawberry / graphql-core / Django
++descriptors (``getattr(obj, name, None) or {}`` and friends in the
++optimizer subpackage) are a *separate* case — there the upstream
++contract genuinely allows the attribute to be absent or ``None`` on
++legitimate shapes, and coercion is unconditionally correct. Do not
++unify the two.
+ """
+ 
++from collections.abc import Mapping
+ from typing import Any
+ 
+ from django.conf import settings as django_settings
+ from django.test.signals import setting_changed
+ 
++from django_strawberry_framework.exceptions import ConfigurationError
++
+ DJANGO_SETTINGS_KEY = "DJANGO_STRAWBERRY_FRAMEWORK"
+ _DISPATCH_UID = "django_strawberry_framework.conf.reload_settings"
+ 
+ 
++def _normalize_user_settings(value: Any) -> dict[str, Any]:
++    """Validate and normalize a ``DJANGO_STRAWBERRY_FRAMEWORK`` candidate.
++
++    Branches:
++
++    - ``value is None`` -> ``{}``. ``None`` and the missing-key case
++      are the package's documented "no settings configured" shape;
++      matches the module-level ``None`` stance.
++    - Non-``Mapping`` value -> ``ConfigurationError`` naming the
++      received type. Protects ``Settings.__getattr__`` from raising a
++      bare ``TypeError`` on subscript when a consumer assigns a string
++      / list / other non-mapping by mistake, which the pre-fix ``or
++      {}`` fallback silently absorbed.
++    - ``dict`` -> returned as-is (fast path; preserves identity so
++      tests that capture the same dict by reference observe their
++      mutations).
++    - Other ``Mapping`` instances -> copied into a plain ``dict`` so
++      the cache always exposes a uniform ``dict[str, Any]`` shape to
++      ``Settings.user_settings`` consumers.
++
++    Shared by ``Settings.__init__`` (eager construction),
++    ``Settings.user_settings`` (lazy read from ``django.conf.settings``),
++    and ``Settings.reload`` (signal-driven and direct cache replacement)
++    so a single shape contract applies across every cache write site.
++    """
++    if value is None:
++        return {}
++    if not isinstance(value, Mapping):
++        raise ConfigurationError(
++            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {type(value).__name__}.",
++        )
++    if isinstance(value, dict):
++        return value
++    return dict(value)
++
++
+ class Settings:
+     """Attribute-style accessor for user-provided library settings."""
+ 
+-    def __init__(self, user_settings: dict[str, Any] | None = None) -> None:
++    def __init__(self, user_settings: Mapping[str, Any] | None = None) -> None:
+         """Build a ``Settings`` instance.
+ 
+         ``None`` (the default) defers loading until first attribute access, at
+         which point the value is read from ``django.conf.settings``.  Passing
+-        a dict uses it as-is and skips the lazy read.
++        a mapping skips the lazy read; ``dict`` values are retained and other
++        mappings are copied into a plain ``dict``.  Non-mapping values raise
++        ``ConfigurationError`` so malformed configuration fails at
++        construction rather than at attribute lookup, matching the
++        ``user_settings`` and ``reload`` write sites.
+         """
+-        self._user_settings = user_settings
++        self._user_settings = None if user_settings is None else _normalize_user_settings(user_settings)
+ 
+     @property
+     def user_settings(self) -> dict[str, Any]:
+         """Lazily load user-defined settings from ``django.conf.settings``.
+ 
+-        A falsy value (``None``, missing key, empty dict) collapses to an
+-        empty dict so attribute access uniformly raises ``AttributeError``
+-        for unknown keys rather than ``TypeError`` on ``None`` subscript.
++        Missing or ``None`` top-level configuration is treated the same as an
++        empty mapping.  Non-mapping values raise ``ConfigurationError`` so
++        malformed configuration fails before attribute lookup.
+         """
+         if self._user_settings is None:
+-            self._user_settings = getattr(django_settings, DJANGO_SETTINGS_KEY, {}) or {}
++            self._user_settings = _normalize_user_settings(
++                getattr(django_settings, DJANGO_SETTINGS_KEY, None),
++            )
+         return self._user_settings
+ 
+-    def reload(self, value: dict[str, Any] | None) -> None:
++    def reload(self, value: Mapping[str, Any] | None) -> None:
+         """Replace the cached user-settings mapping in place.
+ 
+-        ``None`` restores lazy reload on next attribute access; any other
+-        value is used as-is.
++        ``None`` restores lazy reload on next attribute access.  Mapping
++        values replace the cached settings; ``dict`` instances are retained,
++        and other mappings are copied into a plain ``dict``.
+         """
+-        self._user_settings = value
++        self._user_settings = None if value is None else _normalize_user_settings(value)
+ 
+     def __getattr__(self, name: str) -> Any:
+         """Retrieve a setting's value using attribute-style access.
+diff --git a/django_strawberry_framework/optimizer/_context.py b/django_strawberry_framework/optimizer/_context.py
+index 26c3245..0974d38 100644
+--- a/django_strawberry_framework/optimizer/_context.py
++++ b/django_strawberry_framework/optimizer/_context.py
+@@ -59,25 +59,38 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
+ def stash_on_context(context: Any, key: str, value: Any) -> None:
+     """Stash ``value`` on ``context`` under ``key``; silently skip if impossible.
+ 
+-    Strawberry's default context is an object, so ``setattr`` is the
+-    primary path.  Consumers sometimes pass a plain ``dict`` as context,
+-    so we fall back to ``__setitem__`` when ``setattr`` raises.  Frozen
+-    objects (``MappingProxyType``, frozen dataclasses, ``pydantic``
+-    models with ``frozen=True``) raise ``TypeError`` on assignment;
+-    those stashes are silently skipped — the optimizer's introspection
+-    surface is a nice-to-have, not a correctness invariant, so a
+-    read-only context must not abort the resolver chain.
++    Dispatch order mirrors ``get_context_value``: ``dict`` instances are
++    treated as mappings first so a ``dict`` subclass with separate
++    attribute storage round-trips through the same branch the resolver
++    reads from. Non-``dict`` contexts use ``setattr`` first and fall
++    back to ``__setitem__`` for mapping-like objects (Strawberry's
++    default context is an object; some consumers pass a plain dict).
++    Frozen objects (``MappingProxyType``, frozen dataclasses,
++    ``pydantic`` models with ``frozen=True``) raise ``TypeError`` on
++    assignment; those stashes are silently skipped — the optimizer's
++    introspection surface is a nice-to-have, not a correctness
++    invariant, so a read-only context must not abort the resolver chain.
+ 
+     When ``context`` is ``None`` (Strawberry's default when no
+     ``context_value`` is provided), the stash is silently skipped.
++
++    Implementation note: the dict-first decision is expressed as a
++    guard *around* the ``setattr`` block (skip ``setattr`` entirely for
++    ``dict`` instances) rather than as a parallel ``try`` / ``except``
++    path. Both shapes have the same observable behavior, but the
++    guard-and-shared-tail form keeps one ``except TypeError`` handler
++    that ``MappingProxyType``-style fixtures already exercise, so no
++    parallel test scaffold for a frozen ``dict`` subclass is required
++    to keep the package coverage gate at 100%.
+     """
+     if context is None:
+         return
+-    try:
+-        setattr(context, key, value)
+-        return
+-    except (AttributeError, TypeError):
+-        pass
++    if not isinstance(context, dict):
++        try:
++            setattr(context, key, value)
++            return
++        except (AttributeError, TypeError):
++            pass
+     try:
+         context[key] = value
+     except TypeError:
+@@ -85,5 +98,7 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
+         # on ``__setitem__``.  Narrow to ``TypeError`` only — a real ``dict``
+         # never raises ``KeyError`` from assignment, and a future mapping
+         # subclass that raises a custom error should surface, not be silently
+-        # swallowed.
++        # swallowed.  The dict-first guard above routes plain ``dict``
++        # instances and ``dict`` subclasses through this same handler so
++        # frozen subclass shapes share coverage with ``MappingProxyType``.
+         return
+diff --git a/django_strawberry_framework/optimizer/extension.py b/django_strawberry_framework/optimizer/extension.py
+index 5cc5231..b0b9796 100644
+--- a/django_strawberry_framework/optimizer/extension.py
++++ b/django_strawberry_framework/optimizer/extension.py
+@@ -116,24 +116,158 @@ def _walk_directives(
+             if isinstance(arg.value, VariableNode):
+                 names.add(arg.value.name.value)
+     # Recurse into child selections.
++    for child in _child_selections(node):
++        # Always recurse into the child first so directives attached
++        # to the child itself are collected (FragmentSpreadNode has
++        # no ``selection_set`` so this is just the directive sweep).
++        _walk_directives(child, names, fragments, visited_fragments)
++        frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
++        if frag_def is not None:
++            _walk_directives(frag_def, names, fragments, visited_fragments)
++
++
++def _child_selections(node: Any) -> tuple[Any, ...]:
++    """Return the AST node's selection-set children as a tuple, or ``()``.
++
++    Centralizes the ``getattr(node, "selection_set", None)`` plus
++    ``selections or ()`` shape so the three AST walkers in this module
++    (``_walk_directives``, ``_walk_reachable_fragment_definitions``,
++    and by extension ``_collect_reachable_fragment_definitions``) share
++    one "iterate children" implementation. ``FragmentSpreadNode`` has
++    no ``selection_set``, so this returns ``()`` and the caller's
++    per-child loop becomes a no-op.
++    """
+     selection_set = getattr(node, "selection_set", None)
+-    if selection_set is not None:
+-        for child in selection_set.selections or ():
+-            # Always recurse into the child first so directives attached
+-            # to the child itself are collected (FragmentSpreadNode has
+-            # no ``selection_set`` so this is just the directive sweep).
+-            _walk_directives(child, names, fragments, visited_fragments)
+-            if isinstance(child, FragmentSpreadNode):
+-                frag_name = child.name.value if child.name else None
+-                if frag_name is None or frag_name in visited_fragments:
+-                    continue
+-                frag_def = fragments.get(frag_name)
+-                if frag_def is None:
+-                    continue
+-                # Mark before descending so a sibling spread of the same
+-                # fragment in this operation does not re-walk the subtree.
+-                visited_fragments.add(frag_name)
+-                _walk_directives(frag_def, names, fragments, visited_fragments)
++    if selection_set is None:
++        return ()
++    return tuple(selection_set.selections or ())
++
++
++def _unvisited_fragment_definition(
++    node: Any,
++    fragments: dict[str, Any],
++    visited_fragments: set[str],
++) -> Any | None:
++    """Resolve a ``FragmentSpreadNode`` to its definition, once.
++
++    Returns the matching ``FragmentDefinitionNode`` and marks the
++    fragment name as visited so a sibling or cyclic spread of the same
++    fragment in the same walk is a no-op. Returns ``None`` when
++    ``node`` is not a fragment spread, when the spread has no name,
++    when the fragment name is already visited, or when the document
++    does not define the named fragment (defensive — graphql-core's
++    validation would normally reject the operation before the optimizer
++    sees it). Mutates ``visited_fragments`` on success so callers share
++    the same cycle-detection set across recursive descents in both the
++    directive-variable walk and the reachable-fragment walk.
++    """
++    if not isinstance(node, FragmentSpreadNode):
++        return None
++    frag_name = node.name.value if node.name else None
++    if frag_name is None or frag_name in visited_fragments:
++        return None
++    frag_def = fragments.get(frag_name)
++    if frag_def is None:
++        return None
++    visited_fragments.add(frag_name)
++    return frag_def
++
++
++def _collect_reachable_fragment_definitions(
++    node: Any,
++    fragments: dict[str, Any],
++) -> tuple[Any, ...]:
++    """Return every named fragment definition reachable from ``node``.
++
++    Walks the AST in selection-set order, deterministically, so the
++    same operation + fragment map produces the same tuple on every
++    call. Each fragment definition is included once (via the
++    visited-fragments cycle guard inside
++    ``_unvisited_fragment_definition``). The returned tuple feeds
++    ``_print_operation_with_reachable_fragments`` so the plan-cache
++    key includes the fragment bodies the planner will actually expand,
++    closing the ``query Q { ...F } fragment F { ... }`` cache-key gap
++    flagged in this module's review artifact.
++    """
++    reachable: list[Any] = []
++    _walk_reachable_fragment_definitions(node, fragments, set(), reachable)
++    return tuple(reachable)
++
++
++def _walk_reachable_fragment_definitions(
++    node: Any,
++    fragments: dict[str, Any],
++    visited_fragments: set[str],
++    reachable: list[Any],
++) -> None:
++    """Recursive workhorse for ``_collect_reachable_fragment_definitions``.
++
++    For each child selection: if the child is an unvisited fragment
++    spread, append its definition to ``reachable`` and recurse into
++    the definition so transitively-spread fragments are also
++    collected; then recurse into the child itself so inline-fragment
++    children and regular field children contribute their nested
++    spreads. The "always recurse into child" tail is a no-op for
++    ``FragmentSpreadNode`` children because ``_child_selections``
++    returns ``()`` for them, so the duplicate recursion is harmless
++    rather than worth a special-case branch.
++    """
++    for child in _child_selections(node):
++        frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
++        if frag_def is not None:
++            reachable.append(frag_def)
++            _walk_reachable_fragment_definitions(
++                frag_def,
++                fragments,
++                visited_fragments,
++                reachable,
++            )
++        _walk_reachable_fragment_definitions(child, fragments, visited_fragments, reachable)
++
++
++def _print_operation_with_reachable_fragments(
++    operation: Any,
++    fragments: dict[str, Any],
++) -> str:
++    """Render the plan-cache document key.
++
++    Concatenates ``print_ast(operation)`` with the printed AST of
++    every fragment definition reachable from the operation, joined by
++    newlines. This is the load-bearing distinction from a bare
++    ``print_ast(operation)``: two operations with identical bodies
++    but different reachable fragment bodies render to different
++    strings, so they no longer share a cached plan that was built for
++    the wrong fragment shape. Order is deterministic (selection-set
++    order with a visited guard), so the same operation + fragments
++    always produce the same string and the cache key is stable across
++    requests.
++    """
++    parts = [print_ast(operation)]
++    parts.extend(
++        print_ast(fragment) for fragment in _collect_reachable_fragment_definitions(operation, fragments)
++    )
++    return "\n".join(parts)
++
++
++def _root_child_selections(selections: list[Any]) -> list[Any]:
++    """Flatten children from every converted root field node.
++
++    GraphQL merges repeated root fields with the same response key
++    into one resolver call but exposes every contributing ``FieldNode``
++    in ``info.field_nodes``. After ``convert_selections``, the returned
++    list has one entry per field node, and the walker needs the union
++    of their children. The previous shape (``selections[0].selections``)
++    silently dropped relations selected by the second node, so
++    ``{ allItems { name } allItems { category { name } } }`` would
++    skip planning ``category``. The walker's existing alias merging
++    (``_merge_aliased_selections``) deduplicates within the flattened
++    list, so the order in which we flatten does not matter for plan
++    correctness.
++    """
++    children: list[Any] = []
++    for selection in selections:
++        children.extend(selection.selections)
++    return children
+ 
+ 
+ class CacheInfo(NamedTuple):
+@@ -150,11 +284,12 @@ _optimizer_active: ContextVar[bool] = ContextVar(
+ )
+ 
+ 
+-# Per-execution memo for ``print_ast(operation)``.  Set in ``on_execute``
+-# and reset on its way out so each execution gets its own dict; the
+-# ``ContextVar`` shape keeps async executions isolated even when they
+-# share the same extension instance.  ``_build_cache_key`` reads from
+-# this dict before recomputing, keyed by ``id(operation)``.
++# Per-execution memo for the rendered document key: the selected operation
++# plus reachable named fragment definitions.  Set in ``on_execute`` and
++# reset on its way out so each execution gets its own dict; the ``ContextVar``
++# shape keeps async executions isolated even when they share the same
++# extension instance.  ``_build_cache_key`` reads from this dict before
++# recomputing, keyed by ``id(operation)``.
+ _printed_ast_cache: ContextVar[dict[int, str] | None] = ContextVar(
+     "django_strawberry_framework_optimizer_printed_ast_cache",
+     default=None,
+@@ -401,9 +536,7 @@ class DjangoOptimizerExtension(SchemaExtension):
+         from strawberry.types.nodes import convert_selections
+ 
+         selections = convert_selections(info, info.field_nodes)
+-        # selections[0] is the root field; its .selections are the
+-        # children the walker needs.
+-        plan = self._get_or_build_plan(selections[0].selections, target_model, info)
++        plan = self._get_or_build_plan(_root_child_selections(selections), target_model, info)
+         self._publish_plan_to_context(plan, info)
+         if plan.is_empty:
+             return result
+@@ -512,14 +645,17 @@ class DjangoOptimizerExtension(SchemaExtension):
+         """Build the plan-cache key from resolver info and target model.
+ 
+         Key components:
+-        1. The selected operation's printed AST string.  ``print_ast``
+-           includes the operation name and its own selection set only,
+-           so multi-operation documents (``query A {...} query B {...}``)
+-           never collide — using the raw source body would, because
+-           ``loc.source.body`` is the entire document.  We store the
+-           printed string (not its ``hash``) to eliminate the rare-but-
+-           real chance of two distinct operations sharing a 64-bit hash
+-           and silently sharing a cached plan.
++        1. The selected operation's printed AST plus the printed definitions
++           of any named fragments reachable from it.  ``print_ast(operation)``
++           includes the operation name and its own selection set only, so
++           reachable fragment definitions are appended to keep same-shaped
++           operation bodies with different fragment bodies from sharing a
++           plan.  Multi-operation documents (``query A {...} query B {...}``)
++           still never collide — using the raw source body would, because
++           ``loc.source.body`` is the entire document.  We store the printed
++           string (not its ``hash``) to eliminate the rare-but-real chance of
++           two distinct document shapes sharing a 64-bit hash and silently
++           sharing a cached plan.
+         2. Frozenset of ``(var_name, var_value)`` for only the
+            variables referenced in ``@skip``/``@include`` directives.
+         3. The target Django model class (different root fields in the
+@@ -528,26 +664,27 @@ class DjangoOptimizerExtension(SchemaExtension):
+            same model do not share a plan within one operation.
+         """
+         operation = info.operation
+-        # Memoize ``print_ast(operation)`` per execution: many root
+-        # resolvers in one operation share the same operation node, and
+-        # ``print_ast`` is the heaviest step of cache-key construction.
+-        # The memo is a per-execution ``ContextVar`` dict installed by
+-        # ``on_execute``; if the extension is invoked outside an
+-        # ``on_execute`` lifecycle (some test fixtures call
++        fragments = info.fragments or {}
++        # Memoize the rendered operation-plus-reachable-fragments document
++        # key per execution: many root resolvers in one operation share the
++        # same operation node, and ``print_ast`` is the heaviest step of
++        # cache-key construction.  The memo is a per-execution ``ContextVar``
++        # dict installed by ``on_execute``; if the extension is invoked
++        # outside an ``on_execute`` lifecycle (some test fixtures call
+         # ``_build_cache_key`` directly), fall back to recomputing.
+         memo = _printed_ast_cache.get()
+         if memo is None:
+-            doc_key = print_ast(operation)
++            doc_key = _print_operation_with_reachable_fragments(operation, fragments)
+         else:
+             op_id = id(operation)
+             doc_key = memo.get(op_id)
+             if doc_key is None:
+-                doc_key = print_ast(operation)
++                doc_key = _print_operation_with_reachable_fragments(operation, fragments)
+                 memo[op_id] = doc_key
+         # Directive-variable extraction.
+         directive_var_names = _collect_directive_var_names(
+             operation,
+-            fragments=info.fragments,
++            fragments=fragments,
+         )
+         variable_values = info.variable_values or {}
+         relevant_vars = frozenset(
+diff --git a/django_strawberry_framework/optimizer/field_meta.py b/django_strawberry_framework/optimizer/field_meta.py
+index 303067d..403b4a7 100644
+--- a/django_strawberry_framework/optimizer/field_meta.py
++++ b/django_strawberry_framework/optimizer/field_meta.py
+@@ -3,7 +3,7 @@
+ ``FieldMeta`` is the canonical single source of truth for relation
+ shape across the package: ``is_relation``, cardinality flags
+ (``many_to_many`` / ``one_to_many`` / ``one_to_one``), ``attname``,
+-``related_model``, and the FK target columns. Every consumer of
++``nullable``, ``related_model``, and the FK target columns. Every consumer of
+ "relation cardinality + nullable + attname" should read from a
+ ``FieldMeta`` instance (via ``DjangoTypeDefinition.field_map`` or a
+ fresh ``FieldMeta.from_django_field(...)`` call) rather than
+@@ -29,7 +29,14 @@ mirror written in ``django_strawberry_framework/types/base.py`` is
+ retained for the 0.0.x line for backward compatibility with the
+ walker's pre-definition reads; remove the mirror writer and this
+ docstring paragraph in the same change that ships the retirement
+-slice. The walker already prefers ``DjangoTypeDefinition.field_map``.
++slice. The walker still reads ``cls._optimizer_field_map`` today
++(``optimizer/walker.py:_resolve_field_map``); ``BACKLOG-014`` in
++``KANBAN.md`` tracks the move to
++``registry.get_definition(type_cls).field_map`` and enumerates the
++five ``TODO(spec-fieldmeta-mirror-retirement)`` anchor sites that
++close with it. The sibling ``TODO(spec-fieldmeta-ssot)`` family
++(three reader sites that re-derive relation shape) is tracked under
++``BACKLOG-013`` in the same file.
+ """
+ 
+ from __future__ import annotations
+@@ -38,6 +45,7 @@ from dataclasses import dataclass
+ from typing import TYPE_CHECKING, Protocol, runtime_checkable
+ 
+ from django_strawberry_framework.exceptions import OptimizerError
++from django_strawberry_framework.utils.relations import relation_kind
+ 
+ if TYPE_CHECKING:  # pragma: no cover
+     from django.db import models
+@@ -70,6 +78,18 @@ class FieldMeta:
+         many_to_many: ``True`` for M2M fields.
+         one_to_many: ``True`` for reverse FK fields.
+         one_to_one: ``True`` for OneToOne fields (forward or reverse).
++        nullable: Raw single-relation nullability rule. Reverse OneToOne
++            relations short-circuit to ``True`` because the related row
++            may be absent; every other shape follows Django's
++            ``field.null`` flag (with ``getattr`` defaulting to ``False``
++            for descriptors that omit it). Many-side cardinalities
++            (reverse FK / M2M) render as ``list[target_type]`` at the
++            GraphQL layer regardless of this flag, so consumers gate on
++            cardinality before reading ``nullable``. The flag itself is
++            taken from the Django descriptor, which means reverse FK
++            (``ManyToOneRel``) reads ``True`` here as a class-level
++            Django default — the value is semantically irrelevant for
++            many-side cardinalities, not a contradiction.
+         related_model: The target model class for relations, or ``None``.
+         attname: The DB column name (e.g., ``category_id`` for a FK).
+             ``None`` for reverse relations and non-FK fields.
+@@ -88,6 +108,7 @@ class FieldMeta:
+     many_to_many: bool = False
+     one_to_many: bool = False
+     one_to_one: bool = False
++    nullable: bool = False
+     related_model: type[models.Model] | None = None
+     attname: str | None = None
+     target_field_name: str | None = None
+@@ -120,12 +141,14 @@ class FieldMeta:
+         # Read ``target_field`` once — it is consulted twice below to
+         # extract both ``name`` and ``attname``.
+         target_field = getattr(field, "target_field", None)
++        nullable = relation_kind(field) == "reverse_one_to_one" or bool(getattr(field, "null", False))
+         return cls(
+             name=field.name,
+             is_relation=bool(field.is_relation),
+             many_to_many=bool(getattr(field, "many_to_many", False)),
+             one_to_many=bool(getattr(field, "one_to_many", False)),
+             one_to_one=bool(getattr(field, "one_to_one", False)),
++            nullable=nullable,
+             related_model=getattr(field, "related_model", None),
+             attname=getattr(field, "attname", None),
+             target_field_name=getattr(target_field, "name", None),
+diff --git a/django_strawberry_framework/optimizer/walker.py b/django_strawberry_framework/optimizer/walker.py
+index d8c6be0..7d15d73 100644
+--- a/django_strawberry_framework/optimizer/walker.py
++++ b/django_strawberry_framework/optimizer/walker.py
+@@ -7,6 +7,7 @@ from typing import Any
+ 
+ from django.db import models
+ from django.db.models import Prefetch
++from strawberry import relay
+ 
+ from ..registry import registry
+ from ..utils.relations import relation_kind
+@@ -125,12 +126,26 @@ def _walk_selections(
+         django_name = snake_case(sel.name)
+         django_field = field_map.get(django_name)
+         if django_field is None:
++            # Decision 7 ("no avoidable lazy loads on ``resolve_id``"):
++            # when a Relay-declared ``DjangoType`` uses a custom pk
++            # attname (e.g. ``uuid = UUIDField(primary_key=True)``),
++            # ``snake_case("id") == "id"`` does not match the field-map
++            # key (``"uuid"``). Resolve the configured ``id_attr`` and
++            # project that real column so ``_resolve_id_default`` reads
++            # the loaded value from ``root.__dict__`` instead of falling
++            # back to ``getattr`` and triggering an N+1 lazy load.
++            if django_name == "id" and type_cls is not None and issubclass(type_cls, relay.Node):
++                id_attr = type_cls.resolve_id_attr()
++                if id_attr == "pk":
++                    id_attr = model._meta.pk.attname
++                if id_attr in field_map:
++                    append_unique(plan.only_fields, f"{prefix}{id_attr}")
+             continue
+         if not django_field.is_relation:
+-            # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-            # selecting Relay ``id`` on a Relay-declared DjangoType must still
+-            # project the concrete pk attname so ``resolve_id`` can read the
+-            # loaded value without lazy loading.
++            # Scalar projection. When ``django_name == "id"`` and the
++            # type is a Relay-declared ``DjangoType``, this is the
++            # default-pk path (the model's pk attname IS ``"id"``); the
++            # custom-pk path is handled above.
+             append_unique(plan.only_fields, f"{prefix}{django_name}")
+             continue
+ 
+diff --git a/django_strawberry_framework/registry.py b/django_strawberry_framework/registry.py
+index 4f4651e..f227e50 100644
+--- a/django_strawberry_framework/registry.py
++++ b/django_strawberry_framework/registry.py
+@@ -3,10 +3,10 @@
+ Maps Django models to their generated ``DjangoType`` and ``(model,
+ field_name)`` to generated ``Enum`` classes. Used by:
+ 
+-- ``converters.convert_relation`` for relation resolution once target
+-  types are registered.
+-- ``converters.convert_choices_to_enum`` for enum reuse across multiple
+-  ``DjangoType`` subclasses reading the same choice column.
++- ``types.converters.convert_relation`` for relation resolution once
++  target types are registered.
++- ``types.converters.convert_choices_to_enum`` for enum reuse across
++  multiple ``DjangoType`` subclasses reading the same choice column.
+ 
+ The registry is a process-global singleton (``registry``). Test isolation
+ is via the ``clear()`` helper, typically wired into a ``pytest`` autouse
+@@ -31,11 +31,11 @@ if TYPE_CHECKING:  # pragma: no cover
+ class TypeRegistry:
+     """Process-global registry of generated GraphQL types and enums.
+ 
+-    Mutations (``register``, ``register_enum``, ``clear``) are not guarded
+-    by a lock.  This is safe because every production-path mutation runs
+-    at import time from ``DjangoType.__init_subclass__`` (single-threaded
+-    module loading); ``clear`` is test-only.  Do not call ``register`` or
+-    ``register_enum`` from a request handler or async resolver.
++    Mutating methods are not guarded by a lock. This is safe because
++    every production-path mutation runs at import time from
++    ``DjangoType.__init_subclass__`` (single-threaded module loading);
++    ``clear`` is test-only. Do not mutate the registry from a request
++    handler or async resolver.
+     """
+ 
+     def __init__(self) -> None:
+@@ -244,9 +244,8 @@ class TypeRegistry:
+         """Drop all registered types and enums.
+ 
+         Test-only — production code should never need to call this.
+-        Wire into a ``pytest`` autouse fixture (see
+-        ``tests/test_django_types.py``) so each test starts with a clean
+-        registry.
++        Wire into ``pytest`` autouse fixtures so each registry-using test
++        starts with a clean registry.
+         """
+         self._types.clear()
+         self._models.clear()
+diff --git a/django_strawberry_framework/types/__init__.py b/django_strawberry_framework/types/__init__.py
+index 39c128e..cf61cf1 100644
+--- a/django_strawberry_framework/types/__init__.py
++++ b/django_strawberry_framework/types/__init__.py
+@@ -16,7 +16,4 @@ shared primitives belong in ``optimizer/`` or in a sibling utility module.
+ from .base import DjangoType
+ from .finalizer import finalize_django_types
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# keep ``types.relay`` internal; do not re-export Relay helper functions.
+-
+ __all__ = ("DjangoType", "finalize_django_types")
+diff --git a/django_strawberry_framework/types/base.py b/django_strawberry_framework/types/base.py
+index 08bc090..6d2d982 100644
+--- a/django_strawberry_framework/types/base.py
++++ b/django_strawberry_framework/types/base.py
+@@ -26,6 +26,7 @@ triggers the collection pipeline, which:
+ from typing import Any, ClassVar
+ 
+ from django.db import models
++from strawberry import relay
+ from strawberry.types.field import StrawberryField
+ 
+ from ..exceptions import ConfigurationError
+@@ -37,6 +38,7 @@ from ..utils.strings import snake_case
+ from .converters import convert_scalar, resolved_relation_annotation
+ from .definition import DjangoTypeDefinition
+ from .relations import PendingRelation, PendingRelationAnnotation
++from .relay import install_is_type_of
+ 
+ DEFERRED_META_KEYS: frozenset[str] = frozenset(
+     {
+@@ -45,17 +47,6 @@ DEFERRED_META_KEYS: frozenset[str] = frozenset(
+         "aggregate_class",
+         "fields_class",
+         "search_fields",
+-        # ``interfaces`` is in the deferred set rather than the allowed
+-        # set because the relay-interface application pass
+-        # (``cls.__bases__`` injection before ``strawberry.type``) has
+-        # not landed yet. Accepting the key without applying it would
+-        # silently produce types that look interface-bearing but are
+-        # not, which is exactly the alpha posture we want to avoid.
+-        # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-        # move ``interfaces`` to ALLOWED_META_KEYS only after validation,
+-        # storage, base injection, Relay resolver defaults, id suppression,
+-        # tests, docs, and the version bump all land.
+-        "interfaces",
+     },
+ )
+ 
+@@ -67,6 +58,7 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
+         "name",
+         "description",
+         "optimizer_hints",
++        "interfaces",
+     },
+ )
+ 
+@@ -81,9 +73,6 @@ class DjangoType:
+     def __init_subclass__(cls, **kwargs: Any) -> None:
+         """Collect model/type metadata without finalizing the Strawberry type."""
+         super().__init_subclass__(**kwargs)
+-        # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-        # call ``types.relay.install_is_type_of(cls)`` here for every
+-        # DjangoType subclass while preserving consumer-declared ``is_type_of``.
+         has_custom_get_queryset = _detect_custom_get_queryset(cls)
+         cls._is_default_get_queryset = not has_custom_get_queryset
+         meta = cls.__dict__.get("Meta")
+@@ -94,7 +83,7 @@ class DjangoType:
+                 f"finalize_django_types() already ran; cannot register {cls.__name__} "
+                 "after finalization. Call registry.clear() first if this is a test.",
+             )
+-        _validate_meta(meta)
++        interfaces = _validate_meta(meta)
+         fields = _select_fields(meta)
+         _validate_optimizer_hints(meta, fields)
+ 
+@@ -120,10 +109,8 @@ class DjangoType:
+             fields,
+             source_model=meta.model,
+             consumer_authored_fields=consumer_authored_fields,
++            interfaces=interfaces,
+         )
+-        # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-        # pass normalized ``Meta.interfaces`` through to
+-        # ``DjangoTypeDefinition.interfaces`` once the key is accepted.
+         definition = DjangoTypeDefinition(
+             origin=cls,
+             model=meta.model,
+@@ -139,12 +126,14 @@ class DjangoType:
+             consumer_annotated_relation_fields=consumer_annotated_relation_fields,
+             consumer_assigned_relation_fields=consumer_assigned_relation_fields,
+             consumer_assigned_scalar_fields=consumer_assigned_scalar_fields,
++            interfaces=interfaces,
+         )
+         registry.register_with_definition(meta.model, cls, definition)
+         for pending_relation in pending:
+             registry.add_pending_relation(pending_relation)
+         cls.__annotations__ = {**synthesized, **consumer_annotations}
+         cls.__django_strawberry_definition__ = definition
++        install_is_type_of(cls)
+         # TODO(spec-fieldmeta-mirror-retirement): retire these class-attribute
+         # mirrors; the optimizer should read ``DjangoTypeDefinition.field_map`` /
+         # ``optimizer_hints`` directly. Reader sites in ``optimizer/walker.py``
+@@ -270,7 +259,98 @@ def _format_unknown_fields_error(*, model: type, attr: str, unknown: list[str],
+     return f"{model.__name__}.Meta.{attr} names unknown fields: {unknown}. Available: {sorted(available)}."
+ 
+ 
+-def _validate_meta(meta: type) -> None:
++_INTERFACES_SHAPE_ERROR_LEAD_IN = (
++    "Meta.interfaces must be a tuple/list of Strawberry interface classes or a single interface class"
++)
++
++
++def _interfaces_shape_error(meta: type, got_suffix: str) -> str:
++    """Format the top-level ``Meta.interfaces`` shape-rejection message.
++
++    Both raise sites (string-typed raw, other non-sequence raw) share the
++    long lead-in defined in ``_INTERFACES_SHAPE_ERROR_LEAD_IN``; this
++    helper localizes the wording so the two sites cannot drift.
++    """
++    return f"{meta.model.__name__}.{_INTERFACES_SHAPE_ERROR_LEAD_IN}, got {got_suffix}."
++
++
++def _validate_interfaces(meta: type) -> tuple[type, ...]:
++    """Validate and normalize ``Meta.interfaces`` per Decision 4.
++
++    Returns a normalized ``tuple[type, ...]`` ready to pass through to
++    ``DjangoTypeDefinition.interfaces``. Returns ``()`` when the key is
++    absent or set to an empty tuple/list (Decision 4 line 324).
++
++    Validation rules (spec lines 322-330):
++
++    - Accepts a tuple/list of interface classes, or a single real
++      Strawberry interface class (e.g. ``interfaces = relay.Node``).
++    - Rejects strings, sets, generators, dicts, ints, and other
++      non-sequence values.
++    - Each entry must satisfy
++      ``hasattr(entry, "__strawberry_definition__") and
++      entry.__strawberry_definition__.is_interface``.
++    - Rejects string entries (no lazy/forward-reference lookup).
++    - Rejects ``DjangoType`` self-reference and other ``DjangoType``
++      subclasses.
++    - Rejects duplicates.
++
++    The composite-pk constraint and ``relay.Node`` MRO inspection live
++    in Slice 4's Phase 2.5; this helper only validates the shape and
++    contents of the ``Meta.interfaces`` tuple itself.
++    """
++    raw = getattr(meta, "interfaces", None)
++    if raw is None:
++        return ()
++    if isinstance(raw, str):
++        raise ConfigurationError(_interfaces_shape_error(meta, "a string"))
++    if isinstance(raw, type):
++        entries: tuple[type, ...] = (raw,)
++    elif isinstance(raw, (tuple, list)):
++        entries = tuple(raw)
++    else:
++        raise ConfigurationError(_interfaces_shape_error(meta, type(raw).__name__))
++    if entries == ():
++        return ()
++    seen_ids: set[int] = set()
++    duplicates: list[str] = []
++    for entry in entries:
++        if isinstance(entry, str):
++            raise ConfigurationError(
++                f"{meta.model.__name__}.Meta.interfaces must contain interface classes, "
++                f"not strings (got {entry!r}). Lazy/forward-reference interface lookup is "
++                "out of scope for 0.0.5.",
++            )
++        if not isinstance(entry, type):
++            raise ConfigurationError(
++                f"{meta.model.__name__}.Meta.interfaces must contain interface classes, got {entry!r}.",
++            )
++        if issubclass(entry, DjangoType):
++            raise ConfigurationError(
++                f"{meta.model.__name__}.Meta.interfaces may not contain DjangoType or "
++                f"DjangoType subclasses (got {entry.__name__}). DjangoType is not a "
++                "Strawberry interface.",
++            )
++        definition = getattr(entry, "__strawberry_definition__", None)
++        if definition is None or not getattr(definition, "is_interface", False):
++            raise ConfigurationError(
++                f"{meta.model.__name__}.Meta.interfaces entry {entry.__name__} is not a "
++                "Strawberry interface. Use @strawberry.interface or one of the "
++                "strawberry.relay interface classes.",
++            )
++        entry_id = id(entry)
++        if entry_id in seen_ids:
++            duplicates.append(entry.__name__)
++        else:
++            seen_ids.add(entry_id)
++    if duplicates:
++        raise ConfigurationError(
++            f"{meta.model.__name__}.Meta.interfaces contains duplicate entries: {sorted(duplicates)}.",
++        )
++    return entries
++
++
++def _validate_meta(meta: type) -> tuple[type, ...]:
+     """Validate a ``DjangoType`` subclass's nested ``Meta`` class.
+ 
+     Validation order:
+@@ -280,6 +360,14 @@ def _validate_meta(meta: type) -> None:
+     3. Any key in ``DEFERRED_META_KEYS`` raises with a clear message.
+     4. Any non-dunder key on ``meta`` not in ``ALLOWED_META_KEYS |
+        DEFERRED_META_KEYS`` raises (typo guard).
++    5. If ``Meta.interfaces`` is declared, validate it per
++       ``_validate_interfaces`` (Decision 4) and return the normalized
++       tuple.
++
++    Returns:
++        The normalized ``Meta.interfaces`` tuple, or ``()`` when the key
++        is absent or empty. The caller threads this through to
++        ``DjangoTypeDefinition.interfaces``.
+ 
+     Raises:
+         ConfigurationError: any of the above violations.
+@@ -302,11 +390,7 @@ def _validate_meta(meta: type) -> None:
+     if unknown:
+         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
+ 
+-    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-    # validate ``Meta.interfaces`` as a tuple/list of real Strawberry
+-    # interfaces, or as one real Strawberry interface class normalized
+-    # to a one-item tuple. Reject strings, invalid non-sequences,
+-    # duplicates, and DjangoType self-references before Strawberry decoration.
++    return _validate_interfaces(meta)
+ 
+ 
+ def _validate_optimizer_hints(meta: type, fields: tuple[Any, ...]) -> None:
+@@ -428,6 +512,7 @@ def _build_annotations(
+     *,
+     source_model: type[models.Model],
+     consumer_authored_fields: frozenset[str] = frozenset(),
++    interfaces: tuple[type, ...] = (),
+ ) -> tuple[dict[str, Any], list[PendingRelation]]:
+     """Build the annotation dict the Strawberry type decorator consumes.
+ 
+@@ -436,11 +521,28 @@ def _build_annotations(
+     ``convert_scalar`` otherwise. The caller pre-computes the list with
+     ``_select_fields(meta)`` so this function does not need ``meta``.
+ 
++    When ``relay.Node`` appears in ``interfaces``, the primary-key field's
++    synthesized scalar annotation is dropped from the returned dict so
++    Strawberry's interface-supplied ``id: GlobalID!`` is not shadowed by a
++    Django ``int`` field. The pk field stays in ``fields`` so the
++    optimizer's ``DjangoTypeDefinition.field_map`` continues to see it as a
++    connector column (spec Decision 7, line 361).
++
+     Args:
+         cls: The consumer-facing ``DjangoType`` subclass (its ``__name__``
+             threads into ``convert_scalar`` so generated choice enums
+             carry a stable name).
+         fields: The Meta-filtered list of Django field objects.
++        source_model: The Django model the type wraps. Used to resolve the
++            primary-key attname when ``relay.Node`` suppression is active.
++        consumer_authored_fields: Names of fields whose annotation /
++            ``StrawberryField`` assignment is owned by the consumer. The
++            synthesized annotation is skipped for these names so consumer
++            overrides survive collection.
++        interfaces: The validated ``Meta.interfaces`` tuple. When
++            ``relay.Node`` is among them, the primary-key field's
++            synthesized scalar annotation is suppressed so Strawberry's
++            interface-supplied ``id: GlobalID!`` is not shadowed.
+ 
+     Returns:
+         A tuple of ``(annotations, pending_relations)``.
+@@ -452,6 +554,17 @@ def _build_annotations(
+     """
+     annotations: dict[str, Any] = {}
+     pending: list[PendingRelation] = []
++    # Suppress the synthesized scalar ``id`` annotation whenever the type will
++    # participate in the Relay ``Node`` interface — either through
++    # ``Meta.interfaces`` (the canonical path) or through direct inheritance
++    # (``class Foo(DjangoType, relay.Node)``). Without the direct-inheritance
++    # branch a Strawberry-native consumer would land in Phase 3
++    # ``strawberry.type(...)`` decoration with both the synthesized ``id: int``
++    # and the interface-supplied ``id: GlobalID!`` and the schema build would
++    # blow up with ``NodeIDAnnotationError`` (review feedback ``feedback.md``
++    # § High "Direct relay.Node inheritance bypasses Relay finalization").
++    suppress_pk_annotation = relay.Node in interfaces or issubclass(cls, relay.Node)
++    pk_attname = source_model._meta.pk.name if suppress_pk_annotation else None
+     for field in fields:
+         if field.is_relation:
+             if field.name in consumer_authored_fields:
+@@ -477,10 +590,13 @@ def _build_annotations(
+                 # collection. Relation override symmetry: see the
+                 # ``field.is_relation`` branch above.
+                 continue
+-            # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-            # when ``relay.Node`` is declared in ``Meta.interfaces``, suppress
+-            # the synthesized Django ``id`` annotation while preserving the pk
+-            # field in ``DjangoTypeDefinition.field_map`` for optimizer use.
++            if suppress_pk_annotation and field.name == pk_attname:
++                # ``relay.Node`` supplies ``id: GlobalID!`` via the interface;
++                # dropping the synthesized scalar annotation here keeps the
++                # Strawberry surface clean. The pk field stays in ``fields``
++                # so the optimizer's field map still sees it as a connector
++                # column (spec Decision 7, line 361).
++                continue
+             annotations[field.name] = convert_scalar(field, cls.__name__)
+     return annotations, pending
+ 
+diff --git a/django_strawberry_framework/types/definition.py b/django_strawberry_framework/types/definition.py
+index 0344d6e..dfbbcd2 100644
+--- a/django_strawberry_framework/types/definition.py
++++ b/django_strawberry_framework/types/definition.py
+@@ -37,8 +37,7 @@ class DjangoTypeDefinition:
+     aggregate_class: Any | None = None
+     fields_class: Any | None = None
+     search_fields: tuple[str, ...] = ()
+-    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-    # populate this from accepted ``Meta.interfaces`` and keep it as the
+-    # finalizer's source of truth for Phase 2.5 base injection.
++    # Populated by ``_validate_meta``; consumed by ``finalize_django_types()``
++    # Phase 2.5 (Slice 4) as the finalizer's source of truth for base injection.
+     interfaces: tuple[type, ...] = ()
+     finalized: bool = False
+diff --git a/django_strawberry_framework/types/finalizer.py b/django_strawberry_framework/types/finalizer.py
+index ba75c66..5307400 100644
+--- a/django_strawberry_framework/types/finalizer.py
++++ b/django_strawberry_framework/types/finalizer.py
+@@ -8,6 +8,12 @@ from ..exceptions import ConfigurationError
+ from ..registry import registry
+ from .converters import resolved_relation_annotation
+ from .relations import PendingRelation
++from .relay import (
++    _check_composite_pk_for_relay_node,
++    apply_interfaces,
++    implements_relay_node,
++    install_relay_node_resolvers,
++)
+ from .resolvers import _attach_relation_resolvers
+ 
+ 
+@@ -41,6 +47,13 @@ def finalize_django_types() -> None:
+     mutating any class object. Phase 2 resolver attachment and Phase 3
+     ``strawberry.type(...)`` calls mutate classes in place; a Strawberry-side
+     failure there requires ``registry.clear()`` and fresh class recreation.
++
++    Phase 2.5 (between Phase 2 and Phase 3) applies declared interfaces to
++    ``cls.__bases__``, gates Relay-node-declared classes against composite
++    primary keys, and injects the four ``resolve_*`` defaults that
++    ``relay.Node`` would otherwise inherit from the upstream Strawberry
++    interface. Runs before Phase 3 so the ``strawberry.type(...)`` decorator
++    sees the mutated bases and the injected classmethods at decoration time.
+     """
+     if registry.is_finalized():
+         return
+@@ -79,11 +92,22 @@ def finalize_django_types() -> None:
+             definition.selected_fields,
+             skip_field_names=definition.consumer_assigned_relation_fields,
+         )
+-    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-    # insert Phase 2.5 here: apply ``definition.interfaces`` to
+-    # ``type_cls.__bases__``, surface incompatible interfaces as
+-    # ConfigurationError, reject composite-pk Relay nodes, and install Relay
+-    # ``resolve_*`` defaults before Strawberry decorates the class.
++
++    for type_cls, definition in registry.iter_definitions():
++        if definition.finalized:
++            continue
++        # ``apply_interfaces`` is the only step that depends on a non-empty
++        # ``Meta.interfaces`` tuple. The Relay-node gate and resolver injection
++        # are keyed off the resolved MRO (``implements_relay_node``) so they
++        # also catch consumers who wrote ``class Foo(DjangoType, relay.Node)``
++        # directly without ``Meta.interfaces`` (review feedback
++        # ``feedback.md`` § High "Direct relay.Node inheritance bypasses Relay
++        # finalization").
++        if definition.interfaces:
++            apply_interfaces(type_cls, definition)
++        if implements_relay_node(type_cls):
++            _check_composite_pk_for_relay_node(type_cls)
++            install_relay_node_resolvers(type_cls)
+ 
+     for type_cls, definition in registry.iter_definitions():
+         if definition.finalized:
+diff --git a/django_strawberry_framework/types/relay.py b/django_strawberry_framework/types/relay.py
+index 24a7339..5891e27 100644
+--- a/django_strawberry_framework/types/relay.py
++++ b/django_strawberry_framework/types/relay.py
+@@ -1,24 +1,464 @@
+-"""Internal Relay/interface helpers for the 0.0.5 Relay foundation slice."""
++"""Internal Relay/interface helpers for the 0.0.5 Relay foundation slice.
++
++Slice 2 introduced ``install_is_type_of``; Slice 4 extends this module with
++the interface base-class injection step and the four Relay node resolver
++defaults. The helpers split by lifecycle phase:
++
++- Class-creation time (``__init_subclass__``): ``install_is_type_of``
++  (Slice 2). Discriminator: ``cls.__dict__`` membership.
++- Annotation synthesis time (``_build_annotations``): the
++  ``relay.Node in interfaces`` tuple-membership check (Slice 3, in
++  ``types/base.py``).
++- Finalization Phase 2.5 (``finalize_django_types()``): ``apply_interfaces``,
++  ``_check_composite_pk_for_relay_node``, ``install_relay_node_resolvers``
++  (Slice 4). The last uses the ``__func__`` identity test that distinguishes
++  consumer-overridden ``resolve_*`` methods from the ``relay.Node`` defaults
++  inherited through MRO.
++
++Direct ports of behavior from ``strawberry_django/type.py`` and
++``strawberry_django/relay/utils.py`` cited in the spec; the upstream
++package is not imported at runtime.
++"""
+ 
+ from __future__ import annotations
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# implement ``install_is_type_of`` using strawberry-django's virtual subclass
+-# pattern, preserving any consumer-declared ``is_type_of``.
++import inspect
++from collections.abc import Callable
++from typing import TYPE_CHECKING, Any
++
++from django.db import models
++from django.db.models import CompositePrimaryKey
++from strawberry import relay
++from strawberry.relay.exceptions import NodeIDAnnotationError
++from strawberry.utils.inspect import in_async_context
++
++from ..exceptions import ConfigurationError
++
++if TYPE_CHECKING:  # pragma: no cover - type-checking-only import (Slice 4 quoted hint).
++    from .definition import DjangoTypeDefinition
++
++
++def implements_relay_node(type_cls: type) -> bool:
++    """Return whether ``type_cls`` is a subclass of ``strawberry.relay.Node``.
++
++    Used by ``finalize_django_types()`` Phase 2.5 (after ``__bases__``
++    mutation) to decide whether to run the composite-pk gate and the
++    four ``resolve_*`` defaults. Distinct from Slice 3's tuple-membership
++    check (``relay.Node in interfaces`` at ``types/base.py``), which
++    runs pre-base-injection at collection time against the validated
++    ``Meta.interfaces`` tuple.
++    """
++    return issubclass(type_cls, relay.Node)
++
++
++def install_is_type_of(type_cls: type) -> None:
++    """Borrow strawberry-django's ``is_type_of`` virtual-subclass behavior.
++
++    Direct port of ``strawberry_django/type.py:203-211``. Strawberry's
++    interface dispatch uses ``is_type_of`` to identify the concrete type
++    for a returned ORM instance. Without this borrow, an interface field
++    that returns a Django model can fail Strawberry's isinstance check
++    and surface as "Cannot determine type for object of model X" at
++    runtime (spec Decision 6, line 351).
++
++    Preserves a consumer-declared ``is_type_of`` via the ``cls.__dict__``
++    membership check (the same discriminator strawberry-django uses); a
++    function inherited from a base does not count as "declared on this
++    class" and is overwritten by the framework default.
++
++    The upstream ``get_strawberry_type_cast`` branch is intentionally
++    omitted — our package does not yet expose ``strawberry.cast(...)``
++    integration anywhere else, and adding it now would couple this slice
++    to a Strawberry surface we have not committed to. If a future adopter
++    needs ``strawberry.cast(...)`` support, a focused follow-up slice can
++    add the branch without churn to the rest of the Relay machinery.
++    """
++    if "is_type_of" in type_cls.__dict__:
++        return
++    model = type_cls.__django_strawberry_definition__.model
++
++    def is_type_of(obj: object, info: object) -> bool:
++        return isinstance(obj, (type_cls, model))
++
++    type_cls.is_type_of = is_type_of
++
++
++def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
++    """Inject ``definition.interfaces`` into ``type_cls.__bases__`` (Phase 2.5).
++
++    Skips interfaces already in ``type_cls.__mro__`` so a class that
++    already inherits a listed interface directly (e.g. consumer wrote
++    ``class Foo(DjangoType, relay.Node): class Meta: interfaces =
++    (relay.Node,)``) sees no double-injection (spec lines 329, 339,
++    458).
++
++    Raises:
++        ConfigurationError: a ``TypeError`` from ``cls.__bases__``
++            assignment is wrapped with the offending interface named in
++            the message so consumers see "cannot add interface X" rather
++            than a raw layout TypeError (spec Risk note, lines 540-541).
++    """
++    additions = tuple(iface for iface in definition.interfaces if iface not in type_cls.__mro__)
++    if not additions:
++        return
++    try:
++        type_cls.__bases__ = (*type_cls.__bases__, *additions)
++    except TypeError as exc:
++        offending = ", ".join(iface.__name__ for iface in additions)
++        raise ConfigurationError(
++            f"{type_cls.__name__}: cannot add interface(s) {offending} to bases. "
++            f"Python rejected the resulting MRO ({exc}). Either drop the "
++            "incompatible interface from Meta.interfaces or rework the class "
++            "hierarchy.",
++        ) from exc
++
++
++def _check_composite_pk_for_relay_node(type_cls: type) -> None:
++    """Raise ``ConfigurationError`` when a Relay-declared type has a composite pk.
++
++    Decision 2 (spec lines 287, 455, 555): combining ``relay.Node`` with
++    a composite-primary-key model is explicitly out of scope for
++    ``0.0.5``. Detection uses ``isinstance(model._meta.pk,
++    CompositePrimaryKey)`` so the gate aligns with Django 5.2+'s
++    native composite-pk type.
++
++    The error message proposes "declare an explicit ``id: relay.NodeID[...]``
++    annotation" as a remediation; honor that here so a consumer who
++    escapes the composite-pk surface with a single-column ``NodeID``
++    annotation is not unconditionally rejected. Strawberry's
++    ``Node.resolve_id_attr()`` returns the consumer's ``NodeID``
++    attribute name when present and raises ``NodeIDAnnotationError``
++    otherwise; only the latter case is the contract violation this
++    gate is meant to catch.
++    """
++    model = type_cls.__django_strawberry_definition__.model
++    if not isinstance(model._meta.pk, CompositePrimaryKey):
++        return
++    try:
++        type_cls.resolve_id_attr()  # type: ignore[attr-defined]
++    except NodeIDAnnotationError:
++        pass
++    else:
++        return
++    raise ConfigurationError(
++        f"{model.__name__}: relay.Node is not supported on models with a "
++        "composite primary key. Either declare an explicit id: "
++        "relay.NodeID[...] annotation on the DjangoType or remove "
++        "relay.Node from Meta.interfaces.",
++    )
++
++
++def _resolve_id_attr_default(cls: type) -> str:
++    """Default ``Node.resolve_id_attr`` — falls back to ``"pk"``.
++
++    Calls ``super(cls, cls).resolve_id_attr()`` so a consumer
++    ``id: relay.NodeID[...]`` annotation on the class wins; on
++    ``NodeIDAnnotationError`` falls back to ``"pk"``. Direct port of
++    ``strawberry_django/relay/utils.py:285-303``.
++    """
++    try:
++        return super(cls, cls).resolve_id_attr()  # type: ignore[misc]
++    except NodeIDAnnotationError:
++        return "pk"
++
++
++def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:
++    """Default ``Node.resolve_id`` with a ``__dict__`` cache check.
++
++    Signature mirrors ``strawberry.relay.Node.resolve_id`` after
++    ``classmethod`` binding: ``(cls, root, *, info)``. ``info`` is
++    keyword-only so Strawberry's Relay machinery, which calls
++    ``cls.resolve_id(root, info=info)``, lands at the right slot without
++    a positional collision (review feedback ``feedback.md`` § High).
++
++    Calls ``cls.resolve_id_attr()`` to derive the column name (handles
++    consumer ``relay.NodeID[...]`` overrides and the ``"pk"`` fallback),
++    coerces the literal ``"pk"`` to the model's concrete pk ``attname``
++    so the dict-cache lookup keys on the real column, then reads from
++    ``root.__dict__`` first (avoids an extra ORM hit when the optimizer
++    already loaded the row) and falls back to ``getattr(root, id_attr)``
++    (spec line 313 / Decision 7's "no avoidable lazy loads on
++    ``resolve_id``").
++    """
++    id_attr = cls.resolve_id_attr()
++    if id_attr == "pk":
++        id_attr = root.__class__._meta.pk.attname
++    try:
++        return str(root.__dict__[id_attr])
++    except KeyError:
++        return str(getattr(root, id_attr))
++
++
++def _apply_get_queryset_sync(cls: type, qs: models.QuerySet, info: Any) -> models.QuerySet:
++    """Run ``cls.get_queryset`` in a sync context; reject async hooks loudly.
++
++    Decision 9 makes a consumer's ``DjangoType.get_queryset`` allowed to
++    be sync or async, but a sync resolver context cannot await an async
++    hook safely (event-loop edge cases dominate the bridge). On the sync
++    path we therefore close the unawaited coroutine to silence the
++    "coroutine was never awaited" warning and raise a named
++    ``ConfigurationError`` that points the consumer at the async resolver
++    path or a sync ``get_queryset`` rewrite (review feedback
++    ``feedback.md`` § High "Async ``get_queryset`` is not awaited in
++    Relay node defaults").
++    """
++    result = cls.get_queryset(qs, info)
++    if inspect.iscoroutine(result):
++        result.close()
++        raise ConfigurationError(
++            f"{cls.__name__}.get_queryset returned a coroutine in a sync "
++            "resolver context. The Relay node defaults only await async "
++            "get_queryset hooks on the async branch; either invoke the "
++            "Relay node default from an async resolver, or redefine "
++            "get_queryset as a sync method.",
++        )
++    return result
++
++
++async def _apply_get_queryset_async(cls: type, qs: models.QuerySet, info: Any) -> models.QuerySet:
++    """Run ``cls.get_queryset`` in an async context, awaiting awaitables.
++
++    Sync ``get_queryset`` returns the queryset directly and is passed
++    through. Async ``get_queryset`` returns a coroutine which is awaited
++    here before the id filter runs — the Decision 9 contract that the
++    previous implementation broke (it called the hook synchronously then
++    invoked ``.filter`` on a coroutine).
++    """
++    result = cls.get_queryset(qs, info)
++    if inspect.isawaitable(result):
++        result = await result
++    return result
++
++
++def _apply_node_filter(
++    qs: models.QuerySet,
++    id_attr: str,
++    *,
++    node_id: Any = None,
++    node_ids: list[Any] | None = None,
++) -> models.QuerySet:
++    """Apply the Relay-id filter to ``qs`` (sync; no get_queryset involvement).
++
++    Single source of truth for the GlobalID coercion and the
++    ``id_attr`` / ``id_attr__in`` filter shape. The post-``get_queryset``
++    queryset is sync-iterable (or async-iterable in the async branch);
++    the filter itself is a pure ORM operation and identical across both
++    paths.
++    """
++    if node_id is not None:
++        coerced = node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
++        return qs.filter(**{id_attr: coerced})
++    if node_ids is not None:
++        coerced_ids = [(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
++        return qs.filter(**{f"{id_attr}__in": coerced_ids})
++    return qs
++
++
++def _initial_queryset(cls: type) -> models.QuerySet:
++    """Return ``model._default_manager.all()`` for the declared model.
++
++    Centralizes the ``cls.__django_strawberry_definition__.model``
++    lookup so both the sync and async assembly paths share one source of
++    truth for step 1 of the Decision 3 four-step shape.
++    """
++    return cls.__django_strawberry_definition__.model._default_manager.all()
++
++
++def _order_nodes(
++    cls: type,
++    results: list,
++    coerced_keys: list[str],
++    id_attr: str,
++    *,
++    required: bool,
++) -> list:
++    """Re-order ``results`` to match ``coerced_keys`` (port of strawberry-django's map_results).
++
++    Mirrors ``strawberry_django/relay/utils.py:179-189``: build an index
++    keyed on ``str(getattr(obj, id_attr))`` (so the dict lookup matches
++    the ``coerced_keys`` shape — both are ``str``) and emit one entry per
++    requested key.
++
++    ``required=True`` raises the model's ``DoesNotExist`` for any missing
++    key — homogeneous with ``_resolve_node_default``'s ``qs.get()`` so
++    consumers writing visibility-aware exception handling can catch a
++    single exception type for the "required missing id" semantic.
++    ``required=False`` emits ``None`` for missing keys.
++    """
++    index = {str(getattr(obj, id_attr)): obj for obj in results}
++    output: list = []
++    model = cls.__django_strawberry_definition__.model
++    for key in coerced_keys:
++        if required:
++            try:
++                output.append(index[key])
++            except KeyError as exc:
++                raise model.DoesNotExist(
++                    f"{model.__name__}: no row matching {id_attr}={key!r}.",
++                ) from exc
++        else:
++            output.append(index.get(key))
++    return output
++
++
++def _resolve_node_default(
++    cls: type,
++    node_id: Any,
++    *,
++    info: Any,
++    required: bool = False,
++) -> Any:
++    """Default ``Node.resolve_node`` — ``get_queryset`` aware.
++
++    Signature mirrors ``strawberry.relay.Node.resolve_node`` after
++    ``classmethod`` binding: ``(cls, node_id, *, info, required=False)``.
++    ``info`` is keyword-only so Strawberry's runtime call shape
++    (``cls.resolve_node(node_id, info=info, required=...)``) lands
++    correctly. An earlier draft used ``(cls, info, node_id, ...)`` which
++    Strawberry's machinery turned into ``TypeError: got multiple values
++    for argument 'info'`` (review feedback ``feedback.md`` § High).
++
++    Returns the single matching row (``qs.get()`` when ``required``,
++    ``qs.first()`` otherwise). Async detection uses
++    ``strawberry.utils.inspect.in_async_context``; on the async branch
++    the returned coroutine awaits ``get_queryset`` (so async
++    ``get_queryset`` hooks are honored), applies the id filter, and
++    awaits ``aget``/``afirst``. On the sync branch a coroutine returned
++    from ``get_queryset`` is rejected with ``ConfigurationError`` rather
++    than silently producing ``AttributeError: 'coroutine' object has no
++    attribute 'filter'`` (review feedback ``feedback.md`` § High "Async
++    ``get_queryset`` is not awaited in Relay node defaults").
++    """
++    id_attr = cls.resolve_id_attr()
++    if in_async_context():
++        return _resolve_node_async(cls, id_attr, node_id, info=info, required=required)
++    qs = _apply_get_queryset_sync(cls, _initial_queryset(cls), info)
++    qs = _apply_node_filter(qs, id_attr, node_id=node_id)
++    return qs.get() if required else qs.first()
++
++
++async def _resolve_node_async(
++    cls: type,
++    id_attr: str,
++    node_id: Any,
++    *,
++    info: Any,
++    required: bool,
++) -> Any:
++    """Async sibling of ``_resolve_node_default``.
++
++    Awaits the ``get_queryset`` hook (regardless of whether the consumer
++    declared it ``def`` or ``async def``) before applying the id filter
++    and the final ``aget``/``afirst``. Decision 9 of the spec promises
++    both shapes; this is the awaitable that actually delivers on that
++    contract.
++    """
++    qs = await _apply_get_queryset_async(cls, _initial_queryset(cls), info)
++    qs = _apply_node_filter(qs, id_attr, node_id=node_id)
++    return await (qs.aget() if required else qs.afirst())
++
++
++def _resolve_nodes_default(
++    cls: type,
++    *,
++    info: Any,
++    node_ids: Any = None,
++    required: bool = False,
++) -> Any:
++    """Default ``Node.resolve_nodes`` — order-preserving, missing-aware.
++
++    Signature mirrors ``strawberry.relay.Node.resolve_nodes`` after
++    ``classmethod`` binding: ``(cls, *, info, node_ids, required=False)``.
++    ``node_ids`` defaults to ``None`` here (Strawberry's upstream slot is
++    a required keyword argument) so the package can offer the bulk-fetch
++    "no ids -> full queryset" path documented in the spec without
++    forcing callers to thread ``node_ids=None`` explicitly.
++
++    When ``node_ids`` is ``None`` returns the filtered queryset (the
++    caller materializes via iteration as needed). When ``node_ids`` is
++    provided, returns a list whose indexes correspond 1:1 with
++    ``node_ids``: ``required=False`` yields ``None`` for missing ids,
++    ``required=True`` raises the model's ``DoesNotExist`` for missing
++    ids (homogeneous with ``_resolve_node_default``'s ``qs.get()``).
++
++    Async detection routes through ``in_async_context`` so async
++    ``get_queryset`` hooks are awaited before the id filter; in the
++    async branch the caller must ``await`` the call to obtain either
++    the queryset (``node_ids=None``) or the order-preserving list
++    (``node_ids`` provided). Sync resolver contexts cannot await an
++    async ``get_queryset`` hook and surface ``ConfigurationError``
++    instead (review feedback ``feedback.md`` § High).
++    """
++    id_attr = cls.resolve_id_attr()
++    if in_async_context():
++        return _resolve_nodes_async(cls, id_attr, node_ids, info=info, required=required)
++    qs = _apply_get_queryset_sync(cls, _initial_queryset(cls), info)
++    qs = _apply_node_filter(qs, id_attr, node_ids=node_ids)
++    if node_ids is None:
++        return qs
++    coerced_keys = [str(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
++    return _order_nodes(cls, list(qs), coerced_keys, id_attr, required=required)
++
++
++async def _resolve_nodes_async(
++    cls: type,
++    id_attr: str,
++    node_ids: Any,
++    *,
++    info: Any,
++    required: bool,
++) -> Any:
++    """Async sibling of ``_resolve_nodes_default``.
++
++    Awaits the ``get_queryset`` hook before applying the id filter so
++    async ``get_queryset`` hooks are honored. Returns the queryset
++    directly when ``node_ids`` is ``None`` (the caller materializes via
++    ``async for``); when ``node_ids`` is provided, materializes via
++    ``async for`` and returns the order-preserving list shape.
++    """
++    qs = await _apply_get_queryset_async(cls, _initial_queryset(cls), info)
++    qs = _apply_node_filter(qs, id_attr, node_ids=node_ids)
++    if node_ids is None:
++        return qs
++    coerced_keys = [str(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
++    results = [obj async for obj in qs]
++    return _order_nodes(cls, results, coerced_keys, id_attr, required=required)
++
++
++# Single source of truth for the four Relay resolver method names plus the
++# framework default implementation each one maps to. Iterated by
++# ``install_relay_node_resolvers``; appears nowhere else.
++_RELAY_RESOLVER_DEFAULTS: tuple[tuple[str, Callable[..., Any]], ...] = (
++    ("resolve_id", _resolve_id_default),
++    ("resolve_id_attr", _resolve_id_attr_default),
++    ("resolve_node", _resolve_node_default),
++    ("resolve_nodes", _resolve_nodes_default),
++)
++
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# implement ``apply_interfaces`` to inject accepted Strawberry interfaces into
+-# ``DjangoType`` bases before ``strawberry.type(...)`` finalization.
++def install_relay_node_resolvers(type_cls: type) -> None:
++    """Inject the four ``resolve_*`` defaults via the ``__func__`` identity test.
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# implement ``implements_relay_node`` and ``install_relay_node_resolvers`` with
+-# the ``__func__`` identity test so consumer Relay resolver overrides win.
++    For each ``(name, default)`` pair in ``_RELAY_RESOLVER_DEFAULTS``:
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# implement ``_resolve_id_attr_default`` and ``_resolve_id_default`` with
+-# Strawberry ``NodeID`` fallback support and Django ``__dict__`` cache reads.
++    - Look up the inherited method on ``type_cls`` (resolves through MRO
++      to ``relay.Node``'s default if no consumer override exists).
++    - Compare ``existing.__func__`` to ``relay.Node.<attr>.__func__``.
++      When they match (or ``existing`` is ``None``), the consumer has
++      not overridden the method and the framework default is installed
++      via ``setattr(type_cls, attr, classmethod(default))``.
++    - When they differ, the consumer's override wins and is preserved.
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# implement sync/async ``_resolve_node_default`` and ``_resolve_nodes_default``
+-# using the model default manager, ``DjangoType.get_queryset``, optional
+-# optimizer cooperation, order preservation, and required-missing semantics.
++    Direct port of ``strawberry_django/type.py:213-225``. The ``__func__``
++    discriminator is structurally distinct from Slice 2's ``__dict__``
++    membership discriminator (``is_type_of`` injection) and Slice 3's
++    tuple-membership discriminator (``relay.Node in interfaces``) — the
++    three answer different questions at three lifecycle phases.
++    """
++    for attr, default_impl in _RELAY_RESOLVER_DEFAULTS:
++        existing = getattr(type_cls, attr, None)
++        node_default = getattr(relay.Node, attr, None)
++        existing_func = getattr(existing, "__func__", None)
++        node_func = getattr(node_default, "__func__", None)
++        if existing is None or (existing_func is not None and existing_func is node_func):
++            setattr(type_cls, attr, classmethod(default_impl))
+diff --git a/django_strawberry_framework/types/resolvers.py b/django_strawberry_framework/types/resolvers.py
+index 2559259..9371d03 100644
+--- a/django_strawberry_framework/types/resolvers.py
++++ b/django_strawberry_framework/types/resolvers.py
+@@ -45,10 +45,13 @@ _EMPTY_FROZENSET: frozenset[str] = frozenset()
+ 
+ 
+ def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
+-    """Return ``True`` if B2 marked this forward relation as FK-id elided."""
+-    # TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-    # keep Relay GlobalID handling isolated from forward-relation FK-id
+-    # elision; Relay id resolution belongs in ``types.relay``.
++    """Return ``True`` if B2 marked this forward relation as FK-id elided.
++
++    Relay ``GlobalID`` handling is intentionally kept out of this path —
++    Relay id resolution lives in ``types/relay.py`` (``_resolve_id_default``
++    and friends). Forward-relation FK-id elision continues to see only the
++    Django primary-key column it always saw (spec Decision 7, line 357).
++    """
+     elisions = _get_context_value(
+         getattr(info, "context", None),
+         DST_OPTIMIZER_FK_ID_ELISIONS,
+diff --git a/examples/fakeshop/apps/library/schema.py b/examples/fakeshop/apps/library/schema.py
+index 8ec825a..9d08812 100644
+--- a/examples/fakeshop/apps/library/schema.py
++++ b/examples/fakeshop/apps/library/schema.py
+@@ -1,6 +1,7 @@
+ """GraphQL schema for library acceptance coverage."""
+ 
+ import strawberry
++from strawberry import relay
+ 
+ from apps.library import models
+ from django_strawberry_framework import DjangoType, OptimizerHint
+@@ -54,6 +55,7 @@ class GenreType(DjangoType):
+     class Meta:
+         model = models.Genre
+         fields = ("id", "name", "books")
++        interfaces = (relay.Node,)
+ 
+ 
+ class BranchType(DjangoType):
+diff --git a/examples/fakeshop/apps/products/filters.py b/examples/fakeshop/apps/products/filters.py
+index d0806c6..28361f6 100644
+--- a/examples/fakeshop/apps/products/filters.py
++++ b/examples/fakeshop/apps/products/filters.py
+@@ -44,7 +44,15 @@ class ItemFilter(filters.AdvancedFilterSet):
+             "category__name": ["exact"],
+         }
+ 
+-    # TODO: Implement permission check?
++    # TODO(NEXT-006 permissions; see KANBAN.md):
++    #   Per-field ``check_<field>_permission`` hooks are owned by the
++    #   permissions slice (``NEXT-006``) and compose with the filter
++    #   subsystem (``NEXT-002``). The commented method below is the
++    #   target shape: scope ``queryset`` based on the request user so
++    #   non-staff callers cannot filter by ``Item.entries``. Uncomment
++    #   in the same change that lands the hook contract and exempt this
++    #   pseudo-code block from ERA001 per AGENTS.md's TODO-pseudo-code
++    #   rule.
+     # def check_entries_permission(self, queryset, request):
+     #     """Only staff users may filter by Item.entries."""
+     #     user = getattr(request, "user", None)
+diff --git a/examples/fakeshop/test_query/test_library_api.py b/examples/fakeshop/test_query/test_library_api.py
+index 9a37ce2..b3a5bc9 100644
+--- a/examples/fakeshop/test_query/test_library_api.py
++++ b/examples/fakeshop/test_query/test_library_api.py
+@@ -1,5 +1,6 @@
+ """Live GraphQL HTTP tests for the library acceptance app."""
+ 
++import base64
+ import importlib
+ import sys
+ 
+@@ -12,11 +13,6 @@ from django.urls import clear_url_caches
+ 
+ from django_strawberry_framework.registry import registry
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# add a live HTTP acceptance test for a library DjangoType declaring
+-# ``interfaces = (relay.Node,)``; query ``id`` plus a scalar and assert the
+-# GlobalID round-trips to the expected database id.
+-
+ 
+ @pytest.fixture(autouse=True)
+ def _reload_project_schema_for_acceptance_tests():
+@@ -498,3 +494,46 @@ def test_library_relation_override_shapes_http_response_data():
+     # The observable baseline is root query + planned prefetch + one
+     # override manager query per Branch row.
+     assert len(captured) == 4
++
++
++def _decode_global_id(global_id: str) -> tuple[str, str]:
++    """Decode a Strawberry Relay ``GlobalID`` string into ``(type_name, node_id)``.
++
++    Strawberry encodes ``GlobalID`` as ``base64("TypeName:nodeId")``; this
++    test decodes it manually so the HTTP path stays Strawberry-agnostic
++    on the assert side.
++    """
++    decoded = base64.b64decode(global_id.encode()).decode()
++    type_name, _, node_id = decoded.partition(":")
++    return type_name, node_id
++
++
++@pytest.mark.django_db
++def test_library_relay_node_global_id_round_trips():
++    """A library ``GenreType`` declared as a Relay node returns a decodable GlobalID.
++
++    ``apps/library/schema.py::GenreType`` declares ``interfaces = (relay.Node,)``
++    in its ``Meta`` block, so the autouse reload fixture is enough to
++    exercise the end-to-end Relay path through ``Meta.interfaces``.
++    """
++    genre = models.Genre.objects.create(name="Speculative")
++
++    response = _post_graphql(
++        """
++        query {
++          allLibraryGenres {
++            id
++            name
++          }
++        }
++        """,
++    )
++    assert response.status_code == 200
++    payload = response.json()
++    assert "errors" not in payload, payload
++    genres = payload["data"]["allLibraryGenres"]
++    assert len(genres) == 1
++    type_name, node_id = _decode_global_id(genres[0]["id"])
++    assert type_name == "GenreType"
++    assert node_id == str(genre.pk)
++    assert genres[0]["name"] == "Speculative"
+diff --git a/tests/base/test_conf.py b/tests/base/test_conf.py
+index 6495db0..4ad4419 100644
+--- a/tests/base/test_conf.py
++++ b/tests/base/test_conf.py
+@@ -1,9 +1,12 @@
+ """Tests for django_strawberry_framework.conf."""
+ 
++from types import MappingProxyType
++
+ import pytest
+ 
+ from django_strawberry_framework import conf
+ from django_strawberry_framework.conf import Settings, reload_settings
++from django_strawberry_framework.exceptions import ConfigurationError
+ 
+ # ---------------------------------------------------------------------------
+ # Settings.__getattr__
+@@ -22,7 +25,7 @@ def test_settings_returns_user_setting_when_provided():
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# Settings.user_settings (lazy-load + falsy fallback)
++# Settings.user_settings (lazy-load + normalization)
+ # ---------------------------------------------------------------------------
+ 
+ 
+@@ -39,13 +42,28 @@ def test_settings_user_settings_returns_preset_value():
+     assert s.user_settings == {"X": "y"}
+ 
+ 
++def test_settings_user_settings_accepts_mapping_values():
++    s = Settings(MappingProxyType({"X": "y"}))
++    assert s.user_settings == {"X": "y"}
++
++
+ def test_settings_user_settings_falsy_falls_back_to_empty_dict(settings):
+-    """Setting our key to ``None`` should yield ``{}`` via ``or {}``."""
++    """Setting our key to ``None`` should behave like no configured settings."""
+     settings.DJANGO_STRAWBERRY_FRAMEWORK = None
+     s = Settings()
+     assert s.user_settings == {}
+ 
+ 
++def test_settings_user_settings_rejects_non_mapping_django_setting(monkeypatch):
++    django_settings = type("DjangoSettings", (), {})()
++    setattr(django_settings, conf.DJANGO_SETTINGS_KEY, ["not", "a", "mapping"])
++    monkeypatch.setattr(conf, "django_settings", django_settings)
++
++    s = Settings()
++    with pytest.raises(ConfigurationError, match="DJANGO_STRAWBERRY_FRAMEWORK.*list"):
++        _ = s.user_settings
++
++
+ # ---------------------------------------------------------------------------
+ # reload_settings (via signal + direct invocation)
+ # ---------------------------------------------------------------------------
+@@ -108,6 +126,13 @@ def test_settings_reload_with_none_restores_lazy_load():
+     assert s._user_settings is None
+ 
+ 
++def test_settings_reload_rejects_non_mapping_value():
++    s = Settings({"A": 1})
++    with pytest.raises(ConfigurationError, match="DJANGO_STRAWBERRY_FRAMEWORK.*str"):
++        s.reload("bad")
++    assert s.user_settings == {"A": 1}
++
++
+ def test_setting_changed_receiver_uses_dispatch_uid():
+     """Re-connecting with the same dispatch_uid must be a no-op."""
+     from django.test.signals import setting_changed
+diff --git a/tests/base/test_init.py b/tests/base/test_init.py
+index c4d27bb..35597cd 100644
+--- a/tests/base/test_init.py
++++ b/tests/base/test_init.py
+@@ -8,7 +8,7 @@ from django_strawberry_framework.optimizer import logger as optimizer_logger
+ 
+ 
+ def test_version():
+-    assert __version__ == "0.0.4"
++    assert __version__ == "0.0.5"
+ 
+ 
+ def test_logger_name_is_django_strawberry_framework():
+@@ -29,9 +29,9 @@ def test_optimizer_subpackage_reexports_top_level_logger():
+ 
+ def test_public_api_surface_is_pinned():
+     # Pin ``__all__`` so silent surface widening (e.g., accidental
+-    # re-export of an internal name) shows up at test time. The relay
+-    # slice promises only ``__version__`` bumps, never new exports,
+-    # until a future spec ships a new public name.
++    # re-export of an internal name) shows up at test time. New public
++    # names only land when a future spec adds them; routine slices
++    # bump ``__version__`` without widening the surface.
+     assert set(django_strawberry_framework.__all__) == {
+         "DjangoOptimizerExtension",
+         "DjangoType",
+diff --git a/tests/optimizer/test_extension.py b/tests/optimizer/test_extension.py
+index 2e58c6c..7b4f58b 100644
+--- a/tests/optimizer/test_extension.py
++++ b/tests/optimizer/test_extension.py
+@@ -78,6 +78,46 @@ def test_optimizer_applies_select_related_for_forward_fk(django_assert_num_queri
+         assert len(result.data["allItems"]) == 25
+ 
+ 
++@pytest.mark.django_db
++def test_optimizer_plans_merged_duplicate_root_field_nodes(django_assert_num_queries):
++    """Merged duplicate root fields contribute all child selections to one plan."""
++    services.seed_data(1)
++
++    class CategoryType(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++
++    class ItemType(DjangoType):
++        class Meta:
++            model = Item
++            fields = ("id", "name", "category")
++
++    ext = DjangoOptimizerExtension(strictness="raise")
++
++    @strawberry.type
++    class Query:
++        @strawberry.field
++        def all_items(self) -> list[ItemType]:
++            return Item.objects.all()
++
++    finalize_django_types()
++    schema = strawberry.Schema(query=Query, extensions=[ext])
++    ctx = SimpleNamespace()
++
++    with django_assert_num_queries(1):
++        result = schema.execute_sync(
++            "{ allItems { name } allItems { category { name } } }",
++            context_value=ctx,
++        )
++
++    assert result.errors is None
++    assert result.data["allItems"][0]["name"]
++    assert result.data["allItems"][0]["category"]["name"]
++    assert ctx.dst_optimizer_plan.select_related == ("category",)
++    assert "ItemType.category@allItems.category" in ctx.dst_optimizer_planned
++
++
+ @pytest.mark.django_db
+ def test_optimizer_applies_prefetch_related_for_reverse_fk(django_assert_num_queries):
+     """A reverse FK selection collapses to two SQL queries via ``prefetch_related``."""
+@@ -714,6 +754,53 @@ def test_cache_differentiates_queries(django_assert_num_queries):
+     assert ext.cache_info().size == 2
+ 
+ 
++@pytest.mark.django_db
++def test_cache_differentiates_reachable_named_fragment_bodies():
++    """B1: matching operation text with different fragment bodies gets distinct plans."""
++    services.seed_data(1)
++
++    class CategoryType(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++
++    class ItemType(DjangoType):
++        class Meta:
++            model = Item
++            fields = ("id", "name", "category")
++
++    ext = DjangoOptimizerExtension()
++
++    @strawberry.type
++    class Query:
++        @strawberry.field
++        def all_items(self) -> list[ItemType]:
++            return Item.objects.all()
++
++    finalize_django_types()
++    schema = strawberry.Schema(query=Query, extensions=[ext])
++    query_prefix = "query Q { allItems { ...ItemBits } }"
++    ctx_scalar = SimpleNamespace()
++    ctx_relation = SimpleNamespace()
++
++    result_scalar = schema.execute_sync(
++        f"{query_prefix} fragment ItemBits on ItemType {{ name }}",
++        context_value=ctx_scalar,
++    )
++    result_relation = schema.execute_sync(
++        f"{query_prefix} fragment ItemBits on ItemType {{ category {{ name }} }}",
++        context_value=ctx_relation,
++    )
++
++    assert result_scalar.errors is None
++    assert result_relation.errors is None
++    assert ctx_scalar.dst_optimizer_plan.select_related == ()
++    assert ctx_relation.dst_optimizer_plan.select_related == ("category",)
++    assert ext.cache_info().hits == 0
++    assert ext.cache_info().misses == 2
++    assert ext.cache_info().size == 2
++
++
+ @pytest.mark.django_db
+ def test_cache_differentiates_same_model_root_fields(django_assert_num_queries):
+     """B1/O4: root fields returning the same model do not share one cached plan."""
+@@ -2068,6 +2155,28 @@ def test_plan_stashed_on_dict_context():
+     assert ctx["dst_optimizer_plan"] is plan
+ 
+ 
++def test_stash_on_dict_subclass_writes_mapping_before_attributes():
++    """rev-optimizer__context: dict-like contexts must use the mapping branch."""
++    from django_strawberry_framework.optimizer._context import get_context_value, stash_on_context
++    from django_strawberry_framework.optimizer.plans import OptimizationPlan
++
++    class AttributeBackedDict(dict):
++        def __init__(self) -> None:
++            super().__init__()
++            super().__setattr__("attributes", {})
++
++        def __setattr__(self, key: str, value: object) -> None:
++            self.attributes[key] = value
++
++    ctx = AttributeBackedDict()
++    plan = OptimizationPlan(select_related=["category"])
++    stash_on_context(ctx, "dst_optimizer_plan", plan)
++
++    assert ctx["dst_optimizer_plan"] is plan
++    assert ctx.attributes == {}
++    assert get_context_value(ctx, "dst_optimizer_plan") is plan
++
++
+ def test_stash_on_none_context_is_silent():
+     """B5: when context is None (Strawberry default), stash is silently skipped."""
+     from django_strawberry_framework.optimizer.extension import _stash_on_context
+diff --git a/tests/optimizer/test_field_meta.py b/tests/optimizer/test_field_meta.py
+index ee93fcb..fae8a8f 100644
+--- a/tests/optimizer/test_field_meta.py
++++ b/tests/optimizer/test_field_meta.py
+@@ -35,9 +35,19 @@ def test_from_django_field_scalar():
+     assert fm.name == "name"
+     assert fm.is_relation is False
+     assert fm.many_to_many is False
++    assert fm.nullable is False
+     assert fm.related_model is None
+ 
+ 
++def test_from_django_field_nullable_scalar():
++    """Scalar ``null=True`` fields preserve effective nullable metadata."""
++    subtitle_field = Book._meta.get_field("subtitle")
++    fm = FieldMeta.from_django_field(subtitle_field)
++    assert fm.name == "subtitle"
++    assert fm.is_relation is False
++    assert fm.nullable is True
++
++
+ def test_from_django_field_forward_fk():
+     """Forward FK produces is_relation=True with attname and related_model."""
+     cat_field = Item._meta.get_field("category")
+@@ -49,6 +59,7 @@ def test_from_django_field_forward_fk():
+     assert fm.target_field_name == "id"
+     assert fm.many_to_many is False
+     assert fm.one_to_many is False
++    assert fm.nullable is False
+ 
+ 
+ def test_from_django_field_reverse_fk():
+@@ -63,6 +74,16 @@ def test_from_django_field_reverse_fk():
+     fm = FieldMeta.from_django_field(items_field)
+     assert fm.is_relation is True
+     assert fm.one_to_many is True
++    # Django's ``ManyToOneRel`` descriptor inherits ``null = True`` as a
++    # class-level default from ``ForeignObjectRel``, so the raw rule
++    # ``reverse_one_to_one or field.null`` yields ``True`` for reverse FKs
++    # even though the rendered GraphQL annotation is ``list[target_type]``
++    # (not nullable). Consumers like ``resolved_relation_annotation`` reach
++    # the many-side cardinality branch first and ignore this attribute, so
++    # ``True`` here is the faithful raw-rule value rather than the
++    # rendered-annotation value. See the ``FieldMeta.nullable`` docstring
++    # for the many-side caveat.
++    assert fm.nullable is True
+ 
+ 
+ def test_from_django_field_many_to_many():
+@@ -75,6 +96,9 @@ def test_from_django_field_many_to_many():
+     assert fm.related_model is Genre
+     assert fm.one_to_many is False
+     assert fm.one_to_one is False
++    # M2M renders as ``list[target_type]`` (not nullable); the rule defaults to
++    # ``False`` when the field's ``null`` flag is unset/False.
++    assert fm.nullable is False
+ 
+ 
+ def test_from_django_field_one_to_one():
+@@ -88,6 +112,23 @@ def test_from_django_field_one_to_one():
+     assert fm.attname == "patron_id"
+     assert fm.target_field_name == "id"
+     assert fm.target_field_attname == "id"
++    # Forward OneToOne (``MembershipCard.patron``) declares no ``null=True``,
++    # so the rule falls through both clauses (not reverse_one_to_one + no
++    # ``field.null``) and yields ``False``.  Pairs with
++    # ``test_from_django_field_reverse_one_to_one_is_nullable`` for the
++    # short-circuit side of the same expression.
++    assert fm.nullable is False
++
++
++def test_from_django_field_reverse_one_to_one_is_nullable():
++    """Reverse OneToOne is effectively nullable because the related row may not exist."""
++    card_field = Patron._meta.get_field("card")
++    fm = FieldMeta.from_django_field(card_field)
++    assert fm.name == "card"
++    assert fm.is_relation is True
++    assert fm.one_to_one is True
++    assert fm.auto_created is True
++    assert fm.nullable is True
+ 
+ 
+ def test_from_django_field_rejects_non_django_input():
+diff --git a/tests/optimizer/test_relay_id_projection.py b/tests/optimizer/test_relay_id_projection.py
+new file mode 100644
+index 0000000..c0a401f
+--- /dev/null
++++ b/tests/optimizer/test_relay_id_projection.py
+@@ -0,0 +1,140 @@
++"""Optimizer invariants for Relay-declared ``DjangoType`` classes.
++
++Pins Decision 7 (spec lines 352-361): when a Relay-declared type selects
++``id`` the optimizer's ``only()`` projection must still include the
++concrete pk attname; ``_resolve_id_default`` must read from the loaded
++``__dict__`` cache without triggering a lazy load; and relation traversal
++across Relay-declared targets must remain unchanged.
++"""
++
++from types import SimpleNamespace
++
++import pytest
++import strawberry
++from apps.products import services
++from apps.products.models import Category, Item
++from django.db import connection
++from django.test.utils import CaptureQueriesContext
++from strawberry import relay
++
++from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
++from django_strawberry_framework.registry import registry
++
++
++@pytest.fixture(autouse=True)
++def _isolate_registry():
++    """Drop registry state on entry/exit so each test starts clean."""
++    registry.clear()
++    yield
++    registry.clear()
++
++
++@pytest.mark.django_db
++def test_relay_id_only_projection_includes_pk_attname(django_assert_num_queries):
++    """Selecting Relay ``id`` keeps the concrete pk attname in the optimizer's ``only()``."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    @strawberry.type
++    class Query:
++        @strawberry.field
++        def all_categories(self) -> list[CategoryNode]:
++            return Category.objects.all()
++
++    finalize_django_types()
++    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
++    ctx = SimpleNamespace()
++    with django_assert_num_queries(1):
++        result = schema.execute_sync("{ allCategories { id } }", context_value=ctx)
++    assert result.errors is None
++    plan = ctx.dst_optimizer_plan
++    assert "id" in plan.only_fields
++
++
++@pytest.mark.django_db
++def test_relay_id_does_not_trigger_lazy_load():
++    """Selecting ``{ id name }`` on a Relay-declared type is clean under ``strictness="raise"``."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    @strawberry.type
++    class Query:
++        @strawberry.field
++        def all_categories(self) -> list[CategoryNode]:
++            return Category.objects.all()
++
++    finalize_django_types()
++    schema = strawberry.Schema(
++        query=Query,
++        extensions=[DjangoOptimizerExtension(strictness="raise")],
++    )
++    result = schema.execute_sync("{ allCategories { id name } }")
++    assert result.errors is None
++
++
++@pytest.mark.django_db
++def test_relay_target_relation_planning_unchanged(django_assert_num_queries):
++    """Forward FK traversal whose target is a Relay-declared type still plans ``select_related``."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    class ItemType(DjangoType):
++        class Meta:
++            model = Item
++            fields = ("id", "name", "category")
++
++    @strawberry.type
++    class Query:
++        @strawberry.field
++        def all_items(self) -> list[ItemType]:
++            return Item.objects.all()
++
++    finalize_django_types()
++    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
++    ctx = SimpleNamespace()
++    with django_assert_num_queries(1):
++        result = schema.execute_sync(
++            "{ allItems { name category { name } } }",
++            context_value=ctx,
++        )
++    assert result.errors is None
++    plan = ctx.dst_optimizer_plan
++    # ``select_related`` plans the forward FK even though the target is Relay-declared.
++    assert "category" in plan.select_related
++
++
++@pytest.mark.django_db
++def test_relay_resolve_id_uses_loaded_pk():
++    """``CategoryNode.resolve_id`` reads the loaded pk via ``__dict__`` (no extra query)."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++
++    row = Category.objects.only("id", "name").first()
++    assert row is not None
++    expected = str(row.id)
++    with CaptureQueriesContext(connection) as captured:
++        assert CategoryNode.resolve_id(row, info=None) == expected
++    # The dict-cache hit on the loaded pk avoids any additional query.
++    assert len(captured) == 0
+diff --git a/tests/optimizer/test_walker.py b/tests/optimizer/test_walker.py
+index 7fcf900..f14dbb4 100644
+--- a/tests/optimizer/test_walker.py
++++ b/tests/optimizer/test_walker.py
+@@ -32,10 +32,6 @@ from django_strawberry_framework.optimizer.walker import (
+ )
+ from django_strawberry_framework.registry import registry
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# extend optimizer coverage for Relay id projection, no avoidable lazy loads,
+-# unchanged relation planning across Relay targets, and loaded-pk resolve_id.
+-
+ # ---------------------------------------------------------------------------
+ # Helpers: synthetic selection factories
+ # ---------------------------------------------------------------------------
+@@ -125,6 +121,48 @@ def test_plan_skips_unknown_selections():
+     assert plan.is_empty
+ 
+ 
++def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
++    """Regression for ``docs/feedback.md`` § custom-pk Relay projection.
++
++    When a Relay-declared ``DjangoType`` is backed by a model whose pk
++    attname is not ``"id"``, ``snake_case("id")`` does not match the
++    field-map's real key. The walker must resolve the configured
++    ``id_attr`` (via ``type_cls.resolve_id_attr()``) and project that
++    column into ``only()`` so ``_resolve_id_default`` reads the loaded
++    value from ``root.__dict__`` instead of falling back to ``getattr``
++    and triggering a lazy load (Decision 7).
++
++    Simulates the custom-pk shape without adding a new fakeshop model:
++    monkey-patches ``Category._meta.pk.attname`` and the cached
++    ``_optimizer_field_map`` to drop the ``"id"`` key while keeping
++    ``"name"`` as the stand-in pk projection.
++    """
++    from strawberry import relay
++
++    from django_strawberry_framework import DjangoType, finalize_django_types
++
++    registry.clear()
++    try:
++
++        class CategoryNode(DjangoType):
++            class Meta:
++                model = Category
++                fields = ("id", "name")
++                interfaces = (relay.Node,)
++
++        finalize_django_types()
++        fake_field_map = {k: v for k, v in CategoryNode._optimizer_field_map.items() if k != "id"}
++        monkeypatch.setattr(CategoryNode, "_optimizer_field_map", fake_field_map)
++        monkeypatch.setattr(Category._meta.pk, "attname", "name")
++
++        plan = plan_optimizations([_sel("id")], Category)
++
++        assert "name" in plan.only_fields
++        assert "id" not in plan.only_fields
++    finally:
++        registry.clear()
++
++
+ def test_plan_prefetches_relation_with_missing_related_model_defensively():
+     """Defensive branch: relation fields without related_model become string prefetches."""
+ 
+diff --git a/tests/test_registry.py b/tests/test_registry.py
+index a1ba3be..2bbcad3 100644
+--- a/tests/test_registry.py
++++ b/tests/test_registry.py
+@@ -12,8 +12,10 @@ dedicated test that exercises every branch.
+ from enum import Enum
+ 
+ import pytest
++import strawberry
+ from apps.products.models import Category, Item, Property
+ from django.db import models
++from strawberry import relay
+ 
+ from django_strawberry_framework import DjangoType, finalize_django_types
+ from django_strawberry_framework.exceptions import ConfigurationError
+@@ -22,10 +24,6 @@ from django_strawberry_framework.types import finalizer as finalizer_module
+ from django_strawberry_framework.types.relations import PendingRelation, PendingRelationAnnotation
+ from django_strawberry_framework.utils.relations import relation_kind
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# extend registry lifecycle coverage so ``registry.clear()`` permits fresh
+-# Relay-declared DjangoType classes to finalize and register Node metadata.
+-
+ 
+ @pytest.fixture
+ def fresh_registry() -> TypeRegistry:
+@@ -369,6 +367,52 @@ def test_registry_clear_allows_fresh_type_classes_to_finalize_again():
+     assert registry.get(Category) is FreshCategoryType
+ 
+ 
++def test_registry_clear_allows_fresh_relay_declared_type_to_finalize():
++    """``registry.clear()`` lets a fresh Relay-declared ``DjangoType`` finalize cleanly.
++
++    Pins the lifecycle contract that the same model can be re-bound to a
++    fresh Relay-declared type after the previous one was dropped via
++    ``clear()``. The fresh class must end up with ``relay.Node`` in its
++    MRO plus the four ``resolve_*`` classmethods injected.
++    """
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    @strawberry.type
++    class Query:
++        @strawberry.field
++        def all_categories(self) -> list[CategoryNode]:
++            return []
++
++    finalize_django_types()
++    strawberry.Schema(query=Query)
++    registry.clear()
++
++    class FreshCategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    @strawberry.type
++    class Query2:
++        @strawberry.field
++        def all_categories(self) -> list[FreshCategoryNode]:
++            return []
++
++    finalize_django_types()
++    strawberry.Schema(query=Query2)
++    assert registry.is_finalized() is True
++    assert registry.get(Category) is FreshCategoryNode
++    assert relay.Node in FreshCategoryNode.__mro__
++    for attr in ("resolve_id", "resolve_id_attr", "resolve_node", "resolve_nodes"):
++        assert attr in FreshCategoryNode.__dict__
++
++
+ def test_phase_1_failure_is_atomic_and_retryable_after_missing_target_registers():
+     """Unresolved targets fail before class mutation and can retry after the target appears."""
+ 
+diff --git a/tests/types/test_definition_order_schema.py b/tests/types/test_definition_order_schema.py
+index 335efc6..5526b99 100644
+--- a/tests/types/test_definition_order_schema.py
++++ b/tests/types/test_definition_order_schema.py
+@@ -5,14 +5,11 @@ import strawberry
+ from apps.library.models import Book, Genre
+ from apps.products import services
+ from apps.products.models import Category, Item
++from strawberry import relay
+ 
+ from django_strawberry_framework import DjangoType, finalize_django_types
+ from django_strawberry_framework.registry import registry
+ 
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# extend schema-construction coverage so Relay-declared types expose the Node
+-# interface and ``id: GlobalID!`` without leaking interfaces to non-Relay types.
+-
+ 
+ @pytest.fixture(autouse=True)
+ def _isolate_registry():
+@@ -99,3 +96,63 @@ def test_manual_strawberry_type_before_finalization_surfaces_sentinel_repr():
+     msg = str(exc_info.value)
+     assert "Unexpected type" in msg
+     assert "finalize_django_types()" in msg
++
++
++def test_relay_declared_type_emits_node_interface_and_global_id():
++    """A Relay-declared ``DjangoType`` exposes ``id: GlobalID!`` via the ``Node`` interface."""
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    @strawberry.type
++    class Query:
++        @strawberry.field
++        def all_categories(self) -> list[CategoryNode]:
++            return []
++
++    finalize_django_types()
++    schema = strawberry.Schema(query=Query)
++    gql_type = schema._schema.type_map["CategoryNode"]
++    interface_names = {iface.name for iface in gql_type.interfaces}
++    assert "Node" in interface_names
++    id_field = gql_type.fields["id"]
++    assert str(id_field.type) == "ID!"
++
++
++def test_mixed_relay_and_non_relay_types_introspect_cleanly():
++    """A non-Relay ``DjangoType`` does NOT implement ``Node`` (no interface bleed)."""
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    class ItemType(DjangoType):
++        class Meta:
++            model = Item
++            fields = ("id", "name")
++
++    @strawberry.type
++    class Query:
++        @strawberry.field
++        def all_categories(self) -> list[CategoryNode]:
++            return []
++
++        @strawberry.field
++        def all_items(self) -> list[ItemType]:
++            return []
++
++    finalize_django_types()
++    schema = strawberry.Schema(query=Query)
++    relay_gql_type = schema._schema.type_map["CategoryNode"]
++    plain_gql_type = schema._schema.type_map["ItemType"]
++    relay_interfaces = {iface.name for iface in relay_gql_type.interfaces}
++    plain_interfaces = {iface.name for iface in plain_gql_type.interfaces}
++    assert "Node" in relay_interfaces
++    assert "Node" not in plain_interfaces
++    # The plain type's id is still the synthesized ``Int!`` field, not a GlobalID.
++    assert str(plain_gql_type.fields["id"].type) == "Int!"
+diff --git a/tests/types/test_relay.py b/tests/types/test_relay.py
+deleted file mode 100644
+index 58866d0..0000000
+--- a/tests/types/test_relay.py
++++ /dev/null
+@@ -1,10 +0,0 @@
+-"""Tests for Relay helper module import coverage."""
+-
+-import importlib
+-
+-
+-def test_relay_module_imports_for_future_slice_anchor():
+-    """Import the Relay helper module so its deferred-slice anchor stays covered."""
+-    relay = importlib.import_module("django_strawberry_framework.types.relay")
+-
+-    assert relay.__doc__ == "Internal Relay/interface helpers for the 0.0.5 Relay foundation slice."
+diff --git a/tests/types/test_relay_interfaces.py b/tests/types/test_relay_interfaces.py
+index 161c3f8..37a316a 100644
+--- a/tests/types/test_relay_interfaces.py
++++ b/tests/types/test_relay_interfaces.py
+@@ -1,16 +1,1226 @@
+-"""Tests for the 0.0.5 Relay interfaces slice."""
+-
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# add validation/storage coverage for accepted interfaces, single-interface
+-# class normalization, rejected malformed ``Meta.interfaces`` values,
+-# duplicate entries, DjangoType self-references, empty tuples, direct Relay
+-# inheritance, and composite primary keys.
+-
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# add Relay behavior coverage for id annotation suppression, default resolver
+-# injection, consumer override preservation, NodeID annotations, non-Relay
+-# interfaces, ``get_queryset`` cooperation, sync lookup, and async lookup.
+-
+-# TODO(0.0.5 relay interfaces; see docs/spec-relay_interfaces.md):
+-# add ``is_type_of`` coverage for both Relay and non-Relay DjangoTypes while
+-# proving consumer-declared ``is_type_of`` methods are preserved.
++"""Tests for the 0.0.5 Relay interfaces slice.
++
++Covers ``Meta.interfaces`` validation, ``is_type_of`` injection, id
++suppression, interface base-class injection, and the four Relay node
++resolver defaults (``resolve_id_attr``, ``resolve_id``, ``resolve_node``,
++``resolve_nodes``).
++"""
++
++import pytest
++import strawberry
++from apps.products import services
++from apps.products.models import Category, Item
++from asgiref.sync import sync_to_async
++from django.db.models import CompositePrimaryKey
++from strawberry import relay
++
++from django_strawberry_framework import DjangoType, finalize_django_types
++from django_strawberry_framework.exceptions import ConfigurationError
++from django_strawberry_framework.registry import registry
++from django_strawberry_framework.types.base import _build_annotations, _validate_interfaces
++from django_strawberry_framework.types.definition import DjangoTypeDefinition
++from django_strawberry_framework.types.relay import (
++    _resolve_id_attr_default,
++    _resolve_id_default,
++    _resolve_node_default,
++    _resolve_nodes_default,
++    apply_interfaces,
++    implements_relay_node,
++    install_relay_node_resolvers,
++)
++
++
++@pytest.fixture(autouse=True)
++def _isolate_registry():
++    """Drop registry state on entry/exit so each test starts clean."""
++    registry.clear()
++    yield
++    registry.clear()
++
++
++def _meta(**attrs):
++    """Build a throw-away ``Meta`` class with ``model=Category`` plus extras."""
++    attrs.setdefault("model", Category)
++    return type("Meta", (), attrs)
++
++
++# ---------------------------------------------------------------------------
++# Slice 1 — validation + storage
++# ---------------------------------------------------------------------------
++
++
++def test_meta_interfaces_accepted():
++    """``interfaces = (relay.Node,)`` is normalized to ``(relay.Node,)``."""
++    meta = _meta(interfaces=(relay.Node,))
++    assert _validate_interfaces(meta) == (relay.Node,)
++
++
++@pytest.mark.parametrize(
++    "raw",
++    [
++        relay.Node,
++        (relay.Node,),
++        # Missing-comma spec spelling: Python evaluates ``(relay.Node)`` to
++        # the bare class identity (not a tuple), so this case is identical
++        # to the first; included verbatim per spec lines 192-193 / 323.
++        (relay.Node),
++    ],
++)
++def test_meta_interfaces_accepts_single_interface_class(raw):
++    """A single class, a one-tuple, and the missing-comma spelling all normalize."""
++    meta = _meta(interfaces=raw)
++    assert _validate_interfaces(meta) == (relay.Node,)
++
++
++@pytest.mark.parametrize(
++    "raw",
++    [
++        {relay.Node},
++        (x for x in (relay.Node,)),
++        {relay.Node: None},
++        42,
++    ],
++)
++def test_meta_interfaces_rejects_non_sequence(raw):
++    meta = _meta(interfaces=raw)
++    with pytest.raises(ConfigurationError, match="must be a tuple/list"):
++        _validate_interfaces(meta)
++
++
++def test_meta_interfaces_rejects_string_entries():
++    """Both top-level strings and tuple-of-string entries are rejected."""
++    meta_top = _meta(interfaces="Node")
++    with pytest.raises(ConfigurationError, match="must be a tuple/list"):
++        _validate_interfaces(meta_top)
++    meta_entry = _meta(interfaces=("Node",))
++    with pytest.raises(ConfigurationError, match="must contain interface classes"):
++        _validate_interfaces(meta_entry)
++
++
++def test_meta_interfaces_rejects_non_interface_classes():
++    """Plain classes, builtin types, and ``@strawberry.type``-decorated classes are rejected."""
++
++    @strawberry.type
++    class NotAnInterface:
++        name: str
++
++    for entry in (object, int, NotAnInterface):
++        meta = _meta(interfaces=(entry,))
++        with pytest.raises(ConfigurationError, match="not a Strawberry interface"):
++            _validate_interfaces(meta)
++
++
++@pytest.mark.parametrize(
++    "entry",
++    [
++        object(),
++        42,
++    ],
++)
++def test_meta_interfaces_rejects_non_class_entries(entry):
++    """Non-class non-string entries (instances, ints) raise the must-contain-interface-classes error."""
++    meta = _meta(interfaces=(entry,))
++    with pytest.raises(ConfigurationError, match="must contain interface classes"):
++        _validate_interfaces(meta)
++
++
++def test_meta_interfaces_rejects_djangotype_self_reference():
++    """``DjangoType`` itself and any subclass are rejected as interface entries."""
++    meta_self = _meta(interfaces=(DjangoType,))
++    with pytest.raises(ConfigurationError, match="may not contain DjangoType"):
++        _validate_interfaces(meta_self)
++
++    class SomeType(DjangoType):
++        pass
++
++    meta_sub = _meta(interfaces=(SomeType,))
++    with pytest.raises(ConfigurationError, match="may not contain DjangoType"):
++        _validate_interfaces(meta_sub)
++
++
++def test_meta_interfaces_rejects_duplicates():
++    meta = _meta(interfaces=(relay.Node, relay.Node))
++    with pytest.raises(ConfigurationError, match="duplicate entries"):
++        _validate_interfaces(meta)
++
++
++def test_meta_interfaces_empty_tuple_treated_as_unset():
++    """An empty tuple and an absent key both produce ``()`` (bit-for-bit identical)."""
++    assert _validate_interfaces(_meta(interfaces=())) == ()
++    assert _validate_interfaces(_meta()) == ()
++
++
++def test_meta_interfaces_stored_on_definition():
++    """The normalized tuple flows through to ``DjangoTypeDefinition.interfaces``."""
++    meta = _meta(interfaces=(relay.Node,))
++    normalized = _validate_interfaces(meta)
++    definition = DjangoTypeDefinition(
++        origin=object,
++        model=Category,
++        name=None,
++        description=None,
++        fields_spec=None,
++        exclude_spec=None,
++        selected_fields=(),
++        field_map={},
++        optimizer_hints={},
++        has_custom_get_queryset=False,
++        interfaces=normalized,
++    )
++    assert definition.interfaces == (relay.Node,)
++
++
++def test_meta_interfaces_end_to_end_accepted_in_validate_meta():
++    """End-to-end ``class Meta: interfaces = (relay.Node,)`` flows through ``_validate_meta``.
++
++    Slice 5 promoted ``"interfaces"`` from ``DEFERRED_META_KEYS`` to
++    ``ALLOWED_META_KEYS``, so the deferred-key check no longer
++    short-circuits the validator. This test pins that the full
++    ``__init_subclass__`` path accepts the declaration and stores the
++    normalized tuple on ``DjangoTypeDefinition``.
++    """
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    assert CategoryNode.__django_strawberry_definition__.interfaces == (relay.Node,)
++
++
++def test_class_already_inherits_relay_node_directly():
++    """``_validate_interfaces`` accepts a Meta whose host class already inherits ``relay.Node``.
++
++    Slice 1's contract is only that the validator accepts the tuple
++    without raising. The structural no-op (skip bases already in
++    ``cls.__mro__``) is Slice 4's job; this test deliberately does not
++    inspect ``__bases__``.
++    """
++
++    class _Host(DjangoType, relay.Node):
++        pass
++
++    meta = _meta(interfaces=(relay.Node,))
++    assert _validate_interfaces(meta) == (relay.Node,)
++    # Reference _Host so ruff does not flag the host class as unused; the
++    # class existing in the test module is the assertion shape per the plan.
++    assert relay.Node in _Host.__mro__
++
++
++def test_relay_node_with_composite_pk_raises(monkeypatch):
++    """Composite-pk + ``relay.Node`` is rejected at finalization (Phase 2.5).
++
++    The fakeshop apps do not ship a composite-pk model, so the test
++    monkey-patches ``Category._meta.pk`` to a ``CompositePrimaryKey``
++    instance for the duration of the test. Detection in Phase 2.5 is via
++    ``isinstance(model._meta.pk, CompositePrimaryKey)`` per spec line 287.
++    The error message names the model and proposes the two remediation
++    paths (declare ``id: relay.NodeID[...]`` or remove ``relay.Node``).
++    """
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
++    with pytest.raises(ConfigurationError, match="composite primary key"):
++        finalize_django_types()
++
++
++def test_composite_pk_with_explicit_node_id_annotation_is_accepted(monkeypatch):
++    """A consumer ``id: relay.NodeID[str]`` escape hatch bypasses the composite-pk gate.
++
++    Regression for ``docs/feedback.md`` § "Unconditional composite PK
++    rejection ignores explicit ``NodeID`` annotations". The gate's own
++    error message advertises the remediation; honor it.
++    """
++
++    class CategoryNode(DjangoType):
++        name: relay.NodeID[str]
++
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
++    finalize_django_types()
++    assert CategoryNode.resolve_id_attr() == "name"
++
++
++# ---------------------------------------------------------------------------
++# Slice 2 — is_type_of injection
++# ---------------------------------------------------------------------------
++
++
++def test_is_type_of_injected_for_all_djangotypes():
++    """``is_type_of`` is installed on every concrete ``DjangoType`` subclass.
++
++    Decision 6 (spec line 351) is that injection is unconditional — it
++    happens for every ``DjangoType`` subclass with a ``Meta`` regardless
++    of whether ``Meta.interfaces`` is declared. The non-Relay
++    ``DjangoType`` here exercises that unconditional path.
++
++    The assertion uses ``cls.__dict__`` membership (not ``getattr``) so a
++    method inherited from a base would not satisfy the contract; the
++    injection must land on the class itself.
++    """
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++
++    class ItemNode(DjangoType):
++        class Meta:
++            model = Item
++            fields = ("id", "name")
++
++    for type_cls, model_cls, other_model_cls in (
++        (CategoryNode, Category, Item),
++        (ItemNode, Item, Category),
++    ):
++        assert "is_type_of" in type_cls.__dict__
++        is_type_of = type_cls.__dict__["is_type_of"]
++        assert is_type_of(model_cls(), info=None) is True
++        assert is_type_of(other_model_cls(), info=None) is False
++        assert is_type_of(object(), info=None) is False
++
++
++def test_consumer_declared_is_type_of_is_preserved():
++    """A consumer-declared ``is_type_of`` on the class survives ``__init_subclass__``.
++
++    Decision 6 (spec line 351): "If the consumer declares their own
++    ``is_type_of``, we do not overwrite it." The discriminator is
++    ``cls.__dict__`` membership, matching ``strawberry_django/type.py:204-211``.
++    The sentinel return value proves the consumer's callable is the one
++    that survives — not merely that some callable named ``is_type_of``
++    is attached to the class.
++    """
++    sentinel = object()
++
++    def consumer_is_type_of(obj, info):
++        return sentinel
++
++    class CustomNode(DjangoType):
++        is_type_of = consumer_is_type_of
++
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++
++    assert CustomNode.__dict__["is_type_of"] is consumer_is_type_of
++    assert CustomNode.__dict__["is_type_of"](Category(), info=None) is sentinel
++
++
++# ---------------------------------------------------------------------------
++# Slice 3 — id suppression
++# ---------------------------------------------------------------------------
++
++
++def test_relay_node_strips_django_id_annotation():
++    """``relay.Node`` in ``interfaces`` drops the synthesized pk annotation.
++
++    Spec Decision 2 (lines 278-285): when ``relay.Node`` is declared the
++    synthesized scalar ``id`` annotation must not shadow Strawberry's
++    interface-supplied ``id: GlobalID!``. The field stays in ``fields`` so
++    ``DjangoTypeDefinition.field_map`` and the optimizer still see the pk
++    as a connector column (Decision 7, line 361).
++
++    The unit-level test calls ``_build_annotations`` directly with a
++    synthetic host class to keep the boundary tight. End-to-end
++    coverage of the same suppression path lives in
++    ``tests/types/test_definition_order_schema.py``.
++    """
++    fields = tuple(Category._meta.get_fields())
++
++    class _Host:
++        pass
++
++    synthesized, _ = _build_annotations(
++        _Host,
++        fields,
++        source_model=Category,
++        interfaces=(relay.Node,),
++    )
++    assert "id" not in synthesized
++    # Control: a non-pk scalar still receives its synthesized annotation so
++    # the suppression is scoped to the primary key, not to all scalars.
++    assert "name" in synthesized
++
++
++def test_non_relay_type_keeps_id_int():
++    """Without ``relay.Node`` declared, the synthesized ``id: int`` is preserved.
++
++    Regression guard for the suppression branch: a future drift that
++    accidentally strips ``id`` for non-Relay types must surface here. The
++    ``interfaces=()`` default is the ``0.0.4``-identical path.
++    """
++    fields = tuple(Category._meta.get_fields())
++
++    class _Host:
++        pass
++
++    synthesized, _ = _build_annotations(
++        _Host,
++        fields,
++        source_model=Category,
++        interfaces=(),
++    )
++    assert "id" in synthesized
++    assert synthesized["id"] is int
++
++
++# ---------------------------------------------------------------------------
++# Slice 4 — interface base-class injection + Relay resolver defaults
++# ---------------------------------------------------------------------------
++
++
++def _build_fake_root(id_value: int):
++    """Build a synthetic ``root`` whose ``__dict__`` is empty but ``getattr`` resolves the pk.
++
++    Django model instances always cache the pk in ``__dict__`` when loaded
++    through the ORM, so the literal "dict-cache miss" branch of
++    ``_resolve_id_default`` is not reachable with a real saved row. The
++    branch IS reachable when the root is a synthetic non-model object
++    that mimics the ``__class__._meta.pk.attname`` contract — exactly the
++    shape ``strawberry-django`` documents as the fallback path. We build
++    that shape here so the fallback branch has a faithful test.
++    """
++
++    class _FakeRoot:
++        pass
++
++    # Mimic ``root.__class__._meta.pk.attname`` so the "pk" -> "id"
++    # coercion in ``_resolve_id_default`` resolves cleanly.
++    _FakeRoot._meta = Category._meta
++    _FakeRoot.id = id_value
++    return _FakeRoot()
++
++
++def test_relay_node_injects_default_resolvers():
++    """Phase 2.5 injects all four ``resolve_*`` classmethods onto a Relay-declared type."""
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    assert relay.Node in CategoryNode.__mro__
++    for attr in ("resolve_id", "resolve_id_attr", "resolve_node", "resolve_nodes"):
++        assert attr in CategoryNode.__dict__, f"{attr} was not injected"
++        descriptor = CategoryNode.__dict__[attr]
++        assert isinstance(descriptor, classmethod)
++
++
++def test_resolve_id_attr_falls_back_to_pk():
++    """No ``relay.NodeID[...]`` annotation -> ``resolve_id_attr()`` returns ``"pk"``."""
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    assert CategoryNode.resolve_id_attr() == "pk"
++    # Direct helper exercise: the fallback fires when ``NodeIDAnnotationError`` raises.
++    assert _resolve_id_attr_default(CategoryNode) == "pk"
++
++
++@pytest.mark.django_db
++def test_resolve_id_uses_dict_cache():
++    """``resolve_id`` reads ``root.__dict__`` first (no extra lazy load)."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    row = Category.objects.only("id", "name").first()
++    assert row is not None
++    # Force a known pk into ``__dict__`` so the cache branch fires.
++    row.__dict__["id"] = 9999
++    assert CategoryNode.resolve_id(row, info=None) == "9999"
++
++
++def test_resolve_id_falls_back_to_getattr():
++    """When ``root.__dict__`` is missing the pk, ``resolve_id`` falls back to ``getattr``.
++
++    Real Django model instances always cache the pk in ``__dict__``; the
++    fallback branch only fires on synthetic ``root`` objects that mimic
++    the ``__class__._meta.pk.attname`` contract. The synthetic shape is
++    faithful to the spec contract at line 313 (``try ... __dict__ ...
++    except KeyError: return str(getattr(root, id_attr))``).
++    """
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    fake = _build_fake_root(42)
++    assert "id" not in fake.__dict__
++    assert CategoryNode.resolve_id(fake, info=None) == "42"
++
++
++@pytest.mark.django_db
++def test_resolve_node_applies_get_queryset():
++    """A custom ``get_queryset`` filtering ``is_private`` scopes node lookup."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
++            return queryset.filter(is_private=False)
++
++    finalize_django_types()
++    public_row = Category.objects.filter(is_private=False).first()
++    private_row = Category.objects.filter(is_private=True).first()
++    assert public_row is not None and private_row is not None
++    assert CategoryNode.resolve_node(info=None, node_id=public_row.id).pk == public_row.pk
++    assert CategoryNode.resolve_node(info=None, node_id=private_row.id) is None
++
++
++@pytest.mark.django_db
++def test_resolve_node_accepts_strawberry_positional_call_shape():
++    """Strawberry calls ``cls.resolve_node(node_id, info=info)`` — positional ``node_id``.
++
++    Pins the review-feedback regression (``feedback.md`` § High
++    ``resolve_node`` default has the wrong bound signature): Strawberry's
++    Relay machinery passes ``node_id`` positionally and ``info`` as a
++    keyword. With the corrected signature ``(cls, node_id, *, info,
++    required=False)`` this call shape lands correctly; with the previous
++    ``(cls, info, node_id, ...)`` shape Python raised ``TypeError: got
++    multiple values for argument 'info'``.
++    """
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    target = Category.objects.first()
++    assert target is not None
++    # Positional node_id matches Strawberry's bound call site exactly.
++    result = CategoryNode.resolve_node(str(target.pk), info=None)
++    assert result is not None and result.pk == target.pk
++    # required=True via positional node_id keeps the same shape.
++    required_result = CategoryNode.resolve_node(str(target.pk), info=None, required=True)
++    assert required_result.pk == target.pk
++
++
++@pytest.mark.django_db
++def test_resolve_node_required_raises_for_missing():
++    """``required=True`` raises ``Model.DoesNotExist`` when no row matches."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    with pytest.raises(Category.DoesNotExist):
++        CategoryNode.resolve_node(info=None, node_id=99999, required=True)
++
++
++@pytest.mark.django_db
++def test_resolve_nodes_preserves_order_and_missing():
++    """``resolve_nodes(node_ids=[a, missing, b])`` returns ``[a, None, b]``."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    rows = list(Category.objects.order_by("id")[:2])
++    a, b = rows[0], rows[1]
++    results = CategoryNode.resolve_nodes(
++        info=None,
++        node_ids=[a.id, 999999, b.id],
++        required=False,
++    )
++    assert results == [a, None, b]
++
++
++@pytest.mark.django_db
++def test_resolve_nodes_required_raises_for_missing():
++    """``required=True`` raises ``Model.DoesNotExist`` for any missing id.
++
++    Plural-path required-missing raises the model's ``DoesNotExist``, the
++    same exception singular-path ``required=True`` raises via
++    ``qs.get()``. This homogeneous shape lets consumers write one
++    ``except Model.DoesNotExist:`` clause for both Relay node-lookup
++    paths instead of two clauses (``DoesNotExist`` for singular,
++    ``KeyError`` for plural).
++    """
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    a = Category.objects.first()
++    assert a is not None
++    with pytest.raises(Category.DoesNotExist):
++        CategoryNode.resolve_nodes(
++            info=None,
++            node_ids=[a.id, 999999],
++            required=True,
++        )
++
++
++@pytest.mark.django_db
++def test_resolve_nodes_without_ids_returns_full_queryset():
++    """``node_ids=None`` returns the unfiltered queryset (caller materializes)."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    qs = CategoryNode.resolve_nodes(info=None)
++    assert qs.model is Category
++    assert qs.count() == Category.objects.count()
++
++
++def _build_seeded_category_node():
++    """Sync helper: seed catalog state, register a Relay-declared CategoryNode, finalize.
++
++    Wrapped under ``sync_to_async(...)`` by the async tests below because
++    ``services.seed_data``, ``DjangoType`` subclassing (which writes to
++    the registry), and ``finalize_django_types`` are all sync paths that
++    Django refuses to run inside an active event loop without explicit
++    ``sync_to_async`` wrapping.
++    """
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    return CategoryNode
++
++
++@pytest.mark.django_db(transaction=True)
++async def test_resolve_node_async_context():
++    """In an async context ``_resolve_node_default`` awaits the matching row via ``afirst``."""
++    CategoryNode = await sync_to_async(_build_seeded_category_node)()
++    target = await Category.objects.afirst()
++    assert target is not None
++
++    result = await CategoryNode.resolve_node(info=None, node_id=target.id)
++    assert result is not None
++    assert result.pk == target.pk
++
++
++@pytest.mark.django_db(transaction=True)
++async def test_resolve_node_async_context_required():
++    """In an async context ``_resolve_node_default(required=True)`` awaits via ``aget``."""
++    CategoryNode = await sync_to_async(_build_seeded_category_node)()
++    target = await Category.objects.afirst()
++    assert target is not None
++
++    result = await CategoryNode.resolve_node(info=None, node_id=target.id, required=True)
++    assert result is not None
++    assert result.pk == target.pk
++
++
++@pytest.mark.django_db(transaction=True)
++async def test_resolve_nodes_async_context():
++    """Async ``_resolve_nodes_default`` preserves order and emits ``None`` for missing ids."""
++    CategoryNode = await sync_to_async(_build_seeded_category_node)()
++    rows = [row async for row in Category.objects.order_by("id")[:2]]
++    a, b = rows[0], rows[1]
++
++    result = await CategoryNode.resolve_nodes(
++        info=None,
++        node_ids=[a.id, 999999, b.id],
++        required=False,
++    )
++    assert [obj.pk if obj is not None else None for obj in result] == [a.pk, None, b.pk]
++
++
++@pytest.mark.django_db(transaction=True)
++async def test_resolve_nodes_async_context_no_ids_returns_queryset():
++    """``_resolve_nodes_default(node_ids=None)`` under async returns the lazy queryset.
++
++    Async-branch contract (post-async-``get_queryset`` fix): the call
++    returns a coroutine that yields the queryset once ``get_queryset``
++    has been awaited. The caller awaits the resolver call to obtain the
++    queryset, then iterates with ``async for``. Pins the spec line 491
++    "node_ids=None" branch of Decision 9 under the corrected awaitable
++    contract described in ``feedback.md`` § High.
++    """
++    CategoryNode = await sync_to_async(_build_seeded_category_node)()
++    qs = await CategoryNode.resolve_nodes(info=None)
++    assert qs.model is Category
++    rows = [row async for row in qs]
++    assert len(rows) == await Category.objects.acount()
++
++
++def _build_seeded_category_node_with_async_get_queryset():
++    """Sync helper: seed catalog state, register a Relay-declared ``CategoryNode`` with an async hook.
++
++    The hook filters out ``is_private=True`` rows. Used by the async
++    ``get_queryset`` tests below to prove that the async branch awaits
++    the hook before applying the id filter.
++    """
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
++            return queryset.filter(is_private=False)
++
++    finalize_django_types()
++    return CategoryNode
++
++
++@pytest.mark.django_db(transaction=True)
++async def test_resolve_node_async_awaits_async_get_queryset():
++    """Async ``get_queryset`` is awaited before the id filter on the async branch.
++
++    Pins the review-feedback regression (``feedback.md`` § High): the
++    previous implementation called ``cls.get_queryset(qs, info)``
++    synchronously and then invoked ``.filter`` on the resulting
++    coroutine, raising ``AttributeError``. The corrected async branch
++    awaits the hook, then applies the id filter, then awaits
++    ``aget``/``afirst``.
++    """
++    CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
++    public_row = await Category.objects.filter(is_private=False).afirst()
++    private_row = await Category.objects.filter(is_private=True).afirst()
++    assert public_row is not None and private_row is not None
++
++    public_result = await CategoryNode.resolve_node(public_row.pk, info=None)
++    assert public_result is not None and public_result.pk == public_row.pk
++    # Rows the async hook filters out are invisible to the node lookup.
++    assert await CategoryNode.resolve_node(private_row.pk, info=None) is None
++
++
++@pytest.mark.django_db(transaction=True)
++async def test_resolve_nodes_async_awaits_async_get_queryset():
++    """Async ``get_queryset`` is awaited on the async ``resolve_nodes`` branch too.
++
++    Mirrors ``test_resolve_node_async_awaits_async_get_queryset`` for
++    the bulk-fetch path: the async branch awaits the hook before applying
++    the ``id_attr__in`` filter, and the order-preserving missing-id
++    contract still emits ``None`` at the indexes the hook filtered out.
++    """
++    CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
++    public_rows = [row async for row in Category.objects.filter(is_private=False).order_by("id")[:2]]
++    private_row = await Category.objects.filter(is_private=True).afirst()
++    assert len(public_rows) == 2 and private_row is not None
++    a, b = public_rows
++
++    result = await CategoryNode.resolve_nodes(
++        info=None,
++        node_ids=[a.pk, private_row.pk, b.pk],
++        required=False,
++    )
++    # The private row is filtered out by the async hook, so its slot is None.
++    assert [obj.pk if obj is not None else None for obj in result] == [a.pk, None, b.pk]
++
++
++@pytest.mark.django_db(transaction=True)
++async def test_resolve_nodes_async_no_ids_awaits_async_get_queryset():
++    """Async ``resolve_nodes(node_ids=None)`` awaits the async hook and returns the filtered queryset.
++
++    Pins the ``node_ids=None`` branch under async ``get_queryset``: the
++    coroutine returned by ``resolve_nodes`` awaits the hook, applies no
++    id filter, and yields the filtered queryset. Material rows reflect
++    the hook's predicate.
++    """
++    CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
++    qs = await CategoryNode.resolve_nodes(info=None)
++    rows = [row async for row in qs]
++    # Every returned row must satisfy the async hook's predicate.
++    assert rows
++    assert all(row.is_private is False for row in rows)
++
++
++def test_resolve_node_sync_with_async_get_queryset_raises():
++    """Sync ``resolve_node`` + ``async def get_queryset`` raises ``ConfigurationError``.
++
++    The sync branch cannot await an async hook; rather than letting
++    ``.filter`` blow up on a coroutine, the framework closes the
++    unawaited coroutine and raises a named ``ConfigurationError``
++    pointing the consumer at the async resolver path or a sync hook
++    rewrite (review feedback ``feedback.md`` § High).
++    """
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
++            return queryset
++
++    finalize_django_types()
++    with pytest.raises(ConfigurationError, match="returned a coroutine"):
++        CategoryNode.resolve_node(1, info=None)
++
++
++def test_resolve_nodes_sync_with_async_get_queryset_raises():
++    """Sync ``resolve_nodes`` + ``async def get_queryset`` raises ``ConfigurationError``.
++
++    Same contract as ``test_resolve_node_sync_with_async_get_queryset_raises``
++    but for the bulk-fetch path. Both Relay node defaults must reject
++    the sync-context + async-hook combination homogeneously so consumers
++    see one error shape.
++    """
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
++            return queryset
++
++    finalize_django_types()
++    with pytest.raises(ConfigurationError, match="returned a coroutine"):
++        CategoryNode.resolve_nodes(info=None)
++
++
++async def test_consumer_async_resolve_node_wins():
++    """An ``async def resolve_node`` on the consumer class survives injection."""
++    sentinel = object()
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        async def resolve_node(cls, info, node_id, required=False):  # noqa: ARG003
++            return sentinel
++
++    finalize_django_types()
++
++    assert await CategoryNode.resolve_node(info=None, node_id="anything") is sentinel
++
++
++def test_consumer_resolve_id_attr_wins():
++    """A consumer-declared ``resolve_id_attr`` survives Phase 2.5 injection."""
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        def resolve_id_attr(cls) -> str:
++            return "name"
++
++    finalize_django_types()
++    assert CategoryNode.resolve_id_attr() == "name"
++
++
++def test_consumer_resolve_id_wins():
++    """A consumer-declared ``resolve_id`` survives Phase 2.5 injection."""
++    sentinel_id = "consumer-id"
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        def resolve_id(cls, root, info) -> str:  # noqa: ARG003
++            return sentinel_id
++
++    finalize_django_types()
++    assert CategoryNode.resolve_id(None, info=None) == sentinel_id
++
++
++def test_consumer_resolve_node_wins():
++    """A consumer-declared sync ``resolve_node`` survives Phase 2.5 injection."""
++    sentinel = object()
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        def resolve_node(cls, info, node_id, required=False):  # noqa: ARG003
++            return sentinel
++
++    finalize_django_types()
++    assert CategoryNode.resolve_node(info=None, node_id="x") is sentinel
++
++
++def test_consumer_resolve_nodes_wins():
++    """A consumer-declared ``resolve_nodes`` survives Phase 2.5 injection."""
++    sentinel = [object()]
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        def resolve_nodes(cls, info, node_ids=None, required=False):  # noqa: ARG003
++            return sentinel
++
++    finalize_django_types()
++    assert CategoryNode.resolve_nodes(info=None) is sentinel
++
++
++def test_node_id_annotation_overrides_default_id_attr():
++    """A ``relay.NodeID[str]`` annotation steers ``resolve_id_attr`` away from ``"pk"``.
++
++    The consumer declares ``name: relay.NodeID[str]`` on the class (a
++    column the model exposes). Strawberry's ``Node.resolve_id_attr()``
++    walks ``cls.__annotations__`` for a ``relay.NodeID`` marker and
++    returns that attribute's name; the ``NodeIDAnnotationError`` fallback
++    never fires, so the framework default does not return ``"pk"``.
++
++    The correct spelling is ``name: relay.NodeID[str]`` (a subscripted
++    ``NodeID``); the bare ``Annotated[str, relay.NodeID]`` form does not
++    register because Strawberry expects ``NodeIDPrivate`` instances in
++    the metadata which only land via subscription.
++    """
++
++    class CategoryNode(DjangoType):
++        name: relay.NodeID[str]
++
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    assert CategoryNode.resolve_id_attr() == "name"
++
++
++def test_non_relay_interface_works():
++    """A non-Relay ``@strawberry.interface`` is injected without Relay resolver wiring."""
++
++    @strawberry.interface
++    class Auditable:
++        name: str
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (Auditable,)
++
++    finalize_django_types()
++    assert Auditable in CategoryNode.__mro__
++    # No Relay node injection on the consumer class.
++    assert "resolve_node" not in CategoryNode.__dict__
++    assert "resolve_id" not in CategoryNode.__dict__
++    assert not implements_relay_node(CategoryNode)
++
++
++def test_apply_interfaces_skips_already_present_bases():
++    """``apply_interfaces`` is a no-op when the interface is already in ``__mro__``.
++
++    Direct unit-boundary test against the ``apply_interfaces`` helper:
++    constructs a host class whose MRO already contains ``relay.Node``,
++    invokes the helper, and asserts ``__bases__`` is unchanged. Pins the
++    structural-no-op contract from spec lines 329, 339, 458.
++    """
++
++    class _Host(DjangoType, relay.Node):
++        pass
++
++    original_bases = _Host.__bases__
++
++    class _SyntheticDef:
++        interfaces = (relay.Node,)
++
++    apply_interfaces(_Host, _SyntheticDef)
++    assert _Host.__bases__ == original_bases
++
++
++def test_apply_interfaces_wraps_typeerror_as_configuration_error():
++    """An incompatible base raises ``ConfigurationError`` with the interface named.
++
++    A bare ``class _Host`` defaults to ``__bases__ == (object,)``. Appending a
++    Strawberry interface produces ``(object, _BadInterface)``, which Python
++    rejects with a "Cannot create a consistent MRO" ``TypeError`` because
++    ``_BadInterface`` already inherits from ``object`` through a different
++    metaclass path. The helper surfaces that as ``ConfigurationError`` naming
++    the interface, per spec lines 540-541.
++    """
++
++    @strawberry.interface
++    class _BadInterface:
++        name: str
++
++    class _Host:
++        pass
++
++    class _SyntheticDef:
++        interfaces = (_BadInterface,)
++
++    with pytest.raises(ConfigurationError, match="cannot add interface"):
++        apply_interfaces(_Host, _SyntheticDef)
++
++
++def test_resolve_id_default_unit_dict_cache_and_getattr_branches():
++    """Direct unit-test of the dict-cache / ``getattr`` split (no DB hit)."""
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    # Dict-cache hit: explicitly seed ``__dict__``.
++    inst = Category(id=7, name="x")
++    inst.__dict__["id"] = 7
++    assert _resolve_id_default(CategoryNode, inst, info=None) == "7"
++    # Cache-miss fallback to ``getattr``: synthetic root whose ``__dict__``
++    # is empty but whose class-level ``id`` attribute resolves the value.
++    fake = _build_fake_root(12)
++    assert _resolve_id_default(CategoryNode, fake, info=None) == "12"
++
++
++@pytest.mark.django_db
++def test_resolve_node_default_invoked_via_helper():
++    """``_resolve_node_default`` works when invoked as a free function (not via classmethod)."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    target = Category.objects.first()
++    assert target is not None
++    result = _resolve_node_default(CategoryNode, info=None, node_id=target.id)
++    assert result is not None and result.pk == target.pk
++
++
++@pytest.mark.django_db
++def test_resolve_nodes_default_invoked_via_helper():
++    """``_resolve_nodes_default`` exercised as a free function with a ``relay.GlobalID``-coerced id."""
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    target = Category.objects.first()
++    assert target is not None
++    global_id = relay.GlobalID(type_name="CategoryNode", node_id=str(target.id))
++    result = _resolve_nodes_default(
++        CategoryNode,
++        info=None,
++        node_ids=[global_id],
++        required=False,
++    )
++    assert len(result) == 1
++    assert result[0] is not None and result[0].pk == target.pk
++
++
++def test_install_relay_node_resolvers_idempotent():
++    """Calling ``install_relay_node_resolvers`` twice yields the same ``__func__`` identity."""
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++    finalize_django_types()
++    snapshot = {
++        attr: CategoryNode.__dict__[attr]
++        for attr in (
++            "resolve_id",
++            "resolve_id_attr",
++            "resolve_node",
++            "resolve_nodes",
++        )
++    }
++    install_relay_node_resolvers(CategoryNode)
++    after = {attr: CategoryNode.__dict__[attr] for attr in snapshot}
++    # After the first install the inherited defaults are framework defaults, so
++    # the second install also writes framework defaults; identity should match
++    # the first-pass snapshot because the underlying default callables are
++    # module-level constants in ``types/relay.py``.
++    for attr in snapshot:
++        assert after[attr].__func__ is snapshot[attr].__func__
++
++
++# ---------------------------------------------------------------------------
++# Regression: direct ``relay.Node`` inheritance (no ``Meta.interfaces``)
++# ---------------------------------------------------------------------------
++
++
++def test_direct_relay_node_inheritance_suppresses_id_annotation():
++    """Direct ``class Foo(DjangoType, relay.Node)`` suppresses the synthesized pk.
++
++    Pins the review-feedback regression (``feedback.md`` § High "Direct
++    ``relay.Node`` inheritance bypasses Relay finalization"): when a
++    consumer follows Strawberry's native inheritance style without
++    declaring ``Meta.interfaces``, the package must still drop the
++    synthesized ``id: int`` annotation so the interface-supplied ``id:
++    GlobalID!`` is not shadowed.
++
++    Exercises ``_build_annotations`` at the unit boundary against a host
++    class that itself inherits ``relay.Node``, with ``interfaces=()`` to
++    isolate the direct-inheritance branch from the ``Meta.interfaces``
++    branch.
++    """
++    fields = tuple(Category._meta.get_fields())
++
++    class _Host(relay.Node):
++        pass
++
++    synthesized, _ = _build_annotations(
++        _Host,
++        fields,
++        source_model=Category,
++        interfaces=(),
++    )
++    assert "id" not in synthesized
++    # Non-pk scalars still receive their synthesized annotations.
++    assert "name" in synthesized
++
++
++@pytest.mark.django_db
++def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
++    """End-to-end: ``class Foo(DjangoType, relay.Node)`` finalizes the Relay shape.
++
++    Pins the review-feedback regression (``feedback.md`` § High "Direct
++    ``relay.Node`` inheritance bypasses Relay finalization"): Phase 2.5
++    must run the composite-pk gate and the four ``resolve_*`` defaults
++    for every class whose resolved MRO includes ``relay.Node``, not only
++    for classes with a non-empty ``Meta.interfaces`` tuple. Without this
++    fix the consumer's class still inherits ``relay.Node``'s defaults
++    (which call into Strawberry's GlobalID encoder) but never receives
++    the framework's ``get_queryset``-aware overrides.
++    """
++    services.seed_data(1)
++
++    class CategoryNode(DjangoType, relay.Node):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++
++    finalize_django_types()
++    assert relay.Node in CategoryNode.__mro__
++    # ``Meta.interfaces`` was empty — the definition stores the empty tuple.
++    assert CategoryNode.__django_strawberry_definition__.interfaces == ()
++    # All four resolver defaults landed on the class itself.
++    for attr in ("resolve_id", "resolve_id_attr", "resolve_node", "resolve_nodes"):
++        assert attr in CategoryNode.__dict__, f"{attr} was not injected"
++        assert isinstance(CategoryNode.__dict__[attr], classmethod)
++    # The synthesized ``id`` annotation was dropped so the interface-supplied
++    # ``id: GlobalID!`` field wins at Strawberry decoration time.
++    assert "id" not in CategoryNode.__annotations__
++    # Sanity: the injected defaults actually fetch by pk through ``get_queryset``.
++    target = Category.objects.first()
++    assert target is not None
++    assert CategoryNode.resolve_node(str(target.pk), info=None).pk == target.pk
++
++
++def test_direct_relay_node_inheritance_composite_pk_raises(monkeypatch):
++    """Direct ``relay.Node`` inheritance + composite pk raises at finalization.
++
++    Pins the review-feedback regression (``feedback.md`` § High): the
++    composite-pk gate must fire for every Relay-shaped type, including
++    consumers who inherit ``relay.Node`` directly without declaring
++    ``Meta.interfaces``. Detection uses Phase 2.5's
++    ``isinstance(model._meta.pk, CompositePrimaryKey)``.
++    """
++
++    class CategoryNode(DjangoType, relay.Node):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++
++    monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
++    with pytest.raises(ConfigurationError, match="composite primary key"):
++        finalize_django_types()
++
++
++def test_install_relay_node_resolvers_preserves_consumer_override():
++    """A consumer-declared ``resolve_id_attr`` is preserved by ``install_relay_node_resolvers``.
++
++    Pin separately from the idempotency test: this one declares an
++    explicit override on the class (its ``__func__`` differs from
++    ``relay.Node.resolve_id_attr.__func__``) and asserts the helper does
++    not overwrite it. Mirrors the ``test_consumer_resolve_id_attr_wins``
++    end-to-end test but at the helper-boundary level so the override
++    discriminator is exercised directly.
++    """
++    sentinel_value = "slug"
++
++    class CategoryNode(DjangoType):
++        class Meta:
++            model = Category
++            fields = ("id", "name")
++            interfaces = (relay.Node,)
++
++        @classmethod
++        def resolve_id_attr(cls) -> str:
++            return sentinel_value
++
++    consumer_func = CategoryNode.__dict__["resolve_id_attr"].__func__
++    # Manually drive the host class through Phase 2.5 without finalizing the
++    # whole registry (the goal is to exercise the install helper directly).
++    CategoryNode.__bases__ = (*CategoryNode.__bases__, relay.Node)
++    install_relay_node_resolvers(CategoryNode)
++    assert CategoryNode.__dict__["resolve_id_attr"].__func__ is consumer_func
++    assert CategoryNode.resolve_id_attr() == sentinel_value

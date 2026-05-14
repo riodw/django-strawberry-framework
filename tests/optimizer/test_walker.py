@@ -121,6 +121,48 @@ def test_plan_skips_unknown_selections():
     assert plan.is_empty
 
 
+def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
+    """Regression for ``docs/feedback.md`` § custom-pk Relay projection.
+
+    When a Relay-declared ``DjangoType`` is backed by a model whose pk
+    attname is not ``"id"``, ``snake_case("id")`` does not match the
+    field-map's real key. The walker must resolve the configured
+    ``id_attr`` (via ``type_cls.resolve_id_attr()``) and project that
+    column into ``only()`` so ``_resolve_id_default`` reads the loaded
+    value from ``root.__dict__`` instead of falling back to ``getattr``
+    and triggering a lazy load (Decision 7).
+
+    Simulates the custom-pk shape without adding a new fakeshop model:
+    monkey-patches ``Category._meta.pk.attname`` and the cached
+    ``_optimizer_field_map`` to drop the ``"id"`` key while keeping
+    ``"name"`` as the stand-in pk projection.
+    """
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class CategoryNode(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+        fake_field_map = {k: v for k, v in CategoryNode._optimizer_field_map.items() if k != "id"}
+        monkeypatch.setattr(CategoryNode, "_optimizer_field_map", fake_field_map)
+        monkeypatch.setattr(Category._meta.pk, "attname", "name")
+
+        plan = plan_optimizations([_sel("id")], Category)
+
+        assert "name" in plan.only_fields
+        assert "id" not in plan.only_fields
+    finally:
+        registry.clear()
+
+
 def test_plan_prefetches_relation_with_missing_related_model_defensively():
     """Defensive branch: relation fields without related_model become string prefetches."""
 

@@ -230,6 +230,27 @@ def test_relay_node_with_composite_pk_raises(monkeypatch):
         finalize_django_types()
 
 
+def test_composite_pk_with_explicit_node_id_annotation_is_accepted(monkeypatch):
+    """A consumer ``id: relay.NodeID[str]`` escape hatch bypasses the composite-pk gate.
+
+    Regression for ``docs/feedback.md`` § "Unconditional composite PK
+    rejection ignores explicit ``NodeID`` annotations". The gate's own
+    error message advertises the remediation; honor it.
+    """
+
+    class CategoryNode(DjangoType):
+        name: relay.NodeID[str]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
+    finalize_django_types()
+    assert CategoryNode.resolve_id_attr() == "name"
+
+
 # ---------------------------------------------------------------------------
 # Slice 2 — is_type_of injection
 # ---------------------------------------------------------------------------

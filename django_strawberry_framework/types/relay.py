@@ -121,15 +121,31 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     ``0.0.5``. Detection uses ``isinstance(model._meta.pk,
     CompositePrimaryKey)`` so the gate aligns with Django 5.2+'s
     native composite-pk type.
+
+    The error message proposes "declare an explicit ``id: relay.NodeID[...]``
+    annotation" as a remediation; honor that here so a consumer who
+    escapes the composite-pk surface with a single-column ``NodeID``
+    annotation is not unconditionally rejected. Strawberry's
+    ``Node.resolve_id_attr()`` returns the consumer's ``NodeID``
+    attribute name when present and raises ``NodeIDAnnotationError``
+    otherwise; only the latter case is the contract violation this
+    gate is meant to catch.
     """
     model = type_cls.__django_strawberry_definition__.model
-    if isinstance(model._meta.pk, CompositePrimaryKey):
-        raise ConfigurationError(
-            f"{model.__name__}: relay.Node is not supported on models with a "
-            "composite primary key. Either declare an explicit id: "
-            "relay.NodeID[...] annotation on the DjangoType or remove "
-            "relay.Node from Meta.interfaces.",
-        )
+    if not isinstance(model._meta.pk, CompositePrimaryKey):
+        return
+    try:
+        type_cls.resolve_id_attr()  # type: ignore[attr-defined]
+    except NodeIDAnnotationError:
+        pass
+    else:
+        return
+    raise ConfigurationError(
+        f"{model.__name__}: relay.Node is not supported on models with a "
+        "composite primary key. Either declare an explicit id: "
+        "relay.NodeID[...] annotation on the DjangoType or remove "
+        "relay.Node from Meta.interfaces.",
+    )
 
 
 def _resolve_id_attr_default(cls: type) -> str:

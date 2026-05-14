@@ -7,6 +7,7 @@ from typing import Any
 
 from django.db import models
 from django.db.models import Prefetch
+from strawberry import relay
 
 from ..registry import registry
 from ..utils.relations import relation_kind
@@ -125,15 +126,26 @@ def _walk_selections(
         django_name = snake_case(sel.name)
         django_field = field_map.get(django_name)
         if django_field is None:
+            # Decision 7 ("no avoidable lazy loads on ``resolve_id``"):
+            # when a Relay-declared ``DjangoType`` uses a custom pk
+            # attname (e.g. ``uuid = UUIDField(primary_key=True)``),
+            # ``snake_case("id") == "id"`` does not match the field-map
+            # key (``"uuid"``). Resolve the configured ``id_attr`` and
+            # project that real column so ``_resolve_id_default`` reads
+            # the loaded value from ``root.__dict__`` instead of falling
+            # back to ``getattr`` and triggering an N+1 lazy load.
+            if django_name == "id" and type_cls is not None and issubclass(type_cls, relay.Node):
+                id_attr = type_cls.resolve_id_attr()
+                if id_attr == "pk":
+                    id_attr = model._meta.pk.attname
+                if id_attr in field_map:
+                    append_unique(plan.only_fields, f"{prefix}{id_attr}")
             continue
         if not django_field.is_relation:
-            # Scalar projection site for Decision 7 of
-            # ``docs/spec-relay_interfaces.md``: when Relay ``id`` is
-            # selected on a Relay-declared ``DjangoType``,
-            # ``snake_case("id")`` resolves to the model's pk attname and
-            # this branch appends it to ``only_fields`` so
-            # ``_resolve_id_default`` reads the loaded value from
-            # ``root.__dict__`` without a lazy load.
+            # Scalar projection. When ``django_name == "id"`` and the
+            # type is a Relay-declared ``DjangoType``, this is the
+            # default-pk path (the model's pk attname IS ``"id"``); the
+            # custom-pk path is handled above.
             append_unique(plan.only_fields, f"{prefix}{django_name}")
             continue
 

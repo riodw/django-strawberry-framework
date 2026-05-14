@@ -116,24 +116,158 @@ def _walk_directives(
             if isinstance(arg.value, VariableNode):
                 names.add(arg.value.name.value)
     # Recurse into child selections.
+    for child in _child_selections(node):
+        # Always recurse into the child first so directives attached
+        # to the child itself are collected (FragmentSpreadNode has
+        # no ``selection_set`` so this is just the directive sweep).
+        _walk_directives(child, names, fragments, visited_fragments)
+        frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
+        if frag_def is not None:
+            _walk_directives(frag_def, names, fragments, visited_fragments)
+
+
+def _child_selections(node: Any) -> tuple[Any, ...]:
+    """Return the AST node's selection-set children as a tuple, or ``()``.
+
+    Centralizes the ``getattr(node, "selection_set", None)`` plus
+    ``selections or ()`` shape so the three AST walkers in this module
+    (``_walk_directives``, ``_walk_reachable_fragment_definitions``,
+    and by extension ``_collect_reachable_fragment_definitions``) share
+    one "iterate children" implementation. ``FragmentSpreadNode`` has
+    no ``selection_set``, so this returns ``()`` and the caller's
+    per-child loop becomes a no-op.
+    """
     selection_set = getattr(node, "selection_set", None)
-    if selection_set is not None:
-        for child in selection_set.selections or ():
-            # Always recurse into the child first so directives attached
-            # to the child itself are collected (FragmentSpreadNode has
-            # no ``selection_set`` so this is just the directive sweep).
-            _walk_directives(child, names, fragments, visited_fragments)
-            if isinstance(child, FragmentSpreadNode):
-                frag_name = child.name.value if child.name else None
-                if frag_name is None or frag_name in visited_fragments:
-                    continue
-                frag_def = fragments.get(frag_name)
-                if frag_def is None:
-                    continue
-                # Mark before descending so a sibling spread of the same
-                # fragment in this operation does not re-walk the subtree.
-                visited_fragments.add(frag_name)
-                _walk_directives(frag_def, names, fragments, visited_fragments)
+    if selection_set is None:
+        return ()
+    return tuple(selection_set.selections or ())
+
+
+def _unvisited_fragment_definition(
+    node: Any,
+    fragments: dict[str, Any],
+    visited_fragments: set[str],
+) -> Any | None:
+    """Resolve a ``FragmentSpreadNode`` to its definition, once.
+
+    Returns the matching ``FragmentDefinitionNode`` and marks the
+    fragment name as visited so a sibling or cyclic spread of the same
+    fragment in the same walk is a no-op. Returns ``None`` when
+    ``node`` is not a fragment spread, when the spread has no name,
+    when the fragment name is already visited, or when the document
+    does not define the named fragment (defensive — graphql-core's
+    validation would normally reject the operation before the optimizer
+    sees it). Mutates ``visited_fragments`` on success so callers share
+    the same cycle-detection set across recursive descents in both the
+    directive-variable walk and the reachable-fragment walk.
+    """
+    if not isinstance(node, FragmentSpreadNode):
+        return None
+    frag_name = node.name.value if node.name else None
+    if frag_name is None or frag_name in visited_fragments:
+        return None
+    frag_def = fragments.get(frag_name)
+    if frag_def is None:
+        return None
+    visited_fragments.add(frag_name)
+    return frag_def
+
+
+def _collect_reachable_fragment_definitions(
+    node: Any,
+    fragments: dict[str, Any],
+) -> tuple[Any, ...]:
+    """Return every named fragment definition reachable from ``node``.
+
+    Walks the AST in selection-set order, deterministically, so the
+    same operation + fragment map produces the same tuple on every
+    call. Each fragment definition is included once (via the
+    visited-fragments cycle guard inside
+    ``_unvisited_fragment_definition``). The returned tuple feeds
+    ``_print_operation_with_reachable_fragments`` so the plan-cache
+    key includes the fragment bodies the planner will actually expand,
+    closing the ``query Q { ...F } fragment F { ... }`` cache-key gap
+    flagged in this module's review artifact.
+    """
+    reachable: list[Any] = []
+    _walk_reachable_fragment_definitions(node, fragments, set(), reachable)
+    return tuple(reachable)
+
+
+def _walk_reachable_fragment_definitions(
+    node: Any,
+    fragments: dict[str, Any],
+    visited_fragments: set[str],
+    reachable: list[Any],
+) -> None:
+    """Recursive workhorse for ``_collect_reachable_fragment_definitions``.
+
+    For each child selection: if the child is an unvisited fragment
+    spread, append its definition to ``reachable`` and recurse into
+    the definition so transitively-spread fragments are also
+    collected; then recurse into the child itself so inline-fragment
+    children and regular field children contribute their nested
+    spreads. The "always recurse into child" tail is a no-op for
+    ``FragmentSpreadNode`` children because ``_child_selections``
+    returns ``()`` for them, so the duplicate recursion is harmless
+    rather than worth a special-case branch.
+    """
+    for child in _child_selections(node):
+        frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
+        if frag_def is not None:
+            reachable.append(frag_def)
+            _walk_reachable_fragment_definitions(
+                frag_def,
+                fragments,
+                visited_fragments,
+                reachable,
+            )
+        _walk_reachable_fragment_definitions(child, fragments, visited_fragments, reachable)
+
+
+def _print_operation_with_reachable_fragments(
+    operation: Any,
+    fragments: dict[str, Any],
+) -> str:
+    """Render the plan-cache document key.
+
+    Concatenates ``print_ast(operation)`` with the printed AST of
+    every fragment definition reachable from the operation, joined by
+    newlines. This is the load-bearing distinction from a bare
+    ``print_ast(operation)``: two operations with identical bodies
+    but different reachable fragment bodies render to different
+    strings, so they no longer share a cached plan that was built for
+    the wrong fragment shape. Order is deterministic (selection-set
+    order with a visited guard), so the same operation + fragments
+    always produce the same string and the cache key is stable across
+    requests.
+    """
+    parts = [print_ast(operation)]
+    parts.extend(
+        print_ast(fragment) for fragment in _collect_reachable_fragment_definitions(operation, fragments)
+    )
+    return "\n".join(parts)
+
+
+def _root_child_selections(selections: list[Any]) -> list[Any]:
+    """Flatten children from every converted root field node.
+
+    GraphQL merges repeated root fields with the same response key
+    into one resolver call but exposes every contributing ``FieldNode``
+    in ``info.field_nodes``. After ``convert_selections``, the returned
+    list has one entry per field node, and the walker needs the union
+    of their children. The previous shape (``selections[0].selections``)
+    silently dropped relations selected by the second node, so
+    ``{ allItems { name } allItems { category { name } } }`` would
+    skip planning ``category``. The walker's existing alias merging
+    (``_merge_aliased_selections``) deduplicates within the flattened
+    list, so the order in which we flatten does not matter for plan
+    correctness.
+    """
+    children: list[Any] = []
+    for selection in selections:
+        children.extend(selection.selections)
+    return children
 
 
 class CacheInfo(NamedTuple):
@@ -150,11 +284,12 @@ _optimizer_active: ContextVar[bool] = ContextVar(
 )
 
 
-# Per-execution memo for ``print_ast(operation)``.  Set in ``on_execute``
-# and reset on its way out so each execution gets its own dict; the
-# ``ContextVar`` shape keeps async executions isolated even when they
-# share the same extension instance.  ``_build_cache_key`` reads from
-# this dict before recomputing, keyed by ``id(operation)``.
+# Per-execution memo for the rendered document key: the selected operation
+# plus reachable named fragment definitions.  Set in ``on_execute`` and
+# reset on its way out so each execution gets its own dict; the ``ContextVar``
+# shape keeps async executions isolated even when they share the same
+# extension instance.  ``_build_cache_key`` reads from this dict before
+# recomputing, keyed by ``id(operation)``.
 _printed_ast_cache: ContextVar[dict[int, str] | None] = ContextVar(
     "django_strawberry_framework_optimizer_printed_ast_cache",
     default=None,
@@ -401,9 +536,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         from strawberry.types.nodes import convert_selections
 
         selections = convert_selections(info, info.field_nodes)
-        # selections[0] is the root field; its .selections are the
-        # children the walker needs.
-        plan = self._get_or_build_plan(selections[0].selections, target_model, info)
+        plan = self._get_or_build_plan(_root_child_selections(selections), target_model, info)
         self._publish_plan_to_context(plan, info)
         if plan.is_empty:
             return result
@@ -512,14 +645,17 @@ class DjangoOptimizerExtension(SchemaExtension):
         """Build the plan-cache key from resolver info and target model.
 
         Key components:
-        1. The selected operation's printed AST string.  ``print_ast``
-           includes the operation name and its own selection set only,
-           so multi-operation documents (``query A {...} query B {...}``)
-           never collide — using the raw source body would, because
-           ``loc.source.body`` is the entire document.  We store the
-           printed string (not its ``hash``) to eliminate the rare-but-
-           real chance of two distinct operations sharing a 64-bit hash
-           and silently sharing a cached plan.
+        1. The selected operation's printed AST plus the printed definitions
+           of any named fragments reachable from it.  ``print_ast(operation)``
+           includes the operation name and its own selection set only, so
+           reachable fragment definitions are appended to keep same-shaped
+           operation bodies with different fragment bodies from sharing a
+           plan.  Multi-operation documents (``query A {...} query B {...}``)
+           still never collide — using the raw source body would, because
+           ``loc.source.body`` is the entire document.  We store the printed
+           string (not its ``hash``) to eliminate the rare-but-real chance of
+           two distinct document shapes sharing a 64-bit hash and silently
+           sharing a cached plan.
         2. Frozenset of ``(var_name, var_value)`` for only the
            variables referenced in ``@skip``/``@include`` directives.
         3. The target Django model class (different root fields in the
@@ -528,26 +664,27 @@ class DjangoOptimizerExtension(SchemaExtension):
            same model do not share a plan within one operation.
         """
         operation = info.operation
-        # Memoize ``print_ast(operation)`` per execution: many root
-        # resolvers in one operation share the same operation node, and
-        # ``print_ast`` is the heaviest step of cache-key construction.
-        # The memo is a per-execution ``ContextVar`` dict installed by
-        # ``on_execute``; if the extension is invoked outside an
-        # ``on_execute`` lifecycle (some test fixtures call
+        fragments = info.fragments or {}
+        # Memoize the rendered operation-plus-reachable-fragments document
+        # key per execution: many root resolvers in one operation share the
+        # same operation node, and ``print_ast`` is the heaviest step of
+        # cache-key construction.  The memo is a per-execution ``ContextVar``
+        # dict installed by ``on_execute``; if the extension is invoked
+        # outside an ``on_execute`` lifecycle (some test fixtures call
         # ``_build_cache_key`` directly), fall back to recomputing.
         memo = _printed_ast_cache.get()
         if memo is None:
-            doc_key = print_ast(operation)
+            doc_key = _print_operation_with_reachable_fragments(operation, fragments)
         else:
             op_id = id(operation)
             doc_key = memo.get(op_id)
             if doc_key is None:
-                doc_key = print_ast(operation)
+                doc_key = _print_operation_with_reachable_fragments(operation, fragments)
                 memo[op_id] = doc_key
         # Directive-variable extraction.
         directive_var_names = _collect_directive_var_names(
             operation,
-            fragments=info.fragments,
+            fragments=fragments,
         )
         variable_values = info.variable_values or {}
         relevant_vars = frozenset(

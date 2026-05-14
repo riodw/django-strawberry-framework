@@ -1,9 +1,12 @@
 """Tests for django_strawberry_framework.conf."""
 
+from types import MappingProxyType
+
 import pytest
 
 from django_strawberry_framework import conf
 from django_strawberry_framework.conf import Settings, reload_settings
+from django_strawberry_framework.exceptions import ConfigurationError
 
 # ---------------------------------------------------------------------------
 # Settings.__getattr__
@@ -22,7 +25,7 @@ def test_settings_returns_user_setting_when_provided():
 
 
 # ---------------------------------------------------------------------------
-# Settings.user_settings (lazy-load + falsy fallback)
+# Settings.user_settings (lazy-load + normalization)
 # ---------------------------------------------------------------------------
 
 
@@ -39,11 +42,26 @@ def test_settings_user_settings_returns_preset_value():
     assert s.user_settings == {"X": "y"}
 
 
+def test_settings_user_settings_accepts_mapping_values():
+    s = Settings(MappingProxyType({"X": "y"}))
+    assert s.user_settings == {"X": "y"}
+
+
 def test_settings_user_settings_falsy_falls_back_to_empty_dict(settings):
-    """Setting our key to ``None`` should yield ``{}`` via ``or {}``."""
+    """Setting our key to ``None`` should behave like no configured settings."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = None
     s = Settings()
     assert s.user_settings == {}
+
+
+def test_settings_user_settings_rejects_non_mapping_django_setting(monkeypatch):
+    django_settings = type("DjangoSettings", (), {})()
+    setattr(django_settings, conf.DJANGO_SETTINGS_KEY, ["not", "a", "mapping"])
+    monkeypatch.setattr(conf, "django_settings", django_settings)
+
+    s = Settings()
+    with pytest.raises(ConfigurationError, match="DJANGO_STRAWBERRY_FRAMEWORK.*list"):
+        _ = s.user_settings
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +124,13 @@ def test_settings_reload_with_none_restores_lazy_load():
     s = Settings({"A": 1})
     s.reload(None)
     assert s._user_settings is None
+
+
+def test_settings_reload_rejects_non_mapping_value():
+    s = Settings({"A": 1})
+    with pytest.raises(ConfigurationError, match="DJANGO_STRAWBERRY_FRAMEWORK.*str"):
+        s.reload("bad")
+    assert s.user_settings == {"A": 1}
 
 
 def test_setting_changed_receiver_uses_dispatch_uid():

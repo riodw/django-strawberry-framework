@@ -79,6 +79,46 @@ def test_optimizer_applies_select_related_for_forward_fk(django_assert_num_queri
 
 
 @pytest.mark.django_db
+def test_optimizer_plans_merged_duplicate_root_field_nodes(django_assert_num_queries):
+    """Merged duplicate root fields contribute all child selections to one plan."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension(strictness="raise")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(1):
+        result = schema.execute_sync(
+            "{ allItems { name } allItems { category { name } } }",
+            context_value=ctx,
+        )
+
+    assert result.errors is None
+    assert result.data["allItems"][0]["name"]
+    assert result.data["allItems"][0]["category"]["name"]
+    assert ctx.dst_optimizer_plan.select_related == ("category",)
+    assert "ItemType.category@allItems.category" in ctx.dst_optimizer_planned
+
+
+@pytest.mark.django_db
 def test_optimizer_applies_prefetch_related_for_reverse_fk(django_assert_num_queries):
     """A reverse FK selection collapses to two SQL queries via ``prefetch_related``."""
     services.seed_data(1)
@@ -710,6 +750,53 @@ def test_cache_differentiates_queries(django_assert_num_queries):
 
     schema.execute_sync("{ allItems { name } }")
     schema.execute_sync("{ allItems { name category { name } } }")
+    assert ext.cache_info().misses == 2
+    assert ext.cache_info().size == 2
+
+
+@pytest.mark.django_db
+def test_cache_differentiates_reachable_named_fragment_bodies():
+    """B1: matching operation text with different fragment bodies gets distinct plans."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    query_prefix = "query Q { allItems { ...ItemBits } }"
+    ctx_scalar = SimpleNamespace()
+    ctx_relation = SimpleNamespace()
+
+    result_scalar = schema.execute_sync(
+        f"{query_prefix} fragment ItemBits on ItemType {{ name }}",
+        context_value=ctx_scalar,
+    )
+    result_relation = schema.execute_sync(
+        f"{query_prefix} fragment ItemBits on ItemType {{ category {{ name }} }}",
+        context_value=ctx_relation,
+    )
+
+    assert result_scalar.errors is None
+    assert result_relation.errors is None
+    assert ctx_scalar.dst_optimizer_plan.select_related == ()
+    assert ctx_relation.dst_optimizer_plan.select_related == ("category",)
+    assert ext.cache_info().hits == 0
     assert ext.cache_info().misses == 2
     assert ext.cache_info().size == 2
 
@@ -2066,6 +2153,28 @@ def test_plan_stashed_on_dict_context():
     plan = OptimizationPlan(select_related=["category"])
     _stash_on_context(ctx, "dst_optimizer_plan", plan)
     assert ctx["dst_optimizer_plan"] is plan
+
+
+def test_stash_on_dict_subclass_writes_mapping_before_attributes():
+    """rev-optimizer__context: dict-like contexts must use the mapping branch."""
+    from django_strawberry_framework.optimizer._context import get_context_value, stash_on_context
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    class AttributeBackedDict(dict):
+        def __init__(self) -> None:
+            super().__init__()
+            super().__setattr__("attributes", {})
+
+        def __setattr__(self, key: str, value: object) -> None:
+            self.attributes[key] = value
+
+    ctx = AttributeBackedDict()
+    plan = OptimizationPlan(select_related=["category"])
+    stash_on_context(ctx, "dst_optimizer_plan", plan)
+
+    assert ctx["dst_optimizer_plan"] is plan
+    assert ctx.attributes == {}
+    assert get_context_value(ctx, "dst_optimizer_plan") is plan
 
 
 def test_stash_on_none_context_is_silent():

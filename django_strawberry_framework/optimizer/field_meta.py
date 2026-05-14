@@ -3,7 +3,7 @@
 ``FieldMeta`` is the canonical single source of truth for relation
 shape across the package: ``is_relation``, cardinality flags
 (``many_to_many`` / ``one_to_many`` / ``one_to_one``), ``attname``,
-``related_model``, and the FK target columns. Every consumer of
+``nullable``, ``related_model``, and the FK target columns. Every consumer of
 "relation cardinality + nullable + attname" should read from a
 ``FieldMeta`` instance (via ``DjangoTypeDefinition.field_map`` or a
 fresh ``FieldMeta.from_django_field(...)`` call) rather than
@@ -45,6 +45,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from django_strawberry_framework.exceptions import OptimizerError
+from django_strawberry_framework.utils.relations import relation_kind
 
 if TYPE_CHECKING:  # pragma: no cover
     from django.db import models
@@ -77,6 +78,18 @@ class FieldMeta:
         many_to_many: ``True`` for M2M fields.
         one_to_many: ``True`` for reverse FK fields.
         one_to_one: ``True`` for OneToOne fields (forward or reverse).
+        nullable: Raw single-relation nullability rule. Reverse OneToOne
+            relations short-circuit to ``True`` because the related row
+            may be absent; every other shape follows Django's
+            ``field.null`` flag (with ``getattr`` defaulting to ``False``
+            for descriptors that omit it). Many-side cardinalities
+            (reverse FK / M2M) render as ``list[target_type]`` at the
+            GraphQL layer regardless of this flag, so consumers gate on
+            cardinality before reading ``nullable``. The flag itself is
+            taken from the Django descriptor, which means reverse FK
+            (``ManyToOneRel``) reads ``True`` here as a class-level
+            Django default — the value is semantically irrelevant for
+            many-side cardinalities, not a contradiction.
         related_model: The target model class for relations, or ``None``.
         attname: The DB column name (e.g., ``category_id`` for a FK).
             ``None`` for reverse relations and non-FK fields.
@@ -95,6 +108,7 @@ class FieldMeta:
     many_to_many: bool = False
     one_to_many: bool = False
     one_to_one: bool = False
+    nullable: bool = False
     related_model: type[models.Model] | None = None
     attname: str | None = None
     target_field_name: str | None = None
@@ -127,12 +141,14 @@ class FieldMeta:
         # Read ``target_field`` once — it is consulted twice below to
         # extract both ``name`` and ``attname``.
         target_field = getattr(field, "target_field", None)
+        nullable = relation_kind(field) == "reverse_one_to_one" or bool(getattr(field, "null", False))
         return cls(
             name=field.name,
             is_relation=bool(field.is_relation),
             many_to_many=bool(getattr(field, "many_to_many", False)),
             one_to_many=bool(getattr(field, "one_to_many", False)),
             one_to_one=bool(getattr(field, "one_to_one", False)),
+            nullable=nullable,
             related_model=getattr(field, "related_model", None),
             attname=getattr(field, "attname", None),
             target_field_name=getattr(target_field, "name", None),

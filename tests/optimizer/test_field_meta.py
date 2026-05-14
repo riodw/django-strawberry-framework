@@ -35,7 +35,17 @@ def test_from_django_field_scalar():
     assert fm.name == "name"
     assert fm.is_relation is False
     assert fm.many_to_many is False
+    assert fm.nullable is False
     assert fm.related_model is None
+
+
+def test_from_django_field_nullable_scalar():
+    """Scalar ``null=True`` fields preserve effective nullable metadata."""
+    subtitle_field = Book._meta.get_field("subtitle")
+    fm = FieldMeta.from_django_field(subtitle_field)
+    assert fm.name == "subtitle"
+    assert fm.is_relation is False
+    assert fm.nullable is True
 
 
 def test_from_django_field_forward_fk():
@@ -49,6 +59,7 @@ def test_from_django_field_forward_fk():
     assert fm.target_field_name == "id"
     assert fm.many_to_many is False
     assert fm.one_to_many is False
+    assert fm.nullable is False
 
 
 def test_from_django_field_reverse_fk():
@@ -63,6 +74,16 @@ def test_from_django_field_reverse_fk():
     fm = FieldMeta.from_django_field(items_field)
     assert fm.is_relation is True
     assert fm.one_to_many is True
+    # Django's ``ManyToOneRel`` descriptor inherits ``null = True`` as a
+    # class-level default from ``ForeignObjectRel``, so the raw rule
+    # ``reverse_one_to_one or field.null`` yields ``True`` for reverse FKs
+    # even though the rendered GraphQL annotation is ``list[target_type]``
+    # (not nullable). Consumers like ``resolved_relation_annotation`` reach
+    # the many-side cardinality branch first and ignore this attribute, so
+    # ``True`` here is the faithful raw-rule value rather than the
+    # rendered-annotation value. See the ``FieldMeta.nullable`` docstring
+    # for the many-side caveat.
+    assert fm.nullable is True
 
 
 def test_from_django_field_many_to_many():
@@ -75,6 +96,9 @@ def test_from_django_field_many_to_many():
     assert fm.related_model is Genre
     assert fm.one_to_many is False
     assert fm.one_to_one is False
+    # M2M renders as ``list[target_type]`` (not nullable); the rule defaults to
+    # ``False`` when the field's ``null`` flag is unset/False.
+    assert fm.nullable is False
 
 
 def test_from_django_field_one_to_one():
@@ -88,6 +112,23 @@ def test_from_django_field_one_to_one():
     assert fm.attname == "patron_id"
     assert fm.target_field_name == "id"
     assert fm.target_field_attname == "id"
+    # Forward OneToOne (``MembershipCard.patron``) declares no ``null=True``,
+    # so the rule falls through both clauses (not reverse_one_to_one + no
+    # ``field.null``) and yields ``False``.  Pairs with
+    # ``test_from_django_field_reverse_one_to_one_is_nullable`` for the
+    # short-circuit side of the same expression.
+    assert fm.nullable is False
+
+
+def test_from_django_field_reverse_one_to_one_is_nullable():
+    """Reverse OneToOne is effectively nullable because the related row may not exist."""
+    card_field = Patron._meta.get_field("card")
+    fm = FieldMeta.from_django_field(card_field)
+    assert fm.name == "card"
+    assert fm.is_relation is True
+    assert fm.one_to_one is True
+    assert fm.auto_created is True
+    assert fm.nullable is True
 
 
 def test_from_django_field_rejects_non_django_input():

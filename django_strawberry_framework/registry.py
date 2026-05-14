@@ -3,10 +3,10 @@
 Maps Django models to their generated ``DjangoType`` and ``(model,
 field_name)`` to generated ``Enum`` classes. Used by:
 
-- ``converters.convert_relation`` for relation resolution once target
-  types are registered.
-- ``converters.convert_choices_to_enum`` for enum reuse across multiple
-  ``DjangoType`` subclasses reading the same choice column.
+- ``types.converters.convert_relation`` for relation resolution once
+  target types are registered.
+- ``types.converters.convert_choices_to_enum`` for enum reuse across
+  multiple ``DjangoType`` subclasses reading the same choice column.
 
 The registry is a process-global singleton (``registry``). Test isolation
 is via the ``clear()`` helper, typically wired into a ``pytest`` autouse
@@ -31,11 +31,11 @@ if TYPE_CHECKING:  # pragma: no cover
 class TypeRegistry:
     """Process-global registry of generated GraphQL types and enums.
 
-    Mutations (``register``, ``register_enum``, ``clear``) are not guarded
-    by a lock.  This is safe because every production-path mutation runs
-    at import time from ``DjangoType.__init_subclass__`` (single-threaded
-    module loading); ``clear`` is test-only.  Do not call ``register`` or
-    ``register_enum`` from a request handler or async resolver.
+    Mutating methods are not guarded by a lock. This is safe because
+    every production-path mutation runs at import time from
+    ``DjangoType.__init_subclass__`` (single-threaded module loading);
+    ``clear`` is test-only. Do not mutate the registry from a request
+    handler or async resolver.
     """
 
     def __init__(self) -> None:
@@ -244,9 +244,8 @@ class TypeRegistry:
         """Drop all registered types and enums.
 
         Test-only — production code should never need to call this.
-        Wire into a ``pytest`` autouse fixture (see
-        ``tests/test_django_types.py``) so each test starts with a clean
-        registry.
+        Wire into ``pytest`` autouse fixtures so each registry-using test
+        starts with a clean registry.
         """
         self._types.clear()
         self._models.clear()

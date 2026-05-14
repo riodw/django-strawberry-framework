@@ -59,25 +59,38 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
 def stash_on_context(context: Any, key: str, value: Any) -> None:
     """Stash ``value`` on ``context`` under ``key``; silently skip if impossible.
 
-    Strawberry's default context is an object, so ``setattr`` is the
-    primary path.  Consumers sometimes pass a plain ``dict`` as context,
-    so we fall back to ``__setitem__`` when ``setattr`` raises.  Frozen
-    objects (``MappingProxyType``, frozen dataclasses, ``pydantic``
-    models with ``frozen=True``) raise ``TypeError`` on assignment;
-    those stashes are silently skipped — the optimizer's introspection
-    surface is a nice-to-have, not a correctness invariant, so a
-    read-only context must not abort the resolver chain.
+    Dispatch order mirrors ``get_context_value``: ``dict`` instances are
+    treated as mappings first so a ``dict`` subclass with separate
+    attribute storage round-trips through the same branch the resolver
+    reads from. Non-``dict`` contexts use ``setattr`` first and fall
+    back to ``__setitem__`` for mapping-like objects (Strawberry's
+    default context is an object; some consumers pass a plain dict).
+    Frozen objects (``MappingProxyType``, frozen dataclasses,
+    ``pydantic`` models with ``frozen=True``) raise ``TypeError`` on
+    assignment; those stashes are silently skipped — the optimizer's
+    introspection surface is a nice-to-have, not a correctness
+    invariant, so a read-only context must not abort the resolver chain.
 
     When ``context`` is ``None`` (Strawberry's default when no
     ``context_value`` is provided), the stash is silently skipped.
+
+    Implementation note: the dict-first decision is expressed as a
+    guard *around* the ``setattr`` block (skip ``setattr`` entirely for
+    ``dict`` instances) rather than as a parallel ``try`` / ``except``
+    path. Both shapes have the same observable behavior, but the
+    guard-and-shared-tail form keeps one ``except TypeError`` handler
+    that ``MappingProxyType``-style fixtures already exercise, so no
+    parallel test scaffold for a frozen ``dict`` subclass is required
+    to keep the package coverage gate at 100%.
     """
     if context is None:
         return
-    try:
-        setattr(context, key, value)
-        return
-    except (AttributeError, TypeError):
-        pass
+    if not isinstance(context, dict):
+        try:
+            setattr(context, key, value)
+            return
+        except (AttributeError, TypeError):
+            pass
     try:
         context[key] = value
     except TypeError:
@@ -85,5 +98,7 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
         # on ``__setitem__``.  Narrow to ``TypeError`` only — a real ``dict``
         # never raises ``KeyError`` from assignment, and a future mapping
         # subclass that raises a custom error should surface, not be silently
-        # swallowed.
+        # swallowed.  The dict-first guard above routes plain ``dict``
+        # instances and ``dict`` subclasses through this same handler so
+        # frozen subclass shapes share coverage with ``MappingProxyType``.
         return

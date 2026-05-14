@@ -14,61 +14,113 @@ instance is mutated in place — the module global is *not* rebound — so
 references bound via ``from .conf import settings`` see the change
 immediately.
 
-Defensive-coerce stance (package-wide). Two top-level consumer-input
-seams currently coerce ``None`` to an empty mapping rather than
-raising: ``DJANGO_STRAWBERRY_FRAMEWORK = None`` (this module, treated
-as "no settings configured") and ``Meta.optimizer_hints = None`` in
-``types/base.py`` (treated as "no hints configured"). Both behave
-identically to omitting the value entirely. Tightening either to
-raise a configuration error is tracked as future-slice work; until
-then the empty-mapping coercion is the documented contract. Reflective
-shape reads off Strawberry / graphql-core / Django descriptors
-(``getattr(obj, name, None) or {}`` and friends in the optimizer
-subpackage) are a *separate* case — there the upstream contract
-genuinely allows the attribute to be absent or ``None`` on legitimate
-shapes, and coercion is unconditionally correct. Do not unify the two.
+Defensive ``None`` stance (package-wide). Two top-level
+consumer-input seams coerce ``None`` (and the missing-key case) to an
+empty mapping rather than raising: ``DJANGO_STRAWBERRY_FRAMEWORK =
+None`` (this module, treated as "no settings configured") and
+``Meta.optimizer_hints = None`` in ``types/base.py`` (treated as "no
+hints configured"). Both behave identically to omitting the value
+entirely. Tightening the ``None`` cases to raise is tracked as
+future-slice work; until then the empty-mapping coercion is the
+documented contract for ``None``. *Other* invalid shapes are no longer
+defensively coerced here: a non-mapping ``DJANGO_STRAWBERRY_FRAMEWORK``
+value raises ``ConfigurationError`` through
+``_normalize_user_settings`` before attribute lookup, rather than the
+old ``or {}`` collapse that silently absorbed every falsy value.
+Reflective shape reads off Strawberry / graphql-core / Django
+descriptors (``getattr(obj, name, None) or {}`` and friends in the
+optimizer subpackage) are a *separate* case — there the upstream
+contract genuinely allows the attribute to be absent or ``None`` on
+legitimate shapes, and coercion is unconditionally correct. Do not
+unify the two.
 """
 
+from collections.abc import Mapping
 from typing import Any
 
 from django.conf import settings as django_settings
 from django.test.signals import setting_changed
 
+from django_strawberry_framework.exceptions import ConfigurationError
+
 DJANGO_SETTINGS_KEY = "DJANGO_STRAWBERRY_FRAMEWORK"
 _DISPATCH_UID = "django_strawberry_framework.conf.reload_settings"
+
+
+def _normalize_user_settings(value: Any) -> dict[str, Any]:
+    """Validate and normalize a ``DJANGO_STRAWBERRY_FRAMEWORK`` candidate.
+
+    Branches:
+
+    - ``value is None`` -> ``{}``. ``None`` and the missing-key case
+      are the package's documented "no settings configured" shape;
+      matches the module-level ``None`` stance.
+    - Non-``Mapping`` value -> ``ConfigurationError`` naming the
+      received type. Protects ``Settings.__getattr__`` from raising a
+      bare ``TypeError`` on subscript when a consumer assigns a string
+      / list / other non-mapping by mistake, which the pre-fix ``or
+      {}`` fallback silently absorbed.
+    - ``dict`` -> returned as-is (fast path; preserves identity so
+      tests that capture the same dict by reference observe their
+      mutations).
+    - Other ``Mapping`` instances -> copied into a plain ``dict`` so
+      the cache always exposes a uniform ``dict[str, Any]`` shape to
+      ``Settings.user_settings`` consumers.
+
+    Shared by ``Settings.__init__`` (eager construction),
+    ``Settings.user_settings`` (lazy read from ``django.conf.settings``),
+    and ``Settings.reload`` (signal-driven and direct cache replacement)
+    so a single shape contract applies across every cache write site.
+    """
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ConfigurationError(
+            f"`{DJANGO_SETTINGS_KEY}` must be a mapping or None; got {type(value).__name__}.",
+        )
+    if isinstance(value, dict):
+        return value
+    return dict(value)
 
 
 class Settings:
     """Attribute-style accessor for user-provided library settings."""
 
-    def __init__(self, user_settings: dict[str, Any] | None = None) -> None:
+    def __init__(self, user_settings: Mapping[str, Any] | None = None) -> None:
         """Build a ``Settings`` instance.
 
         ``None`` (the default) defers loading until first attribute access, at
         which point the value is read from ``django.conf.settings``.  Passing
-        a dict uses it as-is and skips the lazy read.
+        a mapping skips the lazy read; ``dict`` values are retained and other
+        mappings are copied into a plain ``dict``.  Non-mapping values raise
+        ``ConfigurationError`` so malformed configuration fails at
+        construction rather than at attribute lookup, matching the
+        ``user_settings`` and ``reload`` write sites.
         """
-        self._user_settings = user_settings
+        self._user_settings = None if user_settings is None else _normalize_user_settings(user_settings)
 
     @property
     def user_settings(self) -> dict[str, Any]:
         """Lazily load user-defined settings from ``django.conf.settings``.
 
-        A falsy value (``None``, missing key, empty dict) collapses to an
-        empty dict so attribute access uniformly raises ``AttributeError``
-        for unknown keys rather than ``TypeError`` on ``None`` subscript.
+        Missing or ``None`` top-level configuration is treated the same as an
+        empty mapping.  Non-mapping values raise ``ConfigurationError`` so
+        malformed configuration fails before attribute lookup.
         """
         if self._user_settings is None:
-            self._user_settings = getattr(django_settings, DJANGO_SETTINGS_KEY, {}) or {}
+            self._user_settings = _normalize_user_settings(
+                getattr(django_settings, DJANGO_SETTINGS_KEY, None),
+            )
         return self._user_settings
 
-    def reload(self, value: dict[str, Any] | None) -> None:
+    def reload(self, value: Mapping[str, Any] | None) -> None:
         """Replace the cached user-settings mapping in place.
 
-        ``None`` restores lazy reload on next attribute access; any other
-        value is used as-is.
+        ``None`` restores lazy reload on next attribute access.  Mapping
+        values replace the cached settings; ``dict`` instances are retained,
+        and other mappings are copied into a plain ``dict``.
         """
-        self._user_settings = value
+        self._user_settings = None if value is None else _normalize_user_settings(value)
 
     def __getattr__(self, name: str) -> Any:
         """Retrieve a setting's value using attribute-style access.

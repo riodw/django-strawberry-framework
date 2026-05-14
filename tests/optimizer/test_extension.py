@@ -1987,6 +1987,64 @@ def test_optimizer_hint_force_prefetch(django_assert_num_queries):
     assert "category_id" in plan.only_fields
 
 
+@pytest.mark.django_db
+def test_optimizer_hint_force_select_does_not_bypass_custom_get_queryset(
+    django_assert_num_queries,
+):
+    """B4+O6: ``force_select`` downgrades when the target type filters visibility."""
+    from django.db.models import Prefetch
+
+    from django_strawberry_framework import OptimizerHint
+
+    services.seed_data(1)
+    calls = []
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            calls.append(info)
+            return queryset.filter(is_private=False)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            optimizer_hints = {"category": OptimizerHint.select_related()}
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def public_category_items(self) -> list[ItemType]:
+            return Item.objects.filter(category__is_private=False)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(2):
+        result = schema.execute_sync(
+            "{ publicCategoryItems { name category { name } } }",
+            context_value=ctx,
+        )
+
+    assert result.errors is None
+    assert calls
+    plan = ctx.dst_optimizer_plan
+    assert plan.select_related == ()
+    assert plan.cacheable is False
+    assert ext.cache_info().size == 0
+    assert len(plan.prefetch_related) == 1
+    assert isinstance(plan.prefetch_related[0], Prefetch)
+    assert plan.prefetch_related[0].prefetch_to == "category"
+    assert plan.prefetch_related[0].queryset.query.where
+
+
 def test_optimizer_hints_unknown_field_raises():
     """B4: unknown field name in optimizer_hints raises ConfigurationError."""
     from django_strawberry_framework import OptimizerHint
@@ -2221,11 +2279,11 @@ def test_stash_on_read_only_mapping_is_silent():
 
 
 def test_stash_falls_back_to_setitem_on_typeerror():
-    """B5: ``setattr`` raising ``TypeError`` falls back to ``__setitem__``.
+    """B5: a ``dict`` subclass is still stashed through ``__setitem__``.
 
-    Pins the broadened exception catch: some context objects (e.g. frozen
-    pydantic models) raise ``TypeError`` rather than ``AttributeError`` on
-    ``setattr``, so the dict-style fallback must still run.
+    Dict-like context objects take the mapping branch before attribute
+    writes, so a subclass with hostile attribute assignment still stores
+    the optimizer plan where ``get_context_value`` will read it.
     """
     from django_strawberry_framework.optimizer.extension import _stash_on_context
     from django_strawberry_framework.optimizer.plans import OptimizationPlan
@@ -2240,14 +2298,39 @@ def test_stash_falls_back_to_setitem_on_typeerror():
     assert ctx["dst_optimizer_plan"] is plan
 
 
-def test_stash_does_not_swallow_unexpected_exceptions_from_setitem():
-    """rev-optimizer__context: narrow the dict-fallback ``except`` to ``TypeError``.
+def test_stash_on_immutable_dict_subclass_is_silent():
+    """rev-optimizer__context: ``AttributeError`` from a frozen ``dict`` subclass is silently skipped.
 
-    A mapping subclass that raises a non-``TypeError`` from ``__setitem__``
-    (e.g. a guarded TypedDict-like mapping) must surface the error rather
-    than be silently swallowed. ``KeyError`` is no longer caught — a real
-    ``dict`` never raises ``KeyError`` on assignment, so catching it was
-    dead defensive code that risked hiding bugs in custom mappings.
+    Django's ``QueryDict`` is a ``dict`` subclass that raises
+    ``AttributeError("This QueryDict instance is immutable")`` from
+    ``__setitem__`` when locked. The dict-first dispatch in
+    ``stash_on_context`` routes subclasses through the mapping write
+    path, so the trailing ``except`` must catch ``AttributeError`` in
+    addition to ``TypeError`` — otherwise an immutable-``QueryDict``
+    context would crash the resolver chain instead of being silently
+    skipped, contradicting the docstring contract ("Frozen contexts ...
+    raise on assignment; those stashes are silently skipped").
+    """
+    from django_strawberry_framework.optimizer._context import stash_on_context
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    class ImmutableDictSubclass(dict):
+        def __setitem__(self, _key: str, _value: object) -> None:
+            raise AttributeError("this dict is immutable")
+
+    ctx = ImmutableDictSubclass()
+    plan = OptimizationPlan(prefetch_related=["items"])
+    stash_on_context(ctx, "dst_optimizer_plan", plan)
+    assert "dst_optimizer_plan" not in ctx
+
+
+def test_stash_does_not_swallow_unexpected_exceptions_from_setitem():
+    """rev-optimizer__context: keep the mapping-write ``except`` narrow.
+
+    Read-only mapping failures are intentionally limited to ``TypeError``
+    and ``AttributeError``. A guarded mapping that raises a different
+    exception from ``__setitem__`` must surface the error rather than
+    silently losing the optimizer stash.
     """
     from django_strawberry_framework.optimizer._context import stash_on_context
 

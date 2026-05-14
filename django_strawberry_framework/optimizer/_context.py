@@ -65,11 +65,16 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
     reads from. Non-``dict`` contexts use ``setattr`` first and fall
     back to ``__setitem__`` for mapping-like objects (Strawberry's
     default context is an object; some consumers pass a plain dict).
-    Frozen objects (``MappingProxyType``, frozen dataclasses,
-    ``pydantic`` models with ``frozen=True``) raise ``TypeError`` on
-    assignment; those stashes are silently skipped — the optimizer's
-    introspection surface is a nice-to-have, not a correctness
-    invariant, so a read-only context must not abort the resolver chain.
+    Frozen contexts raise on assignment; those stashes are silently
+    skipped — the optimizer's introspection surface is a nice-to-have,
+    not a correctness invariant, so a read-only context must not abort
+    the resolver chain. The two frozen-shape error modes the dict path
+    must absorb are ``TypeError`` (``MappingProxyType``, frozen
+    dataclasses, ``pydantic`` models with ``frozen=True``) and
+    ``AttributeError`` (Django's ``QueryDict`` when locked raises
+    ``AttributeError("This QueryDict instance is immutable")`` from
+    ``__setitem__``; ``QueryDict`` is a ``dict`` subclass so the
+    dict-first dispatch routes it through the mapping write path).
 
     When ``context`` is ``None`` (Strawberry's default when no
     ``context_value`` is provided), the stash is silently skipped.
@@ -78,10 +83,8 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
     guard *around* the ``setattr`` block (skip ``setattr`` entirely for
     ``dict`` instances) rather than as a parallel ``try`` / ``except``
     path. Both shapes have the same observable behavior, but the
-    guard-and-shared-tail form keeps one ``except TypeError`` handler
-    that ``MappingProxyType``-style fixtures already exercise, so no
-    parallel test scaffold for a frozen ``dict`` subclass is required
-    to keep the package coverage gate at 100%.
+    guard-and-shared-tail form keeps one mapping-write exception
+    handler instead of duplicating the catch in two branches.
     """
     if context is None:
         return
@@ -93,12 +96,15 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
             pass
     try:
         context[key] = value
-    except TypeError:
+    except (TypeError, AttributeError):
         # ``MappingProxyType`` and other frozen mappings raise ``TypeError``
-        # on ``__setitem__``.  Narrow to ``TypeError`` only — a real ``dict``
-        # never raises ``KeyError`` from assignment, and a future mapping
-        # subclass that raises a custom error should surface, not be silently
-        # swallowed.  The dict-first guard above routes plain ``dict``
-        # instances and ``dict`` subclasses through this same handler so
-        # frozen subclass shapes share coverage with ``MappingProxyType``.
+        # on ``__setitem__``; Django's locked ``QueryDict`` (a ``dict``
+        # subclass) raises ``AttributeError`` instead. Both are read-only
+        # contexts whose stash failures must be silently skipped per the
+        # docstring contract; neither indicates a programming bug in the
+        # optimizer. Other exception classes (``KeyError`` from a guarded
+        # mapping, custom ``RuntimeError`` from a TypedDict-like wrapper)
+        # are NOT swallowed — a real ``dict`` never raises ``KeyError``
+        # on assignment, and a custom mapping signalling a guarded write
+        # should surface rather than silently lose the stash.
         return

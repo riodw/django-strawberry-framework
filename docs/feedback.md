@@ -1,18 +1,45 @@
-## Code Review: `django_strawberry_framework__optimizer___context.diff`
 
-The optimization to bypass the slow `try...except AttributeError` block for dictionaries is sensible, but the implementation using `isinstance(context, dict)` introduces a subtle behavior change and a potential crashing bug for dictionary subclasses.
+## Code Review: `django_strawberry_framework__types__base.diff`
 
-1. **Behavior Change for `dict` Subclasses:**
-   - **Old Code:** Subclasses of `dict` typically possess a `__dict__` and therefore support attribute assignment. The old code successfully executed `setattr(context, key, value)` on subclasses, skipping `__setitem__`.
-   - **New Code:** `isinstance(context, dict)` evaluates to `True` for subclasses, causing the code to bypass `setattr` entirely and force the `context[key] = value` path.
-   If the goal was solely to avoid `AttributeError` overhead on built-in dictionaries, `if type(context) is not dict:` is a safer check as it strictly preserves the original `setattr` behavior for subclasses. If forcing `__setitem__` for subclasses is the intended feature, be aware of the bug it exposes in point 2.
+The implementation of `Meta.interfaces` validation and primary key annotation suppression is solid, effectively catching duplicate and malformed interfaces while gracefully handling Python's single-element tuple gotcha. However, there is a bug in the interface detection logic that will cause schema conflicts with extended Node interfaces, along with a misleading variable name.
 
-2. **Unhandled `AttributeError` on Immutable Dict Subclasses:**
-   By forcing `dict` subclasses down the `__setitem__` path, you assume they support arbitrary item assignment or raise a `TypeError` if they do not. However, in Django, `QueryDict` (a `dict` subclass) is immutable by default. When `context[key] = value` is attempted on a `QueryDict`, Django explicitly raises an `AttributeError` ("This QueryDict instance is immutable"). Because your fallback block only catches `TypeError`:
-   ```python
-   try:
-       context[key] = value
-   except TypeError:
-       return
-   ```
-   An `AttributeError` here will go uncaught and crash the application. To fix this, you should either broaden the catch block to `except (TypeError, AttributeError):` or use exact type checking (`type(context) is dict`) to allow subclasses to fall through to `setattr` as they did before.
+### 1. Exact match fails for extended `Node` interfaces
+
+**Location:** `_build_annotations`
+
+```python
+suppress_pk_annotation = relay.Node in interfaces or issubclass(cls, relay.Node)
+```
+
+**Reason:**
+The logic uses an exact membership check (`relay.Node in interfaces`) to determine if the primary key annotation should be suppressed. However, Strawberry supports interface inheritance (e.g., a user might define `@strawberry.interface class CustomNode(relay.Node): ...` and use `interfaces = (CustomNode,)`). 
+
+**Consequence:**
+If a consumer uses an extended Node interface, `relay.Node in interfaces` will evaluate to `False`. The framework will fail to suppress the default database primary key, leading to a schema generation crash when the auto-generated `id: strawberry.ID` conflicts with the interface's required `id: relay.NodeID[str]`.
+
+**Recommended Fix:**
+Since `_validate_interfaces` guarantees all entries are valid `type` instances, use `issubclass` to check the interface tuple:
+
+```python
+suppress_pk_annotation = any(issubclass(i, relay.Node) for i in interfaces) or issubclass(cls, relay.Node)
+```
+
+### 2. Misleading variable name `pk_attname`
+
+**Location:** `_build_annotations`
+
+```python
+pk_attname = source_model._meta.pk.name if suppress_pk_annotation else None
+```
+
+**Reason:**
+You are assigning `source_model._meta.pk.name` to a variable named `pk_attname`. While this is functionally correct for the subsequent `field.name == pk_attname` comparison (because `field.name` compares against the base Django field name), the variable is misnamed. In Django, `name` and `attname` are distinct concepts (e.g., the relation `"user"` vs the column `"user_id"`). 
+
+**Recommended Fix:**
+Rename the variable to `pk_name` to prevent future maintainers from mistakenly using it in an `attname` context (like `getattr(root, pk_attname)`), which would trigger unexpected database queries if the PK ever happens to be a relation.
+
+```python
+pk_name = source_model._meta.pk.name if suppress_pk_annotation else None
+# ...
+if suppress_pk_annotation and field.name == pk_name:
+```

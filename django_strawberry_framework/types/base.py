@@ -8,14 +8,16 @@ Consumer surface::
             fields = "__all__"
 
 A nested ``Meta`` class declares the model and (optionally) ``fields``,
-``exclude``, ``name``, and ``description``. Subclassing
+``exclude``, ``name``, ``description``, ``optimizer_hints``, and
+``interfaces``. Subclassing
 triggers the collection pipeline, which:
 
 1. Detects whether the subclass declares its own ``Meta``. Intermediate
    abstract subclasses without ``Meta`` are skipped so consumers can
    layer their own bases on top of ``DjangoType``.
-2. Validates ``Meta`` (required ``model``, ``fields``/``exclude``
-   exclusivity, deferred-key rejection).
+2. Validates ``Meta`` (required Django model class, supported option
+   shapes, ``fields``/``exclude`` exclusivity, deferred-key rejection,
+   relation-only optimizer hints, and interfaces).
 3. Selects Django fields and builds a ``DjangoTypeDefinition``.
 4. Synthesizes scalar annotations and records unresolved relations as
    pending records.
@@ -23,6 +25,7 @@ triggers the collection pipeline, which:
    pass.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 from django.db import models
@@ -192,6 +195,8 @@ def _normalize_fields_spec(value: Any) -> tuple[str, ...] | str | None:
     """Normalize ``Meta.fields`` for storage on ``DjangoTypeDefinition``."""
     if value is None or value == "__all__":
         return value
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ConfigurationError("Meta.fields must be '__all__' or a non-string sequence of field names")
     return tuple(value)
 
 
@@ -199,6 +204,8 @@ def _normalize_sequence_spec(value: Any) -> tuple[str, ...] | None:
     """Normalize optional sequence specs for storage on ``DjangoTypeDefinition``."""
     if value is None:
         return None
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ConfigurationError("Meta.exclude must be a non-string sequence of field names")
     return tuple(value)
 
 
@@ -239,13 +246,21 @@ def _consumer_assigned_fields(
 
 
 def _meta_optimizer_hints(meta: type) -> dict[str, Any]:
-    """Return ``meta.optimizer_hints`` as a dict, or ``{}`` when unset/empty.
+    """Return ``meta.optimizer_hints`` as a dict, or ``{}`` when unset.
 
-    Centralizes the ``getattr(meta, "optimizer_hints", None) or {}`` pattern
-    used across ``__init_subclass__`` and the validators so the Meta key
-    name only appears once at the read site.
+    Centralizes the shape guard used across ``__init_subclass__`` and the
+    validators so non-mapping declarations fail before hint keys or
+    values are inspected.
     """
-    return getattr(meta, "optimizer_hints", None) or {}
+    value = getattr(meta, "optimizer_hints", None)
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.optimizer_hints must be a mapping of field names to OptimizerHint "
+            f"instances, got {type(value).__name__}.",
+        )
+    return dict(value)
 
 
 def _format_unknown_fields_error(*, model: type, attr: str, unknown: list[str], available: set[str]) -> str:
@@ -355,12 +370,15 @@ def _validate_meta(meta: type) -> tuple[type, ...]:
 
     Validation order:
 
-    1. ``Meta.model`` is required.
+    1. ``Meta.model`` is required and must be a Django model class.
     2. ``fields`` and ``exclude`` are mutually exclusive.
     3. Any key in ``DEFERRED_META_KEYS`` raises with a clear message.
     4. Any non-dunder key on ``meta`` not in ``ALLOWED_META_KEYS |
        DEFERRED_META_KEYS`` raises (typo guard).
-    5. If ``Meta.interfaces`` is declared, validate it per
+    5. ``fields``, ``exclude``, and ``optimizer_hints`` have supported
+       declaration shapes before field selection or hint validation uses
+       them.
+    6. If ``Meta.interfaces`` is declared, validate it per
        ``_validate_interfaces`` (Decision 4) and return the normalized
        tuple.
 
@@ -372,8 +390,11 @@ def _validate_meta(meta: type) -> tuple[type, ...]:
     Raises:
         ConfigurationError: any of the above violations.
     """
-    if getattr(meta, "model", None) is None:
+    model = getattr(meta, "model", None)
+    if model is None:
         raise ConfigurationError("Meta.model is required")
+    if not isinstance(model, type) or not issubclass(model, models.Model):
+        raise ConfigurationError("Meta.model must be a Django model class")
 
     declared = {k for k in meta.__dict__ if not k.startswith("_")}
 
@@ -390,30 +411,36 @@ def _validate_meta(meta: type) -> tuple[type, ...]:
     if unknown:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
 
+    _normalize_fields_spec(getattr(meta, "fields", None))
+    _normalize_sequence_spec(getattr(meta, "exclude", None))
+    _meta_optimizer_hints(meta)
+
     return _validate_interfaces(meta)
 
 
 def _validate_optimizer_hints(meta: type, fields: tuple[Any, ...]) -> None:
     """Validate ``Meta.optimizer_hints`` keys and values in one pass.
 
-    Combines the three checks that previously lived in two helpers:
+    Combines the field-surface and value checks in one place:
 
     1. Every hint key names a field on ``meta.model`` (typo guard).
-    2. Every hint key is in the type's *selected* field set (excluded
-       fields silently drop optimizer intent otherwise — the walker
-       never visits them).
+    2. Every hint key is in the type's selected relation field set.
+       Excluded fields and selected scalar fields would silently drop
+       optimizer intent otherwise — the walker only reads hints after
+       entering the relation branch.
     3. Every hint value is an ``OptimizerHint`` instance.
 
-    All three error sites route through ``_format_unknown_fields_error``
-    so the consumer-visible shape is identical to ``Meta.fields`` /
-    ``Meta.exclude`` typo guards.
+    Field-name error sites route through ``_format_unknown_fields_error``
+    so the consumer-visible shape matches ``Meta.fields`` /
+    ``Meta.exclude`` typo guards; value errors use a dedicated
+    ``OptimizerHint`` message.
     """
     hints = _meta_optimizer_hints(meta)
     if not hints:
         return
     model = meta.model
     valid_field_names = {f.name for f in model._meta.get_fields()}
-    selected_names = {f.name for f in fields}
+    selected_relation_names = {f.name for f in fields if f.is_relation}
 
     unknown_hint_fields = sorted(set(hints) - valid_field_names)
     if unknown_hint_fields:
@@ -425,14 +452,14 @@ def _validate_optimizer_hints(meta: type, fields: tuple[Any, ...]) -> None:
                 available=valid_field_names,
             ),
         )
-    excluded_hint_fields = sorted(set(hints) - selected_names)
+    excluded_hint_fields = sorted(set(hints) - selected_relation_names)
     if excluded_hint_fields:
         raise ConfigurationError(
             _format_unknown_fields_error(
                 model=model,
                 attr="optimizer_hints",
                 unknown=excluded_hint_fields,
-                available=selected_names,
+                available=selected_relation_names,
             ),
         )
     bad_values = sorted(k for k, v in hints.items() if not isinstance(v, OptimizerHint))
@@ -469,8 +496,8 @@ def _select_fields(meta: type) -> tuple[Any, ...]:
             so typos surface loudly instead of silently dropping.
     """
     model = meta.model
-    fields_spec = getattr(meta, "fields", None)
-    exclude_spec = getattr(meta, "exclude", None)
+    fields_spec = _normalize_fields_spec(getattr(meta, "fields", None))
+    exclude_spec = _normalize_sequence_spec(getattr(meta, "exclude", None))
 
     all_fields = list(model._meta.get_fields())
     all_names = [f.name for f in all_fields]
@@ -516,10 +543,13 @@ def _build_annotations(
 ) -> tuple[dict[str, Any], list[PendingRelation]]:
     """Build the annotation dict the Strawberry type decorator consumes.
 
-    Field-by-field dispatch: every entry in ``fields`` is routed through
-    ``convert_relation`` if ``field.is_relation`` is true, or
-    ``convert_scalar`` otherwise. The caller pre-computes the list with
-    ``_select_fields(meta)`` so this function does not need ``meta``.
+    Field-by-field dispatch: scalar entries in ``fields`` are routed
+    through ``convert_scalar``. Relation entries are handled inline so
+    already-registered target types can use ``resolved_relation_annotation``
+    immediately, while unregistered target types leave a
+    ``PendingRelation`` record for the finalization pass. The caller
+    pre-computes the list with ``_select_fields(meta)`` so this function
+    does not need ``meta``.
 
     When ``relay.Node`` appears in ``interfaces``, the primary-key field's
     synthesized scalar annotation is dropped from the returned dict so
@@ -556,15 +586,32 @@ def _build_annotations(
     pending: list[PendingRelation] = []
     # Suppress the synthesized scalar ``id`` annotation whenever the type will
     # participate in the Relay ``Node`` interface — either through
-    # ``Meta.interfaces`` (the canonical path) or through direct inheritance
-    # (``class Foo(DjangoType, relay.Node)``). Without the direct-inheritance
-    # branch a Strawberry-native consumer would land in Phase 3
-    # ``strawberry.type(...)`` decoration with both the synthesized ``id: int``
-    # and the interface-supplied ``id: GlobalID!`` and the schema build would
-    # blow up with ``NodeIDAnnotationError`` (review feedback ``feedback.md``
-    # § High "Direct relay.Node inheritance bypasses Relay finalization").
-    suppress_pk_annotation = relay.Node in interfaces or issubclass(cls, relay.Node)
-    pk_attname = source_model._meta.pk.name if suppress_pk_annotation else None
+    # ``Meta.interfaces`` (the canonical path; includes both ``relay.Node``
+    # directly and any ``@strawberry.interface`` that subclasses it) or
+    # through direct inheritance (``class Foo(DjangoType, relay.Node)``).
+    # Without these branches a Strawberry-native consumer would land in
+    # Phase 3 ``strawberry.type(...)`` decoration with both the synthesized
+    # ``id: int`` and the interface-supplied ``id: GlobalID!`` and the schema
+    # build would blow up with ``NodeIDAnnotationError`` (review feedback
+    # ``feedback.md`` § High "Direct relay.Node inheritance bypasses Relay
+    # finalization" and § "Extended Node interfaces").
+    #
+    # The interfaces tuple is checked with ``issubclass`` per entry rather
+    # than an exact ``relay.Node in interfaces`` membership test:
+    # ``_validate_interfaces`` guarantees every entry is a Strawberry
+    # interface class, and a consumer subclass like
+    # ``@strawberry.interface class CustomNode(relay.Node)`` is the
+    # canonical way to extend Relay-Node behavior.
+    suppress_pk_annotation = any(issubclass(i, relay.Node) for i in interfaces) or issubclass(cls, relay.Node)
+    # ``pk_name`` (not ``pk_attname``): ``_meta.pk.name`` is the Django
+    # field NAME, not the column attname. For a relation primary key
+    # (``OneToOneField(primary_key=True)``) those differ — ``name="user"``
+    # vs. ``attname="user_id"`` — and the comparison below is against
+    # ``field.name`` so the NAME is what's needed. Naming it ``pk_attname``
+    # would invite a future maintainer to reuse it in a
+    # ``getattr(root, pk_attname)`` context, which would lazy-load the
+    # related row for a relation pk.
+    pk_name = source_model._meta.pk.name if suppress_pk_annotation else None
     for field in fields:
         if field.is_relation:
             if field.name in consumer_authored_fields:
@@ -590,7 +637,7 @@ def _build_annotations(
                 # collection. Relation override symmetry: see the
                 # ``field.is_relation`` branch above.
                 continue
-            if suppress_pk_annotation and field.name == pk_attname:
+            if suppress_pk_annotation and field.name == pk_name:
                 # ``relay.Node`` supplies ``id: GlobalID!`` via the interface;
                 # dropping the synthesized scalar annotation here keeps the
                 # Strawberry surface clean. The pk field stays in ``fields``

@@ -352,6 +352,44 @@ def test_relay_node_strips_django_id_annotation():
     assert "name" in synthesized
 
 
+def test_extended_node_interface_subclass_suppresses_id_annotation():
+    """Regression for ``docs/feedback.md`` § extended Node interfaces.
+
+    A consumer-defined ``@strawberry.interface`` that subclasses
+    ``relay.Node`` (e.g. ``class CustomNode(relay.Node): ...`` placed in
+    ``Meta.interfaces``) still requires the Relay-supplied
+    ``id: GlobalID!`` field. The synthesized scalar ``id`` annotation
+    must be suppressed in that case too — otherwise Strawberry's
+    ``strawberry.type(...)`` decoration sees both the inherited
+    ``id: GlobalID!`` (from ``CustomNode -> relay.Node``) and the
+    framework's ``id: int`` and the schema build crashes.
+
+    The bug surfaces when ``_build_annotations`` checks
+    ``relay.Node in interfaces`` (exact membership) rather than
+    "any subclass of ``relay.Node`` in interfaces". The unit-level
+    boundary asserts the suppression decision directly so the test
+    failure points at the right line.
+    """
+
+    @strawberry.interface
+    class CustomNode(relay.Node):
+        pass
+
+    fields = tuple(Category._meta.get_fields())
+
+    class _Host:
+        pass
+
+    synthesized, _ = _build_annotations(
+        _Host,
+        fields,
+        source_model=Category,
+        interfaces=(CustomNode,),
+    )
+    assert "id" not in synthesized
+    assert "name" in synthesized
+
+
 def test_non_relay_type_keeps_id_int():
     """Without ``relay.Node`` declared, the synthesized ``id: int`` is preserved.
 

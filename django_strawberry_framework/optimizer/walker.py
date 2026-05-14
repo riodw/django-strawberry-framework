@@ -129,11 +129,31 @@ def _walk_selections(
             # project that real column so ``_resolve_id_default`` reads
             # the loaded value from ``root.__dict__`` instead of falling
             # back to ``getattr`` and triggering an N+1 lazy load.
+            #
+            # The verification scans the ``FieldMeta`` values by both
+            # ``name`` and ``attname`` rather than ``id_attr in
+            # field_map``: ``field_map`` is keyed by the Django field's
+            # ``name``, but ``model._meta.pk.attname`` carries the
+            # column ``attname`` which differs for relation primary
+            # keys (e.g. ``OneToOneField(primary_key=True)`` named
+            # ``user`` has ``name="user"`` but ``attname="user_id"``).
+            # A naive ``in`` check would skip projection on those shapes
+            # and reintroduce the lazy-load. Django's ``.only(attname)``
+            # accepts the FK column directly, which avoids dragging the
+            # related row in along with it.
             if django_name == "id" and type_cls is not None and issubclass(type_cls, relay.Node):
                 id_attr = type_cls.resolve_id_attr()
                 if id_attr == "pk":
                     id_attr = model._meta.pk.attname
-                if id_attr in field_map:
+                db_field = next(
+                    (
+                        f
+                        for f in field_map.values()
+                        if f.name == id_attr or getattr(f, "attname", None) == id_attr
+                    ),
+                    None,
+                )
+                if db_field is not None:
                     append_unique(plan.only_fields, f"{prefix}{id_attr}")
             continue
         if not django_field.is_relation:

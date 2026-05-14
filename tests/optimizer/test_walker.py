@@ -163,6 +163,72 @@ def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
         registry.clear()
 
 
+def test_plan_relay_id_projects_attname_when_pk_is_relation():
+    """Regression for ``docs/feedback.md`` § walker ``id_attr in field_map`` mismatch.
+
+    When a Relay-declared ``DjangoType`` is backed by a model whose
+    primary key is a relation (e.g. ``OneToOneField(primary_key=True)``
+    or ``ForeignKey(primary_key=True)``), the pk's ``name`` and
+    ``attname`` differ: ``name="user"`` vs. ``attname="user_id"``. The
+    walker's projection branch resolves ``id_attr`` to the attname
+    (``"user_id"``), but ``field_map`` is keyed by the field's ``name``
+    (``"user"``). A naive ``id_attr in field_map`` check would skip
+    projection and re-introduce the lazy-load N+1 the fix was meant to
+    close. The walker must scan the ``FieldMeta`` values by both
+    ``name`` and ``attname``.
+    """
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class UserTarget(models.Model):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class ProfileSource(models.Model):
+        user = models.OneToOneField(
+            UserTarget,
+            on_delete=models.CASCADE,
+            primary_key=True,
+            related_name="profile_for_test",
+        )
+        bio = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    registry.clear()
+    try:
+
+        class UserTargetNode(DjangoType):
+            class Meta:
+                model = UserTarget
+                fields = ("name",)
+
+        class ProfileNode(DjangoType):
+            class Meta:
+                model = ProfileSource
+                fields = ("user", "bio")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+        plan = plan_optimizations([_sel("id")], ProfileSource)
+
+        # ``id_attr`` resolves to ``"user_id"`` (the pk's attname). The
+        # walker must locate the matching ``FieldMeta`` via its
+        # ``attname`` (the ``"user"`` FieldMeta has ``name="user"``,
+        # ``attname="user_id"``) and project ``"user_id"`` so Django's
+        # ``.only("user_id")`` loads the FK column without dragging in
+        # the related ``UserTarget`` row.
+        assert "user_id" in plan.only_fields
+    finally:
+        registry.clear()
+
+
 def test_plan_prefetches_relation_with_missing_related_model_defensively():
     """Defensive branch: relation fields without related_model become string prefetches."""
 

@@ -1,6 +1,6 @@
 # Review: `django_strawberry_framework/optimizer/walker.py`
 
-Status: fix-implemented
+Status: verified
 
 ## DRY analysis
 
@@ -256,10 +256,37 @@ logic accepted; awaiting comment pass
 
 ## Changelog disposition
 
-Worker 2 records changelog handling here after comment verification.
+- Warranted: yes. The accepted fix changes user-visible optimizer correctness for `OptimizerHint` relation planning: `force_select` can no longer bypass target `get_queryset` visibility, and explicit `Prefetch` hints now adapt correctly when reached through a nested parent path.
+- Edit made: no. `AGENTS.md` says not to update `CHANGELOG.md` unless explicitly instructed, and the active review plan did not authorize a changelog edit for this cycle item.
+- Disposition: defer the release-note wording to the maintainer or a later explicitly-authorized changelog pass.
+- Top-level `Status:` remains `fix-implemented`.
 
 ---
 
 ## Iteration log
 
 Each Worker 2 re-pass appends a `## Fix report (Worker 2, pass <N>)` section here. Each Worker 3 re-verification appends a `## Verification (Worker 3, pass <N>)` section here. Do not edit prior entries; append.
+
+## Verification (Worker 3, pass 2)
+
+### Comment/docstring verification outcome
+
+- Accepted: the artifact now records the actual `django_strawberry_framework/optimizer/_context.py` diff and the related `tests/optimizer/test_extension.py::test_stash_on_immutable_dict_subclass_is_silent` coverage in the Worker 2 fix report.
+- Accepted: `tests/optimizer/test_extension.py::test_stash_does_not_swallow_unexpected_exceptions_from_setitem` no longer describes a `TypeError`-only policy; it now states that read-only mapping failures are limited to `TypeError` and `AttributeError`, and other exceptions still surface.
+- Accepted: `django_strawberry_framework/optimizer/walker.py`, `django_strawberry_framework/optimizer/_context.py`, and `tests/optimizer/test_walker.py` comments/docstrings describe the final approved behavior without stale wording from the pre-fix paths.
+
+### Verification outcome
+
+comments accepted; awaiting changelog disposition
+
+## Verification (Worker 3, pass 3)
+
+### Changelog disposition verification outcome
+
+- Accepted: the artifact records that a changelog entry is warranted because the optimizer hint behavior is user-visible.
+- Accepted: `CHANGELOG.md` was intentionally left unchanged because `AGENTS.md` forbids changelog edits without explicit instruction and this cycle did not authorize one.
+- Accepted: logic, DRY disposition, comment/docstring pass, focused validation, and changelog disposition are all complete.
+
+### Verification outcome
+
+cycle accepted; verified

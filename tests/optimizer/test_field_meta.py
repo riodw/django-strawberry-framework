@@ -74,16 +74,39 @@ def test_from_django_field_reverse_fk():
     fm = FieldMeta.from_django_field(items_field)
     assert fm.is_relation is True
     assert fm.one_to_many is True
-    # Django's ``ManyToOneRel`` descriptor inherits ``null = True`` as a
-    # class-level default from ``ForeignObjectRel``, so the raw rule
-    # ``reverse_one_to_one or field.null`` yields ``True`` for reverse FKs
-    # even though the rendered GraphQL annotation is ``list[target_type]``
-    # (not nullable). Consumers like ``resolved_relation_annotation`` reach
-    # the many-side cardinality branch first and ignore this attribute, so
-    # ``True`` here is the faithful raw-rule value rather than the
-    # rendered-annotation value. See the ``FieldMeta.nullable`` docstring
-    # for the many-side caveat.
-    assert fm.nullable is True
+    # Reverse FK resolves to a manager (queryset-like) that may be empty
+    # but is never ``None``. Django's ``ManyToOneRel`` descriptor inherits
+    # ``null = True`` as a class-level default from ``ForeignObjectRel``
+    # (which proxies the forward FK's ``null`` flag), but ``FieldMeta``
+    # forces ``nullable=False`` for many-side cardinalities so the flag
+    # stays self-consistent — a future consumer that reads ``nullable``
+    # without first gating on ``one_to_many`` / ``many_to_many`` will
+    # still produce the right GraphQL annotation (``list[target_type]``,
+    # not ``list[target_type] | None``).
+    assert fm.nullable is False
+
+
+def test_from_django_field_reverse_many_to_many():
+    """Reverse M2M descriptor sets ``many_to_many=True`` with ``nullable=False``.
+
+    Genre is the target of ``Book.genres = models.ManyToManyField(Genre)``,
+    so iterating ``Genre._meta.get_fields()`` surfaces the reverse-side
+    ``ManyToManyRel`` descriptor. Like reverse FK, the descriptor inherits
+    ``null = True`` from ``ForeignObjectRel``; ``FieldMeta`` must override
+    that for many-side cardinalities so the rendered GraphQL annotation
+    stays ``list[target_type]`` (a manager is never ``None``).
+    """
+    reverse_m2m_field = None
+    for f in Genre._meta.get_fields():
+        if f.is_relation and getattr(f, "many_to_many", False) and f.related_model is Book:
+            reverse_m2m_field = f
+            break
+    assert reverse_m2m_field is not None
+    fm = FieldMeta.from_django_field(reverse_m2m_field)
+    assert fm.is_relation is True
+    assert fm.many_to_many is True
+    assert fm.related_model is Book
+    assert fm.nullable is False
 
 
 def test_from_django_field_many_to_many():

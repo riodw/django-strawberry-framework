@@ -608,12 +608,21 @@ def _record_pending_relation(
 ) -> PendingRelation:
     """Build a pending relation record from a selected Django relation field."""
     # TODO(spec-fieldmeta-ssot): the ``nullable`` derivation inlines
-    # ``kind == "reverse_one_to_one" or bool(getattr(field, "null",
-    # False))`` instead of reading from a ``FieldMeta`` already built
-    # for ``field`` at the call site. ``FieldMeta`` is the canonical
-    # SSoT for relation shape — see ``optimizer/field_meta.py``
-    # module docstring.
+    # the same cardinality-gated rule used by
+    # ``FieldMeta.from_django_field`` instead of reading from a
+    # ``FieldMeta`` already built for ``field`` at the call site.
+    # ``FieldMeta`` is the canonical SSoT for relation shape — see
+    # ``optimizer/field_meta.py`` module docstring.
     kind = relation_kind(field)
+    # Many-side cardinalities (reverse FK / forward & reverse M2M)
+    # resolve to a manager that is never ``None``; force
+    # ``nullable=False`` so the flag stays self-consistent and any
+    # future ``PendingRelation.nullable`` reader doesn't have to gate
+    # on cardinality first. Matches ``FieldMeta.from_django_field``.
+    if kind in ("many", "reverse_many_to_one"):
+        nullable = False
+    else:
+        nullable = kind == "reverse_one_to_one" or bool(getattr(field, "null", False))
     return PendingRelation(
         source_type=cls,
         source_model=source_model,
@@ -621,5 +630,5 @@ def _record_pending_relation(
         django_field=field,
         related_model=field.related_model,
         relation_kind=kind,
-        nullable=kind == "reverse_one_to_one" or bool(getattr(field, "null", False)),
+        nullable=nullable,
     )

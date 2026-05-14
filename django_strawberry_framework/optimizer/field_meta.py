@@ -78,18 +78,22 @@ class FieldMeta:
         many_to_many: ``True`` for M2M fields.
         one_to_many: ``True`` for reverse FK fields.
         one_to_one: ``True`` for OneToOne fields (forward or reverse).
-        nullable: Raw single-relation nullability rule. Reverse OneToOne
-            relations short-circuit to ``True`` because the related row
-            may be absent; every other shape follows Django's
-            ``field.null`` flag (with ``getattr`` defaulting to ``False``
-            for descriptors that omit it). Many-side cardinalities
-            (reverse FK / M2M) render as ``list[target_type]`` at the
-            GraphQL layer regardless of this flag, so consumers gate on
-            cardinality before reading ``nullable``. The flag itself is
-            taken from the Django descriptor, which means reverse FK
-            (``ManyToOneRel``) reads ``True`` here as a class-level
-            Django default — the value is semantically irrelevant for
-            many-side cardinalities, not a contradiction.
+        nullable: Single-relation nullability rule, cardinality-gated.
+            Many-side cardinalities (forward M2M, reverse FK, reverse
+            M2M) short-circuit to ``False`` because a manager / queryset
+            is never ``None`` — the rendered GraphQL annotation is
+            ``list[target_type]`` regardless of any underlying Django
+            ``null`` flag. Reverse OneToOne short-circuits to ``True``
+            because the related row may legitimately be absent. Every
+            other single-relation shape follows Django's ``field.null``
+            flag (with ``getattr`` defaulting to ``False`` for
+            descriptors that omit it). The cardinality gate is applied
+            in ``from_django_field`` so consumers can read ``nullable``
+            directly without re-checking ``many_to_many`` /
+            ``one_to_many`` first; this defends future
+            ``TODO(spec-fieldmeta-ssot)`` consolidation against schema
+            corruption from ``ForeignObjectRel``'s class-level
+            ``null=True`` default leaking through.
         related_model: The target model class for relations, or ``None``.
         attname: The DB column name (e.g., ``category_id`` for a FK).
             ``None`` for reverse relations and non-FK fields.
@@ -141,12 +145,30 @@ class FieldMeta:
         # Read ``target_field`` once — it is consulted twice below to
         # extract both ``name`` and ``attname``.
         target_field = getattr(field, "target_field", None)
-        nullable = relation_kind(field) == "reverse_one_to_one" or bool(getattr(field, "null", False))
+        is_m2m = bool(getattr(field, "many_to_many", False))
+        is_o2m = bool(getattr(field, "one_to_many", False))
+        # Many-side cardinalities (reverse FK / M2M, forward or reverse)
+        # resolve to a manager / queryset that may be empty but is never
+        # ``None``, so the rendered GraphQL annotation is
+        # ``list[target_type]`` regardless of any Django ``null`` flag.
+        # Force ``nullable=False`` for those shapes BEFORE consulting
+        # ``field.null`` — Django's ``ForeignObjectRel`` (parent of
+        # ``ManyToOneRel`` / ``ManyToManyRel``) proxies the forward FK's
+        # ``null`` flag, so a reverse-FK descriptor for a nullable
+        # forward FK would otherwise read ``True`` here. Reverse
+        # OneToOne short-circuits to ``True`` because the related row
+        # may legitimately be absent; every other single-relation shape
+        # follows ``field.null`` with the ``getattr`` default of
+        # ``False`` for descriptors that omit it.
+        if is_m2m or is_o2m:
+            nullable = False
+        else:
+            nullable = relation_kind(field) == "reverse_one_to_one" or bool(getattr(field, "null", False))
         return cls(
             name=field.name,
             is_relation=bool(field.is_relation),
-            many_to_many=bool(getattr(field, "many_to_many", False)),
-            one_to_many=bool(getattr(field, "one_to_many", False)),
+            many_to_many=is_m2m,
+            one_to_many=is_o2m,
             one_to_one=bool(getattr(field, "one_to_one", False)),
             nullable=nullable,
             related_model=getattr(field, "related_model", None),

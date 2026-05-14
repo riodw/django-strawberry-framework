@@ -277,7 +277,14 @@ def test_finalize_discards_consumer_authored_pending_relation_without_rewriting_
                 django_field=field,
                 related_model=Item,
                 relation_kind=kind,
-                nullable=kind == "reverse_one_to_one" or bool(getattr(field, "null", False)),
+                # Many-side cardinalities (reverse FK / M2M) force ``False``;
+                # matches the cardinality-gated rule in
+                # ``FieldMeta.from_django_field`` and ``_record_pending_relation``.
+                nullable=(
+                    False
+                    if kind in ("many", "reverse_many_to_one")
+                    else kind == "reverse_one_to_one" or bool(getattr(field, "null", False))
+                ),
             ),
         )
 

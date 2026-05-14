@@ -126,7 +126,8 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
     return py_type
 
 
-_NON_IDENT = re.compile(r"\W+")
+_NON_IDENT = re.compile(r"\W+", flags=re.ASCII)
+_GRAPHQL_RESERVED_ENUM_VALUES = frozenset({"false", "null", "true"})
 
 
 def _sanitize_member_name(value: Any) -> str:
@@ -145,6 +146,8 @@ def _sanitize_member_name(value: Any) -> str:
         sanitized = f"MEMBER_{sanitized}"
     if keyword.iskeyword(sanitized):
         sanitized = f"_{sanitized}"
+    if sanitized.casefold() in _GRAPHQL_RESERVED_ENUM_VALUES or sanitized.startswith("__"):
+        sanitized = f"MEMBER_{sanitized}"
     return sanitized
 
 

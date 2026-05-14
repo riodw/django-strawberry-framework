@@ -31,6 +31,7 @@ from django.db import models
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.base import _detect_custom_get_queryset
@@ -120,6 +121,40 @@ def test_meta_required_model_raises_when_missing():
         class T(DjangoType):
             class Meta:
                 fields = CATEGORY_SCALAR_FIELDS
+
+
+def test_meta_model_must_be_django_model_class():
+    with pytest.raises(ConfigurationError, match="Meta.model must be a Django model class"):
+
+        class T(DjangoType):
+            class Meta:
+                model = "Category"
+                fields = CATEGORY_SCALAR_FIELDS
+
+
+@pytest.mark.parametrize(
+    ("attr", "value", "message"),
+    [
+        ("fields", 123, "Meta.fields must be '__all__' or a non-string sequence"),
+        ("fields", "name", "Meta.fields must be '__all__' or a non-string sequence"),
+        ("exclude", 123, "Meta.exclude must be a non-string sequence"),
+        ("exclude", "name", "Meta.exclude must be a non-string sequence"),
+    ],
+)
+def test_meta_field_selectors_must_have_valid_shapes(attr, value, message):
+    meta_cls = type("Meta", (), {"model": Category, attr: value})
+    with pytest.raises(ConfigurationError, match=message):
+        type("T", (DjangoType,), {"Meta": meta_cls})
+
+
+def test_meta_optimizer_hints_must_be_mapping_when_declared():
+    with pytest.raises(ConfigurationError, match="Meta.optimizer_hints must be a mapping"):
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                optimizer_hints = []
 
 
 def test_meta_fields_and_exclude_mutually_exclusive():
@@ -216,8 +251,6 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
     the consumer's optimization intent is silently dead because the
     walker never visits an excluded field.
     """
-    from django_strawberry_framework.optimizer.hints import OptimizerHint
-
     with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
 
         class T(DjangoType):
@@ -225,6 +258,16 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
                 model = Category
                 fields = ("id", "name")
                 optimizer_hints = {"items": OptimizerHint.prefetch_related()}
+
+
+def test_meta_optimizer_hints_for_selected_scalar_field_raises():
+    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                optimizer_hints = {"name": OptimizerHint.SKIP}
 
 
 # ---------------------------------------------------------------------------

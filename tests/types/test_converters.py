@@ -21,6 +21,7 @@ widening branch and ``registry.register_enum`` / ``get_enum``.
 import enum
 
 import pytest
+import strawberry
 from django.db import models
 
 from django_strawberry_framework import DjangoType
@@ -194,6 +195,53 @@ def test_choice_member_name_sanitization():
     assert _sanitize_member_name("") == "MEMBER_"
 
 
+def test_choice_enum_with_graphql_reserved_and_non_ascii_values_builds_schema(choice_fixture_model):
+    """Reserved, non-ASCII, and introspection-prefixed values produce GraphQL-safe enum members."""
+    field = choice_fixture_model._meta.get_field("status")
+    original = field.choices
+    field.choices = (
+        ("true", "True"),
+        ("FALSE", "False"),
+        ("null", "Null"),
+        ("café", "Cafe"),
+        ("__private", "Private"),
+    )
+    registry.clear()
+    try:
+        enum_cls = convert_choices_to_enum(field, "FixtureType")
+
+        assert [member.name for member in enum_cls] == [
+            "MEMBER_true",
+            "MEMBER_FALSE",
+            "MEMBER_null",
+            "caf_",
+            "MEMBER___private",
+        ]
+
+        @strawberry.type
+        class Query:
+            @strawberry.field
+            def statuses(self) -> list[enum_cls]:
+                return list(enum_cls)
+
+        schema = strawberry.Schema(query=Query)
+        result = schema.execute_sync("{ statuses }")
+
+        assert result.errors is None
+        assert result.data == {
+            "statuses": [
+                "MEMBER_true",
+                "MEMBER_FALSE",
+                "MEMBER_null",
+                "caf_",
+                "MEMBER___private",
+            ],
+        }
+    finally:
+        field.choices = original
+        registry.clear()
+
+
 def test_choice_field_with_null_widens_to_enum_or_none(choice_fixture_model):
     """A nullable choice column produces *exactly* ``EnumType | None``.
 
@@ -263,6 +311,20 @@ def test_convert_choices_to_enum_raises_on_keyword_prefix_collision(choice_fixtu
     field = choice_fixture_model._meta.get_field("status")
     original = field.choices
     field.choices = (("if", "Conditional"), ("_if", "Underscored"))
+    registry.clear()
+    try:
+        with pytest.raises(ConfigurationError, match="sanitize to the same enum member"):
+            convert_choices_to_enum(field, "FixtureType")
+    finally:
+        field.choices = original
+        registry.clear()
+
+
+def test_convert_choices_to_enum_raises_on_graphql_safe_name_collision(choice_fixture_model):
+    """Collision detection runs after GraphQL reserved-name rewriting."""
+    field = choice_fixture_model._meta.get_field("status")
+    original = field.choices
+    field.choices = (("true", "Reserved"), ("MEMBER_true", "Already prefixed"))
     registry.clear()
     try:
         with pytest.raises(ConfigurationError, match="sanitize to the same enum member"):

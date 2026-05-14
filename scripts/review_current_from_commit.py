@@ -1,25 +1,31 @@
-"""Generate stripped/overview shadow files for the CURRENT revision.
+"""Generate stripped/overview shadow files for a package snapshot.
 
-Covers every Python file changed between a given commit and HEAD, excluding
-paths that contain ``test``.
+Enumerates every ``.py`` file under a target package directory at a given
+commit and runs ``review_inspect`` against each file's content as it existed
+*at that commit* (the working tree is never read). Outputs land in
+``docs/review/current/`` with the usual ``a__b__c`` stem scheme.
 
-Same file-selection logic as ``scripts/review_diff_from_commit``, but emits
-only the new-side ``*.stripped.py`` and ``*.overview.md`` into
-``docs/review/current/`` and does not produce diffs. ``review_inspect.main``
-is imported and called in-process to avoid the ``uv`` / Python startup cost
-of spawning a subprocess per file.
+Use this when you want a static review snapshot of the entire package at
+some historical checkout, without actually checking that commit out and
+without limiting the file set to whatever happens to have changed since.
+Paths containing ``test`` are excluded (the package source tree shouldn't
+contain any, but the guard matches the diff helper's contract).
+
+``review_inspect.main`` is imported and called in-process so the
+orchestrator does not pay Python / ``uv`` startup cost per file.
 
 Usage:
-    uv run python scripts/review_current_from_commit.py <commit-hash>
+    uv run python scripts/review_current_from_commit.py <commit-hash> [--package-dir DIR]
 
 The ``uv run`` prefix is required so the script sees the project's virtual
 environment (it imports ``review_inspect`` and the inspector depends on the
-project's pinned Python / dependency versions). Run from anywhere inside the
-repository; the orchestrator resolves ``git rev-parse --show-toplevel`` and
-writes outputs under ``docs/review/current/`` at the repo root.
+project's pinned Python / dependency versions). Run from anywhere inside
+the repository; the orchestrator resolves ``git rev-parse --show-toplevel``
+and writes outputs under ``docs/review/current/`` at the repo root.
 
 Example:
-    uv run python scripts/review_current_from_commit.py 1e6b5830766545d3cb46e3aff21c6dd58a935da4
+    uv run python scripts/review_current_from_commit.py 9096519590040fa25484e05b6a104cb5652b9676
+     --package-dir examples/fakeshop/apps/library
 """
 
 from __future__ import annotations
@@ -29,12 +35,14 @@ import contextlib
 import io
 import subprocess
 import sys
+import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
 from review_inspect import main as review_inspect_main
 
 OUTPUT_CURRENT = Path("docs/review/current")
+DEFAULT_PACKAGE_DIR = "django_strawberry_framework"
 
 
 def _run_git(args: Sequence[str]) -> str:
@@ -61,25 +69,31 @@ def _validate_commit(commit: str) -> None:
         sys.exit(2)
 
 
-def _changed_python_files(commit: str) -> list[str]:
-    """Return repo-relative ``.py`` paths changed between ``commit`` and HEAD."""
+def _package_python_files_at_commit(commit: str, package_dir: str) -> list[str]:
+    """Return every ``.py`` path under ``package_dir`` at ``commit``.
+
+    Uses ``git ls-tree -r`` so the working tree is never consulted. Paths
+    that contain ``test`` are filtered out to match the diff helper's
+    exclusion contract.
+    """
     output = _run_git(
-        [
-            "diff",
-            "--name-only",
-            commit,
-            "HEAD",
-            "--",
-            "*.py",
-            ":(exclude)*test*",
-        ],
+        ["ls-tree", "-r", "--name-only", commit, "--", package_dir],
     )
-    return [line for line in output.splitlines() if line]
+    return [
+        line
+        for line in output.splitlines()
+        if line.endswith(".py") and "test" not in line and Path(line).name != "__init__.py"
+    ]
 
 
 def _stem_for(path: str) -> str:
     """Convert ``a/b/c.py`` into the ``a__b__c`` stem used by review artifacts."""
     return Path(path).with_suffix("").as_posix().replace("/", "__")
+
+
+def _file_at_commit(commit: str, path: str) -> str:
+    """Return the file contents at ``commit:path``."""
+    return _run_git(["show", f"{commit}:{path}"])
 
 
 def _inspect_quiet(target: Path, output_dir: Path, root: Path) -> None:
@@ -100,31 +114,37 @@ def _inspect_quiet(target: Path, output_dir: Path, root: Path) -> None:
         )
 
 
-def _write_current(path: str, repo_root: Path) -> None:
-    """Inspect ``path`` in the working tree, or emit empty placeholders.
+def _write_snapshot(commit: str, path: str, repo_root: Path) -> None:
+    """Materialize ``commit:path`` under a temp root and inspect it.
 
-    Deleted files (present at ``commit`` but missing from the working tree)
-    still produce ``*.stripped.py`` and ``*.overview.md`` placeholders so the
-    output directory enumerates every changed path.
+    Mirroring the repo-relative path under the temp root lets
+    ``review_inspect`` derive the same stable ``a__b__c`` stem the file
+    would get from the working tree, so the output names stay consistent
+    across snapshots.
     """
     out_dir = repo_root / OUTPUT_CURRENT
-    stem = _stem_for(path)
-    new_file = repo_root / path
-    if new_file.is_file():
-        _inspect_quiet(new_file, out_dir, repo_root)
-    else:
-        (out_dir / f"{stem}.stripped.py").write_text("")
-        (out_dir / f"{stem}.overview.md").write_text("")
+    contents = _file_at_commit(commit, path)
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_root = Path(tmp)
+        tmp_target = tmp_root / path
+        tmp_target.parent.mkdir(parents=True, exist_ok=True)
+        tmp_target.write_text(contents)
+        _inspect_quiet(tmp_target, out_dir, tmp_root)
 
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Generate stripped/overview shadow files for the current revision of "
-            "every changed .py file whose path does not contain 'test'."
+            "Generate stripped/overview shadow files for every .py file under "
+            "a package directory at the given commit."
         ),
     )
-    parser.add_argument("commit_hash", help="Commit hash to compare HEAD against.")
+    parser.add_argument("commit_hash", help="Commit hash to snapshot.")
+    parser.add_argument(
+        "--package-dir",
+        default=DEFAULT_PACKAGE_DIR,
+        help=(f"Repo-relative directory to scan recursively. Defaults to {DEFAULT_PACKAGE_DIR!r}."),
+    )
     return parser.parse_args(argv)
 
 
@@ -137,18 +157,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     out_dir = repo_root / OUTPUT_CURRENT
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    changed = _changed_python_files(args.commit_hash)
-    if not changed:
+    paths = _package_python_files_at_commit(args.commit_hash, args.package_dir)
+    if not paths:
         print(
-            f"No changed .py files (excluding tests) between {args.commit_hash} and HEAD.",
+            f"No .py files under {args.package_dir!r} at {args.commit_hash} "
+            "(after excluding paths containing 'test').",
             file=sys.stderr,
         )
         return 0
 
-    for path in changed:
-        _write_current(path, repo_root)
+    for path in paths:
+        _write_snapshot(args.commit_hash, path, repo_root)
 
-    print(f"Wrote current-version shadow files to {OUTPUT_CURRENT.as_posix()}/")
+    print(
+        f"Wrote {len(paths)} snapshots from {args.commit_hash} to {OUTPUT_CURRENT.as_posix()}/",
+    )
     for entry in sorted(out_dir.iterdir()):
         print(entry.name)
     return 0

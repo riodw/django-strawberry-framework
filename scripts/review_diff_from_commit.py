@@ -75,7 +75,12 @@ def _validate_commit(commit: str) -> None:
 
 
 def _changed_python_files(commit: str) -> list[str]:
-    """Return repo-relative ``.py`` paths changed between ``commit`` and HEAD."""
+    """Return repo-relative ``.py`` paths changed between ``commit`` and HEAD.
+
+    Excludes paths containing ``test`` and package ``__init__.py`` re-export
+    shims (``review_inspect`` skips those as a no-op, so feeding them through
+    here would only produce an empty diff entry without useful content).
+    """
     output = _run_git(
         [
             "diff",
@@ -87,7 +92,7 @@ def _changed_python_files(commit: str) -> list[str]:
             ":(exclude)*test*",
         ],
     )
-    return [line for line in output.splitlines() if line]
+    return [line for line in output.splitlines() if line and Path(line).name != "__init__.py"]
 
 
 def _stem_for(path: str) -> str:

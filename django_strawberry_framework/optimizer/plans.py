@@ -20,14 +20,15 @@ The plan is a simple data class carrying optimization directives and metadata:
 - ``cacheable``: whether this plan can be reused from the extension's plan
   cache.
 
-The plan starts empty and accumulates entries as the walker descends the
-selection tree. The extension applies it to the root queryset in a single
-pass once the walk completes.
+The plan starts with mutable sequence fields while the walker descends the
+selection tree, then ``finalize()`` publishes tuple-backed fields for cache and
+extension handoff. The extension applies the final plan to the root queryset
+in a single pass once the walk completes.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, MutableSequence, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -44,16 +45,16 @@ class OptimizationPlan:
     Cache invariant: once a plan has been handed off (returned from the
     walker, stashed on ``info.context``, or stored in the extension's
     plan cache), it must not be mutated in place.  Use
-    ``dataclasses.replace`` to derive a modified plan.  The class is
-    intentionally not ``frozen=True`` so the walker can accumulate
-    entries during construction; every other caller treats the plan as
-    immutable.
+    ``dataclasses.replace`` to derive a modified plan.  The stored fields
+    are typed as ``Sequence`` because they are lists during construction
+    and tuples after ``finalize()``; mutator helpers retain
+    ``MutableSequence`` parameters for the walker-only construction path.
     """
 
-    select_related: list[str] = field(default_factory=list)
+    select_related: Sequence[str] = field(default_factory=list)
     """Forward FK / OneToOne field names for ``QuerySet.select_related``."""
 
-    prefetch_related: list[str | Prefetch] = field(default_factory=list)
+    prefetch_related: Sequence[str | Prefetch] = field(default_factory=list)
     """Strings or ``Prefetch`` objects for ``QuerySet.prefetch_related``.
 
     Generated relation plans use ``Prefetch`` objects so child querysets can
@@ -62,11 +63,11 @@ class OptimizationPlan:
     branches.
     """
 
-    only_fields: list[str] = field(default_factory=list)
+    only_fields: Sequence[str] = field(default_factory=list)
     """Scalar column names for ``QuerySet.only``."""
-    fk_id_elisions: list[str] = field(default_factory=list)
+    fk_id_elisions: Sequence[str] = field(default_factory=list)
     """Resolver keys elided because the source row already carries the target id."""
-    planned_resolver_keys: list[str] = field(default_factory=list)
+    planned_resolver_keys: Sequence[str] = field(default_factory=list)
     """Resolver keys for relations covered by this plan, used by B3 strictness."""
     cacheable: bool = True
     """Whether this plan can be reused from the extension's plan cache.
@@ -207,7 +208,7 @@ def _flatten_select_related(sr: Any) -> set[str]:
     return paths
 
 
-def append_unique(values: list[Any], value: Any) -> None:
+def append_unique(values: MutableSequence[Any], value: Any) -> None:
     """Append ``value`` to ``values`` if it is not already present.
 
     Plan-shape mutator: lives next to ``OptimizationPlan`` so the dedupe
@@ -218,19 +219,21 @@ def append_unique(values: list[Any], value: Any) -> None:
         values.append(value)
 
 
-def append_unique_many(values: list[Any], new_values: tuple[Any, ...]) -> None:
+def append_unique_many(values: MutableSequence[Any], new_values: Iterable[Any]) -> None:
     """Append each value in ``new_values`` if it is not already present."""
     for value in new_values:
         append_unique(values, value)
 
 
-def append_prefetch_unique(values: list[Any], prefetch: Prefetch) -> None:
+def append_prefetch_unique(values: MutableSequence[Any], prefetch: Prefetch) -> None:
     """Append ``prefetch`` unless a lookup for the same path already exists.
 
     Compares lookup paths via ``_lookup_path`` so a hint-supplied
     ``Prefetch(obj)`` and a walker-generated ``Prefetch`` for the same
     Django lookup are recognised as duplicates regardless of queryset
-    identity.
+    identity. Generated duplicate selections are merged before child
+    querysets are built; this helper remains the first-seen path dedupe
+    for already-built ``Prefetch`` entries.
     """
     lookup_path = _lookup_path(prefetch)
     if any(_lookup_path(value) == lookup_path for value in values):
@@ -261,7 +264,7 @@ def _consumer_prefetch_lookups(queryset: Any) -> list[Any]:
 
 def _optimizer_can_absorb(
     opt_entry: Any,
-    consumer_paths: list[str],
+    consumer_paths: Sequence[str],
     consumer_by_path: dict[str, Any],
 ) -> bool:
     """Return ``True`` when ``opt_entry`` can losslessly take over the consumer's subtree.
@@ -350,7 +353,7 @@ def diff_plan_for_queryset(
     )
 
 
-def _diff_select_related(plan_select_related: list[str], queryset: Any) -> list[str]:
+def _diff_select_related(plan_select_related: Sequence[str], queryset: Any) -> list[str]:
     """Drop optimizer ``select_related`` entries that the queryset already has.
 
     Compared as dotted lookup paths against the consumer's existing
@@ -367,7 +370,7 @@ def _diff_select_related(plan_select_related: list[str], queryset: Any) -> list[
 
 
 def _diff_prefetch_related(
-    plan_prefetch_related: list[Any],
+    plan_prefetch_related: Sequence[Any],
     queryset: Any,
 ) -> tuple[list[Any], Any]:
     """Reconcile optimizer ``prefetch_related`` against the queryset's existing lookups.

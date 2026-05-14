@@ -68,8 +68,8 @@ Low: small maintainability issues, naming, minor typing/API polish, localized si
     - [x] `django_strawberry_framework/optimizer/_context.py` -> `docs/review/rev-optimizer__context.md`
     - [x] `django_strawberry_framework/optimizer/extension.py` -> `docs/review/rev-optimizer__extension.md`
     - [x] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
-    - [ ] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
-    - [ ] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
+    - [x] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
+    - [x] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
     - [ ] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
     - [ ] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
   - `django_strawberry_framework/types/`

@@ -9,6 +9,7 @@ from django.db import models
 from django.db.models import Prefetch
 from strawberry import relay
 
+from ..exceptions import ConfigurationError
 from ..registry import registry
 from ..utils.relations import relation_kind
 from ..utils.strings import snake_case
@@ -51,7 +52,7 @@ def plan_relation(
     info: Any | None,
 ) -> tuple[str, str]:
     """Return relation traversal kind without constructing querysets."""
-    if target_type is not None and target_type.has_custom_get_queryset():
+    if _target_has_custom_get_queryset(target_type):
         logger.debug(
             "Optimizer: will downgrade %s to Prefetch because %s overrides get_queryset.",
             field.name,
@@ -61,6 +62,10 @@ def plan_relation(
     if relation_kind(field) in ("many", "reverse_many_to_one"):
         return ("prefetch", "default")
     return ("select", "default")
+
+
+def _target_has_custom_get_queryset(target_type: type | None) -> bool:
+    return target_type is not None and target_type.has_custom_get_queryset()
 
 
 def _resolve_field_map(model: type[models.Model]) -> tuple[type | None, dict[str, Any]]:
@@ -109,20 +114,10 @@ def _walk_selections(
     info: Any | None = None,
     runtime_prefixes: tuple[tuple[str, ...], ...] = ((),),
 ) -> None:
-    """Recursive workhorse: descend one level of the selection tree."""
+    """Recursive workhorse: descend one normalized level of the selection tree."""
     type_cls, field_map = _resolve_field_map(model)
-    merged = _merge_aliased_selections([sel for sel in selections if _should_include(sel)])
+    merged = _merge_aliased_selections(_included_field_selections(selections))
     for sel in merged:
-        if _is_fragment(sel):
-            _walk_selections(
-                sel.selections,
-                model,
-                plan,
-                prefix=prefix,
-                info=info,
-                runtime_prefixes=runtime_prefixes,
-            )
-            continue
         django_name = snake_case(sel.name)
         django_field = field_map.get(django_name)
         if django_field is None:
@@ -227,20 +222,16 @@ def _plan_select_relation(
     resolver_identities: tuple[str, ...],
 ) -> None:
     """Plan a same-query single-valued relation traversal."""
-    attname = getattr(django_field, "attname", None)
-    if attname is not None:
-        append_unique(plan.only_fields, f"{prefix}{attname}")
+    _record_relation_access(plan, django_field, prefix, resolver_identities)
     target_pk_name = _target_pk_name(django_field)
     if (
         _can_elide_fk_id(django_field)
-        and not (target_type is not None and target_type.has_custom_get_queryset())
+        and not _target_has_custom_get_queryset(target_type)
         and not _has_custom_id_resolver(target_type, target_pk_name)
         and _selected_scalar_names(sel.selections, django_field.related_model) == {target_pk_name}
     ):
         append_unique_many(plan.fk_id_elisions, resolver_identities)
-        append_unique_many(plan.planned_resolver_keys, resolver_identities)
         return
-    append_unique_many(plan.planned_resolver_keys, resolver_identities)
     append_unique(plan.select_related, full_path)
     if django_field.related_model is not None:
         _walk_selections(
@@ -265,17 +256,50 @@ def _plan_prefetch_relation(
     resolver_identities: tuple[str, ...],
 ) -> None:
     """Plan a queryset-boundary relation traversal with optional child optimization."""
-    attname = getattr(django_field, "attname", None)
-    if attname is not None:
-        append_unique(plan.only_fields, f"{prefix}{attname}")
-    append_unique_many(plan.planned_resolver_keys, resolver_identities)
-    has_custom_get_queryset = target_type is not None and target_type.has_custom_get_queryset()
+    _record_relation_access(plan, django_field, prefix, resolver_identities)
+    has_custom_get_queryset = _target_has_custom_get_queryset(target_type)
     if has_custom_get_queryset:
         plan.cacheable = False
     if django_field.related_model is None:
         append_unique(plan.prefetch_related, full_path)
         return
 
+    child_queryset = _build_prefetch_child_queryset(
+        sel,
+        django_field,
+        target_type,
+        plan,
+        info,
+        runtime_paths,
+        has_custom_get_queryset=has_custom_get_queryset,
+    )
+    append_prefetch_unique(plan.prefetch_related, Prefetch(full_path, queryset=child_queryset))
+
+
+def _record_relation_access(
+    plan: OptimizationPlan,
+    django_field: Any,
+    prefix: str,
+    resolver_identities: tuple[str, ...],
+) -> None:
+    """Record the shared connector and resolver metadata for a relation."""
+    attname = getattr(django_field, "attname", None)
+    if attname is not None:
+        append_unique(plan.only_fields, f"{prefix}{attname}")
+    append_unique_many(plan.planned_resolver_keys, resolver_identities)
+
+
+def _build_prefetch_child_queryset(
+    sel: Any,
+    django_field: Any,
+    target_type: type | None,
+    parent_plan: OptimizationPlan,
+    info: Any | None,
+    runtime_paths: tuple[tuple[str, ...], ...],
+    *,
+    has_custom_get_queryset: bool,
+) -> Any:
+    """Build and optimize the child queryset for a generated ``Prefetch``."""
     child_plan = OptimizationPlan()
     _walk_selections(
         sel.selections,
@@ -286,13 +310,13 @@ def _plan_prefetch_relation(
         runtime_prefixes=runtime_paths,
     )
     _ensure_connector_only_fields(child_plan, django_field)
-    _merge_child_plan_metadata(plan, child_plan)
+    _merge_child_plan_metadata(parent_plan, child_plan)
     if not child_plan.cacheable:
-        plan.cacheable = False
+        parent_plan.cacheable = False
     child_queryset = child_plan.apply(
         _build_child_queryset(django_field, target_type, info, has_custom_qs=has_custom_get_queryset),
     )
-    append_prefetch_unique(plan.prefetch_related, Prefetch(full_path, queryset=child_queryset))
+    return child_queryset
 
 
 def _apply_hint(
@@ -323,32 +347,45 @@ def _apply_hint(
     if hint_is_skip(hint):
         return True
     if hint.prefetch_obj is not None:
-        attname = getattr(django_field, "attname", None)
-        if attname is not None:
-            append_unique(plan.only_fields, f"{prefix}{attname}")
-        append_unique_many(plan.planned_resolver_keys, resolver_identities)
+        _record_relation_access(plan, django_field, prefix, resolver_identities)
         # Consumer-supplied Prefetch objects commonly close over a queryset
         # built with request- or user-scoped filters; matching the
         # has_custom_get_queryset discipline in _plan_prefetch_relation, mark
         # the plan non-cacheable so the plan cache cannot serve one
         # request's queryset to the next.
         plan.cacheable = False
-        append_prefetch_unique(plan.prefetch_related, hint.prefetch_obj)
+        append_prefetch_unique(
+            plan.prefetch_related,
+            _prefetch_hint_for_path(hint.prefetch_obj, django_name=django_name, full_path=full_path),
+        )
         return True
     if hint.force_select:
-        _plan_select_relation(
-            sel,
-            django_field,
-            django_name,
-            type_cls,
-            target_type,
-            plan,
-            prefix,
-            full_path,
-            info,
-            runtime_paths,
-            resolver_identities,
-        )
+        if _target_has_custom_get_queryset(target_type):
+            _plan_prefetch_relation(
+                sel,
+                django_field,
+                target_type,
+                plan,
+                prefix,
+                full_path,
+                info,
+                runtime_paths,
+                resolver_identities,
+            )
+        else:
+            _plan_select_relation(
+                sel,
+                django_field,
+                django_name,
+                type_cls,
+                target_type,
+                plan,
+                prefix,
+                full_path,
+                info,
+                runtime_paths,
+                resolver_identities,
+            )
         return True
     if hint.force_prefetch:
         _plan_prefetch_relation(
@@ -364,6 +401,29 @@ def _apply_hint(
         )
         return True
     return False
+
+
+def _prefetch_hint_for_path(prefetch: Prefetch, *, django_name: str, full_path: str) -> Prefetch:
+    """Return ``prefetch`` adapted from a type-relative lookup to ``full_path``."""
+    lookup = getattr(prefetch, "prefetch_through", None)
+    if lookup is None:
+        raise ConfigurationError("OptimizerHint.prefetch(obj) requires a Prefetch with a lookup path.")
+    if lookup == full_path or lookup.startswith(f"{full_path}__"):
+        return prefetch
+    if lookup == django_name:
+        adjusted_lookup = full_path
+    elif lookup.startswith(f"{django_name}__"):
+        adjusted_lookup = f"{full_path}{lookup.removeprefix(django_name)}"
+    else:
+        raise ConfigurationError(
+            "OptimizerHint.prefetch(obj) lookup must target the hinted relation "
+            f"{django_name!r}; got {lookup!r}.",
+        )
+    return Prefetch(
+        adjusted_lookup,
+        queryset=prefetch.queryset,
+        to_attr=getattr(prefetch, "to_attr", None),
+    )
 
 
 def _merge_child_plan_metadata(parent_plan: OptimizationPlan, child_plan: OptimizationPlan) -> None:
@@ -383,13 +443,7 @@ def _selected_scalar_names(
         return None
     _type_cls, field_map = _resolve_field_map(model)
     scalar_names: set[str] = set()
-    for sel in _merge_aliased_selections([sel for sel in selections if _should_include(sel)]):
-        if _is_fragment(sel):
-            nested = _selected_scalar_names(sel.selections, model)
-            if nested is None:
-                return None
-            scalar_names.update(nested)
-            continue
+    for sel in _merge_aliased_selections(_included_field_selections(selections)):
         django_name = snake_case(sel.name)
         django_field = field_map.get(django_name)
         if django_field is None or django_field.is_relation:
@@ -494,8 +548,32 @@ def _should_include(selection: Any) -> bool:
     return True
 
 
+def _included_field_selections(selections: list[Any]) -> list[Any]:
+    """Return included fields with fragment bodies inlined before field merging.
+
+    Directive filtering happens on both fragment nodes and their nested field
+    selections. Returning a flat field list lets alias/relation merging combine
+    duplicate relation branches before generated child ``Prefetch`` querysets
+    are built.
+    """
+    result: list[Any] = []
+    for selection in selections:
+        if not _should_include(selection):
+            continue
+        if _is_fragment(selection):
+            result.extend(_included_field_selections(list(getattr(selection, "selections", None) or [])))
+            continue
+        result.append(selection)
+    return result
+
+
 def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
-    """Merge selections that alias the same underlying field while preserving response keys."""
+    """Merge same-field selections while preserving all represented response keys.
+
+    The main walker path passes fragment-inlined field selections here, so
+    duplicate relation branches are combined before planning. The fragment
+    passthrough below is retained for defensive direct helper use.
+    """
     seen: dict[str, Any] = {}
     result: list[Any] = []
     for sel in selections:

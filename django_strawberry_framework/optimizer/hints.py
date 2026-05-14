@@ -136,11 +136,9 @@ def hint_is_skip(hint: Any) -> bool:
     schema audit can keep its "never raises" contract even if a future
     hint surface lands that does not expose a ``.skip`` attribute.
     """
-    # ``None`` is unreachable through the documented call sites (the
-    # walker iterates ``hints.items()`` and the extension audit calls
-    # this only after a non-``None`` lookup), but kept as a defensive
-    # short-circuit so the helper has the same shape consumers expect
-    # from ``getattr``-style probes.
+    # The walker usually receives concrete hint values from ``hints.items()``;
+    # the schema audit probes ``hints.get(field_name)`` for every exposed
+    # relation, so ``None`` is a normal "no hint configured" path there.
     if hint is None:
         return False
     if hint is OptimizerHint.SKIP:

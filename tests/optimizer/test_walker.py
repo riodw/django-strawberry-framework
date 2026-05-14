@@ -988,6 +988,38 @@ def test_plan_prefetch_obj_hint_on_forward_fk_adds_connector_column():
     assert plan.planned_resolver_keys == ("ItemType.category@category",)
 
 
+def test_plan_prefetch_obj_hint_adapts_nested_selected_parent_prefix():
+    """B4: type-relative explicit ``Prefetch`` hints are rooted at the current path."""
+    registry.clear()
+    explicit = Prefetch("items", queryset=Item.objects.only("name"))
+
+    class CategoryType:
+        _optimizer_hints = {"items": OptimizerHint.prefetch(explicit)}
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Category, CategoryType)
+    try:
+        plan = plan_optimizations(
+            [_sel("category", selections=[_sel("items", selections=[_sel("name")])])],
+            Item,
+        )
+    finally:
+        registry.clear()
+
+    assert plan.select_related == ("category",)
+    assert plan.only_fields == ("category_id",)
+    prefetch = _prefetch_entry(plan)
+    assert prefetch is not explicit
+    assert prefetch.prefetch_to == "category__items"
+    assert prefetch.queryset.model is Item
+    fields, is_deferred = prefetch.queryset.query.deferred_loading
+    assert fields == {"name"}
+    assert is_deferred is False
+
+
 def test_plan_force_select_hint_uses_select_recursion():
     """B4: ``select_related`` hints flow through same-query recursion."""
     registry.clear()
@@ -1016,6 +1048,48 @@ def test_plan_force_select_hint_uses_select_recursion():
     fields, is_deferred = prefetch.queryset.query.deferred_loading
     assert fields == {"name", "category_id"}
     assert is_deferred is False
+
+
+def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
+    """B4+O6: ``force_select`` cannot override target visibility hooks."""
+    registry.clear()
+    calls = []
+
+    class CategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return True
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            calls.append(info)
+            return queryset.filter(is_private=False)
+
+    class ItemType:
+        _optimizer_hints = {"category": OptimizerHint.select_related()}
+
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.register(Category, CategoryType)
+    registry.register(Item, ItemType)
+    try:
+        plan = plan_optimizations(
+            [_sel("category", selections=[_sel("name")])],
+            Item,
+        )
+    finally:
+        registry.clear()
+
+    assert calls == [None]
+    assert plan.select_related == ()
+    assert plan.cacheable is False
+    assert plan.only_fields == ("category_id",)
+    prefetch = _prefetch_entry(plan)
+    assert prefetch.prefetch_to == "category"
+    assert prefetch.queryset.model is Category
+    assert prefetch.queryset.query.where
 
 
 def test_plan_no_flag_hint_falls_through_to_default_dispatch():
@@ -1097,6 +1171,30 @@ def test_plan_nested_prefetch_respects_fragment_alias_and_directive_shapes():
     assert inner.prefetch_to == "entries"
     select_related = outer.queryset.query.select_related
     assert select_related is False or "category" not in select_related
+
+
+def test_plan_merges_fragment_branches_before_prefetch_queryset_creation():
+    """Same-relation fragment branches contribute one combined child projection."""
+    plan = plan_optimizations(
+        [
+            _inline_fragment(
+                "CategoryType",
+                selections=[_sel("items", selections=[_sel("name")])],
+            ),
+            _inline_fragment(
+                "CategoryType",
+                selections=[_sel("items", selections=[_sel("description")])],
+            ),
+        ],
+        Category,
+    )
+
+    assert len(plan.prefetch_related) == 1
+    outer = _prefetch_entry(plan)
+    assert outer.prefetch_to == "items"
+    fields, is_deferred = outer.queryset.query.deferred_loading
+    assert fields == {"name", "description", "category_id"}
+    assert is_deferred is False
 
 
 def test_ensure_connector_only_fields_adds_m2m_target_pk():

@@ -605,6 +605,33 @@ def test_resolve_nodes_preserves_order_and_missing():
 
 
 @pytest.mark.django_db
+def test_resolve_nodes_accepts_generator_node_ids():
+    """Plural lookup materializes one-shot ``node_ids`` before filtering and ordering."""
+    services.seed_data(1)
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    rows = list(Category.objects.order_by("id")[:2])
+    a, b = rows[0], rows[1]
+    node_ids = (
+        relay.GlobalID(type_name="CategoryNode", node_id=str(node_id)) for node_id in (a.id, 999999, b.id)
+    )
+
+    results = CategoryNode.resolve_nodes(
+        info=None,
+        node_ids=node_ids,
+        required=False,
+    )
+
+    assert results == [a, None, b]
+
+
+@pytest.mark.django_db
 def test_resolve_nodes_required_raises_for_missing():
     """``required=True`` raises ``Model.DoesNotExist`` for any missing id.
 

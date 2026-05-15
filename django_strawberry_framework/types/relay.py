@@ -230,6 +230,16 @@ async def _apply_get_queryset_async(cls: type, qs: models.QuerySet, info: Any) -
     return result
 
 
+def _coerce_node_id(node_id: Any) -> Any:
+    return node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
+
+
+def _coerce_node_ids(node_ids: Any) -> list[Any] | None:
+    if node_ids is None:
+        return None
+    return [_coerce_node_id(node_id) for node_id in node_ids]
+
+
 def _apply_node_filter(
     qs: models.QuerySet,
     id_attr: str,
@@ -239,18 +249,15 @@ def _apply_node_filter(
 ) -> models.QuerySet:
     """Apply the Relay-id filter to ``qs`` (sync; no get_queryset involvement).
 
-    Single source of truth for the GlobalID coercion and the
-    ``id_attr`` / ``id_attr__in`` filter shape. The post-``get_queryset``
-    queryset is sync-iterable (or async-iterable in the async branch);
-    the filter itself is a pure ORM operation and identical across both
-    paths.
+    The post-``get_queryset`` queryset is sync-iterable (or
+    async-iterable in the async branch); the filter itself is a pure ORM
+    operation and identical across both paths.
     """
     if node_id is not None:
-        coerced = node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
+        coerced = _coerce_node_id(node_id)
         return qs.filter(**{id_attr: coerced})
     if node_ids is not None:
-        coerced_ids = [(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
-        return qs.filter(**{f"{id_attr}__in": coerced_ids})
+        return qs.filter(**{f"{id_attr}__in": node_ids})
     return qs
 
 
@@ -393,10 +400,11 @@ def _resolve_nodes_default(
     if in_async_context():
         return _resolve_nodes_async(cls, id_attr, node_ids, info=info, required=required)
     qs = _apply_get_queryset_sync(cls, _initial_queryset(cls), info)
-    qs = _apply_node_filter(qs, id_attr, node_ids=node_ids)
-    if node_ids is None:
+    coerced_ids = _coerce_node_ids(node_ids)
+    qs = _apply_node_filter(qs, id_attr, node_ids=coerced_ids)
+    if coerced_ids is None:
         return qs
-    coerced_keys = [str(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
+    coerced_keys = [str(node_id) for node_id in coerced_ids]
     return _order_nodes(cls, list(qs), coerced_keys, id_attr, required=required)
 
 
@@ -417,10 +425,11 @@ async def _resolve_nodes_async(
     ``async for`` and returns the order-preserving list shape.
     """
     qs = await _apply_get_queryset_async(cls, _initial_queryset(cls), info)
-    qs = _apply_node_filter(qs, id_attr, node_ids=node_ids)
-    if node_ids is None:
+    coerced_ids = _coerce_node_ids(node_ids)
+    qs = _apply_node_filter(qs, id_attr, node_ids=coerced_ids)
+    if coerced_ids is None:
         return qs
-    coerced_keys = [str(nid.node_id if isinstance(nid, relay.GlobalID) else nid) for nid in node_ids]
+    coerced_keys = [str(node_id) for node_id in coerced_ids]
     results = [obj async for obj in qs]
     return _order_nodes(cls, results, coerced_keys, id_attr, required=required)
 

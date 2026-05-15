@@ -13,10 +13,9 @@ from ..utils.relations import RelationKind
 class PendingRelation:
     """Relation field whose target ``DjangoType`` was not registered during collection.
 
-    Fields must remain hashable because ``TypeRegistry.discard_pending()`` builds
-    ``set(resolved)`` when removing records after successful finalization. The
-    ``__post_init__`` hash probe surfaces a non-hashable ``django_field`` at the
-    registration call site rather than deep inside finalization.
+    Finalization passes the original record instances back to
+    ``TypeRegistry.discard_pending()``, which removes resolved records by
+    identity rather than equality or hash semantics.
     """
 
     source_type: type
@@ -26,16 +25,6 @@ class PendingRelation:
     related_model: type[models.Model]
     relation_kind: RelationKind
     nullable: bool
-
-    def __post_init__(self) -> None:
-        """Probe ``django_field`` hashability so non-hashable surrogates fail here.
-
-        Frozen-dataclass auto-``__hash__`` hashes every field; raising at
-        construction surfaces the contract break at the registration call
-        site rather than inside ``set(resolved)`` during
-        ``TypeRegistry.discard_pending()`` finalization.
-        """
-        hash(self.django_field)
 
 
 class _PendingRelationAnnotationMeta(type):

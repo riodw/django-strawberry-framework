@@ -593,29 +593,26 @@ def test_discard_pending_uses_identity_match_with_real_pending_relation(fresh_re
     assert remaining[0] is record_b
 
 
-def test_pending_relation_rejects_non_hashable_django_field():
-    """``PendingRelation.__post_init__`` surfaces non-hashable ``django_field``.
-
-    The frozen-dataclass auto-``__hash__`` hashes every field, and
-    ``TypeRegistry.discard_pending()`` coerces records into a ``set``. A
-    non-hashable surrogate threaded into ``django_field`` would otherwise
-    fail with ``TypeError`` deep inside finalization; the ``__post_init__``
-    probe fails it at construction instead.
-    """
+def test_discard_pending_tolerates_non_hashable_django_field(fresh_registry):
+    """``discard_pending`` removes pending records by identity without hashing them."""
 
     class _NonHashableField:
         __hash__ = None  # type: ignore[assignment]
 
-    with pytest.raises(TypeError):
-        PendingRelation(
-            source_type=type("Src", (), {}),
-            source_model=Category,
-            field_name="items",
-            django_field=_NonHashableField(),  # type: ignore[arg-type]
-            related_model=Item,
-            relation_kind="reverse_many_to_one",
-            nullable=False,
-        )
+    pending = PendingRelation(
+        source_type=type("Src", (), {}),
+        source_model=Category,
+        field_name="items",
+        django_field=_NonHashableField(),  # type: ignore[arg-type]
+        related_model=Item,
+        relation_kind="reverse_many_to_one",
+        nullable=False,
+    )
+
+    fresh_registry.add_pending_relation(pending)
+    fresh_registry.discard_pending([pending])
+
+    assert list(fresh_registry.iter_pending_relations()) == []
 
 
 def test_mutators_reject_calls_after_mark_finalized(fresh_registry):

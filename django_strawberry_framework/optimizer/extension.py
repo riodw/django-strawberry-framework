@@ -372,6 +372,12 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
             for field_obj in fields.values():
                 _walk_gql_type(getattr(field_obj, "type", None))
 
+        # Recurse into union types.
+        union_types = getattr(gql_type, "types", None)
+        if union_types is not None:
+            for u_type in union_types:
+                _walk_gql_type(u_type)
+
     for root_type in (gql_schema.query_type, gql_schema.mutation_type, gql_schema.subscription_type):
         if root_type is not None:
             _walk_gql_type(root_type)

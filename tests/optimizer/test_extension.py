@@ -1,20 +1,34 @@
-"""Tests for ``DjangoOptimizerExtension`` — O3 scope.
+"""Tests for ``DjangoOptimizerExtension``.
 
-Covers:
+Covers, by topic code:
 
-- End-to-end query counts on relation traversal: ``select_related`` for
-  forward FK, ``prefetch_related`` for reverse FK, both combined.
-- Root-field gate: only root resolvers trigger optimization; inner
-  resolvers pass through.
-- Type-tracing: recursive unwrap of graphql-core's ``GraphQLNonNull`` /
-  ``GraphQLList`` wrappers to reach the ``DjangoType`` class.
-- Passthrough cases: non-``QuerySet`` resolver returns; resolvers whose
-  return type is not registered in the registry; resolvers that select
-  no relations (just scalars).
-- ``on_execute`` ContextVar lifecycle.
+- **O3** — end-to-end relation traversal (forward FK ``select_related``,
+  reverse FK ``prefetch_related``, combined), root-field gate,
+  ``GraphQLNonNull`` / ``GraphQLList`` type tracing, passthrough cases,
+  ``on_execute`` ContextVar lifecycle, async resolver parity.
+- **O4** — nested prefetch chains and nested select-related chains.
+- **O5** — ``only()`` projection collection.
+- **O6** — ``plan_relation`` downgrade from ``select_related`` to
+  ``Prefetch`` for target types with custom ``get_queryset`` hooks.
+- **B1** — plan cache: hits, misses, eviction, named-fragment
+  differentiation, directive-variable cache splitting, runtime-path
+  inclusion.
+- **B2** — forward FK-id elision (and the guards that disable it).
+- **B3** — strictness API (``off`` / ``warn`` / ``raise``).
+- **B4** — ``Meta.optimizer_hints`` (SKIP, force_select, force_prefetch,
+  explicit ``Prefetch``).
+- **B5** — plan introspection via ``info.context`` and the read/write
+  symmetry of the ``_context`` helpers (dict, dict-subclass, non-dict
+  mapping, frozen mapping, immutable ``dict`` subclass, ``None``).
+- **B6** — schema-build-time optimization audit (``check_schema``,
+  ``_collect_schema_reachable_types`` including union-type descent).
+- **B8** — consumer-queryset-aware plan diffing.
+- Extension construction surface (unknown-kwarg rejection, Strawberry
+  ``execution_context`` keyword).
+- ``hint_is_skip`` dispatch shapes.
 
-O6 covers the ``plan_relation`` downgrade from ``select_related`` to
-``Prefetch`` for target types with custom ``get_queryset`` hooks.
+Every test uses the autouse ``_isolate_registry`` fixture so the
+global ``registry`` is cleared on entry and exit.
 """
 
 import contextlib
@@ -1784,6 +1798,52 @@ def test_check_schema_warns_unregistered_target():
     assert any("category" in w and "no registered target" in w for w in warnings)
 
 
+def test_check_schema_descends_into_union_types():
+    """B6: union members are reachable in check_schema's audit walk.
+
+    GraphQL unions expose their constituent object types via ``.types``,
+    not ``.fields``. The schema walker must descend into ``.types`` so a
+    ``DjangoType`` reachable only through a union (e.g.
+    ``list[ItemType | CategoryType]``) still participates in the audit.
+    Without that, ``check_schema`` silently skips missing-target warnings
+    for any relation that lives on a union-member type.
+    """
+    from django_strawberry_framework.optimizer.extension import _collect_schema_reachable_types
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def search(self) -> list[ItemType | CategoryType]:
+            return []
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    # Internal reachable set must include both union members.
+    reachable = _collect_schema_reachable_types(schema)
+    assert ItemType in reachable
+    assert CategoryType in reachable
+
+    # User-visible consequence: drop Category's registration and check_schema
+    # must still surface the gap on ItemType.category. Without the union walk
+    # ItemType is unreachable from the root, the audit skips it, and the
+    # warning is silently lost.
+    registry._types.pop(Category, None)
+    registry._models.pop(CategoryType, None)
+    warnings = DjangoOptimizerExtension.check_schema(schema)
+    assert any("category" in w and "no registered target" in w for w in warnings)
+
+
 def test_check_schema_no_warnings_when_all_covered():
     """B6: check_schema returns no warnings when all relations have registered targets."""
 
@@ -2086,38 +2146,6 @@ def test_optimizer_hint_importable_from_top_level():
 
 
 @pytest.mark.django_db
-def test_plan_stashed_on_object_context(django_assert_num_queries):
-    """B5: the plan is accessible on ``info.context.dst_optimizer_plan`` after execution."""
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
-
-    captured_plan = {}
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self, info: strawberry.types.Info) -> list[ItemType]:
-            return Item.objects.all()
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-    result = schema.execute_sync("{ allItems { name category { name } } }")
-    assert result.errors is None
-    # Strawberry's default context is an object; plan should be stashed via setattr.
-    # We can't access info.context after execution in sync mode directly,
-    # so drive _optimize with a synthetic context object instead.
-
-
-@pytest.mark.django_db
 def test_plan_stashed_with_select_related(django_assert_num_queries):
     """B5: the stashed plan contains the expected select_related entries."""
     services.seed_data(1)
@@ -2233,6 +2261,57 @@ def test_stash_on_dict_subclass_writes_mapping_before_attributes():
     assert ctx["dst_optimizer_plan"] is plan
     assert ctx.attributes == {}
     assert get_context_value(ctx, "dst_optimizer_plan") is plan
+
+
+def test_stash_on_non_dict_mapping_reads_correctly():
+    """get_context_value retrieves stashes from non-dict mappings via item access fallback."""
+    from django_strawberry_framework.optimizer._context import get_context_value, stash_on_context
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    class NonDictMapping:
+        __slots__ = ("_data",)
+
+        def __init__(self):
+            self._data = {}
+
+        def __setitem__(self, key, value):
+            self._data[key] = value
+
+        def __getitem__(self, key):
+            return self._data[key]
+
+    ctx = NonDictMapping()
+    plan = OptimizationPlan()
+    stash_on_context(ctx, "dst_optimizer_plan", plan)
+
+    # Assert stash bypassed setattr (because of __slots__) and populated _data
+    assert ctx._data["dst_optimizer_plan"] is plan
+
+    # Assert get_context_value safely falls back to item access and retrieves it
+    assert get_context_value(ctx, "dst_optimizer_plan") is plan
+
+
+def test_get_context_value_swallows_attribute_error_from_getitem():
+    """rev-optimizer__context: ``__getitem__`` raising ``AttributeError`` on a missing key returns ``default``.
+
+    ``strawberry-graphql-django``'s ``StrawberryDjangoContext`` bridges
+    ``__getitem__`` to ``__getattribute__``, so reading a key that was never
+    stashed raises ``AttributeError`` out of the item access path. The read
+    helper's ``except`` tuple must catch ``AttributeError`` alongside
+    ``KeyError`` / ``TypeError`` so the resolver chain sees ``default`` rather
+    than a leaking ``AttributeError`` from deep inside item lookup.
+    """
+    from django_strawberry_framework.optimizer._context import get_context_value
+
+    class BridgedItemAccess:
+        """Mimics ``StrawberryDjangoContext.__getitem__`` shape."""
+
+        def __getitem__(self, key):
+            raise AttributeError(f"missing attribute {key!r}")
+
+    sentinel = object()
+    ctx = BridgedItemAccess()
+    assert get_context_value(ctx, "dst_optimizer_plan", sentinel) is sentinel
 
 
 def test_stash_on_none_context_is_silent():

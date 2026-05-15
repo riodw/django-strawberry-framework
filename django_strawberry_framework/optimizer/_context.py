@@ -37,23 +37,49 @@ DST_OPTIMIZER_PLANNED = "dst_optimizer_planned"
 DST_OPTIMIZER_LOOKUP_PATHS = "dst_optimizer_lookup_paths"
 DST_OPTIMIZER_STRICTNESS = "dst_optimizer_strictness"
 
+_MISSING: Any = object()
+"""Sentinel for ``get_context_value`` to distinguish a missing attribute
+from an attribute that was explicitly stashed as ``None``."""
+
 
 def get_context_value(context: Any, key: str, default: Any = None) -> Any:
     """Return ``key`` from an object-or-dict context, or ``default``.
 
-    Read-only; safe on frozen contexts.  ``None`` short-circuits to
-    ``default`` so callers can pass ``getattr(info, "context", None)``
-    directly without an extra guard.
+    Dispatch mirrors ``stash_on_context`` so the read and write paths stay
+    symmetric:
+
+    - ``None`` short-circuits to ``default`` so callers can pass
+      ``getattr(info, "context", None)`` without an extra guard.
+    - ``dict`` instances (and subclasses) take the mapping branch via
+      ``context.get(key, default)``; this matches Strawberry's normal
+      usage and lets ``Box``-style dict subclasses that *also* expose
+      attribute access still resolve through ``__getitem__`` first.
+    - Non-``dict`` contexts try attribute access first via ``getattr``;
+      if the attribute is genuinely absent (sentinel ``_MISSING``) the
+      helper falls through to ``context[key]``. The fallback is
+      load-bearing for non-``dict`` mappings whose values were stashed
+      via ``__setitem__`` because their object disallowed ``setattr``
+      (e.g. ``__slots__`` classes, or consumer contexts like
+      ``strawberry-graphql-django``'s ``StrawberryDjangoContext`` whose
+      ``__getitem__`` is bridged to ``__getattribute__``).
+    - ``__getitem__`` on a missing key may raise ``KeyError``,
+      ``TypeError``, or ``AttributeError`` (the last one for bridged
+      attribute-access contexts); all three are caught and return
+      ``default``. Read-only / frozen contexts are safe for the same
+      reason.
     """
     if context is None:
         return default
-    # Dispatch order matters: ``dict`` is checked before the ``getattr``
-    # fallback so that a ``dict`` subclass that *also* exposes attribute
-    # access (e.g., a ``Box``-style mapping) takes the mapping branch,
-    # which matches Strawberry's normal usage.  Do not reverse the order.
-    if isinstance(context, dict):
-        return context.get(key, default)
-    return getattr(context, key, default)
+    if not isinstance(context, dict):
+        val = getattr(context, key, _MISSING)
+        if val is not _MISSING:
+            return val
+    try:
+        if isinstance(context, dict):
+            return context.get(key, default)
+        return context[key]
+    except (TypeError, KeyError, AttributeError):
+        return default
 
 
 def stash_on_context(context: Any, key: str, value: Any) -> None:

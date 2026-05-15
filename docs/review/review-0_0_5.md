@@ -70,15 +70,15 @@ Low: small maintainability issues, naming, minor typing/API polish, localized si
     - [x] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
     - [x] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
     - [x] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
-    - [ ] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
-    - [ ] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
+    - [x] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
+    - [x] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
   - `django_strawberry_framework/types/`
-    - [ ] `django_strawberry_framework/types/base.py` -> `docs/review/rev-types__base.md`
-    - [ ] `django_strawberry_framework/types/converters.py` -> `docs/review/rev-types__converters.md`
-    - [ ] `django_strawberry_framework/types/definition.py` -> `docs/review/rev-types__definition.md`
-    - [ ] `django_strawberry_framework/types/finalizer.py` -> `docs/review/rev-types__finalizer.md`
-    - [ ] `django_strawberry_framework/types/relations.py` -> `docs/review/rev-types__relations.md`
-    - [ ] `django_strawberry_framework/types/relay.py` -> `docs/review/rev-types__relay.md`
+    - [x] `django_strawberry_framework/types/base.py` -> `docs/review/rev-types__base.md`
+    - [x] `django_strawberry_framework/types/converters.py` -> `docs/review/rev-types__converters.md`
+    - [x] `django_strawberry_framework/types/definition.py` -> `docs/review/rev-types__definition.md`
+    - [x] `django_strawberry_framework/types/finalizer.py` -> `docs/review/rev-types__finalizer.md`
+    - [x] `django_strawberry_framework/types/relations.py` -> `docs/review/rev-types__relations.md`
+    - [x] `django_strawberry_framework/types/relay.py` -> `docs/review/rev-types__relay.md`
     - [ ] `django_strawberry_framework/types/resolvers.py` -> `docs/review/rev-types__resolvers.md`
     - [ ] folder pass: `django_strawberry_framework/types/` -> `docs/review/rev-types.md`
   - `django_strawberry_framework/utils/`

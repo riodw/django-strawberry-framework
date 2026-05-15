@@ -192,19 +192,19 @@ obvious.
     - Prompt:
         - Read docs/bug_hunt/current/django_strawberry_framework__optimizer__extension.stripped.py and docs/bug_hunt/current/django_strawberry_framework__optimizer__extension.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/extension.py
 
-- [ ] django_strawberry_framework/optimizer/field_meta.py
+- [x] django_strawberry_framework/optimizer/field_meta.py
     - docs/bug_hunt/current/django_strawberry_framework__optimizer__field_meta.stripped.py
     - docs/bug_hunt/current/django_strawberry_framework__optimizer__field_meta.overview.md
     - Prompt:
         - Read docs/bug_hunt/current/django_strawberry_framework__optimizer__field_meta.stripped.py and docs/bug_hunt/current/django_strawberry_framework__optimizer__field_meta.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/field_meta.py
 
-- [ ] django_strawberry_framework/optimizer/hints.py
+- [x] django_strawberry_framework/optimizer/hints.py
     - docs/bug_hunt/current/django_strawberry_framework__optimizer__hints.stripped.py
     - docs/bug_hunt/current/django_strawberry_framework__optimizer__hints.overview.md
     - Prompt:
         - Read docs/bug_hunt/current/django_strawberry_framework__optimizer__hints.stripped.py and docs/bug_hunt/current/django_strawberry_framework__optimizer__hints.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/hints.py
 
-- [ ] django_strawberry_framework/optimizer/plans.py
+- [x] django_strawberry_framework/optimizer/plans.py
     - docs/bug_hunt/current/django_strawberry_framework__optimizer__plans.stripped.py
     - docs/bug_hunt/current/django_strawberry_framework__optimizer__plans.overview.md
     - Prompt:

@@ -1,8 +1,16 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-05-13
+Last refreshed: 2026-05-15
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
+
+## Card ID format
+
+Every card uses the form `<STATUS>-NNN-X.Y.Z`:
+
+- `<STATUS>` — the column the card lives in: `DONE`, `READY`, `NEXT`, `BACKLOG`, or `BLOCKED`. Updated when the card moves between columns.
+- `NNN` — a monotonic, never-reused 3-digit sequence number indicating the order the card entered the board. Stays fixed across column moves and version-tag changes.
+- `X.Y.Z` — the package version the card shipped in (Done cards) or is planned to ship in (everything else). `0.0.x` is the placeholder version for cards not yet pinned to a specific patch release (long-tail backlog, ongoing rules, blocked items waiting on their dependency).
 
 For install, local development, testing, and the canonical documentation map, start from [`README.md`](README.md).
 
@@ -61,8 +69,8 @@ For install, local development, testing, and the canonical documentation map, st
   - deferred scalar conversions: `BigIntegerField`, `ArrayField`, `JSONField`, `HStoreField`
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
-  - connection-aware planning for Relay-style nested connection selections (new card `BACKLOG-012`)
-- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract (`BACKLOG-011`).
+  - connection-aware planning for Relay-style nested connection selections (new card `BACKLOG-030-0.0.9`)
+- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract (`BACKLOG-029-0.0.x`).
 - The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
 
 ## Board columns
@@ -506,7 +514,7 @@ Why first:
 Foundation-slice seam:
 
 - `DjangoTypeDefinition.fields_class` is the forward-reserved slot the collection phase will populate.
-- `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also `BACKLOG-011` for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
+- `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also `BACKLOG-029-0.0.x` for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
 
 Definition of done:
 
@@ -626,7 +634,7 @@ Foundation-slice seam:
 
 - `finalize_django_types()` is the single architectural entry point that `DjangoConnectionField(DjangoType)` (and `DjangoNodeField`) will auto-trigger as their wrapper. Spec note: `docs/spec-foundation.md:65` already calls this out as a later-phase wrapper around the same finalizer.
 - An auto-trigger wrapper must respect the single-threaded-setup window from `docs/spec-foundation.md:63`: either be constrained to schema-construction time, or acquire a real lock around the finalizer.
-- Connection-aware optimizer planning is its own follow-up slice (`BACKLOG-012`); the foundation slice did not exercise nested connection prefetch shapes.
+- Connection-aware optimizer planning is its own follow-up slice (`BACKLOG-030-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
 
 Definition of done:
 
@@ -678,7 +686,7 @@ Dependencies:
 
 ## Backlog
 
-### BACKLOG-001 — `apps.py` and Django app config
+### BACKLOG-021-0.0.x — `apps.py` and Django app config
 
 Priority: medium
 
@@ -690,7 +698,7 @@ Definition of done:
 - Add `tests/test_apps.py`.
 - Do not add settings placeholders unless a shipped feature consumes them.
 
-### BACKLOG-002 — Schema export management command
+### BACKLOG-022-0.0.x — Schema export management command
 
 Priority: medium
 
@@ -702,7 +710,7 @@ Definition of done:
 - Add `tests/management/test_export_schema.py`.
 - Test through `django.core.management.call_command`, not direct `handle()` calls.
 
-### BACKLOG-003 — `utils/queryset.py`
+### BACKLOG-023-0.0.x — `utils/queryset.py`
 
 Priority: medium
 
@@ -720,7 +728,7 @@ Definition of done:
 - Add mirrored `tests/utils/test_queryset.py`.
 
 
-### BACKLOG-005 — Fakeshop GraphQL schema activation
+### BACKLOG-024-0.1.0 — Fakeshop GraphQL schema activation
 
 Priority: medium
 
@@ -739,7 +747,7 @@ Definition of done:
 - Add in-process schema tests under `examples/fakeshop/tests/`.
 - Add live `/graphql/` tests under `examples/fakeshop/test_query/` only when testing the HTTP endpoint.
 
-### BACKLOG-006 — Public surface promotion discipline
+### BACKLOG-025-0.0.x — Public surface promotion discipline
 
 Priority: medium
 
@@ -760,7 +768,7 @@ Definition of done for each future public symbol:
 - Top-level `__all__` and subpackage exports are updated together.
 - README/TREE status markers match the symbol's actual implementation state.
 
-### BACKLOG-007 — Stable choice enum naming override
+### BACKLOG-026-0.0.12 — Stable choice enum naming override
 
 Priority: low-medium
 
@@ -792,7 +800,7 @@ Files likely touched:
 - `django_strawberry_framework/registry.py`
 - `tests/types/test_converters.py`
 
-### BACKLOG-008 — Model-property optimization hints
+### BACKLOG-027-0.0.13 — Model-property optimization hints
 
 Priority: low-medium
 
@@ -823,7 +831,7 @@ Files likely touched:
 - `django_strawberry_framework/optimizer/plans.py`
 - `tests/optimizer/`
 
-### BACKLOG-009 — Migration and adoption guides
+### BACKLOG-028-0.0.x — Migration and adoption guides
 
 Priority: medium
 
@@ -853,7 +861,7 @@ Files likely touched:
 - `docs/FEATURES.md`
 
 
-### BACKLOG-011 — Layered manual relation override tests
+### BACKLOG-029-0.0.x — Layered manual relation override tests
 
 Priority: low
 
@@ -882,7 +890,7 @@ Files likely touched:
 - `examples/fakeshop/test_query/test_library_api.py`
 - possibly a helper in `django_strawberry_framework/types/resolvers.py` if production code needs it
 
-### BACKLOG-013 — FieldMeta SSoT consolidation
+### BACKLOG-031-0.0.6 — FieldMeta SSoT consolidation
 
 Priority: low
 
@@ -918,7 +926,7 @@ Files likely touched:
 - `django_strawberry_framework/optimizer/field_meta.py`
 - `tests/types/`
 
-### BACKLOG-014 — FieldMeta mirror retirement
+### BACKLOG-032-0.0.6 — FieldMeta mirror retirement
 
 Priority: low
 
@@ -955,7 +963,7 @@ Files likely touched:
 - `django_strawberry_framework/optimizer/field_meta.py`
 - `tests/optimizer/`
 
-### BACKLOG-012 — Connection-aware optimizer planning
+### BACKLOG-030-0.0.9 — Connection-aware optimizer planning
 
 Priority: medium (gated on `NEXT-019-0.0.9` / Relay decisions)
 
@@ -991,7 +999,7 @@ Files likely touched:
 
 ## Blocked / Deferred
 
-### BLOCKED-001 — Full Relay story
+### BLOCKED-033-0.0.9 — Full Relay story
 
 Resolved blockers (Node half shipped in `DONE-011-0.0.5`, `0.0.5`):
 
@@ -1008,7 +1016,7 @@ Unblocks:
 - fakeshop aspirational schema activation (Connection half still blocked).
 - connection field public surface (Connection half still blocked).
 
-### BLOCKED-002 — Layer 3 Meta key promotion
+### BLOCKED-034-0.0.x — Layer 3 Meta key promotion
 
 Blocked by:
 
@@ -1026,7 +1034,7 @@ Rule:
 
 - Do not move a key from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` until the pipeline applies it end-to-end.
 
-### BLOCKED-003 — Product-catalog Layer 3 HTTP GraphQL tests
+### BLOCKED-035-0.1.0 — Product-catalog Layer 3 HTTP GraphQL tests
 
 Blocked by:
 
@@ -1045,10 +1053,10 @@ Current state:
 
 1. READY-012-0.0.7 — multiple types per model / `Meta.primary`.
 2. READY-013-0.0.10 — consumer override semantics (scalar fields).
-3. ~~READY-004~~ — Relay / `Meta.interfaces` shipped as `DONE-011-0.0.5` (`0.0.5`).
+3. ~~Relay / `Meta.interfaces`~~ — shipped as `DONE-011-0.0.5`.
 4. READY-014-0.0.6 — deferred scalar conversions.
-5. BACKLOG-007 — stable choice enum naming override.
-6. BACKLOG-008 — model-property optimization hints.
+5. BACKLOG-026-0.0.12 — stable choice enum naming override.
+6. BACKLOG-027-0.0.13 — model-property optimization hints.
 
 Use this sequence if the goal is to make `DjangoType` feel solid before expanding the public API.
 
@@ -1058,9 +1066,9 @@ Use this sequence if the goal is to make `DjangoType` feel solid before expandin
 2. NEXT-016-0.0.8 — filters.
 3. NEXT-017-0.0.8 — orders.
 4. NEXT-018-0.0.11 — aggregates.
-5. NEXT-019-0.0.9 — `DjangoConnectionField` (interacts with `BACKLOG-012` for connection-aware optimizer planning).
+5. NEXT-019-0.0.9 — `DjangoConnectionField` (interacts with `BACKLOG-030-0.0.9` for connection-aware optimizer planning).
 6. NEXT-020-0.0.9 — permissions.
-7. BACKLOG-005 — activate fakeshop schema.
+7. BACKLOG-024-0.1.0 — activate fakeshop schema.
 
 Use this sequence if the goal is to demonstrate the DRF-shaped API surface quickly.
 
@@ -1069,13 +1077,13 @@ Use this sequence if the goal is to demonstrate the DRF-shaped API surface quick
 1. **Next** — `NEXT-015-0.0.6` `FieldSet`. Smallest Layer 3 slice.
 2. NEXT-016-0.0.8 and NEXT-017-0.0.8 — filters and orders. Both reuse the pending-resolution pattern from the foundation slice for lazy related-class references.
 3. READY-012-0.0.7 — introduce `Meta.primary` before connection/permissions need multiple type variants (also interacts with the filter input-type factory namespace decision in `NEXT-016-0.0.8`).
-4. NEXT-019-0.0.9 and NEXT-020-0.0.9 — connection field and permissions. `BACKLOG-012` runs alongside `NEXT-019-0.0.9` to keep the optimizer aware of Relay-shaped selections.
+4. NEXT-019-0.0.9 and NEXT-020-0.0.9 — connection field and permissions. `BACKLOG-030-0.0.9` runs alongside `NEXT-019-0.0.9` to keep the optimizer aware of Relay-shaped selections.
 5. NEXT-018-0.0.11 — aggregates.
 6. READY-013-0.0.10 — finalize scalar-field consumer override semantics once the relation contract has bedded in.
-7. BACKLOG-007 — add stable choice enum naming if schema import-order friction appears in real use.
-8. BACKLOG-008 — add model-property optimization hints if computed fields start broadening queries.
-9. BACKLOG-011 — keep the layered override-test policy healthy as Strawberry internals and future custom field classes evolve.
-10. BACKLOG-005 — activate the real product-catalog fakeshop GraphQL schema.
+7. BACKLOG-026-0.0.12 — add stable choice enum naming if schema import-order friction appears in real use.
+8. BACKLOG-027-0.0.13 — add model-property optimization hints if computed fields start broadening queries.
+9. BACKLOG-029-0.0.x — keep the layered override-test policy healthy as Strawberry internals and future custom field classes evolve.
+10. BACKLOG-024-0.1.0 — activate the real product-catalog fakeshop GraphQL schema.
 
 
 ## Release readiness checklist
@@ -1097,4 +1105,4 @@ Before a release:
 - When a card moves to Done, update the evidence and remove stale blocker language.
 - When a future spec creates a new subsystem, add it here as a card with a definition of done.
 - Keep `CHANGELOG.md` out of routine updates unless explicitly requested.
-- Strategic differentiation candidates (features neither `graphene-django` nor `strawberry-graphql-django` ship cleanly) live in [`BETTER.md`](BETTER.md). When a `BETTER.md` item is scheduled, promote it to a `NEXT-NNN` or `READY-NNN` card here and cross-reference back.
+- Strategic differentiation candidates (features neither `graphene-django` nor `strawberry-graphql-django` ship cleanly) live in [`BETTER.md`](BETTER.md). When a `BETTER.md` item is scheduled, promote it to a `NEXT-NNN-X.Y.Z` or `READY-NNN-X.Y.Z` card here and cross-reference back.

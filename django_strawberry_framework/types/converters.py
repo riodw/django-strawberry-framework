@@ -81,8 +81,8 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
 
     Algorithm:
 
-    1. Look up ``type(field)`` in ``SCALAR_MAP``; raise ``ConfigurationError``
-       if unsupported.
+    1. Walk ``type(field).__mro__`` until a supported Django field class is
+       found in ``SCALAR_MAP``; raise ``ConfigurationError`` if unsupported.
     2. If the field declares ``choices``, replace the scalar type with a
        generated ``Enum`` via ``convert_choices_to_enum(field, type_name)``.
     3. If the field is nullable, widen to ``T | None``.
@@ -98,9 +98,9 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
             ``<TypeName><FieldName>Enum`` GraphQL name.
 
     Raises:
-        ConfigurationError: ``type(field)`` is not in ``SCALAR_MAP``, or
-            ``field.choices`` is in Django's grouped form (raised from
-            ``convert_choices_to_enum``).
+        ConfigurationError: no class in ``type(field).__mro__`` is in
+            ``SCALAR_MAP``, or ``field.choices`` is in Django's grouped
+            form (raised from ``convert_choices_to_enum``).
     """
     py_type: Any = None
     # Walk the field's MRO so consumer-defined subclasses of a supported
@@ -131,15 +131,17 @@ _GRAPHQL_RESERVED_ENUM_VALUES = frozenset({"false", "null", "true"})
 
 
 def _sanitize_member_name(value: Any) -> str:
-    """Produce a valid Python identifier from a Django choice value.
+    """Produce a Strawberry / GraphQL-safe enum member from a Django choice value.
 
     The choice value (DB-side, not the human label) is the input. We coerce
-    to ``str`` so ``IntegerChoices`` work, replace any non-identifier
-    characters with ``_``, prefix with ``MEMBER_`` if the result starts
-    with a digit (or is empty), and prefix with an underscore if it
-    collides with a Python keyword. Sanitization is a function of the raw
-    value, not the label, so schema member names stay stable when consumers
-    edit human-readable labels.
+    to ``str`` so ``IntegerChoices`` work, replace any non-ASCII
+    identifier characters with ``_``, prefix with ``MEMBER_`` if the
+    result starts with a digit (or is empty), and prefix with an
+    underscore if it collides with a Python keyword. GraphQL-reserved enum
+    values (``true``, ``false``, ``null``) and introspection-prefixed
+    names are also prefixed so Strawberry can build the schema.
+    Sanitization is a function of the raw value, not the label, so schema
+    member names stay stable when consumers edit human-readable labels.
     """
     sanitized = _NON_IDENT.sub("_", str(value))
     if not sanitized or sanitized[0].isdigit():

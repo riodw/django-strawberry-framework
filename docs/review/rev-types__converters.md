@@ -1,6 +1,6 @@
 # Review: `django_strawberry_framework/types/converters.py`
 
-Status: fix-implemented
+Status: verified
 
 ## DRY analysis
 
@@ -115,31 +115,77 @@ def _sanitize_member_name(value: Any) -> str:
 
 ### Logic verification outcome
 
-Pending.
+High accepted. `_sanitize_member_name` now normalizes with `re.ASCII`, prefixes digit/empty names, keeps Python keyword handling, and then rewrites GraphQL-reserved enum values (`true`, `false`, `null`, case-insensitive) plus names beginning with `__`. `convert_choices_to_enum` still builds the `members` dict and detects collisions after `_sanitize_member_name`, so post-GraphQL-safe collisions such as `"true"` vs `"MEMBER_true"` raise `ConfigurationError` before schema construction.
+
+Low not yet addressed. The logic is correct, but the comment/docstring lifecycle remains open: `convert_scalar` still documents exact `type(field)` lookup even though the implementation walks the MRO, and `_sanitize_member_name` still describes only a Python-identifier contract instead of the final GraphQL enum-value constraints.
 
 ### DRY findings disposition
 
-Pending.
+Accepted for logic. The fix kept the normalization rules centralized in `_sanitize_member_name` and left `convert_choices_to_enum` as the sole collision-detection point after final sanitization. The existing `resolved_relation_annotation` / `FieldMeta` SSoT note remains a carried-forward TODO, not a local blocker for this enum-sanitization fix.
 
 ### Temp test verification
 
-- Pending.
+- Temp test files used: none.
+- Disposition: not needed; Worker 2 promoted the relevant reserved/non-ASCII/`__` and final-name collision coverage directly into `tests/types/test_converters.py`.
 
 ### Verification outcome
 
-Pending.
+Logic accepted; awaiting comment pass. Top-level `Status:` remains `fix-implemented`, and the checklist item remains unchecked until comments/docstrings and changelog disposition are complete.
+
+Validation passed:
+
+- `uv run pytest tests/types/test_converters.py --no-cov` — passed (`14 passed`, with existing Django model re-registration warnings).
+- `uv run ruff format --check django_strawberry_framework/types/converters.py tests/types/test_converters.py` — passed.
+- `uv run ruff check django_strawberry_framework/types/converters.py tests/types/test_converters.py` — passed.
 
 ---
 
 ## Comment/docstring pass
 
-Pending.
+Completed. Updated `convert_scalar` to document the MRO walk through `type(field).__mro__` instead of exact `type(field)` lookup, including the unsupported-field `ConfigurationError` path. Updated `_sanitize_member_name` to describe the final Strawberry / GraphQL enum-value contract: ASCII-safe identifier normalization, Python keyword handling, reserved enum values, and `__` introspection-name prefix handling.
+
+Validation:
+
+- `uv run ruff format django_strawberry_framework/types/converters.py` — pass.
+- `uv run ruff check django_strawberry_framework/types/converters.py` — pass.
 
 ---
 
 ## Changelog disposition
 
-Pending.
+Warranted. This was a High, user-visible bug fix: consumer Django choice values that were valid enough for Python enum member creation could still generate Strawberry enums rejected by GraphQL schema construction (`true` / `false` / `null`, non-ASCII values, or `__`-prefixed names). The fix changes generated enum member names for those edge cases and prevents a normal schema-build crash path.
+
+No `CHANGELOG.md` edit was made because the active review plan and maintainer instructions did not explicitly authorize editing the changelog.
+
+---
+
+## Verification (Worker 3, pass 2)
+
+### Comment/docstring verification outcome
+
+Comments accepted. `convert_scalar` now documents the final MRO-based scalar lookup and unsupported-field `ConfigurationError` path instead of the stale exact `type(field)` lookup. `_sanitize_member_name` now documents the final Strawberry / GraphQL enum-value contract, including ASCII-safe normalization, Python keyword handling, case-insensitive reserved enum values, and `__` introspection-name prefix handling.
+
+### Verification outcome
+
+Comments accepted; awaiting changelog disposition. Top-level `Status:` remains `fix-implemented`, and the checklist item remains unchecked until Worker 2 records whether `CHANGELOG.md` should be updated or intentionally left unchanged.
+
+---
+
+## Verification (Worker 3, pass 3)
+
+### Changelog verification outcome
+
+Changelog disposition accepted. The bug fix is user-visible and release-note-worthy because invalid generated enum member names could crash Strawberry schema construction for ordinary Django choice values. `CHANGELOG.md` was intentionally left unchanged because maintainer instructions do not authorize changelog edits during this cycle.
+
+### Final verification outcome
+
+Logic, DRY disposition, comments/docstrings, validation, and changelog handling are accepted. No temp tests were used; the schema-build and final-name collision coverage is permanent in `tests/types/test_converters.py`. Cycle accepted; verified.
+
+Validation passed:
+
+- `uv run pytest tests/types/test_converters.py --no-cov` — passed (`14 passed`, with two existing Django model re-registration warnings).
+- `uv run ruff format --check django_strawberry_framework/types/converters.py tests/types/test_converters.py` — passed.
+- `uv run ruff check django_strawberry_framework/types/converters.py tests/types/test_converters.py` — passed.
 
 ---
 

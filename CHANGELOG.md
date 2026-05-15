@@ -7,17 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.0.5] - 2026-05-13
+## [0.0.5] - 2026-05-15
 ### Added
 - Relay Node interface support: `Meta.interfaces` accepted for any Strawberry interface (Relay `Node` or `@strawberry.interface`-decorated classes).
 - Default `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` classmethods injected on every `DjangoType` whose `Meta.interfaces` declares `relay.Node`; consumer-declared overrides are preserved via Strawberry's `__func__` identity test (matches `strawberry-django`).
-- Automatic synthesized `id: int!` suppression when `relay.Node` is in `Meta.interfaces`; the Relay-supplied `id: GlobalID!` from the interface is used instead. The Django primary key remains selected as a connector column for the optimizer.
+- Automatic synthesized `id: int!` suppression when `relay.Node` is in `Meta.interfaces` (including consumer subclasses of `relay.Node`); the Relay-supplied `id: GlobalID!` from the interface is used instead. The Django primary key remains selected as a connector column for the optimizer.
 - `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
 - Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise `ConfigurationError` at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
 - Both sync and async paths for `_resolve_node_default` / `_resolve_nodes_default`; `_resolve_id_attr_default` and `_resolve_id_default` are sync.
+- `is_many_side_relation_kind` and `unwrap_graphql_type` utility helpers consolidated in `django_strawberry_framework.utils` so optimizer, walker, and type-conversion call sites share a single source of truth for relation cardinality and graphql-core type unwrapping.
 
 ### Changed
 - `Meta.interfaces` promoted from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
+- Optimizer schema audit (`check_schema`) now descends into GraphQL union member types so `DjangoType`s reachable only through a union participate in the missing-target audit.
+- `get_context_value` tolerates non-dict mapping contexts and `AttributeError` from `__getitem__` so `strawberry-graphql-django`'s attribute-bridging context and `__slots__`-backed mappings read correctly.
+
+### Fixed
+- `_check_n1` now receives the real `relation_kind` of the field being resolved (including `reverse_many_to_one`) instead of a hardcoded `"many"` / `"forward"`, so reverse-FK resolvers exercise the many-side N+1 check path consistently.
+- `_ensure_connector_only_fields` now injects the forward FK column for reverse one-to-one prefetches so Django can bind each child row back to its parent without a lazy load.
+- Optimizer walker now projects a `NodeID`-targeted relation via the FK `attname` (e.g. `user_id`) instead of the relation name (`user`), so `.only(...)` does not drag the related row back through a deferred load.
+- GraphQL-reserved enum member names (`true` / `false` / `null`) and introspection-prefixed (`__`) sanitizations from Django `choices` values now produce schema-valid Strawberry enums.
+- Relay `_resolve_nodes_default` / `_resolve_nodes_async` materialize the input `node_ids` once so one-shot iterables (generators, `map`, etc.) survive both the IN-filter and the order-preserving key pass.
+- Walker `_prefetch_hint_for_path` now rebases type-relative nested lookups onto the full path while preserving queryset and `to_attr`, and rejects mismatched lookups that do not target the hinted relation.
+
+### Removed
+- Removed the dead `PendingRelation` hashability probe; `TypeRegistry.discard_pending()` removes pending records by identity rather than via a hash set.
 
 ## [0.0.4] - 2026-05-08
 ### Added

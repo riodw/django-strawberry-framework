@@ -20,9 +20,9 @@ The current docs define the package direction clearly:
 - Strawberry GraphQL on Django.
 - Existing querysets remain owned by the application.
 - The optimizer cooperates with querysets instead of replacing them.
-- Today’s stable early names are `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, and `auto`.
+- Today’s stable early names are `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, and `auto`.
 - Planned features include filters, orders, aggregates, connection fields, permissions, cascade permissions, fieldsets, richer `Meta` keys, and schema helpers.
-- Definition-order independence is planned so model relation graphs can be expressed naturally.
+- Definition-order-independent relation finalization and Relay Node interface wiring are shipped foundation pieces, so model relation graphs can be expressed naturally before the richer query surface lands.
 
 `GOAL.md` describes the intended destination. `README.md` and `docs/README.md` continue to describe the operational entry point and the current shipped surface.
 

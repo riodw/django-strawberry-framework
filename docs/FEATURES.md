@@ -25,6 +25,7 @@ Public exports:
 - `OptimizerHint`
 - `finalize_django_types`
 - `auto`
+- `__version__`
 
 Current posture:
 - alpha-quality: suitable for internal tools and prototypes, not production
@@ -109,7 +110,7 @@ Shipped today:
 
 Current alpha constraints:
 - one `DjangoType` per Django model
-- manual override validation for relation cardinality is deferred; 0.0.4 trusts relation-field annotations supplied by the consumer
+- manual override validation for relation cardinality is deferred; the package trusts relation-field annotations supplied by the consumer
 
 ### Definition-order independence
 Status: shipped.
@@ -126,7 +127,7 @@ Supported relation cycles:
 
 Unresolved relation targets fail during finalization with an error that names the source model, source field, and target model. The most common cause is that a Python module containing the target `DjangoType` was never imported before finalization.
 
-Supported forward-reference/manual relation shapes in 0.0.4:
+Supported forward-reference/manual relation shapes:
 - generated relation annotations for target types declared before or after the source type
 - same-module string annotations such as `items: list["ItemType"]`
 - stringified annotations from `from __future__ import annotations`
@@ -404,4 +405,4 @@ Tracked in the contributor/maintainer board, [`../KANBAN.md`](../KANBAN.md):
 - filters, orders, aggregates, fieldsets, connections, and permissions
 - model-property and cached-property optimizer hints
 
-Dedicated migration guides are tracked in [`../KANBAN.md`](../KANBAN.md#backlog-009--migration-and-adoption-guides) so this file can stay focused on package capabilities.
+Dedicated migration guides are tracked in [`../KANBAN.md`](../KANBAN.md) under `BACKLOG-028-0.0.x`, so this file can stay focused on package capabilities.

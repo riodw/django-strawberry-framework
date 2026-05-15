@@ -1,6 +1,6 @@
 # Reference Trees
 
-This file is the detailed layout reference. It exists to preserve the package/test tree rationale, upstream layout comparisons, and per-file responsibilities without turning [`README.md`](README.md) into a second architecture document.
+This file is the detailed layout reference. It exists to preserve the package/test tree rationale, upstream layout comparisons, and per-file responsibilities without turning [`../README.md`](../README.md) into a second architecture document.
 
 For install, local development, testing, and the canonical documentation map, start from [`../README.md`](../README.md).
 
@@ -192,7 +192,7 @@ The fakeshop example project uses the standard explicit-package layout under `ex
 
 ```text
 django_strawberry_framework/
-├── __init__.py              # public-API re-exports (DjangoType, DjangoOptimizerExtension, OptimizerHint, auto)
+├── __init__.py              # public-API re-exports (DjangoType, DjangoOptimizerExtension, OptimizerHint, finalize_django_types, auto)
 ├── py.typed
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
@@ -201,18 +201,24 @@ django_strawberry_framework/
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
 │   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
+│   ├── definition.py        # DjangoTypeDefinition (canonical per-type metadata with forward-reserved Layer-3 slots)
+│   ├── finalizer.py         # finalize_django_types() three-phase finalizer
+│   ├── relations.py         # PendingRelationAnnotation sentinel + metaclass
+│   ├── relay.py             # Relay Node interface wiring (resolve_* defaults, id suppression, is_type_of injection)
 │   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers, B3 N+1 detection
 ├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O6 + B1–B8 shipped
 │   ├── __init__.py          # re-exports DjangoOptimizerExtension
-│   ├── extension.py         # DjangoOptimizerExtension (O3 hook, B1 cache, B2 elision stash, B3 strictness, B5 context stash)
+│   ├── _context.py          # context-key constants and get_context_value helper
+│   ├── extension.py         # DjangoOptimizerExtension (O3 hook, B1 cache, B2 elision stash, B3 strictness, B5 context stash, B6 schema audit)
 │   ├── walker.py            # selection-tree walker (O2, O5 only fields, B2 FK-id elision, B4 hints, B7 cached field map)
-│   ├── plans.py             # OptimizationPlan data structure
+│   ├── plans.py             # OptimizationPlan data structure + resolver_key / runtime_path helpers
 │   ├── hints.py             # OptimizerHint typed wrapper (B4)
 │   └── field_meta.py        # FieldMeta precomputed field metadata (B7)
 └── utils/                   # cross-cutting helpers
     ├── __init__.py
+    ├── relations.py         # relation_kind / RelationKind / is_many_side_relation_kind
     ├── strings.py           # snake_case / camelCase / PascalCase conversion
-    └── typing.py            # type unwrapping (list[T], of_type, Optional[T])
+    └── typing.py            # unwrap_return_type (one layer), unwrap_graphql_type (full peel)
 ```
 
 ## django_strawberry_framework (target package layout)
@@ -234,9 +240,14 @@ django_strawberry_framework/
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
 │   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
+│   ├── definition.py        # DjangoTypeDefinition (canonical per-type metadata)
+│   ├── finalizer.py         # finalize_django_types() three-phase finalizer
+│   ├── relations.py         # PendingRelationAnnotation sentinel + metaclass
+│   ├── relay.py             # Relay Node interface wiring
 │   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers
 ├── optimizer/               # N+1 optimizer subsystem (Layer 2)
 │   ├── __init__.py
+│   ├── _context.py          # context-key constants and get_context_value helper
 │   ├── extension.py         # DjangoOptimizerExtension (Strawberry SchemaExtension)
 │   ├── walker.py            # selection-tree walker (plan_optimizations)
 │   ├── plans.py             # OptimizationPlan, Prefetch chain helpers
@@ -264,8 +275,9 @@ django_strawberry_framework/
 │       └── export_schema.py # schema export (mirrors strawberry_django's command)
 └── utils/                   # cross-cutting helpers
     ├── __init__.py
+    ├── relations.py         # relation_kind / RelationKind / is_many_side_relation_kind
     ├── strings.py           # snake_case / camelCase / PascalCase conversion
-    ├── typing.py            # type unwrapping (list[T], of_type, Optional[T])
+    ├── typing.py            # unwrap_return_type, unwrap_graphql_type
     └── queryset.py          # queryset introspection, prefetch-cache awareness
 ```
 
@@ -287,18 +299,25 @@ tests/                       # Package-internal tests (current state)
 │   ├── __init__.py
 │   ├── test_base.py         # ← DjangoType + Meta validation + scalar/relation synthesis
 │   ├── test_converters.py   # ← convert_scalar / convert_relation / convert_choices_to_enum
+│   ├── test_definition_order.py        # ← definition-order-independent relation finalization
+│   ├── test_definition_order_schema.py # ← schema-build / strawberry.type decoration interactions
+│   ├── test_generic_foreign_key.py     # ← GenericForeignKey rejection contract
+│   ├── test_relay_interfaces.py        # ← Meta.interfaces + Relay Node wiring
 │   └── test_resolvers.py    # ← O1 _make_relation_resolver / _attach_relation_resolvers
 ├── optimizer/               # mirrors django_strawberry_framework/optimizer/
 │   ├── __init__.py
+│   ├── test_definition_order.py     # ← optimizer behavior under definition-order-independent relations
 │   ├── test_extension.py    # ← DjangoOptimizerExtension (root-gated resolve hook, O3)
-│   ├── test_walker.py       # ← O2 selection-tree walker
-│   ├── test_plans.py        # ← OptimizationPlan data structure
+│   ├── test_field_meta.py   # ← FieldMeta precomputed field metadata
 │   ├── test_hints.py        # ← OptimizerHint typed wrapper
-│   └── test_field_meta.py   # ← FieldMeta precomputed field metadata
+│   ├── test_plans.py        # ← OptimizationPlan data structure
+│   ├── test_relay_id_projection.py  # ← Relay GlobalID projection / connector-column behavior
+│   └── test_walker.py       # ← O2 selection-tree walker
 └── utils/                   # mirrors django_strawberry_framework/utils/
     ├── __init__.py
+    ├── test_relations.py    # ← relation_kind / is_many_side_relation_kind
     ├── test_strings.py      # ← snake_case / camelCase / PascalCase conversion
-    └── test_typing.py       # ← type unwrapping
+    └── test_typing.py       # ← unwrap_return_type / unwrap_graphql_type
 
 examples/fakeshop/tests/     # Example-project tests, NO /graphql HTTP
 ├── test_admin.py            # admin actions via django.test.Client on /admin/...
@@ -348,13 +367,19 @@ tests/                       # Package-internal tests (target as Layer-3 subsyst
 ├── types/
 │   ├── test_base.py
 │   ├── test_converters.py
+│   ├── test_definition_order.py
+│   ├── test_definition_order_schema.py
+│   ├── test_generic_foreign_key.py
+│   ├── test_relay_interfaces.py
 │   └── test_resolvers.py
 ├── optimizer/
+│   ├── test_definition_order.py
 │   ├── test_extension.py
-│   ├── test_walker.py       # selection-tree walker
-│   ├── test_plans.py        # OptimizationPlan / Prefetch chain helpers
+│   ├── test_field_meta.py   # FieldMeta precomputed field metadata
 │   ├── test_hints.py        # OptimizerHint typed wrapper
-│   └── test_field_meta.py   # FieldMeta precomputed field metadata
+│   ├── test_plans.py        # OptimizationPlan / Prefetch chain helpers
+│   ├── test_relay_id_projection.py
+│   └── test_walker.py       # selection-tree walker
 ├── filters/
 │   ├── test_base.py
 │   ├── test_sets.py
@@ -371,6 +396,7 @@ tests/                       # Package-internal tests (target as Layer-3 subsyst
 ├── management/
 │   └── test_export_schema.py
 └── utils/
+    ├── test_relations.py
     ├── test_strings.py
     ├── test_typing.py
     └── test_queryset.py

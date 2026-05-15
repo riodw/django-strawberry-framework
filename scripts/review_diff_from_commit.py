@@ -6,12 +6,12 @@ checked-out branch (HEAD) whose path does not contain ``test``, the script
 1. Reads the OLD revision via ``git show <commit>:<path>`` into a temp tree
    that mirrors the repo layout, then runs ``scripts/review_inspect`` against
    it so the generated ``*.stripped.py`` and ``*.overview.md`` land in
-   ``docs/review/old/`` with a stable ``django_strawberry_framework__conf``
+   ``docs/bug_hunt/old/`` with a stable ``django_strawberry_framework__conf``
    style stem.
 2. Runs ``scripts/review_inspect`` against the NEW revision (the file as it
-   exists in the working tree) into ``docs/review/new/``.
+   exists in the working tree) into ``docs/bug_hunt/new/``.
 3. Writes a unified diff of the two stripped shadow files to
-   ``docs/review/diff/``.
+   ``docs/bug_hunt/diff/``.
 
 ``review_inspect.main`` is imported and called in-process so the orchestrator
 does not pay Python / ``uv`` startup cost twice per changed file. Added or
@@ -25,7 +25,7 @@ The ``uv run`` prefix is required so the script sees the project's virtual
 environment (it imports ``review_inspect`` and the inspector depends on the
 project's pinned Python / dependency versions). Run from anywhere inside the
 repository; the orchestrator resolves ``git rev-parse --show-toplevel`` and
-writes outputs under ``docs/review/{old,new,diff}/`` at the repo root.
+writes outputs under ``docs/bug_hunt/{old,new,diff}/`` at the repo root.
 
 Example:
     uv run python scripts/review_diff_from_commit.py 1e6b5830766545d3cb46e3aff21c6dd58a935da4
@@ -45,9 +45,9 @@ from pathlib import Path
 
 from review_inspect import main as review_inspect_main
 
-OUTPUT_OLD = Path("docs/review/old")
-OUTPUT_NEW = Path("docs/review/new")
-OUTPUT_DIFF = Path("docs/review/diff")
+OUTPUT_OLD = Path("docs/bug_hunt/old")
+OUTPUT_NEW = Path("docs/bug_hunt/new")
+OUTPUT_DIFF = Path("docs/bug_hunt/diff")
 
 
 def _run_git(args: Sequence[str]) -> str:

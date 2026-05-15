@@ -11,6 +11,13 @@ RelationKind: TypeAlias = Literal[
     "forward_single",
 ]
 
+MANY_SIDE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
+    {
+        "many",
+        "reverse_many_to_one",
+    },
+)
+
 
 @runtime_checkable
 class _RelationFieldLike(Protocol):
@@ -56,3 +63,8 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
     if getattr(field, "one_to_one", False) and getattr(field, "auto_created", False):
         return "reverse_one_to_one"
     return "forward_single"
+
+
+def is_many_side_relation_kind(kind: object) -> bool:
+    """Return ``True`` for relation kinds represented as GraphQL lists."""
+    return kind in MANY_SIDE_RELATION_KINDS

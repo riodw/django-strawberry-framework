@@ -1,5 +1,6 @@
 """Tests for ``django_strawberry_framework.utils.typing``."""
 
+from django_strawberry_framework.utils import unwrap_graphql_type
 from django_strawberry_framework.utils.typing import unwrap_return_type
 
 
@@ -22,6 +23,37 @@ def test_unwrap_return_type_handles_strawberry_of_type():
         of_type = Inner
 
     assert unwrap_return_type(FakeStrawberryList()) is Inner
+
+
+def test_unwrap_return_type_peels_only_one_layer():
+    """The annotation helper keeps nested wrappers for callers to inspect."""
+
+    class Inner:
+        pass
+
+    class Outer:
+        of_type = list[Inner]
+
+    assert unwrap_return_type(Outer()) == list[Inner]
+
+
+def test_unwrap_graphql_type_peels_all_of_type_layers():
+    """The GraphQL helper recursively unwraps wrapper stacks to the leaf type."""
+
+    class Inner:
+        pass
+
+    class NonNull:
+        def __init__(self, of_type):
+            self.of_type = of_type
+
+    class List:
+        def __init__(self, of_type):
+            self.of_type = of_type
+
+    wrapped = NonNull(List(NonNull(Inner)))
+
+    assert unwrap_graphql_type(wrapped) is Inner
 
 
 def test_unwrap_return_type_returns_direct_class_when_unwrapped():

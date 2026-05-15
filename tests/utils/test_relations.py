@@ -1,8 +1,11 @@
 from types import SimpleNamespace
 
-from django_strawberry_framework.utils import RelationKind, relation_kind
+from django_strawberry_framework.utils import RelationKind, is_many_side_relation_kind, relation_kind
 from django_strawberry_framework.utils.relations import (
     RelationKind as _RelationKindSubmodule,
+)
+from django_strawberry_framework.utils.relations import (
+    is_many_side_relation_kind as _is_many_side_relation_kind_submodule,
 )
 from django_strawberry_framework.utils.relations import (
     relation_kind as _relation_kind_submodule,
@@ -44,6 +47,15 @@ def test_utils_init_reexports_match_submodule():
     """``utils.relation_kind`` / ``utils.RelationKind`` re-export the submodule contract."""
     assert relation_kind is _relation_kind_submodule
     assert RelationKind is _RelationKindSubmodule
+    assert is_many_side_relation_kind is _is_many_side_relation_kind_submodule
+
+
+def test_is_many_side_relation_kind_matches_list_valued_shapes():
+    assert is_many_side_relation_kind("many") is True
+    assert is_many_side_relation_kind("reverse_many_to_one") is True
+    assert is_many_side_relation_kind("reverse_one_to_one") is False
+    assert is_many_side_relation_kind("forward_single") is False
+    assert is_many_side_relation_kind(None) is False
 
 
 def test_relation_kind_classifies_auto_created_one_to_one_as_reverse():

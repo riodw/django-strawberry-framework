@@ -1,15 +1,21 @@
-"""Type-unwrapping helpers for Strawberry / Python annotations.
+"""Type-unwrapping helpers for Strawberry / Python / GraphQL types.
 
 Strawberry exposes list-shaped return types in two distinct forms across
 versions: native ``typing.list[T]`` (the modern path) and an internal
-wrapper object that carries an ``of_type`` attribute. Subsystems that
-need to introspect a resolver's return type — the optimizer today, and
-the connection-field / filter argument factories tomorrow — all need
-the same one-layer unwrap, so it lives here rather than re-implemented
-per consumer.
+wrapper object that carries an ``of_type`` attribute. graphql-core also
+uses ``of_type`` wrapper stacks for ``GraphQLNonNull`` and ``GraphQLList``.
+Both contracts live here so optimizer and schema factories do not grow
+parallel unwrap loops.
 """
 
 from typing import Any, get_args, get_origin
+
+
+def unwrap_graphql_type(gql_type: Any) -> Any:
+    """Peel all graphql-core / Strawberry ``of_type`` wrapper layers."""
+    while hasattr(gql_type, "of_type"):
+        gql_type = gql_type.of_type
+    return gql_type
 
 
 def unwrap_return_type(rt: Any) -> Any:

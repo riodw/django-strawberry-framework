@@ -174,8 +174,8 @@ for now" — until those subsystems ship.
 # ---------------------------------------------------------------------------
 # Placeholder
 # ---------------------------------------------------------------------------
-# Until ``DjangoType`` and ``DjangoConnectionField`` are implemented, expose
-# an empty ``Query`` so the project-level schema can still be assembled.
+# Until DjangoConnectionField and the Layer 3 query features are implemented
+# expose an empty ``Query`` so the project-level schema can still be assembled
 
 import strawberry
 

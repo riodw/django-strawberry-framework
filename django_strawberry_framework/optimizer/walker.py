@@ -11,7 +11,7 @@ from strawberry import relay
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
-from ..utils.relations import relation_kind
+from ..utils.relations import is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
 from . import logger
 from .hints import OptimizerHint, hint_is_skip
@@ -59,7 +59,7 @@ def plan_relation(
             target_type.__name__,
         )
         return ("prefetch", "custom_get_queryset")
-    if relation_kind(field) in ("many", "reverse_many_to_one"):
+    if is_many_side_relation_kind(relation_kind(field)):
         return ("prefetch", "default")
     return ("select", "default")
 
@@ -154,7 +154,14 @@ def _walk_selections(
                     None,
                 )
                 if db_field is not None:
-                    append_unique(plan.only_fields, f"{prefix}{id_attr}")
+                    # Project via ``attname`` so a consumer-declared
+                    # ``NodeID`` targeting the relation's ``name`` (e.g.
+                    # ``user`` on ``OneToOneField(primary_key=True)``)
+                    # still lands on the FK column ``user_id`` instead of
+                    # the relation name, which would drag the related row
+                    # back via ``.only("user")``.
+                    column = getattr(db_field, "attname", None) or id_attr
+                    append_unique(plan.only_fields, f"{prefix}{column}")
             continue
         if not django_field.is_relation:
             # Scalar projection. When ``django_name == "id"`` and the
@@ -529,7 +536,8 @@ def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> 
     """Inject columns Django needs to attach prefetched rows to parents."""
     if not plan.only_fields:
         return
-    if parent_field.one_to_many:
+    kind = relation_kind(parent_field)
+    if parent_field.one_to_many or kind == "reverse_one_to_one":
         attname = getattr(getattr(parent_field, "field", None), "attname", None) or getattr(
             parent_field,
             "reverse_connector_attname",

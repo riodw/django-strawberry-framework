@@ -41,6 +41,7 @@ from graphql.language.printer import print_ast
 from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
+from ..utils.typing import unwrap_graphql_type
 from . import logger
 from ._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
@@ -296,18 +297,6 @@ _printed_ast_cache: ContextVar[dict[int, str] | None] = ContextVar(
 )
 
 
-def _unwrap_gql_type(gql_type: Any) -> Any:
-    """Peel graphql-core ``GraphQLNonNull`` / ``GraphQLList`` wrappers.
-
-    Centralises the ``while hasattr(t, "of_type")`` loop so the
-    schema-reachability walker and the return-type tracer share one
-    implementation.
-    """
-    while hasattr(gql_type, "of_type"):
-        gql_type = gql_type.of_type
-    return gql_type
-
-
 def _strawberry_schema_from_schema(schema: Any) -> Any:
     """Unwrap a Strawberry Schema to its inner schema; return ``schema`` if already unwrapped.
 
@@ -346,7 +335,7 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
 
     def _walk_gql_type(gql_type: Any) -> None:
         """Recursively collect DjangoType origins from a graphql-core type."""
-        gql_type = _unwrap_gql_type(gql_type)
+        gql_type = unwrap_graphql_type(gql_type)
         type_name = getattr(gql_type, "name", None)
         if type_name is None or type_name in visited_type_names:
             return
@@ -398,7 +387,7 @@ def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
     leaf, missing schema backref). The caller treats ``None`` as
     "nothing to optimize" and passes the queryset through unchanged.
     """
-    rt = _unwrap_gql_type(info.return_type)
+    rt = unwrap_graphql_type(info.return_type)
     type_name = getattr(rt, "name", None)
     if type_name is None:
         return None

@@ -1465,3 +1465,23 @@ def test_prefetch_hint_for_path_rejects_mismatched_lookup():
             django_name="items",
             full_path="category__items",
         )
+
+
+def test_ensure_connector_only_fields_adds_reverse_o2o_connector():
+    """A reverse ``OneToOneRel`` prefetch must project the forward FK column.
+
+    When prefetching a reverse one-to-one relation, the child queryset
+    needs the forward FK column so Django can bind each child row back
+    to its parent. Without this projection, accessing the reverse
+    attribute reintroduces a lazy load (matching the reverse-FK branch
+    behavior in ``_ensure_connector_only_fields``).
+    """
+    from apps.library.models import Patron
+
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    plan = OptimizationPlan(only_fields=["id"])
+    parent_field = Patron._meta.get_field("card")
+    _ensure_connector_only_fields(plan, parent_field)
+
+    assert "patron_id" in plan.only_fields

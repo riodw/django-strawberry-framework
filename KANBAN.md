@@ -20,7 +20,7 @@ For install, local development, testing, and the canonical documentation map, st
   - O1 through O6 are implemented: relation resolvers, root-gated planning, nested prefetch chains, `only()` projection, and `get_queryset`-aware `Prefetch` downgrade.
   - B1 through B8 are implemented: AST plan cache, FK-id elision, strictness mode, optimizer hints, context plan stashing, schema audit, precomputed field metadata, and queryset diffing.
   - Recent cache-key review findings are implemented in source: fragment-spread directives are collected and multi-operation documents hash the selected operation AST.
-- 0.0.4 foundation slice has shipped (card `DONE-006`):
+- 0.0.4 foundation slice has shipped (card `DONE-006-0.0.4`):
   - `DjangoTypeDefinition` is the canonical per-type metadata object stashed at `cls.__django_strawberry_definition__`, with forward-reserved slots (`filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `interfaces`) ready for Layer 3 to populate.
   - `finalize_django_types()` resolves pending relations, attaches generated relation resolvers, and runs `strawberry.type(cls, ...)` for every collected type. Re-exported from `django_strawberry_framework` and `django_strawberry_framework.types`.
   - Pending-relation registry (`PendingRelation`, `add_pending_relation`, `iter_pending_relations`, `discard_pending`, `is_finalized`, `mark_finalized`, extended `clear`) supports definition-order-independent FK / reverse FK / forward + reverse OneToOne / forward + reverse M2M / multi-cycle graphs.
@@ -37,7 +37,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- No slice is currently active. The `0.0.5` Relay Node slice shipped as `DONE-011`.
+- No slice is currently active. The `0.0.5` Relay Node slice shipped as `DONE-011-0.0.5`.
 - Strategic differentiation roadmap (post-`0.0.5`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -53,7 +53,7 @@ For install, local development, testing, and the canonical documentation map, st
   - `management/commands/export_schema.py`
   - `utils/queryset.py`
 - Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
-- `Meta.interfaces` and Relay Node wiring shipped in `0.0.5` (`DONE-011`); the foundation seam (finalizer phase 2.5, before `strawberry.type(cls)`, with the slot already on `DjangoTypeDefinition`) is the insertion point now applied.
+- `Meta.interfaces` and Relay Node wiring shipped in `0.0.5` (`DONE-011-0.0.5`); the foundation seam (finalizer phase 2.5, before `strawberry.type(cls)`, with the slot already on `DjangoTypeDefinition`) is the insertion point now applied.
 - Several DjangoType contract gaps remain:
   - multiple `DjangoType`s per model / `Meta.primary`
   - stable consumer override semantics for **scalar** fields (the foundation slice pinned the contract for relation fields only)
@@ -69,7 +69,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## Done
 
-### DONE-001 — DjangoType core foundation
+### DONE-001-0.0.1 — DjangoType core foundation
 
 Priority: completed foundation
 
@@ -97,9 +97,9 @@ Notes:
 
 - The public shape is intentionally narrow and explicit.
 - Deferred Meta keys are rejected, not silently accepted.
-- Definition-order independence is now covered by `DONE-006`.
+- Definition-order independence is now covered by `DONE-006-0.0.4`.
 
-### DONE-002 — Optimizer O1-O6 foundation
+### DONE-002-0.0.2 — Optimizer O1-O6 foundation
 
 Priority: completed foundation
 
@@ -126,7 +126,7 @@ Notes:
 
 - Shipped behavior is consolidated into `docs/FEATURES.md`; source/tests are the truth for optimizer behavior.
 
-### DONE-003 — Optimizer beyond slices B1-B8
+### DONE-003-0.0.3 — Optimizer beyond slices B1-B8
 
 Priority: completed optimizer polish/performance layer
 
@@ -157,7 +157,7 @@ Notes:
 - B8 went beyond the initial simple exact-match diff and now handles subtree-aware prefetch reconciliation.
 - Fragment-spread directive and multi-operation cache-key bugs have been fixed in source; the old `alpha-review-feedback.md` entries are now historical.
 
-### DONE-004 — Documentation/status positioning for shipped Layer 2
+### DONE-004-0.0.3 — Documentation/status positioning for shipped Layer 2
 
 Priority: completed enough for current alpha
 
@@ -177,7 +177,7 @@ Notes:
 
 - User-facing docs avoid internal slice shorthand; maintainer docs can still use it where useful.
 
-### DONE-005 — 0.0.4 onboarding docs and spec consolidation
+### DONE-005-0.0.4 — 0.0.4 onboarding docs and spec consolidation
 
 Priority: completed docs cleanup
 
@@ -202,7 +202,7 @@ Notes:
 
 - Future in-flight design docs still use the `docs/spec-<topic>.md` convention, then get folded into durable docs when shipped.
 
-### DONE-006 — 0.0.4 foundation slice (definition-order independence)
+### DONE-006-0.0.4 — 0.0.4 foundation slice (definition-order independence)
 
 Priority: completed Layer 2 foundation
 
@@ -248,7 +248,7 @@ Notes:
 - The pending-resolution pattern (record at class creation, resolve at finalization, fail loud on missing target with named source model / field / target) generalizes directly to lazy related class references for `RelatedFilter`, `RelatedOrder`, and `RelatedAggregate`.
 - The previous foundation-slice in-progress cards have been retired; this card is their successor in Done.
 
-### DONE-007 — Stale placeholder cleanup
+### DONE-007-0.0.4 — Stale placeholder cleanup
 
 Priority: completed testing/doc cleanup
 
@@ -257,16 +257,16 @@ Status: complete.
 Scope:
 
 - Replaced stale M2M and forward-reference skips with definition-order tests.
-- Kept the remaining scalar override skip documented as a separate scalar-field concern under `READY-003`.
+- Kept the remaining scalar override skip documented as a separate scalar-field concern under `READY-013-0.0.10`.
 
 Evidence:
 
 - `tests/types/test_definition_order.py`
 - `tests/types/test_definition_order_schema.py`
 - `tests/optimizer/test_definition_order.py`
-- `READY-003`
+- `READY-013-0.0.10`
 
-### DONE-008 — 0.0.4 version and release alignment
+### DONE-008-0.0.4 — 0.0.4 version and release alignment
 
 Priority: completed release alignment
 
@@ -285,7 +285,7 @@ Evidence:
 - `uv.lock`
 - `CHANGELOG.md`
 
-### DONE-009 — Real M2M coverage
+### DONE-009-0.0.4 — Real M2M coverage
 
 Priority: completed testing-shift hygiene
 
@@ -303,7 +303,7 @@ Evidence:
 - `tests/types/test_definition_order.py`
 - `tests/optimizer/test_definition_order.py`
 
-### DONE-010 — Move test fixture out of example settings
+### DONE-010-0.0.4 — Move test fixture out of example settings
 
 Priority: completed testing-shift hygiene
 
@@ -323,7 +323,7 @@ Evidence:
 - `AGENTS.md`
 - `docs/TREE.md`
 
-### DONE-011 — 0.0.5 Relay interfaces and Node foundation
+### DONE-011-0.0.5 — 0.0.5 Relay interfaces and Node foundation
 
 Priority: completed Relay Node foundation
 
@@ -371,7 +371,7 @@ _No slice in progress._
 
 ## Ready
 
-### READY-002 — Multiple DjangoTypes per model with `Meta.primary`
+### READY-012-0.0.7 — Multiple DjangoTypes per model with `Meta.primary`
 
 Priority: high
 
@@ -414,13 +414,13 @@ Files likely touched:
 - `tests/test_registry.py`
 - `tests/types/test_base.py`
 
-### READY-003 — Consumer override semantics (scalar fields)
+### READY-013-0.0.10 — Consumer override semantics (scalar fields)
 
 Priority: high
 
 Status: ready for design, not implementation-by-assumption
 
-Note: the foundation slice (`DONE-006`) pins the consumer-override contract for **relation fields only** (`DjangoTypeDefinition.consumer_annotated_relations`, finalizer skip). This card now covers the remaining scalar-field override semantics.
+Note: the foundation slice (`DONE-006-0.0.4`) pins the consumer-override contract for **relation fields only** (`DjangoTypeDefinition.consumer_annotated_relations`, finalizer skip). This card now covers the remaining scalar-field override semantics.
 
 Current behavior:
 
@@ -456,7 +456,7 @@ Files likely touched:
 - `django_strawberry_framework/types/resolvers.py`
 - `tests/types/test_base.py`
 
-### READY-005 — Deferred scalar conversions
+### READY-014-0.0.6 — Deferred scalar conversions
 
 Priority: medium
 
@@ -492,7 +492,7 @@ Files likely touched:
 
 ## Next up
 
-### NEXT-001 — `FieldSet`
+### NEXT-015-0.0.6 — `FieldSet`
 
 Priority: high for Layer 3
 
@@ -516,7 +516,7 @@ Definition of done:
 - Keep the API Meta-class-driven.
 - Do not top-level export until the public-surface rules are satisfied.
 
-### NEXT-002 — Filtering subsystem
+### NEXT-016-0.0.8 — Filtering subsystem
 
 Priority: high for package positioning
 
@@ -547,14 +547,14 @@ Definition of done:
 - Expose enough introspection for one type definition to show what filter surface it supports.
 - Use fakeshop flows where practical, but package tests belong under `tests/filters/`.
 - Validate Django ORM query generation for N+1 opportunities when filters traverse relations.
-- Decide whether the input-type factory's namespace shares the `TypeRegistry` or has its own (interacts with `READY-002` and the `Meta.primary` design).
+- Decide whether the input-type factory's namespace shares the `TypeRegistry` or has its own (interacts with `READY-012-0.0.7` and the `Meta.primary` design).
 
 Dependencies:
 
 - Field selection semantics may affect filter argument generation.
 - `utils/queryset.py` may become useful here.
 
-### NEXT-003 — Ordering subsystem
+### NEXT-017-0.0.8 — Ordering subsystem
 
 Priority: high after filters
 
@@ -582,7 +582,7 @@ Definition of done:
 - Define interaction with filters and connection field.
 - Keep ordering declarations introspectable from the owning type/query surface.
 
-### NEXT-004 — Aggregation subsystem
+### NEXT-018-0.0.11 — Aggregation subsystem
 
 Priority: medium-high
 
@@ -611,7 +611,7 @@ Definition of done:
 - Validate generated queryset aggregation paths.
 - Keep aggregation declarations composable with filters, ordering, and connection field behavior.
 
-### NEXT-005 — `DjangoConnectionField`
+### NEXT-019-0.0.9 — `DjangoConnectionField`
 
 Priority: high once filters/orders/fieldset are stable
 
@@ -643,7 +643,7 @@ Dependencies:
 - `OrderSet`
 - Relay/interface decisions
 
-### NEXT-006 — Permissions subsystem
+### NEXT-020-0.0.9 — Permissions subsystem
 
 Priority: high for the fakeshop example and real usage
 
@@ -957,7 +957,7 @@ Files likely touched:
 
 ### BACKLOG-012 — Connection-aware optimizer planning
 
-Priority: medium (gated on `NEXT-005` / Relay decisions)
+Priority: medium (gated on `NEXT-019-0.0.9` / Relay decisions)
 
 Status: planned
 
@@ -993,18 +993,18 @@ Files likely touched:
 
 ### BLOCKED-001 — Full Relay story
 
-Resolved blockers (Node half shipped in `DONE-011`, `0.0.5`):
+Resolved blockers (Node half shipped in `DONE-011-0.0.5`, `0.0.5`):
 
-- ~~`Meta.interfaces` design~~ — shipped as `DONE-011`.
-- ~~`GlobalID` mapping decision~~ — shipped as `DONE-011` (Decision 2 of [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md)).
+- ~~`Meta.interfaces` design~~ — shipped as `DONE-011-0.0.5`.
+- ~~`GlobalID` mapping decision~~ — shipped as `DONE-011-0.0.5` (Decision 2 of [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md)).
 
 Remaining blocker (Connection half still blocked):
 
-- `DjangoConnectionField` design (pending; `NEXT-005`)
+- `DjangoConnectionField` design (pending; `NEXT-019-0.0.9`)
 
 Unblocks:
 
-- Relay node queries (shipped via `DONE-011`).
+- Relay node queries (shipped via `DONE-011-0.0.5`).
 - fakeshop aspirational schema activation (Connection half still blocked).
 - connection field public surface (Connection half still blocked).
 
@@ -1043,10 +1043,10 @@ Current state:
 
 ### Sequence A — Stabilize Layer 2 before Layer 3
 
-1. READY-002 — multiple types per model / `Meta.primary`.
-2. READY-003 — consumer override semantics (scalar fields).
-3. ~~READY-004~~ — Relay / `Meta.interfaces` shipped as `DONE-011` (`0.0.5`).
-4. READY-005 — deferred scalar conversions.
+1. READY-012-0.0.7 — multiple types per model / `Meta.primary`.
+2. READY-013-0.0.10 — consumer override semantics (scalar fields).
+3. ~~READY-004~~ — Relay / `Meta.interfaces` shipped as `DONE-011-0.0.5` (`0.0.5`).
+4. READY-014-0.0.6 — deferred scalar conversions.
 5. BACKLOG-007 — stable choice enum naming override.
 6. BACKLOG-008 — model-property optimization hints.
 
@@ -1054,24 +1054,24 @@ Use this sequence if the goal is to make `DjangoType` feel solid before expandin
 
 ### Sequence B — Ship visible Layer 3 value sooner
 
-1. NEXT-001 — `FieldSet`.
-2. NEXT-002 — filters.
-3. NEXT-003 — orders.
-4. NEXT-004 — aggregates.
-5. NEXT-005 — `DjangoConnectionField` (interacts with `BACKLOG-012` for connection-aware optimizer planning).
-6. NEXT-006 — permissions.
+1. NEXT-015-0.0.6 — `FieldSet`.
+2. NEXT-016-0.0.8 — filters.
+3. NEXT-017-0.0.8 — orders.
+4. NEXT-018-0.0.11 — aggregates.
+5. NEXT-019-0.0.9 — `DjangoConnectionField` (interacts with `BACKLOG-012` for connection-aware optimizer planning).
+6. NEXT-020-0.0.9 — permissions.
 7. BACKLOG-005 — activate fakeshop schema.
 
 Use this sequence if the goal is to demonstrate the DRF-shaped API surface quickly.
 
 ### Recommended hybrid (current direction)
 
-1. **Next** — `NEXT-001` `FieldSet`. Smallest Layer 3 slice.
-2. NEXT-002 and NEXT-003 — filters and orders. Both reuse the pending-resolution pattern from the foundation slice for lazy related-class references.
-3. READY-002 — introduce `Meta.primary` before connection/permissions need multiple type variants (also interacts with the filter input-type factory namespace decision in `NEXT-002`).
-4. NEXT-005 and NEXT-006 — connection field and permissions. `BACKLOG-012` runs alongside `NEXT-005` to keep the optimizer aware of Relay-shaped selections.
-5. NEXT-004 — aggregates.
-6. READY-003 — finalize scalar-field consumer override semantics once the relation contract has bedded in.
+1. **Next** — `NEXT-015-0.0.6` `FieldSet`. Smallest Layer 3 slice.
+2. NEXT-016-0.0.8 and NEXT-017-0.0.8 — filters and orders. Both reuse the pending-resolution pattern from the foundation slice for lazy related-class references.
+3. READY-012-0.0.7 — introduce `Meta.primary` before connection/permissions need multiple type variants (also interacts with the filter input-type factory namespace decision in `NEXT-016-0.0.8`).
+4. NEXT-019-0.0.9 and NEXT-020-0.0.9 — connection field and permissions. `BACKLOG-012` runs alongside `NEXT-019-0.0.9` to keep the optimizer aware of Relay-shaped selections.
+5. NEXT-018-0.0.11 — aggregates.
+6. READY-013-0.0.10 — finalize scalar-field consumer override semantics once the relation contract has bedded in.
 7. BACKLOG-007 — add stable choice enum naming if schema import-order friction appears in real use.
 8. BACKLOG-008 — add model-property optimization hints if computed fields start broadening queries.
 9. BACKLOG-011 — keep the layered override-test policy healthy as Strawberry internals and future custom field classes evolve.

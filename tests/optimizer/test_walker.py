@@ -17,15 +17,18 @@ downgrades extend this same walker surface.
 
 from types import SimpleNamespace
 
+import pytest
 from apps.products.models import Category, Entry, Item
 from django.db import models
 from django.db.models import Prefetch
 
 from django_strawberry_framework import OptimizerHint
+from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.optimizer.walker import (
     _ensure_connector_only_fields,
     _is_fragment,
     _merge_aliased_selections,
+    _prefetch_hint_for_path,
     _selected_scalar_names,
     _should_include,
     plan_optimizations,
@@ -1395,3 +1398,70 @@ def test_plan_tolerates_optimizer_hints_set_to_none():
     # With no hints, default dispatch picks select_related for a forward FK
     # with a non-id-only child selection.
     assert plan.select_related == ("category",)
+
+
+def test_prefetch_hint_for_path_rejects_prefetch_without_lookup():
+    """B4: ``_prefetch_hint_for_path`` raises when the Prefetch carries no lookup path.
+
+    ``Prefetch`` always sets ``prefetch_through`` from its first positional arg,
+    so the ``None`` branch is reachable only when a malformed surrogate is
+    passed in.  A duck-typed object with ``prefetch_through is None`` surfaces
+    the defensive guard so the consumer learns about a missing lookup at plan
+    time, not as a silent missed prefetch downstream.
+    """
+    no_lookup = SimpleNamespace(prefetch_through=None, queryset=None, to_attr=None)
+
+    with pytest.raises(
+        ConfigurationError,
+        match="requires a Prefetch with a lookup path",
+    ):
+        _prefetch_hint_for_path(
+            no_lookup,
+            django_name="items",
+            full_path="category__items",
+        )
+
+
+def test_prefetch_hint_for_path_adapts_nested_lookup_under_parent():
+    """B4: a type-relative nested ``Prefetch`` lookup is rebased onto ``full_path``.
+
+    When the hint is declared as ``Prefetch("items__entries", ...)`` on
+    ``CategoryType.items`` and the walker reaches that relation through
+    ``Item.category``, the planned lookup is ``"category__items__entries"``.
+    The original queryset and ``to_attr`` survive the rebuild.
+    """
+    qs = Entry.objects.only("value")
+    explicit = Prefetch("items__entries", queryset=qs, to_attr="bucket")
+
+    rebased = _prefetch_hint_for_path(
+        explicit,
+        django_name="items",
+        full_path="category__items",
+    )
+
+    assert rebased is not explicit
+    assert rebased.prefetch_through == "category__items__entries"
+    assert rebased.queryset is qs
+    assert rebased.to_attr == "bucket"
+
+
+def test_prefetch_hint_for_path_rejects_mismatched_lookup():
+    """B4: a ``Prefetch`` lookup that does not target the hinted relation raises.
+
+    The walker treats the hint as type-relative.  ``Prefetch("items", ...)`` on
+    ``CategoryType.items`` is the simple case; ``Prefetch("items__entries", ...)``
+    is the nested-adaptation case.  ``Prefetch("unrelated_relation", ...)``
+    cannot be rebased onto the current ``full_path`` and is rejected so the
+    consumer learns about the misconfiguration at plan time.
+    """
+    explicit = Prefetch("unrelated_relation", queryset=Entry.objects.all())
+
+    with pytest.raises(
+        ConfigurationError,
+        match="lookup must target the hinted relation 'items'",
+    ):
+        _prefetch_hint_for_path(
+            explicit,
+            django_name="items",
+            full_path="category__items",
+        )

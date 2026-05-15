@@ -418,7 +418,8 @@ def test_check_n1_raise_strictness_raises_on_lazy_load():
         _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind="forward")
 
 
-def test_check_n1_many_kind_treats_consumer_set_attribute_as_lazy():
+@pytest.mark.parametrize("kind", ("many", "reverse_many_to_one"))
+def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(kind):
     """B3: many-side ignores ``__dict__`` short-circuit.
 
     A consumer (or test double) setting ``root.<field>`` directly does
@@ -445,7 +446,7 @@ def test_check_n1_many_kind_treats_consumer_set_attribute_as_lazy():
     # short-circuit the many-side check.
     root = SimpleNamespace(items=["not-a-real-prefetch"])
     with pytest.raises(OptimizerError, match="Unplanned N\\+1: items"):
-        _check_n1(fake_info, root, "items", CategoryType, kind="many")
+        _check_n1(fake_info, root, "items", CategoryType, kind=kind)
 
 
 def test_check_n1_many_kind_respects_prefetched_objects_cache():

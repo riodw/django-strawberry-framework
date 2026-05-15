@@ -36,7 +36,7 @@ from ..exceptions import ConfigurationError
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 from ..registry import registry
-from ..utils.relations import relation_kind
+from ..utils.relations import is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
 from .converters import convert_scalar, resolved_relation_annotation
 from .definition import DjangoTypeDefinition
@@ -666,7 +666,7 @@ def _record_pending_relation(
     # ``nullable=False`` so the flag stays self-consistent and any
     # future ``PendingRelation.nullable`` reader doesn't have to gate
     # on cardinality first. Matches ``FieldMeta.from_django_field``.
-    if kind in ("many", "reverse_many_to_one"):
+    if is_many_side_relation_kind(kind):
         nullable = False
     else:
         nullable = kind == "reverse_one_to_one" or bool(getattr(field, "null", False))

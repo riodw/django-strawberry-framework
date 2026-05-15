@@ -25,7 +25,7 @@ from django.db import models
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
-from ..utils.relations import relation_kind
+from ..utils.relations import is_many_side_relation_kind, relation_kind
 from ..utils.strings import pascal_case
 from .relations import PendingRelationAnnotation
 
@@ -232,7 +232,7 @@ def resolved_relation_annotation(field: models.Field, target_type: type) -> Any:
     # SSoT for relation shape — see ``optimizer/field_meta.py``
     # module docstring.
     kind = relation_kind(field)
-    if kind in ("many", "reverse_many_to_one"):
+    if is_many_side_relation_kind(kind):
         return list[target_type]
     if kind == "reverse_one_to_one" or getattr(field, "null", False):
         return target_type | None

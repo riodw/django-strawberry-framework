@@ -90,9 +90,9 @@ def test_register_same_class_against_two_models_raises(fresh_registry):
 def test_model_for_type_returns_none_for_none(fresh_registry):
     """Passing ``None`` short-circuits to ``None`` so the optimizer can pipeline.
 
-    ``DjangoOptimizerExtension`` chains ``unwrap_return_type`` ->
-    ``model_for_type`` and the unwrap can yield ``None`` for opaque
-    wrapper types; the registry must accept that without raising.
+    ``DjangoOptimizerExtension`` resolves GraphQL return types with
+    ``unwrap_graphql_type`` and then calls ``model_for_type``; the registry
+    must accept a missing origin without raising.
     """
     assert fresh_registry.model_for_type(None) is None
 

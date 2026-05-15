@@ -37,7 +37,7 @@ from ..optimizer._context import (
     get_context_value as _get_context_value,
 )
 from ..optimizer.plans import resolver_key, runtime_path_from_info
-from ..utils.relations import relation_kind
+from ..utils.relations import is_many_side_relation_kind, relation_kind
 
 # Module-level immutable sentinel for the "no elisions registered" branch so
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
@@ -118,11 +118,12 @@ def _check_n1(
 ) -> None:
     """B3: warn or raise if the relation is not planned and would lazy-load.
 
-    ``kind`` is the ``relation_kind`` of the field being resolved
-    (``"many"``, ``"reverse_one_to_one"``, ``"forward"``). When it is
-    ``None`` (legacy direct calls in tests), the function falls back to
-    the single-valued cache check, which is the conservative shape that
-    used to be the only branch.
+    ``kind`` accepts the ``relation_kind`` of the field being resolved.
+    ``"many"`` and ``"reverse_many_to_one"`` use the many-side cache
+    check; every other known relation shape uses the single-valued cache
+    check. When ``kind`` is ``None`` (legacy direct calls in tests), the
+    function falls back to the single-valued cache check, which is the
+    conservative shape that used to be the only branch.
     """
     context = getattr(info, "context", None)
     planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
@@ -131,7 +132,7 @@ def _check_n1(
     key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
     if key in planned:
         return
-    if kind == "many":
+    if is_many_side_relation_kind(kind):
         lazy = _will_lazy_load_many(root, field_name)
     else:
         lazy = _will_lazy_load_single(root, field_name)
@@ -186,10 +187,10 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     field_name = field.name
     kind = relation_kind(field)
 
-    if kind in ("many", "reverse_many_to_one"):
+    if is_many_side_relation_kind(kind):
 
         def many_resolver(root: Any, info: Info) -> Any:
-            _check_n1(info, root, field_name, parent_type, kind="many")
+            _check_n1(info, root, field_name, parent_type, kind=kind)
             return list(getattr(root, field_name).all())
 
         return _name_resolver(many_resolver, field_name)
@@ -216,7 +217,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     def forward_resolver(root: Any, info: Info) -> Any:
         if attname is not None and _is_fk_id_elided(info, field_name, parent_type):
             return _build_fk_id_stub(root, field)
-        _check_n1(info, root, field_name, parent_type, kind="forward")
+        _check_n1(info, root, field_name, parent_type, kind=kind)
         return getattr(root, field_name)
 
     return _name_resolver(forward_resolver, field_name)

@@ -79,12 +79,12 @@ Low: small maintainability issues, naming, minor typing/API polish, localized si
     - [x] `django_strawberry_framework/types/finalizer.py` -> `docs/review/rev-types__finalizer.md`
     - [x] `django_strawberry_framework/types/relations.py` -> `docs/review/rev-types__relations.md`
     - [x] `django_strawberry_framework/types/relay.py` -> `docs/review/rev-types__relay.md`
-    - [ ] `django_strawberry_framework/types/resolvers.py` -> `docs/review/rev-types__resolvers.md`
-    - [ ] folder pass: `django_strawberry_framework/types/` -> `docs/review/rev-types.md`
+    - [x] `django_strawberry_framework/types/resolvers.py` -> `docs/review/rev-types__resolvers.md`
+    - [x] folder pass: `django_strawberry_framework/types/` -> `docs/review/rev-types.md`
   - `django_strawberry_framework/utils/`
-    - [ ] `django_strawberry_framework/utils/relations.py` -> `docs/review/rev-utils__relations.md`
-    - [ ] `django_strawberry_framework/utils/strings.py` -> `docs/review/rev-utils__strings.md`
-    - [ ] `django_strawberry_framework/utils/typing.py` -> `docs/review/rev-utils__typing.md`
-    - [ ] folder pass: `django_strawberry_framework/utils/` -> `docs/review/rev-utils.md`
+    - [x] `django_strawberry_framework/utils/relations.py` -> `docs/review/rev-utils__relations.md`
+    - [x] `django_strawberry_framework/utils/strings.py` -> `docs/review/rev-utils__strings.md`
+    - [x] `django_strawberry_framework/utils/typing.py` -> `docs/review/rev-utils__typing.md`
+    - [x] folder pass: `django_strawberry_framework/utils/` -> `docs/review/rev-utils.md`
   - [ ] project-level pass: `django_strawberry_framework/` -> `docs/review/rev-django_strawberry_framework.md`
 - [ ] final test-run gate: `uv run pytest` -> `docs/review/rev-final.md`

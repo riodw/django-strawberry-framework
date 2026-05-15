@@ -26,9 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `_check_n1` now receives the real `relation_kind` of the field being resolved (including `reverse_many_to_one`) instead of a hardcoded `"many"` / `"forward"`, so reverse-FK resolvers exercise the many-side N+1 check path consistently.
 - `_ensure_connector_only_fields` now injects the forward FK column for reverse one-to-one prefetches so Django can bind each child row back to its parent without a lazy load.
 - Optimizer walker now projects a `NodeID`-targeted relation via the FK `attname` (e.g. `user_id`) instead of the relation name (`user`), so `.only(...)` does not drag the related row back through a deferred load.
+- `FieldMeta.nullable` is now forced to `False` for many-side cardinalities (`many_to_many`, `one_to_many`, `reverse_many_to_one`). Django's `ForeignObjectRel` inherits `null = True` as a class-level default, which caused reverse FK and M2M fields to be annotated as `list[T] | None` instead of `list[T]`, corrupting the schema.
 - GraphQL-reserved enum member names (`true` / `false` / `null`) and introspection-prefixed (`__`) sanitizations from Django `choices` values now produce schema-valid Strawberry enums.
 - Relay `_resolve_nodes_default` / `_resolve_nodes_async` materialize the input `node_ids` once so one-shot iterables (generators, `map`, etc.) survive both the IN-filter and the order-preserving key pass.
 - Walker `_prefetch_hint_for_path` now rebases type-relative nested lookups onto the full path while preserving queryset and `to_attr`, and rejects mismatched lookups that do not target the hinted relation.
+- Optimizer `stash_on_context` now handles frozen dict subclasses and `AttributeError` from `__getitem__` so the plan cache survives immutable mapping contexts.
 
 ### Removed
 - Removed the dead `PendingRelation` hashability probe; `TypeRegistry.discard_pending()` removes pending records by identity rather than via a hash set.

@@ -24,8 +24,8 @@ import strawberry
 from django.db import models
 
 from ..exceptions import ConfigurationError
+from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
-from ..utils.relations import is_many_side_relation_kind, relation_kind
 from ..utils.strings import pascal_case
 from .relations import PendingRelationAnnotation
 
@@ -224,17 +224,17 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
     return enum_cls
 
 
-def resolved_relation_annotation(field: models.Field, target_type: type) -> Any:
+def resolved_relation_annotation(
+    field: models.Field,
+    target_type: type,
+    *,
+    field_meta: FieldMeta | None = None,
+) -> Any:
     """Return the concrete annotation for ``field`` pointing at ``target_type``."""
-    # TODO(spec-fieldmeta-ssot): read cardinality + nullable from a
-    # ``FieldMeta`` instead of ``relation_kind(field)`` + raw
-    # ``getattr(field, "null", False)``. ``FieldMeta`` is the canonical
-    # SSoT for relation shape — see ``optimizer/field_meta.py``
-    # module docstring.
-    kind = relation_kind(field)
-    if is_many_side_relation_kind(kind):
+    meta = field_meta or FieldMeta.from_django_field(field)
+    if meta.is_many_side:
         return list[target_type]
-    if kind == "reverse_one_to_one" or getattr(field, "null", False):
+    if meta.nullable:
         return target_type | None
     return target_type
 
@@ -273,4 +273,8 @@ def convert_relation(field: models.Field) -> Any:
     target_type = registry.get(target_model)
     if target_type is None:
         return PendingRelationAnnotation
-    return resolved_relation_annotation(field, target_type)
+    return resolved_relation_annotation(
+        field,
+        target_type,
+        field_meta=FieldMeta.from_django_field(field),
+    )

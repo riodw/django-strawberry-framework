@@ -16,6 +16,7 @@ from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.base import _build_annotations, _validate_interfaces
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
@@ -28,6 +29,7 @@ from django_strawberry_framework.types.relay import (
     implements_relay_node,
     install_relay_node_resolvers,
 )
+from django_strawberry_framework.utils.strings import snake_case
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +38,11 @@ def _isolate_registry():
     registry.clear()
     yield
     registry.clear()
+
+
+def _field_map_for(fields):
+    """Build the definition-style field map expected by _build_annotations."""
+    return {snake_case(field.name): FieldMeta.from_django_field(field) for field in fields}
 
 
 def _meta(**attrs):
@@ -344,6 +351,7 @@ def test_relay_node_strips_django_id_annotation():
         _Host,
         fields,
         source_model=Category,
+        field_map=_field_map_for(fields),
         interfaces=(relay.Node,),
     )
     assert "id" not in synthesized
@@ -384,6 +392,7 @@ def test_extended_node_interface_subclass_suppresses_id_annotation():
         _Host,
         fields,
         source_model=Category,
+        field_map=_field_map_for(fields),
         interfaces=(CustomNode,),
     )
     assert "id" not in synthesized
@@ -406,6 +415,7 @@ def test_non_relay_type_keeps_id_int():
         _Host,
         fields,
         source_model=Category,
+        field_map=_field_map_for(fields),
         interfaces=(),
     )
     assert "id" in synthesized
@@ -1196,6 +1206,7 @@ def test_direct_relay_node_inheritance_suppresses_id_annotation():
         _Host,
         fields,
         source_model=Category,
+        field_map=_field_map_for(fields),
         interfaces=(),
     )
     assert "id" not in synthesized

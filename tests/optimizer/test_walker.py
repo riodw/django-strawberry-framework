@@ -24,6 +24,7 @@ from django.db.models import Prefetch
 
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.optimizer.walker import (
     _ensure_connector_only_fields,
     _is_fragment,
@@ -34,6 +35,8 @@ from django_strawberry_framework.optimizer.walker import (
     plan_optimizations,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.definition import DjangoTypeDefinition
+from django_strawberry_framework.utils.strings import snake_case
 
 # ---------------------------------------------------------------------------
 # Helpers: synthetic selection factories
@@ -74,6 +77,29 @@ def _fragment_spread(name, type_condition, selections=None, directives=None):
         type_condition=type_condition,
         directives=directives or {},
         selections=selections or [],
+    )
+
+
+def _register_type_definition(model, type_cls, *, optimizer_hints=None, field_map=None):
+    """Register a minimal definition for walker-only synthetic type classes."""
+    selected_fields = tuple(model._meta.get_fields())
+    registry.register(model, type_cls)
+    registry.register_definition(
+        type_cls,
+        DjangoTypeDefinition(
+            origin=type_cls,
+            model=model,
+            name=None,
+            description=None,
+            fields_spec=None,
+            exclude_spec=None,
+            selected_fields=selected_fields,
+            field_map=field_map
+            if field_map is not None
+            else {snake_case(field.name): FieldMeta.from_django_field(field) for field in selected_fields},
+            optimizer_hints=optimizer_hints or {},
+            has_custom_get_queryset=type_cls.has_custom_get_queryset(),
+        ),
     )
 
 
@@ -136,8 +162,8 @@ def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
     and triggering a lazy load (Decision 7).
 
     Simulates the custom-pk shape without adding a new fakeshop model:
-    monkey-patches ``Category._meta.pk.attname`` and the cached
-    ``_optimizer_field_map`` to drop the ``"id"`` key while keeping
+    monkey-patches ``Category._meta.pk.attname`` and the registered
+    definition field map to drop the ``"id"`` key while keeping
     ``"name"`` as the stand-in pk projection.
     """
     from strawberry import relay
@@ -154,8 +180,9 @@ def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
                 interfaces = (relay.Node,)
 
         finalize_django_types()
-        fake_field_map = {k: v for k, v in CategoryNode._optimizer_field_map.items() if k != "id"}
-        monkeypatch.setattr(CategoryNode, "_optimizer_field_map", fake_field_map)
+        definition = registry.get_definition(CategoryNode)
+        fake_field_map = {k: v for k, v in definition.field_map.items() if k != "id"}
+        monkeypatch.setattr(definition, "field_map", fake_field_map)
         monkeypatch.setattr(Category._meta.pk, "attname", "name")
 
         plan = plan_optimizations([_sel("id")], Category)
@@ -991,13 +1018,11 @@ def test_plan_honors_optimizer_hints_at_nested_depth():
     registry.clear()
 
     class ItemType:
-        _optimizer_hints = {"entries": OptimizerHint.SKIP}
-
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
-    registry.register(Item, ItemType)
+    _register_type_definition(Item, ItemType, optimizer_hints={"entries": OptimizerHint.SKIP})
     try:
         plan = plan_optimizations(
             [_sel("items", selections=[_sel("entries", selections=[_sel("value")])])],
@@ -1016,13 +1041,15 @@ def test_plan_honors_prefetch_obj_hint_does_not_walk_inner_selections():
     explicit = Prefetch("items", queryset=Item.objects.only("name"))
 
     class CategoryType:
-        _optimizer_hints = {"items": OptimizerHint.prefetch(explicit)}
-
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
-    registry.register(Category, CategoryType)
+    _register_type_definition(
+        Category,
+        CategoryType,
+        optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
+    )
     try:
         plan = plan_optimizations(
             [_sel("items", selections=[_sel("entries", selections=[_sel("value")])])],
@@ -1040,13 +1067,11 @@ def test_plan_prefetch_obj_hint_on_forward_fk_adds_connector_column():
     explicit = Prefetch("category", queryset=Category.objects.only("name"))
 
     class ItemType:
-        _optimizer_hints = {"category": OptimizerHint.prefetch(explicit)}
-
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
-    registry.register(Item, ItemType)
+    _register_type_definition(Item, ItemType, optimizer_hints={"category": OptimizerHint.prefetch(explicit)})
     try:
         plan = plan_optimizations([_sel("category", selections=[_sel("name")])], Item)
     finally:
@@ -1063,13 +1088,15 @@ def test_plan_prefetch_obj_hint_adapts_nested_selected_parent_prefix():
     explicit = Prefetch("items", queryset=Item.objects.only("name"))
 
     class CategoryType:
-        _optimizer_hints = {"items": OptimizerHint.prefetch(explicit)}
-
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
-    registry.register(Category, CategoryType)
+    _register_type_definition(
+        Category,
+        CategoryType,
+        optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
+    )
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("items", selections=[_sel("name")])])],
@@ -1094,13 +1121,11 @@ def test_plan_force_select_hint_uses_select_recursion():
     registry.clear()
 
     class ItemType:
-        _optimizer_hints = {"category": OptimizerHint.select_related()}
-
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
-    registry.register(Item, ItemType)
+    _register_type_definition(Item, ItemType, optimizer_hints={"category": OptimizerHint.select_related()})
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("name"), _sel("items", selections=[_sel("name")])])],
@@ -1135,14 +1160,12 @@ def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
             return queryset.filter(is_private=False)
 
     class ItemType:
-        _optimizer_hints = {"category": OptimizerHint.select_related()}
-
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
     registry.register(Category, CategoryType)
-    registry.register(Item, ItemType)
+    _register_type_definition(Item, ItemType, optimizer_hints={"category": OptimizerHint.select_related()})
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("name")])],
@@ -1174,13 +1197,11 @@ def test_plan_no_flag_hint_falls_through_to_default_dispatch():
     registry.clear()
 
     class ItemType:
-        _optimizer_hints = {"category": OptimizerHint()}
-
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
-    registry.register(Item, ItemType)
+    _register_type_definition(Item, ItemType, optimizer_hints={"category": OptimizerHint()})
     try:
         plan = plan_optimizations([_sel("category", selections=[_sel("name")])], Item)
     finally:
@@ -1317,13 +1338,15 @@ def test_plan_prefetch_obj_hint_marks_plan_non_cacheable():
     explicit = Prefetch("items", queryset=Item.objects.only("name"))
 
     class CategoryType:
-        _optimizer_hints = {"items": OptimizerHint.prefetch(explicit)}
-
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
-    registry.register(Category, CategoryType)
+    _register_type_definition(
+        Category,
+        CategoryType,
+        optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
+    )
     try:
         plan = plan_optimizations(
             [_sel("items", selections=[_sel("name")])],
@@ -1348,13 +1371,15 @@ def test_plan_prefetch_obj_hint_dedupes_repeat_lookups():
     explicit = Prefetch("items", queryset=Item.objects.only("name"))
 
     class CategoryType:
-        _optimizer_hints = {"items": OptimizerHint.prefetch(explicit)}
-
         @classmethod
         def has_custom_get_queryset(cls):
             return False
 
-    registry.register(Category, CategoryType)
+    _register_type_definition(
+        Category,
+        CategoryType,
+        optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
+    )
     try:
         # Two sibling selections of the same field; _merge_aliased_selections
         # collapses them, but the dedupe guard is the load-bearing invariant
@@ -1373,18 +1398,37 @@ def test_plan_prefetch_obj_hint_dedupes_repeat_lookups():
 
 
 def test_plan_tolerates_optimizer_hints_set_to_none():
-    """Shape guard: type_cls._optimizer_hints = None must not raise.
+    """Shape guard: definition.optimizer_hints = None must not raise.
 
-    The legacy class-attribute mirror documents "dict or absent"; defending
-    the intersection ``set to None`` keeps the reader robust against
-    misbehaving writers and matches the ``getattr(..., None) or {}`` pattern
-    used elsewhere in the package.
+    The definition field is typed as a dict, but defending the
+    intersection ``set to None`` keeps the reader robust against
+    misbehaving writers and matches the ``... or {}`` pattern used
+    elsewhere in the package.
     """
     registry.clear()
 
     class ItemType:
-        _optimizer_hints = None
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
 
+    _register_type_definition(Item, ItemType)
+    registry.get_definition(ItemType).optimizer_hints = None
+    try:
+        plan = plan_optimizations([_sel("category", selections=[_sel("name")])], Item)
+    finally:
+        registry.clear()
+
+    # With no hints, default dispatch picks select_related for a forward FK
+    # with a non-id-only child selection.
+    assert plan.select_related == ("category",)
+
+
+def test_plan_tolerates_registered_type_without_definition():
+    """Shape guard: a stale registered type without definition metadata has no hints."""
+    registry.clear()
+
+    class ItemType:
         @classmethod
         def has_custom_get_queryset(cls):
             return False
@@ -1395,8 +1439,6 @@ def test_plan_tolerates_optimizer_hints_set_to_none():
     finally:
         registry.clear()
 
-    # With no hints, default dispatch picks select_related for a forward FK
-    # with a non-id-only child selection.
     assert plan.select_related == ("category",)
 
 

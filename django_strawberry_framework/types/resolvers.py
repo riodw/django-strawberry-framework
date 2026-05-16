@@ -36,8 +36,10 @@ from ..optimizer._context import (
 from ..optimizer._context import (
     get_context_value as _get_context_value,
 )
+from ..optimizer.field_meta import FieldMeta
 from ..optimizer.plans import resolver_key, runtime_path_from_info
-from ..utils.relations import is_many_side_relation_kind, relation_kind
+from ..registry import registry
+from ..utils.relations import is_many_side_relation_kind
 
 # Module-level immutable sentinel for the "no elisions registered" branch so
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
@@ -61,17 +63,19 @@ def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None
     return key in elisions
 
 
-def _build_fk_id_stub(root: Any, field: Any) -> Any:
+def _build_fk_id_stub(root: Any, field_meta: FieldMeta) -> Any:
     """Build a target-model stub from ``root.<attname>`` for B2 id-only selections."""
-    related_id = getattr(root, field.attname)
+    if field_meta.attname is None or field_meta.related_model is None:
+        return None
+    related_id = getattr(root, field_meta.attname)
     if related_id is None:
         return None
-    stub = field.related_model(pk=related_id)
+    stub = field_meta.related_model(pk=related_id)
     state = getattr(stub, "_state", None)
     if state is not None:
         state.adding = False
         instance = root if hasattr(root, "_state") else None
-        state.db = router.db_for_read(field.related_model, instance=instance)
+        state.db = router.db_for_read(field_meta.related_model, instance=instance)
     return stub
 
 
@@ -155,6 +159,29 @@ def _name_resolver(resolver: Any, field_name: str) -> Any:
     return resolver
 
 
+def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
+    """Return registered ``FieldMeta`` for ``field`` when the parent type exposes it."""
+    if parent_type is not None:
+        definition = registry.get_definition(parent_type)
+        if definition is not None:
+            meta = definition.field_map.get(field.name)
+            if meta is not None:
+                return meta
+    if not hasattr(field, "is_relation"):
+        return FieldMeta(
+            name=field.name,
+            is_relation=True,
+            many_to_many=bool(getattr(field, "many_to_many", False)),
+            one_to_many=bool(getattr(field, "one_to_many", False)),
+            one_to_one=bool(getattr(field, "one_to_one", False)),
+            nullable=bool(getattr(field, "null", False)),
+            related_model=getattr(field, "related_model", None),
+            attname=getattr(field, "attname", None),
+            auto_created=bool(getattr(field, "auto_created", False)),
+        )
+    return FieldMeta.from_django_field(field)
+
+
 def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     """Generate a resolver for a Django relation field.
 
@@ -173,21 +200,16 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
     B3: all resolvers now accept ``info`` (Strawberry injects it
     automatically) and call ``_check_n1`` when a strictness sentinel
-    is present on ``info.context``. ``_check_n1`` receives the
-    field's ``relation_kind`` so the many-side dispatch uses
+    is present on ``info.context``. ``_check_n1`` receives a
+    ``FieldMeta``-derived relation-kind key so the many-side dispatch uses
     ``_prefetched_objects_cache`` exclusively and does not mis-classify
     a consumer-assigned attribute as "already loaded".
     """
-    # TODO(spec-fieldmeta-ssot): read cardinality and ``attname`` from
-    # ``DjangoTypeDefinition.field_map[field_name]`` (a ``FieldMeta``)
-    # instead of re-deriving via ``relation_kind(field)`` and raw
-    # ``getattr(field, "attname", None)`` below. ``FieldMeta`` is the
-    # canonical SSoT for relation shape — see
-    # ``optimizer/field_meta.py`` module docstring.
     field_name = field.name
-    kind = relation_kind(field)
+    field_meta = _field_meta_for_resolver(field, parent_type)
+    kind = field_meta.relation_kind
 
-    if is_many_side_relation_kind(kind):
+    if field_meta.is_many_side:
 
         def many_resolver(root: Any, info: Info) -> Any:
             _check_n1(info, root, field_name, parent_type, kind=kind)
@@ -195,11 +217,11 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
         return _name_resolver(many_resolver, field_name)
 
-    if kind == "reverse_one_to_one":
+    if field_meta.one_to_one and field_meta.auto_created:
         related_does_not_exist = field.related_model.DoesNotExist
 
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
-            _check_n1(info, root, field_name, parent_type, kind="reverse_one_to_one")
+            _check_n1(info, root, field_name, parent_type, kind=kind)
             try:
                 return getattr(root, field_name)
             except related_does_not_exist:
@@ -207,16 +229,9 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
         return _name_resolver(reverse_one_to_one_resolver, field_name)
 
-    # SSoT note: relation shape (kind, attname) is canonically derived by
-    # ``optimizer/field_meta.py:FieldMeta``. This resolver builder currently
-    # consumes the raw Django field directly; consolidating onto ``FieldMeta``
-    # is the folder-pass DRY candidate tracked in ``docs/review/rev-types.md``
-    # (Medium "attname / relation-shape derivation is duplicated").
-    attname = getattr(field, "attname", None)
-
     def forward_resolver(root: Any, info: Info) -> Any:
-        if attname is not None and _is_fk_id_elided(info, field_name, parent_type):
-            return _build_fk_id_stub(root, field)
+        if field_meta.attname is not None and _is_fk_id_elided(info, field_name, parent_type):
+            return _build_fk_id_stub(root, field_meta)
         _check_n1(info, root, field_name, parent_type, kind=kind)
         return getattr(root, field_name)
 

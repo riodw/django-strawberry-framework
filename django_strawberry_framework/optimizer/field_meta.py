@@ -8,35 +8,13 @@ shape across the package: ``is_relation``, cardinality flags
 ``FieldMeta`` instance (via ``DjangoTypeDefinition.field_map`` or a
 fresh ``FieldMeta.from_django_field(...)`` call) rather than
 re-deriving the shape through raw ``getattr`` on a Django field
-descriptor. Three sites currently re-derive the shape and carry
-``TODO(spec-fieldmeta-ssot)`` cross-references back to this module:
-``types/resolvers.py:_make_relation_resolver``,
-``types/converters.py:resolved_relation_annotation``, and
-``types/base.py:_record_pending_relation``. Migrating those readers
-to ``FieldMeta`` is tracked as a folder-level DRY follow-up; the
-anchors stay in place until the migration ships.
+descriptor.
 
 Built once per ``DjangoType`` at class-creation time (in
 ``__init_subclass__``) and stored canonically on
-``DjangoTypeDefinition.field_map``. The legacy
-``cls._optimizer_field_map`` mirror remains for the 0.0.x line while the
-optimizer reads from the definition-backed metadata. The O2 walker reads
-the cached map instead of calling ``model._meta.get_fields()`` on every
-walk, eliminating per-request Django introspection overhead.
-
-TODO(spec-fieldmeta-mirror-retirement): the ``cls._optimizer_field_map``
-mirror written in ``django_strawberry_framework/types/base.py`` is
-retained for the 0.0.x line for backward compatibility with the
-walker's pre-definition reads; remove the mirror writer and this
-docstring paragraph in the same change that ships the retirement
-slice. The walker still reads ``cls._optimizer_field_map`` today
-(``optimizer/walker.py:_resolve_field_map``); ``BACKLOG-014`` in
-``KANBAN.md`` tracks the move to
-``registry.get_definition(type_cls).field_map`` and enumerates the
-five ``TODO(spec-fieldmeta-mirror-retirement)`` anchor sites that
-close with it. The sibling ``TODO(spec-fieldmeta-ssot)`` family
-(three reader sites that re-derive relation shape) is tracked under
-``BACKLOG-013`` in the same file.
+``DjangoTypeDefinition.field_map``. The O2 walker reads the cached map
+instead of calling ``model._meta.get_fields()`` on every walk,
+eliminating per-request Django introspection overhead.
 """
 
 from __future__ import annotations
@@ -45,7 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from django_strawberry_framework.exceptions import OptimizerError
-from django_strawberry_framework.utils.relations import relation_kind
+from django_strawberry_framework.utils.relations import RelationKind, relation_kind
 
 if TYPE_CHECKING:  # pragma: no cover
     from django.db import models
@@ -91,8 +69,7 @@ class FieldMeta:
             in ``from_django_field`` so consumers can read ``nullable``
             directly without re-checking ``many_to_many`` /
             ``one_to_many`` first; this defends future
-            ``TODO(spec-fieldmeta-ssot)`` consolidation against schema
-            corruption from ``ForeignObjectRel``'s class-level
+            schema work against corruption from ``ForeignObjectRel``'s class-level
             ``null=True`` default leaking through.
         related_model: The target model class for relations, or ``None``.
         attname: The DB column name (e.g., ``category_id`` for a FK).
@@ -119,6 +96,24 @@ class FieldMeta:
     target_field_attname: str | None = None
     reverse_connector_attname: str | None = None
     auto_created: bool = False
+
+    @property
+    def relation_kind(self) -> RelationKind:
+        """Return this relation's GraphQL/runtime cardinality classifier."""
+        if self.many_to_many:
+            return "many"
+        if self.one_to_many:
+            if self.auto_created:
+                return "reverse_many_to_one"
+            return "many"
+        if self.one_to_one and self.auto_created:
+            return "reverse_one_to_one"
+        return "forward_single"
+
+    @property
+    def is_many_side(self) -> bool:
+        """Return whether this relation resolves as a GraphQL list."""
+        return self.relation_kind in {"many", "reverse_many_to_one"}
 
     @classmethod
     def from_django_field(cls, field: _DjangoFieldLike) -> FieldMeta:

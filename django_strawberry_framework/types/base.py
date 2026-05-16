@@ -36,7 +36,6 @@ from ..exceptions import ConfigurationError
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 from ..registry import registry
-from ..utils.relations import is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
 from .converters import convert_scalar, resolved_relation_annotation
 from .definition import DjangoTypeDefinition
@@ -70,8 +69,6 @@ class DjangoType:
     """Base class for Django-model-backed Strawberry GraphQL types."""
 
     _is_default_get_queryset: ClassVar[bool] = True
-    _optimizer_field_map: ClassVar[dict[str, FieldMeta]] = {}
-    _optimizer_hints: ClassVar[dict[str, OptimizerHint]] = {}
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect model/type metadata without finalizing the Strawberry type."""
@@ -111,6 +108,7 @@ class DjangoType:
             cls,
             fields,
             source_model=meta.model,
+            field_map=field_map,
             consumer_authored_fields=consumer_authored_fields,
             interfaces=interfaces,
         )
@@ -137,12 +135,6 @@ class DjangoType:
         cls.__annotations__ = {**synthesized, **consumer_annotations}
         cls.__django_strawberry_definition__ = definition
         install_is_type_of(cls)
-        # TODO(spec-fieldmeta-mirror-retirement): retire these class-attribute
-        # mirrors; the optimizer should read ``DjangoTypeDefinition.field_map`` /
-        # ``optimizer_hints`` directly. Reader sites in ``optimizer/walker.py``
-        # and ``optimizer/field_meta.py`` carry the matching anchor.
-        cls._optimizer_field_map = field_map
-        cls._optimizer_hints = optimizer_hints
 
     @classmethod
     def get_queryset(
@@ -538,6 +530,7 @@ def _build_annotations(
     fields: tuple[Any, ...],
     *,
     source_model: type[models.Model],
+    field_map: dict[str, FieldMeta],
     consumer_authored_fields: frozenset[str] = frozenset(),
     interfaces: tuple[type, ...] = (),
 ) -> tuple[dict[str, Any], list[PendingRelation]]:
@@ -616,6 +609,7 @@ def _build_annotations(
         if field.is_relation:
             if field.name in consumer_authored_fields:
                 continue
+            field_meta = field_map[snake_case(field.name)]
             if getattr(field, "related_model", None) is None:
                 raise ConfigurationError(
                     f"{source_model.__name__}.{field.name} is a GenericForeignKey or other "
@@ -625,10 +619,14 @@ def _build_annotations(
                 )
             target_type = registry.get(field.related_model)
             if target_type is None:
-                pending.append(_record_pending_relation(cls, source_model, field))
+                pending.append(_record_pending_relation(cls, source_model, field, field_meta))
                 annotations[field.name] = PendingRelationAnnotation
             else:
-                annotations[field.name] = resolved_relation_annotation(field, target_type)
+                annotations[field.name] = resolved_relation_annotation(
+                    field,
+                    target_type,
+                    field_meta=field_meta,
+                )
         else:
             if field.name in consumer_authored_fields:
                 # A consumer-assigned ``StrawberryField`` (or annotation) on a
@@ -652,30 +650,15 @@ def _record_pending_relation(
     cls: type,
     source_model: type[models.Model],
     field: Any,
+    field_meta: FieldMeta,
 ) -> PendingRelation:
     """Build a pending relation record from a selected Django relation field."""
-    # TODO(spec-fieldmeta-ssot): the ``nullable`` derivation inlines
-    # the same cardinality-gated rule used by
-    # ``FieldMeta.from_django_field`` instead of reading from a
-    # ``FieldMeta`` already built for ``field`` at the call site.
-    # ``FieldMeta`` is the canonical SSoT for relation shape — see
-    # ``optimizer/field_meta.py`` module docstring.
-    kind = relation_kind(field)
-    # Many-side cardinalities (reverse FK / forward & reverse M2M)
-    # resolve to a manager that is never ``None``; force
-    # ``nullable=False`` so the flag stays self-consistent and any
-    # future ``PendingRelation.nullable`` reader doesn't have to gate
-    # on cardinality first. Matches ``FieldMeta.from_django_field``.
-    if is_many_side_relation_kind(kind):
-        nullable = False
-    else:
-        nullable = kind == "reverse_one_to_one" or bool(getattr(field, "null", False))
     return PendingRelation(
         source_type=cls,
         source_model=source_model,
         field_name=field.name,
         django_field=field,
         related_model=field.related_model,
-        relation_kind=kind,
-        nullable=nullable,
+        relation_kind=field_meta.relation_kind,
+        nullable=field_meta.nullable,
     )

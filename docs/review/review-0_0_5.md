@@ -86,5 +86,5 @@ Low: small maintainability issues, naming, minor typing/API polish, localized si
     - [x] `django_strawberry_framework/utils/strings.py` -> `docs/review/rev-utils__strings.md`
     - [x] `django_strawberry_framework/utils/typing.py` -> `docs/review/rev-utils__typing.md`
     - [x] folder pass: `django_strawberry_framework/utils/` -> `docs/review/rev-utils.md`
-  - [ ] project-level pass: `django_strawberry_framework/` -> `docs/review/rev-django_strawberry_framework.md`
-- [ ] final test-run gate: `uv run pytest` -> `docs/review/rev-final.md`
+  - [x] project-level pass: `django_strawberry_framework/` -> `docs/review/rev-django_strawberry_framework.md`
+- [x] final test-run gate: `uv run pytest` -> `docs/review/rev-final.md`

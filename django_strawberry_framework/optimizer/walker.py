@@ -71,21 +71,28 @@ def _target_has_custom_get_queryset(target_type: type | None) -> bool:
 def _resolve_field_map(model: type[models.Model]) -> tuple[type | None, dict[str, Any]]:
     """Return ``(registered DjangoType, field_map)`` for ``model``.
 
-    Prefers the precomputed ``_optimizer_field_map`` cached on the
-    ``DjangoType`` subclass; falls back to a fresh
+    Prefers the canonical ``DjangoTypeDefinition.field_map`` registered
+    for the ``DjangoType`` subclass; falls back to a fresh
     ``model._meta.get_fields()`` walk when the model has no registered
-    type.  Centralizes the brittle Django-private ``_meta`` access used
-    by the walker.
+    definition. Centralizes the brittle Django-private ``_meta`` access
+    used by the walker.
     """
     type_cls = registry.get(model)
-    # TODO(spec-fieldmeta-mirror-retirement): once the one-minor compatibility
-    # mirror from ``DjangoTypeDefinition.field_map`` to
-    # ``type_cls._optimizer_field_map`` is removed, read through
-    # ``registry.get_definition(type_cls)`` here instead of the legacy class
-    # attribute.
-    cached_map = getattr(type_cls, "_optimizer_field_map", None) if type_cls is not None else None
-    field_map = cached_map if cached_map is not None else {f.name: f for f in model._meta.get_fields()}
+    definition = registry.get_definition(type_cls) if type_cls is not None else None
+    field_map = (
+        definition.field_map if definition is not None else {f.name: f for f in model._meta.get_fields()}
+    )
     return type_cls, field_map
+
+
+def _resolve_optimizer_hints(type_cls: type | None) -> dict[str, OptimizerHint]:
+    """Return optimizer hints from the registered ``DjangoTypeDefinition``."""
+    if type_cls is None:
+        return {}
+    definition = registry.get_definition(type_cls)
+    if definition is None:
+        return {}
+    return definition.optimizer_hints or {}
 
 
 def _build_child_queryset(
@@ -184,11 +191,7 @@ def _walk_selections(
             registry.get(django_field.related_model) if django_field.related_model is not None else None
         )
 
-        # TODO(spec-fieldmeta-mirror-retirement): after the compatibility
-        # mirror is removed, read optimizer hints from
-        # ``registry.get_definition(type_cls)`` instead of the legacy
-        # ``_optimizer_hints`` class attribute.
-        hints_map = getattr(type_cls, "_optimizer_hints", None) or {} if type_cls is not None else {}
+        hints_map = _resolve_optimizer_hints(type_cls)
         hint = hints_map.get(django_name)
         if hint is not None and _apply_hint(
             hint,

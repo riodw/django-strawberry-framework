@@ -348,12 +348,7 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
         )
         if definition is not None:
             origin = getattr(definition, "origin", None)
-            # TODO(spec-fieldmeta-mirror-retirement): after
-            # ``DjangoTypeDefinition`` is the only optimizer metadata source,
-            # identify Django types through ``registry.get_definition(origin)``
-            # instead of the legacy ``_optimizer_field_map`` compatibility
-            # mirror.
-            if origin is not None and hasattr(origin, "_optimizer_field_map"):
+            if origin is not None and registry.get_definition(origin) is not None:
                 reachable.add(origin)
         # Recurse into fields.
         fields = getattr(gql_type, "fields", None)
@@ -599,8 +594,8 @@ class DjangoOptimizerExtension(SchemaExtension):
 
         Walks only the ``DjangoType``s reachable from the schema's root
         types (not the entire registry) and checks each **exposed**
-        relation field (i.e., present in ``_optimizer_field_map``, not
-        hidden by ``Meta.fields``/``Meta.exclude`` or
+        relation field (i.e., present in its registered definition's
+        field map, not hidden by ``Meta.fields``/``Meta.exclude`` or
         ``OptimizerHint.SKIP``). Returns a list of warning strings for
         relations whose target model has no registered ``DjangoType``.
 
@@ -612,14 +607,11 @@ class DjangoOptimizerExtension(SchemaExtension):
         for _model, type_cls in registry.iter_types():
             if type_cls not in reachable:
                 continue
-            # TODO(spec-fieldmeta-mirror-retirement): after the foundation
-            # compatibility window, read ``field_map`` and ``optimizer_hints``
-            # from ``registry.get_definition(type_cls)`` instead of the legacy
-            # class-attribute mirrors.
-            field_map = getattr(type_cls, "_optimizer_field_map", None)
-            if field_map is None:
+            definition = registry.get_definition(type_cls)
+            if definition is None:
                 continue
-            hints = getattr(type_cls, "_optimizer_hints", {})
+            field_map = definition.field_map
+            hints = definition.optimizer_hints or {}
             for field_name, meta in field_map.items():
                 if not meta.is_relation:
                     continue

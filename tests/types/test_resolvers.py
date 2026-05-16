@@ -210,6 +210,61 @@ def test_b2_forward_fk_id_elision_returns_stub_without_accessing_relation():
     assert result._state.db == router.db_for_read(Category)
 
 
+def test_b2_forward_fk_id_elision_uses_registered_field_meta_attname():
+    """B2: resolver FK-id elision reads attname from registered FieldMeta."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.types.definition import DjangoTypeDefinition
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    class ItemType:
+        pass
+
+    field = SimpleNamespace(name="category", attname="wrong_id")
+    registry.register_definition(
+        ItemType,
+        DjangoTypeDefinition(
+            origin=ItemType,
+            model=Item,
+            name=None,
+            description=None,
+            fields_spec=None,
+            exclude_spec=None,
+            selected_fields=(),
+            field_map={
+                "category": FieldMeta(
+                    name="category",
+                    is_relation=True,
+                    attname="category_id",
+                    related_model=Category,
+                ),
+            },
+            optimizer_hints={},
+            has_custom_get_queryset=False,
+        ),
+    )
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    key = resolver_key(ItemType, "category", ("allItems", "category"))
+    fake_info = SimpleNamespace(
+        context={"dst_optimizer_fk_id_elisions": {key}},
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+
+    class Root:
+        category_id = 42
+
+        @property
+        def category(self):
+            raise AssertionError("B2 resolver should not lazy-load the relation")
+
+    result = resolver(Root(), fake_info)
+
+    assert isinstance(result, Category)
+    assert result.pk == 42
+
+
 def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
     """B2: nullable FK ids still resolve to ``None`` instead of a stub."""
     from types import SimpleNamespace
@@ -230,6 +285,23 @@ def test_b2_forward_fk_id_elision_returns_none_for_null_fk():
     )
 
     assert resolver(fake_root, fake_info) is None
+
+
+def test_b2_fk_id_stub_returns_none_without_related_model():
+    """Direct unit: incomplete metadata cannot build an FK-id stub."""
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
+
+    field_meta = FieldMeta(
+        name="category",
+        is_relation=True,
+        attname="category_id",
+        related_model=None,
+    )
+
+    assert _build_fk_id_stub(SimpleNamespace(category_id=42), field_meta) is None
 
 
 def test_b2_forward_fk_id_elision_does_not_leak_across_parent_types():

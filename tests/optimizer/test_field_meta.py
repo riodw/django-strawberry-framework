@@ -1,6 +1,6 @@
 """Tests for B7 — precomputed optimizer field metadata.
 
-Covers ``FieldMeta.from_django_field``, ``_optimizer_field_map`` on
+Covers ``FieldMeta.from_django_field``, definition-backed field maps on
 ``DjangoType`` subclasses, and the walker's use of the cached map.
 """
 
@@ -187,20 +187,22 @@ def test_field_meta_is_frozen():
 
 
 # ---------------------------------------------------------------------------
-# _optimizer_field_map on DjangoType
+# DjangoTypeDefinition.field_map on DjangoType
 # ---------------------------------------------------------------------------
 
 
 def test_optimizer_field_map_populated():
-    """B7: _optimizer_field_map is populated after DjangoType subclass creation."""
+    """B7: definition.field_map is populated after DjangoType subclass creation."""
 
     class CategoryType(DjangoType):
         class Meta:
             model = Category
             fields = ("id", "name")
 
-    assert hasattr(CategoryType, "_optimizer_field_map")
-    field_map = CategoryType._optimizer_field_map
+    definition = registry.get_definition(CategoryType)
+
+    assert definition is not None
+    field_map = definition.field_map
     assert "id" in field_map
     assert "name" in field_map
     assert isinstance(field_map["id"], FieldMeta)
@@ -219,7 +221,10 @@ def test_optimizer_field_map_contains_relations():
             model = Item
             fields = ("id", "name", "category")
 
-    field_map = ItemType._optimizer_field_map
+    definition = registry.get_definition(ItemType)
+
+    assert definition is not None
+    field_map = definition.field_map
     assert "category" in field_map
     cat_meta = field_map["category"]
     assert cat_meta.is_relation is True
@@ -234,7 +239,10 @@ def test_optimizer_field_map_respects_fields_filter():
             model = Category
             fields = ("id",)
 
-    field_map = CategoryType._optimizer_field_map
+    definition = registry.get_definition(CategoryType)
+
+    assert definition is not None
+    field_map = definition.field_map
     assert "id" in field_map
     assert "name" not in field_map
 

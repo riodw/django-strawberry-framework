@@ -131,8 +131,8 @@ def test_check_schema_returns_no_warnings_for_registered_cyclic_targets():
     assert DjangoOptimizerExtension.check_schema(schema) == []
 
 
-def test_definition_field_map_matches_legacy_optimizer_mirror():
-    """Definition-owned field metadata mirrors the legacy optimizer class attribute."""
+def test_definition_field_map_carries_optimizer_metadata():
+    """Definition-owned field metadata is the optimizer's canonical source."""
 
     class CategoryType(DjangoType):
         class Meta:
@@ -142,7 +142,7 @@ def test_definition_field_map_matches_legacy_optimizer_mirror():
     definition = registry.get_definition(CategoryType)
 
     assert definition is not None
-    assert definition.field_map == CategoryType._optimizer_field_map
+    assert sorted(definition.field_map) == ["id", "items", "name"]
 
 
 def test_annotation_only_relation_override_still_plans_prefetch():

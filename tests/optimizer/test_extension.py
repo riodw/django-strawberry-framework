@@ -1920,7 +1920,7 @@ def test_check_schema_hidden_fields_not_flagged():
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
     warnings = DjangoOptimizerExtension.check_schema(schema)
-    # category is not in _optimizer_field_map so not flagged.
+    # category is not in the definition field map, so it is not flagged.
     assert not any("category" in w for w in warnings)
 
 

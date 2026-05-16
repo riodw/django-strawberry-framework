@@ -2,6 +2,16 @@
 
 Thanks for your interest in contributing to `django-strawberry-framework`. The project is in early development and contributions of all sizes are welcome — bug reports, doc fixes, tests, feature work, design feedback.
 
+## Where things live
+
+- **Package layout & test placement** — [`docs/TREE.md`](docs/TREE.md) is the canonical layout reference: upstream tree comparisons, the current on-disk shape, the target shape with `[alpha]` / `[beta]` / `[stable]` milestone tags, and the test-placement rules across the package and example-project test trees.
+- **Capability catalog** — [`docs/FEATURES.md`](docs/FEATURES.md) is the source of truth for what's shipped / planned / deferred plus the `0.1.0` / `1.0.0` milestone framing.
+- **Per-card sequencing** — [`KANBAN.md`](KANBAN.md) tracks all planned work as `TODO-ALPHA-*`, `TODO-BETA-*`, `BLOCKED-*`, and `DONE-*` cards with version pins.
+- **Strategic differentiation roadmap** — [`BETTER.md`](BETTER.md) holds post-`1.0.0` items that aren't on the milestone roadmap. Items graduate to `KANBAN.md` cards when scheduled.
+- **In-flight design work** — new features use the `docs/spec-<topic>.md` convention. Once a slice ships, its behavior is folded into `docs/FEATURES.md` or `docs/TREE.md` and the completed design doc is archived.
+- **Current example-project capability snapshot** — [`TODAY.md`](TODAY.md) shows what the package can do in the fakeshop example right now.
+- **Long-term destination** — [`GOAL.md`](GOAL.md) describes the rich-schema north star the milestone roadmap is heading toward.
+
 ## Getting started
 
 This project uses [`uv`](https://docs.astral.sh/uv/) for dependency and environment management.
@@ -23,11 +33,47 @@ Coverage runs automatically and the build will fail if total coverage drops belo
 ## Linting and formatting
 
 ```bash
-uv run ruff check .
+uv run ruff check --fix .
 uv run ruff format .
 ```
 
 CI runs both checks; please run them locally before pushing.
+
+## Updating the package version
+
+Bump the version in both places before tagging a release:
+
+- `pyproject.toml`
+- `django_strawberry_framework/__init__.py`
+
+`tests/base/test_init.py` pins the expected version against `pyproject.toml`, so a missed bump fails the test suite loudly.
+
+## Building
+
+```bash
+uv lock
+rm -rf dist/
+uv build
+```
+
+## Publishing
+
+```bash
+uv publish --token PASSWORD
+```
+
+## Updating dependencies
+
+```bash
+# Show outdated packages
+uv pip list --outdated
+
+# Add a dev dependency
+uv add --group dev <package>
+
+# Remove the virtual environment
+rm -rf .venv
+```
 
 ## Commit messages
 

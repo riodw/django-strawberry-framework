@@ -44,7 +44,7 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 
 **`0.0.5`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening.
 
-For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`](TODAY.md). The full shipped/planned/deferred catalog lives in [`docs/FEATURES.md`](docs/FEATURES.md), and the `0.1.0` → `1.0.0` milestone narrative is in [`docs/README.md`'s status section](docs/README.md#status).
+For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`](TODAY.md). The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/FEATURES.md`](docs/FEATURES.md). Per-card sequencing for both releases lives in [`KANBAN.md`](KANBAN.md).
 
 ## Get started → [`docs/README.md`](docs/README.md)
 

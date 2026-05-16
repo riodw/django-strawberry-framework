@@ -2,7 +2,16 @@
 
 `django-strawberry-framework` is a DRF-shaped Django integration for Strawberry GraphQL. It lets Django teams build GraphQL APIs from Django models using the familiar `class Meta` style instead of a decorator-heavy surface.
 
-For install, local development, testing, and the canonical documentation map, start from [`../README.md`](../README.md). For the long-term destination, see [`../GOAL.md`](../GOAL.md). For the current capability snapshot, see [`../TODAY.md`](../TODAY.md).
+For the project pitch, migration context, and the canonical documentation map, start from [`../README.md`](../README.md). For the long-term destination, see [`../GOAL.md`](../GOAL.md). For the current capability snapshot, see [`../TODAY.md`](../TODAY.md). For contributor / maintainer workflow (dev setup, format, test, build, publish), see [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+
+## Installation
+
+```shell
+# pip
+pip install django-strawberry-framework
+# uv
+uv add django-strawberry-framework
+```
 
 ## Quick start
 
@@ -70,58 +79,156 @@ See [`FEATURES.md`'s Relay Node integration subsection](FEATURES.md#relay-node-i
 - Returning a Django `QuerySet` from the root resolver gives the optimizer something it can shape.
 - `DjangoOptimizerExtension()` walks the selected GraphQL fields once at the root and applies one ORM plan.
 - Nested relations become joins, prefetches, projections, and strictness checks without replacing your queryset.
-- [`FEATURES.md`](FEATURES.md) has the full capability catalog when you need details.
-
-## Why this package exists
-
-Django teams already think in `Meta.model`, `fields`, `exclude`, querysets, and DRF/django-filter idioms. Strawberry is the modern Python GraphQL engine, but its Django ecosystem leans on decorators. This package keeps Strawberry as the engine and the configuration shape consumers already know.
 
 ## Today and coming next
 
-Today:
-- `DjangoType` for model-backed Strawberry types
-- scalar, relation, and choice-enum conversion
-- generated relation resolvers
-- definition-order-independent relation finalization via `finalize_django_types`
-- `get_queryset` visibility hook
-- model/type registry
-- `DjangoOptimizerExtension` for automatic ORM optimization
-- `OptimizerHint` for per-field optimizer overrides
-- `auto` re-export from Strawberry
+For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`](../TODAY.md). For the full shipped / planned / deferred capability catalog and the quick-comparison table against `graphene-django` and `strawberry-graphql-django`, see [`FEATURES.md`](FEATURES.md). For the long-term destination, see [`../GOAL.md`](../GOAL.md).
 
-Coming:
-- fieldsets
-- filters
-- orders
-- aggregates
-- connection fields
-- permissions and cascade permissions
-- schema export helpers
+A quick summary:
 
-How this stacks up against the alternatives: see the [quick comparison in `FEATURES.md`](FEATURES.md#quick-comparison).
+**Shipped today** (`0.0.5`):
+- `DjangoType` — model-backed Strawberry types via `class Meta`
+- scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, file/image, choice enums)
+- relation conversion (forward / reverse FK, forward / reverse OneToOne, forward / reverse M2M)
+- `Meta.interfaces = (relay.Node,)` for Relay-node-shaped types with `id: GlobalID!`
+- generated relation resolvers, with annotation-only and `strawberry.field` consumer overrides preserved
+- definition-order-independent relation finalization via `finalize_django_types()`
+- `get_queryset` visibility hook (cooperates with the optimizer via `Prefetch` downgrade)
+- `DjangoOptimizerExtension` — automatic ORM optimization: one selection-tree walk produces a `select_related` / `prefetch_related` / `only()` plan that cooperates with querysets you've already shaped (consumer entries are respected, not clobbered). Plan caching, FK-id elision for `{ relation { id } }`, `get_queryset` → `Prefetch` downgrade so visibility filters survive joins, and strictness mode (`off` / `warn` / `raise`) for accidental-N+1 detection are all in the box. See [`FEATURES.md`](FEATURES.md) for the full optimizer surface.
+- `OptimizerHint` — per-relation overrides (`SKIP`, `select_related`, `prefetch_related`, custom `Prefetch`)
+- model / type registry and `auto` re-export from Strawberry
 
-For a more narrative snapshot of what the package can do right now in the example project, see [`../TODAY.md`](../TODAY.md). For the full north-star goal, see [`../GOAL.md`](../GOAL.md).
+**Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
+- `Meta.primary` for multiple `DjangoType`s per model
+- `DjangoListField` (non-Relay list) and `DjangoConnectionField` (Relay connection)
+- filters, orders, and permissions / cascade permissions
+- mutations + auto-generated `Input` types, plus form-based and DRF-serializer-based mutation flavors
+- `Upload` scalar and file-field mapping
+- auth mutations (`login` / `logout` / `register`) and `current_user` query
+- Channels ASGI router, debug-toolbar middleware, test client helper, response-extensions debug
+- schema export management command, Django `AppConfig`
+- specialized scalar conversions (`BigIntegerField`, `JSONField`, `ArrayField`, `HStoreField`)
 
-## Optimizer behavior
+**Coming in `1.0.0`** (stable — `django-graphene-filters` depth + API freeze):
+- `FieldSet` (declarative `fields_class`)
+- `AggregateSet` with `Sum` / `Count` / `Avg` / `Min` / `Max` / `GroupBy` (`aggregate_class`)
+- `Meta.search_fields`
+- stable choice-enum naming overrides
+- fakeshop GraphQL schema activation end-to-end
+- migration and adoption guides
+- API freeze: strict SemVer applies from `1.0.0` forward
 
-The optimizer is opt-in and only changes root resolvers that return Django `QuerySet`s. It walks the selected GraphQL fields once, builds an ORM plan, then applies that plan without taking ownership of querysets you already shaped.
+## Schema setup boundary
 
-Shipped optimizer value:
-- **Forward relations** use `select_related`.
-- **Many-side relations** use `prefetch_related`.
-- **Nested many-side selections** become nested `Prefetch` objects.
-- **Scalar selections** become `only` projections with connector columns preserved.
-- **`category { id }`** can read `category_id` from the parent row without a join.
-- **Resolver-defined `get_queryset` filters** survive relation traversal through a `Prefetch` downgrade.
-- **Consumer-shaped querysets** keep their existing `select_related`, `prefetch_related`, and `Prefetch` entries.
-- **Strictness mode** can warn or raise when development/test queries would accidentally lazy-load.
+`finalize_django_types()` must run once during single-threaded import/schema setup, after every module that defines `DjangoType` classes has been imported and before `strawberry.Schema(...)` is constructed. The most common failure mode is forgetting to import a module that contains a related type before finalization.
 
-## Status
+Recommended:
 
-**Status: 0.0.5, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto` — are intended to remain stable through `0.1.0`. API names are the stability promise; correctness and edge-case behavior are still hardening.
+```python
+from django_strawberry_framework import finalize_django_types
 
-Expect the deferred `Meta` keys (`filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`) to move from rejected to accepted as their subsystems ship. The registry will gain `Meta.primary` for multiple `DjangoType`s per model. None of those changes break code that uses today's surface.
+from myapp import types as _types  # noqa: F401
 
-## Contributor notes
+finalize_django_types()
+schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+```
 
-Detailed package/test layout lives in [`TREE.md`](TREE.md). Future in-flight design work continues to use `docs/spec-<topic>.md`; once a slice ships, its behavior should be folded into [`FEATURES.md`](FEATURES.md) or `TREE.md` and the completed design doc should be archived.
+Wrong order:
+
+```python
+schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+finalize_django_types()
+```
+
+The second form constructs the Strawberry schema before relation targets are finalized, so exposed relations whose target type was still pending cannot be resolved into concrete `DjangoType`s.
+
+## Running the example project
+
+The repository ships with a fakeshop example project that exercises the shipped surface against a real Django app.
+
+```shell
+# Apply migrations to the example app
+uv run python examples/fakeshop/manage.py migrate
+
+# Start the dev server (admin + GraphiQL at /graphql/)
+uv run python examples/fakeshop/manage.py runserver
+```
+
+The dev landing page at `/` links to GraphiQL, the admin, and the seed/delete query-param triggers. For the full example walkthrough see [`../examples/fakeshop/README.md`](../examples/fakeshop/README.md).
+
+### Seeding the example database
+
+The fakeshop example dynamically discovers **all** Faker providers at runtime and seeds the database accordingly. The command is idempotent — it ensures at least N items exist per provider and only creates the shortfall.
+
+```shell
+# Ensure 5 items per provider (default)
+uv run python examples/fakeshop/manage.py seed_data
+
+# Ensure 50 items per provider
+uv run python examples/fakeshop/manage.py seed_data 50
+
+# Delete the first 10 items (and their cascading entries)
+uv run python examples/fakeshop/manage.py delete_data 10
+
+# Delete all items and entries
+uv run python examples/fakeshop/manage.py delete_data all
+
+# Wipe all four tables (Category, Property, Item, Entry)
+uv run python examples/fakeshop/manage.py delete_data everything
+```
+
+The same actions are reachable from the admin via query-param triggers — see the dev landing page at `/` for clickable links.
+
+### Test users
+
+Create test users with individual Django `view_*` permissions for exercising `get_queryset` permission branches. Each set creates 6 users: 1 staff, 1 regular (no perms), and 4 per-model permission users (`view_category`, `view_item`, `view_property`, `view_entry`). All share password `admin`. Superusers are never deleted.
+
+```shell
+# Create 1 set of test users (6 users)
+uv run python examples/fakeshop/manage.py create_users
+
+# Create 3 sets (18 users)
+uv run python examples/fakeshop/manage.py create_users 3
+
+# Delete all non-superusers
+uv run python examples/fakeshop/manage.py delete_users all
+
+# Delete the first 5 non-superusers
+uv run python examples/fakeshop/manage.py delete_users 5
+```
+
+### Sharded mode (multi-DB)
+
+The example ships with a two-DB layout for stress-testing multi-database scenarios. Toggle it via `FAKESHOP_SHARDED=1`:
+
+```shell
+# Materialize both shard SQLite files (idempotent)
+FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards
+
+# Larger seed for stress testing
+FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards --count 5000
+```
+
+In sharded mode `default` → `db_shard_a.sqlite3` and `shard_b` → `db_shard_b.sqlite3`. The single-DB `db.sqlite3` is invisible while the env var is set.
+
+## Using the package in your own project
+
+If you want to develop against a local checkout of this package from another Django project:
+
+1. Go to the project you want to install the package in.
+2. Add `django-strawberry-framework` to your `pyproject.toml` dependencies.
+3. Point it at your local checkout:
+
+```toml
+# In your project's pyproject.toml
+[tool.uv.sources]
+django-strawberry-framework = { path = "../django-strawberry-framework", editable = true }
+```
+
+Then run:
+
+```shell
+uv sync
+```
+
+For status, the milestone roadmap, and contributor signposts, see [`../README.md`'s status section](../README.md#status) and [`../CONTRIBUTING.md`](../CONTRIBUTING.md).

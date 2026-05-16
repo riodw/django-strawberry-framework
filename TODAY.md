@@ -6,16 +6,14 @@ For the package-wide capability catalog, shipped/planned feature status, optimiz
 
 ## Current fakeshop state
 
-- `examples/fakeshop/apps/products/schema.py` still exposes a placeholder `hello` field.
-- The large commented design in `examples/fakeshop/apps/products/schema.py` is intentionally ahead of the shipped package.
-- The package can support a practical list-based schema for the fakeshop product models today.
-- The best current fakeshop shape is a bidirectional list-based graph: root list fields for each model, with FK and reverse-FK traversal across `Category`, `Item`, `Property`, and `Entry`.
+Both example apps are wired today:
 
-The **library example app is the live demonstration** of the shipped surface today. `examples/fakeshop/apps/library/schema.py` declares seven `DjangoType` classes and exercises, in one place: forward FK, reverse FK, forward OneToOne, reverse OneToOne, forward M2M, reverse M2M, choice-enum generation (`Book.circulation_status`), `Meta.interfaces = (relay.Node,)` on `GenreType`, `Meta.optimizer_hints` on `LoanType` (`OptimizerHint.prefetch_related()` + `OptimizerHint.SKIP`), a consumer-authored relation override on `Branch.shelves`, a consumer-shaped queryset cooperating with the optimizer (`all_library_prefetched_books` uses `select_related("shelf").prefetch_related("genres")`), and definition-order-independent finalization (the type declaration order is intentionally awkward — `LoanType` before `BookType` and `PatronType`, etc.). The live `/graphql/` HTTP tests in `examples/fakeshop/test_query/test_library_api.py` exercise all of these end-to-end, including the Relay GlobalID round trip via `test_library_relay_node_global_id_round_trips`.
+- `examples/fakeshop/apps/library/schema.py` — the **rich live demonstration** of the shipped surface. Seven `DjangoType` classes exercise, in one place: forward FK, reverse FK, forward OneToOne, reverse OneToOne, forward M2M, reverse M2M, choice-enum generation (`Book.circulation_status`), `Meta.interfaces = (relay.Node,)` on `GenreType`, `Meta.optimizer_hints` on `LoanType` (`OptimizerHint.prefetch_related()` + `OptimizerHint.SKIP`), a consumer-authored relation override on `Branch.shelves`, a consumer-shaped queryset cooperating with the optimizer (`all_library_prefetched_books` uses `select_related("shelf").prefetch_related("genres")`), and definition-order-independent finalization (the type declaration order is intentionally awkward — `LoanType` before `BookType` and `PatronType`, etc.). The live `/graphql/` HTTP tests in `examples/fakeshop/test_query/test_library_api.py` exercise all of these end-to-end, including the Relay GlobalID round trip via `test_library_relay_node_global_id_round_trips`.
+- `examples/fakeshop/apps/products/schema.py` — the **minimal "wire up a model app today" demonstration**. A bidirectional list-based graph over `Category` / `Item` / `Property` / `Entry`: four `DjangoType` classes with FK + reverse-FK traversal and four root list resolvers (`all_categories`, `all_items`, `all_properties`, `all_entries`). Non-Relay; intentionally narrower than `library` to show the absolute minimum a consumer needs to type to get a model app queryable through GraphQL today.
 
-The products-catalog list-based schema below stays non-Relay and intentionally narrower than the library demo — it's the minimal "wire up a model app today" example.
+The eventual `1.0.0` shape for products — Relay `DjangoConnectionField`s with `filterset_class` / `orderset_class` / `aggregate_class` / `fields_class` / `search_fields` / `apply_cascade_permissions` — is tracked in `KANBAN.md` under the Layer-3 cards (`TODO-ALPHA-020` filters, `TODO-ALPHA-021` orders, `TODO-BETA-038` aggregates, `TODO-ALPHA-024` permissions, etc.). The list-based schema below is what's there today; the Relay shape grows in as those cards land.
 
-The commented rich fakeshop design is not directly usable yet because it depends on unshipped APIs and features:
+The products design depends on these unshipped APIs and features to reach its `1.0.0` shape:
 
 - `DjangoConnectionField`
 - `apply_cascade_permissions`
@@ -25,9 +23,9 @@ The commented rich fakeshop design is not directly usable yet because it depends
 - `Meta.fields_class`
 - `Meta.search_fields`
 
-## What to put in `examples/fakeshop/apps/products/schema.py` today
-Replace the placeholder with list-based Strawberry query fields using `DjangoType` and manual root resolvers that return Django `QuerySet`s.
-Use this bidirectional schema:
+## What's in `examples/fakeshop/apps/products/schema.py` today
+
+This is the actual current contents of the products app's schema — list-based Strawberry query fields using `DjangoType` and manual root resolvers that return Django `QuerySet`s:
 ```python
 import strawberry
 

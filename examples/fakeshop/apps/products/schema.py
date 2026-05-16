@@ -1,192 +1,216 @@
 """GraphQL schema for the fakeshop products app.
 
-This file is the *intended* end-state of the example schema once
-``django-strawberry-framework`` has the ``DjangoType``,
-``DjangoConnectionField``, and ``apply_cascade_permissions`` machinery
-built out.  Until then, the design below is fully commented so that
-``config.schema`` can still import a working (placeholder) ``Query``.
+A bidirectional list-based graph over `Category` / `Item` / `Property` /
+`Entry` using the shipped `DjangoType` surface. Each root field returns a
+Django `QuerySet`, so `DjangoOptimizerExtension` (wired in
+`config.schema`) plans `select_related` / `prefetch_related` / `only()`
+across nested selections without per-resolver boilerplate.
 
-The design is a 1-to-1 port of the ``django-graphene-filters`` cookbook
-example (``recipes/schema.py``), translated to Strawberry idioms and
-the new model names: ``Category`` / ``Item`` / ``Property`` / ``Entry``.
-
-Within the commented design block, each ``filterset_class``,
-``orderset_class``, ``aggregate_class``, ``fields_class`` line and the
-permission-aware ``get_queryset`` method is *doubly* commented so that
-when the outer block is later uncommented, those lines remain
-commented out — matching "comment out filters/orders/aggregates/perms
-for now" — until those subsystems ship.
+The eventual `1.0.0` shape — Relay-node types with the cookbook-shaped
+filter / order / aggregate / fields / search / permissions surface, a
+1-to-1 port of the `django-graphene-filters` cookbook recipe — is
+tracked in `KANBAN.md` under the Layer-3 cards (`TODO-ALPHA-020`
+filters, `TODO-ALPHA-021` orders, `TODO-ALPHA-022` `DjangoConnectionField`,
+`TODO-ALPHA-024` permissions, `TODO-BETA-035` fieldsets,
+`TODO-BETA-036` search, `TODO-BETA-037` aggregates). Each `*Type`
+class below carries commented-out future-shape Meta keys and methods —
+uncomment each line as the corresponding card ships. Sidecar keys
+(`filterset_class`, `orderset_class`, `aggregate_class`,
+`fields_class`) additionally need a `filters.py` / `orders.py` /
+`aggregates.py` / `fields.py` module under this app — the sibling
+files are not yet present.
 """
 
-# import strawberry
-# from strawberry import relay
+# Future imports (uncomment as Layer-3 subsystems ship):
 #
-# from django_strawberry_framework import (
-#     DjangoConnectionField,
-#     DjangoType,
-#     # apply_cascade_permissions,
-# )
-#
-# from apps.products import models
-# # from apps.products import aggregates, filters, orders
-# # from apps.products import fields as fieldsets
-#
-#
-# # ---------------------------------------------------------------------------
-# # Nodes
-# # ---------------------------------------------------------------------------
-#
-#
-# class CategoryNode(DjangoType):
-#     class Meta:
-#         model = models.Category
-#         interfaces = (relay.Node,)
-#         fields = "__all__"
-#         # filterset_class = filters.CategoryFilter
-#         # orderset_class = orders.CategoryOrder
-#         # aggregate_class = aggregates.CategoryAggregate
-#         # fields_class = fieldsets.CategoryFieldSet
-#         search_fields = (
-#             "name",
-#             "description",
-#         )
-#
-#     # @classmethod
-#     # def get_queryset(cls, queryset, info):
-#     #     """Staff or users with view_category permission see everything; others see public only."""
-#     #     user = getattr(info.context, "user", None)
-#     #     if user and user.is_staff:
-#     #         return queryset
-#     #     elif user and user.has_perm("products.view_category"):
-#     #         return queryset.filter(is_private=False)
-#     #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
-#
-#
-# class ItemNode(DjangoType):
-#     class Meta:
-#         model = models.Item
-#         interfaces = (relay.Node,)
-#         fields = "__all__"
-#         # filterset_class = filters.ItemFilter
-#         # orderset_class = orders.ItemOrder
-#         # aggregate_class = aggregates.ItemAggregate
-#         # fields_class = fieldsets.ItemFieldSet
-#         search_fields = (
-#             "name",
-#             "description",
-#             "category__name",
-#             "category__description",
-#         )
-#
-#     # @classmethod
-#     # def get_queryset(cls, queryset, info):
-#     #     """Staff or users with view_item permission see everything; others see public only."""
-#     #     user = getattr(info.context, "user", None)
-#     #     if user and user.is_staff:
-#     #         return queryset
-#     #     elif user and user.has_perm("products.view_item"):
-#     #         return queryset.filter(is_private=False)
-#     #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
-#
-#
-# class PropertyNode(DjangoType):
-#     class Meta:
-#         model = models.Property
-#         interfaces = (relay.Node,)
-#         fields = "__all__"
-#         # filterset_class = filters.PropertyFilter
-#         # orderset_class = orders.PropertyOrder
-#         # aggregate_class = aggregates.PropertyAggregate
-#         # fields_class = fieldsets.PropertyFieldSet
-#         search_fields = (
-#             "name",
-#             "description",
-#             "category__name",
-#             "category__description",
-#         )
-#
-#     # @classmethod
-#     # def get_queryset(cls, queryset, info):
-#     #     """Staff or users with view_property permission see everything; others see public only."""
-#     #     user = getattr(info.context, "user", None)
-#     #     if user and user.is_staff:
-#     #         return queryset
-#     #     elif user and user.has_perm("products.view_property"):
-#     #         return queryset.filter(is_private=False)
-#     #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
-#
-#
-# class EntryNode(DjangoType):
-#     class Meta:
-#         model = models.Entry
-#         interfaces = (relay.Node,)
-#         fields = [
-#             "id",
-#             "value",
-#             # description - not included for permissions testing
-#             "property",
-#             "item",
-#             "is_private",
-#             "created_date",
-#             "updated_date",
-#         ]
-#         # filterset_class = filters.EntryFilter
-#         # orderset_class = orders.EntryOrder
-#         # aggregate_class = aggregates.EntryAggregate
-#         # fields_class = fieldsets.EntryFieldSet
-#         search_fields = (
-#             "value",
-#             "property__name",
-#             "item__name",
-#         )
-#
-#     # @classmethod
-#     # def get_queryset(cls, queryset, info):
-#     #     """Staff or users with view_entry permission see everything; others see public only."""
-#     #     user = getattr(info.context, "user", None)
-#     #     if user and user.is_staff:
-#     #         return queryset
-#     #     elif user and user.has_perm("products.view_entry"):
-#     #         return queryset.filter(is_private=False)
-#     #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
-#
-#
-# # ---------------------------------------------------------------------------
-# # Query
-# # ---------------------------------------------------------------------------
-#
-#
-# @strawberry.type
-# class Query:
-#     category: CategoryNode = relay.node()
-#     all_categories: relay.ListConnection[CategoryNode] = DjangoConnectionField(CategoryNode)
-#
-#     item: ItemNode = relay.node()
-#     all_items: relay.ListConnection[ItemNode] = DjangoConnectionField(ItemNode)
-#
-#     property: PropertyNode = relay.node()
-#     all_properties: relay.ListConnection[PropertyNode] = DjangoConnectionField(PropertyNode)
-#
-#     entry: EntryNode = relay.node()
-#     all_entries: relay.ListConnection[EntryNode] = DjangoConnectionField(EntryNode)
-
-
-# ---------------------------------------------------------------------------
-# Placeholder
-# ---------------------------------------------------------------------------
-# Until DjangoConnectionField and the Layer 3 query features are implemented
-# expose an empty ``Query`` so the project-level schema can still be assembled
+# from strawberry import relay                                       # works today (DONE-011)
+# from django_strawberry_framework import DjangoConnectionField      # TODO-ALPHA-022
+# from django_strawberry_framework import apply_cascade_permissions  # TODO-ALPHA-024
+# from apps.products import aggregates, filters, orders              # TODO-ALPHA-020/021, TODO-BETA-037
+# from apps.products import fields as fieldsets                      # TODO-BETA-035
 
 import strawberry
+
+from django_strawberry_framework import DjangoType
+
+from . import models
+
+
+class CategoryType(DjangoType):
+    class Meta:
+        model = models.Category
+        fields = (
+            "id",
+            "name",
+            "description",
+            "items",
+            "properties",
+            "is_private",
+            "created_date",
+            "updated_date",
+        )
+        # Future Layer-3 additions — uncomment each as the relevant card ships:
+        # interfaces = (relay.Node,)                        # works today (DONE-011)
+        # search_fields = ("name", "description")           # needs TODO-BETA-036
+        # filterset_class = filters.CategoryFilter          # needs TODO-ALPHA-020 + filters.py
+        # orderset_class = orders.CategoryOrder             # needs TODO-ALPHA-021 + orders.py
+        # aggregate_class = aggregates.CategoryAggregate    # needs TODO-BETA-037 + aggregates.py
+        # fields_class = fieldsets.CategoryFieldSet         # needs TODO-BETA-035 + fields.py
+
+    # Future cascade-permission visibility hook — uncomment when TODO-ALPHA-024 ships:
+    #
+    # @classmethod
+    # def get_queryset(cls, queryset, info):
+    #     """Staff or users with view_category permission see everything; others see public only."""
+    #     user = getattr(info.context, "user", None)
+    #     if user and user.is_staff:
+    #         return queryset
+    #     elif user and user.has_perm("products.view_category"):
+    #         return queryset.filter(is_private=False)
+    #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+
+
+class ItemType(DjangoType):
+    class Meta:
+        model = models.Item
+        fields = (
+            "id",
+            "name",
+            "description",
+            "category",
+            "entries",
+            "is_private",
+            "created_date",
+            "updated_date",
+        )
+        # Future Layer-3 additions — uncomment each as the relevant card ships:
+        # interfaces = (relay.Node,)                                                  # works today (DONE-011)
+        # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-036
+        # filterset_class = filters.ItemFilter           # needs TODO-ALPHA-020 + filters.py
+        # orderset_class = orders.ItemOrder              # needs TODO-ALPHA-021 + orders.py
+        # aggregate_class = aggregates.ItemAggregate     # needs TODO-BETA-037 + aggregates.py
+        # fields_class = fieldsets.ItemFieldSet          # needs TODO-BETA-035 + fields.py
+
+    # Future cascade-permission visibility hook — uncomment when TODO-ALPHA-024 ships:
+    #
+    # @classmethod
+    # def get_queryset(cls, queryset, info):
+    #     """Staff or users with view_item permission see everything; others see public only."""
+    #     user = getattr(info.context, "user", None)
+    #     if user and user.is_staff:
+    #         return queryset
+    #     elif user and user.has_perm("products.view_item"):
+    #         return queryset.filter(is_private=False)
+    #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+
+
+class PropertyType(DjangoType):
+    class Meta:
+        model = models.Property
+        fields = (
+            "id",
+            "name",
+            "description",
+            "category",
+            "entries",
+            "is_private",
+            "created_date",
+            "updated_date",
+        )
+        # Future Layer-3 additions — uncomment each as the relevant card ships:
+        # interfaces = (relay.Node,)                                                  # works today (DONE-011)
+        # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-036
+        # filterset_class = filters.PropertyFilter        # needs TODO-ALPHA-020 + filters.py
+        # orderset_class = orders.PropertyOrder           # needs TODO-ALPHA-021 + orders.py
+        # aggregate_class = aggregates.PropertyAggregate  # needs TODO-BETA-037 + aggregates.py
+        # fields_class = fieldsets.PropertyFieldSet       # needs TODO-BETA-035 + fields.py
+
+    # Future cascade-permission visibility hook — uncomment when TODO-ALPHA-024 ships:
+    #
+    # @classmethod
+    # def get_queryset(cls, queryset, info):
+    #     """Staff or users with view_property permission see everything; others see public only."""
+    #     user = getattr(info.context, "user", None)
+    #     if user and user.is_staff:
+    #         return queryset
+    #     elif user and user.has_perm("products.view_property"):
+    #         return queryset.filter(is_private=False)
+    #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+
+
+class EntryType(DjangoType):
+    class Meta:
+        model = models.Entry
+        fields = (
+            "id",
+            "value",
+            "description",   # Future: drop this entry to exercise field-level permission gating (TODO-ALPHA-024)
+            "property",
+            "item",
+            "is_private",
+            "created_date",
+            "updated_date",
+        )
+        # Future Layer-3 additions — uncomment each as the relevant card ships:
+        # interfaces = (relay.Node,)                                # works today (DONE-011)
+        # search_fields = ("value", "property__name", "item__name") # needs TODO-BETA-036
+        # filterset_class = filters.EntryFilter        # needs TODO-ALPHA-020 + filters.py
+        # orderset_class = orders.EntryOrder           # needs TODO-ALPHA-021 + orders.py
+        # aggregate_class = aggregates.EntryAggregate  # needs TODO-BETA-037 + aggregates.py
+        # fields_class = fieldsets.EntryFieldSet       # needs TODO-BETA-035 + fields.py
+
+    # Future cascade-permission visibility hook — uncomment when TODO-ALPHA-024 ships:
+    #
+    # @classmethod
+    # def get_queryset(cls, queryset, info):
+    #     """Staff or users with view_entry permission see everything; others see public only."""
+    #     user = getattr(info.context, "user", None)
+    #     if user and user.is_staff:
+    #         return queryset
+    #     elif user and user.has_perm("products.view_entry"):
+    #         return queryset.filter(is_private=False)
+    #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
 @strawberry.type
 class Query:
-    """Placeholder until ``DjangoType`` and ``DjangoConnectionField`` ship."""
+    """Fakeshop products app root fields."""
+
+    # Future shape — once TODO-ALPHA-022 (`DjangoConnectionField` + Relay
+    # `node()` root helpers) ships, the four `@strawberry.field` resolvers
+    # below collapse into eight class-level attributes:
+    #
+    #     category: CategoryType = relay.node()
+    #     all_categories: relay.ListConnection[CategoryType] = DjangoConnectionField(CategoryType)
+    #
+    #     item: ItemType = relay.node()
+    #     all_items: relay.ListConnection[ItemType] = DjangoConnectionField(ItemType)
+    #
+    #     property: PropertyType = relay.node()
+    #     all_properties: relay.ListConnection[PropertyType] = DjangoConnectionField(PropertyType)
+    #
+    #     entry: EntryType = relay.node()
+    #     all_entries: relay.ListConnection[EntryType] = DjangoConnectionField(EntryType)
+    #
+    # The per-type `interfaces = (relay.Node,)` declarations in each
+    # `*Type` class's Meta block above are what make `relay.node()` work
+    # — uncomment those first.
 
     @strawberry.field
-    def hello(self) -> str:
-        return "fakeshop placeholder"
+    def all_categories(self) -> list[CategoryType]:
+        return models.Category.objects.all()
+
+    @strawberry.field
+    def all_items(self) -> list[ItemType]:
+        return models.Item.objects.all()
+
+    @strawberry.field
+    def all_properties(self) -> list[PropertyType]:
+        return models.Property.objects.all()
+
+    @strawberry.field
+    def all_entries(self) -> list[EntryType]:
+        return models.Entry.objects.all()
 
 
 __all__ = ("Query",)

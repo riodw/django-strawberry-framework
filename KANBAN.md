@@ -6,11 +6,12 @@ This board summarizes what is shipped, what has recently landed, and what remain
 
 ## Card ID format
 
-Every card uses the form `<STATUS>-NNN-X.Y.Z`:
+Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 
-- `<STATUS>` — the column the card lives in: `WIP` (in progress), `TODO` (committed to the roadmap), `BLOCKED` (waiting on a dependency), `BACKLOG` (long-tail / maybe-one-day / ongoing rules), or `DONE` (shipped). Updated when the card moves between columns.
-- `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is planned to be completed (every other card, ordered by planned ship version, ties broken by intra-version dependency order). **Unlike status and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
-- `X.Y.Z` — the package version the card shipped in (Done cards) or is planned to ship in (everything else). `0.0.x` is the placeholder version for cards not yet pinned to a specific patch release (long-tail backlog, ongoing rules, blocked items waiting on their dependency).
+- `<STATUS>` — the column the card lives in: `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), `BLOCKED` (waiting on a dependency), `BACKLOG` (post-1.0 / long-tail / ongoing rules), or `DONE` (shipped). Updated when the card moves between columns.
+- `<MILESTONE>` *(optional)* — the release milestone the card is committed to: `BETA` (for the **0.1.0** parity release) or `STABLE` (for the **1.0.0** stable release). Present on every card that participates in either milestone, regardless of current column. Stays with the card through `WIP` and `DONE` so the post-shipment record preserves milestone affiliation (a Beta card that ships becomes `DONE-BETA-NNN-X.Y.Z`). Omitted on pre-`0.1.0` `DONE` cards and post-`1.0.0` `BACKLOG` cards, which don't belong to either milestone.
+- `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is planned to be completed (every other card, ordered by planned ship version, ties broken by intra-version dependency order). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
+- `X.Y.Z` — the package version the card shipped in (Done cards) or is planned to ship in (everything else). Beta cards span `0.0.6` through `0.0.12` leading up to `0.1.0`; Stable cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. `1.0.x` is the placeholder for post-stable long-tail backlog items and ongoing rules that don't pin to a specific patch.
 
 For install, local development, testing, and the canonical documentation map, start from [`README.md`](README.md).
 
@@ -69,8 +70,8 @@ For install, local development, testing, and the canonical documentation map, st
   - deferred scalar conversions: `BigIntegerField`, `ArrayField`, `JSONField`, `HStoreField`
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
-  - connection-aware planning for Relay-style nested connection selections (new card `BACKLOG-020-0.0.9`)
-- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract (`BACKLOG-038-0.0.x`).
+  - connection-aware planning for Relay-style nested connection selections (new card `TODO-BETA-022-0.0.9`)
+- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract (`BACKLOG-046-1.0.x`).
 - The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
 
 ## Board columns
@@ -79,11 +80,11 @@ For install, local development, testing, and the canonical documentation map, st
 
 _No slice in progress._
 
-## To do
+## To Do - Beta (0.1.0)
 
-Cards are listed in NNN order, which equals planned ship order (lowest ship version first, ties broken by intra-version dependency order). Dependencies and parallelism notes live on each card; this list is the single source of truth for sequencing.
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
-### TODO-012-0.0.6 — Deferred scalar conversions
+### TODO-BETA-012-0.0.6 — Deferred scalar conversions
 
 Priority: medium
 
@@ -116,31 +117,7 @@ Files likely touched:
 - `django_strawberry_framework/types/converters.py`
 - `tests/types/test_converters.py`
 
-### TODO-013-0.0.6 — `FieldSet`
-
-Priority: high for Layer 3
-
-Status: needs spec or implementation slice
-
-Why first:
-
-- `FieldSet` is the smallest Layer 3 surface and can define field-selection semantics used by `DjangoConnectionField`.
-- It bridges the existing `DjangoType.Meta.fields` behavior and future connection/query APIs.
-
-Foundation-slice seam:
-
-- `DjangoTypeDefinition.fields_class` is the forward-reserved slot the collection phase will populate.
-- `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also `BACKLOG-038-0.0.x` for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
-
-Definition of done:
-
-- Add `docs/spec-fieldset.md`.
-- Implement `django_strawberry_framework/fieldset.py`.
-- Add `tests/test_fieldset.py`.
-- Keep the API Meta-class-driven.
-- Do not top-level export until the public-surface rules are satisfied.
-
-### TODO-014-0.0.7 — Multiple DjangoTypes per model with `Meta.primary`
+### TODO-BETA-013-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`
 
 Priority: high
 
@@ -183,7 +160,50 @@ Files likely touched:
 - `tests/test_registry.py`
 - `tests/types/test_base.py`
 
-### TODO-015-0.0.7 — `DjangoListField` (non-Relay list)
+### TODO-BETA-014-0.0.6 — Consumer override semantics (scalar fields)
+
+Priority: high
+
+Status: ready for design, not implementation-by-assumption
+
+Note: the foundation slice (`DONE-006-0.0.4`) pins the consumer-override contract for **relation fields only** (`DjangoTypeDefinition.consumer_annotated_relations`, finalizer skip). This card now covers the remaining scalar-field override semantics.
+
+Current behavior:
+
+- `DjangoType.__init_subclass__` merges consumer annotations over synthesized annotations for both scalar and relation fields, but only the relation-field path is part of the stable 0.0.4 contract.
+- Strawberry later rewrites class annotation/field metadata for scalars, so the scalar override is not a reliable public contract.
+- `test_consumer_annotation_overrides_synthesized` remains skipped.
+
+Why it matters:
+
+- Consumers need a stable way to customize generated scalar fields without abandoning `DjangoType`.
+- The package should not claim scalar-annotation overrides survive end-to-end until they actually do.
+
+Open design choices:
+
+- Use Strawberry field customization APIs.
+- Add explicit `Meta.field_overrides`.
+- Support annotation overrides by controlling the timing of Strawberry finalization (the foundation slice already moves Strawberry finalization into `finalize_django_types()`, which makes this design cheaper to land later).
+
+Definition of done:
+
+- New spec, probably `docs/spec-consumer_overrides.md`.
+- Clear supported override forms for scalars:
+  - type annotation override
+  - resolver override
+  - field description/deprecation/default metadata
+  - opt-out/removal behavior
+- The skipped override test is either unskipped and passes or replaced with the accepted explicit mechanism.
+- README and contract docs describe the supported path.
+
+Files likely touched:
+
+- `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/types/resolvers.py`
+- `tests/types/test_base.py`
+
+
+### TODO-BETA-015-0.0.7 — `DjangoListField` (non-Relay list)
 
 Priority: medium (⚛️ parity-required)
 
@@ -202,7 +222,7 @@ Verified in upstream:
 
 Definition of done:
 
-- Implement `DjangoListField` in `django_strawberry_framework/list_field.py` (or alongside `DjangoConnectionField` in `connection.py` from `TODO-018-0.0.9` — decide during the spec).
+- Implement `DjangoListField` in `django_strawberry_framework/list_field.py` (or alongside `DjangoConnectionField` in `connection.py` from `TODO-BETA-020-0.0.9` — decide during the spec).
 - Default resolver pulls `model.objects.all()`, calls `cls.get_queryset(queryset, info)`, and returns the queryset; composes with the existing optimizer extension (root querysets are already planned).
 - Tests under `tests/test_list_field.py`.
 - Live HTTP coverage replacing one of the hand-rolled `all_library_*` resolvers in `examples/fakeshop/apps/library/schema.py`.
@@ -213,7 +233,31 @@ Files likely touched:
 - `tests/test_list_field.py`
 - `examples/fakeshop/apps/library/schema.py`
 
-### TODO-016-0.0.8 — Filtering subsystem
+### TODO-BETA-016-0.0.7 — `apps.py` and Django app config
+
+Priority: medium
+
+Status: planned
+
+Definition of done:
+
+- Add `django_strawberry_framework/apps.py`.
+- Add `tests/test_apps.py`.
+- Do not add settings placeholders unless a shipped feature consumes them.
+
+### TODO-BETA-017-0.0.7 — Schema export management command
+
+Priority: medium
+
+Status: planned
+
+Definition of done:
+
+- Add `django_strawberry_framework/management/commands/export_schema.py`.
+- Add `tests/management/test_export_schema.py`.
+- Test through `django.core.management.call_command`, not direct `handle()` calls.
+
+### TODO-BETA-018-0.0.8 — Filtering subsystem
 
 Priority: high for package positioning (⚛️&🍓 parity-required)
 
@@ -258,14 +302,14 @@ Definition of done:
 - Expose enough introspection for one type definition to show what filter surface it supports.
 - Use fakeshop flows where practical, but package tests belong under `tests/filters/`.
 - Validate Django ORM query generation for N+1 opportunities when filters traverse relations.
-- Decide whether the input-type factory's namespace shares the `TypeRegistry` or has its own (interacts with `TODO-014-0.0.7` and the `Meta.primary` design).
+- Decide whether the input-type factory's namespace shares the `TypeRegistry` or has its own (interacts with `TODO-BETA-013-0.0.6` and the `Meta.primary` design).
 
 Dependencies:
 
 - Field selection semantics may affect filter argument generation.
 - `utils/queryset.py` may become useful here.
 
-### TODO-017-0.0.8 — Ordering subsystem
+### TODO-BETA-019-0.0.8 — Ordering subsystem
 
 Priority: high after filters
 
@@ -293,7 +337,7 @@ Definition of done:
 - Define interaction with filters and connection field.
 - Keep ordering declarations introspectable from the owning type/query surface.
 
-### TODO-018-0.0.9 — `DjangoConnectionField`
+### TODO-BETA-020-0.0.9 — `DjangoConnectionField`
 
 Priority: high once filters/orders/fieldset are stable
 
@@ -308,7 +352,7 @@ Foundation-slice seam:
 
 - `finalize_django_types()` is the single architectural entry point that `DjangoConnectionField(DjangoType)` (and `DjangoNodeField`) will auto-trigger as their wrapper. Spec note: `docs/spec-foundation.md:65` already calls this out as a later-phase wrapper around the same finalizer.
 - An auto-trigger wrapper must respect the single-threaded-setup window from `docs/spec-foundation.md:63`: either be constrained to schema-construction time, or acquire a real lock around the finalizer.
-- Connection-aware optimizer planning is its own follow-up slice (`BACKLOG-020-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
+- Connection-aware optimizer planning is its own follow-up slice (`TODO-BETA-022-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
 
 Definition of done:
 
@@ -325,7 +369,41 @@ Dependencies:
 - `OrderSet`
 - Relay/interface decisions
 
-### TODO-019-0.0.9 — Permissions subsystem
+### TODO-BETA-022-0.0.9 — Connection-aware optimizer planning
+
+Priority: medium (gated on `TODO-BETA-020-0.0.9` / Relay decisions)
+
+Status: planned
+
+Current behavior:
+
+- The optimizer's plan cache, `select_related` / `prefetch_related` planning, FK-id elision, and queryset diffing are all proven for direct selection trees and nested non-Relay relation paths.
+- Relay-style nested connection selections (`{ allObjects { edges { node { values { edges { node { value } } } } } } }`, mirroring the cookbook recipes shape) have not been exercised against the optimizer.
+- The cookbook reference `AdvancedDjangoFilterConnectionField` does its own argument and queryset construction; the Strawberry equivalent will need the optimizer to recognize Relay edge/node wrappers in its selection walk.
+
+Potential scope:
+
+- Selection-tree walker awareness of Relay `edges { node { ... } }` pattern.
+- Connection-pagination-aware queryset planning (`Prefetch` downgrade for `connection { edges { node } }`, `total_count` aggregate cooperation, slice-aware projections).
+- Plan-cache key hygiene for paginated selections (skip pagination args that do not affect selection shape, hash the ones that do).
+- Strictness-mode interaction with connection paths so unplanned nested connection access still surfaces as N+1.
+
+Definition of done:
+
+- New spec, probably `docs/spec-connection_optimizer.md` (or folded into `docs/spec-connection.md`).
+- Walker recognizes connection edge/node shapes without reaching into `DjangoConnectionField` internals.
+- Tests cover the cookbook-equivalent nested-connection shape against fakeshop or the cardinality fixture.
+- No regression on the existing B1-B8 plan-cache and queryset-diff coverage.
+
+Files likely touched:
+
+- `django_strawberry_framework/optimizer/walker.py`
+- `django_strawberry_framework/optimizer/plans.py`
+- `django_strawberry_framework/optimizer/extension.py`
+- future `django_strawberry_framework/connection.py`
+- mirrored optimizer tests
+
+### TODO-BETA-023-0.0.10 — Permissions subsystem
 
 Priority: high for the fakeshop example and real usage
 
@@ -358,7 +436,7 @@ Dependencies:
 - optimizer `Prefetch` downgrade
 - future `DjangoConnectionField`
 
-### TODO-022-0.0.10 — Mutations + auto-generated Input types
+### TODO-BETA-024-0.0.11 — Mutations + auto-generated Input types
 
 Priority: high (🍓 parity-required)
 
@@ -380,14 +458,14 @@ Definition of done:
 - Add `docs/spec-mutations.md`.
 - Implement `django_strawberry_framework/mutations/` (sets, fields, resolvers, input-type generation) on the DRF-style Meta surface (`Meta.input_class`, `Meta.partial_input_class`, etc.).
 - Auto-generated input types respect the relation-override contract pinned in `DONE-006-0.0.4`.
-- Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-023-0.0.10`, `TODO-024-0.0.10`, and `TODO-025-0.0.10`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
+- Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-BETA-025-0.0.11`, `TODO-BETA-026-0.0.11`, and `TODO-BETA-027-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
 - Tests under `tests/mutations/`.
 - Live HTTP coverage under `examples/fakeshop/test_query/` exercising the products write surface.
 
 Dependencies:
 
-- `TODO-014-0.0.7` (`Meta.primary`) — explicit primary type drives mutation target resolution.
-- `TODO-019-0.0.9` (permissions) — write mutations need to compose with `apply_cascade_permissions`.
+- `TODO-BETA-013-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution.
+- `TODO-BETA-023-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`.
 
 Files likely touched:
 
@@ -396,13 +474,13 @@ Files likely touched:
 - `tests/mutations/` (new)
 - `examples/fakeshop/apps/products/schema.py`
 
-### TODO-023-0.0.10 — Upload scalar and file / image field mapping
+### TODO-BETA-025-0.0.11 — Upload scalar and file / image field mapping
 
 Priority: medium (🍓 parity-required)
 
 Severity: **medium**
 
-Status: planned; pairs with `TODO-022-0.0.10` for the write side
+Status: planned; pairs with `TODO-BETA-024-0.0.11` for the write side
 
 Why it matters:
 
@@ -415,7 +493,7 @@ Verified in upstream:
 Definition of done:
 
 - Scalar conversion in `types/converters.py` returns `DjangoFileType` / `DjangoImageType` (or local equivalents) for `FileField` / `ImageField`.
-- Mutation input-type generation (`TODO-022-0.0.10`) maps the same fields to Strawberry's `Upload` scalar.
+- Mutation input-type generation (`TODO-BETA-024-0.0.11`) maps the same fields to Strawberry's `Upload` scalar.
 - Synthetic-model tests cover both read and write paths.
 - `docs/FEATURES.md` documents the conversion table change.
 
@@ -425,7 +503,7 @@ Files likely touched:
 - `django_strawberry_framework/mutations/` (input mapping)
 - `tests/types/test_converters.py`
 
-### TODO-024-0.0.10 — Form-based mutations (Django Forms / ModelForms)
+### TODO-BETA-026-0.0.11 — Form-based mutations (Django Forms / ModelForms)
 
 Priority: high (⚛️ parity-required)
 
@@ -436,7 +514,7 @@ Status: needs spec — no on-board predecessor
 Why it matters:
 
 - `graphene-django` ships `DjangoFormMutation` and `DjangoModelFormMutation`: mutation classes that consume a Django `Form` / `ModelForm` and translate field validation + `cleaned_data` into a GraphQL mutation surface. Many graphene-django consumers rely on this as their write-side abstraction because it reuses validation they already have.
-- Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `TODO-022-0.0.10`.
+- Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `TODO-BETA-024-0.0.11`.
 
 Verified in upstream:
 
@@ -449,13 +527,13 @@ Definition of done:
 - Add `docs/spec-form_mutations.md`.
 - Implement `django_strawberry_framework/forms/` on the DRF-style Meta surface (`Meta.form_class`, `Meta.return_field_name`, etc.) rather than graphene's `MutationOptions` pattern.
 - Form-field → Strawberry input mapping lives in `forms/converter.py` and reuses the scalar conversion registry where field types overlap.
-- Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `TODO-022-0.0.10`, populated from `form.errors`.
+- Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `TODO-BETA-024-0.0.11`, populated from `form.errors`.
 - Tests under `tests/forms/`.
 - Live HTTP coverage under `examples/fakeshop/test_query/` exercising both a plain `Form` mutation and a `ModelForm` mutation.
 
 Dependencies:
 
-- `TODO-022-0.0.10` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to.
+- `TODO-BETA-024-0.0.11` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to.
 
 Files likely touched:
 
@@ -463,7 +541,7 @@ Files likely touched:
 - `tests/forms/` (new)
 - `examples/fakeshop/apps/products/schema.py`
 
-### TODO-025-0.0.10 — DRF serializer mutations (`SerializerMutation`)
+### TODO-BETA-027-0.0.11 — DRF serializer mutations (`SerializerMutation`)
 
 Priority: high (⚛️ parity-required)
 
@@ -488,13 +566,13 @@ Definition of done:
 - Implement `django_strawberry_framework/rest_framework/` exposing `SerializerMutation` (final name pinned during implementation) on the DRF-style Meta surface: `Meta.serializer_class`, `Meta.lookup_field`, `Meta.model_operations`, `Meta.optional_fields`.
 - Serializer-field → Strawberry input mapping lives in `rest_framework/serializer_converter.py`, dual-purposed for inputs and outputs (mirroring graphene's `is_input=True` flag).
 - `rest_framework` is a soft dependency: package import must succeed without DRF installed; the helper raises `ImportError` with an install hint when actually called.
-- Validation errors surface through the shared `errors: list[FieldError]` envelope from `TODO-022-0.0.10`, populated from `serializer.errors`.
+- Validation errors surface through the shared `errors: list[FieldError]` envelope from `TODO-BETA-024-0.0.11`, populated from `serializer.errors`.
 - Tests under `tests/rest_framework/`.
 - Live HTTP coverage under `examples/fakeshop/test_query/` exercising a `ModelSerializer` mutation.
 
 Dependencies:
 
-- `TODO-022-0.0.10` — general mutation infrastructure (including the shared `errors` envelope).
+- `TODO-BETA-024-0.0.11` — general mutation infrastructure (including the shared `errors` envelope).
 
 Files likely touched:
 
@@ -502,50 +580,235 @@ Files likely touched:
 - `tests/rest_framework/` (new)
 - `examples/fakeshop/apps/products/schema.py`
 
-### TODO-026-0.0.10 — Consumer override semantics (scalar fields)
+### TODO-BETA-028-0.0.11 — Auth mutations (login / logout / register)
 
-Priority: high
+Priority: medium (🍓 parity-required)
 
-Status: ready for design, not implementation-by-assumption
+Severity: **medium**
 
-Note: the foundation slice (`DONE-006-0.0.4`) pins the consumer-override contract for **relation fields only** (`DjangoTypeDefinition.consumer_annotated_relations`, finalizer skip). This card now covers the remaining scalar-field override semantics.
-
-Current behavior:
-
-- `DjangoType.__init_subclass__` merges consumer annotations over synthesized annotations for both scalar and relation fields, but only the relation-field path is part of the stable 0.0.4 contract.
-- Strawberry later rewrites class annotation/field metadata for scalars, so the scalar override is not a reliable public contract.
-- `test_consumer_annotation_overrides_synthesized` remains skipped.
+Status: planned; depends on `TODO-BETA-024-0.0.11`
 
 Why it matters:
 
-- Consumers need a stable way to customize generated scalar fields without abandoning `DjangoType`.
-- The package should not claim scalar-annotation overrides survive end-to-end until they actually do.
+- `strawberry-graphql-django` ships a small auth-mutations module so consumers don't have to hand-wire the most common Django auth flows. Natural follow-on once general mutations land.
 
-Open design choices:
+Verified in upstream:
 
-- Use Strawberry field customization APIs.
-- Add explicit `Meta.field_overrides`.
-- Support annotation overrides by controlling the timing of Strawberry finalization (the foundation slice already moves Strawberry finalization into `finalize_django_types()`, which makes this design cheaper to land later).
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/auth/` — `mutations.py` (login / logout / register), `queries.py` (`current_user`), `utils.py`.
 
 Definition of done:
 
-- New spec, probably `docs/spec-consumer_overrides.md`.
-- Clear supported override forms for scalars:
-  - type annotation override
-  - resolver override
-  - field description/deprecation/default metadata
-  - opt-out/removal behavior
-- The skipped override test is either unskipped and passes or replaced with the accepted explicit mechanism.
-- README and contract docs describe the supported path.
+- Implement `django_strawberry_framework/auth/` with `login_mutation`, `logout_mutation`, `register_mutation`, and a `current_user` query helper, each composable with the existing permissions surface.
+- Mirrored tests under `tests/auth/`.
+- Documented as opt-in: consumers must import explicitly; auth mutations are not injected into every schema.
+
+### TODO-BETA-029-0.0.12 — Channels ASGI router (migration aid)
+
+Priority: low (🍓 parity-required; small slice; explicit migration aid)
+
+Severity: **low**
+
+Status: planned
+
+Why it matters:
+
+- `strawberry-graphql-django` ships a small `routers.py` that builds a `ProtocolTypeRouter` over `GraphQLHTTPConsumer` and `GraphQLWSConsumer` for consumers using Channels. The module is ~30 lines but is the single import that makes ASGI / WebSocket migration painless.
+- Shipping a functionally-equivalent helper lets strawberry-graphql-django migrants update one import line in their ASGI entrypoint. This card exists primarily to reduce migration friction, not to expand the API surface.
+
+Verified in upstream:
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/routers.py` — `AuthGraphQLProtocolTypeRouter` wrapping `ProtocolTypeRouter`, `URLRouter`, `AllowedHostsOriginValidator`, `AuthMiddlewareStack`, plus `GraphQLHTTPConsumer` / `GraphQLWSConsumer`.
+
+Architectural posture:
+
+- The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`](GOAL.md) non-goal "a thin wrapper around `strawberry-graphql-django`".
+- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-STABLE-041-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+
+Definition of done:
+
+- Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
+- `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
+- Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
+- Migration guide (`TODO-STABLE-041-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+
+### TODO-BETA-030-0.0.12 — Debug-toolbar middleware
+
+Priority: low (🍓 parity-adjacent; developer experience)
+
+Severity: **low**
+
+Status: planned
+
+Why it matters:
+
+- `strawberry-graphql-django` ships a `middlewares/debug_toolbar.py` so `django-debug-toolbar`'s SQL panel captures queries triggered by GraphQL resolvers. Without it, developers can't see the SQL hit by their queries during a `/graphql/` request.
+
+Verified in upstream:
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/middlewares/debug_toolbar.py`.
+
+Definition of done:
+
+- Implement `django_strawberry_framework/middleware/debug_toolbar.py` exposing a middleware class that lets `django-debug-toolbar` capture SQL through the Strawberry view.
+- `debug_toolbar` is a soft dependency.
+- In-process test against a fakeshop request that emits SQL.
+
+### TODO-BETA-031-0.0.12 — Test client helper
+
+Priority: low (⚛️&🍓 parity-adjacent; developer experience)
+
+Severity: **low**
+
+Status: planned
+
+Why it matters:
+
+- `strawberry-graphql-django` ships `strawberry_django.test.client.TestClient`, a thin wrapper around `django.test.Client` that posts GraphQL requests with the right content type, parses the response, and exposes `.query(...)` / `.mutate(...)`.
+- `graphene-django` ships `graphene_django.utils.testing` with `GraphQLTestCase` / `graphql_query` helpers covering the same need.
+- The fakeshop live tests already do this by hand; centralizing the pattern is a small win for consumers and keeps our HTTP tests crisp.
+
+Verified in upstream:
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/test/client.py` — `TestClient`, `AsyncTestClient`.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/utils/testing.py` — `GraphQLTestCase`, `graphql_query`.
+
+Definition of done:
+
+- Implement `django_strawberry_framework/test/client.py` with `TestClient` / `AsyncTestClient` plus a `GraphQLTestCase` subclass for the unittest crowd.
+- Live HTTP tests under `examples/fakeshop/test_query/` switch to the helper.
+- Tests under `tests/test/test_client.py`.
+
+### TODO-BETA-032-0.0.12 — Response-extensions debug middleware
+
+Priority: low (⚛️ parity-adjacent; developer experience)
+
+Severity: **low**
+
+Status: planned; distinct from `TODO-BETA-030-0.0.12` (Django debug toolbar)
+
+Why it matters:
+
+- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-BETA-030-0.0.12` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
+- A Strawberry-native equivalent is a small `SchemaExtension` that captures SQL through `django.db.connection.queries` and attaches the result to the response's `extensions` map.
+
+Verified in upstream:
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py` — `DjangoDebugContext`, `DjangoDebugMiddleware` (wraps cursors, captures exceptions, resolves the `_debug` object on result).
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/types.py` — `class DjangoDebug(ObjectType)` with `sql: List(DjangoDebugSQL)` and `exceptions: List(DjangoDebugException)`.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/tracking.py` and `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/formating.py` — cursor wrapping and exception serialization.
+
+Definition of done:
+
+- Implement `django_strawberry_framework/extensions/debug.py` as a Strawberry `SchemaExtension` that captures SQL and exceptions and attaches them to the response `extensions` map (key: `debug`).
+- Off by default; opt-in via the extensions list passed to `strawberry.Schema(...)`.
+- Tests under `tests/extensions/test_debug.py` against a fakeshop request that emits SQL.
+- Documented as the response-side counterpart to `TODO-BETA-030-0.0.12`.
 
 Files likely touched:
 
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/types/resolvers.py`
-- `tests/types/test_base.py`
+- `django_strawberry_framework/extensions/` (new)
+- `tests/extensions/` (new)
 
+### TODO-BETA-033-0.1.0 — Beta release (cleanup, verification, alpha → beta)
 
-### TODO-027-0.0.11 — Aggregation subsystem
+Priority: high — release card
+
+Severity: **major** (release-blocking)
+
+Status: planned; this is the final card in the Beta queue and gates the alpha → beta milestone
+
+Why it matters:
+
+- This card is the formal cut-over from pre-alpha (`0.0.x`) to beta (`0.1.0`). When every other Beta card is in `DONE`, this card is the only thing left between the current state and the beta release. It exists to make the milestone explicit and to give the cleanup / verification work a place to live.
+- Without a dedicated release card, the alpha → beta transition becomes an unstructured handful of doc tweaks and version bumps spread across the last few patches. Tracking it explicitly forces the parity audit and the full test pass to happen on a single named slice.
+
+Definition of done:
+
+- Every other Beta card (`TODO-BETA-012-0.0.6` through `TODO-BETA-032-0.0.12` plus `BLOCKED-BETA-021-0.0.9`) is in `DONE`.
+- Full test pass under each supported `(Python, Django, Strawberry)` combination.
+- Coverage stays at 100% for the package source tree.
+- Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
+- `CHANGELOG.md` `[Unreleased]` block promoted to `## [0.1.0] - YYYY-MM-DD` with a one-paragraph release summary plus the cumulative Added / Changed / Fixed / Removed sections covering `0.0.6` through `0.0.12`.
+- `README.md`, `docs/README.md`, `docs/FEATURES.md`, and `docs/TREE.md` cross-checked against the actual shipped surface; "shipped" / "planned" status markers updated.
+- Audit pass against the parity findings: every ⚛️ and 🍓 card from the two upstream audits is either `DONE` or explicitly deferred with a recorded reason.
+- Tag the release in git and publish to PyPI.
+
+Files likely touched:
+
+- `pyproject.toml`
+- `django_strawberry_framework/__init__.py`
+- `tests/base/test_init.py`
+- `uv.lock`
+- `CHANGELOG.md`
+- `README.md`, `docs/README.md`, `docs/FEATURES.md`, `docs/TREE.md`
+
+## To Do - Stable (1.0.0)
+
+Cards that complete the django-graphene-filters Layer-3 richness on top of parity (`fields_class`, `aggregate_class`, `search_fields`, plus pre-stable cleanup). Each card targets its own `0.1.x` patch within the road to **1.0.0**. The final card in this column is the `1.0.0` release itself (API freeze, cleanup, verification, beta → stable cut-over). Cards in NNN order = planned ship order.
+
+### TODO-STABLE-034-0.1.1 — `FieldSet`
+
+Priority: high for Layer 3
+
+Status: needs spec or implementation slice
+
+Why first:
+
+- `FieldSet` is the smallest Layer 3 surface and can define field-selection semantics used by `DjangoConnectionField`.
+- It bridges the existing `DjangoType.Meta.fields` behavior and future connection/query APIs.
+
+Foundation-slice seam:
+
+- `DjangoTypeDefinition.fields_class` is the forward-reserved slot the collection phase will populate.
+- `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also `BACKLOG-046-1.0.x` for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
+
+Definition of done:
+
+- Add `docs/spec-fieldset.md`.
+- Implement `django_strawberry_framework/fieldset.py`.
+- Add `tests/test_fieldset.py`.
+- Keep the API Meta-class-driven.
+- Do not top-level export until the public-surface rules are satisfied.
+
+### TODO-STABLE-035-0.1.2 — `Meta.search_fields` support
+
+Priority: high for django-graphene-filters parity
+
+Severity: **medium**
+
+Status: planned; gated on `TODO-BETA-018-0.0.8` (Filtering) and `TODO-BETA-020-0.0.9` (DjangoConnectionField)
+
+Why it matters:
+
+- `Meta.search_fields` is one of the five django-graphene-filters Layer-3 Meta keys explicitly listed in [`GOAL.md`](GOAL.md) alongside `filterset_class`, `orderset_class`, `aggregate_class`, and `fields_class`. Without it the package cannot claim full DGF parity at 1.0.0.
+- Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-STABLE-039-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap.
+
+Verified reference shape:
+
+- `django-graphene-filters` exposes `Meta.search_fields = ("name", "description", "category__name")` — a tuple of model-field paths. The connection field gains a single `search: String` argument that fans out across the listed fields as an OR'd `icontains` filter, traversing relations through Django's standard ORM lookup syntax.
+
+Definition of done:
+
+- Add `docs/spec-search_fields.md`.
+- Search-fields argument generation lives in `django_strawberry_framework/filters/` and reuses the same DRF-style Meta surface and argument-factory machinery as `filterset_class`.
+- Single `search: String` argument surfaces on `DjangoConnectionField` consumers and produces an OR'd `icontains` queryset filter across every declared field path.
+- Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `BLOCKED-041`).
+- Tests under `tests/filters/test_search_fields.py` covering single-field, relation-path, and combined-with-filterset cases.
+- Live HTTP coverage under `examples/fakeshop/test_query/` exercising a search across at least one relation path.
+
+Dependencies:
+
+- `TODO-BETA-018-0.0.8` (Filtering subsystem) — the argument factory is shared.
+- `TODO-BETA-020-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields.
+
+Files likely touched:
+
+- `django_strawberry_framework/filters/` (search support)
+- `django_strawberry_framework/types/base.py` (Meta validation; promote key)
+- `tests/filters/test_search_fields.py` (new)
+- `examples/fakeshop/apps/products/schema.py` (activation)
+
+### TODO-STABLE-036-0.1.3 — Aggregation subsystem
 
 Priority: medium-high
 
@@ -574,115 +837,7 @@ Definition of done:
 - Validate generated queryset aggregation paths.
 - Keep aggregation declarations composable with filters, ordering, and connection field behavior.
 
-## Blocked
-
-### BLOCKED-021-0.0.9 — Full Relay story
-
-Resolved blockers (Node half shipped in `DONE-011-0.0.5`, `0.0.5`):
-
-- ~~`Meta.interfaces` design~~ — shipped as `DONE-011-0.0.5`.
-- ~~`GlobalID` mapping decision~~ — shipped as `DONE-011-0.0.5` (Decision 2 of [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md)).
-
-Remaining blocker (Connection half still blocked):
-
-- `DjangoConnectionField` design (pending; `TODO-018-0.0.9`)
-
-Unblocks:
-
-- Relay node queries (shipped via `DONE-011-0.0.5`).
-- fakeshop aspirational schema activation (Connection half still blocked).
-- connection field public surface (Connection half still blocked).
-
-### BLOCKED-032-0.1.0 — Product-catalog Layer 3 HTTP GraphQL tests
-
-Blocked by:
-
-- activating the product-catalog fakeshop GraphQL schema
-- connection/query fields and other Layer 3 public surfaces
-
-Current state:
-
-- The library app already has live `/graphql/` acceptance tests under `examples/fakeshop/test_query/`.
-- Future product-catalog HTTP tests should use the same placement and schema-reload pattern.
-- In-process `schema.execute_sync` tests still go under `examples/fakeshop/tests/`.
-
-### BLOCKED-041-0.0.x — Layer 3 Meta key promotion
-
-Blocked by:
-
-- each Layer 3 subsystem implementation
-
-Affected keys:
-
-- `filterset_class`
-- `orderset_class`
-- `aggregate_class`
-- `fields_class`
-- `search_fields`
-
-Rule:
-
-- Do not move a key from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` until the pipeline applies it end-to-end.
-
-## Backlog
-
-### BACKLOG-020-0.0.9 — Connection-aware optimizer planning
-
-Priority: medium (gated on `TODO-018-0.0.9` / Relay decisions)
-
-Status: planned
-
-Current behavior:
-
-- The optimizer's plan cache, `select_related` / `prefetch_related` planning, FK-id elision, and queryset diffing are all proven for direct selection trees and nested non-Relay relation paths.
-- Relay-style nested connection selections (`{ allObjects { edges { node { values { edges { node { value } } } } } } }`, mirroring the cookbook recipes shape) have not been exercised against the optimizer.
-- The cookbook reference `AdvancedDjangoFilterConnectionField` does its own argument and queryset construction; the Strawberry equivalent will need the optimizer to recognize Relay edge/node wrappers in its selection walk.
-
-Potential scope:
-
-- Selection-tree walker awareness of Relay `edges { node { ... } }` pattern.
-- Connection-pagination-aware queryset planning (`Prefetch` downgrade for `connection { edges { node } }`, `total_count` aggregate cooperation, slice-aware projections).
-- Plan-cache key hygiene for paginated selections (skip pagination args that do not affect selection shape, hash the ones that do).
-- Strictness-mode interaction with connection paths so unplanned nested connection access still surfaces as N+1.
-
-Definition of done:
-
-- New spec, probably `docs/spec-connection_optimizer.md` (or folded into `docs/spec-connection.md`).
-- Walker recognizes connection edge/node shapes without reaching into `DjangoConnectionField` internals.
-- Tests cover the cookbook-equivalent nested-connection shape against fakeshop or the cardinality fixture.
-- No regression on the existing B1-B8 plan-cache and queryset-diff coverage.
-
-Files likely touched:
-
-- `django_strawberry_framework/optimizer/walker.py`
-- `django_strawberry_framework/optimizer/plans.py`
-- `django_strawberry_framework/optimizer/extension.py`
-- future `django_strawberry_framework/connection.py`
-- mirrored optimizer tests
-
-### BACKLOG-028-0.0.11 — Auth mutations (login / logout / register)
-
-Priority: medium (🍓 parity-required)
-
-Severity: **medium**
-
-Status: planned; depends on `TODO-022-0.0.10`
-
-Why it matters:
-
-- `strawberry-graphql-django` ships a small auth-mutations module so consumers don't have to hand-wire the most common Django auth flows. Natural follow-on once general mutations land.
-
-Verified in upstream:
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/auth/` — `mutations.py` (login / logout / register), `queries.py` (`current_user`), `utils.py`.
-
-Definition of done:
-
-- Implement `django_strawberry_framework/auth/` with `login_mutation`, `logout_mutation`, `register_mutation`, and a `current_user` query helper, each composable with the existing permissions surface.
-- Mirrored tests under `tests/auth/`.
-- Documented as opt-in: consumers must import explicitly; auth mutations are not injected into every schema.
-
-### BACKLOG-029-0.0.12 — Stable choice enum naming override
+### TODO-STABLE-038-0.1.4 — Stable choice enum naming override
 
 Priority: low-medium
 
@@ -714,38 +869,7 @@ Files likely touched:
 - `django_strawberry_framework/registry.py`
 - `tests/types/test_converters.py`
 
-### BACKLOG-030-0.0.13 — Model-property optimization hints
-
-Priority: low-medium
-
-Status: deferred
-
-Current behavior:
-
-- The optimizer plans Django model fields and relation fields.
-- `Meta.optimizer_hints` controls relation planning only.
-- Model properties and cached properties are not part of the optimizer contract.
-
-Potential scope:
-
-- Evaluate `model_property` / `cached_model_property` style hints after the core optimizer has real-world use.
-- Decide whether property hints belong in `Meta.optimizer_hints`, a separate `Meta.property_hints`, or field customization.
-- Define how property dependencies declare the Django columns or relations they require.
-
-Definition of done:
-
-- New spec defines supported property hint syntax and interaction with `only()`, `select_related`, and `prefetch_related`.
-- Implementation lets computed fields declare required columns/relations without broadening every query.
-- Tests cover plain properties, cached properties, relation-dependent properties, and failure modes.
-
-Files likely touched:
-
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/optimizer/walker.py`
-- `django_strawberry_framework/optimizer/plans.py`
-- `tests/optimizer/`
-
-### BACKLOG-031-0.1.0 — Fakeshop GraphQL schema activation
+### TODO-STABLE-039-0.1.5 — Fakeshop GraphQL schema activation
 
 Priority: medium
 
@@ -764,69 +888,7 @@ Definition of done:
 - Add in-process schema tests under `examples/fakeshop/tests/`.
 - Add live `/graphql/` tests under `examples/fakeshop/test_query/` only when testing the HTTP endpoint.
 
-### BACKLOG-033-0.0.x — `apps.py` and Django app config
-
-Priority: medium
-
-Status: planned
-
-Definition of done:
-
-- Add `django_strawberry_framework/apps.py`.
-- Add `tests/test_apps.py`.
-- Do not add settings placeholders unless a shipped feature consumes them.
-
-### BACKLOG-034-0.0.x — Schema export management command
-
-Priority: medium
-
-Status: planned
-
-Definition of done:
-
-- Add `django_strawberry_framework/management/commands/export_schema.py`.
-- Add `tests/management/test_export_schema.py`.
-- Test through `django.core.management.call_command`, not direct `handle()` calls.
-
-### BACKLOG-035-0.0.x — `utils/queryset.py`
-
-Priority: medium
-
-Status: planned
-
-Potential scope:
-
-- queryset introspection helpers
-- prefetch-cache awareness helpers
-- reusable utilities currently embedded in optimizer/resolver modules if they become cross-subsystem needs
-
-Definition of done:
-
-- Add only when at least one shipped feature needs it.
-- Add mirrored `tests/utils/test_queryset.py`.
-
-### BACKLOG-036-0.0.x — Public surface promotion discipline
-
-Priority: medium
-
-Status: ongoing
-
-Current behavior:
-
-- Top-level exports currently include `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto`, and `__version__`.
-- Future names must follow the public-surface promotion discipline in this card.
-- README/TREE language should use the public-surface status vocabulary: `shipped`, `partial`, `experimental`, `planned`, `in flight`, `deferred`, and `aspirational`.
-
-Definition of done for each future public symbol:
-
-- Implementation shipped end-to-end.
-- Tests pin consumer-visible behavior.
-- Docs mark it shipped.
-- API name is stable enough for alpha.
-- Top-level `__all__` and subpackage exports are updated together.
-- README/TREE status markers match the symbol's actual implementation state.
-
-### BACKLOG-037-0.0.x — Migration and adoption guides
+### TODO-STABLE-041-0.1.6 — Migration and adoption guides
 
 Priority: medium
 
@@ -856,235 +918,240 @@ Files likely touched:
 - `docs/FEATURES.md`
 
 
-### BACKLOG-038-0.0.x — Layered manual relation override tests
+### TODO-STABLE-042-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)
 
-Priority: low
+Priority: critical — release card
 
-Status: partially addressed by the testing-shift follow-up
+Severity: **major** (release-blocking; API freeze starts here)
 
-Current behavior:
+Status: planned; this is the final card in the Stable queue and gates the beta → stable milestone
 
-- Package tests in `tests/types/test_definition_order.py` intentionally inspect Strawberry internals (`field.base_resolver.wrapped_func.*`) to pin resolver-attachment details and fail early if Strawberry changes the underlying field shape.
-- The live HTTP suite in `examples/fakeshop/test_query/test_library_api.py` now also proves the consumer-visible contract: a consumer-authored relation resolver on the real `library` schema shapes `/graphql/` response data.
-- This is the chosen policy for now: package tests pin internal wiring; HTTP tests pin observable behavior.
+Why it matters:
 
-Potential scope:
-
-- If Strawberry internals churn becomes noisy, introduce a single named helper (production or test-only) that centralizes the `StrawberryField.base_resolver` access and documents the coupling.
-- Keep at least one HTTP assertion for consumer-authored relation override behavior so the public contract does not depend only on internals.
-- Revisit when the deferred `DjangoModelField` custom Strawberry field class lands; production code may need a stable resolver-introspection helper then.
+- `1.0.0` is the API freeze. After this card lands, every public symbol — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `DjangoConnectionField`, `DjangoListField`, mutation classes, filter / order / aggregate / fieldset surfaces, and the Meta key vocabulary — is bound by strict SemVer. Breaking changes from this point forward require a major bump.
+- The release card is where we audit, finalize, and commit to that contract. Without a dedicated card, "1.0 is stable" becomes a soft promise spread across N patches; making it a single card means the audit happens before the version tag goes out.
 
 Definition of done:
 
-- Override coverage remains layered: internal attachment details are pinned in package tests, and consumer-visible override behavior is pinned through schema/HTTP response data.
-- Any future direct Strawberry-internal access is centralized or documented at the helper site.
+- Every other Stable card (`TODO-STABLE-034-0.1.1` through `TODO-STABLE-041-0.1.6` plus `BLOCKED-STABLE-037-0.1.3` and `BLOCKED-STABLE-040-0.1.5`) is in `DONE`.
+- API surface audit: top-level `__all__` confirmed stable; every public symbol documented; no `# experimental` markers in shipped code; no `_private` symbols accidentally referenced from docs.
+- SemVer policy committed in CHANGELOG header: every release after `1.0.0` follows MAJOR / MINOR / PATCH rules strictly; pre-`0.1.0` deprecation shims removed entirely.
+- Full async + sync coverage matrix validated; no `sync_to_async` workarounds remain on any resolver path.
+- Security review: input-validation surfaces (mutations, filters, GlobalID decoding) audited for injection / authorization gaps.
+- Version bumped to `1.0.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
+- `CHANGELOG.md` `[Unreleased]` block promoted to `## [1.0.0] - YYYY-MM-DD`. Release summary mentions the parity story (graphene-django + strawberry-graphql-django), the django-graphene-filters depth, and the SemVer policy switch.
+- Final pass through `BETTER.md` to mark differentiators that landed and refresh the post-1.0 roadmap.
+- Tag, publish to PyPI, write the 1.0 announcement.
 
 Files likely touched:
 
-- `tests/types/test_definition_order.py`
-- `examples/fakeshop/test_query/test_library_api.py`
-- possibly a helper in `django_strawberry_framework/types/resolvers.py` if production code needs it
+- `pyproject.toml`
+- `django_strawberry_framework/__init__.py`
+- `tests/base/test_init.py`
+- `uv.lock`
+- `CHANGELOG.md`
+- `README.md`, `docs/README.md`, `docs/FEATURES.md`, `docs/TREE.md`
+- `BETTER.md`
 
-### BACKLOG-039-0.0.x — FieldMeta SSoT consolidation
+## Blocked
 
-Priority: low
+### BLOCKED-BETA-021-0.0.9 — Full Relay story (Node + Connection + Root + validation)
 
-Status: planned
+Priority: high
 
-Current behavior:
+Severity: **major** — Relay is the canonical GraphQL identity + pagination spec; the foundation shipped in `DONE-011-0.0.5` only becomes useful end-to-end when paired with this card's Connection + Root + validation surface.
 
-- `FieldMeta` (`django_strawberry_framework/optimizer/field_meta.py`) is the canonical relation-shape single source of truth: cardinality flags, `attname`, `related_model`, FK target columns.
-- Three sites still re-derive relation shape via `relation_kind(field)` + raw `getattr(field, ...)` instead of reading the `FieldMeta` already on `DjangoTypeDefinition.field_map`:
-  - `django_strawberry_framework/types/base.py:_record_pending_relation` — anchored with `TODO(spec-fieldmeta-ssot)`.
-  - `django_strawberry_framework/types/converters.py:resolved_relation_annotation` — anchored with `TODO(spec-fieldmeta-ssot)`.
-  - `django_strawberry_framework/types/resolvers.py:_make_relation_resolver` — anchored with `TODO(spec-fieldmeta-ssot)`.
-- The `optimizer/field_meta.py` module docstring enumerates the three reader sites as cross-references back to `FieldMeta`.
+Status: blocked on `TODO-BETA-020-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BETTER.md`](BETTER.md) item 39 — they extend this story rather than block it.
 
-Why it matters:
+This is the umbrella spec for the **complete Relay surface at `0.0.9`** — Node foundation + Connection + Root entry points + schema validation + test helpers. The Node half shipped in `DONE-011-0.0.5`; the Connection half is its own implementation slice (`TODO-BETA-020-0.0.9`); this card carries the connective tissue that ties them together into one end-to-end Relay story.
 
-- Three shape-derivation paths can drift when Django adds a relation flag or when reverse-relation descriptor attributes change.
-- Routing every reader through one `FieldMeta` instance removes the raw Django-private `getattr` calls from production code and shrinks the drift surface to one place.
+Resolved blockers (shipped in `DONE-011-0.0.5`):
 
-Definition of done:
+- ~~`Meta.interfaces` design~~ — `Meta.interfaces` accepted end-to-end for any Strawberry interface; `(relay.Node,)` activates the Node foundation.
+- ~~`GlobalID` mapping decision~~ — Strawberry-supplied `id: GlobalID!` from the Relay interface replaces the synthesized `id: int!`; Django primary key remains projected as a connector column for the optimizer (Decision 2 of [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md)).
+- ~~Default `resolve_*` injection~~ — `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` defaults injected when `relay.Node` is in `Meta.interfaces`; consumer overrides preserved via Strawberry's `__func__` identity test.
+- ~~`is_type_of` injection~~ — Unconditional on every `DjangoType`; consumer-declared `is_type_of` preserved.
+- ~~`CompositePrimaryKey` rejection~~ — Django 5.2+ composite-pk models raise `ConfigurationError` at finalization with the documented escape hatch (`id: relay.NodeID[...]` annotation).
 
-- Each anchored site reads its `FieldMeta` from `DjangoTypeDefinition.field_map` (keyed by `field.name` / `snake_case(field.name)`) instead of recomputing.
-- The three `TODO(spec-fieldmeta-ssot)` anchors are removed in the same change.
-- The `optimizer/field_meta.py` module docstring paragraph listing the three reader sites is trimmed accordingly.
-- Tests cover all current cardinalities (forward FK, OneToOne, reverse OneToOne, reverse FK, M2M) so the three readers still produce identical annotations / pending-relation records / resolvers.
-- Coverage stays at 100%; no new public surface.
+Remaining work (unblocks when `TODO-BETA-020-0.0.9` lands):
 
-Files likely touched:
+#### Goal 1: Root Node entry points
 
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/types/converters.py`
-- `django_strawberry_framework/types/resolvers.py`
-- `django_strawberry_framework/optimizer/field_meta.py`
-- `tests/types/`
+Schema-level entry points for *"give me any Node by GlobalID"* — required by Relay clients (Apollo, Relay Compiler) for refetch and cache reconciliation. Two fields:
 
-### BACKLOG-040-0.0.x — FieldMeta mirror retirement
+- `node(id: GlobalID!): Node` — single-object refetch. Decodes the GlobalID, dispatches to the type's `resolve_node`, returns the resolved object. Returns `null` if the GlobalID decodes to a type/ID the requesting user can't see (respects `get_queryset`).
+- `nodes(ids: [GlobalID!]!): [Node]!` — batch refetch. Decodes each GlobalID, dispatches per-type to `resolve_nodes` (batched), returns results in input order. Missing IDs become `null` entries (preserves positional correspondence).
 
-Priority: low
+Both ship as `DjangoNodeField` / `DjangoNodesField` re-exports in the package public surface. Consumers attach them to their root `Query` type by declaration:
 
-Status: planned
+```python path=null start=null
+@strawberry.type
+class Query:
+    node:  Node           = DjangoNodeField()
+    nodes: list[Node]     = DjangoNodesField()
+```
 
-Current behavior:
+Both fields cooperate with `TODO-BETA-022-0.0.9` (connection-aware optimizer) so the per-type `get_queryset` is applied at decode time, not after-the-fact filtering — a Relay-client refetch on a hidden row returns `null` cheaply, not a hidden row that the post-filter would have removed.
 
-- `DjangoType.__init_subclass__` writes legacy class-attribute mirrors (`cls._optimizer_field_map`, `cls._optimizer_hints`) in addition to populating the canonical `DjangoTypeDefinition.field_map` / `optimizer_hints`. The writer is at `django_strawberry_framework/types/base.py:137`, anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
-- The optimizer still reads the legacy mirrors at four sites:
-  - `django_strawberry_framework/optimizer/walker.py:_resolve_field_map` — anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
-  - `django_strawberry_framework/optimizer/walker.py:_walk_selections` (hints read) — anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
-  - `django_strawberry_framework/optimizer/extension.py:_collect_schema_reachable_types` — anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
-  - `django_strawberry_framework/optimizer/extension.py:check_schema` — anchored with `TODO(spec-fieldmeta-mirror-retirement)`.
-- The `optimizer/field_meta.py` module docstring documents the mirror and cross-references this card.
+#### Goal 2: Relation-as-Connection upgrade
 
-Why it matters:
+The shipped foundation exposes reverse-FK and M2M relations as `list[T]`. For Relay-compatible schemas, those relations need a *Connection* counterpart so clients can paginate inside a parent object's relation set. Two paths:
 
-- The mirror is dead weight after the foundation slice put `DjangoTypeDefinition` on the canonical metadata path; the optimizer should reach the same data through `registry.get_definition(type_cls)` so there is one source of truth and no compatibility shim.
-- Removing the mirror also removes a class-attribute residue that survives `registry.clear()`, which today is documented as a non-issue for tests that recreate classes but is still extra surface.
+- **Implicit upgrade** (default): every `DjangoType` whose `Meta.interfaces` includes `relay.Node` automatically exposes its reverse-FK and M2M relations as Connections in addition to the existing `list[T]` shape. Field names follow a stable convention (`itemsConnection: ItemConnection` alongside `items: list[Item]`).
+- **Explicit-only**: consumers who want only Connections (or only lists) on a relation declare `Meta.relation_shapes = {"items": "connection"}` (or `"list"`, or `"both"` — `"both"` is the default for Relay types).
 
-Definition of done:
+The Connection counterpart inherits the parent's `get_queryset` (so a reverse-FK Connection over `category.items` filters the items by the parent category AND by the type's `get_queryset` policy) and integrates with filters (`TODO-BETA-018-0.0.8`) and orders (`TODO-BETA-019-0.0.8`) when declared on the related `DjangoType`.
 
-- All four reader sites read `field_map` / `optimizer_hints` from `registry.get_definition(type_cls)` (or accept a missing definition gracefully where the walker tolerates an unregistered model today).
-- The mirror writer at `django_strawberry_framework/types/base.py` is removed in the same change.
-- The five `TODO(spec-fieldmeta-mirror-retirement)` anchors are deleted.
-- The `optimizer/field_meta.py` module docstring paragraph documenting the mirror is removed.
-- Coverage stays at 100% with the existing optimizer/fakeshop tests; no new public surface.
+#### Goal 3: Cursor pagination math
 
-Files likely touched:
+The `DjangoConnectionField` implementation (`TODO-BETA-020-0.0.9`) carries the actual cursor algorithm; this card pins the **contracts** the connection field must satisfy:
 
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/optimizer/walker.py`
-- `django_strawberry_framework/optimizer/extension.py`
-- `django_strawberry_framework/optimizer/field_meta.py`
-- `tests/optimizer/`
+- **Cursor format**: opaque base64-encoded payload by default (`b64("offset:N")`). Documented as opaque — clients must not parse it. `Meta.cursor_field` for stable column-based cursors is **out of scope** for this card; lives in BETTER item 39 sub-feature 3.
+- **Required arguments**: `first: Int`, `after: String`, `last: Int`, `before: String`. Backward pagination (`last`/`before`) is required by the Relay spec.
+- **`pageInfo`**: emits the four standard fields (`hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`) with correct semantics — including the spec-mandated *"the connection MUST resolve `hasNextPage` correctly even when the consumer didn't request it"* invariant.
+- **Edge cases**: `first: 0` returns empty edges + `pageInfo`. `first: N` with N > remaining rows returns the actual remainder. `after` cursor for a row that no longer exists falls through to the next existing row (no error). Both `first` and `last` in the same query is rejected with a typed error.
+- **`totalCount`**: an opt-in field on every Connection (`Meta.connection = {"total_count": True}`). When selected, runs `qs.count()` on the *unpaginated* queryset (post-filter, pre-slice). Documented as the canonical Relay-compatible total-count surface.
 
-### BACKLOG-042-0.0.x — Channels ASGI router (migration aid)
+#### Goal 4: Filter / Order integration
 
-Priority: low (🍓 parity-required; small slice; explicit migration aid)
+A Connection without filters is half a feature. The connection field accepts:
 
-Severity: **low**
+- `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `TODO-BETA-018-0.0.8`)
+- `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `TODO-BETA-019-0.0.8`)
+- `search: String` — generated from `Meta.search_fields` (composes with `TODO-STABLE-035-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent)
 
-Status: planned
+The cursor algorithm runs *after* filter + order are applied, so cursors are stable across the filtered+ordered queryset. Changing `orderBy` between paginated requests is **documented as invalidating cursors** (consumers should treat order change as a fresh pagination cycle, not a continuation).
 
-Why it matters:
+#### Goal 5: Permission integration
 
-- `strawberry-graphql-django` ships a small `routers.py` that builds a `ProtocolTypeRouter` over `GraphQLHTTPConsumer` and `GraphQLWSConsumer` for consumers using Channels. The module is ~30 lines but is the single import that makes ASGI / WebSocket migration painless.
-- Shipping a functionally-equivalent helper lets strawberry-graphql-django migrants update one import line in their ASGI entrypoint. This card exists primarily to reduce migration friction, not to expand the API surface.
+Relay refetch over `node(id:)` is a privacy hot spot — clients can construct any GlobalID and ask the server to resolve it. The Node entry points MUST:
 
-Verified in upstream:
+- decode the GlobalID server-side (never trust the client's claim of which type the ID belongs to)
+- dispatch to the resolved type's `resolve_node` (which honors `cls.get_queryset(qs, info)`)
+- return `null` for rows the user can't see (not an error — the Relay spec requires `null`, not an exception)
+- never reveal *existence* of hidden rows through error timing or status codes
 
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/routers.py` — `AuthGraphQLProtocolTypeRouter` wrapping `ProtocolTypeRouter`, `URLRouter`, `AllowedHostsOriginValidator`, `AuthMiddlewareStack`, plus `GraphQLHTTPConsumer` / `GraphQLWSConsumer`.
+Composes with `TODO-BETA-023-0.0.10` (Permissions subsystem). Permission-aware cursor decoding (cursors minted under one user's privileges shouldn't reveal rows under another's) is **out of scope** for this card — lives in BETTER item 39 sub-feature 6.
 
-Architectural posture:
+#### Goal 6: Schema-validation diagnostics
 
-- The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`](GOAL.md) non-goal "a thin wrapper around `strawberry-graphql-django`".
-- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`BACKLOG-037-0.0.x`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+Targeted `ConfigurationError` messages when consumers misuse the Relay vocabulary:
 
-Definition of done:
+- `relay.GlobalID`, `relay.NodeID[...]`, `relay.Connection`, `relay.ListConnection`, `relay.Edge`, `relay.PageInfo` in `Meta.interfaces` → rejected with a message naming the helper and explaining it's a scalar / annotation / field-type rather than an interface.
+- Non-Strawberry-interface classes in `Meta.interfaces` → rejected at validation with the offending class name.
+- `Meta.connection = {...}` declared on a type that doesn't include `relay.Node` in `Meta.interfaces` → rejected with a message suggesting either remove the `connection` key or add `relay.Node` to interfaces.
+- A `DjangoNodeField()` query field on a schema with **no** `DjangoType`s declaring `relay.Node` → rejected at finalization with *"node lookup configured but no Node types registered."*
 
-- Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
-- `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
-- Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
-- Migration guide (`BACKLOG-037-0.0.x`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+#### Goal 7: Test helpers
 
-### BACKLOG-043-0.0.x — Debug-toolbar middleware
+Basic helpers for HTTP-test fixtures, in a new `django_strawberry_framework.test.relay` submodule:
 
-Priority: low (🍓 parity-adjacent; developer experience)
+```python path=null start=null
+from django_strawberry_framework.test.relay import global_id_for, decode_global_id
 
-Severity: **low**
+item_gid = global_id_for(ItemType, item.id)
+response = client.query("{ node(id: $id) { ... on Item { name } } }", variables={"id": item_gid})
 
-Status: planned
+# decode_global_id(item_gid) → ("Item", "42") for assertions
+```
 
-Why it matters:
+Advanced helpers (cursor encoding for paginated test fixtures, polymorphic-connection fixture generation) are **out of scope** for this card; deferred to BETTER item 39's test-helper sub-section.
 
-- `strawberry-graphql-django` ships a `middlewares/debug_toolbar.py` so `django-debug-toolbar`'s SQL panel captures queries triggered by GraphQL resolvers. Without it, developers can't see the SQL hit by their queries during a `/graphql/` request.
+#### Goal 8: Fakeshop activation
 
-Verified in upstream:
+The library app already has live `/graphql/` acceptance tests for the Node foundation (DONE-011); the product-catalog aspirational schema in `examples/fakeshop/apps/products/schema.py` activates as part of `TODO-STABLE-039-0.1.5` (Fakeshop activation) but ITS **Relay surface** lights up here:
 
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/middlewares/debug_toolbar.py`.
+- `node(id:)` and `nodes(ids:)` resolve real product / category / item / entry GlobalIDs
+- Reverse-FK and M2M relations on those types expose their Connection counterparts
+- Live HTTP tests under `examples/fakeshop/test_query/` exercise the full Relay query shape (refetch, paginated connection, cursor round-trip, `totalCount`)
 
-Definition of done:
+The fakeshop activation itself depends on Layer-3 subsystems (filters, orders, aggregates, fieldsets, search) so the *full* Relay-shaped schema lights up at `1.0.0`. This card delivers the **mechanics** that activation depends on.
 
-- Implement `django_strawberry_framework/middleware/debug_toolbar.py` exposing a middleware class that lets `django-debug-toolbar` capture SQL through the Strawberry view.
-- `debug_toolbar` is a soft dependency.
-- In-process test against a fakeshop request that emits SQL.
+#### Out-of-scope (lives in `BETTER.md` item 39)
 
-### BACKLOG-044-0.0.x — Apollo Federation support
+Explicitly *not* in this card; they're post-`1.0.0` Relay-magic differentiators:
 
-Priority: low (🍓 parity-adjacent; out-of-scope for v0.x)
+- Type-rename GlobalID migrations (Django-migrations-style history that lets old-format IDs decode alongside new)
+- Polymorphic connections (`Connection[Interface]` with auto-dispatched concrete types per edge)
+- `Meta.cursor_field` for stable cursors keyed on a deterministic column
+- Auto-upgrade reverse FK / M2M to Connection based on a row-count threshold
+- Refetchable container schema metadata for `useRefetchableFragment`
+- Permission-aware cursor decoding (cursor decode re-runs `get_queryset` so privileged cursors don't leak)
 
-Severity: **low**
+These all build on `BLOCKED-BETA-021`'s mechanics. Shipping `BLOCKED-BETA-021` first means BETTER item 39 becomes incremental enhancement, not foundational work.
 
-Status: deferred — re-evaluate if a consumer asks for it
+#### Dependencies
 
-Why it matters:
+- `TODO-BETA-020-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 020 lands.
+- `TODO-BETA-018-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
+- `TODO-BETA-019-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
+- `TODO-BETA-022-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
+- `TODO-BETA-023-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 023 lands.
 
-- `strawberry-graphql-django` ships a `federation/` subpackage for Apollo Federation (`@key`, entity resolution, federated type generation). Integration with a separate spec and a small audience; deferring keeps the v0.x surface focused.
+#### Definition of done
 
-Verified in upstream:
+- New spec: `docs/spec-relay_connection.md` covering all eight goals above with worked examples and decision rationale.
+- `DjangoNodeField` and `DjangoNodesField` exported from the package public surface; both wired through the registry's GlobalID decode path and the per-type `get_queryset`.
+- Reverse-FK and M2M relations on `relay.Node`-implementing types expose their Connection counterparts; `Meta.relation_shapes` opt-out documented.
+- Cursor pagination math passes the Relay-spec test suite for `first`/`after`/`last`/`before`/`pageInfo` edge cases.
+- `Meta.connection = {"total_count": True}` adds a `totalCount` field that runs `qs.count()` on the unpaginated post-filter queryset.
+- Filter / order arguments accepted on Connection fields when the corresponding `*_class` is declared on the type.
+- Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
+- Six schema-validation diagnostics from Goal 6 raise `ConfigurationError` with the documented messages.
+- `django_strawberry_framework.test.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
+- The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-STABLE-039-0.1.5`.
+- 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
 
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/federation/` — `field.py`, `resolve.py`, `type.py`.
+#### Files likely touched
 
-Definition of done:
+- `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-BETA-020-0.0.9`)
+- `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
+- `django_strawberry_framework/types/base.py` — `Meta.connection` / `Meta.relation_shapes` validation
+- `django_strawberry_framework/types/finalizer.py` — auto-upgrade reverse-FK / M2M to Connection
+- `django_strawberry_framework/test/relay.py` (new) — test helpers
+- `tests/test_relay_node_field.py`, `tests/test_relay_connection.py` (new)
+- `examples/fakeshop/test_query/test_library_api.py` — Relay-shape HTTP tests
+- `examples/fakeshop/apps/products/schema.py` — Relay surface activation (lit up at fakeshop activation time)
+- `docs/spec-relay_connection.md` (new)
+- `docs/FEATURES.md` — Relay surface description
 
-- Draft a spec only when a real consumer asks.
-- If shipped, `django_strawberry_framework/federation/` mirrors Strawberry's federation contract and reuses the DRF-style Meta surface.
+#### Unblocks
 
-### BACKLOG-045-0.0.x — Test client helper
+- Relay node refetch from Apollo / Relay Compiler clients (the *"Relay just works"* end state for `1.0.0`)
+- Fakeshop product-catalog Relay activation (Goal 8)
+- Per-type `useFragment` / `useRefetchableFragment` patterns (mechanics; the schema-side `@refetchable` directive support lives in BETTER item 39 sub-feature 5)
+- Every BETTER item 39 sub-feature builds on this card's mechanics
 
-Priority: low (⚛️&🍓 parity-adjacent; developer experience)
+### BLOCKED-STABLE-037-0.1.3 — Layer 3 Meta key promotion
 
-Severity: **low**
+Blocked by:
 
-Status: planned
+- each Layer 3 subsystem implementation
 
-Why it matters:
+Affected keys:
 
-- `strawberry-graphql-django` ships `strawberry_django.test.client.TestClient`, a thin wrapper around `django.test.Client` that posts GraphQL requests with the right content type, parses the response, and exposes `.query(...)` / `.mutate(...)`.
-- `graphene-django` ships `graphene_django.utils.testing` with `GraphQLTestCase` / `graphql_query` helpers covering the same need.
-- The fakeshop live tests already do this by hand; centralizing the pattern is a small win for consumers and keeps our HTTP tests crisp.
+- `filterset_class`
+- `orderset_class`
+- `aggregate_class`
+- `fields_class`
+- `search_fields`
 
-Verified in upstream:
+Rule:
 
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/test/client.py` — `TestClient`, `AsyncTestClient`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/utils/testing.py` — `GraphQLTestCase`, `graphql_query`.
+- Do not move a key from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` until the pipeline applies it end-to-end.
 
-Definition of done:
+### BLOCKED-STABLE-040-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests
 
-- Implement `django_strawberry_framework/test/client.py` with `TestClient` / `AsyncTestClient` plus a `GraphQLTestCase` subclass for the unittest crowd.
-- Live HTTP tests under `examples/fakeshop/test_query/` switch to the helper.
-- Tests under `tests/test/test_client.py`.
+Blocked by:
 
-### BACKLOG-046-0.0.x — Response-extensions debug middleware
+- activating the product-catalog fakeshop GraphQL schema
+- connection/query fields and other Layer 3 public surfaces
 
-Priority: low (⚛️ parity-adjacent; developer experience)
+Current state:
 
-Severity: **low**
-
-Status: planned; distinct from `BACKLOG-043-0.0.x` (Django debug toolbar)
-
-Why it matters:
-
-- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `BACKLOG-043-0.0.x` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
-- A Strawberry-native equivalent is a small `SchemaExtension` that captures SQL through `django.db.connection.queries` and attaches the result to the response's `extensions` map.
-
-Verified in upstream:
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py` — `DjangoDebugContext`, `DjangoDebugMiddleware` (wraps cursors, captures exceptions, resolves the `_debug` object on result).
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/types.py` — `class DjangoDebug(ObjectType)` with `sql: List(DjangoDebugSQL)` and `exceptions: List(DjangoDebugException)`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/tracking.py` and `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/formating.py` — cursor wrapping and exception serialization.
-
-Definition of done:
-
-- Implement `django_strawberry_framework/extensions/debug.py` as a Strawberry `SchemaExtension` that captures SQL and exceptions and attaches them to the response `extensions` map (key: `debug`).
-- Off by default; opt-in via the extensions list passed to `strawberry.Schema(...)`.
-- Tests under `tests/extensions/test_debug.py` against a fakeshop request that emits SQL.
-- Documented as the response-side counterpart to `BACKLOG-043-0.0.x`.
-
-Files likely touched:
-
-- `django_strawberry_framework/extensions/` (new)
-- `tests/extensions/` (new)
+- The library app already has live `/graphql/` acceptance tests under `examples/fakeshop/test_query/`.
+- Future product-catalog HTTP tests should use the same placement and schema-reload pattern.
+- In-process `schema.execute_sync` tests still go under `examples/fakeshop/tests/`.
 
 ## Done
 
@@ -1276,14 +1343,14 @@ Status: complete.
 Scope:
 
 - Replaced stale M2M and forward-reference skips with definition-order tests.
-- Kept the remaining scalar override skip documented as a separate scalar-field concern under `TODO-026-0.0.10`.
+- Kept the remaining scalar override skip documented as a separate scalar-field concern under `TODO-BETA-014-0.0.6`.
 
 Evidence:
 
 - `tests/types/test_definition_order.py`
 - `tests/types/test_definition_order_schema.py`
 - `tests/optimizer/test_definition_order.py`
-- `TODO-026-0.0.10`
+- `TODO-BETA-014-0.0.6`
 
 ### DONE-008-0.0.4 — 0.0.4 version and release alignment
 

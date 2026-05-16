@@ -2,8 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## Versioning
+
+This project follows a milestone-style cadence during pre-`1.0.0`:
+
+- **Pre-alpha (`0.0.x`)** — each patch ships a coherent feature group on the road to `0.1.0`. Public surface is still in flight; breaking changes can land in any patch. Strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) does **not** apply here.
+- **`0.1.0` (beta release)** — feature parity with `graphene-django` (`⚛️`) and `strawberry-graphql-django` (`🍓`) is complete. Alpha → beta cut-over. Tracked by `BETA-033-0.1.0` in [`KANBAN.md`](KANBAN.md).
+- **Beta (`0.1.x`)** — each patch ships a Layer-3 capability (`FieldSet`, `search_fields`, aggregations, choice-enum naming, fakeshop activation, migration guides) on the road to `1.0.0`. Public surface stabilizes; breaking changes are discouraged but not forbidden.
+- **`1.0.0` (stable release)** — full `django-graphene-filters` depth on top of parity. Beta → stable cut-over; **API freeze**. Tracked by `STABLE-042-1.0.0` in [`KANBAN.md`](KANBAN.md).
+- **Post-stable (`1.x.y`)** — strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) applies from this point forward: breaking changes require a MAJOR bump, additive changes require a MINOR bump, and bug-fix-only releases get a PATCH bump.
+
+See [`KANBAN.md`](KANBAN.md) for the per-card sequencing and the version scope of each patch.
 
 ## [Unreleased]
 
@@ -75,4 +86,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Early `DjangoOptimizerExtension` Strawberry schema extension for depth-1 N+1 prevention.
 - Cardinality-aware relation resolvers attached at `DjangoType.__init_subclass__` so reverse FK / M2M fields return iterables instead of Django `RelatedManager`s.
 
-Pre-alpha; the public API is unstable until `0.1.0`. See `docs/README.md` for the architecture and roadmap.
+See [`docs/README.md`](docs/README.md) for the architecture and [`KANBAN.md`](KANBAN.md) for per-release sequencing. The Versioning section at the top of this file describes the alpha → beta → stable milestone cadence.

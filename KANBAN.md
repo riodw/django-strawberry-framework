@@ -337,6 +337,49 @@ Foundation-slice seam:
 - The pending-relation registry's record-now-resolve-at-finalization pattern reuses cleanly for lazy related-filter class references; a `LazyRelatedClassMixin` equivalent should reuse the same fail-loud error format ("Cannot finalize ... no registered ...") that the model-relation finalizer already produces.
 - The relation-override contract pinned in 0.0.4 is what allows filter sidecars to reference relation fields by name without the framework clobbering consumer annotations or resolvers.
 
+Lazy-resolution pipeline (borrowed from `django-graphene-filters`):
+
+The four cooperating files in the Graphene reference (`filters.py`, `filterset.py`, `filterset_factories.py`, `filter_arguments_factory.py`) implement a six-layer lazy-resolution pipeline that handles circular `RelatedFilter` references across modules. **Five of six layers are library-agnostic Python and port verbatim**; only Layer 5 (the cycle-safe forward reference in the GraphQL schema build) is Strawberry-adapted.
+
+1. **Lazy class references in `RelatedFilter`** — port verbatim from `filters.py:BaseRelatedFilter`. `RelatedFilter` accepts target as class, absolute import path string (`"myapp.filters.ManagerFilter"`), or unqualified name (`"ManagerFilter"`). `_filterset` stores it unresolved; the `.filterset` property triggers resolution.
+2. **Module-fallback resolution** — port verbatim from `mixins.py:LazyRelatedClassMixin.resolve_lazy_class`. Two-step resolution: try as absolute path via `django.utils.module_loading.import_string`; on `ImportError`, retry with `bound_class.__module__` prefix. Handles circular-import scenarios in the same module.
+3. **Metaclass discovery, deferred expansion** — port pattern from `filterset.py:FilterSetMetaclass`. Metaclass collects `BaseRelatedFilter` declarations into `cls.related_filters`, calls `f.bind_filterset(new_class)` so the module-fallback resolver knows the owning module, and **does not** expand. Expansion is deferred to `get_filters()`.
+4. **Cycle-safe expansion + cache** — port verbatim from `filterset.py:AdvancedFilterSet.get_filters`. `cls.__dict__["_expanded_filters"]` cache plus `cls.__dict__["_is_expanding_filters"]` recursion guard. Two-condition cache write: `"related_filters" in cls.__dict__` AND no string `_filterset` remaining on any related filter. This is what breaks `A → B → A` cycles cleanly.
+5. **BFS schema build with deferred references — Strawberry-adapted.** BFS algorithm in `filter_arguments_factory.py:FilterArgumentsFactory._ensure_built` ports verbatim; only the cycle-safe forward reference changes. Graphene's `graphene.InputField(lambda tn=target_name: input_object_types[tn])` becomes `strawberry.lazy("django_strawberry_framework.filters._registry.{TargetFilterSet}InputType")` (or an `Annotated[..., strawberry.lazy(...)]` annotation, whichever Strawberry's filter-input-class generator emits). The `lambda:` and `strawberry.lazy()` are exact conceptual twins — both defer the type reference until schema walk.
+6. **Memoized dynamic FilterSet generation** — port verbatim from `filterset_factories.py:_dynamic_filterset_cache`. Cache keyed by `(model, fields, extra_meta)` for connection fields declared without an explicit `filterset_class`; prevents duplicate-`__name__` collisions when two connection fields target the same model.
+
+Synchronization point: every layer runs inside `finalize_django_types()` phase 2.5 — the same seam that already wires `Meta.interfaces = (relay.Node,)` per `DONE-011-0.0.5`. For each `DjangoType` with `Meta.filterset_class`:
+
+- validate the class is a `FilterSet`
+- call `filterset_cls.get_filters()` to trigger Layer 4 expansion (resolves lazy refs, expands related filters with cycle guards)
+- call `FilterArgumentsFactory(filterset_cls).arguments` to trigger Layer 5 BFS (builds every reachable `strawberry.input` type)
+- register the resulting input types in a per-package filter-input-type registry
+
+By phase 3, when `strawberry.type(cls, ...)` runs on the `DjangoType`, every referenced filter input type already exists. **No consumer-facing `strawberry.lazy()` calls needed** — the laziness is internal to the filter-input-type generator, mirroring how `django-graphene-filters` hides its lambdas inside `FilterArgumentsFactory`.
+
+Verbatim ports beyond the six layers (also library-agnostic):
+
+- `FilterArgumentsFactory.filterset_to_trees` / `try_add_sequence` / `sequence_to_tree` — per-lookup tree-building algorithm
+- `AdvancedFilterSet._apply_related_queryset_constraints` — explicit queryset as security/scope boundary that can't be bypassed via nested filters
+- `AdvancedFilterSet.check_permissions` — recursion through `RelatedFilter`s into child filtersets' `check_*_permission` methods
+- `LOOKUP_PREFIXES` map for `construct_search` (`^` → `istartswith`, `=` → `iexact`, `@` → `search`, `$` → `iregex`)
+- Recursion-protected `_get_fields` (with `visited: set[type]`)
+
+Strawberry-adapted bits:
+
+- `_build_class_type` emits a `strawberry.input`-decorated class instead of `type(name, (graphene.InputObjectType,), fields)`
+- `_build_logic_fields` (`and` / `or` / `not`) uses self-referential `strawberry.lazy(...)` instead of `graphene.List(lambda: ...)`
+- `_build_input_fields` lambda ref to target filterset's root type → `strawberry.lazy("...module.path...")`
+- `GrapheneFilterSetMixin.FILTER_DEFAULTS` (FK/PK → `GlobalIDFilter`) → our own `FILTER_DEFAULTS` mapping FK/PK to a `strawberry.relay.GlobalID`-aware primitive (the global-ID filter in the upstream-primitives list above)
+- `graphene_django.forms.converter.convert_form_field` → our own form-field → Strawberry-input converter; pairs with `TODO-ALPHA-028` (Form-based mutations), which builds the same converter for the mutation surface
+
+Dropped (Graphene-specific, no Strawberry equivalent needed):
+
+- `setup_filterset` wrapper avoidance — Strawberry's eager annotation resolution doesn't have the "Graphene{X}Filter" wrapping problem that motivated this in the reference
+- `replace_csv_filters` — Strawberry's typed input handles `list[T]` natively without comma-separated-string workarounds
+
+Reference symbols in the Graphene checkout (`/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/`): `filters.py:BaseRelatedFilter`, `mixins.py:LazyRelatedClassMixin`, `filterset.py:FilterSetMetaclass` + `AdvancedFilterSet.get_filters`, `filter_arguments_factory.py:FilterArgumentsFactory`, `filterset_factories.py:get_filterset_class` + `_dynamic_filterset_cache`.
+
 Definition of done:
 
 - Add `docs/spec-filters.md`.
@@ -371,6 +414,12 @@ Foundation-slice seam:
 
 - `DjangoTypeDefinition.orderset_class` is the populated slot.
 - Lazy related-order class references reuse the same record-now-resolve-at-finalization pattern as model relations (`PendingRelation` → analogous `PendingRelatedClass` shape).
+
+Lazy-resolution pipeline:
+
+Reuses the six-layer lazy-resolution architecture spec'd in detail under `TODO-ALPHA-020-0.0.8` (Filtering subsystem). The same `LazyRelatedClassMixin`, metaclass-discovery + deferred-expansion pattern, cycle-safe `get_orders()` cache + recursion guard, BFS schema build, and `_dynamic_orderset_cache` memoization all port verbatim, with `RelatedOrder` substituted for `RelatedFilter` and `OrderSet` for `FilterSet`. The Strawberry adaptation is identical: Graphene's `lambda tn=...: input_object_types[tn]` forward references become `strawberry.lazy("django_strawberry_framework.orders._registry.{TargetOrderSet}InputType")` (or `Annotated[..., strawberry.lazy(...)]`). Synchronization runs inside `finalize_django_types()` phase 2.5 alongside filter resolution; the two subsystems share the same finalizer pass.
+
+Reference symbols in the Graphene checkout: `django_graphene_filters/orders.py`, `orderset.py`, `order_arguments_factory.py` — mirror images of the filter trio with the same lazy-resolution shape.
 
 Definition of done:
 
@@ -871,6 +920,16 @@ Foundation-slice seam:
 - `DjangoTypeDefinition.aggregate_class` is the populated slot.
 - The cookbook reference (`AdvancedAggregateSet.compute` / `acompute`) splits sync and async paths; this lines up with the existing async-resolver support in the optimizer.
 - Selection-set-aware aggregate computation will reuse the optimizer plan-cache infrastructure, since the aggregate output type's selected fields drive which annotations are computed.
+
+Lazy-resolution pipeline:
+
+Reuses the six-layer lazy-resolution architecture spec'd in detail under `TODO-ALPHA-020-0.0.8` (Filtering subsystem). Same `LazyRelatedClassMixin`, metaclass-discovery + deferred-expansion pattern, cycle-safe `get_aggregates()` cache + recursion guard, BFS schema build, and `_dynamic_aggregateset_cache` memoization — with `RelatedAggregate` substituted for `RelatedFilter` and `AggregateSet` for `FilterSet`.
+
+One key difference from Filtering / Ordering: aggregates emit **output types** (`strawberry.type`-decorated), not input types. The Strawberry adaptation in Layer 5 (the BFS schema build) accordingly uses `strawberry.lazy("django_strawberry_framework.aggregates._registry.{TargetAggregateSet}OutputType")` for forward references between aggregate output types. The `compute` / `acompute` split from `AdvancedAggregateSet` runs *after* the type graph is built — the sync/async dispatch happens at resolver-invocation time, not at finalize time.
+
+Synchronization runs inside `finalize_django_types()` phase 2.5 alongside filters and orders; all three subsystems share the same finalizer pass, with `aggregate_class` resolution coming last so it can reference filter-input types when an aggregate is filtered before computation.
+
+Reference symbols in the Graphene checkout: `django_graphene_filters/aggregateset.py`, `aggregate_types.py`, `aggregate_arguments_factory.py` — same lazy-resolution shape as the filter trio, swapped for output-type emission.
 
 Definition of done:
 

@@ -187,7 +187,7 @@ django_graphene_filters/
 
 ## django_strawberry_framework (current on-disk layout)
 
-The shared infrastructure plus model/type and optimizer subpackages are on disk: `types/`, `optimizer/`, and `utils/`. Query-surface modules (`filters/`, `orders/`, `aggregates/`, `fieldset.py`, `permissions.py`, `connection.py`, `apps.py`, `management/`) do not exist yet and will land as their future design slices ship.
+The shared infrastructure plus model/type and optimizer subpackages are on disk: `types/`, `optimizer/`, and `utils/`. Every other module shown in the target package layout below — query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the test client, the Channels router, and the management command — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
 The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`). `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
 
 ```text
@@ -225,17 +225,20 @@ django_strawberry_framework/
 
 This package target layout is separate from the fakeshop example-project layout above. It adds query-surface modules on top of the current `django_strawberry_framework/` package. It is derived from the three reference trees above and the package direction captured in [`FEATURES.md`](FEATURES.md).
 
+Modules are tagged with `[alpha]`, `[beta]`, or `[stable]` to indicate which development phase they land in (matching the `MILESTONE` convention in [`../KANBAN.md`](../KANBAN.md)). `[alpha]` modules land before `0.1.0` and `[beta]` modules land before `1.0.0` — both are tracked in [`../KANBAN.md`](../KANBAN.md). `[stable]` modules are post-`1.0.0` and tracked in [`../BETTER.md`](../BETTER.md); they appear here only so the tree is comprehensive, not because they are committed.
+
 ```text
 django_strawberry_framework/
 ├── __init__.py              # public-API re-exports
 ├── py.typed
-├── apps.py                  # Django AppConfig
+├── apps.py                  # [alpha] Django AppConfig
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
-├── registry.py              # model→type registry
-├── fieldset.py              # FieldSet (declarative scalar/relation selection)
-├── permissions.py           # apply_cascade_permissions, per-field permission hooks
-├── connection.py            # DjangoConnectionField (Relay-style connection)
+├── registry.py              # model→type registry (gains Meta.primary at beta)
+├── fieldset.py              # [beta] FieldSet (declarative field selection)
+├── permissions.py           # [alpha] apply_cascade_permissions, per-field permission hooks
+├── connection.py            # [alpha] DjangoConnectionField + DjangoListField (Relay + non-Relay)
+├── routers.py               # [alpha] DjangoGraphQLProtocolRouter (Channels; soft dep)
 ├── types/                   # DjangoType subsystem (Layer 2)
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
@@ -253,32 +256,62 @@ django_strawberry_framework/
 │   ├── plans.py             # OptimizationPlan, Prefetch chain helpers
 │   ├── hints.py             # OptimizerHint typed wrapper
 │   └── field_meta.py        # FieldMeta precomputed field metadata
-├── filters/                 # Filtering subsystem (Layer 3)
+├── filters/                 # [alpha] Filtering subsystem (Layer 3 read-side)
 │   ├── __init__.py
-│   ├── base.py              # individual Filter classes
+│   ├── base.py              # Filter classes; array / range / list / typed / global-ID primitives
 │   ├── sets.py              # FilterSet
 │   ├── factories.py         # filterset + GraphQL-arguments factories
-│   └── inputs.py            # input types + input-data adapters
-├── orders/                  # Ordering subsystem (Layer 3)
+│   ├── inputs.py            # input types + input-data adapters
+│   └── search.py            # [beta] Meta.search_fields support
+├── orders/                  # [alpha] Ordering subsystem (Layer 3 read-side)
 │   ├── __init__.py
 │   ├── base.py              # Order classes
 │   ├── sets.py              # OrderSet
 │   └── factories.py         # GraphQL-arguments factory
-├── aggregates/              # Aggregation subsystem (Layer 3)
+├── aggregates/              # [beta] Aggregation subsystem (Layer 3)
 │   ├── __init__.py
 │   ├── base.py              # Sum/Count/Avg/Min/Max/GroupBy result types
 │   ├── sets.py              # AggregateSet
 │   └── factories.py         # GraphQL-arguments factory
-├── management/              # Django management commands
+├── mutations/               # [alpha] Mutations subsystem (Layer 3 write-side)
+│   ├── __init__.py
+│   ├── base.py              # DjangoMutation base + Meta.input_class / Meta.partial_input_class
+│   ├── fields.py            # DjangoMutationField
+│   ├── resolvers.py         # sync + async write resolvers
+│   ├── types.py             # auto-generated Input / PartialInput type factories
+│   └── errors.py            # shared `errors: list[FieldError]` envelope
+├── forms/                   # [alpha] Form-based mutations (Django Forms / ModelForms)
+│   ├── __init__.py
+│   ├── mutation.py          # DjangoFormMutation, DjangoModelFormMutation (DRF-style Meta)
+│   └── converter.py         # Django form field → Strawberry input type
+├── rest_framework/          # [alpha] DRF serializer-driven mutations (soft dep on rest_framework)
+│   ├── __init__.py
+│   ├── mutation.py          # SerializerMutation (DRF-style Meta)
+│   └── serializer_converter.py  # DRF field → Strawberry input/output type
+├── auth/                    # [alpha] Auth mutations (opt-in import)
+│   ├── __init__.py
+│   ├── mutations.py         # login_mutation, logout_mutation, register_mutation
+│   └── queries.py           # current_user query helper
+├── extensions/              # [alpha] Strawberry SchemaExtension implementations
+│   ├── __init__.py
+│   └── debug.py             # response-extensions debug (SQL + exceptions in `extensions`)
+├── middleware/              # [alpha] Django middleware
+│   ├── __init__.py
+│   └── debug_toolbar.py     # django-debug-toolbar SQL-panel capture during /graphql/
+├── test/                    # [alpha] Test utilities for consumers
+│   ├── __init__.py
+│   └── client.py            # TestClient, AsyncTestClient, GraphQLTestCase
+├── management/              # [alpha] Django management commands
+│   ├── __init__.py
 │   └── commands/
 │       ├── __init__.py
-│       └── export_schema.py # schema export (mirrors strawberry_django's command)
+│       └── export_schema.py # GraphQL schema SDL export (`manage.py export_schema`)
 └── utils/                   # cross-cutting helpers
     ├── __init__.py
     ├── relations.py         # relation_kind / RelationKind / is_many_side_relation_kind
     ├── strings.py           # snake_case / camelCase / PascalCase conversion
     ├── typing.py            # unwrap_return_type, unwrap_graphql_type
-    └── queryset.py          # queryset introspection, prefetch-cache awareness
+    └── queryset.py          # [stable] queryset introspection, prefetch-cache awareness
 ```
 
 ## Test layout going forward

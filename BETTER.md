@@ -185,7 +185,7 @@ If Strawberry internals churn becomes noisy, introduce a single named helper (pr
 
 **What `strawberry-graphql-django` does**: same — Strawberry's `extensions.code` convention is freeform; no shipped registry.
 
-**What we already plan**: the mutations cluster (`TODO-BETA-024`) ships an `errors: list[FieldError]` envelope with `field` and `message`.
+**What we already plan**: the mutations cluster (`TODO-ALPHA-024`) ships an `errors: list[FieldError]` envelope with `field` and `message`.
 
 **What we'd do**: extend the envelope to a full typed shape with code, field path, parameters, and a translation hook:
 
@@ -237,7 +237,7 @@ This mirrors how every other Django setting works (project setting overrides pac
 
 #### Design decision 3: routing decoded IDs
 
-The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — `TODO-BETA-013-0.0.6`), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
+The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — `TODO-ALPHA-013-0.0.6`), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
 
 This works *better* than the type-name encoding for the multi-`DjangoType`-per-model case: instead of needing a separate GlobalID for every type variant over the same model, all variants share one ID space and the schema author picks the discriminator (primary type, or explicit inline fragments).
 
@@ -317,7 +317,7 @@ class TransitionalType(DjangoType):
 
 - **Item 39 (Relay magic)** — sub-feature 1 (GlobalID migrations) collapses to a tiny *"app-move alias helper"* once `"model"` is the default. The full migration system this item replaces was always a workaround for the type-name convention's fragility; with model identity as the durable anchor, the migration system isn't needed for the common case.
 - **Item 15 (Content-versioned Node types)** — composes cleanly; content versions are computed off the row data, not the encoding strategy.
-- **`BLOCKED-BETA-021` (Full Relay story)** — this item is the *recommended encoding strategy* for that card's `1.0.0` Relay surface. Worth pinning the decision *before* `BLOCKED-BETA-021` ships so client deployments are minted against the durable identifier from day one. Promoting this item to a `TODO-BETA-*` card before `BLOCKED-BETA-021` is the cleanest path.
+- **`BLOCKED-ALPHA-021` (Full Relay story)** — this item is the *recommended encoding strategy* for that card's `1.0.0` Relay surface. Worth pinning the decision *before* `BLOCKED-ALPHA-021` ships so client deployments are minted against the durable identifier from day one. Promoting this item to a `TODO-ALPHA-*` card before `BLOCKED-ALPHA-021` is the cleanest path.
 
 #### Why it matters
 
@@ -448,7 +448,7 @@ Generated hooks integrate with item 20 (mutation invalidation gossip): the wrapp
 
 **What `tRPC` does**: end-to-end type safety by sharing the TypeScript source between server and client. No codegen step. Theo's *"The Truth About GraphQL"* points at this as a major win for tRPC over GraphQL.
 
-**What we'd do**: extend the planned `export_schema` management command (`TODO-BETA-017`) with `--emit` modes that produce client-ready type definitions for queries, mutations, fragments, and the typed-error envelope from item 19:
+**What we'd do**: extend the planned `export_schema` management command (`TODO-ALPHA-017`) with `--emit` modes that produce client-ready type definitions for queries, mutations, fragments, and the typed-error envelope from item 19:
 
 ```bash path=null start=null
 uv run python manage.py export_schema \
@@ -986,7 +986,7 @@ The optimizer-hints half deserves a closer look: properties that traverse relati
 
 **What `DRF` does today**: REST only; no GraphQL story. Teams running both write their serializers twice.
 
-**What we'd do**: every `DjangoType` declaration can optionally expose a matching DRF-style REST endpoint set, with `Meta.filterset_class`, `Meta.orderset_class`, and `Meta.search_fields` reused as the REST filter/order/search surface. Mutations from `forms/` and `rest_framework/` (`TODO-BETA-026`, `TODO-BETA-027`) reuse their existing validation chain for `POST` / `PUT` / `PATCH` / `DELETE`. The same declaration powers `/graphql/` and `/api/<name>/`.
+**What we'd do**: every `DjangoType` declaration can optionally expose a matching DRF-style REST endpoint set, with `Meta.filterset_class`, `Meta.orderset_class`, and `Meta.search_fields` reused as the REST filter/order/search surface. Mutations from `forms/` and `rest_framework/` (`TODO-ALPHA-026`, `TODO-ALPHA-027`) reuse their existing validation chain for `POST` / `PUT` / `PATCH` / `DELETE`. The same declaration powers `/graphql/` and `/api/<name>/`.
 
 ```python path=null start=null
 class ItemType(DjangoType):
@@ -1263,7 +1263,7 @@ For nested lists (e.g. `allOrders { lineItems { … } }`), the row is "one line 
 - **Item 29 (schema usage analytics)** — track which dimensions / measures / formats consumers query, drives matrix-surface deprecation decisions.
 - **Item 30 (resumable streaming downloads)** — the wire is the same: matrix exports above `auto_stream_above` use item 30's snapshot + token + resume protocol; the format chooser picks the streaming serializer.
 - **Item 31 (gRPC)** — matrix RPCs become server-streaming methods with `Order` (proto message) frames; Arrow IPC over gRPC is the canonical analytical-pipeline transport.
-- **`TODO-STABLE-036` (Aggregation subsystem)** — the matrix layer is the natural evolution of the planned `AggregateSet` work. Aggregates ship a single-row aggregation surface first; the matrix layer (this item) generalizes it to multi-row group-by + pivot. Same `Meta.measures` dict can drive both.
+- **`TODO-BETA-036` (Aggregation subsystem)** — the matrix layer is the natural evolution of the planned `AggregateSet` work. Aggregates ship a single-row aggregation surface first; the matrix layer (this item) generalizes it to multi-row group-by + pivot. Same `Meta.measures` dict can drive both.
 
 #### Failure modes and edge cases
 
@@ -1340,7 +1340,7 @@ class ItemType(DjangoType):
 
 **What `strawberry-graphql-django` does**: `strawberry-django.relay` provides cursor-connection support but no migration tooling for type renames, no first-class polymorphic connections, no declarative cursor field, no refetchable container metadata. Each gap is per-team plumbing.
 
-**What we'd do**: ship six Relay-specific extensions, all opt-in, all composable with the shipped `Meta.interfaces = (relay.Node,)` foundation and the `1.0.0` Connection surface (`BLOCKED-BETA-021`).
+**What we'd do**: ship six Relay-specific extensions, all opt-in, all composable with the shipped `Meta.interfaces = (relay.Node,)` foundation and the `1.0.0` Connection surface (`BLOCKED-ALPHA-021`).
 
 #### Sub-feature 1: GlobalID model-rename / app-move helper
 
@@ -1417,7 +1417,7 @@ class ItemType(DjangoType):
         refetchable = True   # advertises this type as a Relay refetchable container target
 ```
 
-The package emits the right schema metadata (the `@refetchable` directive when present in the consumer's Strawberry version; a documented introspection hint otherwise), and the `node(id:)` root resolver (shipped in `BLOCKED-BETA-021`) is guaranteed to return the same shape the consumer queried — no field-set drift between the connection edge and the refetched object.
+The package emits the right schema metadata (the `@refetchable` directive when present in the consumer's Strawberry version; a documented introspection hint otherwise), and the `node(id:)` root resolver (shipped in `BLOCKED-ALPHA-021`) is guaranteed to return the same shape the consumer queried — no field-set drift between the connection edge and the refetched object.
 
 #### Sub-feature 6: Permission-aware cursor decoding
 
@@ -1433,7 +1433,7 @@ Relay is the canonical GraphQL pagination + identity spec. It's also where teams
 
 The headline pitch: *"Relay just works — type renames don't break IDs, cursors don't drift on inserts, polymorphic feeds use one connection, permissions are honored across pagination."* Combined with the shipped `Meta.interfaces = (relay.Node,)` foundation and the `1.0.0` Connection surface, this completes the *"Relay is the easiest part of our package, not the hardest"* story.
 
-**Framework integration**: composes with `BLOCKED-BETA-021` (Full Relay story, the `1.0.0` connective tissue) — this item is the *post-stable* expansion of that card. Composes with item 15 (content-versioned Node types) for per-Node freshness gossip. Composes with item 33 (DoS policy stack) since stable cursors and polymorphic connections need their own cost weights. Composes with item 4 (polymorphic / `GenericForeignKey` support) — sub-feature 2 (polymorphic connections) is the *Relay-shaped* version of the same underlying machinery item 4 introduces for non-Relay polymorphic types.
+**Framework integration**: composes with `BLOCKED-ALPHA-021` (Full Relay story, the `1.0.0` connective tissue) — this item is the *post-stable* expansion of that card. Composes with item 15 (content-versioned Node types) for per-Node freshness gossip. Composes with item 33 (DoS policy stack) since stable cursors and polymorphic connections need their own cost weights. Composes with item 4 (polymorphic / `GenericForeignKey` support) — sub-feature 2 (polymorphic connections) is the *Relay-shaped* version of the same underlying machinery item 4 introduces for non-Relay polymorphic types.
 
 ### 15. Content-versioned Node types with response-extensions gossip
 
@@ -1875,7 +1875,7 @@ We'd ship a `DjangoAuthInterceptor` that:
 - Attaches the resolved user + a Django-shaped request-like context to the per-RPC ContextVar.
 - Resolvers access it via the same `info.context.user` pattern they use under GraphQL.
 
-The same `apply_cascade_permissions` (item 1 / `TODO-BETA-023`) and `Meta.rate_limit` (item 24) and typed error envelope (item 19) apply unchanged — they read from `info.context`, not from a request-shaped object, so the gRPC interceptor stack populates the same fields the Django HTTP middleware does.
+The same `apply_cascade_permissions` (item 1 / `TODO-ALPHA-023`) and `Meta.rate_limit` (item 24) and typed error envelope (item 19) apply unchanged — they read from `info.context`, not from a request-shaped object, so the gRPC interceptor stack populates the same fields the Django HTTP middleware does.
 
 #### Schema-author experience
 

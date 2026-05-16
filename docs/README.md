@@ -32,8 +32,6 @@ class ItemType(DjangoType):
         model = Item
         fields = ("id", "name", "category")
 
-finalize_django_types()
-
 
 @strawberry.type
 class Query:
@@ -41,6 +39,8 @@ class Query:
     def all_items(self) -> list[ItemType]:
         return Item.objects.all()
 
+
+finalize_django_types()
 
 schema = strawberry.Schema(
     query=Query,

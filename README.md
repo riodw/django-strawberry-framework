@@ -11,43 +11,10 @@
 [changelog-image]: https://img.shields.io/badge/changelog-CHANGELOG.md-blue
 [changelog-url]: https://github.com/riodw/django-strawberry-framework/blob/main/CHANGELOG.md
 
-Meta classes, not decorators. [Strawberry GraphQL](https://github.com/strawberry-graphql/strawberry) on Django, with an N+1 optimizer that cooperates with your existing querysets. Filters / orders / aggregates / permissions are on the roadmap.
-
-> **Status: 0.0.5, single-maintainer.** Stable enough for internal tools and prototypes; not for production. Today's shipped names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto` — are intended to remain stable through `0.1.0`. API names are the stability promise; correctness and edge-case behavior are still hardening. Coming features — filters, orders, aggregates, connections, permissions, and more `Meta` keys — do not ship yet.
-
-#### This package takes inspiration from:
-
-- <https://github.com/riodw/django-graphene-filters>
-- <https://github.com/encode/django-rest-framework>
-- <https://github.com/strawberry-graphql/strawberry-graphql-django>
-
-## Project documentation
-
-This root README is the operational entry point: install, run, seed example data, test, build, and publish.
-
-- [`docs/README.md`](docs/README.md) — quick start, package orientation, optimizer behavior, and status.
-- [`GOAL.md`](GOAL.md) — long-term project destination and rich-schema north star.
-- [`TODAY.md`](TODAY.md) — current package capability snapshot for examples and early adopters.
-- [`docs/FEATURES.md`](docs/FEATURES.md) — detailed shipped/planned/deferred capability catalog, quick comparison table, and migration notes.
-- [`docs/TREE.md`](docs/TREE.md) — detailed layout reference for upstream trees, this package's source tree, target architecture, and test placement.
-- [`KANBAN.md`](KANBAN.md) — contributor/maintainer board for shipped work, planned work, blockers, and release-readiness notes.
-- [`scripts/`](scripts/) — review and tooling helpers used during release review; see [`docs/review/REVIEW.md`](docs/review/REVIEW.md).
-
-## Quick start
-
-Install the package, define `DjangoType` classes with nested `Meta`, import every module that declares them, call `finalize_django_types()` during schema setup, return a Django `QuerySet`, and enable `DjangoOptimizerExtension` on your Strawberry schema.
+A DRF-shaped Django integration for [Strawberry GraphQL](https://github.com/strawberry-graphql/strawberry). Build GraphQL APIs from Django models with `class Meta`, not decorators — and get a cooperative N+1 optimizer in the box.
 
 ```python
-import strawberry
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
-from myapp.models import Category, Item
-
-
-class CategoryType(DjangoType):
-    class Meta:
-        model = Category
-        fields = ("id", "name")
-
+from django_strawberry_framework import DjangoType, finalize_django_types
 
 class ItemType(DjangoType):
     class Meta:
@@ -55,205 +22,50 @@ class ItemType(DjangoType):
         fields = ("id", "name", "category")
 
 finalize_django_types()
-
-
-@strawberry.type
-class Query:
-    @strawberry.field
-    def all_items(self) -> list[ItemType]:
-        return Item.objects.all()
-
-
-schema = strawberry.Schema(
-    query=Query,
-    extensions=[DjangoOptimizerExtension()],
-)
 ```
 
-The longer onboarding path lives in [`docs/README.md`](docs/README.md#quick-start).
+That's the entire surface for a model-backed GraphQL type. Relations are wired automatically; nested selections become Django ORM `select_related` / `prefetch_related` / `only` calls without you touching the resolver.
 
-### Schema setup boundary
+## Why this package exists
 
-`finalize_django_types()` must run once during single-threaded import/schema setup, after every module that defines `DjangoType` classes has been imported and before `strawberry.Schema(...)` is constructed. The most common failure mode is forgetting to import a module that contains a related type before finalization.
+Django developers think in `class Meta`, querysets, DRF Serializers, and django-filter. The Python GraphQL world has moved to [Strawberry](https://github.com/strawberry-graphql/strawberry) — but Strawberry's Django ecosystem leans on decorators and Strawberry-shaped configuration, not Django-shaped configuration.
 
-Recommended:
+This package closes that gap: Strawberry stays as the engine, `class Meta` becomes the configuration surface, your existing querysets stay yours, and the shipped N+1 optimizer *cooperates* with the `select_related` / `prefetch_related` you've already written instead of replacing them. The result feels like `graphene-django` evolved onto a modern engine instead of replaced by a different one.
 
-```python
-from django_strawberry_framework import finalize_django_types
+## Is this for you?
 
-from myapp import types as _types  # noqa: F401
+**Coming from `graphene-django`?** Your `class Meta` shape stays — `DjangoObjectType` becomes `DjangoType`, you drop the Graphene runtime, and you gain the N+1 optimizer for free. Same mental model, modern Strawberry engine.
 
-finalize_django_types()
-schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-```
+**Coming from `strawberry-graphql-django`?** Keep Strawberry; lose the decorators. Configuration moves into `class Meta` so it's consistent with the rest of your Django app. Bonus: plan caching, FK-id elision, queryset diffing, strictness mode.
 
-Wrong order:
+**Coming from DRF + django-filter?** Your `Meta.model` / `fields` / `exclude` / `filterset_class` mental model travels straight over. Mutations land as `DjangoMutation` classes with the same nested-`Meta` shape; DRF Serializers integrate via `Meta.serializer_class`.
 
-```python
-schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-finalize_django_types()
-```
+## Status
 
-The second form constructs the Strawberry schema before relation targets are finalized, so exposed relations whose target type was still pending cannot be resolved into concrete `DjangoType`s.
+**`0.0.5`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening.
 
-## Installation
+For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`](TODAY.md). The full shipped/planned/deferred catalog lives in [`docs/FEATURES.md`](docs/FEATURES.md), and the `0.1.0` → `1.0.0` milestone narrative is in [`docs/README.md`'s status section](docs/README.md#status).
 
-```shell
-# pip
-pip install django-strawberry-framework
-# uv
-uv add django-strawberry-framework
-```
+## Get started → [`docs/README.md`](docs/README.md)
 
-## Development Setup
+Installation, quick start, schema-setup walkthrough, running the example project, and seeding test data live in [`docs/README.md`](docs/README.md). That's the next stop if this looks like your shape.
 
-```shell
-# Install uv (if not already installed)
-# https://docs.astral.sh/uv/getting-started/installation/
+## Project documentation
 
-# Clone and install
-git clone https://github.com/riodw/django-strawberry-framework.git
-cd django-strawberry-framework
-uv sync
-uv sync --upgrade
-```
+- [`docs/README.md`](docs/README.md) — install, quick start, walkthrough, status
+- [`docs/FEATURES.md`](docs/FEATURES.md) — shipped/planned/deferred capability catalog + migration notes
+- [`GOAL.md`](GOAL.md) — long-term destination and rich-schema north star
+- [`TODAY.md`](TODAY.md) — current package capability snapshot for examples and early adopters
+- [`docs/TREE.md`](docs/TREE.md) — package and test layout reference
+- [`KANBAN.md`](KANBAN.md) — contributor/maintainer board for shipped, planned, and blocked work
+- [`BETTER.md`](BETTER.md) — strategic differentiators beyond parity (post-`1.0.0`)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup, format, test, build, publish
 
-## Running
+## Inspired by
 
-```shell
-# Apply migrations to the example app
-uv run python examples/fakeshop/manage.py migrate
-
-# Start the dev server (admin + GraphiQL at /graphql/)
-uv run python examples/fakeshop/manage.py runserver
-```
-
-The dev landing page at `/` links to GraphiQL, the admin, and the seed/delete query-param triggers.
-
-### Seeding the example database
-
-The fakeshop example dynamically discovers **all** Faker providers at runtime and seeds the database accordingly. The command is idempotent — it ensures at least N items exist per provider and only creates the shortfall.
-
-```shell
-# Ensure 5 items per provider (default)
-uv run python examples/fakeshop/manage.py seed_data
-
-# Ensure 50 items per provider
-uv run python examples/fakeshop/manage.py seed_data 50
-
-# Delete the first 10 items (and their cascading entries)
-uv run python examples/fakeshop/manage.py delete_data 10
-
-# Delete all items and entries
-uv run python examples/fakeshop/manage.py delete_data all
-
-# Wipe all four tables (Category, Property, Item, Entry)
-uv run python examples/fakeshop/manage.py delete_data everything
-```
-
-The same actions are also reachable from the admin via query-param triggers — see the dev landing page at `/` for clickable links.
-
-### Test users
-
-Create test users with individual Django `view_*` permissions for exercising `get_queryset` permission branches. Each set creates 6 users: 1 staff, 1 regular (no perms), and 4 per-model permission users (`view_category`, `view_item`, `view_property`, `view_entry`). All share password `admin`. Superusers are never deleted.
-
-```shell
-# Create 1 set of test users (6 users)
-uv run python examples/fakeshop/manage.py create_users
-
-# Create 3 sets (18 users)
-uv run python examples/fakeshop/manage.py create_users 3
-
-# Delete all non-superusers
-uv run python examples/fakeshop/manage.py delete_users all
-
-# Delete the first 5 non-superusers
-uv run python examples/fakeshop/manage.py delete_users 5
-```
-
-### Sharded mode (multi-DB)
-
-The example ships with a two-DB layout for stress-testing multi-database scenarios. Toggle it via `FAKESHOP_SHARDED=1`:
-
-```shell
-# Materialize both shard SQLite files (idempotent)
-FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards
-
-# Larger seed for stress testing
-FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards --count 5000
-```
-
-In sharded mode `default` → `db_shard_a.sqlite3` and `shard_b` → `db_shard_b.sqlite3`. The single-DB `db.sqlite3` is invisible while the env var is set.
-
-## Testing
-
-```shell
-# Run the full test suite (coverage runs automatically; build fails below 100%)
-uv run pytest
-
-# Run a single test file
-uv run pytest tests/base/test_conf.py
-```
-
-CI runs the suite across a Python × Django matrix on every push and PR. The full matrix is also available via `workflow_dispatch`. See [`.github/workflows/django.yml`](.github/workflows/django.yml).
-
-### Formatting and Linting
-
-```shell
-# pyproject.toml [tool.ruff]
-uv run ruff format .
-uv run ruff check --fix .
-```
-
-### Updating Version
-
-- `pyproject.toml`
-- `django_strawberry_framework/__init__.py`
-
-## Build
-
-```shell
-uv lock
-rm -rf dist/
-uv build
-```
-
-## Publish
-
-```shell
-uv publish --token PASSWORD
-```
-
-### Updating dependencies
-
-```shell
-# Show outdated packages
-uv pip list --outdated
-
-# Add a dev dependency
-uv add --group dev <package>
-
-# Remove the virtual environment
-rm -rf .venv
-```
-
-### Local usage in another project
-
-1. Go to the project you want to install the package in.
-2. Add `django-strawberry-framework` to your `pyproject.toml` dependencies.
-3. Point it at your local checkout:
-
-```toml
-# In your project's pyproject.toml
-[tool.uv.sources]
-django-strawberry-framework = { path = "../django-strawberry-framework", editable = true }
-```
-
-Then run:
-
-```shell
-uv sync
-```
+- <https://github.com/riodw/django-graphene-filters>
+- <https://github.com/encode/django-rest-framework>
+- <https://github.com/strawberry-graphql/strawberry-graphql-django>
 
 ## Contributing & Security
 

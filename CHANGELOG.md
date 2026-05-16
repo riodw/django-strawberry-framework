@@ -8,15 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 This project follows a milestone-style cadence during pre-`1.0.0`:
 
-- **Pre-alpha (`0.0.x`)** — each patch ships a coherent feature group on the road to `0.1.0`. Public surface is still in flight; breaking changes can land in any patch. Strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) does **not** apply here.
-- **`0.1.0` (beta release)** — feature parity with `graphene-django` (`⚛️`) and `strawberry-graphql-django` (`🍓`) is complete. Alpha → beta cut-over. Tracked by `BETA-033-0.1.0` in [`KANBAN.md`](KANBAN.md).
+- **Alpha (`0.0.x`)** — each patch ships a coherent feature group on the road to `0.1.0`. Public surface is still in flight; breaking changes can land in any patch. Strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) does **not** apply here.
+- **`0.1.0` (beta release)** — feature parity with `graphene-django` (`⚛️`) and `strawberry-graphql-django` (`🍓`) is complete. Alpha → beta cut-over. Tracked by `TODO-BETA-035-0.1.0` in [`KANBAN.md`](KANBAN.md).
 - **Beta (`0.1.x`)** — each patch ships a Layer-3 capability (`FieldSet`, `search_fields`, aggregations, choice-enum naming, fakeshop activation, migration guides) on the road to `1.0.0`. Public surface stabilizes; breaking changes are discouraged but not forbidden.
-- **`1.0.0` (stable release)** — full `django-graphene-filters` depth on top of parity. Beta → stable cut-over; **API freeze**. Tracked by `STABLE-042-1.0.0` in [`KANBAN.md`](KANBAN.md).
-- **Post-stable (`1.x.y`)** — strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) applies from this point forward: breaking changes require a MAJOR bump, additive changes require a MINOR bump, and bug-fix-only releases get a PATCH bump.
+- **`1.0.0` (stable release)** — full `django-graphene-filters` depth on top of parity. Beta → stable cut-over; **API freeze**. Tracked by `TODO-STABLE-044-1.0.0` in [`KANBAN.md`](KANBAN.md).
+- **Stable (`1.x.y`)** — strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) applies from this point forward: breaking changes require a MAJOR bump, additive changes require a MINOR bump, and bug-fix-only releases get a PATCH bump.
 
 See [`KANBAN.md`](KANBAN.md) for the per-card sequencing and the version scope of each patch.
 
 ## [Unreleased]
+### Changed
+- Consolidated field metadata onto `DjangoTypeDefinition` as the single source of truth. Three reader sites in `types/` (`_record_pending_relation`, `resolved_relation_annotation`, `_make_relation_resolver`) now read `FieldMeta` from `DjangoTypeDefinition.field_map` instead of re-deriving relation shape via `relation_kind(field)` + raw `getattr(field, ...)`. The optimizer reads `FieldMeta` from `registry.get_definition(type_cls)` at all four former mirror-reader sites (`walker._resolve_field_map`, `walker._walk_selections`, `extension._collect_schema_reachable_types`, `extension.check_schema`); the legacy `cls._optimizer_field_map` / `cls._optimizer_hints` class-attribute mirrors are retired. Internal refactor only — no public surface or consumer-visible behavior change. Tracked as `DONE-ALPHA-012-0.0.6` in [`KANBAN.md`](KANBAN.md).
 
 ## [0.0.5] - 2026-05-15
 ### Added

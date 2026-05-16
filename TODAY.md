@@ -11,7 +11,9 @@ For the package-wide capability catalog, shipped/planned feature status, optimiz
 - The package can support a practical list-based schema for the fakeshop product models today.
 - The best current fakeshop shape is a bidirectional list-based graph: root list fields for each model, with FK and reverse-FK traversal across `Category`, `Item`, `Property`, and `Entry`.
 
-The library example app's `GenreType` declares `interfaces = (relay.Node,)` and its live `/graphql/` HTTP test in `examples/fakeshop/test_query/test_library_api.py::test_library_relay_node_global_id_round_trips` exercises the end-to-end Relay GlobalID round trip. The products-catalog list-based schema below stays non-Relay.
+The **library example app is the live demonstration** of the shipped surface today. `examples/fakeshop/apps/library/schema.py` declares seven `DjangoType` classes and exercises, in one place: forward FK, reverse FK, forward OneToOne, reverse OneToOne, forward M2M, reverse M2M, choice-enum generation (`Book.circulation_status`), `Meta.interfaces = (relay.Node,)` on `GenreType`, `Meta.optimizer_hints` on `LoanType` (`OptimizerHint.prefetch_related()` + `OptimizerHint.SKIP`), a consumer-authored relation override on `Branch.shelves`, a consumer-shaped queryset cooperating with the optimizer (`all_library_prefetched_books` uses `select_related("shelf").prefetch_related("genres")`), and definition-order-independent finalization (the type declaration order is intentionally awkward — `LoanType` before `BookType` and `PatronType`, etc.). The live `/graphql/` HTTP tests in `examples/fakeshop/test_query/test_library_api.py` exercise all of these end-to-end, including the Relay GlobalID round trip via `test_library_relay_node_global_id_round_trips`.
+
+The products-catalog list-based schema below stays non-Relay and intentionally narrower than the library demo — it's the minimal "wire up a model app today" example.
 
 The commented rich fakeshop design is not directly usable yet because it depends on unshipped APIs and features:
 
@@ -141,23 +143,40 @@ schema = strawberry.Schema(
 ```
 
 ## What fakeshop model fields work today
-For the fakeshop product models, `DjangoType` can currently generate:
-- `BigAutoField` and IDs -> `int`
-- `TextField` -> `str`
-- `BooleanField` -> `bool`
-- `DateTimeField` -> `datetime.datetime`
-- `ForeignKey` -> related `DjangoType`
-- reverse FK -> `list[RelatedType]`
 
-Use these bidirectional relations in the current fakeshop schema:
-- `Item.category`
-- `Property.category`
-- `Entry.item`
-- `Entry.property`
-- `Category.items`
-- `Category.properties`
-- `Item.entries`
-- `Property.entries`
+Across the products and library example apps, `DjangoType` currently generates:
+
+Scalar conversions:
+- `BigAutoField` / `AutoField` / `IntegerField` → `int`
+- `TextField` / `CharField` → `str`
+- `BooleanField` → `bool`
+- `DateTimeField` / `DateField` / `TimeField` / `DurationField` → Python-native time types
+- `DecimalField` → `decimal.Decimal`
+- `FloatField` → `float`
+- `UUIDField` → `uuid.UUID`
+- `BinaryField` → `bytes`
+- `FileField` / `ImageField` → `str`
+- `null=True` → `T | None`
+- `CharField` / `TextField` with `choices` → generated Strawberry enum (live: `Book.circulation_status` in library)
+- Relay `GlobalID` when `Meta.interfaces = (relay.Node,)` is declared (live: `GenreType` in library)
+
+Relation conversions:
+- forward `ForeignKey` → related `DjangoType`
+- reverse `ForeignKey` → `list[RelatedType]`
+- forward `OneToOneField` → related `DjangoType` or `None`
+- reverse `OneToOneField` → related `DjangoType` or `None` (live: `Patron.card` in library)
+- forward `ManyToManyField` → `list[RelatedType]` (live: `Book.genres` in library)
+- reverse `ManyToManyField` → `list[RelatedType]` (live: `Genre.books` in library)
+
+Products-catalog bidirectional relations exercised in the schema below:
+- `Item.category` / `Property.category` / `Entry.item` / `Entry.property` (forward FK)
+- `Category.items` / `Category.properties` / `Item.entries` / `Property.entries` (reverse FK)
+
+Library bidirectional relations exercised live in `examples/fakeshop/apps/library/schema.py`:
+- `Shelf.branch` / `Loan.book` / `Loan.patron` / `Book.shelf` / `MembershipCard.patron` (forward FK / OneToOne)
+- `Branch.shelves` / `Patron.loans` / `Shelf.books` / `Book.loans` (reverse FK)
+- `Patron.card` (reverse OneToOne, nullable)
+- `Book.genres` / `Genre.books` (M2M, bidirectional)
 
 ## Optimized fakeshop queries that work today
 

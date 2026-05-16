@@ -115,7 +115,7 @@ A second mutation with the same `request_id` within the TTL returns the cached f
 
 **Why it matters**: production-grade GraphQL APIs allow-list operation hashes to prevent arbitrary query injection and cache responses by hash. Today this is per-team plumbing. Owning the `django.core.cache` integration is a real production-hardening story.
 
-**Framework integration**: ships as the `PersistedQueryGate()` policy class within **item 33** (Pluggable per-model DoS policy stack). This item owns the hash-lookup-and-cache logic and the management-command rotation flow; item 33 owns the hook timing (pre-parse phase) and the per-model / global stack composition. Building item 10 standalone produces a useful feature; building it through item 33's framework produces a coherent layered defense.
+**Framework integration**: ships **as a standalone primitive first** — a `DjangoPersistedQueryExtension` that hashes incoming operations, looks them up in `django.core.cache`, and rejects unknown hashes in production. This item owns the hash-lookup-and-cache logic, the management-command rotation flow, and the public API for declaring persisted-query allowlists. Once **item 33** (Pluggable per-model DoS policy stack) generalizes — see the sequencing note on item 33 — this primitive folds into the stack as `PersistedQueryGate()` in the pre-parse phase, exposing the same logic through the uniform stacked-class surface. Building this item standalone produces a useful feature today; folding it into item 33's framework later produces a coherent layered defense.
 
 ### 37. Public surface promotion discipline
 
@@ -185,7 +185,7 @@ If Strawberry internals churn becomes noisy, introduce a single named helper (pr
 
 **What `strawberry-graphql-django` does**: same — Strawberry's `extensions.code` convention is freeform; no shipped registry.
 
-**What we already plan**: the mutations cluster (`TODO-ALPHA-024`) ships an `errors: list[FieldError]` envelope with `field` and `message`.
+**What we already plan**: the mutations cluster (`TODO-ALPHA-026`) ships an `errors: list[FieldError]` envelope with `field` and `message`.
 
 **What we'd do**: extend the envelope to a full typed shape with code, field path, parameters, and a translation hook:
 
@@ -237,7 +237,7 @@ This mirrors how every other Django setting works (project setting overrides pac
 
 #### Design decision 3: routing decoded IDs
 
-The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — `TODO-ALPHA-013-0.0.6`), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
+The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — `TODO-ALPHA-014-0.0.6`), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
 
 This works *better* than the type-name encoding for the multi-`DjangoType`-per-model case: instead of needing a separate GlobalID for every type variant over the same model, all variants share one ID space and the schema author picks the discriminator (primary type, or explicit inline fragments).
 
@@ -317,7 +317,7 @@ class TransitionalType(DjangoType):
 
 - **Item 39 (Relay magic)** — sub-feature 1 (GlobalID migrations) collapses to a tiny *"app-move alias helper"* once `"model"` is the default. The full migration system this item replaces was always a workaround for the type-name convention's fragility; with model identity as the durable anchor, the migration system isn't needed for the common case.
 - **Item 15 (Content-versioned Node types)** — composes cleanly; content versions are computed off the row data, not the encoding strategy.
-- **`BLOCKED-ALPHA-021` (Full Relay story)** — this item is the *recommended encoding strategy* for that card's `1.0.0` Relay surface. Worth pinning the decision *before* `BLOCKED-ALPHA-021` ships so client deployments are minted against the durable identifier from day one. Promoting this item to a `TODO-ALPHA-*` card before `BLOCKED-ALPHA-021` is the cleanest path.
+- **`BLOCKED-ALPHA-023` (Full Relay story)** — this item is the *recommended encoding strategy* for that card's `1.0.0` Relay surface. Worth pinning the decision *before* `BLOCKED-ALPHA-023` ships so client deployments are minted against the durable identifier from day one. Promoting this item to a `TODO-ALPHA-*` card before `BLOCKED-ALPHA-023` is the cleanest path.
 
 #### Why it matters
 
@@ -355,7 +355,7 @@ Cost defaults: scalar field = `1`, single relation = `5`, many relation = `10 ×
 
 **Why it matters**: arbitrary-shape queries are GraphQL's single most-cited production risk. A client that writes `query { allItems { category { allItems { category { ... } } } } }` can exhaust the server in one request. Both upstreams punt; we already walk the selection tree once and have field-cost metadata sitting on every `FieldMeta` instance — declaring a budget is a tiny addition that gives consumers DoS protection out of the box. Closes one of Theo's specific gripes ("GraphQL is a DoS vector by default").
 
-**Framework integration**: ships as two policy classes — `CostWeight(per_query=, per_field=)` (the cost half) and `DepthCap(max=)` (the depth half) — within **item 33** (Pluggable per-model DoS policy stack). This item owns the per-field cost-weight derivation from `FieldMeta`, the budget arithmetic, and the depth-counting algorithm; item 33 owns the hook timing (evaluate_cost + pre-execute phases) and the per-model / global stack composition. Together they let consumers say `dos_classes = [CostWeight(per_query=50), DepthCap(max=10)]` per model.
+**Framework integration**: ships **as a standalone primitive first** — a `DjangoCostLimitExtension` that derives per-field cost from `FieldMeta`, sums it across the selection tree, enforces a configurable budget, and a separate `DjangoDepthLimitExtension` that counts selection depth and enforces a configurable cap. This item owns the per-field cost-weight derivation, the budget arithmetic, and the depth-counting algorithm — plus the public API for declaring per-type cost weights. Once **item 33** (Pluggable per-model DoS policy stack) generalizes — see the sequencing note on item 33 — these primitives fold into the stack as `CostWeight(per_query=, per_field=)` and `DepthCap(max=)`, exposing the same logic through the uniform stacked-class surface. Shipping standalone first lets the cost-weight declaration syntax and the depth-cap configuration story shake out in real consumer use before they're locked into the stacked-class contract.
 
 ### 29. Schema usage analytics
 
@@ -448,7 +448,7 @@ Generated hooks integrate with item 20 (mutation invalidation gossip): the wrapp
 
 **What `tRPC` does**: end-to-end type safety by sharing the TypeScript source between server and client. No codegen step. Theo's *"The Truth About GraphQL"* points at this as a major win for tRPC over GraphQL.
 
-**What we'd do**: extend the planned `export_schema` management command (`TODO-ALPHA-017`) with `--emit` modes that produce client-ready type definitions for queries, mutations, fragments, and the typed-error envelope from item 19:
+**What we'd do**: extend the planned `export_schema` management command (`TODO-ALPHA-018`) with `--emit` modes that produce client-ready type definitions for queries, mutations, fragments, and the typed-error envelope from item 19:
 
 ```bash path=null start=null
 uv run python manage.py export_schema \
@@ -546,7 +546,7 @@ Backed by `django.core.cache`. Rejections produce a typed error (item 19) with `
 
 **Why it matters**: GraphQL's *"client picks the shape"* model means individual fields can be very expensive — and endpoint-level rate limiting can't distinguish a cheap `currentUser` query from an expensive `generateReport`. Field-level limits are far more useful. Pairs with item 17 (cost analysis) for layered DoS protection: cost limit rejects pathological *shapes*; rate limit rejects pathological *frequency*.
 
-**Framework integration**: ships as two policy classes — `RateLimit(anon=, user=, staff=)` (the per-tier rate-limit half) and `CircuitBreaker(global_rate=)` (the aggregate auto-pause half) — within **item 33** (Pluggable per-model DoS policy stack). This item owns the cache-backed rate-limit math, the per-scope key derivation, and the circuit-breaker state machine; item 33 owns the hook timing (check_per_field phase) and the per-model / global stack composition. Together they let consumers compose `dos_classes = [RateLimit(user="20/min"), CircuitBreaker(global_rate="500/min")]` per model.
+**Framework integration**: ships **as a standalone primitive first** — a `DjangoRateLimitExtension` exposing per-resolver rate-limit decorators / `Meta` keys (anonymous tier, authenticated tier, staff tier) and a separate `DjangoCircuitBreakerExtension` for aggregate auto-pause when global rates exceed a threshold. This item owns the cache-backed rate-limit math, the per-scope key derivation, and the circuit-breaker state machine — plus the public API for declaring per-type and per-field rate budgets. Once **item 33** (Pluggable per-model DoS policy stack) generalizes — see the sequencing note on item 33 — these primitives fold into the stack as `RateLimit(anon=, user=, staff=)` and `CircuitBreaker(global_rate=)` in the check_per_field phase, exposing the same logic through the uniform stacked-class surface. Shipping standalone first means the rate-limit declaration syntax and the per-tier key derivation get to settle on real production deployments before they're absorbed into the stacked-class contract.
 
 ### 6. Built-in OpenTelemetry / span integration
 
@@ -582,37 +582,6 @@ Backed by `django.core.cache`. Rejections produce a typed error (item 19) with `
 - an opt-in auto-removal gate: deprecated fields whose usage stays at zero for N days get flagged as safe-to-delete (or, with maximum boldness, removed automatically on the next schema build)
 
 **Why it matters**: deprecation is the GraphQL-recommended migration path (additive schema evolution, mark old, add new), but nobody actually tracks adoption. Teams either remove deprecated fields blind and break clients, or never remove them and accumulate schema cruft. Owning the telemetry closes that loop and turns *"is anyone still using `Order.deprecatedTotal`?"* from a guessing game into a query.
-
-### 35. `FieldMeta` single-source-of-truth consolidation and mirror retirement
-
-**Realistic**: 9/10 — Both refactors have explicit `TODO(spec-fieldmeta-*)` anchors in source code; well-scoped; no architectural changes needed.
-
-**Impact**: 3/10 — Internal cleanup; invisible to consumers. Reduces drift surface (one source of truth for field metadata) and removes dead weight (legacy class-attribute mirrors).
-
-**Difficulty**: 4/10 — Touches ~7 reader sites total (3 SSoT + 4 mirror) plus the mirror writer; bounded refactor with explicit anchor points.
-
-**What this is**: two related internal refactors. Combined into one item because they share the same underlying intent (one canonical metadata path through `DjangoTypeDefinition`).
-
-**Part A — SSoT consolidation.** Three sites currently re-derive relation shape via `relation_kind(field)` + raw `getattr(field, ...)` instead of reading the `FieldMeta` already on `DjangoTypeDefinition.field_map`:
-
-- `django_strawberry_framework/types/base.py:_record_pending_relation` — anchored with `TODO(spec-fieldmeta-ssot)`
-- `django_strawberry_framework/types/converters.py:resolved_relation_annotation` — anchored with `TODO(spec-fieldmeta-ssot)`
-- `django_strawberry_framework/types/resolvers.py:_make_relation_resolver` — anchored with `TODO(spec-fieldmeta-ssot)`
-
-All three should read `FieldMeta` from the canonical source instead. The optimizer's `field_meta.py` module docstring already enumerates them as cross-references.
-
-**Part B — Mirror retirement.** `DjangoType.__init_subclass__` writes legacy class-attribute mirrors (`cls._optimizer_field_map`, `cls._optimizer_hints`) in addition to populating the canonical `DjangoTypeDefinition`. The optimizer reads the legacy mirrors at four sites:
-
-- `optimizer/walker.py:_resolve_field_map` — anchored with `TODO(spec-fieldmeta-mirror-retirement)`
-- `optimizer/walker.py:_walk_selections` (hints read) — anchored with `TODO(spec-fieldmeta-mirror-retirement)`
-- `optimizer/extension.py:_collect_schema_reachable_types` — anchored with `TODO(spec-fieldmeta-mirror-retirement)`
-- `optimizer/extension.py:check_schema` — anchored with `TODO(spec-fieldmeta-mirror-retirement)`
-
-All four should read from `registry.get_definition(type_cls)` directly. The mirror writer at `types/base.py:137` should be removed in the same change.
-
-**Why it matters**: removes ~7 sites of duplicated relation-shape logic and eliminates legacy class-attribute residue that survives `registry.clear()`. Single source of truth for field metadata reduces the chance of drift when Django adds a new relation flag or changes a descriptor attribute. No public surface change; tests stay at 100% coverage.
-
-**Framework integration**: a prerequisite for any future item that adds new relation kinds or new `FieldMeta` fields — would amplify the drift surface if shipped without consolidating first. Touches the same code paths as item 17 (cost analysis reads `FieldMeta`) and item 33 (DoS policies read `FieldMeta` for cost-weight computation).
 
 ### 3. DRF `Serializer`-driven mutations
 
@@ -680,6 +649,8 @@ Each function bundles the operation string and the variables shape; a tiny (~2KB
 **Impact**: 10/10 — Per-model declarative DoS protection is what every Django + GraphQL team eventually rolls themselves. Owning the stacked-DRF-style mental model is the headline answer to *"GraphQL DoS protection is hard"* and the comprehensive security-positioning win on the list.
 
 **Difficulty**: 7/10 — Framework + 14 policy classes is meaningful surface; total LOC is moderate-large but no single piece is intractable. Most difficulty is concentrated in two policies (`WallClockBudget` cancellation, `CircuitBreaker` cross-worker coordination).
+
+**Sequencing**: this item is the *late-stage generalization*, not the next slice. Land items 10 (Persisted queries), 17 (Cost & complexity limits), 24 (Per-resolver rate limiting), and 29 (Schema usage analytics) as **independent primitives first**, each with its own clear win and its own settled API surface from real consumer use. Once 3-4 primitives have shipped and the patterns have shaken out, generalize them into the stacked-class architecture described below. At that point the catalog of 14 policy classes in "Design decision 4" maps to *already-shipped behavior wrapped in a uniform composition surface* — not to greenfield design. Shipping the policy stack first locks in API shape (hook signatures, ordering semantics, error-code identifiers) before any of the underlying primitives have been pressure-tested in production, which is exactly the trap DRF avoided by letting `permission_classes` emerge from individual `IsAuthenticated` / `IsAdminUser` / etc. before there was a stacked pattern at all.
 
 **What `graphene-django` does**: nothing — DoS defense is entirely per-team plumbing. Teams roll their own depth limiters, alias counters, and rate limiters from scratch.
 
@@ -986,7 +957,7 @@ The optimizer-hints half deserves a closer look: properties that traverse relati
 
 **What `DRF` does today**: REST only; no GraphQL story. Teams running both write their serializers twice.
 
-**What we'd do**: every `DjangoType` declaration can optionally expose a matching DRF-style REST endpoint set, with `Meta.filterset_class`, `Meta.orderset_class`, and `Meta.search_fields` reused as the REST filter/order/search surface. Mutations from `forms/` and `rest_framework/` (`TODO-ALPHA-026`, `TODO-ALPHA-027`) reuse their existing validation chain for `POST` / `PUT` / `PATCH` / `DELETE`. The same declaration powers `/graphql/` and `/api/<name>/`.
+**What we'd do**: every `DjangoType` declaration can optionally expose a matching DRF-style REST endpoint set, with `Meta.filterset_class`, `Meta.orderset_class`, and `Meta.search_fields` reused as the REST filter/order/search surface. Mutations from `forms/` and `rest_framework/` (`TODO-ALPHA-028`, `TODO-ALPHA-029`) reuse their existing validation chain for `POST` / `PUT` / `PATCH` / `DELETE`. The same declaration powers `/graphql/` and `/api/<name>/`.
 
 ```python path=null start=null
 class ItemType(DjangoType):
@@ -1263,7 +1234,7 @@ For nested lists (e.g. `allOrders { lineItems { … } }`), the row is "one line 
 - **Item 29 (schema usage analytics)** — track which dimensions / measures / formats consumers query, drives matrix-surface deprecation decisions.
 - **Item 30 (resumable streaming downloads)** — the wire is the same: matrix exports above `auto_stream_above` use item 30's snapshot + token + resume protocol; the format chooser picks the streaming serializer.
 - **Item 31 (gRPC)** — matrix RPCs become server-streaming methods with `Order` (proto message) frames; Arrow IPC over gRPC is the canonical analytical-pipeline transport.
-- **`TODO-BETA-036` (Aggregation subsystem)** — the matrix layer is the natural evolution of the planned `AggregateSet` work. Aggregates ship a single-row aggregation surface first; the matrix layer (this item) generalizes it to multi-row group-by + pivot. Same `Meta.measures` dict can drive both.
+- **`TODO-BETA-038` (Aggregation subsystem)** — the matrix layer is the natural evolution of the planned `AggregateSet` work. Aggregates ship a single-row aggregation surface first; the matrix layer (this item) generalizes it to multi-row group-by + pivot. Same `Meta.measures` dict can drive both.
 
 #### Failure modes and edge cases
 
@@ -1340,7 +1311,7 @@ class ItemType(DjangoType):
 
 **What `strawberry-graphql-django` does**: `strawberry-django.relay` provides cursor-connection support but no migration tooling for type renames, no first-class polymorphic connections, no declarative cursor field, no refetchable container metadata. Each gap is per-team plumbing.
 
-**What we'd do**: ship six Relay-specific extensions, all opt-in, all composable with the shipped `Meta.interfaces = (relay.Node,)` foundation and the `1.0.0` Connection surface (`BLOCKED-ALPHA-021`).
+**What we'd do**: ship six Relay-specific extensions, all opt-in, all composable with the shipped `Meta.interfaces = (relay.Node,)` foundation and the `1.0.0` Connection surface (`BLOCKED-ALPHA-023`).
 
 #### Sub-feature 1: GlobalID model-rename / app-move helper
 
@@ -1417,7 +1388,7 @@ class ItemType(DjangoType):
         refetchable = True   # advertises this type as a Relay refetchable container target
 ```
 
-The package emits the right schema metadata (the `@refetchable` directive when present in the consumer's Strawberry version; a documented introspection hint otherwise), and the `node(id:)` root resolver (shipped in `BLOCKED-ALPHA-021`) is guaranteed to return the same shape the consumer queried — no field-set drift between the connection edge and the refetched object.
+The package emits the right schema metadata (the `@refetchable` directive when present in the consumer's Strawberry version; a documented introspection hint otherwise), and the `node(id:)` root resolver (shipped in `BLOCKED-ALPHA-023`) is guaranteed to return the same shape the consumer queried — no field-set drift between the connection edge and the refetched object.
 
 #### Sub-feature 6: Permission-aware cursor decoding
 
@@ -1433,7 +1404,7 @@ Relay is the canonical GraphQL pagination + identity spec. It's also where teams
 
 The headline pitch: *"Relay just works — type renames don't break IDs, cursors don't drift on inserts, polymorphic feeds use one connection, permissions are honored across pagination."* Combined with the shipped `Meta.interfaces = (relay.Node,)` foundation and the `1.0.0` Connection surface, this completes the *"Relay is the easiest part of our package, not the hardest"* story.
 
-**Framework integration**: composes with `BLOCKED-ALPHA-021` (Full Relay story, the `1.0.0` connective tissue) — this item is the *post-stable* expansion of that card. Composes with item 15 (content-versioned Node types) for per-Node freshness gossip. Composes with item 33 (DoS policy stack) since stable cursors and polymorphic connections need their own cost weights. Composes with item 4 (polymorphic / `GenericForeignKey` support) — sub-feature 2 (polymorphic connections) is the *Relay-shaped* version of the same underlying machinery item 4 introduces for non-Relay polymorphic types.
+**Framework integration**: composes with `BLOCKED-ALPHA-023` (Full Relay story, the `1.0.0` connective tissue) — this item is the *post-stable* expansion of that card. Composes with item 15 (content-versioned Node types) for per-Node freshness gossip. Composes with item 33 (DoS policy stack) since stable cursors and polymorphic connections need their own cost weights. Composes with item 4 (polymorphic / `GenericForeignKey` support) — sub-feature 2 (polymorphic connections) is the *Relay-shaped* version of the same underlying machinery item 4 introduces for non-Relay polymorphic types.
 
 ### 15. Content-versioned Node types with response-extensions gossip
 
@@ -1875,7 +1846,7 @@ We'd ship a `DjangoAuthInterceptor` that:
 - Attaches the resolved user + a Django-shaped request-like context to the per-RPC ContextVar.
 - Resolvers access it via the same `info.context.user` pattern they use under GraphQL.
 
-The same `apply_cascade_permissions` (item 1 / `TODO-ALPHA-023`) and `Meta.rate_limit` (item 24) and typed error envelope (item 19) apply unchanged — they read from `info.context`, not from a request-shaped object, so the gRPC interceptor stack populates the same fields the Django HTTP middleware does.
+The same `apply_cascade_permissions` (item 1 / `TODO-ALPHA-025`) and `Meta.rate_limit` (item 24) and typed error envelope (item 19) apply unchanged — they read from `info.context`, not from a request-shaped object, so the gRPC interceptor stack populates the same fields the Django HTTP middleware does.
 
 #### Schema-author experience
 
@@ -1998,6 +1969,26 @@ const order  = await client.getOrder({ id: 42 });
 2. **Mobile clients**. iOS / Android / Flutter clients that care about bytes-on-the-wire and battery life can drop a generated gRPC client and stop sending JSON. The package's existing optimizer, permissions, error envelope, and rate-limit machinery apply unchanged.
 
 Nothing in the Django ecosystem does this today. `django-grpc-framework` ships gRPC but doesn't share a schema with anything; the GraphQL + DRF + gRPC tri-stack is currently maintained by hand at every team that needs it.
+
+### 41. First-class multi-database / sharding-aware optimizer
+
+**Realistic**: 3/10 — Multi-database is a niche Django facility most teams don't reach for. Cross-shard joins are genuinely hard and Django's ORM doesn't help — there's no built-in cross-shard `JOIN`, so any first-class story has to invent the planning seam itself.
+
+**Impact**: 4/10 — Strong differentiator for the narrow audience that runs sharded Django (large multi-tenant SaaS, fintech with data-residency requirements, Instagram-scale read-heavy apps). Invisible to most consumers, but the audience that needs it has nowhere else to go.
+
+**Difficulty**: 8/10 — Cross-shard queryset planning, shard-aware `Prefetch` reconciliation, and cross-shard aggregate composition. The hard cases (FK from shard A pointing into shard B) require schema-aware routing decisions the optimizer doesn't currently make. Concentrating the routing decision behind `Meta.preferred_database` keeps the consumer-facing surface small, but the optimizer-internal work is substantial.
+
+**What this is**: a multi-database story that goes beyond polite cooperation (which the package already does — see [`KANBAN.md`](KANBAN.md) `TODO-ALPHA-019-0.0.7` for the contract that pins today's `router.db_for_read` cooperation, strictness-mode routing, and `.using()` plan correctness). First-class means:
+
+- the optimizer detects when a planned join would cross shards and falls back to a routed `Prefetch` instead
+- `Meta.preferred_database = "shard_b"` declares a `DjangoType`'s home shard so the optimizer can route automatically without `.using()` boilerplate everywhere
+- multi-shard aggregates compose results from each shard (count / sum / min / max are trivial; avg and group-by need explicit reduce semantics)
+- M2M through-tables respect routing for the through-table's database
+- connection pagination (`TODO-ALPHA-024` Connection-aware optimizer planning) respects shard locality — sharded connections paginate within a shard, not across
+
+**Why it matters**: apps that run sharded Django today (Instagram-shape large multi-tenants, fintech with per-region data residency, multi-tenant SaaS with isolated tenant DBs) currently hand-roll their queryset routing. They write `.using(tenant_db)` everywhere and the optimizer doesn't help them — it just gets out of the way. First-class support means GraphQL queries against routed types automatically plan against the right database, cross-shard relations downgrade to a `Prefetch` instead of failing or N+1ing, and the response shape stays consistent with the single-DB case. Nobody else in the Django GraphQL ecosystem is even close.
+
+**Framework integration**: builds on the shipped cooperation contract from `TODO-ALPHA-019-0.0.7`. Composes with `Meta.get_queryset` (the routing decision could live there per-type, in tandem with the explicit `Meta.preferred_database`). Composes with `TODO-ALPHA-024` (Connection-aware optimizer — sharded connection pagination). Composes with item 33 (DoS policy stack — per-shard rate limits and cost budgets). Composes with item 19 (typed error envelope — surfacing cross-shard routing errors with a stable error code). Composes with item 4 (polymorphic / `GenericForeignKey`) when the polymorphic targets live on different shards.
 
 ## How to use this file
 - When scheduling a slice after parity items land, pull a high-`Realistic` `BETTER.md` item that isn't already on `KANBAN.md`.

@@ -82,7 +82,7 @@ See [`FEATURES.md`'s Relay Node integration subsection](FEATURES.md#relay-node-i
 
 ## Today and coming next
 
-For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`](../TODAY.md). For the full shipped / planned / deferred capability catalog and the quick-comparison table against `graphene-django` and `strawberry-graphql-django`, see [`FEATURES.md`](FEATURES.md). For the long-term destination, see [`../GOAL.md`](../GOAL.md).
+For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`](../TODAY.md). For the per-feature glossary covering every shipped / planned / deferred capability (deep-linkable by anchor — `FEATURES.md#filterset`, `FEATURES.md#fk-id-elision`, …), see [`FEATURES.md`](FEATURES.md). For the long-term destination and the migration-shape diffs against `graphene-django` and `strawberry-graphql-django`, see [`../GOAL.md`](../GOAL.md).
 
 A quick summary:
 

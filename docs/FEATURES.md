@@ -1,23 +1,15 @@
 # Features
 
-This file is the **per-feature capability catalog** for `django-strawberry-framework`. Think of it as the glossary: every public symbol (`DjangoType`, `FilterSet`, `apply_cascade_permissions`, …), every `Meta` key, and every behavior contract has an entry below.
+Glossary of every public symbol, `Meta` key, configuration argument, and named behavior in `django-strawberry-framework`. Every entry below has a stable anchor — `#djangotype`, `#fk-id-elision`, `#metafilterset_class`, and so on — so this file is intended to be linked directly from documentation, code comments, example projects, and migration notes.
 
-Most readers come here with one of two questions:
+Companion files:
 
-- **"Is X shipped today?"** → use the [Capabilities at a glance](#capabilities-at-a-glance) matrix. Click a row to jump to the section that defines it.
-- **"What exactly does X do?"** → use the per-subsystem section that owns X.
+- [`../GOAL.md`](../GOAL.md) — the pitch / vision and a complete `1.0.0`-shape walkthrough (the astronomy showcase).
+- [`../TODAY.md`](../TODAY.md) — the current example-app usage snapshot.
+- [`../KANBAN.md`](../KANBAN.md) — per-card ship sequencing.
+- [`../BETTER.md`](../BETTER.md) — strategic post-`1.0.0` differentiators.
 
-What this file is **not**:
-
-- **The pitch / vision.** That's [`../GOAL.md`](../GOAL.md), which shows a complete `1.0.0` Django app (the astronomy showcase) demonstrating every capability in real code.
-- **The per-card ship sequencing.** That's [`../KANBAN.md`](../KANBAN.md), which tracks each planned capability against a target patch version.
-- **The strategic post-`1.0.0` roadmap.** That's [`../BETTER.md`](../BETTER.md), which holds differentiation items beyond parity.
-
-For the example-project current usage snapshot, see [`../TODAY.md`](../TODAY.md).
-
-## Feature status
-
-Status labels used throughout this file:
+## Status legend
 
 - `shipped` — implemented, tested, available in the current package surface.
 - `planned for X.Y.Z` — committed package direction, not implemented yet; tracked in [`../KANBAN.md`](../KANBAN.md) against a target patch version.
@@ -25,257 +17,323 @@ Status labels used throughout this file:
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
 - `post-1.0.0` — strategic differentiation tracked in [`../BETTER.md`](../BETTER.md), not on the roadmap to `1.0.0`.
 
-## Current package surface
+Current package version: `0.0.5`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
-Current package version: `0.0.5`. Alpha-quality — suitable for internal tools and prototypes, not production.
+## Public exports
 
-Public exports from `django_strawberry_framework`:
+Symbols re-exported from `django_strawberry_framework`:
 
-- [`DjangoType`](#django-model-to-strawberry-type-generation) — model-backed Strawberry type base class.
-- [`DjangoOptimizerExtension`](#automatic-orm-optimization) — Strawberry schema extension that does ORM optimization.
-- [`OptimizerHint`](#optimizer-hints) — typed wrapper for per-relation optimizer overrides.
-- [`finalize_django_types`](#definition-order-independence) — synchronization point that resolves pending relations and applies `strawberry.type(cls, ...)` decoration.
+- [`DjangoType`](#djangotype) — model-backed Strawberry type base class.
+- [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
+- [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
+- [`finalize_django_types`](#finalize_django_types) — synchronization point that resolves pending relations and applies `strawberry.type` decoration.
 - `auto` — re-export from Strawberry for `auto`-typed field annotations inside this package's import surface.
 - `__version__` — package version string.
 
-## Capabilities at a glance
+## Index
 
-Status-by-capability index. Click a row to jump to the section that defines it.
+Alphabetical lookup. Each row links to the entry; the status column reflects current availability.
 
-| Capability | Status |
+| Entry | Status |
 |---|---|
-| [`DjangoType` — model-backed Strawberry types](#django-model-to-strawberry-type-generation) | shipped (`0.0.5`) |
-| [Definition-order-independent finalization](#definition-order-independence) | shipped (`0.0.4`) |
-| [`Meta.interfaces = (relay.Node,)` — Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
-| [Scalar field conversion (text / int / bool / decimal / date-time / UUID / binary / file / null)](#django-field-conversion) | shipped (`0.0.1`+) |
-| [Choice enum generation](#django-field-conversion) | shipped (`0.0.1`) |
-| [Relation handling (forward / reverse FK / OneToOne / M2M)](#relation-handling) | shipped (`0.0.1`+) |
-| [`get_queryset` visibility hook](#queryset-visibility-hook) | shipped (`0.0.1`) |
-| [Optimizer (`select_related` / `prefetch_related` / `only`)](#automatic-orm-optimization) | shipped (`0.0.2`) |
-| [Optimizer plan caching](#optimizer-cache-and-planning-features) | shipped (`0.0.3`) |
-| [FK-id elision for `{ relation { id } }`](#join-avoidance-and-projection) | shipped (`0.0.3`) |
-| [`OptimizerHint` + `Meta.optimizer_hints`](#optimizer-hints) | shipped (`0.0.3`) |
-| [Strictness mode (`off` / `warn` / `raise`)](#optimizer-observability-and-safety) | shipped (`0.0.3`) |
-| [Schema audit (`DjangoOptimizerExtension.check_schema`)](#optimizer-observability-and-safety) | shipped (`0.0.3`) |
-| [Queryset diffing / consumer-shaped queryset cooperation](#queryset-diffing-and-consumer-cooperation) | shipped (`0.0.3`) |
-| [Specialized scalars (`BigIntegerField` / `JSONField` / `ArrayField` / `HStoreField`)](#specialized-scalar-conversions) | planned for `0.0.6` |
-| [`Meta.primary` — multiple `DjangoType`s per model](#metaprimary) | planned for `0.0.6` |
-| [Scalar field override semantics](#scalar-field-override-semantics) | planned for `0.0.6` |
-| [`DjangoListField` (non-Relay list)](#djangolistfield) | planned for `0.0.7` |
-| [Django `AppConfig`](#django-appconfig) | planned for `0.0.7` |
-| [Schema export management command](#schema-export-management-command) | planned for `0.0.7` |
-| [Multi-database cooperation contract](#multi-database-cooperation) | planned for `0.0.7` |
-| [`FilterSet` + `Meta.filterset_class`](#filterset) | planned for `0.0.8` |
-| [`OrderSet` + `Meta.orderset_class`](#orderset) | planned for `0.0.8` |
-| [`DjangoConnectionField` + `DjangoConnection[T]` return type](#djangoconnectionfield) | planned for `0.0.9` |
-| [`DjangoNodeField` (single-node lookup)](#full-relay-story) | planned for `0.0.9` |
-| [Full Relay story (root `node()` / connection / validation)](#full-relay-story) | planned for `0.0.9` |
+| [`AggregateSet`](#aggregateset) | planned for `0.1.3` |
+| [`apply_cascade_permissions`](#apply_cascade_permissions) | planned for `0.0.10` |
+| [Auth mutations](#auth-mutations) | planned for `0.0.11` |
+| [`BigInt` scalar](#bigint-scalar) | planned for `0.0.6` |
+| [Choice enum generation](#choice-enum-generation) | shipped (`0.0.1`) |
+| [`ConfigurationError`](#configurationerror) | shipped (`0.0.1`) |
 | [Connection-aware optimizer planning](#connection-aware-optimizer-planning) | planned for `0.0.9` |
-| [`apply_cascade_permissions` + per-field permissions](#permissions-subsystem) | planned for `0.0.10` |
-| [Mutations + auto-generated `Input` / `PartialInput` types](#mutations-subsystem) | planned for `0.0.11` |
-| [`Upload` scalar + `DjangoFileType` / `DjangoImageType`](#upload-scalar) | planned for `0.0.11` |
-| [Form-based mutations (`DjangoFormMutation` / `DjangoModelFormMutation`)](#form-based-mutations) | planned for `0.0.11` |
-| [DRF serializer mutations (`SerializerMutation`)](#drf-serializer-mutations) | planned for `0.0.11` |
-| [Auth mutations (`login` / `logout` / `register`) + `current_user`](#auth-mutations) | planned for `0.0.11` |
-| [Channels ASGI router (`DjangoGraphQLProtocolRouter`)](#channels-asgi-router) | planned for `0.0.12` |
 | [Debug-toolbar middleware](#debug-toolbar-middleware) | planned for `0.0.12` |
-| [Test client helper (`TestClient` / `AsyncTestClient` / `GraphQLTestCase`)](#test-client-helper) | planned for `0.0.12` |
-| [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.12` |
-| [`FieldSet` + `Meta.fields_class`](#fieldset) | planned for `0.1.1` |
+| [Definition-order independence](#definition-order-independence) | shipped (`0.0.4`) |
+| [Django `AppConfig`](#django-appconfig) | planned for `0.0.7` |
+| [`DjangoConnection`](#djangoconnection) | planned for `0.0.9` |
+| [`DjangoConnectionField`](#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoFileType`](#djangofiletype) | planned for `0.0.11` |
+| [`DjangoFormMutation`](#djangoformmutation) | planned for `0.0.11` |
+| [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) | planned for `0.0.12` |
+| [`DjangoImageType`](#djangoimagetype) | planned for `0.0.11` |
+| [`DjangoListField`](#djangolistfield) | planned for `0.0.7` |
+| [`DjangoModelFormMutation`](#djangomodelformmutation) | planned for `0.0.11` |
+| [`DjangoMutation`](#djangomutation) | planned for `0.0.11` |
+| [`DjangoNodeField`](#djangonodefield) | planned for `0.0.9` |
+| [`DjangoOptimizerExtension`](#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](#djangotype) | shipped (`0.0.5`) |
+| [`FieldError` envelope](#fielderror-envelope) | planned for `0.0.11` |
+| [`FieldSet`](#fieldset) | planned for `0.1.1` |
+| [`FilterSet`](#filterset) | planned for `0.0.8` |
+| [`finalize_django_types`](#finalize_django_types) | shipped (`0.0.4`) |
+| [FK-id elision](#fk-id-elision) | shipped (`0.0.3`) |
+| [`get_child_queryset`](#get_child_queryset) | planned for `0.1.3` |
+| [`get_queryset` visibility hook](#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [`GraphQLTestCase`](#graphqltestcase) | planned for `0.0.12` |
+| [Input type generation](#input-type-generation) | planned for `0.0.11` |
+| [`Meta.aggregate_class`](#metaaggregate_class) | planned for `0.1.3` |
+| [`Meta.choice_enum_names`](#metachoice_enum_names) | planned for `0.1.4` |
+| [`Meta.description`](#metadescription) | shipped |
+| [`Meta.exclude`](#metaexclude) | shipped |
+| [`Meta.fields`](#metafields) | shipped |
+| [`Meta.fields_class`](#metafields_class) | planned for `0.1.1` |
+| [`Meta.filterset_class`](#metafilterset_class) | planned for `0.0.8` |
+| [`Meta.interfaces`](#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.model`](#metamodel) | shipped |
+| [`Meta.name`](#metaname) | shipped |
+| [`Meta.optimizer_hints`](#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`Meta.orderset_class`](#metaorderset_class) | planned for `0.0.8` |
+| [`Meta.primary`](#metaprimary) | planned for `0.0.6` |
 | [`Meta.search_fields`](#metasearch_fields) | planned for `0.1.2` |
-| [`AggregateSet` + `Meta.aggregate_class`](#aggregateset) | planned for `0.1.3` |
-| [Stable choice-enum naming overrides (`Meta.choice_enum_names`)](#stable-choice-enum-naming-overrides) | planned for `0.1.4` |
-| Apollo Federation | post-`1.0.0` (BETTER item 34) |
-| First-class multi-db / sharding-aware optimizer | post-`1.0.0` (BETTER item 41) |
+| [Multi-database cooperation](#multi-database-cooperation) | planned for `0.0.7` |
+| [`only()` projection](#only-projection) | shipped (`0.0.2`) |
+| [`OptimizerHint`](#optimizerhint) | shipped (`0.0.3`) |
+| [`OrderSet`](#orderset) | planned for `0.0.8` |
+| [Per-field permission hooks](#per-field-permission-hooks) | planned for `0.0.10` |
+| [Plan cache](#plan-cache) | shipped (`0.0.3`) |
+| [Queryset diffing](#queryset-diffing) | shipped (`0.0.3`) |
+| [`RelatedAggregate`](#relatedaggregate) | planned for `0.1.3` |
+| [`RelatedFilter`](#relatedfilter) | planned for `0.0.8` |
+| [`RelatedOrder`](#relatedorder) | planned for `0.0.8` |
+| [Relation handling](#relation-handling) | shipped (`0.0.1`+) |
+| [Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
+| [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.12` |
+| [Scalar field conversion](#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [Scalar field override semantics](#scalar-field-override-semantics) | planned for `0.0.6` |
+| [Schema audit](#schema-audit) | shipped (`0.0.3`) |
+| [Schema export management command](#schema-export-management-command) | planned for `0.0.7` |
+| [`SerializerMutation`](#serializermutation) | planned for `0.0.11` |
+| [Specialized scalar conversions](#specialized-scalar-conversions) | planned for `0.0.6` |
+| [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
+| [`TestClient`](#testclient) | planned for `0.0.12` |
+| [`Upload` scalar](#upload-scalar) | planned for `0.0.11` |
 
-## Quick comparison
+## Browse by category
 
-| Concern | graphene-django | strawberry-graphql-django | this package |
-| --- | --- | --- | --- |
-| Configuration shape | `class Meta` | decorators | `class Meta` |
-| Async resolvers | retrofitted | native | native |
-| Modern typing | `graphene.String()` style declarations | type hints | type hints |
-| Built-in N+1 optimizer | external patterns | shipped | shipped + plan cache + FK-id elision + queryset diffing + strictness |
-| Filter / order / aggregate | shipped | shipped | planned for `0.0.8` / `0.0.8` / `0.1.3` |
-| Stable today | yes | yes | alpha |
+For readers exploring rather than looking up a specific term:
 
-For the migration code diffs from each upstream stack, see [`../GOAL.md`'s Migration shape section](../GOAL.md#migration-shape).
+- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
+- **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.choice_enum_names`](#metachoice_enum_names).
+- **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
+- **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`Meta.filterset_class`](#metafilterset_class).
+- **Ordering:** [`OrderSet`](#orderset) · [`RelatedOrder`](#relatedorder) · [`Meta.orderset_class`](#metaorderset_class).
+- **Aggregation:** [`AggregateSet`](#aggregateset) · [`RelatedAggregate`](#relatedaggregate) · [`Meta.aggregate_class`](#metaaggregate_class) · [`get_child_queryset`](#get_child_queryset).
+- **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
+- **Search:** [`Meta.search_fields`](#metasearch_fields).
+- **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [Per-field permission hooks](#per-field-permission-hooks).
+- **Relay:** [Relay Node integration](#relay-node-integration) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
+- **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
+- **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
+- **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
+- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware).
+- **Testing:** [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase).
 
-## DRF-shaped GraphQL API
+---
 
-Status: shipped foundation, planned query features.
+## `AggregateSet`
 
-The package uses nested `Meta` classes as the consumer-facing configuration surface. The goal is a GraphQL API style that feels like DRF, django-filter, and Django model declarations instead of a stack of Strawberry decorators.
+**Status:** planned for `0.1.3`.
 
-Shipped `Meta` keys:
+Declarative aggregate class with `Sum` / `Count` / `Avg` / `Min` / `Max` / `Mode` / `Uniques` / `GroupBy`, [`RelatedAggregate`](#relatedaggregate) traversal, custom `compute_*_*` stats declared via `Meta.custom_stats`, sync and async paths via `compute` / `acompute`. Computation is selection-set-aware — only requested stats are computed. The [`get_child_queryset`](#get_child_queryset) cascade hook excludes private rows when traversing into children. Declared per-type via [`Meta.aggregate_class`](#metaaggregate_class).
 
-- `Meta.model` — required for every concrete `DjangoType`.
-- `Meta.fields` — tuple/list of field names, or `"__all__"`, or omitted (defaults to `"__all__"`).
-- `Meta.exclude` — tuple/list of field names to exclude.
-- `Meta.name` — override the GraphQL type name (defaults to the Python class name).
-- `Meta.description` — override the GraphQL type description.
-- `Meta.optimizer_hints` — per-relation optimizer overrides; see [Optimizer hints](#optimizer-hints).
-- `Meta.interfaces` — tuple of Strawberry interface classes; see [Relay Node integration](#relay-node-integration).
+**See also:** [`Meta.aggregate_class`](#metaaggregate_class) · [`RelatedAggregate`](#relatedaggregate) · [`get_child_queryset`](#get_child_queryset).
 
-Validation:
+## `apply_cascade_permissions`
 
-- Unknown `Meta` keys raise `ConfigurationError` so typos do not silently alter the schema.
-- Deferred `Meta` keys (`filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`) are rejected until the feature that owns them ships.
+**Status:** planned for `0.0.10`.
 
-### Relay Node integration
-
-Status: shipped.
-
-`Meta.interfaces` accepts a tuple of Strawberry interface classes; when `relay.Node` is among them, the `DjangoType` becomes a Relay-node-shaped GraphQL type with `id: GlobalID!` and the four `resolve_*` defaults wired through `cls.get_queryset` (the model's default manager plus the type's visibility hook).
+Cascades each `DjangoType`'s [`get_queryset`](#get_queryset-visibility-hook) filter to its related types when reaching through FK / M2M. Used inside a type's `get_queryset` override:
 
 ```python
-import strawberry
-from strawberry import relay
-from django_strawberry_framework import DjangoType
-from myapp.models import Category
-
-
-class CategoryNode(DjangoType):
-    class Meta:
-        model = Category
-        fields = ("id", "name")
-        interfaces = (relay.Node,)
+@classmethod
+def get_queryset(cls, queryset, info):
+    return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 ```
 
-Shipped behavior:
+Composes with filter / order / aggregate permission gates and with the post-write return value of mutations.
 
-- Default `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` classmethods are injected when `relay.Node` is declared; consumer-declared overrides are preserved via Strawberry's `__func__` identity test (matches `strawberry-django`).
-- When `relay.Node` is in `Meta.interfaces`, the synthesized Django `id: int!` annotation is suppressed and the Relay-supplied `id: GlobalID!` from the interface is used instead. The Django primary key remains selected as a connector column for the optimizer.
-- Both sync and async paths for `resolve_node` and `resolve_nodes`; `resolve_id_attr` and `resolve_id` are sync.
-- `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
-- Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise `ConfigurationError` at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
-- Non-Relay Strawberry interfaces (`@strawberry.interface`-decorated classes) are accepted without Relay-specific wiring.
+**See also:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [Per-field permission hooks](#per-field-permission-hooks).
 
-The optimizer node-lookup path: optimizer-extension cooperation on the per-node `resolve_node` resolver is deferred to a follow-up slice; root-level list resolvers continue to receive full `DjangoOptimizerExtension` treatment today.
+## Auth mutations
 
-## Django model to Strawberry type generation
+**Status:** planned for `0.0.11`.
 
-Status: shipped with alpha constraints.
+`login` / `logout` / `register` mutations plus a `current_user` query helper. Opt-in via explicit import; not bundled into the default schema. Composes with [`DjangoMutation`](#djangomutation) and `django.contrib.auth`.
 
-`DjangoType` reads Django model metadata and builds a Strawberry type. It preserves Django concepts rather than replacing them with a custom data layer.
+**See also:** [`DjangoMutation`](#djangomutation).
 
-Shipped:
+## `BigInt` scalar
 
-- model field selection with `fields` and `exclude`
-- default `fields = "__all__"` behavior when neither selector is supplied
-- GraphQL type-name and description overrides
-- scalar annotation generation (see [Django field conversion](#django-field-conversion))
-- relation annotation generation (see [Relation handling](#relation-handling))
-- choice enum generation (see [Django field conversion](#django-field-conversion))
-- relation resolver generation
-- type registry registration
-- definition-order-independent relation finalization (see [Definition-order independence](#definition-order-independence))
-- abstract / intermediate base support when a subclass has no `Meta`
+**Status:** planned for `0.0.6`.
 
-Current alpha constraints:
+JSON-safe scalar for plain `BigIntegerField` (not `BigAutoField`). Serialized as a string on the wire to survive JavaScript's 53-bit integer limit; deserialized to Python `int`. Part of [Specialized scalar conversions](#specialized-scalar-conversions).
 
-- one `DjangoType` per Django model (the [`Meta.primary`](#metaprimary) card promotes this to a primary-declaration contract)
-- manual override validation for relation cardinality is deferred; the package trusts relation-field annotations supplied by the consumer
+**See also:** [Scalar field conversion](#scalar-field-conversion) · [Specialized scalar conversions](#specialized-scalar-conversions).
 
-### Definition-order independence
+## Choice enum generation
 
-Status: shipped.
+**Status:** shipped (`0.0.1`).
 
-`DjangoType` collection is split from Strawberry finalization. Class creation records Django metadata and pending relation targets, while `finalize_django_types()` resolves those pending relations, attaches generated relation resolvers, and decorates each collected type with `strawberry.type`.
+`CharField` / `TextField` with `choices=...` generates a Strawberry enum. Member names are sanitized from stored database values (not display labels), so the GraphQL contract is stable against label changes. Enum objects are cached by `(model, field_name)`. Grouped choices are rejected with [`ConfigurationError`](#configurationerror).
 
-Call `finalize_django_types()` once during single-threaded schema setup, after every module that defines `DjangoType` classes has been imported and before `strawberry.Schema(...)` is constructed. Calling it a second time is a no-op. Declaring a new concrete `DjangoType` after finalization raises `ConfigurationError`; tests should use `registry.clear()` and fresh type classes when they need a new registry lifecycle.
+Stable cross-type enum naming overrides ship later — see [`Meta.choice_enum_names`](#metachoice_enum_names).
+
+**See also:** [Scalar field conversion](#scalar-field-conversion) · [`Meta.choice_enum_names`](#metachoice_enum_names).
+
+## `ConfigurationError`
+
+**Status:** shipped (`0.0.1`).
+
+Raised at type-creation or finalization time when consumer configuration is invalid or inconsistent. Examples:
+
+- unknown `Meta` keys (typo detection)
+- deferred `Meta` keys whose owning subsystem hasn't shipped
+- unresolved relation targets at finalization
+- declaring a new concrete `DjangoType` after [`finalize_django_types()`](#finalize_django_types) has been called
+- invalid optimizer hints (unknown field name, wrong type)
+- `CompositePrimaryKey` models declared with `Meta.interfaces = (relay.Node,)`
+
+Validation errors raise early and loudly rather than silently mutating the schema.
+
+**See also:** [`DjangoType`](#djangotype) · [`finalize_django_types`](#finalize_django_types).
+
+## Connection-aware optimizer planning
+
+**Status:** planned for `0.0.9`.
+
+The optimizer learns to recognize `edges { node { ... } }` selections and plan `Prefetch` chains correctly across connection-paginated relations. Without this, nested connections fall back to per-row queries.
+
+**See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [Plan cache](#plan-cache) · [`DjangoOptimizerExtension`](#djangooptimizerextension).
+
+## Debug-toolbar middleware
+
+**Status:** planned for `0.0.12`.
+
+`django-debug-toolbar` SQL-panel integration during `/graphql/` requests. Mirrors `strawberry-django`'s `middlewares/debug_toolbar.py` shape.
+
+Distinct from the [Response-extensions debug middleware](#response-extensions-debug-middleware) — this is the server-side panel, that is in-response surfacing through the GraphQL response's `extensions` envelope. Both useful, not mutually exclusive.
+
+**See also:** [Response-extensions debug middleware](#response-extensions-debug-middleware).
+
+## Definition-order independence
+
+**Status:** shipped (`0.0.4`).
+
+`DjangoType` collection is split from Strawberry finalization. Class creation records Django metadata and pending relation targets; [`finalize_django_types()`](#finalize_django_types) resolves those pending relations, attaches generated relation resolvers, and decorates each collected type with `strawberry.type`.
 
 Supported relation cycles:
 
 - forward FK and reverse FK
 - forward OneToOne and reverse OneToOne
 - forward and reverse M2M
-- multi-cycle graphs that combine those relation shapes
-
-Unresolved relation targets fail during finalization with an error that names the source model, source field, and target model. The most common cause is that a Python module containing the target `DjangoType` was never imported before finalization.
+- multi-cycle graphs that combine those shapes
 
 Supported forward-reference / manual relation shapes:
 
 - generated relation annotations for target types declared before or after the source type
 - same-module string annotations such as `items: list["ItemType"]`
 - stringified annotations from `from __future__ import annotations`
-- cross-module `Annotated[..., strawberry.lazy("module.path")]` annotations when the consumer wants Strawberry's explicit lazy import path
+- cross-module `Annotated[..., strawberry.lazy("module.path")]` annotations
 - annotation-only relation overrides, which keep the generated resolver
 - `strawberry.field(resolver=...)` and `@strawberry.field` relation overrides, which keep the consumer resolver
 
+Unresolved relation targets fail during finalization with an error that names the source model, source field, and target model. The most common cause is that the Python module containing the target `DjangoType` was never imported before finalization.
+
 Validation that a manual relation annotation matches the Django relation cardinality is deferred. Manual scalar-field override semantics remain an implementation detail until [Scalar field override semantics](#scalar-field-override-semantics) ships.
 
-## Django field conversion
+**See also:** [`finalize_django_types`](#finalize_django_types) · [`DjangoType`](#djangotype) · [Relation handling](#relation-handling).
 
-Status: shipped for common Django fields, deferred for some specialized fields.
+## Django `AppConfig`
 
-Shipped scalar support:
+**Status:** planned for `0.0.7`.
 
-- text-like fields (`CharField` / `TextField`) → `str`
-- integer and auto fields (`IntegerField` / `AutoField` / `BigAutoField` / `SmallIntegerField` / `PositiveIntegerField`) → `int`
-- boolean fields → `bool`
-- float fields → `float`
-- decimal fields → `decimal.Decimal`
-- date / datetime / time / duration fields → Python-native time types
-- UUID fields → `uuid.UUID`
-- binary fields → `bytes`
-- file and image fields → string path/URL values
-- `null=True` → `T | None`
-- Relay `GlobalID` mapping for auto IDs when `Meta.interfaces = (relay.Node,)` is declared
+`django_strawberry_framework/apps.py` ships an `AppConfig` so consumers can add the package to `INSTALLED_APPS` and use Django checks / signal hooks against it.
 
-Shipped choice support:
+**See also:** [Schema export management command](#schema-export-management-command).
 
-- Django `choices` generate Strawberry enums
-- enum objects are cached by `(model, field_name)`
-- member names are sanitized from stored database values, not display labels
-- grouped choices are rejected clearly
+## `DjangoConnection`
 
-Deferred field conversion (see [Specialized scalar conversions](#specialized-scalar-conversions)):
+**Status:** planned for `0.0.9`.
 
-- plain `BigIntegerField` with JSON-safe `BigInt`
-- PostgreSQL `ArrayField`
-- `JSONField`
-- PostgreSQL `HStoreField`
+Generic return-type alias `DjangoConnection[T]` for fields that produce Relay connections. Used as the return annotation for [`DjangoConnectionField`](#djangoconnectionfield) declarations.
 
-The stable choice-enum naming override surface ships separately; see [Stable choice-enum naming overrides](#stable-choice-enum-naming-overrides).
+**See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [Relay Node integration](#relay-node-integration).
 
-## Relation handling
+## `DjangoConnectionField`
 
-Status: shipped.
+**Status:** planned for `0.0.9`.
 
-The package maps Django relation cardinality into GraphQL type shape and resolver behavior.
+Relay-style connection field with `edges` / `node` / `pageInfo` / `totalCount`, cursor-based pagination, and `filter` / `orderBy` / `search` arguments that flow into the connection's `DjangoType`'s [`filterset_class`](#metafilterset_class) / [`orderset_class`](#metaorderset_class) / [`search_fields`](#metasearch_fields). Composes with the optimizer for nested-selection planning. Works at root fields and at nested relation fields.
 
-Shipped relation conversion:
+**See also:** [`DjangoConnection`](#djangoconnection) · [`DjangoNodeField`](#djangonodefield) · [Relay Node integration](#relay-node-integration) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 
-- forward `ForeignKey` → target type, nullable when the field is nullable
-- forward `OneToOneField` → target type, nullable when the field is nullable
-- reverse `ForeignKey` → `list[target_type]`
-- many-to-many → `list[target_type]`
-- reverse one-to-one → target type or `None`
+## `DjangoFileType`
 
-Shipped resolver behavior:
+**Status:** planned for `0.0.11`.
 
-- many-side resolvers return lists, not Django managers
-- reverse one-to-one resolvers return `None` when the related row does not exist
-- forward resolvers can return FK-id stubs when the optimizer safely elides a join (see [Join avoidance and projection](#join-avoidance-and-projection))
-- relation access cooperates with Django's prefetch and relation caches
-- consumer-authored `strawberry.field` relation overrides are preserved instead of being clobbered by generated resolvers
+Output type for `FileField` carrying `name` / `path` / `size` / `url`. Paired with the [`Upload` scalar](#upload-scalar) on the input side.
 
-Consumer overrides are responsible for their own queryset shape. If an override re-shapes a relation queryset with `.order_by(...)`, `.filter(...)`, or similar, it can bypass the framework's prefetched relation cache and introduce per-parent lazy queries.
+**See also:** [`Upload` scalar](#upload-scalar) · [`DjangoImageType`](#djangoimagetype).
 
-## Queryset visibility hook
+## `DjangoFormMutation`
 
-Status: shipped.
+**Status:** planned for `0.0.11`.
 
-If you've used DRF, you already know this hook. `DjangoType.get_queryset(cls, queryset, info, **kwargs)` runs once per type, defaults to identity, and is where permission filters, tenant scoping, soft-delete, staff/public visibility splits, and request-user filters live.
+`DjangoMutation` subclass that consumes a Django `Form`. Declared via `Meta.form_class`; validation errors surface through the shared [`FieldError` envelope](#fielderror-envelope) (populated from `form.errors`); the post-save object is the mutation return value.
 
-The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` reports whether a type or inherited intermediate base overrides the hook, and the optimizer downgrades a JOIN to a `Prefetch` when a target type defines one. Your visibility filter survives relation traversal instead of being bypassed by a raw `select_related` join.
+**See also:** [`DjangoMutation`](#djangomutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`FieldError` envelope](#fielderror-envelope).
 
-## Automatic ORM optimization
+## `DjangoGraphQLProtocolRouter`
 
-Status: shipped.
+**Status:** planned for `0.0.12`.
 
-`DjangoOptimizerExtension` translates selected GraphQL fields into Django ORM optimization calls. It is opt-in at Strawberry schema construction time.
+A Channels `ProtocolTypeRouter`-wrapping helper for consumers using Channels. Soft dependency on `channels`; symbol name is intentionally distinct from `strawberry-django`'s `AuthGraphQLProtocolTypeRouter` to avoid migration ambiguity.
+
+## `DjangoImageType`
+
+**Status:** planned for `0.0.11`.
+
+Output type for `ImageField` carrying `name` / `path` / `size` / `url` plus image dimensions where Pillow is available.
+
+**See also:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype).
+
+## `DjangoListField`
+
+**Status:** planned for `0.0.7`.
+
+Non-Relay `list[T]` root and nested fields. The smallest entry point for migrants coming from `graphene-django`'s `DjangoListField` and for use cases that do not need pagination, edges, or page-info. Accepts a `DjangoType`, derives the queryset from `Meta.model`, applies the type-level [`get_queryset`](#get_queryset-visibility-hook), cooperates with [`DjangoOptimizerExtension`](#djangooptimizerextension), and accepts filter / ordering input when those subsystems are configured.
+
+**See also:** [`DjangoConnectionField`](#djangoconnectionfield) (the Relay-shaped equivalent).
+
+## `DjangoModelFormMutation`
+
+**Status:** planned for `0.0.11`.
+
+`DjangoMutation` subclass that consumes a Django `ModelForm` declared via `Meta.form_class`. Errors and return-shape contracts match [`DjangoFormMutation`](#djangoformmutation).
+
+**See also:** [`DjangoFormMutation`](#djangoformmutation) · [`DjangoMutation`](#djangomutation).
+
+## `DjangoMutation`
+
+**Status:** planned for `0.0.11`.
+
+Base class for mutations with `Meta`-driven configuration; auto-generates [`Input` / `PartialInput`](#input-type-generation) types from Django models that preserve the relation-override contract; shared [`FieldError` envelope](#fielderror-envelope) reused across every mutation flavor; sync and async resolver paths; composition with the optimizer for the post-write return value (re-fetching the mutated row with the right `select_related` / `prefetch_related` for the response selection).
+
+**See also:** [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope).
+
+## `DjangoNodeField`
+
+**Status:** planned for `0.0.9`.
+
+Root-level single-node lookup field — the `category: GalaxyNode = DjangoNodeField(GalaxyNode)` shape in [`../GOAL.md`'s astronomy showcase](../GOAL.md#what-success-looks-like-in-your-code). Resolves a single `DjangoType` instance by Relay `GlobalID`, running the target type's [`get_queryset`](#get_queryset-visibility-hook) hook.
+
+**See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [Relay Node integration](#relay-node-integration).
+
+## `DjangoOptimizerExtension`
+
+**Status:** shipped (`0.0.2`).
+
+Strawberry schema extension that translates selected GraphQL fields into Django ORM optimization calls. Opt-in at Strawberry schema construction time:
+
+```python
+schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+```
 
 Shipped behavior:
 
@@ -285,52 +343,284 @@ Shipped behavior:
 - `prefetch_related` for many-side relations
 - generated `Prefetch` objects for child querysets
 - nested prefetch chains for nested GraphQL selections
-- `only` projection for selected scalar columns
+- [`only`](#only-projection) projection for selected scalar columns
 - connector-column inclusion so Django can attach joined and prefetched rows without lazy loads
-- custom `get_queryset` downgrade from join to `Prefetch`
+- custom [`get_queryset`](#get_queryset-visibility-hook) downgrade from join to `Prefetch`
 - async resolver support
 
-## Optimizer cache and planning features
+Constructor accepts a `strictness` argument — see [Strictness mode](#strictness-mode). Classmethod [`check_schema`](#schema-audit) audits schema-reachable `DjangoType`s.
 
-Status: shipped.
+**See also:** [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation).
 
-The optimizer includes performance and correctness features beyond the baseline N+1 avoidance pattern.
+## `DjangoType`
 
-Shipped value:
+**Status:** shipped (`0.0.5`).
 
-- **Plan cache.** The same query 10,000×/sec walks the selection tree once, not 10,000 times. Cache keys ignore filter variables that do not affect selection shape, so a query with many filter combinations can still reuse one cached plan.
-- **Selection-shape keys.** Cache keys include the selected operation AST, relevant `@skip` / `@include` variables, target model, and root runtime path.
-- **Multi-operation safety.** `query A { ... } query B { ... }` in one document never shares a plan across operations.
-- **Named-fragment safety.** Directives inside named fragments are tracked into the cache key.
-- **Introspection.** `cache_info()` exposes hit, miss, and size counts.
-- **Request-scope safety.** Plans that embed request-scoped `get_queryset` results are marked uncacheable.
-- **Low per-request overhead.** `DjangoType` precomputes optimizer field metadata at class creation, and cached plans are never mutated while reconciling against a specific queryset.
+Model-backed Strawberry type base class. Each subclass declares a nested `class Meta` referencing a Django model; the class is registered at definition time and decorated with `strawberry.type` at finalization. The primary public surface.
 
-## Join avoidance and projection
+```python
+from django_strawberry_framework import DjangoType
 
-Status: shipped.
+class CategoryType(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name")
+```
 
-The optimizer can avoid unnecessary database work in common relation shapes.
+Shipped capability:
 
-Shipped value:
+- model field selection with [`Meta.fields`](#metafields) and [`Meta.exclude`](#metaexclude)
+- default `fields = "__all__"` when neither selector is supplied
+- GraphQL type-name and description overrides via [`Meta.name`](#metaname) / [`Meta.description`](#metadescription)
+- scalar annotation generation (see [Scalar field conversion](#scalar-field-conversion))
+- relation annotation generation (see [Relation handling](#relation-handling))
+- choice enum generation (see [Choice enum generation](#choice-enum-generation))
+- type registry registration
+- definition-order-independent relation finalization (see [Definition-order independence](#definition-order-independence))
+- abstract / intermediate base support when a subclass has no `Meta`
 
-- **FK-id elision.** `{ category { id } }` reads `category_id` off the parent row — no JOIN, no second query.
-- **Safe fallback.** The optimizer falls back to a join when the target selection needs more than the primary key, when the target ID has a custom resolver, or when a target `get_queryset` hook must run.
-- **Branch isolation.** Aliases and sibling root fields do not leak elision state into each other.
-- **Column projection.** Scalar selections become `only()` projections.
-- **Connector preservation.** Projection plans include connector columns for `select_related`, reverse FK, FK/OneToOne, and M2M attachment paths so Django can stitch related rows without lazy loads.
+Current alpha constraints:
 
-## Optimizer hints
+- one `DjangoType` per Django model — [`Meta.primary`](#metaprimary) promotes this to a primary-declaration contract
+- manual override validation for relation cardinality is deferred; the package trusts relation-field annotations supplied by the consumer
 
-Status: shipped.
+`Meta` validation: unknown `Meta` keys raise [`ConfigurationError`](#configurationerror); deferred `Meta` keys are rejected until the feature that owns them ships.
 
-Override the optimizer per relation when you know better than it does — skip a relation entirely, force a join, or hand it your own `Prefetch` for filtered children. Configure it in the same `class Meta` you already declared the type with:
+**See also:** all [`Meta.*`](#index) keys · [`finalize_django_types`](#finalize_django_types) · [Definition-order independence](#definition-order-independence) · [Relay Node integration](#relay-node-integration).
+
+## `FieldError` envelope
+
+**Status:** planned for `0.0.11`.
+
+Shared `errors: list[FieldError]` envelope returned by every mutation flavor — [`DjangoMutation`](#djangomutation), [`DjangoFormMutation`](#djangoformmutation), [`DjangoModelFormMutation`](#djangomodelformmutation), [`SerializerMutation`](#serializermutation). Each `FieldError` carries a `field` path and a `messages: list[str]`. Populated automatically from `form.errors` / `serializer.errors` / `ValidationError` raised inside `DjangoMutation.perform_mutation`.
+
+**See also:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`SerializerMutation`](#serializermutation).
+
+## `FieldSet`
+
+**Status:** planned for `0.1.1`.
+
+Declarative field-selection class for the [`Meta.fields_class`](#metafields_class) surface. Carries field-level permission checks ([`check_*_permission`](#per-field-permission-hooks) denial gates), custom field resolvers (`resolve_*` overrides), computed fields (class-level annotations), and redaction / deny-value behavior. Integrates with generated model fields; declared per-type via `Meta.fields_class = MyTypeFieldSet`.
+
+**See also:** [`Meta.fields_class`](#metafields_class) · [Per-field permission hooks](#per-field-permission-hooks).
+
+## `FilterSet`
+
+**Status:** planned for `0.0.8`.
+
+Declarative filter classes with `Meta.model`, `Meta.fields` (dict form `{"name": ["exact", "icontains"]}` or `"__all__"` shorthand), [`RelatedFilter`](#relatedfilter) for cross-relation traversal (accepts class, absolute import path, or unqualified name for circular cases), `check_*_permission` denial gates, and explicit-queryset scope boundaries that nested filters cannot bypass. Logical `and` / `or` / `not` operators on the input shape. Generated input types use stable class-derived names so two connection fields on the same model resolve to the same `FilterInputType` (Apollo cache friendly).
+
+The lazy-resolution architecture is borrowed verbatim from `django-graphene-filters` — a six-layer pipeline; five layers are library-agnostic and port directly; only the cycle-safe forward reference (Graphene's `lambda:` → Strawberry's `strawberry.lazy()`) is engine-adapted.
+
+**See also:** [`Meta.filterset_class`](#metafilterset_class) · [`RelatedFilter`](#relatedfilter) · [`OrderSet`](#orderset).
+
+## `finalize_django_types`
+
+**Status:** shipped (`0.0.4`).
+
+Synchronization point that resolves pending relation annotations and applies `strawberry.type(cls, ...)` decoration to every collected `DjangoType`. Required because Strawberry resolves field annotations eagerly at decoration time, while Django relations may target a `DjangoType` whose module hasn't been imported yet.
+
+Call it once during single-threaded schema setup, after every module that defines `DjangoType` classes has been imported and before `strawberry.Schema(...)` is constructed:
+
+```python
+from django_strawberry_framework import finalize_django_types
+import apps.products.schema  # registers DjangoType subclasses
+import apps.library.schema
+
+finalize_django_types()
+
+schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+```
+
+Calling it a second time is a no-op. Declaring a new concrete `DjangoType` after finalization raises [`ConfigurationError`](#configurationerror); tests that need a new registry lifecycle should use `registry.clear()` and fresh type classes.
+
+**See also:** [Definition-order independence](#definition-order-independence) · [`DjangoType`](#djangotype) · [`ConfigurationError`](#configurationerror).
+
+## FK-id elision
+
+**Status:** shipped (`0.0.3`).
+
+For `{ category { id } }` and similar `id`-only forward-relation selections, the optimizer reads the FK column off the parent row — no JOIN, no second query, no Python attribute access on a related instance.
+
+Safety properties:
+
+- falls back to a join when the target selection needs more than the primary key
+- falls back when the target ID has a custom resolver
+- falls back when a target [`get_queryset`](#get_queryset-visibility-hook) hook must run
+- branch-isolated: aliases and sibling root fields do not leak elision state into each other
+
+FK-id elisions are stashed on `info.context.dst_optimizer_plan` for introspection.
+
+**See also:** [`only()` projection](#only-projection) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache).
+
+## `get_child_queryset`
+
+**Status:** planned for `0.1.3`.
+
+Cascade hook on [`AggregateSet`](#aggregateset) called when aggregation traverses into a child queryset (via [`RelatedAggregate`](#relatedaggregate)). Lets consumers exclude private rows before they contribute to `Count` / `Sum` / `Avg` / etc., parallel to how [`apply_cascade_permissions`](#apply_cascade_permissions) gates filter traversal.
+
+**See also:** [`AggregateSet`](#aggregateset) · [`RelatedAggregate`](#relatedaggregate) · [`apply_cascade_permissions`](#apply_cascade_permissions).
+
+## `get_queryset` visibility hook
+
+**Status:** shipped (`0.0.1`).
+
+`DjangoType.get_queryset(cls, queryset, info, **kwargs)` runs once per type, defaults to identity, and is where permission filters, tenant scoping, soft-delete, staff/public visibility splits, and request-user filters live:
+
+```python
+class ItemType(DjangoType):
+    class Meta:
+        model = Item
+
+    @classmethod
+    def get_queryset(cls, queryset, info, **kwargs):
+        user = getattr(info.context, "user", None)
+        if user and user.is_staff:
+            return queryset
+        return queryset.filter(is_private=False)
+```
+
+The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` reports whether a type or inherited intermediate base overrides the hook, and the optimizer downgrades a JOIN to a `Prefetch` when a target type defines one. Your visibility filter survives relation traversal instead of being bypassed by a raw `select_related` join.
+
+**See also:** [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Per-field permission hooks](#per-field-permission-hooks).
+
+## `GraphQLTestCase`
+
+**Status:** planned for `0.0.12`.
+
+`unittest.TestCase` subclass for live HTTP-level testing patterns. Mirrors `strawberry-django`'s `test/client.py`. Provides `query()` / `mutate()` helpers and assertion shortcuts.
+
+**See also:** [`TestClient`](#testclient).
+
+## Input type generation
+
+**Status:** planned for `0.0.11`.
+
+[`DjangoMutation`](#djangomutation) auto-generates two input types from a Django model declared in `Meta.model`:
+
+- **`Input`** — every field required (matches `Model.objects.create(...)` semantics).
+- **`PartialInput`** — every field optional (matches `Model.objects.update(...)` semantics).
+
+Both preserve the relation-override contract from the foundation slice: consumer-authored input fields are honored rather than clobbered by generated ones.
+
+**See also:** [`DjangoMutation`](#djangomutation) · [`Upload` scalar](#upload-scalar).
+
+## `Meta.aggregate_class`
+
+**Status:** planned for `0.1.3`.
+
+References an [`AggregateSet`](#aggregateset) subclass that defines aggregates for this `DjangoType`. Surfaces as `aggregates` arguments on [`DjangoConnectionField`](#djangoconnectionfield).
+
+```python
+class GalaxyType(DjangoType):
+    class Meta:
+        model = Galaxy
+        aggregate_class = aggregates.GalaxyAggregate
+```
+
+**See also:** [`AggregateSet`](#aggregateset).
+
+## `Meta.choice_enum_names`
+
+**Status:** planned for `0.1.4`.
+
+`Meta.choice_enum_names = {"status": "ItemStatusEnum"}` overrides the first-`DjangoType`-wins enum-naming behavior that ships today. Pins a stable contract for renaming generated choice enums.
+
+**See also:** [Choice enum generation](#choice-enum-generation).
+
+## `Meta.description`
+
+**Status:** shipped.
+
+Overrides the GraphQL type description (defaults to the class docstring).
+
+**See also:** [`DjangoType`](#djangotype) · [`Meta.name`](#metaname).
+
+## `Meta.exclude`
+
+**Status:** shipped.
+
+Tuple / list of model field names to exclude from the generated GraphQL type. Mutually exclusive with the all-fields default of [`Meta.fields`](#metafields). Validated against the model — unknown names raise [`ConfigurationError`](#configurationerror).
+
+**See also:** [`Meta.fields`](#metafields) · [`DjangoType`](#djangotype).
+
+## `Meta.fields`
+
+**Status:** shipped.
+
+Tuple / list of model field names, or `"__all__"`, or omitted (defaults to `"__all__"`). Names must reference real model fields or shipped relation accessors. Mixing scalar fields and relation fields is allowed.
+
+**See also:** [`Meta.exclude`](#metaexclude) · [`DjangoType`](#djangotype) · [Relation handling](#relation-handling).
+
+## `Meta.fields_class`
+
+**Status:** planned for `0.1.1`.
+
+References a [`FieldSet`](#fieldset) subclass that defines field-level permission checks, custom resolvers, computed fields, and redaction behavior for this `DjangoType`.
+
+**See also:** [`FieldSet`](#fieldset) · [Per-field permission hooks](#per-field-permission-hooks).
+
+## `Meta.filterset_class`
+
+**Status:** planned for `0.0.8`.
+
+References a [`FilterSet`](#filterset) subclass that defines the filter input for this `DjangoType`. Surfaces as the `filter:` argument on [`DjangoConnectionField`](#djangoconnectionfield).
+
+```python
+class GalaxyType(DjangoType):
+    class Meta:
+        model = Galaxy
+        filterset_class = filters.GalaxyFilter
+```
+
+**See also:** [`FilterSet`](#filterset).
+
+## `Meta.interfaces`
+
+**Status:** shipped (`0.0.5`).
+
+Tuple of Strawberry interface classes the generated GraphQL type implements. When `strawberry.relay.Node` is among them, the `DjangoType` becomes a Relay-node-shaped type — see [Relay Node integration](#relay-node-integration) for the full contract.
+
+```python
+import strawberry
+from strawberry import relay
+
+class CategoryNode(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name")
+        interfaces = (relay.Node,)
+```
+
+Non-Relay Strawberry interfaces (`@strawberry.interface`-decorated classes) are accepted without Relay-specific wiring.
+
+**See also:** [Relay Node integration](#relay-node-integration) · [`DjangoType`](#djangotype).
+
+## `Meta.model`
+
+**Status:** shipped.
+
+The Django model class this `DjangoType` is generated from. Required for every concrete `DjangoType`. Abstract base `DjangoType`s without a `Meta` are allowed and do not register.
+
+**See also:** [`DjangoType`](#djangotype) · [`Meta.primary`](#metaprimary).
+
+## `Meta.name`
+
+**Status:** shipped.
+
+Overrides the GraphQL type name (defaults to the Python class name).
+
+**See also:** [`DjangoType`](#djangotype) · [`Meta.description`](#metadescription).
+
+## `Meta.optimizer_hints`
+
+**Status:** shipped (`0.0.3`).
+
+Per-relation optimizer overrides — a dict mapping relation field name to an [`OptimizerHint`](#optimizerhint) instance. Configured in the same `class Meta` you already declared the type with:
 
 ```python
 from django.db.models import Prefetch
 from django_strawberry_framework import DjangoType, OptimizerHint
-from myapp.models import Category, Item
-
 
 class CategoryType(DjangoType):
     class Meta:
@@ -343,313 +633,334 @@ class CategoryType(DjangoType):
         }
 ```
 
-Supported hint modes:
+Validation: hint field names must exist on the model; hint values must be `OptimizerHint` instances; invalid hints fail at type creation with [`ConfigurationError`](#configurationerror).
 
-- `OptimizerHint.SKIP` — exclude a relation from automatic planning.
+**See also:** [`OptimizerHint`](#optimizerhint) · [`DjangoOptimizerExtension`](#djangooptimizerextension).
+
+## `Meta.orderset_class`
+
+**Status:** planned for `0.0.8`.
+
+References an [`OrderSet`](#orderset) subclass that defines ordering input for this `DjangoType`. Surfaces as the `orderBy:` argument on [`DjangoConnectionField`](#djangoconnectionfield).
+
+**See also:** [`OrderSet`](#orderset).
+
+## `Meta.primary`
+
+**Status:** planned for `0.0.6`.
+
+Allows multiple `DjangoType` subclasses for one Django model. `Meta.primary = True` declares the type used for nested-relation resolution (`AdminItemType` vs `ItemType` for the same `Item` model). Today the registry rejects a second `DjangoType` for a model that already has one; this `Meta` key promotes the behavior to a primary-declaration contract with an explicit primary.
+
+**See also:** [`Meta.model`](#metamodel) · [`DjangoType`](#djangotype).
+
+## `Meta.search_fields`
+
+**Status:** planned for `0.1.2`.
+
+Declarative search across model fields (and relation paths). Single `search: String` argument on connection fields fans out across the listed fields as an OR'd `icontains` filter — equivalent to `django-graphene-filters`'s `Meta.search_fields = ("name", "description", "category__name")` shape.
+
+**See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [`FilterSet`](#filterset).
+
+## Multi-database cooperation
+
+**Status:** planned for `0.0.7`.
+
+Pins the existing `router.db_for_read` cooperation in `types/resolvers.py` with a spec, tests, and a `FEATURES.md` status entry. Multi-db cooperation already exists in source today — this card documents it as a contract: the optimizer plans correctly under `.using()`, `Prefetch` chains respect routing, strictness mode tracks the originating connection, [`get_queryset`](#get_queryset-visibility-hook) downgrades respect routing.
+
+Companion `BETTER.md` item 41 covers first-class sharding-aware planning post-`1.0.0`.
+
+**See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`get_queryset` visibility hook](#get_queryset-visibility-hook).
+
+## `only()` projection
+
+**Status:** shipped (`0.0.2`).
+
+Scalar GraphQL selections become Django `.only(...)` projections so unselected columns are not fetched from the database. Connector columns required for `select_related`, reverse FK, FK / OneToOne, and M2M attachment paths are preserved automatically so Django can stitch related rows without lazy loads.
+
+**See also:** [FK-id elision](#fk-id-elision) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache).
+
+## `OptimizerHint`
+
+**Status:** shipped (`0.0.3`).
+
+Typed wrapper for per-relation optimizer overrides. Pass instances through [`Meta.optimizer_hints`](#metaoptimizer_hints).
+
+Supported modes:
+
+- `OptimizerHint.SKIP` — exclude a relation from automatic planning (the optimizer leaves it alone).
 - `OptimizerHint.select_related()` — force `select_related`.
 - `OptimizerHint.prefetch_related()` — force `prefetch_related`.
 - `OptimizerHint.prefetch(Prefetch(...))` — use a consumer-provided `Prefetch` object and stop walking below that relation.
 
-Validation:
+**See also:** [`Meta.optimizer_hints`](#metaoptimizer_hints) · [`DjangoOptimizerExtension`](#djangooptimizerextension).
 
-- hint field names must exist on the model
-- hint values must be `OptimizerHint` instances
-- invalid hints fail at type creation with `ConfigurationError`
+## `OrderSet`
 
-## Optimizer observability and safety
+**Status:** planned for `0.0.8`.
 
-Status: shipped.
+Declarative ordering with `Meta.fields` (list form `["name", "created_date"]` or `"__all__"` shorthand), [`RelatedOrder`](#relatedorder) for cross-relation traversal, `check_*_permission` gates. Reuses the filtering subsystem's lazy-resolution architecture verbatim with `OrderSet` substituted for `FilterSet`.
 
-The optimizer exposes what it did instead of forcing consumers to infer behavior from SQL logs.
+**See also:** [`Meta.orderset_class`](#metaorderset_class) · [`RelatedOrder`](#relatedorder) · [`FilterSet`](#filterset).
 
-Shipped observability:
+## Per-field permission hooks
 
-- latest plan stashed on `info.context.dst_optimizer_plan`
-- FK-id elisions stashed on context
-- strictness planned resolver keys stashed on context
-- lookup paths stashed on context in strictness mode
-- dict and object context support
+**Status:** planned for `0.0.10`.
 
-Shipped N+1 detection:
+Methods named `check_<field>_permission` on the type's [`FieldSet`](#fieldset) gate access to that field. Two failure modes:
 
-- `strictness="off"` for silent production default
-- `strictness="warn"` for logged warnings
-- `strictness="raise"` for fail-fast tests/dev checks
-- warnings / errors only when an unplanned relation access would actually lazy-load
+- **Redaction** — silent safe-value fallback (`None`, empty string, sentinel) so the response shape stays stable.
+- **Denial** — raise `GraphQLError` so the response carries an `errors` entry for that path.
 
-Shipped schema audit:
+Composes with filter / order / aggregate permission gates and with the post-write return value of mutations.
 
-- `DjangoOptimizerExtension.check_schema(schema)` audits schema-reachable `DjangoType`s
-- hidden fields and `OptimizerHint.SKIP` fields are ignored
-- relation targets without registered `DjangoType`s are reported as warnings
+**See also:** [`FieldSet`](#fieldset) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`get_queryset` visibility hook](#get_queryset-visibility-hook).
 
-## Queryset diffing and consumer cooperation
+## Plan cache
 
-Status: shipped.
+**Status:** shipped (`0.0.3`).
+
+Caches optimizer plans across requests. The same query 10,000×/sec walks the selection tree once, not 10,000 times.
+
+Properties:
+
+- **Selection-shape keys.** Cache keys include the selected operation AST, relevant `@skip` / `@include` variables, target model, and root runtime path.
+- **Variable filtering.** Filter-variable values that do not affect selection shape are excluded from the key, so a query with many filter combinations reuses one cached plan.
+- **Multi-operation safety.** `query A { ... } query B { ... }` in one document never shares a plan across operations.
+- **Named-fragment safety.** Directives inside named fragments are tracked into the cache key.
+- **Request-scope safety.** Plans that embed request-scoped [`get_queryset`](#get_queryset-visibility-hook) results are marked uncacheable.
+- **Cache immutability.** Cached plans are copied before queryset-specific diffing, so one resolver's queryset shape cannot mutate a plan reused by another request.
+- **Introspection.** `DjangoOptimizerExtension.cache_info()` exposes hit / miss / size counts.
+- **Low per-request overhead.** `DjangoType` precomputes optimizer field metadata at class creation.
+
+**See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Queryset diffing](#queryset-diffing) · [FK-id elision](#fk-id-elision).
+
+## Queryset diffing
+
+**Status:** shipped (`0.0.3`).
 
 The optimizer does not assume it owns the queryset. It reconciles framework-generated plans against queryset work the consumer already applied.
 
-Shipped value:
+Cooperation rules:
 
 - **Queryset cooperation.** If your resolver already calls `select_related("category")`, the optimizer does not reapply it.
 - **Prefetch cooperation.** If your resolver returns `Category.objects.prefetch_related(Prefetch("items", queryset=...))`, the consumer `Prefetch` wins over less-specific automatic work.
 - **Subtree-aware reconciliation.** `prefetch_related("items", "items__entries")` cooperates with the optimizer's nested `Prefetch("items", ...)` instead of raising Django's "lookup already seen with a different queryset" error.
 - **Plain-string absorption.** Safe consumer string prefetches can be absorbed by richer optimizer `Prefetch` objects.
-- **Cache safety.** Cached plans are copied before queryset-specific diffing, so one resolver's queryset shape cannot mutate a plan reused by another request.
 
-## Planned subsystems
+**See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache) · [`OptimizerHint`](#optimizerhint).
 
-Per-subsystem preview of what lands between now and `1.0.0`. Each entry below has a `Status: planned for X.Y.Z` line and a brief contract preview; the canonical user-facing shape of the feature-complete API lives in [`../GOAL.md`'s astronomy showcase](../GOAL.md#what-success-looks-like-in-your-code); per-card ship sequencing lives in [`../KANBAN.md`](../KANBAN.md).
+## `RelatedAggregate`
 
-### Specialized scalar conversions
+**Status:** planned for `0.1.3`.
 
-Status: planned for `0.0.6`.
+Field declaration on an [`AggregateSet`](#aggregateset) for cross-relation aggregate traversal. Accepts a target `AggregateSet` class (or its import path for circular cases), parallel to [`RelatedFilter`](#relatedfilter) / [`RelatedOrder`](#relatedorder) in the filter / order subsystems.
 
-`BigIntegerField` → JSON-safe `BigInt` scalar (string-serialized at the wire to survive JavaScript's 53-bit integer limit); `JSONField` → `strawberry.scalars.JSON`; PostgreSQL `ArrayField` → typed `list[T]` (recursive through `field.base_field`); PostgreSQL `HStoreField` → `dict[str, str | None]` (soft-registered, only when `django.contrib.postgres` is installed).
+**See also:** [`AggregateSet`](#aggregateset) · [`get_child_queryset`](#get_child_queryset).
 
-### `Meta.primary`
+## `RelatedFilter`
 
-Status: planned for `0.0.6`.
+**Status:** planned for `0.0.8`.
 
-Allows multiple `DjangoType` subclasses for one Django model. `Meta.primary = True` declares the type used for nested-relation resolution (`AdminItemType` vs `ItemType` for the same `Item` model). Today the registry rejects a second `DjangoType` for a model that already has one; this `Meta` key promotes the behavior to a primary-declaration contract with an explicit primary.
+Field declaration on a [`FilterSet`](#filterset) for cross-relation filter traversal. Accepts a target `FilterSet` class, an absolute import path, or an unqualified name for circular references. The unqualified-name form is resolved lazily, matching `django-graphene-filters`'s six-layer pipeline.
 
-### Scalar field override semantics
+**See also:** [`FilterSet`](#filterset) · [`RelatedOrder`](#relatedorder).
 
-Status: planned for `0.0.6`.
+## `RelatedOrder`
 
-The stable contract layer for consumer-authored scalar field overrides, parallel to the shipped relation-override contract from `0.0.4` (`DONE-006`). Today consumers can override relation fields via annotation-only or `strawberry.field(resolver=...)` patterns; scalar field overrides remain an implementation detail until this card promotes the contract.
+**Status:** planned for `0.0.8`.
 
-### `DjangoListField`
+Field declaration on an [`OrderSet`](#orderset) for cross-relation ordering traversal. Same lazy-resolution semantics as [`RelatedFilter`](#relatedfilter).
 
-Status: planned for `0.0.7`.
+**See also:** [`OrderSet`](#orderset) · [`RelatedFilter`](#relatedfilter).
 
-Non-Relay `list[T]` root and nested fields. The smallest entry point for migrants coming from `graphene-django`'s `DjangoListField` and for use cases that do not need pagination, edges, or page-info. Accepts a `DjangoType`, derives the queryset from `Meta.model`, applies the type-level `get_queryset`, cooperates with the optimizer, accepts filter / ordering input when those subsystems are configured.
+## Relation handling
 
-### Django `AppConfig`
+**Status:** shipped (`0.0.1`+).
 
-Status: planned for `0.0.7`.
+`DjangoType` maps Django relation cardinality into GraphQL type shape and resolver behavior. Each cardinality has its own sub-anchor for direct linking.
 
-`django_strawberry_framework/apps.py` ships an `AppConfig` so consumers can add the package to `INSTALLED_APPS` and use Django checks / signal hooks against it.
+### Forward `ForeignKey`
 
-### Schema export management command
+Target type, nullable when the field is nullable. The optimizer plans `select_related` for this shape or — under safe conditions — performs [FK-id elision](#fk-id-elision).
 
-Status: planned for `0.0.7`.
+### Forward `OneToOneField`
+
+Target type, nullable when the field is nullable.
+
+### Reverse `ForeignKey`
+
+`list[target_type]`. The optimizer plans `prefetch_related`. Many-side resolvers return Python lists, not Django managers.
+
+### Reverse `OneToOneField`
+
+Target type or `None`. Returns `None` when the related row does not exist (no `RelatedObjectDoesNotExist` raised at the GraphQL boundary).
+
+### Forward `ManyToManyField`
+
+`list[target_type]`. Optimizer plans `prefetch_related`.
+
+### Reverse `ManyToManyField`
+
+`list[target_type]`. Symmetric with forward M2M.
+
+### Resolver behavior
+
+- many-side resolvers return lists, not Django managers
+- forward resolvers can return FK-id stubs when the optimizer safely elides a join (see [FK-id elision](#fk-id-elision))
+- relation access cooperates with Django's prefetch and relation caches
+- consumer-authored `strawberry.field` relation overrides are preserved instead of being clobbered by generated resolvers
+- consumer overrides are responsible for their own queryset shape — re-shaping a relation queryset with `.order_by(...)` / `.filter(...)` can bypass the framework's prefetched relation cache
+
+**See also:** [`DjangoType`](#djangotype) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [FK-id elision](#fk-id-elision) · [Definition-order independence](#definition-order-independence).
+
+## Relay Node integration
+
+**Status:** shipped (`0.0.5`).
+
+When [`Meta.interfaces`](#metainterfaces) includes `strawberry.relay.Node`, the `DjangoType` becomes a Relay-node-shaped GraphQL type with `id: GlobalID!` and the four `resolve_*` defaults wired through `cls.get_queryset` (the model's default manager plus the type's visibility hook).
+
+Shipped behavior:
+
+- Default `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` classmethods are injected when `relay.Node` is declared; consumer-declared overrides are preserved via Strawberry's `__func__` identity test (matches `strawberry-django`).
+- When `relay.Node` is in `Meta.interfaces`, the synthesized Django `id: int!` annotation is suppressed and the Relay-supplied `id: GlobalID!` from the interface is used instead. The Django primary key remains selected as a connector column for the optimizer.
+- Both sync and async paths for `resolve_node` and `resolve_nodes`; `resolve_id_attr` and `resolve_id` are sync.
+- `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
+- Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise [`ConfigurationError`](#configurationerror) at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
+- Non-Relay Strawberry interfaces (`@strawberry.interface`-decorated classes) are accepted without Relay-specific wiring.
+
+Optimizer-extension cooperation on the per-node `resolve_node` resolver is deferred to a follow-up slice; root-level list resolvers continue to receive full [`DjangoOptimizerExtension`](#djangooptimizerextension) treatment today.
+
+**See also:** [`Meta.interfaces`](#metainterfaces) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
+
+## Response-extensions debug middleware
+
+**Status:** planned for `0.0.12`.
+
+Surfaces executed SQL queries and raised exceptions through the GraphQL response's `extensions` envelope so frontend clients can read them without the toolbar. Distinct from [Debug-toolbar middleware](#debug-toolbar-middleware): this is in-response surfacing, that is server-side panel.
+
+**See also:** [Debug-toolbar middleware](#debug-toolbar-middleware).
+
+## Scalar field conversion
+
+**Status:** shipped (`0.0.1`+).
+
+Shipped scalar support:
+
+- text-like fields (`CharField` / `TextField`) → `str`
+- integer and auto fields (`IntegerField` / `AutoField` / `BigAutoField` / `SmallIntegerField` / `PositiveIntegerField`) → `int`
+- boolean fields → `bool`
+- float fields → `float`
+- decimal fields → `decimal.Decimal`
+- date / datetime / time / duration fields → Python-native time types
+- UUID fields → `uuid.UUID`
+- binary fields → `bytes`
+- file and image fields → string path / URL values
+- `null=True` → `T | None`
+- Relay `GlobalID` mapping for auto IDs when [`Meta.interfaces = (relay.Node,)`](#metainterfaces) is declared
+
+Choice support is documented separately under [Choice enum generation](#choice-enum-generation).
+
+Deferred mappings — `BigIntegerField`, `JSONField`, PostgreSQL `ArrayField`, PostgreSQL `HStoreField` — are scheduled in [Specialized scalar conversions](#specialized-scalar-conversions).
+
+**See also:** [Choice enum generation](#choice-enum-generation) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics).
+
+## Scalar field override semantics
+
+**Status:** planned for `0.0.6`.
+
+The stable contract layer for consumer-authored scalar field overrides, parallel to the shipped relation-override contract from `0.0.4`. Today consumers can override relation fields via annotation-only or `strawberry.field(resolver=...)` patterns; scalar field overrides remain an implementation detail until this card promotes the contract.
+
+**See also:** [`DjangoType`](#djangotype) · [Definition-order independence](#definition-order-independence).
+
+## Schema audit
+
+**Status:** shipped (`0.0.3`).
+
+`DjangoOptimizerExtension.check_schema(schema)` walks every schema-reachable `DjangoType` and reports relation targets without registered `DjangoType`s as warnings. Hidden fields and [`OptimizerHint.SKIP`](#optimizerhint) fields are ignored. Intended for use as a unit-test assertion or a CI gate.
+
+**See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Strictness mode](#strictness-mode).
+
+## Schema export management command
+
+**Status:** planned for `0.0.7`.
 
 `manage.py export_schema [path]` writes the GraphQL SDL to a file. Mirrors `strawberry-django`'s `export_schema` command.
 
-### Multi-database cooperation
+**See also:** [Django `AppConfig`](#django-appconfig).
 
-Status: planned for `0.0.7`.
+## `SerializerMutation`
 
-Pins the existing `router.db_for_read` cooperation in `types/resolvers.py` with a spec, tests, and a `FEATURES.md` status entry. Multi-db cooperation already exists in source today — this card documents it as a contract: the optimizer plans correctly under `.using()`, `Prefetch` chains respect routing, strictness mode tracks the originating connection, `get_queryset` downgrades respect routing. The companion BETTER.md item 41 covers first-class sharding-aware planning post-`1.0.0`.
+**Status:** planned for `0.0.11`.
 
-### `FilterSet`
+Consumes DRF `Serializer` / `ModelSerializer` via `Meta.serializer_class`, `Meta.lookup_field`, `Meta.model_operations`, `Meta.optional_fields`. Existing serializers move to GraphQL without re-declaring validation; input-type factory derives the Strawberry input shape from the serializer's fields. Soft dependency on `rest_framework`.
 
-Status: planned for `0.0.8`.
+**See also:** [`DjangoMutation`](#djangomutation) · [`FieldError` envelope](#fielderror-envelope).
 
-Declarative filter classes with `Meta.model`, `Meta.fields` (dict form `{"name": ["exact", "icontains"]}` or `"__all__"` shorthand), `RelatedFilter` for cross-relation traversal (accepts class, absolute import path, or unqualified name for circular cases), `check_*_permission` denial gates, explicit-queryset scope boundaries that nested filters cannot bypass. Logical `and` / `or` / `not` operators on the input shape. Generated input types use stable class-derived names so two connection fields on the same model resolve to the same `FilterInputType` (Apollo cache friendly). The lazy-resolution architecture is borrowed verbatim from `django-graphene-filters` — six-layer pipeline; five layers are library-agnostic and port directly; only the cycle-safe forward reference (Graphene's `lambda:` → Strawberry's `strawberry.lazy()`) is engine-adapted.
+## Specialized scalar conversions
 
-### `OrderSet`
+**Status:** planned for `0.0.6`.
 
-Status: planned for `0.0.8`.
+Adds these mappings to [Scalar field conversion](#scalar-field-conversion):
 
-Declarative ordering with `Meta.fields` (list form `["name", "created_date"]` or `"__all__"` shorthand), `RelatedOrder` for cross-relation traversal, `check_*_permission` gates. Reuses the filtering subsystem's lazy-resolution architecture verbatim with `OrderSet` substituted for `FilterSet`.
+- `BigIntegerField` → JSON-safe [`BigInt`](#bigint-scalar) scalar (string-serialized at the wire to survive JavaScript's 53-bit integer limit)
+- `JSONField` → `strawberry.scalars.JSON`
+- PostgreSQL `ArrayField` → typed `list[T]` (recursive through `field.base_field`)
+- PostgreSQL `HStoreField` → `dict[str, str | None]` (soft-registered, only when `django.contrib.postgres` is installed)
 
-### `DjangoConnectionField`
+**See also:** [Scalar field conversion](#scalar-field-conversion) · [`BigInt` scalar](#bigint-scalar).
 
-Status: planned for `0.0.9`.
+## Strictness mode
 
-Relay-style connection field with `edges` / `node` / `pageInfo` / `totalCount`, cursor-based pagination, `filter` / `orderBy` / `search` arguments that flow into the connection's `DjangoType`'s `filterset_class` / `orderset_class` / `search_fields`. Composes with the optimizer for nested-selection planning. Works at root fields and at nested relation fields.
+**Status:** shipped (`0.0.3`).
 
-### Full Relay story
+`DjangoOptimizerExtension(strictness="off" | "warn" | "raise")` controls how the optimizer reacts when an unplanned relation access would actually lazy-load (an accidental N+1).
 
-Status: planned for `0.0.9`.
+- `"off"` — silent production default.
+- `"warn"` — logged warning per occurrence.
+- `"raise"` — fail-fast `RuntimeError` for tests / dev checks.
 
-The connective tissue between Relay Node (shipped in `0.0.5`) and Connection ([`DjangoConnectionField`](#djangoconnectionfield) above): `DjangoNodeField(SomeNode)` for root single-node lookup (the `category: GalaxyNode = DjangoNodeField(GalaxyNode)` shape in [`../GOAL.md`'s astronomy showcase](../GOAL.md#what-success-looks-like-in-your-code)), root `node(id:)` / `nodes(ids:)` query helpers, reverse-FK / M2M relation-as-Connection upgrade, cursor pagination math, schema-validation diagnostics, test helpers. The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`) as part of this card.
+Warnings and errors fire only when the relation access actually causes a lazy load — false positives from unhit prefetches do not trigger.
 
-### Connection-aware optimizer planning
+Planned resolver keys and lookup paths are stashed on `info.context` for introspection during strictness incidents.
 
-Status: planned for `0.0.9`.
+**See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Schema audit](#schema-audit).
 
-The optimizer learns to recognize `edges { node { ... } }` selections and plan `Prefetch` chains correctly across connection-paginated relations. Without this, nested connections fall back to per-row queries.
+## `TestClient`
 
-### Permissions subsystem
+**Status:** planned for `0.0.12`.
 
-Status: planned for `0.0.10`.
+`TestClient` and `AsyncTestClient` helpers for live HTTP-level testing patterns. Mirrors `strawberry-django`'s `test/client.py` shape. Companion: [`GraphQLTestCase`](#graphqltestcase).
 
-`apply_cascade_permissions(cls, queryset, info)` — cascades each `DjangoType`'s `get_queryset` filter to its related types when reaching through FK / M2M. Per-field permission hooks via `check_*_permission` methods on the type's `FieldSet`. Field-level redaction (silent safe-value fallback) and denial (raise via `GraphQLError`). Composes with filter / order / aggregate permission gates and with the post-write return value of mutations.
+**See also:** [`GraphQLTestCase`](#graphqltestcase).
 
-### Mutations subsystem
+## `Upload` scalar
 
-Status: planned for `0.0.11`.
+**Status:** planned for `0.0.11`.
 
-`DjangoMutation` base class with `Meta`-driven configuration; auto-generated `Input` (all fields required) and `PartialInput` (all fields optional) types from Django models that preserve the relation-override contract from the foundation slice; shared `errors: list[FieldError]` envelope reused across every mutation flavor; sync and async resolver paths; composition with the optimizer for the post-write return value (re-fetching the mutated row with the right `select_related` / `prefetch_related` for the response selection).
+Strawberry `Upload` scalar mapping for `FileField` / `ImageField` on mutation inputs. Paired with [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) on the output side.
 
-### `Upload` scalar
+**See also:** [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype) · [`DjangoMutation`](#djangomutation).
 
-Status: planned for `0.0.11`.
+---
 
-Strawberry `Upload` scalar mapping for `FileField` / `ImageField` on mutation inputs. `DjangoFileType` / `DjangoImageType` output types carrying `name` / `path` / `size` / `url`.
+## Cross-subsystem invariants
 
-### Form-based mutations
+Goals that the Layer-3 cards collectively satisfy by `1.0.0`:
 
-Status: planned for `0.0.11`.
+- Deferred `Meta` keys are accepted only when their subsystem applies them end-to-end. This rule resolves entirely at `1.0.0`.
+- Filters, orders, aggregates, mutations, permissions, and connection fields all compose with [`DjangoOptimizerExtension`](#djangooptimizerextension).
+- The [`FieldError` envelope](#fielderror-envelope) is shared across every mutation flavor for a consistent client contract.
+- Example-project schemas reference only shipped features — never unshipped ones.
 
-`DjangoFormMutation` (consumes Django `Form`) and `DjangoModelFormMutation` (consumes `ModelForm`) — declarative `Meta.form_class` shape; validation errors surface through the shared `errors: list[FieldError]` envelope (populated from `form.errors`); the post-save object is the mutation return value.
+## Beyond `1.0.0`
 
-### DRF serializer mutations
+Strategic differentiators that go past `1.0.0` parity live in [`../BETTER.md`](../BETTER.md). Roadmap-adjacent items already tracked there:
 
-Status: planned for `0.0.11`.
+- Apollo Federation support — `BETTER` item 34
+- Model-property / cached-property optimizer hints — folded into `BETTER` item 14 (`Meta.computed_fields`)
+- Shared queryset introspection helpers (`utils/queryset.py`) — `BETTER` item 36
+- Public-surface promotion discipline — `BETTER` item 37
+- Layered manual relation-override test policy — `BETTER` item 38
+- First-class multi-db / sharding-aware optimizer — `BETTER` item 41
 
-`SerializerMutation` consumes DRF `Serializer` / `ModelSerializer` via `Meta.serializer_class`, `Meta.lookup_field`, `Meta.model_operations`, `Meta.optional_fields`. Existing Serializers move to GraphQL without re-declaring validation; input-type factory derives the Strawberry input shape from the serializer's fields. Soft dependency on `rest_framework`.
-
-### Auth mutations
-
-Status: planned for `0.0.11`.
-
-`login` / `logout` / `register` mutations plus a `current_user` query helper. Opt-in via explicit import; not bundled into the default schema. Composes with the existing `DjangoMutation` envelope and with `django.contrib.auth`.
-
-### Channels ASGI router
-
-Status: planned for `0.0.12`.
-
-`DjangoGraphQLProtocolRouter` — a Channels `ProtocolTypeRouter`-wrapping helper for consumers using Channels. Soft dependency on `channels`; symbol name is intentionally distinct from `strawberry-django`'s `AuthGraphQLProtocolTypeRouter` to avoid migration ambiguity (the migration guide maps the equivalents).
-
-### Debug-toolbar middleware
-
-Status: planned for `0.0.12`.
-
-`django-debug-toolbar` SQL-panel integration during `/graphql/` requests. Mirrors `strawberry-django`'s `middlewares/debug_toolbar.py` shape.
-
-### Test client helper
-
-Status: planned for `0.0.12`.
-
-`TestClient`, `AsyncTestClient`, and a `GraphQLTestCase` base class for live HTTP-level testing patterns. Mirrors `strawberry-django`'s `test/client.py`.
-
-### Response-extensions debug middleware
-
-Status: planned for `0.0.12`.
-
-Surfaces executed SQL queries and raised exceptions through the GraphQL response's `extensions` envelope so frontend clients can read them without the toolbar. Distinct from [Debug-toolbar middleware](#debug-toolbar-middleware): this is in-response, that is server-side panel — both useful, not mutually exclusive.
-
-### `FieldSet`
-
-Status: planned for `0.1.1`.
-
-Declarative field selection class for the `Meta.fields_class` surface. Carries field-level permission checks (`check_*_permission` denial gates), custom field resolvers (`resolve_*` overrides), computed fields (class-level annotations), and redaction / deny-value behavior. Integrates with generated model fields; declared per-type via `Meta.fields_class = MyTypeFieldSet`.
-
-### `Meta.search_fields`
-
-Status: planned for `0.1.2`.
-
-Declarative search across model fields (and relation paths). Single `search: String` argument on connection fields fans out across the listed fields as an OR'd `icontains` filter — equivalent to `django-graphene-filters`'s `Meta.search_fields = ("name", "description", "category__name")` shape.
-
-### `AggregateSet`
-
-Status: planned for `0.1.3`.
-
-`AggregateSet` with `Sum` / `Count` / `Avg` / `Min` / `Max` / `Mode` / `Uniques` / `GroupBy`, `RelatedAggregate` traversal, custom `compute_*_*` stats declared via `Meta.custom_stats`, sync and async paths via `compute` / `acompute`, selection-set-aware computation (only requested stats are computed), `get_child_queryset` cascade hook for excluding private rows when traversing into children.
-
-### Stable choice-enum naming overrides
-
-Status: planned for `0.1.4`.
-
-`Meta.choice_enum_names = {"status": "ItemStatusEnum"}` overrides the first-`DjangoType`-wins enum-naming behavior that ships today. Pins a stable contract for renaming generated choice enums.
-
-## Planned integration goals
-
-Cross-subsystem invariants that the Layer-3 cards collectively satisfy by `1.0.0`:
-
-- Deferred `Meta` keys become accepted only when their subsystem applies them end-to-end (this rule resolves entirely at `1.0.0`).
-- Filters, orders, aggregates, mutations, permissions, and connection fields all compose with the optimizer.
-- The validation-error envelope is shared across every mutation flavor for a consistent client contract.
-- Fakeshop GraphQL schema activates only as its dependencies ship; never references unshipped features.
-
-## Enhancements over strawberry-graphql-django
-
-For the migration code diff coming from `strawberry-graphql-django`, see [`../GOAL.md`'s Coming-from-strawberry-graphql-django section](../GOAL.md#coming-from-strawberry-graphql-django). The enhancements below are the specific package-level capabilities gained.
-
-API enhancements:
-
-- DRF-shaped nested `Meta` configuration instead of decorator-first configuration
-- field selection, future filters, future orders, future aggregates, future permissions, and optimizer hints all belong to one class-local configuration surface
-- deferred features fail loudly instead of becoming accepted no-ops
-- typed optimizer hints replace mixed strings / dicts / decorator flags
-
-Optimizer performance enhancements:
-
-- cached optimization plans for hot repeated operations
-- directive-aware cache keys that ignore variables unrelated to selection shape
-- named-fragment directive support in cache keys
-- selected-operation hashing for multi-operation documents
-- precomputed field metadata instead of per-request `_meta.get_fields()` walks
-- FK-id elision for `id`-only forward relation selections
-- queryset diffing before applying framework plans
-- subtree-aware prefetch reconciliation
-
-Optimizer correctness and debugging enhancements:
-
-- branch-sensitive resolver keys for aliases and sibling root fields
-- strictness mode for warning or raising on accidental N+1s
-- plan introspection through `info.context`
-- schema audit for unregistered relation targets
-- cached-plan immutability during queryset-specific diffing
-- consumer `Prefetch` objects respected as more specific than automatic plans
-
-Django-stack enhancements:
-
-- visibility filtering remains in `get_queryset`
-- query planning uses standard Django ORM primitives
-- database routing and relation / prefetch caches are preserved
-- future features are shaped around DRF / django-filter conventions rather than Strawberry decorator conventions
-
-## Enhancements over graphene-django
-
-For the migration code diff coming from `graphene-django`, see [`../GOAL.md`'s Coming-from-graphene-django section](../GOAL.md#coming-from-graphene-django). The enhancements below are the specific package-level capabilities gained.
-
-Engine and typing enhancements:
-
-- Strawberry is the underlying GraphQL engine
-- modern Python annotations drive GraphQL type generation
-- async-compatible resolver lifecycle
-- typed package marker for static-analysis consumers
-- no dependency on Graphene's older type system
-
-Django API enhancements:
-
-- DRF-style `Meta` surface stays familiar to graphene-django users
-- `ConfigurationError` catches unsupported and misspelled config early
-- choice fields generate Strawberry enums while preserving database values
-- relation cardinality is inferred from Django model metadata
-- type-level `get_queryset` remains the central visibility hook
-
-ORM optimization enhancements:
-
-- built-in N+1 optimizer is part of the shipped foundation
-- nested relation selections are optimized automatically
-- `only` projection reduces selected columns
-- `Prefetch` downgrade preserves permission/visibility filtering across relation boundaries
-- strictness mode and plan introspection make query behavior testable
-
-Future migration advantage:
-
-- planned filters, orders, aggregates, connection fields, and permissions target the familiar Django / DRF mental model
-- teams can move toward Strawberry without giving up Django-shaped schema declarations
-
-## Deferred and future work
-
-Items beyond the `0.1.0` / `1.0.0` roadmap are tracked in [`../BETTER.md`](../BETTER.md). They are not committed to a ship version — they graduate into [`../KANBAN.md`](../KANBAN.md) cards when scheduled.
-
-Roadmap-adjacent items already in `BETTER.md`:
-
-- Apollo Federation support (deferred unless a real consumer asks) — BETTER item 34
-- model-property / cached-property optimizer hints — folded into BETTER item 14 (`Meta.computed_fields`)
-- shared queryset introspection helpers (`utils/queryset.py`) — BETTER item 36
-- public-surface promotion discipline — BETTER item 37
-- layered manual relation-override test policy — BETTER item 38
-- first-class multi-db / sharding-aware optimizer — BETTER item 41
-
-Strategic differentiators that go beyond either upstream — e.g. unified declarative permissions, selection-aware annotations, content-versioned Node types, optimizer "explain" extension, OpenTelemetry integration, Django-signal-driven subscriptions, persisted queries, per-tenant schema variants, soft-delete cooperation — also live in [`../BETTER.md`](../BETTER.md).
-
-Dedicated migration guides are tracked in [`../KANBAN.md`](../KANBAN.md) (graphene-django, strawberry-graphql-django, DRF / django-filter), so this file can stay focused on package capabilities.
+Dedicated migration guides (graphene-django, strawberry-graphql-django, DRF / django-filter) are tracked in [`../KANBAN.md`](../KANBAN.md) so this file can stay focused on capability lookup. For the migration code diffs, see [`../GOAL.md`'s Migration shape section](../GOAL.md#migration-shape).

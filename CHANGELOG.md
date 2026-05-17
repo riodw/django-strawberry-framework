@@ -17,8 +17,18 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 See [`KANBAN.md`](KANBAN.md) for the per-card sequencing and the version scope of each patch.
 
 ## [Unreleased]
+### Added
+- `BigInt` public scalar export — JSON-safe, decimal-string-serialized, with a strict regex parser (`^(0|-?[1-9][0-9]*)$`) and a strict serializer that rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. See [`BigInt` scalar](docs/FEATURES.md#bigint-scalar). Tracked as `DONE-013-0.0.6` in [`KANBAN.md`](KANBAN.md).
+- `JSONField → strawberry.scalars.JSON` mapping in `SCALAR_MAP`.
+- `HStoreField → strawberry.scalars.JSON` mapping via a sentinel-guarded branch in `convert_scalar` (soft-registered, only when `django.contrib.postgres.fields` imports successfully).
+- PostgreSQL `ArrayField` recursion through `field.base_field` via a sentinel-guarded branch in `convert_scalar`. Nested `ArrayField` and outer `choices` on `ArrayField` / `HStoreField` are rejected with `ConfigurationError`.
+
 ### Changed
-- Consolidated field metadata onto `DjangoTypeDefinition` as the single source of truth. Three reader sites in `types/` (`_record_pending_relation`, `resolved_relation_annotation`, `_make_relation_resolver`) now read `FieldMeta` from `DjangoTypeDefinition.field_map` instead of re-deriving relation shape via `relation_kind(field)` + raw `getattr(field, ...)`. The optimizer reads `FieldMeta` from `registry.get_definition(type_cls)` at all four former mirror-reader sites (`walker._resolve_field_map`, `walker._walk_selections`, `extension._collect_schema_reachable_types`, `extension.check_schema`); the legacy `cls._optimizer_field_map` / `cls._optimizer_hints` class-attribute mirrors are retired. Internal refactor only — no public surface or consumer-visible behavior change. Tracked as `DONE-ALPHA-012-0.0.6` in [`KANBAN.md`](KANBAN.md).
+- Consolidated field metadata onto `DjangoTypeDefinition` as the single source of truth. Three reader sites in `types/` (`_record_pending_relation`, `resolved_relation_annotation`, `_make_relation_resolver`) now read `FieldMeta` from `DjangoTypeDefinition.field_map` instead of re-deriving relation shape via `relation_kind(field)` + raw `getattr(field, ...)`. The optimizer reads `FieldMeta` from `registry.get_definition(type_cls)` at all four former mirror-reader sites (`walker._resolve_field_map`, `walker._walk_selections`, `extension._collect_schema_reachable_types`, `extension.check_schema`); the legacy `cls._optimizer_field_map` / `cls._optimizer_hints` class-attribute mirrors are retired. Internal refactor only — no public surface or consumer-visible behavior change. Tracked as `DONE-012-0.0.6` in [`KANBAN.md`](KANBAN.md).
+- `PositiveBigIntegerField` mapping switched from `int` to [`BigInt`](docs/FEATURES.md#bigint-scalar). Breaking wire-format change: `PositiveBigIntegerField` values are now serialized as decimal strings on the wire (not JSON integers) to survive GraphQL's signed 32-bit `Int` boundary. Consumers using the existing 32-bit `int` shape must update wire-format expectations.
+
+### Notes
+- The internal `BigInt` scalar definition uses `strawberry.scalar(NewType, ...)`, which Strawberry deprecates in favor of `StrawberryConfig.scalar_map`. The deprecation warning is suppressed at the definition site so the package import remains clean. Migration to a `scalar_map`-based design is tracked as a follow-up and will be a real public-API change for consumers using `BigInt` directly.
 
 ## [0.0.5] - 2026-05-15
 ### Added

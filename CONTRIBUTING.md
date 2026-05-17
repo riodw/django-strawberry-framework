@@ -8,7 +8,7 @@ Thanks for your interest in contributing to `django-strawberry-framework`. The p
 - **Capability catalog** — [`docs/FEATURES.md`](docs/FEATURES.md) is the source of truth for what's shipped / planned / deferred plus the `0.1.0` / `1.0.0` milestone framing.
 - **Per-card sequencing** — [`KANBAN.md`](KANBAN.md) tracks all planned work as `TODO-ALPHA-*`, `TODO-BETA-*`, `BLOCKED-*`, and `DONE-*` cards with version pins.
 - **Strategic differentiation roadmap** — [`BETTER.md`](BETTER.md) holds post-`1.0.0` items that aren't on the milestone roadmap. Items graduate to `KANBAN.md` cards when scheduled.
-- **In-flight design work** — new features use the `docs/spec-<topic>.md` convention. Once a slice ships, its behavior is folded into `docs/FEATURES.md` or `docs/TREE.md` and the completed design doc is archived.
+- **In-flight design work** — new features use the `docs/spec-<NNN>-<topic>-<0_0_X>.md` convention (NNN is the 3-digit KANBAN card number, e.g. `docs/spec-013-deferred_scalars-0_0_6.md`; see `docs/builder/BUILD.md` "Spec filename pattern"). Once a slice ships, its behavior is folded into `docs/FEATURES.md` or `docs/TREE.md` and the spec stays at its working location as the historical record.
 - **Current example-project capability snapshot** — [`TODAY.md`](TODAY.md) shows what the package can do in the fakeshop example right now.
 - **Long-term destination** — [`GOAL.md`](GOAL.md) describes the rich-schema north star the milestone roadmap is heading toward.
 

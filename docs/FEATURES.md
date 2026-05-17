@@ -17,18 +17,21 @@ Companion files:
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
 - `post-1.0.0` — strategic differentiation tracked in [`../BETTER.md`](../BETTER.md), not on the roadmap to `1.0.0`.
 
-Current package version: `0.0.5`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
+Current package version: `0.0.6`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
 ## Public exports
 
 Symbols re-exported from `django_strawberry_framework`:
 
+- [`BigInt`](#bigint-scalar) — JSON-safe scalar for 64-bit integer fields.
 - [`DjangoType`](#djangotype) — model-backed Strawberry type base class.
 - [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
 - [`finalize_django_types`](#finalize_django_types) — synchronization point that resolves pending relations and applies `strawberry.type` decoration.
 - `auto` — re-export from Strawberry for `auto`-typed field annotations inside this package's import surface.
 - `__version__` — package version string.
+
+_Note:_ The import path is now clean — no Strawberry deprecation warning escapes (the deprecation is suppressed at the definition site in `scalars.py`).
 
 ## Index
 
@@ -39,7 +42,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`AggregateSet`](#aggregateset) | planned for `0.1.3` |
 | [`apply_cascade_permissions`](#apply_cascade_permissions) | planned for `0.0.10` |
 | [Auth mutations](#auth-mutations) | planned for `0.0.11` |
-| [`BigInt` scalar](#bigint-scalar) | planned for `0.0.6` |
+| [`BigInt` scalar](#bigint-scalar) | shipped (`0.0.6`) |
 | [Choice enum generation](#choice-enum-generation) | shipped (`0.0.1`) |
 | [`ConfigurationError`](#configurationerror) | shipped (`0.0.1`) |
 | [Connection-aware optimizer planning](#connection-aware-optimizer-planning) | planned for `0.0.9` |
@@ -99,7 +102,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Schema audit](#schema-audit) | shipped (`0.0.3`) |
 | [Schema export management command](#schema-export-management-command) | planned for `0.0.7` |
 | [`SerializerMutation`](#serializermutation) | planned for `0.0.11` |
-| [Specialized scalar conversions](#specialized-scalar-conversions) | planned for `0.0.6` |
+| [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
 | [`TestClient`](#testclient) | planned for `0.0.12` |
 | [`Upload` scalar](#upload-scalar) | planned for `0.0.11` |
@@ -160,9 +163,9 @@ Composes with filter / order / aggregate permission gates and with the post-writ
 
 ## `BigInt` scalar
 
-**Status:** planned for `0.0.6`.
+**Status:** shipped (`0.0.6`).
 
-JSON-safe scalar for plain `BigIntegerField` (not `BigAutoField`). Serialized as a string on the wire to survive JavaScript's 53-bit integer limit; deserialized to Python `int`. Part of [Specialized scalar conversions](#specialized-scalar-conversions).
+JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntegerField` and `PositiveBigIntegerField` (not `BigAutoField`). Technically arbitrary-precision: serialized via Python `str(int_value)`, which handles any `int`. Wire format is a decimal string to survive GraphQL's signed 32-bit `Int` boundary (executing a query returning an `int`-annotated value past `2**31 - 1` raises a `GraphQLError` with message containing `Int cannot represent non 32-bit signed integer value`). Strict parser accepts Python `int` (excluding `bool`) and strings matching `^(0|-?[1-9][0-9]*)$` — plain ASCII decimal, optional leading minus for non-zero, no leading zeroes (except `"0"` itself), no underscores, no plus sign, no Unicode digits. Strict serializer rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. Part of [Specialized scalar conversions](#specialized-scalar-conversions).
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [Specialized scalar conversions](#specialized-scalar-conversions).
 
@@ -848,6 +851,7 @@ Shipped scalar support:
 
 - text-like fields (`CharField` / `TextField`) → `str`
 - integer and auto fields (`IntegerField` / `AutoField` / `BigAutoField` / `SmallIntegerField` / `PositiveIntegerField`) → `int`
+- `BigIntegerField` / `PositiveBigIntegerField` → [`BigInt`](#bigint-scalar) (string-serialized at the wire; `PositiveBigIntegerField` switched from `int` to `BigInt` in `0.0.6` — breaking wire-format change)
 - boolean fields → `bool`
 - float fields → `float`
 - decimal fields → `decimal.Decimal`
@@ -855,14 +859,15 @@ Shipped scalar support:
 - UUID fields → `uuid.UUID`
 - binary fields → `bytes`
 - file and image fields → string path / URL values
+- `JSONField` → `strawberry.scalars.JSON`
+- PostgreSQL `ArrayField` → typed `list[T]` (recursive through `field.base_field`; soft-registered, only when `django.contrib.postgres.fields` imports successfully; nested `ArrayField` and outer `choices` rejected with [`ConfigurationError`](#configurationerror))
+- PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered, only when `django.contrib.postgres.fields` imports successfully; outer `choices` rejected with [`ConfigurationError`](#configurationerror))
 - `null=True` → `T | None`
 - Relay `GlobalID` mapping for auto IDs when [`Meta.interfaces = (relay.Node,)`](#metainterfaces) is declared
 
 **Subclass MRO walk.** Consumer subclasses of any supported Django field class (e.g., `class TrimmedCharField(models.CharField)`, third-party encrypted / money fields) resolve to the parent's annotation automatically — the converter walks `type(field).__mro__` until it matches, so subclasses inherit without explicit registration. Subclasses whose MRO contains no registered Django field class raise [`ConfigurationError`](#configurationerror) at type creation (with `Meta.exclude` named as the consumer recourse).
 
 Choice support is documented separately under [Choice enum generation](#choice-enum-generation).
-
-Deferred mappings — `BigIntegerField`, `JSONField`, PostgreSQL `ArrayField`, PostgreSQL `HStoreField` — are scheduled in [Specialized scalar conversions](#specialized-scalar-conversions).
 
 **See also:** [Choice enum generation](#choice-enum-generation) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics).
 
@@ -900,14 +905,15 @@ Consumes DRF `Serializer` / `ModelSerializer` via `Meta.serializer_class`, `Meta
 
 ## Specialized scalar conversions
 
-**Status:** planned for `0.0.6`.
+**Status:** shipped (`0.0.6`).
 
 Adds these mappings to [Scalar field conversion](#scalar-field-conversion):
 
 - `BigIntegerField` → JSON-safe [`BigInt`](#bigint-scalar) scalar (string-serialized at the wire to survive JavaScript's 53-bit integer limit)
+- `PositiveBigIntegerField` → `BigInt`
 - `JSONField` → `strawberry.scalars.JSON`
 - PostgreSQL `ArrayField` → typed `list[T]` (recursive through `field.base_field`)
-- PostgreSQL `HStoreField` → `dict[str, str | None]` (soft-registered, only when `django.contrib.postgres` is installed)
+- PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered, only when `django.contrib.postgres.fields` imports successfully)
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [`BigInt` scalar](#bigint-scalar).
 

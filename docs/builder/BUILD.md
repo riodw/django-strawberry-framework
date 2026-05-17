@@ -9,7 +9,7 @@ The build is driven by a given spec — `docs/spec-<NNN>-<topic>-<0_0_X>.md` is 
 Spec files live at `docs/spec-<NNN>-<topic>-<0_0_X>.md`; build plans live at `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` (same segments, different directory and prefix). Segments:
 
 - `spec-` / `build-` — literal prefix.
-- `<NNN>` — 3-digit zero-padded KANBAN card number (e.g. `013` from `DONE-ALPHA-013-0.0.6`, `004` from `READY-004`). The NNN is the build's anchor identity: spec and build plan share it, every artifact references it, KANBAN cards link to it, and the files sort alongside their peers in `ls`.
+- `<NNN>` — 3-digit zero-padded KANBAN card number (e.g. `013` from `DONE-013-0.0.6`, `011` from `DONE-011-0.0.5`). The NNN is the build's anchor identity: spec and build plan share it, every artifact references it, KANBAN cards link to it, and the files sort alongside their peers in `ls`. DONE cards use the bare `DONE-<NNN>-<X.X.X>` form (no milestone prefix); TODO/BLOCKED cards keep the milestone prefix (`TODO-ALPHA-<NNN>`, `TODO-BETA-<NNN>`, `TODO-STABLE-<NNN>`, `BLOCKED-ALPHA-<NNN>`) until they ship.
 - `<topic>` — lowercase underscore-separated topic slug (e.g. `deferred_scalars`, `relay_interfaces`).
 - `<0_0_X>` — target release version with dots converted to underscores (e.g. `0_0_6`, `0_0_5`).
 - `.md` — extension.

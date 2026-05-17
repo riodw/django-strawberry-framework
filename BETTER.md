@@ -17,7 +17,7 @@ Items are ordered primarily by **Realistic** (highest first), tiebreaking on **I
 
 ## Relay/interface parking lot
 
-The package's Relay Node foundation deliberately stays limited to `Meta.interfaces`, type-level `relay.Node`, Relay `id: GlobalID!`, and the four default `resolve_*` methods. The ideas below came up while stress-testing that API and should be reconsidered once the foundation has bedded in. Some are parity or roadmap items rather than strict differentiators; keep them here until they graduate into `KANBAN.md` or a dedicated `docs/spec-<topic>.md`.
+The package's Relay Node foundation deliberately stays limited to `Meta.interfaces`, type-level `relay.Node`, Relay `id: GlobalID!`, and the four default `resolve_*` methods. The ideas below came up while stress-testing that API and should be reconsidered once the foundation has bedded in. Some are parity or roadmap items rather than strict differentiators; keep them here until they graduate into `KANBAN.md` or a dedicated `docs/spec-<NNN>-<topic>-<0_0_X>.md`.
 
 ### Root node and connection surface
 - Add a schema-level root `node(id:)` field, probably as `DjangoNodeField`, after type-level Node support is proven.
@@ -237,7 +237,7 @@ This mirrors how every other Django setting works (project setting overrides pac
 
 #### Design decision 3: routing decoded IDs
 
-The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — `TODO-ALPHA-014-0.0.6`), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
+The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — `WIP-ALPHA-014-0.0.6`), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
 
 This works *better* than the type-name encoding for the multi-`DjangoType`-per-model case: instead of needing a separate GlobalID for every type variant over the same model, all variants share one ID space and the schema author picks the discriminator (primary type, or explicit inline fragments).
 
@@ -1993,7 +1993,7 @@ Nothing in the Django ecosystem does this today. `django-grpc-framework` ships g
 ## How to use this file
 - When scheduling a slice after parity items land, pull a high-`Realistic` `BETTER.md` item that isn't already on `KANBAN.md`.
 - Promote it to a `KANBAN.md` `TODO-*` card (or `BACKLOG-*` if it's not committed to a milestone yet).
-- Write its `docs/spec-<topic>.md` and follow the existing slice cadence.
+- Write its `docs/spec-<NNN>-<topic>-<0_0_X>.md` and follow the existing slice cadence.
 - When the slice ships, cross-reference the `BETTER.md` item from the new `KANBAN.md` `DONE-*` card so the differentiation story stays traceable.
 
 If a `BETTER.md` item turns out to be wrong (the upstream packages ship it, real-world adopters don't want it, or the architectural cost is too high), strike it through with a one-line note explaining why; do not delete it. The history of rejected differentiators is itself useful design context.

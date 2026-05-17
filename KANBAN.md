@@ -9,7 +9,7 @@ This board summarizes what is shipped, what has recently landed, and what remain
 Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 
 - `<STATUS>` — the column the card lives in: `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), `BLOCKED` (waiting on a dependency), or `DONE` (shipped). Updated when the card moves between columns.
-- `<MILESTONE>` *(optional)* — the development phase the card lives in: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-035-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-044-1.0.0` is the beta → stable cut-over. Stays with the card through `WIP` and `DONE` so the post-shipment record preserves phase affiliation (an Alpha card that ships becomes `DONE-ALPHA-NNN-X.Y.Z`). Omitted on `DONE` cards from before this phase convention was introduced (the pre-`0.0.6` Done cluster).
+- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `TODO`, `WIP`, and `BLOCKED` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-035-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-044-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is planned to be completed (every other card, ordered by planned ship version, ties broken by intra-version dependency order). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
 - `X.Y.Z` — the package version the card shipped in (Done cards) or is planned to ship in (everything else). Alpha cards span `0.0.6` through `0.0.12` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Anything beyond `1.0.0` lives in [`BETTER.md`](BETTER.md), not here.
 
@@ -46,7 +46,9 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- No slice is currently active. The `0.0.5` Relay Node slice shipped as `DONE-011-0.0.5`.
+- `WIP-ALPHA-014-0.0.6 — Multiple DjangoTypes per model with Meta.primary` — registry-multiplicity + primary-type-resolution work for the remaining `0.0.6` patch. Spec pending.
+- `WIP-ALPHA-015-0.0.6 — Consumer override semantics (scalar fields)` — extends the `DONE-006-0.0.4` relation-field override contract to scalar fields. Spec pending.
+- `0.0.6` shipped progress: `DONE-012-0.0.6` (`FieldMeta` consolidation) and `DONE-013-0.0.6` (deferred scalar conversions) landed in this version; the two WIP cards above complete the `0.0.6` patch.
 - Strategic differentiation roadmap (post-`0.0.5`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -78,46 +80,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## In progress
 
-_No slice in progress._
-
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
-
-### TODO-ALPHA-013-0.0.6 — Deferred scalar conversions
-
-Priority: medium
-
-Status: ready when fixture/model coverage is added
-
-Current behavior:
-
-- Implemented scalar coverage is broad but excludes:
-  - plain `BigIntegerField` with custom `BigInt`
-  - `ArrayField`
-  - `JSONField`
-  - `HStoreField`
-
-Why it matters:
-
-- These are expected model-field conversions in the original `DjangoType` spec.
-- `JSONField` is common in modern Django projects.
-
-Definition of done:
-
-- Add `BigInt` scalar with string serialization and `int` parsing.
-- Add `JSONField` mapping to Strawberry JSON.
-- Add `HStoreField` where available.
-- Add `ArrayField` recursion through `field.base_field`.
-- Use synthetic unmanaged test models where fakeshop does not naturally exercise the fields.
-- Keep coverage at 100%.
-
-Files likely touched:
-
-- `django_strawberry_framework/types/converters.py`
-- `tests/types/test_converters.py`
-
-### TODO-ALPHA-014-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`
+### WIP-ALPHA-014-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`
 
 Priority: high
 
@@ -160,7 +123,7 @@ Files likely touched:
 - `tests/test_registry.py`
 - `tests/types/test_base.py`
 
-### TODO-ALPHA-015-0.0.6 — Consumer override semantics (scalar fields)
+### WIP-ALPHA-015-0.0.6 — Consumer override semantics (scalar fields)
 
 Priority: high
 
@@ -202,6 +165,9 @@ Files likely touched:
 - `django_strawberry_framework/types/resolvers.py`
 - `tests/types/test_base.py`
 
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 ### TODO-ALPHA-016-0.0.7 — `DjangoListField` (non-Relay list)
 
@@ -302,6 +268,97 @@ Out of scope:
 
 - First-class sharding-aware planning — cross-shard joins, automatic shard selection based on FK, multi-shard aggregates, `Meta.preferred_database`. That's post-stable differentiation territory and lives in [`BETTER.md`](BETTER.md) under "First-class multi-database / sharding-aware optimizer".
 
+### TODO-ALPHA-045-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
+
+Priority: medium
+
+Severity: low (the suppressed warning in `0.0.6` is a workaround, not a runtime bug)
+
+Status: ready for design
+
+Predecessors: `DONE-013-0.0.6` (introduced the suppression debt); `docs/spec-013-deferred_scalars-0_0_6.md` revision 7 (Decision 1, Decision 6, Risks).
+
+Why it matters:
+
+- `0.0.6` ships `BigInt` defined via `strawberry.scalar(NewType("BigInt", int), ...)`, which Strawberry deprecates in favor of `StrawberryConfig.scalar_map`. The deprecation warning is suppressed at the definition site in `django_strawberry_framework/scalars.py` so it doesn't escape to consumers — but the suppression is a workaround, not a fix.
+- The right design defines `BigInt` (and any future package-defined scalars) on Strawberry's recommended path and has consumers merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`. This card pays down the debt, removes the suppression filter, and establishes the public-API pattern for any future package-defined scalar (planned: `Upload` for file / image fields in `TODO-ALPHA-027`; possibly more).
+- Removes the `0.0.6` `Notes` line from `CHANGELOG.md` about suppressed deprecation; closes the architectural debt explicitly.
+
+Recommended architectural direction (pinned here so the spec doesn't re-litigate the helper shape):
+
+- **Helper API shape: factory function.** Expose `strawberry_config(extra_scalar_map=None) -> StrawberryConfig` returning a composed `StrawberryConfig` pre-populated with the package's scalar map. Note: `extra_extensions=` deliberately omitted — Strawberry extensions go to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig`. If the follow-up reveals a need to compose extensions too, that's a separate helper (returning a schema-construction bundle, not a `StrawberryConfig`). Consumer usage:
+
+  ```python
+  from django_strawberry_framework import strawberry_config, DjangoOptimizerExtension
+  import strawberry
+
+  schema = strawberry.Schema(
+      query=Query,
+      config=strawberry_config(),
+      extensions=[DjangoOptimizerExtension()],
+  )
+  ```
+
+  Rationale: explicit (consumer sees what they're getting); composable (factory accepts `extra_scalar_map=...` for consumer additions, merges instead of overwriting); forward-extensible (new package scalars / future config needs slot into the factory without API breaks); doesn't shadow Strawberry's `Schema` symbol.
+
+  Alternatives considered (and recommended against): a static `SCALAR_MAP` constant (pushes `StrawberryConfig(...)` boilerplate onto every consumer); a `dst.Schema(...)` wrapper (shadows upstream symbol; hides composition).
+
+- **`BigInt` symbol stays usable as a direct annotation.** `category: BigInt` in `DjangoType` and `@strawberry.field` annotations works as today. Internally, `BigInt` is a bare `NewType("BigInt", int)`; the `strawberry_config(...)` factory registers `BigInt → ScalarDefinition(...)` in its `scalar_map`. The wire format, parser, and serializer logic are preserved verbatim from `0.0.6`.
+
+- **Single-line consumer migration.** Consumers upgrading from `0.0.6` add `config=strawberry_config()` to their existing `strawberry.Schema(...)` call. No annotation changes. No re-import.
+
+- **Recommended posture: hard break in alpha.** Suggested default — no deprecation window — consumers using `BigInt` directly in `0.0.6` who don't add `config=strawberry_config()` will see Strawberry schema-construction fail with `Unexpected type '...BigInt'`. Matches the `PositiveBigIntegerField` precedent in `0.0.6`'s Changed entry. Long deprecation windows are appropriate at `1.0.0`, not during alpha — but the follow-up spec author can revisit after surveying real `0.0.6` consumer adoption of `BigInt`.
+
+- **Composition story.** Factory accepts `extra_scalar_map` to merge with consumer-defined scalars without losing the package's defaults. Conflict resolution: explicit error if a key collides between package defaults and consumer extras, instructing the consumer to override the package default via a separate API (TBD in the spec).
+
+- **Forward compatibility for future package scalars.** When `Upload` (TODO-ALPHA-027) and any future package scalars ship, they slot into the factory's internal scalar map without API changes. Consumers' existing `strawberry_config()` calls continue to work; new scalars become usable immediately.
+
+Definition of done:
+
+- New spec: `docs/spec-scalar_map_helper.md` settling the helper API shape, composition story (including conflict resolution between package defaults and consumer extras), and the migration guide.
+- `django_strawberry_framework/scalars.py` — `BigInt` redefined as a bare `NewType` (or per the spec's final decision); strict parser and serializer preserved; suppression filter removed.
+- New `django_strawberry_framework/config.py` (or wherever the helper lives — TBD by spec; follows `docs/TREE.md` mirror rule) exposing the factory.
+- `django_strawberry_framework/__init__.py` updated: re-export the helper (`strawberry_config`); `BigInt` stays in `__all__` (consistent with the recommended "BigInt as a direct annotation" usage pattern above).
+- `tests/base/test_init.py` — pinned `__all__` assertion updated.
+- New test file mirroring the helper's source location (e.g., `tests/test_config.py`).
+- `tests/test_scalars.py` updated: the `test_package_import_does_not_emit_strawberry_deprecation_warning` test continues to pass (no suppression needed because the deprecation is no longer triggered at all).
+- `docs/README.md` quickstart updated to show the new schema-construction pattern; replaces every `strawberry.Schema(query=Query, ...)` example with `strawberry.Schema(query=Query, config=strawberry_config(), ...)`.
+- `GOAL.md` schema-setup section updated.
+- `examples/fakeshop/config/schema.py` updated to use the helper.
+- `examples/fakeshop/apps/library/schema.py` (and any other example schemas) audited for direct `BigInt` usage — no change should be needed if they only use it indirectly via Django field-to-scalar mapping.
+- `docs/FEATURES.md` updated: `BigInt scalar` entry covers the new construction pattern; new entry for the helper symbol; `Public exports` updated; `Quick start` and `Schema setup` walk-throughs (if present) updated.
+- `CHANGELOG.md`:
+  - `Changed`: "Public-API migration — `BigInt` now requires `config=strawberry_config()` in `strawberry.Schema(...)`. Single-line change for consumers using `BigInt` directly."
+  - `Removed`: "Internal `warnings.catch_warnings()` suppression in `scalars.py` (no longer needed)."
+  - Remove the `0.0.6` `Notes` line about suppressed deprecation.
+- Migration note in `CHANGELOG.md` and the spec: explicit before/after code blocks.
+- Archive the spec to `docs/SPECS/spec-scalar_map_helper.md`.
+
+Files likely touched (subject to the follow-up spec settling final locations):
+
+- `docs/spec-scalar_map_helper.md` (new)
+- `django_strawberry_framework/scalars.py`
+- `django_strawberry_framework/config.py` (new — or wherever the spec decides)
+- `django_strawberry_framework/__init__.py`
+- `tests/base/test_init.py`
+- `tests/test_config.py` (new)
+- `tests/test_scalars.py`
+- `docs/README.md`
+- `docs/FEATURES.md`
+- `docs/TREE.md` (if the new module location requires it)
+- `GOAL.md`
+- `examples/fakeshop/config/schema.py`
+- `KANBAN.md` (move to Done; rewrite body)
+- `CHANGELOG.md`
+
+Open design questions for the spec (not blocking; spec author decides):
+
+- Helper module name: `config.py`, `schema.py`, or kept as a top-level export in `__init__.py`?
+- Conflict resolution when consumer's `extra_scalar_map` collides with package defaults: hard error, override with warning, or silent override?
+- Deprecation-window details: should the recommended hard-break (matching `PositiveBigIntegerField` in `0.0.6`) be revisited after surveying real `0.0.6` consumer adoption? If softened to a one-release `DeprecationWarning` from the package, what does the warning shape look like?
+- Helper module location: top-level export in `__init__.py`, or `django_strawberry_framework/config.py` (new module)?
+- Helper signature beyond `extra_scalar_map=`: nothing more, or a small set of curated optional parameters? (Note: `extra_extensions=` does not fit here — extensions are passed to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig`. If extension composition becomes a need, it requires a separate helper returning a schema-construction bundle, not a `StrawberryConfig`.)
+
 ### TODO-ALPHA-020-0.0.8 — Filtering subsystem
 
 Priority: high for package positioning (⚛️&🍓 parity-required)
@@ -390,7 +447,7 @@ Definition of done:
 - Expose enough introspection for one type definition to show what filter surface it supports.
 - Use fakeshop flows where practical, but package tests belong under `tests/filters/`.
 - Validate Django ORM query generation for N+1 opportunities when filters traverse relations.
-- Decide whether the input-type factory's namespace shares the `TypeRegistry` or has its own (interacts with `TODO-ALPHA-014-0.0.6` and the `Meta.primary` design).
+- Decide whether the input-type factory's namespace shares the `TypeRegistry` or has its own (interacts with `WIP-ALPHA-014-0.0.6` and the `Meta.primary` design).
 
 Dependencies:
 
@@ -558,7 +615,7 @@ Definition of done:
 
 Dependencies:
 
-- `TODO-ALPHA-014-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution.
+- `WIP-ALPHA-014-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution.
 - `TODO-ALPHA-025-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`.
 
 Files likely touched:
@@ -818,7 +875,7 @@ Why it matters:
 
 Definition of done:
 
-- Every other Alpha card (`TODO-ALPHA-013-0.0.6` through `TODO-ALPHA-034-0.0.12` plus `BLOCKED-ALPHA-023-0.0.9`) is in `DONE`.
+- Every other Alpha card (`ALPHA-013-0.0.6` through `ALPHA-034-0.0.12` plus `ALPHA-023-0.0.9`) is in `DONE`.
 - Full test pass under each supported `(Python, Django, Strawberry)` combination.
 - Coverage stays at 100% for the package source tree.
 - Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
@@ -1072,7 +1129,7 @@ This is the umbrella spec for the **complete Relay surface at `0.0.9`** — Node
 Resolved blockers (shipped in `DONE-011-0.0.5`):
 
 - ~~`Meta.interfaces` design~~ — `Meta.interfaces` accepted end-to-end for any Strawberry interface; `(relay.Node,)` activates the Node foundation.
-- ~~`GlobalID` mapping decision~~ — Strawberry-supplied `id: GlobalID!` from the Relay interface replaces the synthesized `id: int!`; Django primary key remains projected as a connector column for the optimizer (Decision 2 of [`docs/spec-relay_interfaces.md`](docs/spec-relay_interfaces.md)).
+- ~~`GlobalID` mapping decision~~ — Strawberry-supplied `id: GlobalID!` from the Relay interface replaces the synthesized `id: int!`; Django primary key remains projected as a connector column for the optimizer (Decision 2 of [`docs/SPECS/spec-011-relay_interfaces-0_0_5.md`](docs/SPECS/spec-011-relay_interfaces-0_0_5.md)).
 - ~~Default `resolve_*` injection~~ — `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` defaults injected when `relay.Node` is in `Meta.interfaces`; consumer overrides preserved via Strawberry's `__func__` identity test.
 - ~~`is_type_of` injection~~ — Unconditional on every `DjangoType`; consumer-declared `is_type_of` preserved.
 - ~~`CompositePrimaryKey` rejection~~ — Django 5.2+ composite-pk models raise `ConfigurationError` at finalization with the documented escape hatch (`id: relay.NodeID[...]` annotation).
@@ -1390,7 +1447,7 @@ Evidence:
 
 Notes:
 
-- Future in-flight design docs still use the `docs/spec-<topic>.md` convention, then get folded into durable docs when shipped.
+- Future in-flight design docs use the `docs/spec-<NNN>-<topic>-<0_0_X>.md` convention (NNN matches the KANBAN card number; see `docs/builder/BUILD.md` "Spec filename pattern"), then get folded into durable docs when shipped.
 
 ### DONE-006-0.0.4 — 0.0.4 foundation slice (definition-order independence)
 
@@ -1447,14 +1504,14 @@ Status: complete.
 Scope:
 
 - Replaced stale M2M and forward-reference skips with definition-order tests.
-- Kept the remaining scalar override skip documented as a separate scalar-field concern under `TODO-ALPHA-015-0.0.6`.
+- Kept the remaining scalar override skip documented as a separate scalar-field concern under `WIP-ALPHA-015-0.0.6`.
 
 Evidence:
 
 - `tests/types/test_definition_order.py`
 - `tests/types/test_definition_order_schema.py`
 - `tests/optimizer/test_definition_order.py`
-- `TODO-ALPHA-015-0.0.6`
+- `WIP-ALPHA-015-0.0.6`
 
 ### DONE-008-0.0.4 — 0.0.4 version and release alignment
 
@@ -1555,7 +1612,7 @@ Notes:
 - Borrowed patterns from `strawberry-django` (spec "Borrowing posture", Decision 3). The override discriminator triad stays distinct across the three injection sites: `__dict__` membership for `is_type_of`, tuple membership for id suppression, `__func__` identity for the four `resolve_*` defaults.
 - `Meta.interfaces` is the first `0.0.4`-reserved `DjangoTypeDefinition` slot that ships end-to-end through finalizer phase 2.5; subsequent Layer 3 subsystems plug into the same architectural seam.
 
-### DONE-ALPHA-012-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement
+### DONE-012-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement
 
 Priority: completed metadata-architecture cleanup (will release with `0.0.6`)
 
@@ -1595,6 +1652,27 @@ Notes:
 - Originally tracked as `BETTER.md` item 35 ("`FieldMeta` single-source-of-truth consolidation and mirror retirement"). Promoted to a DONE card and removed from `BETTER.md` when the work shipped — per `BETTER.md`'s "graduate into a `KANBAN.md` card when scheduled" workflow. This is the first `BETTER.md` item to graduate; the precedent for shipped items: strike-through with SHIPPED status is fine while the item awaits a release; once a release is imminent, move the item to a `KANBAN.md` `DONE` card and delete it from `BETTER.md` so the strategic-differentiation file doesn't keep pointing at completed architecture debt.
 - The consolidation eliminates ~7 sites of duplicated relation-shape logic and removes legacy class-attribute residue that previously survived `registry.clear()`. Single source of truth for field metadata reduces drift surface whenever Django adds a new relation flag or changes a descriptor attribute.
 - Internal refactor only; no `Meta` key changes, no public surface changes, no consumer-visible behavior changes. Existing tests pass without modification.
+
+### DONE-013-0.0.6 — Deferred scalar conversions
+
+Slice-by-slice scope (per `docs/spec-013-deferred_scalars-0_0_6.md`):
+
+- Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based) with the Strawberry class-direct-to-`scalar()` `DeprecationWarning` suppressed at the definition site so consumers see no warning at import time.
+- Strict `BigInt` parser via regex `^(0|-?[1-9][0-9]*)$` — rejects `bool`, `float`, empty / whitespace-padded strings, non-decimal strings, underscores, plus signs, leading zeroes, `-0`, and Unicode digits.
+- Strict `BigInt` serializer — rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`.
+- `BigIntegerField → BigInt` and `PositiveBigIntegerField → BigInt` in `SCALAR_MAP`. `BigAutoField` preserved as `int` (no current-day override recourse; wait for WIP-ALPHA-015).
+- `JSONField → strawberry.scalars.JSON` in `SCALAR_MAP`.
+- `ArrayField` and `HStoreField` mapped via sentinel-guarded branches in `convert_scalar`. `HStoreField` not added to `SCALAR_MAP`.
+- `ArrayField` rejects nested arrays and outer `choices` with `ConfigurationError`.
+- `SCALAR_MAP`'s declared value type widened from `dict[type[models.Field], type]` to `dict[type[models.Field], Any]`.
+- `BigInt` added to `django_strawberry_framework.__all__`; `tests/base/test_init.py`'s pinned `__all__` and `__version__` assertions updated.
+- Atomic version-bump quintet: `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `docs/FEATURES.md` package-version line, `uv.lock`.
+- 100% coverage via `tests/test_scalars.py` (new flat file) and `tests/types/test_converters.py` (extended). Includes a `test_package_import_does_not_emit_strawberry_deprecation_warning` guard so future regressions to the suppression are explicit.
+- Docs: `docs/FEATURES.md`, `docs/README.md`, `README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`.
+
+Design notes carried into `0.0.6`:
+
+- The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `TODO-ALPHA-045-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor.
 
 ## Release readiness checklist
 

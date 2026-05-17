@@ -32,7 +32,7 @@ def test_public_api_surface_is_pinned():
     # re-export of an internal name) shows up at test time. New public
     # names only land when a future spec adds them; routine slices
     # bump ``__version__`` without widening the surface.
-    assert set(django_strawberry_framework.__all__) == {
+    assert django_strawberry_framework.__all__ == (
         "BigInt",
         "DjangoOptimizerExtension",
         "DjangoType",
@@ -40,4 +40,4 @@ def test_public_api_surface_is_pinned():
         "__version__",
         "auto",
         "finalize_django_types",
-    }
+    )

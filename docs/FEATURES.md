@@ -858,6 +858,8 @@ Shipped scalar support:
 - `null=True` → `T | None`
 - Relay `GlobalID` mapping for auto IDs when [`Meta.interfaces = (relay.Node,)`](#metainterfaces) is declared
 
+**Subclass MRO walk.** Consumer subclasses of any supported Django field class (e.g., `class TrimmedCharField(models.CharField)`, third-party encrypted / money fields) resolve to the parent's annotation automatically — the converter walks `type(field).__mro__` until it matches, so subclasses inherit without explicit registration. Subclasses whose MRO contains no registered Django field class raise [`ConfigurationError`](#configurationerror) at type creation (with `Meta.exclude` named as the consumer recourse).
+
 Choice support is documented separately under [Choice enum generation](#choice-enum-generation).
 
 Deferred mappings — `BigIntegerField`, `JSONField`, PostgreSQL `ArrayField`, PostgreSQL `HStoreField` — are scheduled in [Specialized scalar conversions](#specialized-scalar-conversions).

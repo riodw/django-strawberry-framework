@@ -20,9 +20,9 @@ If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` 
 
 Worker 0 may edit:
 
-- `docs/builder/build-<topic>-<0_0_X>.md`
+- `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`
 - `docs/builder/worker-memory/worker-0.md`
-- `docs/builder/worker-memory/` at lifecycle boundaries (create at plan time, delete at closeout)
+- `docs/builder/worker-memory/` at plan-creation time (create the directory if missing; (re-)seed four empty files truncating any prior-build content). Worker 0 does NOT delete the directory at closeout — it persists on disk as the maintainer's reference and is re-seeded at the next build's plan time.
 - `docs/builder/BUILD.md` and `docs/builder/worker-*.md` only for closeout retrospective improvements after maintainer approval
 
 Worker 0 must not:
@@ -53,9 +53,9 @@ Worker 0 never writes to `Status:`. Worker 0 only reads it to drive dispatch. If
 
 Create the active build plan from the spec. Version-bump correctness is the maintainer's responsibility — Worker 0 does not validate `pyproject.toml`, `__init__.py`, or whether the spec target is already shipped.
 
-1. Read the active spec and identify its topic slug and target release version.
+1. Read the active spec and identify its topic slug, target release version, and KANBAN card NNN from its filename (per BUILD.md "Spec filename pattern" — e.g. `docs/spec-013-deferred_scalars-0_0_6.md` yields NNN `013`, topic `deferred_scalars`, version `0.0.6`).
 2. Convert the target release dots to underscores (e.g. `0.0.5` becomes `0_0_5`).
-3. Create `docs/builder/build-<topic>-<0_0_X>.md`.
+3. Create `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`.
 4. Mirror the spec's slice checklist exactly; do not invent slices.
 5. Add `bld-slice-<N>-<slug>.md` artifacts for every spec slice.
 6. Add `docs/builder/bld-integration.md` and `docs/builder/bld-final.md`.
@@ -66,7 +66,7 @@ Create the active build plan from the spec. Version-bump correctness is the main
    - `docs/builder/worker-memory/worker-2.md`
    - `docs/builder/worker-memory/worker-3.md`
 
-   The directory and files are gitignored. They persist across cycles within this build; Worker 0 deletes them at closeout (see "Closeout job" below).
+   The directory and files are gitignored. They persist across slices within this build, and after closeout they remain on disk as the maintainer's reference. The next build's plan-creation step (this section) re-seeds the four files empty.
 
 ## Per-slice dispatch
 
@@ -139,7 +139,7 @@ After all build-plan checkboxes are complete:
 4. Identify recurring DRY patterns, repeated bug classes, and workflow stumbling blocks.
 5. Provide final feedback to the maintainer.
 6. Implement workflow-doc closeout improvements only after maintainer approval.
-7. Delete `docs/builder/worker-memory/` and `docs/builder/temp-tests/`.
+7. Leave `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/` on disk. These gitignored directories persist across builds; the next cycle's plan-creation step re-seeds the memory files, and the helper / Worker 3 repopulate shadow / temp-tests as needed.
 
 Retrospective notes must stay general. Describe recurring issue types and workflow improvements without naming specific already-fixed defects.
 

@@ -146,6 +146,7 @@ Across the products and library example apps, `DjangoType` currently generates:
 
 Scalar conversions:
 - `BigAutoField` / `AutoField` / `IntegerField` → `int`
+- `BigIntegerField` / `PositiveBigIntegerField` → `BigInt` (JSON-safe string-serialized scalar; `PositiveBigIntegerField` switched from `int` to `BigInt` in `0.0.6` — breaking wire-format change)
 - `TextField` / `CharField` → `str`
 - `BooleanField` → `bool`
 - `DateTimeField` / `DateField` / `TimeField` / `DurationField` → Python-native time types
@@ -154,6 +155,9 @@ Scalar conversions:
 - `UUIDField` → `uuid.UUID`
 - `BinaryField` → `bytes`
 - `FileField` / `ImageField` → `str`
+- `JSONField` → `strawberry.scalars.JSON`
+- PostgreSQL `ArrayField` → `list[T]` (recursive through `field.base_field`; soft-registered, only when `django.contrib.postgres.fields` imports successfully)
+- PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered, only when `django.contrib.postgres.fields` imports successfully)
 - `null=True` → `T | None`
 - `CharField` / `TextField` with `choices` → generated Strawberry enum (live: `Book.circulation_status` in library)
 - Relay `GlobalID` when `Meta.interfaces = (relay.Node,)` is declared (live: `GenreType` in library)

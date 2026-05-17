@@ -8,7 +8,7 @@ from django_strawberry_framework.optimizer import logger as optimizer_logger
 
 
 def test_version():
-    assert __version__ == "0.0.5"
+    assert __version__ == "0.0.6"
 
 
 def test_logger_name_is_django_strawberry_framework():
@@ -33,6 +33,7 @@ def test_public_api_surface_is_pinned():
     # names only land when a future spec adds them; routine slices
     # bump ``__version__`` without widening the surface.
     assert set(django_strawberry_framework.__all__) == {
+        "BigInt",
         "DjangoOptimizerExtension",
         "DjangoType",
         "OptimizerHint",

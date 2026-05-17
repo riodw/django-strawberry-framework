@@ -86,9 +86,10 @@ For the current capability snapshot — what the package can actually do in the 
 
 A quick summary:
 
-**Shipped today** (`0.0.5`):
+**Shipped today** (`0.0.6`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
 - scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, file/image, choice enums)
+- specialized scalar conversions (`BigIntegerField` / `PositiveBigIntegerField` → `BigInt`, `JSONField` → `JSON`, PostgreSQL `ArrayField` → `list[T]`, PostgreSQL `HStoreField` → `JSON`)
 - relation conversion (forward / reverse FK, forward / reverse OneToOne, forward / reverse M2M)
 - `Meta.interfaces = (relay.Node,)` for Relay-node-shaped types with `id: GlobalID!`
 - generated relation resolvers, with annotation-only and `strawberry.field` consumer overrides preserved
@@ -107,7 +108,6 @@ A quick summary:
 - auth mutations (`login` / `logout` / `register`) and `current_user` query
 - Channels ASGI router, debug-toolbar middleware, test client helper, response-extensions debug
 - schema export management command, Django `AppConfig`
-- specialized scalar conversions (`BigIntegerField`, `JSONField`, `ArrayField`, `HStoreField`)
 
 **Coming in `1.0.0`** (stable — `django-graphene-filters` depth + API freeze):
 - `FieldSet` (declarative `fields_class`)

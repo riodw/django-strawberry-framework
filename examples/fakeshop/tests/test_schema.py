@@ -40,7 +40,12 @@ def test_project_schema_traverses_products_relations():
     """Forward + reverse relation traversal works through the products schema."""
     category = products_models.Category.objects.create(name="Books", description="", is_private=False)
     products_models.Item.objects.create(name="Dune", description="", category=category, is_private=False)
-    products_models.Item.objects.create(name="Foundation", description="", category=category, is_private=False)
+    products_models.Item.objects.create(
+        name="Foundation",
+        description="",
+        category=category,
+        is_private=False,
+    )
 
     result = project_schema.execute_sync(
         """
@@ -60,7 +65,9 @@ def test_project_schema_traverses_products_relations():
     assert result.errors is None
     item_category_names = {row["category"]["name"] for row in result.data["allItems"]}
     assert item_category_names == {"Books"}
-    category_item_lists = {row["name"]: sorted(i["name"] for i in row["items"]) for row in result.data["allCategories"]}
+    category_item_lists = {
+        row["name"]: sorted(i["name"] for i in row["items"]) for row in result.data["allCategories"]
+    }
     assert category_item_lists["Books"] == ["Dune", "Foundation"]
 
 

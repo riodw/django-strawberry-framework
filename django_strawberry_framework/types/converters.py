@@ -26,27 +26,11 @@ from django.db import models
 from ..exceptions import ConfigurationError
 from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
+from ..scalars import BigInt
 from ..utils.strings import pascal_case
 from .relations import PendingRelationAnnotation
 
-# TODO(future): define and export a ``BigInt`` Strawberry scalar so
-# ``BigIntegerField`` maps to a 64-bit integer that survives JSON
-# serialization. Build it via Strawberry's ``scalar()`` helper with
-# ``name="BigInt"``, ``serialize=str`` (so JSON clients receive a string
-# and avoid silent truncation past 2**53), and ``parse_value=int`` for
-# the inbound side. Once defined, add ``models.BigIntegerField: BigInt``
-# to ``SCALAR_MAP``. The example fakeshop models use ``BigAutoField``
-# (mapped to ``int``) and no plain ``BigIntegerField``.
-
-# TODO(future): handle ``ArrayField`` -> ``list[inner_type]`` by
-# inspecting ``field.base_field`` (itself a Django Field) and recursing
-# through ``convert_scalar`` to resolve the inner annotation.
-
-# TODO(future): handle ``JSONField`` and ``HStoreField`` via Strawberry's
-# JSON scalar (``strawberry.scalars.JSON``). Both columns deserialize to
-# native Python dict / list shapes; the GraphQL schema sees them as ``JSON``.
-
-SCALAR_MAP: dict[type[models.Field], type] = {
+SCALAR_MAP: dict[type[models.Field], Any] = {
     models.AutoField: int,
     models.BigAutoField: int,
     models.SmallAutoField: int,
@@ -58,10 +42,11 @@ SCALAR_MAP: dict[type[models.Field], type] = {
     models.GenericIPAddressField: str,
     models.FilePathField: str,
     models.IntegerField: int,
+    models.BigIntegerField: BigInt,
     models.SmallIntegerField: int,
     models.PositiveIntegerField: int,
     models.PositiveSmallIntegerField: int,
-    models.PositiveBigIntegerField: int,
+    models.PositiveBigIntegerField: BigInt,
     models.BooleanField: bool,
     models.FloatField: float,
     models.DecimalField: decimal.Decimal,
@@ -69,6 +54,7 @@ SCALAR_MAP: dict[type[models.Field], type] = {
     models.DateTimeField: datetime.datetime,
     models.TimeField: datetime.time,
     models.DurationField: datetime.timedelta,
+    models.JSONField: strawberry.scalars.JSON,
     models.UUIDField: uuid.UUID,
     models.BinaryField: bytes,
     models.FileField: str,
@@ -76,11 +62,48 @@ SCALAR_MAP: dict[type[models.Field], type] = {
 }
 
 
+def _resolve_array_field() -> type[models.Field] | None:
+    """Soft-import postgres ``ArrayField``.
+
+    Returns ``None`` if ``django.contrib.postgres.fields`` is unavailable so
+    package import succeeds on dev environments without the postgres driver.
+    """
+    try:
+        from django.contrib.postgres.fields import ArrayField
+    except ImportError:
+        return None
+    return ArrayField
+
+
+def _resolve_hstore_field() -> type[models.Field] | None:
+    """Soft-import postgres ``HStoreField``.
+
+    Returns ``None`` if ``django.contrib.postgres.fields`` is unavailable so
+    package import succeeds on dev environments without the postgres driver.
+    """
+    try:
+        from django.contrib.postgres.fields import HStoreField
+    except ImportError:
+        return None
+    return HStoreField
+
+
+_ARRAY_FIELD_CLS: type[models.Field] | None = _resolve_array_field()
+_HSTORE_FIELD_CLS: type[models.Field] | None = _resolve_hstore_field()
+
+
 def convert_scalar(field: models.Field, type_name: str) -> Any:
     """Map a Django scalar field to a Python / Strawberry type.
 
     Algorithm:
 
+    0. If the field is a sentinel-guarded postgres type (``ArrayField`` /
+       ``HStoreField``), dispatch to the matching branch and return early.
+       ``ArrayField`` rejects nested arrays and outer ``choices``, then
+       recurses on ``base_field`` and wraps in ``list[inner]``.
+       ``HStoreField`` rejects outer ``choices``, then returns
+       ``strawberry.scalars.JSON``. Both branches widen to ``T | None`` on
+       outer ``field.null`` themselves.
     1. Walk ``type(field).__mro__`` until a supported Django field class is
        found in ``SCALAR_MAP``; raise ``ConfigurationError`` if unsupported.
     2. If the field declares ``choices``, replace the scalar type with a
@@ -98,10 +121,57 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
             ``<TypeName><FieldName>Enum`` GraphQL name.
 
     Raises:
-        ConfigurationError: no class in ``type(field).__mro__`` is in
-            ``SCALAR_MAP``, or ``field.choices`` is in Django's grouped
-            form (raised from ``convert_choices_to_enum``).
+        ConfigurationError: triggered by any of the following:
+
+            - ``Unsupported Django field type`` — no class in
+              ``type(field).__mro__`` is in ``SCALAR_MAP``.
+            - ``Nested ArrayField on ...`` — ``ArrayField`` whose
+              ``base_field`` is itself an ``ArrayField`` (multi-dim arrays
+              are not supported).
+            - ``ArrayField on ... declares choices on the outer field`` —
+              outer-array ``choices`` are ambiguous at the GraphQL
+              boundary; declare choices on ``base_field`` instead.
+            - ``HStoreField on ... declares choices`` — ``HStoreField``
+              stores a ``dict[str, str | None]`` with no enum-able shape
+              at the GraphQL boundary.
+            - ``<Model>.<field> uses Django's grouped-choices form`` —
+              raised from ``convert_choices_to_enum`` for nested-tuple
+              choice declarations.
     """
+    # Sentinel-guarded ``ArrayField`` dispatch runs **before** the MRO walk
+    # so a subclass-of-``models.Field`` test double does not accidentally
+    # match a parent in ``SCALAR_MAP``. The recursive call into
+    # ``base_field`` re-enters ``convert_scalar`` and naturally inherits
+    # choice substitution and inner-null widening; the outer ``field.null``
+    # widens the resulting ``list[inner]`` here.
+    if _ARRAY_FIELD_CLS is not None and isinstance(field, _ARRAY_FIELD_CLS):
+        if isinstance(field.base_field, _ARRAY_FIELD_CLS):
+            raise ConfigurationError(
+                f"Nested ArrayField on {field.model.__name__}.{field.name} is not supported.",
+            )
+        if field.choices:
+            raise ConfigurationError(
+                f"ArrayField on {field.model.__name__}.{field.name} declares choices on the outer "
+                f"field; outer-array choices are ambiguous at the GraphQL boundary. Declare choices "
+                f"on base_field for element-level enum, or use FilterSet.",
+            )
+        inner = convert_scalar(field.base_field, type_name)
+        result = list[inner]
+        return result | None if field.null else result
+    # Sentinel-guarded ``HStoreField`` dispatch mirrors the ArrayField
+    # posture: outer-``choices`` rejection (HStore stores
+    # ``dict[str, str | None]`` with no enum-able GraphQL shape), then
+    # return ``strawberry.scalars.JSON`` widened on outer ``field.null``.
+    if _HSTORE_FIELD_CLS is not None and isinstance(field, _HSTORE_FIELD_CLS):
+        if field.choices:
+            raise ConfigurationError(
+                f"HStoreField on {field.model.__name__}.{field.name} declares choices; "
+                f"HStore stores a dict[str, str | None] with no enum-able shape at the "
+                f"GraphQL boundary. Drop the choices declaration or model the constrained "
+                f"shape with a separate field.",
+            )
+        py_type = strawberry.scalars.JSON
+        return py_type | None if field.null else py_type
     py_type: Any = None
     # Walk the field's MRO so consumer-defined subclasses of a supported
     # Django field (e.g. ``class TrimmedCharField(models.CharField)`` or

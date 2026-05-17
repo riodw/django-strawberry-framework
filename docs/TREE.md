@@ -192,11 +192,12 @@ The fakeshop example project uses the standard explicit-package layout under `ex
 
 ```text
 django_strawberry_framework/
-├── __init__.py              # public-API re-exports (DjangoType, DjangoOptimizerExtension, OptimizerHint, finalize_django_types, auto)
+├── __init__.py              # public-API re-exports (DjangoType, DjangoOptimizerExtension, OptimizerHint, BigInt, finalize_django_types, auto)
 ├── py.typed
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
 ├── registry.py              # model→type registry (+ iter_types() public iterator)
+├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
 ├── types/                   # DjangoType subsystem (Layer 2) — shipped
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
@@ -235,6 +236,7 @@ django_strawberry_framework/
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
 ├── registry.py              # model→type registry (gains Meta.primary at beta)
+├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
 ├── fieldset.py              # [beta] FieldSet (declarative field selection)
 ├── permissions.py           # [alpha] apply_cascade_permissions, per-field permission hooks
 ├── connection.py            # [alpha] DjangoConnectionField + DjangoListField (Relay + non-Relay)

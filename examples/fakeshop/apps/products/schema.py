@@ -144,7 +144,7 @@ class EntryType(DjangoType):
         fields = (
             "id",
             "value",
-            "description",   # Future: drop this entry to exercise field-level permission gating (TODO-ALPHA-024)
+            "description",  # Future: drop this entry to exercise field-level permission gating (TODO-ALPHA-024)
             "property",
             "item",
             "is_private",

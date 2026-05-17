@@ -1,60 +1,29 @@
-# DRY Feedback
+Yes — three things worth flagging before code starts. None are blockers; they're "watch for these during implementation" items.
 
-## DRY.md Compared To Project-Level Review
+**Three implementation gotchas the spec doesn't fully shield against:**
 
-`docs/DRY.md` does not match `docs/review/rev-django_strawberry_framework.md` as a whole. It is an aggregate of every `docs/review/rev-*.md` DRY section, while `rev-django_strawberry_framework.md` is only the package-level pass.
+1. **The sentinel monkey-patch / class-creation timing trap.** The spec says "call `monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)` *before* declaring the `DjangoType`." That's correct, but subtle: `DjangoType.__init_subclass__` runs at class-*definition* time. If the `DjangoType` subclass is defined at module level (outside the test function), the patch — which happens inside the test function — fires too late. The in-function pattern recommended in Decision 7 sidesteps this, but a dev pattern-matching on `tests/optimizer/test_walker.py` (which defines models in functions but types at module level for some tests) could trip on it. If a test "silently falls through to the unsupported-field path" during implementation, this is almost certainly the cause.
 
-The `# Review: django_strawberry_framework/` block inside `docs/DRY.md` does match the project-level artifact's DRY conclusion: there are no unanchored package-level DRY findings. The remaining useful redundancy is already concentrated in the two FieldMeta follow-up areas below.
+2. **The deprecation-message regex binding is fragile.** The suppression filter matches `message="Passing a class to strawberry.scalar"`. If Strawberry's next release rewords the deprecation (e.g., to "Use scalar_map instead" or anything that doesn't contain that exact substring), suppression silently stops working and the subprocess test starts failing. That's actually the *desired* failure mode — the test catches the drift — but the dev should know the binding is deliberately fragile-by-design, not robust. Don't "improve" the regex to a broader pattern; the strict match is what makes the regression detectable.
 
-## Real DRY Opportunities
+3. **The strict parser's `int(value)` after `re.fullmatch` looks redundant.** It isn't. The regex validates *shape*; `int(...)` does the *conversion*. A well-meaning "simplification" could remove the regex check thinking `int()` already validates, but Python's `int()` accepts the very forms the regex rejects (`"1_000"`, `"+1"`, `"01"`, `"１２"`). Worth a code comment so a future cleanup doesn't undo the strictness.
 
-### 1. Make `FieldMeta` The Only Relation-Shape Reader
+**Two load-bearing decisions worth a final yes/no before you start:**
 
-`FieldMeta` already documents itself as the single source of truth for relation shape, nullability, connector columns, and target metadata in `django_strawberry_framework/optimizer/field_meta.py`. It already stores the values consumers need: `nullable`, `attname`, `related_model`, `target_field_attname`, and `reverse_connector_attname`.
+- **`PositiveBigIntegerField → BigInt`** is a breaking wire-format change. Any current consumer on `0.0.5` who selects this field gets a `BigInt!` string instead of an `Int!` number after upgrade. Acceptable in alpha and documented in the CHANGELOG `Changed` entry, but cannot be undone in a `0.0.7` patch later without a second breaking change. Final yes?
+- **`BigAutoField → int` preserved** means PKs near `2**31` will start raising `GraphQLError`. Consumers have no current-day recourse (TODO-ALPHA-015 hasn't shipped). If you have any internal expectation that PK ranges are growing, this might matter sooner than the spec assumes.
 
-Three type-layer sites still recompute pieces of that same relation shape from raw Django fields:
+If you're a yes on both, the spec is locked.
 
-- `django_strawberry_framework/types/base.py::_record_pending_relation` recomputes `kind` and `nullable`.
-- `django_strawberry_framework/types/converters.py::resolved_relation_annotation` recomputes cardinality and nullability.
-- `django_strawberry_framework/types/resolvers.py::_make_relation_resolver` recomputes cardinality and `attname`.
+**Suggested workflow ordering once you start:**
 
-This is real redundancy because a future relation-shape change must keep `FieldMeta.from_django_field()` and those three readers aligned. The many-side helper reduced one repeated grouping, but the broader derivation still exists in multiple places.
+- **Slice 1 first, in isolation** — touches the most files but ships the most consumer-visible behavior. Most likely to surface design issues. Verify `tests/test_scalars.py`'s subprocess deprecation test passes before moving to Slice 2; if it fails, the suppression message-match is wrong and the rest of the slices inherit broken state.
+- **Slices 2–4 are mechanical** — each touches `convert_scalar` + tests. If Slice 1 is clean, these follow the pattern.
+- **Slice 5 (version quintet) as a single commit, isolated.** Don't bundle with Slice 6. CI green needs all five sites moved together; rolling back is cheap if Slice 6 reviews come back asking for changes.
+- **Slice 6 as a draft PR** — already in the spec, but worth re-emphasizing. The two verbatim KANBAN bodies (DONE-013 + TODO-045) are ~120 lines combined; reviewer eyes on those wording choices are valuable. The Slice 6a/6b split exists as a fallback if reviewer feedback flags commit size.
 
-Useful reduction:
+**One thing to keep an eye on once Slice 1 lands:**
 
-- Thread or look up the relevant `FieldMeta` from `DjangoTypeDefinition.field_map` at the three TODO-anchored sites.
-- Keep raw Django fields only where Django descriptors or exception classes are still needed.
-- Let `FieldMeta.nullable` decide annotation/nullability behavior instead of rechecking `relation_kind(field)` and `field.null`.
-- Let `FieldMeta.attname` decide FK-id elision resolver behavior instead of `getattr(field, "attname", None)`.
-- Remove the three `TODO(spec-fieldmeta-ssot)` anchors and trim the `field_meta.py` docstring once the migration lands.
+The `tests/types/test_converters.py` growth — spec estimates +700 lines (420 baseline → ~1100). If actual is much higher (say, 1500+), file the TREE-mirror-rule follow-up immediately while the design is fresh. Don't let it accumulate. Conversely, if actual is much lower (~900), the `~1500-line follow-up trigger` in the Risks section might be premature and worth dropping in a future revision.
 
-Definition of done:
-
-- One cardinality/nullability/attname source feeds pending relation records, relation annotations, and generated relation resolvers.
-- Tests still cover forward FK, forward OneToOne, reverse OneToOne, reverse FK, and M2M behavior.
-- No new public API is introduced.
-
-### 2. Retire The Legacy Optimizer Metadata Mirrors
-
-`DjangoTypeDefinition` already carries the canonical optimizer metadata: `field_map` and `optimizer_hints`. `DjangoType.__init_subclass__` still mirrors those values onto private class attributes:
-
-- `cls._optimizer_field_map`
-- `cls._optimizer_hints`
-
-The optimizer still reads those mirrors in `optimizer/walker.py` and `optimizer/extension.py`. That leaves two metadata paths for the same state: definition-backed registry metadata and class-attribute compatibility mirrors.
-
-This is real redundancy because the class attributes are written from the canonical definition data and then read back later as if they were the source. They also survive as class-level residue after registry lifecycle resets, which increases the surface area tests and future code need to reason about.
-
-Useful reduction:
-
-- Have walker code resolve `registry.get_definition(type_cls)` and read `definition.field_map` / `definition.optimizer_hints`.
-- Have schema reachability and schema audit code identify Django types through registry definitions instead of `hasattr(origin, "_optimizer_field_map")`.
-- Preserve the current fallback for unregistered models where the walker currently tolerates `model._meta.get_fields()`.
-- Remove the mirror writer in `types/base.py`.
-- Remove the `TODO(spec-fieldmeta-mirror-retirement)` anchors and the mirror-retirement paragraph in `field_meta.py`.
-
-Definition of done:
-
-- Optimizer metadata has one canonical storage path: `DjangoTypeDefinition`.
-- No optimizer source reads `_optimizer_field_map` or `_optimizer_hints`.
-- Existing optimizer and fakeshop tests still pass without adding public surface.
+**Bottom line:** spec is locked, design is honest, contracts are pinned. Ship it.

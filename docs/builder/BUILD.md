@@ -52,6 +52,17 @@ Every worker reads the standing project docs and its own role file before acting
 
 Workers never read another worker's memory file during the cycle; see "Subagent dispatch and worker memory" below. Adding a new standing doc (e.g., a future `docs/ARCHITECTURE.md`) is a one-line change to this table.
 
+## Pre-flight checks
+
+Before Worker 0 creates `docs/builder/build-<topic>-<0_0_X>.md`, verify the build-environment preconditions. One-time, catches issues that would otherwise stall the cycle late:
+
+1. **`scripts/review_inspect.py` runs.** Smoke invocation from the repo root: `python scripts/review_inspect.py <pick_a_dst_module>.py --output-dir docs/builder/shadow --stdout`. Confirm the overview prints and the shadow file lands. If the helper is broken, Worker 1's planning pass and Worker 3's review pass for any `types/`-touching or `optimizer/`-touching slice cannot run as specified — escalate to the maintainer before starting.
+2. **`docs/builder/` clean of stale `bld-*.md` artifacts.** `ls docs/builder/bld-*.md` should be empty. Pre-existing artifacts from an interrupted prior cycle should be committed (if part of an earlier build's permanent record) or moved aside before the new build starts.
+3. **`.gitignore` lists the untracked scratch paths.** Confirm `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/` are gitignored. Without this, Worker 0's seeded memory files, the helper's shadow output, and Worker 3's temp tests would accidentally enter git tracking.
+4. **`docs/builder/worker-memory/` and `docs/builder/temp-tests/` do not pre-exist.** Worker 0 creates these fresh at plan-creation time; pre-existing copies from an interrupted prior cycle should be deleted after confirming nothing tracked is being lost.
+
+Record the outcome in the build plan's preamble (`Pre-flight: passed on YYYY-MM-DD` or `Pre-flight: <issue>, resolved by <action>`). If any check fails and can't be resolved without maintainer input, escalate before creating the build plan.
+
 ## Versioned build plan
 
 Worker 0 is **handed** the active spec file (e.g. `docs/spec-<topic>.md`) at the start of the cycle. Worker 0 does not write the spec; Worker 0 derives the build plan from it.
@@ -581,6 +592,8 @@ Worker 1 is the central hub of every cycle. Worker 1:
 
 Worker 1 may iterate the whole pipeline (re-plan → re-build → re-review) when integration-pass DRY findings warrant it.
 
+Worker 1 may also **split a planned slice into sub-slices** (e.g. `5a` / `5b`) when implementation reveals the slice cannot land as a single coherent commit — typical triggers: the diff is too large for sensible review, two halves of the slice have independent risk profiles, or one half is blocked while the other can ship. The split is a spec edit (recorded under `Spec changes made (Worker 1 only)` in the active artifact with cited spec lines and a one-line reason). After the spec is updated, Worker 1 returns control to Worker 0 to regenerate the build plan's checklist (adding the new sub-slice rows in declared order) and dispatch Worker 2 for each sub-slice in sequence. Splits are not free — they add an extra artifact and at least one extra maintainer checkpoint — so reserve them for cases where the unsplit slice would harm review quality.
+
 ### Worker 2: builder / implementer
 
 Worker 2 reads the plan section of the active artifact and the target source, then implements. Worker 2:
@@ -588,7 +601,7 @@ Worker 2 reads the plan section of the active artifact and the target source, th
 - reads per the **Required reading per worker** table
 - implements the plan's steps in order
 - adds or updates tests in the same change
-- runs `uv run ruff format .` and `uv run ruff check --fix .` (per `START.md`); does NOT run `pytest` (per `START.md`), and never with `--cov*` flags (per "Coverage is the maintainer's gate, not a worker's tool")
+- runs `uv run ruff format .` and `uv run ruff check --fix .` (per `START.md`); does NOT run `pytest` (per `START.md`), and never with `--cov*` flags (per "Coverage is the maintainer's gate, not a worker's tool"); may run `uv lock` only when the slice modifies `pyproject.toml` (e.g. version bump, added or removed dependency) — never speculatively, never to "refresh" the lockfile
 - appends a "Build report (Worker 2)" section to the slice artifact and sets the artifact `Status:` line to `built` at the end of every pass
 - on a re-pass after Worker 3 review, appends a "Build report (Worker 2, pass N)" section — never edits prior reports
 - never edits the spec
@@ -709,5 +722,5 @@ When all checklist items are marked `- [x]` (every slice plus integration plus f
 3. Worker 0 identifies recurring DRY patterns, repeated bug classes, and workflow stumbling blocks.
 4. Worker 0 provides a brief retrospective to the maintainer.
 5. After maintainer approval, Worker 0 updates `docs/builder/BUILD.md` or the worker role files with general retrospective notes — describing recurring patterns and workflow improvements **without naming specific already-shipped fixes**.
-6. Worker 0 deletes `docs/builder/worker-memory/` and `docs/builder/temp-tests/`. The tracked permanent record is the `bld-*.md` artifacts, the build plan, and the spec edits — the scratch memory and temp tests have served their purpose.
+6. Worker 0 deletes `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/`. The tracked permanent record is the `bld-*.md` artifacts, the build plan, and the spec edits — the scratch memory, the helper's shadow overviews, and the temp tests have served their purpose.
 7. The maintainer commits the updated `docs/builder/` workflow docs along with the now-completed `docs/builder/build-<topic>-<0_0_X>.md` plan and any remaining `bld-*.md` artifacts to finish the build cycle. The plan and artifacts stay in git as the permanent record of the build.

@@ -53,7 +53,7 @@ Worker 0 never writes to `Status:`. Worker 0 only reads it to drive dispatch. If
 
 Create the active build plan from the spec. Version-bump correctness is the maintainer's responsibility — Worker 0 does not validate `pyproject.toml`, `__init__.py`, or whether the spec target is already shipped.
 
-1. Read the active spec and identify its topic slug, target release version, and KANBAN card NNN from its filename (per BUILD.md "Spec filename pattern" — e.g. `docs/spec-013-deferred_scalars-0_0_6.md` yields NNN `013`, topic `deferred_scalars`, version `0.0.6`).
+1. Read the active spec and identify its topic slug, target release version, and KANBAN card NNN from its filename (per BUILD.md "Spec filename pattern" — e.g. `spec-013-deferred_scalars-0_0_6.md` yields NNN `013`, topic `deferred_scalars`, version `0.0.6`; active specs live at `docs/spec-<NNN>-<topic>-<0_0_X>.md`).
 2. Convert the target release dots to underscores (e.g. `0.0.5` becomes `0_0_5`).
 3. Create `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`.
 4. Mirror the spec's slice checklist exactly; do not invent slices.

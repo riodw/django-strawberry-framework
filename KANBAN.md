@@ -276,7 +276,7 @@ Severity: low (the suppressed warning in `0.0.6` is a workaround, not a runtime 
 
 Status: ready for design
 
-Predecessors: `DONE-013-0.0.6` (introduced the suppression debt); `docs/spec-013-deferred_scalars-0_0_6.md` revision 7 (Decision 1, Decision 6, Risks).
+Predecessors: `DONE-013-0.0.6` (introduced the suppression debt); `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` revision 7 (Decision 1, Decision 6, Risks).
 
 Why it matters:
 
@@ -1655,7 +1655,7 @@ Notes:
 
 ### DONE-013-0.0.6 — Deferred scalar conversions
 
-Slice-by-slice scope (per `docs/spec-013-deferred_scalars-0_0_6.md`):
+Slice-by-slice scope (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`):
 
 - Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based) with the Strawberry class-direct-to-`scalar()` `DeprecationWarning` suppressed at the definition site so consumers see no warning at import time.
 - Strict `BigInt` parser via regex `^(0|-?[1-9][0-9]*)$` — rejects `bool`, `float`, empty / whitespace-padded strings, non-decimal strings, underscores, plus signs, leading zeroes, `-0`, and Unicode digits.

@@ -14,7 +14,7 @@ Spec files live at `docs/spec-<NNN>-<topic>-<0_0_X>.md`; build plans live at `do
 - `<0_0_X>` — target release version with dots converted to underscores (e.g. `0_0_6`, `0_0_5`).
 - `.md` — extension.
 
-Examples: spec `docs/spec-013-deferred_scalars-0_0_6.md` pairs with build plan `docs/builder/build-013-deferred_scalars-0_0_6.md`. Earlier specs predating this pattern may live without the NNN/version segments; new specs and their build plans use the pattern.
+Examples: spec `docs/spec-013-deferred_scalars-0_0_6.md` pairs with build plan `docs/builder/build-013-deferred_scalars-0_0_6.md` during the active build (the spec for `0.0.6` was later opt-in-archived to `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`; the build plan stays at the working location). Earlier specs predating this pattern may live without the NNN/version segments; new specs and their build plans use the pattern.
 
 !!IMPORTANT!!
 Begin by reading `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/FEATURES.md`, `GOAL.md`, and the active spec file at `docs/spec-<NNN>-<topic>-<0_0_X>.md`.

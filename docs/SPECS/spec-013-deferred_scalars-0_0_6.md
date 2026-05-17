@@ -3,8 +3,8 @@
 Target release: `0.0.6`.
 Status: draft (revision 10, post-feedback2 re-review).
 Owner: package maintainer.
-Predecessors: [`docs/FEATURES.md`](FEATURES.md) (entries [Scalar field conversion](FEATURES.md#scalar-field-conversion), [Specialized scalar conversions](FEATURES.md#specialized-scalar-conversions), [`BigInt` scalar](FEATURES.md#bigint-scalar)), [`KANBAN.md`](../KANBAN.md) card `TODO-ALPHA-013-0.0.6`.
-Card line: ["Add `BigInt` scalar with string serialization and `int` parsing. Add `JSONField` mapping to Strawberry JSON. Add `HStoreField` where available. Add `ArrayField` recursion through `field.base_field`. Use synthetic unmanaged test models where fakeshop does not naturally exercise the fields. Keep coverage at 100%."](../KANBAN.md)
+Predecessors: [`docs/FEATURES.md`](../FEATURES.md) (entries [Scalar field conversion](../FEATURES.md#scalar-field-conversion), [Specialized scalar conversions](../FEATURES.md#specialized-scalar-conversions), [`BigInt` scalar](../FEATURES.md#bigint-scalar)), [`KANBAN.md`](../../KANBAN.md) card `TODO-ALPHA-013-0.0.6`.
+Card line: ["Add `BigInt` scalar with string serialization and `int` parsing. Add `JSONField` mapping to Strawberry JSON. Add `HStoreField` where available. Add `ArrayField` recursion through `field.base_field`. Use synthetic unmanaged test models where fakeshop does not naturally exercise the fields. Keep coverage at 100%."](../../KANBAN.md)
 
 Revision history (kept inline so the spec is self-contained):
 
@@ -48,24 +48,24 @@ Revision history (kept inline so the spec is self-contained):
 
 ## Key glossary references
 
-Skim these [`docs/FEATURES.md`](FEATURES.md) entries first — they anchor the vocabulary used throughout the spec:
+Skim these [`docs/FEATURES.md`](../FEATURES.md) entries first — they anchor the vocabulary used throughout the spec:
 
-- [`DjangoType`](FEATURES.md#djangotype) — the base class whose field-conversion table this card extends.
-- [Scalar field conversion](FEATURES.md#scalar-field-conversion) — the shipped scalar coverage and the **subclass MRO walk** that the spec's [Edge cases](#edge-cases-and-constraints) section relies on.
-- [Specialized scalar conversions](FEATURES.md#specialized-scalar-conversions) — the planned umbrella entry this card flips from `planned for 0.0.6` to `shipped (0.0.6)`.
-- [`BigInt` scalar](FEATURES.md#bigint-scalar) — the new public scalar this card introduces.
-- [`ConfigurationError`](FEATURES.md#configurationerror) — raised for unsupported fields, nested `ArrayField`, and outer `choices` on `ArrayField`.
-- [`Meta.exclude`](FEATURES.md#metaexclude) — consumer-side recourse named in the existing unsupported-field error message.
-- [`finalize_django_types`](FEATURES.md#finalize_django_types) — where the new annotations land. The [Schema test fixture pattern](#decision-7--test-strategy) requires every test that defines a synthetic `DjangoType` to call this.
-- [Choice enum generation](FEATURES.md#choice-enum-generation) — `ArrayField(CharField(choices=...))` on the *base field* is the tested edge case; outer `choices` on `ArrayField` is rejected.
-- [Scalar field override semantics](FEATURES.md#scalar-field-override-semantics) — planned for `0.0.6` (WIP-ALPHA-015). The `BigAutoField` deferral depends on that contract.
+- [`DjangoType`](../FEATURES.md#djangotype) — the base class whose field-conversion table this card extends.
+- [Scalar field conversion](../FEATURES.md#scalar-field-conversion) — the shipped scalar coverage and the **subclass MRO walk** that the spec's [Edge cases](#edge-cases-and-constraints) section relies on.
+- [Specialized scalar conversions](../FEATURES.md#specialized-scalar-conversions) — the planned umbrella entry this card flips from `planned for 0.0.6` to `shipped (0.0.6)`.
+- [`BigInt` scalar](../FEATURES.md#bigint-scalar) — the new public scalar this card introduces.
+- [`ConfigurationError`](../FEATURES.md#configurationerror) — raised for unsupported fields, nested `ArrayField`, and outer `choices` on `ArrayField`.
+- [`Meta.exclude`](../FEATURES.md#metaexclude) — consumer-side recourse named in the existing unsupported-field error message.
+- [`finalize_django_types`](../FEATURES.md#finalize_django_types) — where the new annotations land. The [Schema test fixture pattern](#decision-7--test-strategy) requires every test that defines a synthetic `DjangoType` to call this.
+- [Choice enum generation](../FEATURES.md#choice-enum-generation) — `ArrayField(CharField(choices=...))` on the *base field* is the tested edge case; outer `choices` on `ArrayField` is rejected.
+- [Scalar field override semantics](../FEATURES.md#scalar-field-override-semantics) — planned for `0.0.6` (WIP-ALPHA-015). The `BigAutoField` deferral depends on that contract.
 
 Project conventions to follow:
 
-- [`AGENTS.md`](../AGENTS.md) — schema testing via `schema.execute_sync`. **Note:** `AGENTS.md` prohibits `CHANGELOG.md` edits without explicit permission; [Slice 6](#slice-6--docs-kanban-changelog-archive) grants that permission.
-- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — 100% coverage target; release-bump checklist.
-- [`KANBAN.md`](../KANBAN.md) — Card ID format; column movement at Slice 6.
-- [`docs/TREE.md`](TREE.md) — package layout convention; tests mirror source one-to-one.
+- [`AGENTS.md`](../../AGENTS.md) — schema testing via `schema.execute_sync`. **Note:** `AGENTS.md` prohibits `CHANGELOG.md` edits without explicit permission; [Slice 6](#slice-6--docs-kanban-changelog-archive) grants that permission.
+- [`CONTRIBUTING.md`](../../CONTRIBUTING.md) — 100% coverage target; release-bump checklist.
+- [`KANBAN.md`](../../KANBAN.md) — Card ID format; column movement at Slice 6.
+- [`docs/TREE.md`](../TREE.md) — package layout convention; tests mirror source one-to-one.
 
 ## Slice checklist
 
@@ -196,18 +196,18 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
   - [ ] `docs/README.md` — update the "shipped today is `0.0.5`" line (`docs/README.md:89`) to `0.0.6`; **move specialized scalar conversions out of the "Coming in `0.1.0`" callouts (`docs/README.md:101` and `docs/README.md:112`)** into shipped/current-capability text
   - [ ] `docs/TREE.md` — add `django_strawberry_framework/scalars.py` to the current package layout (near `converters.py` at `docs/TREE.md:203`) and to the target package layout (near `docs/TREE.md:245`)
   - [ ] `docs/FEATURES.md` entries updated:
-    - [Specialized scalar conversions](FEATURES.md#specialized-scalar-conversions) → `shipped (0.0.6)`. **Replace the existing line at `docs/FEATURES.md:910`** (currently reads `PostgreSQL HStoreField → dict[str, str | None] (soft-registered, only when django.contrib.postgres is installed)`) with `PostgreSQL HStoreField → strawberry.scalars.JSON (soft-registered, only when django.contrib.postgres.fields imports successfully)`. Update the `PositiveBigIntegerField` bullet to read `→ BigInt`.
-    - [`BigInt` scalar](FEATURES.md#bigint-scalar) → `shipped (0.0.6)`. **Entry text** (drop-in for the dev): "JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntegerField` and `PositiveBigIntegerField` (not `BigAutoField`). Technically arbitrary-precision: serialized via Python `str(int_value)`, which handles any `int`. Wire format is a decimal string to survive GraphQL's signed 32-bit `Int` boundary (executing a query returning an `int`-annotated value past `2**31 - 1` raises a `GraphQLError` with message containing `Int cannot represent non 32-bit signed integer value`). Strict parser accepts Python `int` (excluding `bool`) and strings matching `^(0|-?[1-9][0-9]*)$` — plain ASCII decimal, optional leading minus for non-zero, no leading zeroes (except `"0"` itself), no underscores, no plus sign, no Unicode digits. Strict serializer rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. Part of [Specialized scalar conversions](#specialized-scalar-conversions)."
-    - [Scalar field conversion](FEATURES.md#scalar-field-conversion) → add the new field-type bullets; note the `PositiveBigIntegerField` change.
-    - [Index](FEATURES.md#index) → update status badges for the two flipped entries.
-    - [Public exports](FEATURES.md#public-exports) → add `BigInt`. Note: the import path is now clean — no Strawberry deprecation warning escapes (the deprecation is suppressed at the definition site in `scalars.py`).
+    - [Specialized scalar conversions](../FEATURES.md#specialized-scalar-conversions) → `shipped (0.0.6)`. **Replace the existing line at `docs/FEATURES.md:910`** (currently reads `PostgreSQL HStoreField → dict[str, str | None] (soft-registered, only when django.contrib.postgres is installed)`) with `PostgreSQL HStoreField → strawberry.scalars.JSON (soft-registered, only when django.contrib.postgres.fields imports successfully)`. Update the `PositiveBigIntegerField` bullet to read `→ BigInt`.
+    - [`BigInt` scalar](../FEATURES.md#bigint-scalar) → `shipped (0.0.6)`. **Entry text** (drop-in for the dev): "JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntegerField` and `PositiveBigIntegerField` (not `BigAutoField`). Technically arbitrary-precision: serialized via Python `str(int_value)`, which handles any `int`. Wire format is a decimal string to survive GraphQL's signed 32-bit `Int` boundary (executing a query returning an `int`-annotated value past `2**31 - 1` raises a `GraphQLError` with message containing `Int cannot represent non 32-bit signed integer value`). Strict parser accepts Python `int` (excluding `bool`) and strings matching `^(0|-?[1-9][0-9]*)$` — plain ASCII decimal, optional leading minus for non-zero, no leading zeroes (except `"0"` itself), no underscores, no plus sign, no Unicode digits. Strict serializer rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. Part of [Specialized scalar conversions](#specialized-scalar-conversions)."
+    - [Scalar field conversion](../FEATURES.md#scalar-field-conversion) → add the new field-type bullets; note the `PositiveBigIntegerField` change.
+    - [Index](../FEATURES.md#index) → update status badges for the two flipped entries.
+    - [Public exports](../FEATURES.md#public-exports) → add `BigInt`. Note: the import path is now clean — no Strawberry deprecation warning escapes (the deprecation is suppressed at the definition site in `scalars.py`).
   - [ ] `TODAY.md` — expand the "What fakeshop model fields work today" section with the four new scalars.
   - [ ] `KANBAN.md` — move `TODO-ALPHA-013-0.0.6` → `DONE-013-0.0.6`. **Drop in the verbatim body below**:
 
     ```markdown
     ### DONE-013-0.0.6 — Deferred scalar conversions
 
-    Slice-by-slice scope (per `docs/spec-013-deferred_scalars-0_0_6.md`):
+    Slice-by-slice scope (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`):
 
     - Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based) with the Strawberry class-direct-to-`scalar()` `DeprecationWarning` suppressed at the definition site so consumers see no warning at import time.
     - Strict `BigInt` parser via regex `^(0|-?[1-9][0-9]*)$` — rejects `bool`, `float`, empty / whitespace-padded strings, non-decimal strings, underscores, plus signs, leading zeroes, `-0`, and Unicode digits.
@@ -230,7 +230,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
 
     > "See `KANBAN.md` for the current `TODO-ALPHA-045-0.0.7` card body — the verbatim drop-in below was used for the initial card creation in this commit and may be out of date once the follow-up spec evolves the card."
 
-  - [ ] `CHANGELOG.md` — `[Unreleased]` entries (**permission granted by this spec**, overriding [`AGENTS.md`](../AGENTS.md)'s default prohibition):
+  - [ ] `CHANGELOG.md` — `[Unreleased]` entries (**permission granted by this spec**, overriding [`AGENTS.md`](../../AGENTS.md)'s default prohibition):
     - `Added`: `BigInt` (public export), `JSONField → JSON` and `HStoreField → JSON` mappings, `ArrayField` recursion.
     - `Changed`: `PositiveBigIntegerField` mapping switched from `int` to `BigInt` (breaking wire-format change).
     - `Notes`: "The internal `BigInt` scalar definition uses `strawberry.scalar(NewType, ...)`, which Strawberry deprecates in favor of `StrawberryConfig.scalar_map`. The deprecation warning is suppressed at the definition site so the package import remains clean. Migration to a `scalar_map`-based design is tracked as a follow-up and will be a real public-API change for consumers using `BigInt` directly."
@@ -239,11 +239,11 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
     > "See `KANBAN.md` for the current `TODO-ALPHA-045-0.0.7` card body — the verbatim drop-in below was used for the initial card creation in this commit and may be out of date once the follow-up spec evolves the card."
 
     This prevents the archived spec from drifting against the live `KANBAN.md` card as the follow-up card's body evolves (open design questions resolve, additional context lands). The inline `DONE-013-0.0.6` body above can stay — it's a historical record of what shipped, not a live evolving card.
-  - [ ] Archive this spec to `docs/spec-013-deferred_scalars-0_0_6.md`.
+  - [ ] Archive this spec to `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`.
 
 ## Problem statement
 
-[`docs/FEATURES.md`'s Scalar field conversion entry](FEATURES.md#scalar-field-conversion) advertises broad Django scalar coverage but explicitly defers four: plain `BigIntegerField`, `JSONField`, PostgreSQL `ArrayField`, and PostgreSQL `HStoreField`. The deferral has lived in `types/converters.py` as three TODO comments (lines 32-47). This card converts those TODOs into shipped behavior.
+[`docs/FEATURES.md`'s Scalar field conversion entry](../FEATURES.md#scalar-field-conversion) advertises broad Django scalar coverage but explicitly defers four: plain `BigIntegerField`, `JSONField`, PostgreSQL `ArrayField`, and PostgreSQL `HStoreField`. The deferral has lived in `types/converters.py` as three TODO comments (lines 32-47). This card converts those TODOs into shipped behavior.
 
 Five constraints shape the design:
 
@@ -399,7 +399,7 @@ Target Django fields:
 
 - `BigIntegerField` → `BigInt` (new). Always.
 - `PositiveBigIntegerField` → `BigInt` (changed from `int`). Explicit `SCALAR_MAP` entry for regression protection.
-- `BigAutoField` → `int` (preserved). No current-day consumer recourse for the `2**31` boundary — wait for [Scalar field override semantics](FEATURES.md#scalar-field-override-semantics).
+- `BigAutoField` → `int` (preserved). No current-day consumer recourse for the `2**31` boundary — wait for [Scalar field override semantics](../FEATURES.md#scalar-field-override-semantics).
 
 ### Decision 2 — `ArrayField` dimensionality cap and outer-`choices` rejection
 
@@ -487,7 +487,7 @@ if _HSTORE_FIELD_CLS is not None and isinstance(field, _HSTORE_FIELD_CLS):
 
 ### Decision 6 — `BigInt` public-export status and migration contract
 
-`BigInt` becomes a public export (`from django_strawberry_framework import BigInt`). [`docs/FEATURES.md`'s Public exports](FEATURES.md#public-exports) entry gains the new symbol. The pinned `__all__` assertion in `tests/base/test_init.py` is updated in Slice 1.
+`BigInt` becomes a public export (`from django_strawberry_framework import BigInt`). [`docs/FEATURES.md`'s Public exports](../FEATURES.md#public-exports) entry gains the new symbol. The pinned `__all__` assertion in `tests/base/test_init.py` is updated in Slice 1.
 
 **Import-time warning posture:** Strawberry's class-direct-to-`scalar()` `DeprecationWarning` is **suppressed at the definition site** in `scalars.py` (tight `warnings.catch_warnings()` filter). Consumers importing the package — directly or transitively — see no warning. The suppression is documented in code comments and verified by `test_package_import_does_not_emit_strawberry_deprecation_warning`.
 
@@ -502,7 +502,7 @@ The follow-up is a **real public-API migration**, not an internal-only refactor.
 
 ### Decision 7 — Test strategy
 
-**Test file layout** (mirrors [`docs/TREE.md`](TREE.md)):
+**Test file layout** (mirrors [`docs/TREE.md`](../TREE.md)):
 
 - `tests/test_scalars.py` (new) — scalar wire-format, strict-parser, and strict-serializer tests for `BigInt`, plus the deprecation-suppression regression test. Mirrors the flat `django_strawberry_framework/scalars.py`.
 - `tests/types/test_converters.py` (extended) — all field-mapping tests including sentinel-swap and `sys.modules` helper-resolver tests. Mirrors `django_strawberry_framework/types/converters.py`.
@@ -620,7 +620,7 @@ Change `SCALAR_MAP`'s declared value type from `dict[type[models.Field], type]` 
 
 ## User-facing API
 
-After this card ships, [`docs/FEATURES.md`'s Scalar field conversion entry](FEATURES.md#scalar-field-conversion) gains four new mappings and one changed mapping:
+After this card ships, [`docs/FEATURES.md`'s Scalar field conversion entry](../FEATURES.md#scalar-field-conversion) gains four new mappings and one changed mapping:
 
 | Django field | Generated annotation | Notes |
 |---|---|---|
@@ -663,7 +663,7 @@ Single commit; five files: `pyproject.toml`, `django_strawberry_framework/__init
 
 ### Slice 6 — Docs, KANBAN, CHANGELOG, archive
 
-Separate commit. Files: root `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/FEATURES.md` (entries beyond the version line), `TODAY.md`, `KANBAN.md` (move + verbatim body), `CHANGELOG.md` (`Added` / `Changed` / `Notes`), `docs/spec-013-deferred_scalars-0_0_6.md` (archive this spec).
+Separate commit. Files: root `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/FEATURES.md` (entries beyond the version line), `TODAY.md`, `KANBAN.md` (move + verbatim body), `CHANGELOG.md` (`Added` / `Changed` / `Notes`), `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` (archive this spec).
 
 ## Edge cases and constraints
 
@@ -680,7 +680,7 @@ Separate commit. Files: root `README.md`, `docs/README.md`, `docs/TREE.md`, `doc
 - **Strict parser tradeoffs.** Regex narrower than `int(str)` — predictability over leniency.
 - **Strict serializer tradeoffs.** Resolver returning a non-`int` value raises at the schema boundary instead of silently stringifying. Consumers wanting permissive output can wrap the serializer at their layer; the package surface stays strict.
 - **`BigInt` is arbitrary-precision** — see [Decision 1](#decision-1--bigint-wire-format-and-target-fields) for the canonical framing.
-- **Custom `from_db_value` on a `BigIntegerField` subclass.** If a consumer subclasses `BigIntegerField` and overrides `from_db_value` to return a non-`int` Python value (e.g. a domain type like a money object), `_serialize_bigint` raises `TypeError` at the schema boundary — a behavioral change from a permissive `serialize=str` (which would have silently stringified the domain object via `__str__`). Not a regression of shipped behavior (`BigInt` is new in `0.0.6`), but worth documenting so consumers hitting this have a referenceable "we did this deliberately." Recourse: keep the column type-pure at the GraphQL boundary, or override the scalar annotation on the affected field once [Scalar field override semantics](FEATURES.md#scalar-field-override-semantics) (WIP-ALPHA-015) ships.
+- **Custom `from_db_value` on a `BigIntegerField` subclass.** If a consumer subclasses `BigIntegerField` and overrides `from_db_value` to return a non-`int` Python value (e.g. a domain type like a money object), `_serialize_bigint` raises `TypeError` at the schema boundary — a behavioral change from a permissive `serialize=str` (which would have silently stringified the domain object via `__str__`). Not a regression of shipped behavior (`BigInt` is new in `0.0.6`), but worth documenting so consumers hitting this have a referenceable "we did this deliberately." Recourse: keep the column type-pure at the GraphQL boundary, or override the scalar annotation on the affected field once [Scalar field override semantics](../FEATURES.md#scalar-field-override-semantics) (WIP-ALPHA-015) ships.
 
 ## Test plan
 
@@ -689,7 +689,7 @@ Two test files, both run unconditionally:
 - **`tests/test_scalars.py`** (new) — `BigInt` wire-format, strict-parser, strict-serializer, and deprecation-suppression tests. Django setup not required for the parser/serializer unit tests; the deprecation test forces a re-import of the package.
 - **`tests/types/test_converters.py`** (extended) — all field-mapping tests via the [Schema test fixture pattern](#decision-7--test-strategy), plus helper-resolver tests via `sys.modules` manipulation.
 
-Per [`AGENTS.md`](../AGENTS.md), every new public field mapping has at least one `schema.execute_sync` test. Strict-parser and strict-serializer unit tests live in `tests/test_scalars.py`; reject paths also fire through schema execution in `tests/types/test_converters.py` to confirm strictness survives Strawberry's pipeline.
+Per [`AGENTS.md`](../../AGENTS.md), every new public field mapping has at least one `schema.execute_sync` test. Strict-parser and strict-serializer unit tests live in `tests/test_scalars.py`; reject paths also fire through schema execution in `tests/types/test_converters.py` to confirm strictness survives Strawberry's pipeline.
 
 Test categories:
 
@@ -733,13 +733,13 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 - **`T | None` syntax for `NewType` / `ScalarWrapper`.** Verified working on Python 3.10+ (`NewType.__or__` added alongside PEP 604; CI gates this).
 - **`sys.modules` manipulation in helper-resolver tests.** `sys.modules[name] = None` forces `ImportError` — documented Python behavior, low risk.
 - **Strict serializer tradeoffs.** Symmetric with the strict parser. Public-scalar discipline. See Decision 1.
-- **`tests/types/test_converters.py` size growth.** This card adds ~28 tests (~700 lines) to a file currently at ~420 lines, bringing it to roughly ~1100 lines after Slice 4. If the file later exceeds ~1500 lines, file a follow-up to extend the [`docs/TREE.md`](TREE.md) mirror rule with a concern-specific test-file convention (e.g., `tests/types/test_converters_scalars.py`).
+- **`tests/types/test_converters.py` size growth.** This card adds ~28 tests (~700 lines) to a file currently at ~420 lines, bringing it to roughly ~1100 lines after Slice 4. If the file later exceeds ~1500 lines, file a follow-up to extend the [`docs/TREE.md`](../TREE.md) mirror rule with a concern-specific test-file convention (e.g., `tests/types/test_converters_scalars.py`).
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- Filter input shapes — [`FilterSet`](FEATURES.md#filterset), TODO-ALPHA-020-0.0.8.
-- Mutation input types for `BigInt` — [Mutations subsystem](FEATURES.md#djangomutation), TODO-ALPHA-026-0.0.11.
-- Multi-database routing — [Multi-database cooperation](FEATURES.md#multi-database-cooperation), TODO-ALPHA-019-0.0.7.
+- Filter input shapes — [`FilterSet`](../FEATURES.md#filterset), TODO-ALPHA-020-0.0.8.
+- Mutation input types for `BigInt` — [Mutations subsystem](../FEATURES.md#djangomutation), TODO-ALPHA-026-0.0.11.
+- Multi-database routing — [Multi-database cooperation](../FEATURES.md#multi-database-cooperation), TODO-ALPHA-019-0.0.7.
 - Multi-dimensional `ArrayField`.
 - Dedicated `HStore` scalar.
 - `BigAutoField` → `BigInt`.
@@ -755,11 +755,11 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 - `SCALAR_MAP`'s value type annotation widened to `Any`.
 - Atomic version-bump quintet aligned at `0.0.6`.
 - Root `README.md`, `docs/README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`, `KANBAN.md` (with both the verbatim `DONE-013-0.0.6` body AND the new `TODO-ALPHA-045-0.0.7` card body added to To-Do) all reflect shipped state.
-- `docs/FEATURES.md` updated entries: [Specialized scalar conversions](FEATURES.md#specialized-scalar-conversions), [`BigInt` scalar](FEATURES.md#bigint-scalar), [Scalar field conversion](FEATURES.md#scalar-field-conversion), [Index](FEATURES.md#index), [Public exports](FEATURES.md#public-exports).
+- `docs/FEATURES.md` updated entries: [Specialized scalar conversions](../FEATURES.md#specialized-scalar-conversions), [`BigInt` scalar](../FEATURES.md#bigint-scalar), [Scalar field conversion](../FEATURES.md#scalar-field-conversion), [Index](../FEATURES.md#index), [Public exports](../FEATURES.md#public-exports).
 - `BigInt` strict parser **and strict serializer** unit-tested in `tests/test_scalars.py` and exercised at schema-execution level in `tests/types/test_converters.py`.
 - Deprecation-suppression pinned via `test_package_import_does_not_emit_strawberry_deprecation_warning` (subprocess-based).
 - `ArrayField` outer-`choices` rejection tested.
 - `HStoreField` outer-`choices` rejection tested.
 - `BigInt` top-level import smoke-tested (`test_bigint_is_importable_from_top_level`).
-- Spec archived to `docs/spec-013-deferred_scalars-0_0_6.md`.
+- Spec archived to `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`.
 - **PyPI publish gate** — do not `uv publish` the `0.0.6` distribution until Slice 6 closes. Published artifacts must not ship with stale `README.md` / `docs/README.md` / `CHANGELOG.md` / `KANBAN.md` (the controlled inconsistency between Slice 5 and Slice 6 stays inside the repo; PyPI sees the consistent end-state).

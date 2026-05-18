@@ -1,80 +1,77 @@
-# Review feedback — `docs/spec-014-meta_primary-0_0_6.md` revision 3
+# Review feedback - `docs/spec-014-meta_primary-0_0_6.md` revision 4
 
-Scope: third-pass review of the updated spec against current registry, type collection/finalization, relation override tests, and optimizer code. The headline rev2 findings (H1 always-defer scope, M1 symmetric flip guard, M2 stale-test ownership, L1 plan-cache wording, L2 prior-card wording, L3 finalizer idempotency) are substantially addressed in rev3. The findings below are smaller — one medium correctness gap, two medium clarification gaps, and four low-severity precision fixes.
+Scope: final-pass review of revision 4 against the current registry, type-finalization, relation-override, and optimizer code. The previous high-severity implementation issues are mostly resolved; the remaining items are contradictions and worker traps that can still leak into the implementation or closeout docs.
+
+## High-Severity Findings
+
+### H1. Non-goals still classify the already-shipped direct relation override path as deferred
+
+Spec refs: `docs/spec-014-meta_primary-0_0_6.md:281`, `docs/spec-014-meta_primary-0_0_6.md:710`, `docs/spec-014-meta_primary-0_0_6.md:717`
+
+Revision 4 correctly preserves consumer-authored relation fields in the H1 fix and even adds regression tests for direct secondary-type overrides. But the Non-goals section still says "No consumer-side override of relation resolution per field (e.g., `category: AdminCategoryType = ...` syntax)" and the Out-of-scope list repeats that consumer-side relation override resolution is deferred.
+
+That contradicts the live package contract:
+
+- `docs/FEATURES.md:230-237` lists annotation-only and `strawberry.field` relation overrides as supported relation shapes.
+- `tests/types/test_definition_order.py:174`, `:201`, and `:319` pin annotation-only, assigned resolver, decorator, and string relation override behavior.
+- This spec's own Slice 4 tests at `docs/spec-014-meta_primary-0_0_6.md:138-139` require consumer-authored relation overrides to survive and target a secondary type instead of the primary.
+
+If a worker follows the Non-goals wording, they can treat `category: AdminCategoryType` as future work and weaken the H1 preservation path this card explicitly needs.
+
+Required spec change: rephrase the Non-goal and Out-of-scope entries to say no **new override API** ships in this card, especially no `Meta.field_types = {...}` style override. Explicitly state that the already-shipped direct annotation / assigned `strawberry.field` relation override contract remains in scope and may target a secondary `DjangoType`.
 
 ## Medium-Severity Findings
 
-### M1. Audit placement vs `is_finalized()` guard is ambiguous in Slice 3
+### M1. The verbatim KANBAN body still says "ALL relation annotations"
 
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:109`, `docs/spec-014-meta_primary-0_0_6.md:450`, `docs/spec-014-meta_primary-0_0_6.md:631`
+Spec refs: `docs/spec-014-meta_primary-0_0_6.md:168`, `docs/spec-014-meta_primary-0_0_6.md:192`, `docs/spec-014-meta_primary-0_0_6.md:233`, `docs/spec-014-meta_primary-0_0_6.md:734`
 
-Slice 3 instructs: "Run at the **start** of `finalize_django_types()`, before pending-relation resolution." The L3 fix in Edge cases (line 631) only resolves correctly if the audit runs **below** the existing `is_finalized()` short-circuit at `types/finalizer.py:58-59` (`if registry.is_finalized(): return`). Above the guard the audit re-runs on every `finalize_django_types()` call — contradicting the rev3 L3 contract — and the existing test suite would not catch the regression because the audit is side-effect free against a locked registry.
+Slice 6 tells the worker to drop in the KANBAN body verbatim. That body still says relation conversion "defers ALL relation annotations to `finalize_django_types()`." This reintroduces the exact rev2 over-broad wording that rev3 fixed everywhere else.
 
-Worker 2 reading Slice 3 in isolation can plausibly place the audit at the first line of the function. The L3 contract sits ~520 lines later in Edge cases, easy to miss.
+The implementation and changelog bullets now correctly say **auto-synthesized** relation annotations are deferred and consumer-authored annotations / assigned `strawberry.field` resolvers skip synthesis. The KANBAN body should use the same wording, because it becomes the closeout source of truth.
 
-Required spec change: rewrite Slice 3's audit-placement sentence to: "Run inside `finalize_django_types()`, **after the existing `is_finalized()` short-circuit** but before pending-relation resolution." Apply the same wording to Decision 5's prose. Optionally add a test that calls `finalize_django_types()` twice and asserts the audit did not raise / did not re-execute (e.g., observe a spy on `models_with_multiple_types`).
+Required spec change: replace "defers ALL relation annotations" with "defers all auto-synthesized relation annotations" and add the short consumer-authored-fields exception in the KANBAN body.
 
-### M2. `_resolve_field_map` has two call sites; spec names only one for the `source_type` thread
+### M2. Optimizer origin plumbing needs explicit ownership of `_resolve_model_from_return_type`
 
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:120`, `docs/spec-014-meta_primary-0_0_6.md:122`, `docs/spec-014-meta_primary-0_0_6.md:487`, `docs/spec-014-meta_primary-0_0_6.md:528`
+Spec refs: `docs/spec-014-meta_primary-0_0_6.md:131`, `docs/spec-014-meta_primary-0_0_6.md:132`, `docs/spec-014-meta_primary-0_0_6.md:539`, `docs/spec-014-meta_primary-0_0_6.md:557`
 
-The H2 fix instructs Worker 2 to add a `source_type` keyword to `_resolve_field_map` and thread the resolver's origin Strawberry type to "the walker's first `_resolve_field_map(model, source_type=origin)` call". Current `optimizer/walker.py` calls `_resolve_field_map(model)` from **two** sites:
+The H2 contract needs the resolver's origin Strawberry type in `_get_or_build_plan`, `_build_cache_key`, and `plan_optimizations`. In the current code, that origin exists only inside `_resolve_model_from_return_type()` and is discarded when the helper returns `registry.model_for_type(origin)` at `optimizer/extension.py:396`.
 
-- `_walk_selections` at `optimizer/walker.py:125` — the obvious root path from `plan_optimizations`.
-- `_selected_scalar_names` at `optimizer/walker.py:474` — a second helper that also resolves the field map.
+The spec says to "thread the resolved origin Strawberry type" but does not name this helper as a required change or name the existing tests that assert the old return shape (`tests/optimizer/test_extension.py:469`, `:499`, `:508`, `:517`). A worker can update the walker/cache key surface and still be left without a reliable `origin` value at the extension call site.
 
-If `_selected_scalar_names` is reachable from the root planning path (and not exclusively a nested recursion helper), it needs the same `source_type` propagation — otherwise scalar-only selections on a secondary-type root resolver still plan against the primary's field map. The spec does not direct Worker 1 to audit both call sites.
-
-Required spec change: in the Slice 4 bullet for `_resolve_field_map`, name **both** call sites (`_walk_selections:125` and `_selected_scalar_names:474`) and instruct Worker 1's planning pass to determine which are root-path callers needing the keyword. Add a regression test where a secondary-type resolver selects only scalar fields and the planner uses the secondary's field map.
+Required spec change: add an explicit Slice 4 checklist item to change `_resolve_model_from_return_type` into a helper that returns both values, for example `(origin, model)` or a small named tuple, or to add a sibling `_resolve_origin_and_model_from_return_type`. Include the existing test rewrites for the helper's return shape and the `_build_cache_key` signature tests.
 
 ## Low-Severity Findings
 
-### L1. Plan-cache key shape is under-described
+### L1. Finalizer line references are still off in this tree
 
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:123`, `docs/spec-014-meta_primary-0_0_6.md:490`, `docs/spec-014-meta_primary-0_0_6.md:533`, `docs/spec-014-meta_primary-0_0_6.md:629`
+Spec refs: `docs/spec-014-meta_primary-0_0_6.md:126`, `docs/spec-014-meta_primary-0_0_6.md:256`, `docs/spec-014-meta_primary-0_0_6.md:496`, `docs/spec-014-meta_primary-0_0_6.md:647`
 
-The spec describes today's cache key as "model + selection-set fingerprint" (Decision 6 row "Plan cache key") and tells Worker 1 to "pin the exact key tuple shape during planning". The actual structure at `optimizer/extension.py:437-440` is a four-element tuple: `(doc_key: str, relevant_vars: frozenset[tuple[str, Any]], target_model: type, response_path: tuple[str, ...])`. Worker 1 grepping for "selection-set fingerprint" finds nothing.
+The spec now references `types/finalizer.py:68` for `target_type = registry.get(...)`, but the current assignment is at `django_strawberry_framework/types/finalizer.py:69`; line 68 is the `continue` in the consumer-authored branch. Minor, but this spec has been deliberately line-reference-heavy for worker planning, so the reference should be corrected or softened to "near the pending-relation loop."
 
-Recommended fix: in Decision 9 (or the Slice 4 plan-cache bullet) reference `extension.py:437-440` directly and quote the current tuple shape so Worker 1 knows what to extend (probable shape: add `origin: type | None` as a fifth slot, or replace slot 3 with `(target_model, origin)`).
+### L2. Definition of done still has the narrow version no-op wording
 
-### L2. Quoted disappearing collision message does not match the live string
+Spec ref: `docs/spec-014-meta_primary-0_0_6.md:738`
 
-Spec ref: `docs/spec-014-meta_primary-0_0_6.md:407`
+The detailed Slice 5 wording correctly says the version bump is a no-op if any prior `0.0.6` card already bumped it. The Definition of done still says no-op if `WIP-ALPHA-015-0.0.6` already bumped. Broaden this final checklist item to "any prior `0.0.6` card" so it matches the rest of revision 4.
 
-Decision 3's "What disappears" sentence quotes the old message as `"<existing> is already registered as <existing>"`. The actual format at `registry.py:64-72` (`_already_registered` helper, label `"as"`) produces `"<ModelName> is already registered as <ExistingTypeName>"` — the first slot is the model name, the second is the type name, not two copies of "existing". The stale test at `tests/test_registry.py:57` matches `"already registered"` (loose substring), so the rewrite Worker 1 plans still passes, but the spec's quoted form misrepresents the real string and could mislead anyone refining the message.
+### L3. `DjangoTypeDefinition.primary` is described as consumed by code that does not use it
 
-Recommended fix: replace the quoted form with the actual template, e.g. `"<model_name> is already registered as <existing_type_name>"`.
+Spec refs: `docs/spec-014-meta_primary-0_0_6.md:102`, `docs/spec-014-meta_primary-0_0_6.md:529`, `docs/spec-014-meta_primary-0_0_6.md:531`
 
-### L3. `consumer_authored_fields` short-circuit is "in the per-field loop", not "at the top of `_build_annotations`"
+The spec says `DjangoTypeDefinition.primary` is stored so the schema audit and optimizer walker can read the flag without re-querying the registry. The actual decisions route ambiguity checks through `registry.primary_for(model)` and optimizer root planning through the origin type, not through `definition.primary`.
 
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:117`, `docs/spec-014-meta_primary-0_0_6.md:484`, `docs/spec-014-meta_primary-0_0_6.md:698`
+The field is harmless and useful for introspection/future work, but the stated consumers are misleading. Either remove "schema audit, optimizer walker" from the rationale, or add a concrete planned read site. Otherwise Worker 2 may add redundant definition-primary checks that drift from `_primaries`, the stated single source of truth.
 
-The H1 fix description repeatedly places the `if field.name in consumer_authored_fields: continue` guard "at the top of `_build_annotations`". In `types/base.py` the actual location is line 610 (relations branch) and line 631 (scalars branch) — both inside the per-field iteration, not the function preamble. Calling it "at the top" implies it short-circuits the whole function rather than skipping individual consumer-authored fields. Functional intent is correct; the description is just imprecise.
+### L4. The same-type re-register rationale overstates current behavior
 
-Recommended fix: rewrite as "the existing `if field.name in consumer_authored_fields: continue` short-circuit early in the per-field loop body (`types/base.py:610` for relations, `:631` for scalars)".
+Spec ref: `docs/spec-014-meta_primary-0_0_6.md:308`
 
-### L4. Finalizer line reference is off by one
+Decision 2 says treating re-registration of the same type as a no-op "matches the existing idempotent-import behavior." The current `TypeRegistry.register()` checks `model in self._types` before checking `type_cls`, so `register(Model, T)` followed by `register(Model, T)` raises today at `registry.py:88-89`.
 
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:118`, `docs/spec-014-meta_primary-0_0_6.md:245`, `docs/spec-014-meta_primary-0_0_6.md:485`
-
-The spec references `types/finalizer.py:69` as the `target_type = registry.get(...)` line. The actual `target_type = registry.get(pending.related_model)` assignment is at line 68; line 69 is the subsequent `if target_type is None:` check. Worker 1 grepping `:69` lands on the conditional, not the call. Minor.
-
-Recommended fix: change references from `types/finalizer.py:69` to `types/finalizer.py:68`.
-
-### L5. Two named tests files do not exist today; spec frames them as "new or existing"
-
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:110`, `docs/spec-014-meta_primary-0_0_6.md:128`, `docs/spec-014-meta_primary-0_0_6.md:502`, `docs/spec-014-meta_primary-0_0_6.md:503`
-
-Slices 3 and 4 point new tests at `tests/types/test_finalizer.py` and `tests/types/test_relations.py`. Neither file exists today:
-
-- Finalizer test coverage currently lives in `tests/test_registry.py` (idempotency / finalization sections) and `tests/types/test_definition_order.py` (relation resolution after finalize).
-- Relation-conversion test coverage currently lives in `tests/types/test_converters.py` (~1455 lines) and `tests/utils/test_relations.py`.
-
-Decision 7's "new or existing — Worker 1 picks" framing is fine, but Worker 1 could create new files when an existing host is the lower-touch fit. Suggest the spec affirmatively name the existing hosts as the default (e.g., "extend `tests/types/test_converters.py`; create `tests/types/test_finalizer.py` only if the audit-test cluster grows past comfortable size in `test_converters.py`").
+The new idempotent behavior is fine and well-tested in the spec; just phrase it as a new import/retry-tolerant behavior rather than an existing one.
 
 ## Notes
 
-- Rev2's high-severity findings (H1 wrong-primary relation binding, H2 root optimizer planning + plan-cache, H3 schema audit secondary coverage), the M1 rollback corruption, the M2 stale-test ownership trail, the L1 plan-cache wording, the L2 broader prior-card framing, and the L3 finalizer idempotency contract are all addressed in rev3 with explicit pseudocode, regression tests, and edge-case clarifications.
-- The verbatim `DONE-014-0.0.6` KANBAN body now points at `docs/spec-014-meta_primary-0_0_6.md` (the working location), matching Slice 6's "spec stays at working location" rule.
-- Pre-existing single-type-no-primary path stays backward compatible (`registry.get` still returns the lone type without `Meta.primary`), pinned by the `test_get_returns_single_type_when_one_registered_no_primary` test.
-- No tests were run; this is a spec review only.
+Revision 4 substantially addresses the earlier relation-binding, primary-flip, rollback, audit-placement, stale-test ownership, schema-audit secondary coverage, and optimizer call-site issues. No tests were run; this is a spec review only.

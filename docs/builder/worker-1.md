@@ -62,8 +62,9 @@ For the current slice:
 9. Include a DRY analysis that cites existing files/helpers to reuse or extend.
 10. Include implementation steps with file paths and line anchors where practical. Mark line numbers as pin-at-write-time hints (per `BUILD.md` Implementation steps note).
 11. Include required tests and temporary-test opportunities for Worker 3.
-12. Use `Implementation discretion items` only when you have **assessed and decided** the choice belongs to Worker 2 (style, naming, equivalent-shape preference). Do not delegate architectural questions there; if you cannot resolve one by reading the spec and codebase, escalate to the maintainer instead.
-13. Append a short memory entry.
+12. Copy the spec's nested sub-bullets for this slice from `## Slice checklist` verbatim into `### Spec slice checklist (verbatim)` — preserve exact bullet text, nested sub-bullets, and inline citations. Every box stays `- [ ]` during the planning pass; the final-verification pass ticks them as the contract lands.
+13. Use `Implementation discretion items` only when you have **assessed and decided** the choice belongs to Worker 2 (style, naming, equivalent-shape preference). Do not delegate architectural questions there; if you cannot resolve one by reading the spec and codebase, escalate to the maintainer instead.
+14. Append a short memory entry.
 
 The plan must prefer small, reusable helpers over duplicated local logic. If a helper would be premature, say why and name the condition that would justify extracting it later.
 
@@ -95,7 +96,7 @@ After Worker 3 has accepted the slice:
 
 1. Read the full slice artifact and Worker 2/3 iteration history.
 2. Read the current diff for the slice.
-3. Confirm every planned step was implemented or intentionally rejected with reason.
+3. Confirm every planned step was implemented or intentionally rejected with reason. Walk the Plan's `### Spec slice checklist (verbatim)` against the diff and tick each `- [ ]` whose contract landed (`- [x]`). For any sub-check that did not land, record a one-line deferral reason under `### Spec changes made (Worker 1 only)` citing the target (future slice / future spec / maintainer follow-up) or set status to `revision-needed`. Silently un-ticked boxes are not allowed.
 4. Check the slice against prior accepted slices for new duplication, repeated literals, or inconsistent helper shape.
 5. Run the focused existing tests relevant to the slice when the plan calls for it. Never with `--cov*` flags — coverage is the maintainer's gate, not yours.
 6. Do not inspect line coverage; only record whether the existing tests run for this gate pass. If you find yourself wanting to know which lines are uncovered, the answer is to compare the spec's decisions against the diff and test file by reading, not by running coverage.

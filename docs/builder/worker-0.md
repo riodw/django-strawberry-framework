@@ -31,6 +31,7 @@ Worker 0 must not:
 - edit source code or tests
 - create or fill ordinary `docs/builder/bld-*.md` slice artifacts
 - mark a build-plan checkbox complete before Worker 1 sets the artifact status to `final-accepted`
+- tick sub-check boxes (`- [ ]`) inside any `bld-slice-*.md` artifact. Worker 1 owns those boxes; Worker 0 owns only the slice-level boxes in `build-<NNN>-*.md`
 - bypass per-slice subagent dispatch by inlining a worker's job
 - read Worker 1/2/3 memory during the active cycle
 - edit any worker's memory file except its own

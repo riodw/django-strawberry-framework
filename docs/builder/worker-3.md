@@ -41,7 +41,7 @@ Worker 3 must not:
 2. Read the artifact's plan and Worker 2 build report.
 3. Read Worker 2's diff.
    - **Cumulative-diff trap.** From Slice 2 onward the working-tree diff carries prior accepted slices' changes too. Use the artifact's `### Files touched` section as a navigational filter so Worker 3 only weighs the current slice's contribution. The pre-flight `M docs/builder/BUILD.md` (if any) and other baseline-resolved drift are likewise out-of-scope unless the slice deliberately touches them.
-4. Compare implementation against the spec and plan.
+4. Compare implementation against the spec and plan. The Plan's `### Spec slice checklist (verbatim)` is the slice's contract — walk every `- [ ]` box and confirm the diff addresses it (or that the artifact already records a deferral). A sub-check that the diff does not address and that has no recorded deferral is a Medium finding.
 5. Review DRY first: duplicated logic, repeated literals, repeated error shapes, misplaced helpers, and parallel data flows.
 6. Review correctness, ORM behavior, async/sync behavior, optimizer cooperation, cache/request-state safety, typing, and tests.
 7. Run `scripts/review_inspect.py` with `--output-dir docs/builder/shadow` when `BUILD.md` requires it.
@@ -55,6 +55,7 @@ Worker 3 must not:
 Set `review-accepted` only when:
 
 - every spec-required behavior is reflected in the diff or intentionally rejected with a recorded reason
+- every `- [ ]` in the Plan's `### Spec slice checklist (verbatim)` is either reflected in the diff (Worker 1 ticks at final verification) or pre-recorded as deferred; silently-unaddressed sub-checks are Medium findings
 - every High, Medium, and Low finding has been addressed or intentionally rejected with a recorded reason
 - DRY findings have all been addressed or recorded as a deferred follow-up Worker 1 will weigh during final verification
 - tests pin every High-severity behavior change

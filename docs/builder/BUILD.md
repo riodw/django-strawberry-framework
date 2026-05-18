@@ -237,6 +237,14 @@ Items where Worker 1 has **assessed the design and decided** the choice is at Wo
 
 If Worker 1 cannot resolve a question by reading the spec and the codebase, **do not** delegate it here. Stop the planning pass and escalate to the maintainer. Worker 2 implements; Worker 2 does not architect.
 
+### Spec slice checklist (verbatim)
+
+The spec's nested sub-bullets for this slice from `## Slice checklist`, copied verbatim as `- [ ]` boxes (preserve exact text, nested sub-bullets, inline citations). Worker 1 ticks each `- [x]` during final verification as the contract lands. An unticked box at final verification is either deferred with a one-line reason under `### Spec changes made (Worker 1 only)` or the slice goes `revision-needed`. Worker 3 walks the list during review; a sub-check that appears silently un-addressed in the diff is a Medium finding.
+
+- [ ] (verbatim sub-check #1)
+- [ ] (verbatim sub-check #2)
+- ...
+
 ---
 
 ## Build report (Worker 2)
@@ -350,6 +358,7 @@ Each Worker 2 re-pass appends a `## Build report (Worker 2, pass <N>)` section a
 
 ## Final verification (Worker 1)
 
+- Spec slice checklist: every `- [ ]` in the Plan's `### Spec slice checklist (verbatim)` is `- [x]` (the contract landed), or has a one-line deferral reason under `### Spec changes made (Worker 1 only)`. Silently un-ticked boxes block `final-accepted`.
 - DRY check across this slice and prior accepted slices: any new duplication?
 - Existing tests still pass: `uv run pytest <focused scope>`.
 - Spec reconciliation: does the spec need a Worker 1 edit to reflect what landed?
@@ -386,6 +395,7 @@ Medium:
 - unclear ownership between modules introduced by the new code
 - brittle edge-case behavior
 - missing tests for important branches
+- silently-unaddressed spec slice sub-check (a `- [ ]` item in the Plan's `### Spec slice checklist (verbatim)` with no matching implementation in the diff and no recorded deferral)
 - repeated literal / key / tuple that should be a named constant
 
 Low:

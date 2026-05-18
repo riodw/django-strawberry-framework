@@ -30,6 +30,7 @@ Worker 2 must not:
 - edit the active spec
 - edit Worker 0/1/3 memory
 - mark build-plan checkboxes
+- tick sub-check boxes (`- [ ]`) inside the artifact's `### Spec slice checklist (verbatim)` section. Worker 1 owns those boxes; Worker 2 implements the underlying contract
 - edit prior artifact sections except to append a new build report
 - make unrelated cleanup
 - broaden the slice beyond Worker 1's plan

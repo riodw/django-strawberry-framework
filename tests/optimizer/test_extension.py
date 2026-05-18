@@ -541,6 +541,18 @@ def test_resolve_model_returns_none_when_type_not_in_schema():
     assert _resolve_model_from_return_type(info) is None
 
 
+def test_resolve_model_returns_none_when_definition_has_no_origin():
+    """When the schema's type definition lacks an ``origin`` (e.g. a scalar / interface), returns None."""
+    fake_strawberry_schema = SimpleNamespace(
+        get_type_by_name=lambda _name: SimpleNamespace(),  # definition without `origin`
+    )
+    info = SimpleNamespace(
+        return_type=SimpleNamespace(name="SomeType"),
+        schema=SimpleNamespace(_strawberry_schema=fake_strawberry_schema),
+    )
+    assert _resolve_model_from_return_type(info) is None
+
+
 # ---------------------------------------------------------------------------
 # O3: root-field gate
 # ---------------------------------------------------------------------------

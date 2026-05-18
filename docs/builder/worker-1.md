@@ -127,9 +127,14 @@ Produce `docs/builder/bld-final.md`.
 
 Run, in order:
 
-1. `uv run pytest` — full sweep across all three test trees. **No `--cov*` flags.** Do not inspect line coverage or run coverage-specific commands. The package's `fail_under = 100` gate is enforced by CI and the maintainer, not by this pass.
+1. `uv run pytest --no-cov` — full sweep across all three test trees. **The explicit `--no-cov` opts out of `pytest.ini`'s auto-applied `--cov`.** Do not inspect line coverage or run coverage-specific commands. The package's `fail_under = 100` gate is enforced by CI and the maintainer, not by this pass.
 2. `uv run python examples/fakeshop/manage.py check` — Django's system-check framework against the example project. Catches model/admin/url drift that `pytest` does not.
 3. `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` — confirms model state is migration-consistent without producing migration files.
+4. Lint/format/diff gate, in order:
+   - `uv run ruff format --check .` — fails if any file is not properly formatted (read-only check; do NOT pass `--fix` or run the auto-formatter here)
+   - `uv run ruff check .` — fails on any lint violation (read-only; no `--fix`)
+   - `git diff --check` — fails on whitespace errors or conflict markers anywhere in the working tree
+   These catch tool-induced drift and whitespace damage that pytest does not. Failures block `final-accepted` unless a pre-flight baseline exception was explicitly recorded in the build plan's preamble. If a failure surfaces tool-induced drift that should have been owned by a slice's Worker 2, route the fix through the owning slice loop the same way a `pytest` failure is routed.
 
 Record each command's pass/fail in `bld-final.md`. If any fails, record the failing item and route the fix back through the owning slice loop.
 

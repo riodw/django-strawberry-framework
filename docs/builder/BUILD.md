@@ -111,7 +111,7 @@ Tests themselves are still in scope:
 - Worker 1 plans which tests must exist for the slice.
 - Worker 2 writes them in the same change as the code.
 - Worker 3 verifies they exercise the right branches by reading the diff and comparing against the spec; Worker 3 may run them focused (without coverage flags) to confirm pass/fail when the artifact contract requires it.
-- Worker 1's final test-run gate runs the full `uv run pytest` once at the end of the build (without coverage flags) and only checks that the suite passes.
+- Worker 1's final test-run gate runs the full `uv run pytest --no-cov` once at the end of the build (the explicit `--no-cov` is required because `pytest.ini` auto-applies `--cov`) and only checks that the suite passes.
 
 If a worker believes coverage data is necessary to resolve a review finding, the answer is to add the missing test that pins the spec contract — not to run coverage to discover what is missing. If gap-discovery feels intractable, escalate to the maintainer rather than running coverage.
 
@@ -262,6 +262,7 @@ The spec's nested sub-bullets for this slice from `## Slice checklist`, copied v
 
 - `uv run ruff format .` — pass/fail
 - `uv run ruff check --fix .` — pass/fail
+- `git status --short` after both ruff invocations — list every modified file. Classify each: slice-intended (stays in the diff; appears in `### Files touched`) or unrelated tool churn (reverted with `git checkout -- path` before setting `Status: built`). Tool-induced drift is Worker 2's responsibility to own at this boundary; never pass it through as "out of scope" or defer to Worker 1.
 - Focused test commands run, if any (without `--cov*` flags — see "Coverage is the maintainer's gate, not a worker's tool")
 
 ### Implementation notes
@@ -428,6 +429,7 @@ Worker 2 builds against the plan. Worker 2:
 - adds tests in the same change as the code
 - does not add scope beyond the artifact unless the plan explicitly required it
 - runs `uv run ruff format .` and `uv run ruff check --fix .` after every edit (per `AGENTS.md` / `START.md`)
+- after every ruff invocation, runs `git status --short` and classifies each modified file: slice-intended (stays in the diff and appears in the artifact's `### Files touched`) or unrelated tool churn (reverted with `git checkout -- path` before setting `Status: built`). "Out-of-slice drift accepted as defensible" is not a valid disposition; deferring tool-induced drift to Worker 1 is also not valid. If a tooling-caused change cannot be cleanly classified, escalate to the maintainer rather than passing it through
 - does NOT run `pytest` after every edit (per `START.md`)
 
 ### Code review (Worker 3)
@@ -719,11 +721,16 @@ After the integration pass is clean, Worker 1 runs the final test-run gate and p
 
 The gate is intentionally narrow:
 
-- Run `uv run pytest` (full sweep across all three test trees per `AGENTS.md`). No `--cov*` flags — see "Coverage is the maintainer's gate, not a worker's tool" above.
+- Run `uv run pytest --no-cov` (full sweep across all three test trees per `AGENTS.md`). The explicit `--no-cov` opts out of `pytest.ini`'s auto-applied `--cov` — see "Coverage is the maintainer's gate, not a worker's tool" above. Plain `uv run pytest` is a coverage run in this repo and is forbidden by the same rule.
 - Run Django's own consistency checks against the example project:
   - `uv run python examples/fakeshop/manage.py check`
   - `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run`
   These catch model/admin/url-config drift that `pytest` does not. Record their pass/fail in `bld-final.md`. If either fails, route the fix through the owning slice loop the same way a `pytest` failure is routed.
+- Run the lint/format/diff gate (catches tool-induced drift and whitespace damage that `pytest` does not):
+  - `uv run ruff format --check .` — fails if any file is not properly formatted (read-only check; do NOT pass `--fix` or run the auto-formatter here)
+  - `uv run ruff check .` — fails on any lint violation (read-only; no `--fix`)
+  - `git diff --check` — fails on whitespace errors or conflict markers anywhere in the working tree
+  Record each command's pass/fail in `bld-final.md`. Failures block `final-accepted` unless a pre-flight baseline exception was explicitly recorded in the build plan's preamble (per "Pre-flight checks" above). If a failure surfaces tool-induced drift that should have been owned by a slice's Worker 2, route the fix through the owning slice loop the same way a `pytest` failure is routed.
 - The only `pytest`-side requirement is that the existing test suite passes. Do NOT inspect or assert line coverage at this stage. Coverage gating belongs to CI (`pyproject.toml` `[tool.coverage.report] fail_under = 100`) and to the maintainer, not to this gate.
 - If failures appear, record them in `bld-final.md`, then re-loop through whichever slice owns the failing behavior (Worker 1 plans the fix, Worker 0 dispatches Worker 2 to implement, Worker 0 dispatches Worker 3 to review, Worker 1 re-runs the gate).
 - If the build added user-visible behavior, `CHANGELOG.md` is edited only when the active spec explicitly includes that work or the maintainer explicitly authorizes it. Worker 1 checks the changelog contract; Worker 2 applies the edit when the plan says so.

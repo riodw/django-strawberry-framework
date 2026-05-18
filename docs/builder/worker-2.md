@@ -49,10 +49,11 @@ Worker 2 must not:
 7. If Worker 3 supplied a temp test that should become permanent, promote it to the correct test tree rather than leaving it under `docs/builder/temp-tests/`.
 8. Run `uv run ruff format .`.
 9. Run `uv run ruff check --fix .`.
-10. Do not run `pytest` unless the artifact explicitly instructs you to run a focused test as part of the pass; Worker 1 owns the normal test gates. When the artifact does require a focused `pytest`, run it **without** `--cov*` flags. Use the focused run only to confirm pass/fail of the assertions you wrote; never to chase coverage.
-11. Append a `Build report (Worker 2)` section, or `Build report (Worker 2, pass N)` on re-pass.
-12. Set the artifact `Status:` line to `built` so Worker 0 knows to dispatch Worker 3 next.
-13. Append a short memory entry when the pass is complete.
+10. Run `git status --short` after both ruff invocations. For each modified file, classify: slice-intended (stays in the diff and appears in `### Files touched`) or unrelated tool churn (revert with `git checkout -- path` before continuing). Tool-induced drift is your responsibility to own at this boundary — never pass it through to Worker 3 as "out of scope" or defer it to Worker 1. If a tooling-caused change cannot be cleanly classified, escalate to the maintainer.
+11. Do not run `pytest` unless the artifact explicitly instructs you to run a focused test as part of the pass; Worker 1 owns the normal test gates. When the artifact does require a focused `pytest`, run it **without** `--cov*` flags. Use the focused run only to confirm pass/fail of the assertions you wrote; never to chase coverage.
+12. Append a `Build report (Worker 2)` section, or `Build report (Worker 2, pass N)` on re-pass.
+13. Set the artifact `Status:` line to `built` so Worker 0 knows to dispatch Worker 3 next.
+14. Append a short memory entry when the pass is complete.
 
 ### Pass-name and status conventions
 

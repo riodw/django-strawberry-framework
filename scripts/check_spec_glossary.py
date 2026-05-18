@@ -1,4 +1,4 @@
-"""Validate that a spec's project-specific terms are glossary-anchored.
+r"""Validate that a spec's project-specific terms are glossary-anchored.
 
 Two checks per term in the spec's companion ``*-terms.csv``:
 
@@ -12,10 +12,10 @@ on a CLI / file-not-found error.
 
 Usage::
 
-    uv run python scripts/check_spec_glossary.py \\
-        --spec docs/spec-014-meta_primary-0_0_6.md \\
-        --terms docs/spec-014-meta_primary-0_0_6-terms.csv \\
-        --features docs/FEATURES.md \\
+    uv run python scripts/check_spec_glossary.py \
+        --spec docs/spec-014-meta_primary-0_0_6.md \
+        --terms docs/spec-014-meta_primary-0_0_6-terms.csv \
+        --features docs/FEATURES.md \
         --auto-link
 
 Only ``--spec`` is required. ``--terms`` defaults to the spec path with
@@ -265,6 +265,7 @@ def _default_terms_path(spec_path: Path) -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: validate (and optionally auto-link) the spec's glossary references."""
     args = _parse_args(argv)
     if args.terms is None:
         args.terms = _default_terms_path(args.spec)

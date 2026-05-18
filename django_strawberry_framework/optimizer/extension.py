@@ -393,6 +393,21 @@ def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
     if definition is None:
         return None
     origin = getattr(definition, "origin", None)
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 4 / rev6 M2): return both
+    # origin and model so the optimizer can use the resolver's actual
+    # Strawberry type for root planning and plan-cache identity.
+    # Pseudo:
+    # - model = registry.model_for_type(origin)
+    # - if model is None or origin is None: return None  (either-leg failure)
+    # - return OriginAndModel(origin=origin, model=model) or (origin, model)
+    # Failure contract: this helper already returns None for non-object leaf
+    # types, missing Strawberry schema, and missing schema type (the early
+    # returns above). The expanded version returns None whenever EITHER
+    # origin OR model is unresolvable; it returns the pair ONLY when both
+    # are resolved. Callers (_optimize) keep their `if resolved is None`
+    # pass-through; the existing failure-case tests at
+    # tests/optimizer/test_extension.py:499, :508, :517 continue to assert
+    # None — only the success-case test at :469 asserts the pair shape.
     return registry.model_for_type(origin)
 
 
@@ -507,6 +522,12 @@ class DjangoOptimizerExtension(SchemaExtension):
         """
         if not isinstance(result, models.QuerySet):
             return result
+        # TODO(spec-014-meta_primary-0_0_6.md Slice 4): unpack origin+model
+        # from the return-type resolver; pass origin into _get_or_build_plan.
+        # Pseudo:
+        # - resolved = _resolve_origin_and_model_from_return_type(info)
+        # - if resolved is None: pass through unchanged
+        # - origin, target_model = resolved.origin, resolved.model
         target_model = _resolve_model_from_return_type(info)
         if target_model is None:
             logger.debug(
@@ -548,6 +569,19 @@ class DjangoOptimizerExtension(SchemaExtension):
         the walker, evict the oldest quarter when full, insert iff the
         plan is ``cacheable``, and increment ``_cache_misses``.
         """
+        # TODO(spec-014-meta_primary-0_0_6.md Slice 4 / rev6 L1): accept
+        # origin: type | None, include it in the cache key, and pass it to
+        # plan_optimizations(..., source_type=origin).
+        # Pseudo:
+        # - cache_key = _build_cache_key(info, target_model, origin)
+        # - plan = plan_optimizations(selections, target_model, info=info, source_type=origin)
+        # Scope (rev6 L1): _plan_cache is root-only — this helper is the
+        # sole insertion site. Nested plans built inside walker recursion or
+        # _build_prefetch_child_queryset do NOT pass through _build_cache_key,
+        # so in production paths the `origin` slot always receives the
+        # concrete root origin type. The `None` value of the slot is reserved
+        # for direct/test-only callers that build a plan without an origin.
+        # Do NOT introduce a nested extension-cache path.
         cache_key = self._build_cache_key(info, target_model)
         cached_plan = self._plan_cache.get(cache_key)
         if cached_plan is not None:
@@ -603,6 +637,12 @@ class DjangoOptimizerExtension(SchemaExtension):
         whether to raise based on the extension's ``strictness``.
         """
         reachable = _collect_schema_reachable_types(schema)
+        # TODO(spec-014-meta_primary-0_0_6.md Slice 4): dedupe warning
+        # collection after registry.iter_types() starts yielding one entry per
+        # registered type, while still auditing reachable secondary types.
+        # Pseudo:
+        # - seen: set[tuple[type[models.Model], str]] = set()
+        # - add one warning per (source_model, field_name) key.
         warnings: list[str] = []
         for _model, type_cls in registry.iter_types():
             if type_cls not in reachable:
@@ -649,6 +689,9 @@ class DjangoOptimizerExtension(SchemaExtension):
            same operation can return different models).
         4. The root response path, so multiple root fields returning the
            same model do not share a plan within one operation.
+        5. TODO(spec-014-meta_primary-0_0_6.md Slice 4): add the resolver's
+           origin Strawberry type so primary-return and secondary-return
+           resolvers for the same model do not share a cached plan.
         """
         operation = info.operation
         fragments = info.fragments or {}
@@ -677,6 +720,8 @@ class DjangoOptimizerExtension(SchemaExtension):
         relevant_vars = frozenset(
             (k, variable_values[k]) for k in directive_var_names if k in variable_values
         )
+        # TODO(spec-014-meta_primary-0_0_6.md Slice 4): append origin as the
+        # fifth tuple member after updating the signature and cache type.
         return (doc_key, relevant_vars, target_model, runtime_path_from_info(info))
 
     def plan_relation(

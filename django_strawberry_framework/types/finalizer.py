@@ -58,6 +58,15 @@ def finalize_django_types() -> None:
     if registry.is_finalized():
         return
 
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 3): run the primary-ambiguity
+    # audit here, after the finalized guard and before pending relation
+    # resolution, so ambiguous multi-type models fail before "unresolved target".
+    # Pseudo:
+    # - walk registry.models_with_multiple_types().
+    # - collect models where registry.primary_for(model) is None, paired with
+    #   registry.types_for(model) for the error body.
+    # - raise ConfigurationError with every model/type and the
+    #   "Declare Meta.primary = True on exactly one..." guidance.
     unresolved: list[PendingRelation] = []
     resolved: list[tuple[PendingRelation, type]] = []
     consumer_authored: list[PendingRelation] = []

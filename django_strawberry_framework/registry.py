@@ -39,6 +39,12 @@ class TypeRegistry:
     """
 
     def __init__(self) -> None:
+        # TODO(spec-014-meta_primary-0_0_6.md Slice 1): replace the one-type
+        # map with ordered per-model storage plus explicit primary tracking.
+        # Pseudo:
+        # - _types: dict[Model, list[type]] = {}
+        # - _primaries: dict[Model, type] = {}
+        # - keep _models as the type -> model reverse lookup.
         self._types: dict[type[models.Model], type] = {}
         self._models: dict[type, type[models.Model]] = {}
         self._enums: dict[tuple[type[models.Model], str], type[Enum]] = {}
@@ -71,6 +77,15 @@ class TypeRegistry:
         """
         return ConfigurationError(f"{name} is already registered {label} {existing_name}")
 
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 1): add keyword-only
+    # primary: bool = False and return bool for "state was added".
+    # Pseudo:
+    # - reject type_cls already mapped to a different model.
+    # - if type_cls is already in _types[model], compare primary to
+    #   (_primaries.get(model) is type_cls); flag flips raise.
+    # - if primary and a different primary exists, raise duplicate-primary.
+    # - append new types in registration order; set _models and _primaries.
+    # - return True for append, False for idempotent same-type no-op.
     def register(self, model: type[models.Model], type_cls: type) -> None:
         """Register ``type_cls`` as the ``DjangoType`` for ``model``.
 
@@ -93,6 +108,12 @@ class TypeRegistry:
         self._types[model] = type_cls
         self._models[type_cls] = model
 
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 1): change lookup semantics to
+    # primary-first, single-type fallback, ambiguous-multiple-as-None.
+    # Pseudo:
+    # - if _primaries.get(model): return it
+    # - if len(_types.get(model, ())) == 1: return the only type
+    # - return None for no type or multiple types without primary.
     def get(self, model: type[models.Model]) -> type | None:
         """Return the registered ``DjangoType`` for ``model``, or ``None``."""
         return self._types.get(model)
@@ -111,6 +132,13 @@ class TypeRegistry:
             return None
         return self._models.get(type_cls)
 
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 1): add primary_for(model),
+    # types_for(model), and models_with_multiple_types(); update iter_types()
+    # to yield one (model, type_cls) pair for every registered type.
+    # Pseudo:
+    # - primary_for -> _primaries.get(model)
+    # - types_for -> tuple(_types.get(model, ()))
+    # - models_with_multiple_types -> models whose stored list has len >= 2.
     def iter_types(self) -> Iterator[tuple[type[models.Model], type]]:
         """Yield ``(model, type_cls)`` pairs for every registered ``DjangoType``.
 
@@ -151,6 +179,14 @@ class TypeRegistry:
         instead of "already registered". ``DjangoType.__init_subclass__``
         is the only intended caller; see ``types/base.py``.
         """
+        # TODO(spec-014-meta_primary-0_0_6.md Slice 1): forward primary= to
+        # register() and make rollback conditional on that call appending state.
+        # Pseudo:
+        # - pre_primary = _primaries.get(model)
+        # - appended = register(model, type_cls, primary=primary)
+        # - if register_definition raises and appended: remove only this type,
+        #   restore _models, and restore/pop _primaries back to pre_primary.
+        # - if appended is False: leave pre-existing registry state untouched.
         self.register(model, type_cls)
         try:
             self.register_definition(type_cls, definition)
@@ -248,6 +284,8 @@ class TypeRegistry:
         starts with a clean registry.
         """
         self._types.clear()
+        # TODO(spec-014-meta_primary-0_0_6.md Slice 1): clear _primaries here
+        # after adding explicit primary tracking.
         self._models.clear()
         self._enums.clear()
         self._definitions.clear()

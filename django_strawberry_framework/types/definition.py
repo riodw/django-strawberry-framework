@@ -29,6 +29,9 @@ class DjangoTypeDefinition:
     consumer_annotated_relation_fields: frozenset[str] = frozenset()
     consumer_assigned_relation_fields: frozenset[str] = frozenset()
     consumer_assigned_scalar_fields: frozenset[str] = frozenset()
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 2): add primary: bool = False.
+    # This is a per-type read convenience for introspection and future work;
+    # registry._primaries remains the authority for ambiguity routing.
     # TODO(deferred specs; see docs/FEATURES.md): tighten ``Any | None`` to the
     # concrete classes once filtersets/ordersets/aggregates/fields/search ship;
     # update or remove this anchor in the same change that lands each slice.

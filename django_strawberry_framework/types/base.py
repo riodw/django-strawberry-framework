@@ -61,6 +61,8 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "description",
         "optimizer_hints",
         "interfaces",
+        # TODO(spec-014-meta_primary-0_0_6.md Slice 2): add "primary" as a
+        # supported Meta key once the registry accepts primary tracking.
     },
 )
 
@@ -89,6 +91,14 @@ class DjangoType:
 
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         optimizer_hints = _meta_optimizer_hints(meta)
+        # TODO(spec-014-meta_primary-0_0_6.md Slice 2): read
+        # primary = getattr(meta, "primary", False), store it on
+        # DjangoTypeDefinition, and pass primary=primary into
+        # registry.register_with_definition(...).
+        # Pseudo:
+        # - capture the Meta.primary bool after validation.
+        # - store it on DjangoTypeDefinition for read-only introspection.
+        # - forward it to registry.register_with_definition as primary=...
         consumer_annotations = dict(getattr(cls, "__annotations__", {}))
         consumer_annotated_relation_fields = frozenset(
             field.name for field in fields if field.is_relation and field.name in consumer_annotations
@@ -393,6 +403,11 @@ def _validate_meta(meta: type) -> tuple[type, ...]:
     if "fields" in declared and "exclude" in declared:
         raise ConfigurationError("Meta.fields and Meta.exclude are mutually exclusive")
 
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 2): validate Meta.primary
+    # before the unknown-key guard after "primary" is in ALLOWED_META_KEYS.
+    # Pseudo:
+    # - primary = getattr(meta, "primary", False)
+    # - if not isinstance(primary, bool): raise ConfigurationError(...)
     deferred = sorted(declared & DEFERRED_META_KEYS)
     if deferred:
         raise ConfigurationError(
@@ -617,6 +632,15 @@ def _build_annotations(
                     "a single GraphQL type. Exclude it via Meta.exclude, or supply an "
                     "explicit annotation or resolver.",
                 )
+            # TODO(spec-014-meta_primary-0_0_6.md Slice 4): always defer
+            # auto-synthesized relations instead of eager-binding when the
+            # target type is already registered. Preserve the consumer-authored
+            # short-circuit above so direct annotations and assigned
+            # strawberry.field resolvers can still target secondary types.
+            # Pseudo:
+            # - record the field in the pending relation list.
+            # - set the synthesized annotation to PendingRelationAnnotation.
+            # - remove registry.get()/resolved_relation_annotation eager branch.
             target_type = registry.get(field.related_model)
             if target_type is None:
                 pending.append(_record_pending_relation(cls, source_model, field, field_meta))

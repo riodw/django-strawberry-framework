@@ -32,6 +32,9 @@ def plan_optimizations(
 ) -> OptimizationPlan:
     """Walk the selection tree and produce an ``OptimizationPlan``."""
     plan = OptimizationPlan()
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 4): accept source_type and
+    # thread it to the root _walk_selections/_resolve_field_map call so a root
+    # resolver returning a secondary DjangoType plans from that type's field_map.
     _walk_selections(
         selected_fields,
         model,
@@ -77,6 +80,13 @@ def _resolve_field_map(model: type[models.Model]) -> tuple[type | None, dict[str
     definition. Centralizes the brittle Django-private ``_meta`` access
     used by the walker.
     """
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 4): add keyword-only
+    # source_type: type | None = None. If source_type is provided, use it as
+    # type_cls directly; otherwise keep registry.get(model) for nested paths.
+    # Pseudo:
+    # - type_cls = source_type if source_type is not None else registry.get(model)
+    # - definition = registry.get_definition(type_cls)
+    # - return type_cls and definition.field_map or fallback model fields.
     type_cls = registry.get(model)
     definition = registry.get_definition(type_cls) if type_cls is not None else None
     field_map = (
@@ -122,6 +132,10 @@ def _walk_selections(
     runtime_prefixes: tuple[tuple[str, ...], ...] = ((),),
 ) -> None:
     """Recursive workhorse: descend one normalized level of the selection tree."""
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 4): when this is the root call
+    # from plan_optimizations, pass source_type through to _resolve_field_map.
+    # Recursive calls for nested relations should leave source_type unset so
+    # relation targets continue to resolve through the primary.
     type_cls, field_map = _resolve_field_map(model)
     merged = _merge_aliased_selections(_included_field_selections(selections))
     for sel in merged:
@@ -471,6 +485,14 @@ def _selected_scalar_names(
     """Return selected scalar Django field names, or ``None`` when elision is unsafe."""
     if model is None:
         return None
+    # TODO(spec-014-meta_primary-0_0_6.md Slice 4 / rev6 M1): nested-only —
+    # do NOT thread source_type here. The only caller is _plan_select_relation
+    # for FK-id elision; the model argument is django_field.related_model,
+    # never the resolver's root return type. Nested relation targets correctly
+    # route through the primary via registry.get(model), which is what the
+    # default _resolve_field_map(model) call already does. The scalar-only
+    # secondary-type regression is exercised through the root _walk_selections
+    # path, not through this helper.
     _type_cls, field_map = _resolve_field_map(model)
     scalar_names: set[str] = set()
     for sel in _merge_aliased_selections(_included_field_selections(selections)):

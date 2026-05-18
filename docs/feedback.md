@@ -1,68 +1,71 @@
-# Review feedback — `docs/spec-014-meta_primary-0_0_6.md`
+# Review feedback — `docs/spec-014-meta_primary-0_0_6.md` revision 2
 
-Scope: reviewed `docs/spec-014-meta_primary-0_0_6.md` against the current registry, `DjangoType` collection/finalization path, relation conversion, and optimizer code.
+Scope: second-pass review of the updated spec against current registry, type collection/finalization, relation override tests, and optimizer code.
 
 ## High-Severity Findings
 
-### H1. Relation binding can freeze the wrong secondary type before the primary is declared
+### H1. The "always defer every relation field" wording can break consumer-authored relation overrides
 
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:95`, `docs/spec-014-meta_primary-0_0_6.md:383`, `docs/spec-014-meta_primary-0_0_6.md:490`
+Spec refs: `docs/spec-014-meta_primary-0_0_6.md:106`, `docs/spec-014-meta_primary-0_0_6.md:467`, `docs/spec-014-meta_primary-0_0_6.md:653`, `docs/spec-014-meta_primary-0_0_6.md:657`
 
-The spec says no `_build_annotations` call-site change is needed because `registry.get()` returning `None` will defer ambiguous relations. That misses the import-order case where exactly one non-primary type is registered when a relation source is collected, and the explicit primary is declared later.
+Revision 2 correctly removes eager binding for auto-generated relation annotations, but the spec repeatedly says "every relation field" should become `PendingRelationAnnotation`. That is too broad. Current `types/base.py` deliberately skips synthesis when the relation is consumer-authored (`consumer_authored_fields`) so annotation overrides and assigned `strawberry.field` resolvers survive. Existing tests pin this in `tests/types/test_definition_order.py:174` and `tests/types/test_definition_order.py:201`.
 
-Example failure shape:
+If Worker 2 implements the wording literally, assigned relation fields can receive a synthetic `PendingRelationAnnotation` class annotation even though the consumer-owned `StrawberryField` should be the only source of truth. That risks changing Strawberry field construction and violates the spec's own risk note that direct relation annotations remain unchanged.
 
-- `AdminItemType` registers for `Item` first, with no `Meta.primary`.
-- `CategoryType` is declared next. `registry.get(Item)` returns the single registered `AdminItemType`, so `CategoryType.items` is immediately annotated as `list[AdminItemType]`, not recorded as pending.
-- `ItemType(primary=True)` registers later.
-- Finalization sees one primary and succeeds, but `CategoryType.items` is already frozen to `AdminItemType`.
-
-That violates the headline contract that relations resolve to the primary type and breaks definition-order independence. The spec should require `_build_annotations` to defer relation binding unless the related model has an explicit primary already, or more simply defer all relation annotations to finalization so the final primary/single-type state is known. Add a regression test where secondary-before-relation-before-primary still finalizes the relation to the primary.
-
-### H2. Optimizer planning loses the actual secondary return type
-
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:387`, `docs/spec-014-meta_primary-0_0_6.md:390`, `docs/spec-014-meta_primary-0_0_6.md:508`, `docs/spec-014-meta_primary-0_0_6.md:533`
-
-The spec says secondary-type resolvers stay planable because `model_for_type(AdminItemType) is Item`, but the current optimizer flow converts the GraphQL return type to only a model. From there, `plan_optimizations(..., model=Item)` calls `registry.get(Item)`, which the spec changes to return the primary type. A root resolver returning `AdminItemType` would therefore plan against `ItemType`'s `field_map` and `optimizer_hints`, not `AdminItemType`'s.
-
-The spec also says the plan cache key includes the resolver return type, but current code keys on the target model, so primary and secondary resolvers for the same model can share the wrong cached plan.
-
-The spec needs an optimizer design change: preserve the resolved origin type alongside the model, pass that source type into the walker for the root field-map/hints lookup, and include that type in the cache key. Keep `registry.get(related_model)` for nested default relation targets if the default target should be primary. Add a test where a secondary type exposes a field or hint not present on the primary, and verify the optimizer plans from the secondary definition.
-
-### H3. The proposed schema-audit change skips reachable secondary types
-
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:99`, `docs/spec-014-meta_primary-0_0_6.md:388`, `docs/spec-014-meta_primary-0_0_6.md:542`
-
-Switching `DjangoOptimizerExtension.check_schema()` from `registry.iter_types()` to `primary_or_single_per_model()` makes the audit inspect only one type per model. That misses relation fields exposed only on a reachable secondary type.
-
-For example, if `ItemType(primary=True)` exposes only scalars and a reachable `AdminItemType` exposes `category`, the audit must still check `AdminItemType.category`. Skipping secondary types would let missing relation targets or bad optimizer coverage pass silently. The "no double-warn" goal should be solved by iterating reachable types and deduplicating warning keys if needed, not by dropping secondary types from the audit.
+Required spec change: say "always defer auto-synthesized relation fields" and explicitly preserve the existing early `if field.name in consumer_authored_fields: continue` behavior. Add Slice 4 regression checks that annotation-only and assigned relation overrides still pass after the always-defer change.
 
 ## Medium-Severity Findings
 
-### M1. `register_with_definition` rollback can remove a pre-existing idempotent registration
+### M1. `register()` still allows a primary flag flip from `True` to `False`
 
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:45`, `docs/spec-014-meta_primary-0_0_6.md:502`, `docs/spec-014-meta_primary-0_0_6.md:522`
+Spec refs: `docs/spec-014-meta_primary-0_0_6.md:49`, `docs/spec-014-meta_primary-0_0_6.md:50`, `docs/spec-014-meta_primary-0_0_6.md:316`, `docs/spec-014-meta_primary-0_0_6.md:606`
 
-The rollback instruction says to pop from `_types[model]`, pop `_models`, and clear `_primaries` whenever `register_definition` fails. With the new idempotent `register()` behavior, `register_with_definition()` can call `register()` for a type that was already registered and therefore did not append anything. If `register_definition()` then raises because a different definition already exists, a naive rollback would remove the earlier valid registration.
+The text says primary state is immutable and same-type re-registration with a flipped primary flag raises. The pseudocode only catches the `False -> True` flip:
 
-The registry API should track whether `register()` actually appended/set state, or snapshot prior state before calling it, and only roll back state created by the current call. Add a test that pre-registers a type/definition, calls `register_with_definition()` again with the same type and a different definition, and asserts the original `_types`, `_models`, `_primaries`, and definition remain intact after the error.
+`if primary and self._primaries.get(model) is not type_cls: raise ...`
 
-### M2. The KANBAN done-card path contradicts the no-archive instruction
+If `T` is already registered as primary, `register(Model, T, primary=False)` returns `False` and silently leaves the primary in place. That contradicts the stated "primary flag cannot be flipped" contract.
 
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:132`, `docs/spec-014-meta_primary-0_0_6.md:176`, `docs/spec-014-meta_primary-0_0_6.md:498`
+Recommended fix: in the same-type branch, compare the requested flag to stored state:
 
-The verbatim `DONE-014` body says the scope is per `docs/SPECS/spec-014-meta_primary-0_0_6.md`, but Slice 6 explicitly says this spec stays at `docs/spec-014-meta_primary-0_0_6.md` and archival is opt-in. If workers follow the no-archive instruction, the KANBAN card will point at a nonexistent or stale path.
+`stored_primary = self._primaries.get(model) is type_cls`
 
-Update the drop-in body to reference `docs/spec-014-meta_primary-0_0_6.md`, or make archival mandatory and align Slice 6 / Definition of done with that.
+`if primary != stored_primary: raise ConfigurationError(...)`
+
+Add a test for `register(Model, T, primary=True)` followed by `register(Model, T, primary=False)`.
+
+### M2. Existing tests that assert old behavior need explicit slice ownership
+
+Spec refs: `docs/spec-014-meta_primary-0_0_6.md:63`, `docs/spec-014-meta_primary-0_0_6.md:116`, `docs/spec-014-meta_primary-0_0_6.md:592`
+
+The spec adds new tests but does not explicitly update current tests that will fail as soon as the behavior changes:
+
+- `tests/test_registry.py:57` still expects registering a second type for the same model to raise.
+- `tests/types/test_base.py:68` still expects declaring a second `DjangoType` for the same model to raise.
+- `tests/types/test_base.py:509`, `:526`, `:549`, and `:598` assert eager relation annotations before `finalize_django_types()`. The always-defer change makes those pre-finalize assertions intentionally stale.
+
+Add checklist items in the relevant slices to rewrite these tests in the same commit as the behavior change. Otherwise a worker following only the added-test list can produce a locally focused green run while the full suite fails.
 
 ## Low-Severity Findings
 
-### L1. Version-bump no-op wording is too narrow for the current repo state
+### L1. Plan-cache wording still contradicts the H2 fix
 
-Spec refs: `docs/spec-014-meta_primary-0_0_6.md:111`, `docs/spec-014-meta_primary-0_0_6.md:119`, `docs/spec-014-meta_primary-0_0_6.md:120`, `docs/spec-014-meta_primary-0_0_6.md:545`
+Spec refs: `docs/spec-014-meta_primary-0_0_6.md:612`, `docs/spec-014-meta_primary-0_0_6.md:516`, `docs/spec-014-meta_primary-0_0_6.md:658`
 
-The repo is already at `0.0.6` from the prior scalar card (`pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `docs/FEATURES.md`, `README.md`, `docs/README.md`, and `uv.lock`). The spec mostly frames no-op handling around `WIP-ALPHA-015` landing first. Broaden the wording to "if already bumped by any prior 0.0.6 card" so workers do not chase already-completed version edits.
+Line 612 says the plan cache key includes the resolver return type, "not the model." The H2 fix elsewhere says the key includes the origin type alongside the model. The latter matches current cache shape and the intended change. Rewrite the edge-case bullet to say "includes the resolver's origin type alongside the model."
+
+### L2. One Slice 5 no-op sentence still names only `WIP-ALPHA-015`
+
+Spec ref: `docs/spec-014-meta_primary-0_0_6.md:598`
+
+The detailed Slice 5 checklist now correctly says the repo is already at `0.0.6` from `spec-013`, but the Implementation plan summary still says "No-op if `WIP-ALPHA-015-0.0.6` already bumped them." Broaden that sentence to "no-op if any prior `0.0.6` card already bumped them" to match the rest of the revision.
+
+### L3. Finalizer idempotency language does not match the current guard
+
+Spec ref: `docs/spec-014-meta_primary-0_0_6.md:614`
+
+The spec says calling `finalize_django_types()` after a successful finalize re-runs the audit. Current finalizer behavior returns immediately when `registry.is_finalized()` is true. Either behavior is defensible because registry mutation is already blocked after finalization, but the spec should choose one explicitly: keep the current no-op guard and say the audit does not re-run after finalization, or require moving the audit before the finalized guard.
 
 ## Notes
 
-I did not review implementation because this request is for the new spec only. No tests were run; the feedback is based on reading the spec and current source.
+The prior high-severity findings around wrong-primary relation binding, root optimizer planning for secondary return types, schema-audit secondary coverage, rollback corruption, KANBAN path, and broad version no-op handling are substantially addressed in revision 2. No tests were run; this is a spec review only.

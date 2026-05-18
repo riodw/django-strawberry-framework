@@ -54,20 +54,6 @@ def test_get_returns_none_for_unregistered_model(fresh_registry):
     assert fresh_registry.get(Category) is None
 
 
-def test_register_collision_raises(fresh_registry):
-    """Registering twice for the same model raises ``ConfigurationError``."""
-
-    class CategoryTypeA:
-        pass
-
-    class CategoryTypeB:
-        pass
-
-    fresh_registry.register(Category, CategoryTypeA)
-    with pytest.raises(ConfigurationError, match="already registered"):
-        fresh_registry.register(Category, CategoryTypeB)
-
-
 def test_register_same_class_against_two_models_raises(fresh_registry):
     """Registering the same ``type_cls`` against two models raises ``ConfigurationError``.
 
@@ -697,3 +683,438 @@ def test_register_with_definition_rolls_back_register_on_definition_failure(fres
     # Re-registration after the rollback now sees a clean slate for the model.
     fresh_registry.register_with_definition(Category, CategoryType, sentinel)
     assert fresh_registry.get(Category) is CategoryType
+
+
+# ---------------------------------------------------------------------------
+# Slice 1 (spec-014-meta_primary-0_0_6.md) — multi-type storage + primary
+# tracking. Tests below exercise the new contract through ``register`` /
+# ``register_with_definition`` directly with plain test classes (no
+# ``DjangoType`` subclasses) per spec slice-1 paragraph at ``spec:656``.
+# ---------------------------------------------------------------------------
+
+
+def test_register_two_types_same_model_without_primary_allows_both_in_types_for(fresh_registry):
+    """Two types for one model without ``primary`` co-exist; both appear in ``types_for``."""
+
+    class ItemTypeA:
+        pass
+
+    class ItemTypeB:
+        pass
+
+    fresh_registry.register(Item, ItemTypeA)
+    fresh_registry.register(Item, ItemTypeB)
+    assert fresh_registry.types_for(Item) == (ItemTypeA, ItemTypeB)
+    assert fresh_registry.primary_for(Item) is None
+
+
+def test_register_second_type_for_same_model_no_longer_raises_collision(fresh_registry):
+    """Second type for an existing model no longer raises (collision path retired)."""
+
+    class ItemTypeA:
+        pass
+
+    class ItemTypeB:
+        pass
+
+    fresh_registry.register(Item, ItemTypeA)
+    try:
+        fresh_registry.register(Item, ItemTypeB)
+    except ConfigurationError:
+        pytest.fail("Slice 1: second registration without primary must not raise")
+
+
+def test_register_same_type_twice_is_idempotent(fresh_registry):
+    """Calling ``register(Model, T)`` twice is a no-op for the second call."""
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType)
+    second = fresh_registry.register(Item, ItemType)
+    assert second is False
+    assert fresh_registry.types_for(Item) == (ItemType,)
+
+
+def test_register_primary_flag_sets_primary_for(fresh_registry):
+    """``primary=True`` populates ``_primaries`` and ``primary_for`` reads it back."""
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType, primary=True)
+    assert fresh_registry.primary_for(Item) is ItemType
+    assert fresh_registry.get(Item) is ItemType
+    assert fresh_registry.types_for(Item) == (ItemType,)
+
+
+def test_register_two_primaries_for_same_model_raises_configuration_error(fresh_registry):
+    """Second ``primary=True`` on the same model raises with ``already declared primary``."""
+
+    class ItemType:
+        pass
+
+    class AdminItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType, primary=True)
+    with pytest.raises(ConfigurationError, match="already declared primary as ItemType"):
+        fresh_registry.register(Item, AdminItemType, primary=True)
+    # The duplicate-primary attempt did not append AdminItemType.
+    assert fresh_registry.types_for(Item) == (ItemType,)
+    assert fresh_registry.primary_for(Item) is ItemType
+
+
+def test_register_same_type_re_register_with_flipped_primary_false_raises(fresh_registry):
+    """Flip of stored ``primary=True`` to ``primary=False`` raises (M1 regression)."""
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType, primary=True)
+    with pytest.raises(ConfigurationError, match="primary flag cannot be flipped"):
+        fresh_registry.register(Item, ItemType, primary=False)
+
+
+def test_register_same_type_re_register_with_flipped_primary_true_raises(fresh_registry):
+    """Flip of stored ``primary=False`` to ``primary=True`` raises (symmetric guard)."""
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType)
+    with pytest.raises(ConfigurationError, match="primary flag cannot be flipped"):
+        fresh_registry.register(Item, ItemType, primary=True)
+
+
+def test_register_with_definition_rollback_clears_primary(fresh_registry):
+    """``register_with_definition`` rolls back ``_primaries`` for state it added."""
+
+    class ItemType:
+        pass
+
+    # Pre-poison ``register_definition`` for ItemType so the second
+    # ``register_with_definition`` call raises after ``register`` succeeded.
+    sentinel = object()
+    fresh_registry.register_definition(ItemType, sentinel)
+
+    with pytest.raises(ConfigurationError, match="already has a registered DjangoTypeDefinition"):
+        fresh_registry.register_with_definition(Item, ItemType, object(), primary=True)
+
+    assert fresh_registry.types_for(Item) == ()
+    assert fresh_registry.model_for_type(ItemType) is None
+    assert fresh_registry.primary_for(Item) is None
+    # Pre-existing definition pin survives.
+    assert fresh_registry.get_definition(ItemType) is sentinel
+
+
+def test_register_with_definition_rollback_restores_pre_existing_primary(fresh_registry):
+    """Rollback restores ``_primaries[model]`` to the pre-existing primary.
+
+    Pins the ``else: self._primaries[model] = pre_primary`` branch of the
+    rollback in ``register_with_definition``: when a model already has a
+    primary set and a NEW non-primary type's ``register()`` succeeds, then
+    ``register_definition`` raises, the rollback must restore the
+    pre-existing primary rather than popping it.
+    """
+
+    class ItemType:
+        pass
+
+    class AdminItemType:
+        pass
+
+    # Set up a pre-existing primary on Item.
+    fresh_registry.register_with_definition(Item, ItemType, object(), primary=True)
+    assert fresh_registry.primary_for(Item) is ItemType
+
+    # Pre-poison the definition for AdminItemType so register_definition raises
+    # AFTER register() succeeds (appended=True for the new non-primary type).
+    sentinel = object()
+    fresh_registry.register_definition(AdminItemType, sentinel)
+
+    with pytest.raises(ConfigurationError, match="already has a registered DjangoTypeDefinition"):
+        fresh_registry.register_with_definition(Item, AdminItemType, object())
+
+    # AdminItemType was rolled back from ``_types`` and ``_models``.
+    assert fresh_registry.types_for(Item) == (ItemType,)
+    assert fresh_registry.model_for_type(AdminItemType) is None
+    # ``_primaries[Item]`` is still ``ItemType`` — the else-branch restore ran.
+    assert fresh_registry.primary_for(Item) is ItemType
+
+
+def test_register_with_definition_idempotent_re_register_does_not_corrupt_state(fresh_registry):
+    """A re-register-with-different-definition failure leaves pre-existing state intact."""
+
+    class ItemType:
+        pass
+
+    def1 = object()
+    def2 = object()
+    assert def2 is not def1
+
+    fresh_registry.register_with_definition(Item, ItemType, def1)
+
+    with pytest.raises(ConfigurationError, match="already has a registered DjangoTypeDefinition"):
+        fresh_registry.register_with_definition(Item, ItemType, def2)
+
+    assert fresh_registry.types_for(Item) == (ItemType,)
+    assert fresh_registry.model_for_type(ItemType) is Item
+    assert fresh_registry.get_definition(ItemType) is def1
+    assert fresh_registry.primary_for(Item) is None
+
+
+def test_register_with_definition_idempotent_re_register_preserves_primary(fresh_registry):
+    """Primary-preservation corollary: the pre-existing primary survives a re-register failure."""
+
+    class ItemType:
+        pass
+
+    def1 = object()
+    def2 = object()
+    fresh_registry.register_with_definition(Item, ItemType, def1, primary=True)
+    assert fresh_registry.primary_for(Item) is ItemType
+
+    with pytest.raises(ConfigurationError, match="already has a registered DjangoTypeDefinition"):
+        fresh_registry.register_with_definition(Item, ItemType, def2, primary=True)
+
+    assert fresh_registry.primary_for(Item) is ItemType
+    assert fresh_registry.types_for(Item) == (ItemType,)
+
+
+def test_register_returns_true_for_new_state(fresh_registry):
+    """First registration returns ``True`` (state was added)."""
+
+    class ItemType:
+        pass
+
+    assert fresh_registry.register(Item, ItemType) is True
+
+
+def test_register_returns_false_for_idempotent_re_register(fresh_registry):
+    """Idempotent re-register returns ``False`` (no state added)."""
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType)
+    assert fresh_registry.register(Item, ItemType) is False
+
+
+def test_get_returns_single_type_when_one_registered_no_primary(fresh_registry):
+    """``get(Model)`` returns the lone type even when ``primary`` is not declared."""
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType)
+    assert fresh_registry.get(Item) is ItemType
+
+
+def test_get_returns_primary_when_multiple_and_primary_declared(fresh_registry):
+    """``get(Model)`` returns the explicit primary when multiple types are registered."""
+
+    class ItemType:
+        pass
+
+    class AdminItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType, primary=True)
+    fresh_registry.register(Item, AdminItemType)
+    assert fresh_registry.get(Item) is ItemType
+
+
+def test_get_returns_none_when_multiple_and_no_primary(fresh_registry):
+    """``get(Model)`` returns ``None`` when multi-type and no primary declared."""
+
+    class ItemType:
+        pass
+
+    class AdminItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType)
+    fresh_registry.register(Item, AdminItemType)
+    assert fresh_registry.get(Item) is None
+    # Distinguishing path: types_for still surfaces the registered pair.
+    assert fresh_registry.types_for(Item) == (ItemType, AdminItemType)
+
+
+def test_primary_for_returns_none_when_only_implicit_single_type(fresh_registry):
+    """``primary_for`` is strictly ``_primaries``; the single-type convenience lives on ``get``."""
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType)
+    assert fresh_registry.primary_for(Item) is None
+    assert fresh_registry.get(Item) is ItemType
+
+
+def test_types_for_preserves_registration_order(fresh_registry):
+    """``types_for`` returns registrations in the order they happened."""
+
+    class A:
+        pass
+
+    class B:
+        pass
+
+    class C:
+        pass
+
+    fresh_registry.register(Item, A)
+    fresh_registry.register(Item, B)
+    fresh_registry.register(Item, C)
+    assert fresh_registry.types_for(Item) == (A, B, C)
+
+
+def test_iter_types_yields_each_type_once_when_multiple_registered_for_same_model(fresh_registry):
+    """``iter_types`` yields one pair per registered type; multi-type models appear repeatedly."""
+
+    class A:
+        pass
+
+    class B:
+        pass
+
+    fresh_registry.register(Item, A, primary=True)
+    fresh_registry.register(Item, B)
+    pairs = list(fresh_registry.iter_types())
+    assert pairs == [(Item, A), (Item, B)]
+
+
+def test_register_same_type_against_two_models_still_raises(fresh_registry):
+    """Reverse-collision contract is preserved after the Slice 1 rewrite (spec:108)."""
+
+    class SharedType:
+        pass
+
+    fresh_registry.register(Category, SharedType)
+    with pytest.raises(ConfigurationError, match="already registered against Category"):
+        fresh_registry.register(Item, SharedType)
+
+
+def test_clear_resets_primaries(fresh_registry):
+    """``clear()`` wipes ``_primaries`` alongside the other registry maps."""
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType, primary=True)
+    fresh_registry.clear()
+    assert fresh_registry.primary_for(Item) is None
+    assert fresh_registry.types_for(Item) == ()
+
+
+def test_models_with_multiple_types_yields_only_models_with_two_or_more(fresh_registry):
+    """``models_with_multiple_types`` reports only models with ``>= 2`` registered types."""
+
+    class CategoryType:
+        pass
+
+    class ItemTypeA:
+        pass
+
+    class ItemTypeB:
+        pass
+
+    class PropertyTypeA:
+        pass
+
+    class PropertyTypeB:
+        pass
+
+    class PropertyTypeC:
+        pass
+
+    fresh_registry.register(Category, CategoryType)
+    fresh_registry.register(Item, ItemTypeA)
+    fresh_registry.register(Item, ItemTypeB)
+    fresh_registry.register(Property, PropertyTypeA)
+    fresh_registry.register(Property, PropertyTypeB)
+    fresh_registry.register(Property, PropertyTypeC)
+    multi = sorted(fresh_registry.models_with_multiple_types(), key=lambda m: m.__name__)
+    assert multi == [Item, Property]
+
+
+# ---------------------------------------------------------------------------
+# Slice 3 (spec-014-meta_primary-0_0_6.md) — finalize-time ambiguity audit.
+# Tests below cover ``audit_primary_ambiguity()`` running inside
+# ``finalize_django_types()``. The audit-success and audit-vs-unresolved
+# tests live in ``tests/types/test_definition_order.py``; this file hosts
+# the raise-at-finalize and once-per-build regression coverage.
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_raises_when_model_has_multiple_types_no_primary():
+    """``finalize_django_types`` raises when a model has 2+ types and no primary."""
+
+    class ItemTypeA(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class ItemTypeB(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+
+    msg = str(exc_info.value)
+    assert "Models with multiple registered DjangoType subclasses and no primary" in msg
+    assert "Item" in msg
+    assert "ItemTypeA" in msg
+    assert "ItemTypeB" in msg
+
+
+def test_finalize_ambiguity_error_message_contains_actionable_fix():
+    """The ambiguity error message ends with the actionable ``Declare Meta.primary`` sentence."""
+
+    class ItemTypeA(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class ItemTypeB(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+
+    assert ("Declare Meta.primary = True on exactly one of the registered DjangoType subclasses.") in str(
+        exc_info.value,
+    )
+
+
+def test_audit_runs_once_per_build(monkeypatch):
+    """The ambiguity audit runs exactly once per finalize-cycle build (M1 regression).
+
+    Pins that ``audit_primary_ambiguity`` sits *below* the
+    ``registry.is_finalized()`` short-circuit in ``finalize_django_types``;
+    a second ``finalize_django_types()`` call must short-circuit without
+    re-auditing.
+    """
+    calls = []
+    original = registry.models_with_multiple_types
+
+    def spy():
+        calls.append(None)
+        return original()
+
+    monkeypatch.setattr(registry, "models_with_multiple_types", spy)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    finalize_django_types()  # second call must hit the is_finalized() guard
+
+    assert len(calls) == 1

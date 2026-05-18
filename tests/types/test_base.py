@@ -70,13 +70,15 @@ def test_registry_collision_raises_configuration_error():
         class Meta:
             model = Category
             fields = CATEGORY_SCALAR_FIELDS
+            primary = True
 
-    with pytest.raises(ConfigurationError, match="already registered"):
+    with pytest.raises(ConfigurationError, match="already declared primary"):
 
         class CategoryTypeB(DjangoType):
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
+                primary = True
 
 
 def test_registry_clear_drops_types_and_enums():
@@ -268,6 +270,129 @@ def test_meta_optimizer_hints_for_selected_scalar_field_raises():
                 model = Category
                 fields = ("id", "name")
                 optimizer_hints = {"name": OptimizerHint.SKIP}
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 — Meta.primary recognition
+# ---------------------------------------------------------------------------
+
+
+def test_meta_primary_true_registers_type_as_primary():
+    """``Meta.primary = True`` populates ``registry._primaries`` for the model."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    assert registry.primary_for(Item) is ItemType
+
+
+def test_meta_primary_false_does_not_register_primary():
+    """An explicit ``Meta.primary = False`` is treated identically to absent."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = False
+
+    assert registry.primary_for(Item) is None
+    # Single-type backward-compat: ``get()`` still returns the lone type even
+    # without an explicit primary flag (Slice 1 Decision 4).
+    assert registry.get(Item) is ItemType
+
+
+def test_meta_primary_absent_does_not_register_primary():
+    """No ``Meta.primary`` key is the default ``False`` path."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    assert registry.primary_for(Item) is None
+    assert registry.get(Item) is ItemType
+
+
+@pytest.mark.parametrize("bad", ["yes", 1, 0, [], None, 1.0])
+def test_meta_primary_non_bool_raises_configuration_error(bad):
+    """``Meta.primary`` must be a ``bool``; any other shape raises.
+
+    ``isinstance(1, bool)`` is ``False`` (``bool`` is a subclass of ``int``,
+    not the other way around) so the guard correctly rejects the ``1``/``0``
+    integer trap that would otherwise pass a duck-typed bool check.
+    """
+    with pytest.raises(ConfigurationError, match="must be a bool"):
+
+        class T(DjangoType):
+            class Meta:
+                model = Item
+                fields = ("id", "name")
+                primary = bad
+
+
+def test_meta_primary_propagates_to_definition():
+    """The ``primary`` flag is stored on ``DjangoTypeDefinition`` for introspection."""
+
+    class ItemTypePrimary(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    assert registry.get_definition(ItemTypePrimary).primary is True
+
+
+def test_meta_primary_absent_definition_primary_defaults_false():
+    """Absent ``Meta.primary`` lands ``False`` on the dataclass default."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    assert registry.get_definition(ItemType).primary is False
+
+
+def test_two_types_same_model_one_primary_both_register_successfully():
+    """Two ``DjangoType`` subclasses on one model, exactly one primary, both register."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    assert registry.types_for(Item) == (ItemType, AdminItemType)
+    assert registry.primary_for(Item) is AdminItemType
+    # ``get()`` returns the declared primary even though ``ItemType`` registered
+    # first (Slice 1 Decision 4: primary wins over registration order).
+    assert registry.get(Item) is AdminItemType
+
+
+def test_two_primary_types_same_model_raises():
+    """Two ``Meta.primary = True`` declarations for the same model raise at class creation."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    with pytest.raises(ConfigurationError, match="already declared primary"):
+
+        class AdminItemType(DjangoType):
+            class Meta:
+                model = Item
+                fields = ("id", "name")
+                primary = True
 
 
 # ---------------------------------------------------------------------------
@@ -507,7 +632,7 @@ def test_convert_scalar_raises_on_unsupported_field_type(monkeypatch):
 
 
 def test_relation_fk_to_target_djangotype():
-    """Forward FK on Item maps to the registered ``CategoryType``."""
+    """Forward FK on Item maps to the registered ``CategoryType`` post-finalize."""
 
     class CategoryType(DjangoType):
         class Meta:
@@ -520,6 +645,7 @@ def test_relation_fk_to_target_djangotype():
             # Skip ``entries`` reverse rel — Entry is unregistered in this test.
             fields = ("id", "name", "category")
 
+    finalize_django_types()
     assert ItemType.__annotations__["category"] is CategoryType
 
 
@@ -541,6 +667,7 @@ def test_relation_reverse_fk_returns_list():
             model = Category
             fields = ("id", "name", "items", "properties")
 
+    finalize_django_types()
     a = CategoryType.__annotations__
     assert a["items"] == list[ItemType]
     assert a["properties"] == list[PropertyType]
@@ -563,6 +690,7 @@ def test_relation_meta_default_when_neither_fields_nor_exclude_set():
         class Meta:
             model = Category
 
+    finalize_django_types()
     a = CategoryType.__annotations__
     assert {"id", "name", "items", "properties"} <= set(a)
     assert a["items"] == list[ItemType]
@@ -620,6 +748,7 @@ def test_relation_full_chain_when_all_targets_registered():
             model = Entry
             fields = ("id", "value", "property", "item")
 
+    finalize_django_types()
     assert PropertyType.__annotations__["category"] is CategoryType
     assert ItemType.__annotations__["category"] is CategoryType
     assert EntryType.__annotations__["property"] is PropertyType

@@ -98,9 +98,9 @@ A quick summary:
 - `DjangoOptimizerExtension` — automatic ORM optimization: one selection-tree walk produces a `select_related` / `prefetch_related` / `only()` plan that cooperates with querysets you've already shaped (consumer entries are respected, not clobbered). Plan caching, FK-id elision for `{ relation { id } }`, `get_queryset` → `Prefetch` downgrade so visibility filters survive joins, and strictness mode (`off` / `warn` / `raise`) for accidental-N+1 detection are all in the box. See [`FEATURES.md`](FEATURES.md) for the full optimizer surface.
 - `OptimizerHint` — per-relation overrides (`SKIP`, `select_related`, `prefetch_related`, custom `Prefetch`)
 - model / type registry and `auto` re-export from Strawberry
+- `Meta.primary` — multiple `DjangoType` subclasses per Django model with explicit primary-flag opt-in
 
 **Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
-- `Meta.primary` for multiple `DjangoType`s per model
 - `DjangoListField` (non-Relay list) and `DjangoConnectionField` (Relay connection)
 - filters, orders, and permissions / cascade permissions
 - mutations + auto-generated `Input` types, plus form-based and DRF-serializer-based mutation flavors

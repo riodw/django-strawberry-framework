@@ -29,18 +29,27 @@ def plan_optimizations(
     selected_fields: list[Any],
     model: type[models.Model],
     info: Any | None = None,
+    *,
+    source_type: type | None = None,
 ) -> OptimizationPlan:
-    """Walk the selection tree and produce an ``OptimizationPlan``."""
+    """Walk the selection tree and produce an ``OptimizationPlan``.
+
+    ``source_type`` is the resolver's actual Strawberry return type
+    (``origin``). Threaded into the root ``_walk_selections`` call so the
+    root ``_resolve_field_map(...)`` uses that type's ``field_map`` /
+    ``optimizer_hints`` instead of ``registry.get(model)`` (which
+    returns the primary). Nested relation traversal stays unchanged —
+    nested ``_walk_selections`` calls leave ``source_type`` ``None`` so
+    nested targets continue to route through the primary.
+    """
     plan = OptimizationPlan()
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 4): accept source_type and
-    # thread it to the root _walk_selections/_resolve_field_map call so a root
-    # resolver returning a secondary DjangoType plans from that type's field_map.
     _walk_selections(
         selected_fields,
         model,
         plan,
         info=info,
         runtime_prefixes=(runtime_path_from_info(info),),
+        source_type=source_type,
     )
     # Finalise at handoff: list fields become tuples so post-walker
     # mutation (by callers, the plan cache, or downstream resolvers)
@@ -71,7 +80,11 @@ def _target_has_custom_get_queryset(target_type: type | None) -> bool:
     return target_type is not None and target_type.has_custom_get_queryset()
 
 
-def _resolve_field_map(model: type[models.Model]) -> tuple[type | None, dict[str, Any]]:
+def _resolve_field_map(
+    model: type[models.Model],
+    *,
+    source_type: type | None = None,
+) -> tuple[type | None, dict[str, Any]]:
     """Return ``(registered DjangoType, field_map)`` for ``model``.
 
     Prefers the canonical ``DjangoTypeDefinition.field_map`` registered
@@ -79,15 +92,16 @@ def _resolve_field_map(model: type[models.Model]) -> tuple[type | None, dict[str
     ``model._meta.get_fields()`` walk when the model has no registered
     definition. Centralizes the brittle Django-private ``_meta`` access
     used by the walker.
+
+    ``source_type`` carries the root resolver's actual return type when
+    the call comes from ``plan_optimizations`` — that type's field_map /
+    optimizer_hints are used so a secondary-return resolver plans
+    against the secondary's metadata rather than the primary's.
+    Nested ``_walk_selections`` calls leave ``source_type`` ``None``,
+    which routes through ``registry.get(model)`` and resolves nested
+    relation targets to the primary (the spec-014 nested contract).
     """
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 4): add keyword-only
-    # source_type: type | None = None. If source_type is provided, use it as
-    # type_cls directly; otherwise keep registry.get(model) for nested paths.
-    # Pseudo:
-    # - type_cls = source_type if source_type is not None else registry.get(model)
-    # - definition = registry.get_definition(type_cls)
-    # - return type_cls and definition.field_map or fallback model fields.
-    type_cls = registry.get(model)
+    type_cls = source_type if source_type is not None else registry.get(model)
     definition = registry.get_definition(type_cls) if type_cls is not None else None
     field_map = (
         definition.field_map if definition is not None else {f.name: f for f in model._meta.get_fields()}
@@ -130,13 +144,20 @@ def _walk_selections(
     prefix: str = "",
     info: Any | None = None,
     runtime_prefixes: tuple[tuple[str, ...], ...] = ((),),
+    *,
+    source_type: type | None = None,
 ) -> None:
-    """Recursive workhorse: descend one normalized level of the selection tree."""
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 4): when this is the root call
-    # from plan_optimizations, pass source_type through to _resolve_field_map.
-    # Recursive calls for nested relations should leave source_type unset so
-    # relation targets continue to resolve through the primary.
-    type_cls, field_map = _resolve_field_map(model)
+    """Recursive workhorse: descend one normalized level of the selection tree.
+
+    ``source_type`` is set only on the root invocation from
+    ``plan_optimizations`` so the resolver's actual Strawberry return
+    type drives the root ``_resolve_field_map`` lookup. Recursive
+    nested calls (``_plan_select_relation`` and
+    ``_build_prefetch_child_queryset`` below) intentionally omit it so
+    nested relation targets keep routing through ``registry.get(model)``
+    and resolve to the primary type.
+    """
+    type_cls, field_map = _resolve_field_map(model, source_type=source_type)
     merged = _merge_aliased_selections(_included_field_selections(selections))
     for sel in merged:
         django_name = snake_case(sel.name)
@@ -485,14 +506,14 @@ def _selected_scalar_names(
     """Return selected scalar Django field names, or ``None`` when elision is unsafe."""
     if model is None:
         return None
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 4 / rev6 M1): nested-only —
-    # do NOT thread source_type here. The only caller is _plan_select_relation
-    # for FK-id elision; the model argument is django_field.related_model,
-    # never the resolver's root return type. Nested relation targets correctly
-    # route through the primary via registry.get(model), which is what the
-    # default _resolve_field_map(model) call already does. The scalar-only
-    # secondary-type regression is exercised through the root _walk_selections
-    # path, not through this helper.
+    # Nested-only: do NOT thread source_type here. The only caller is
+    # _plan_select_relation for FK-id elision; the model argument is
+    # django_field.related_model, never the resolver's root return type.
+    # Nested relation targets correctly route through the primary via
+    # registry.get(model), which is what the default _resolve_field_map(model)
+    # call already does. The scalar-only secondary-type regression is
+    # exercised through the root _walk_selections path, not through this
+    # helper. (spec-014 rev6 M1 audit invariant.)
     _type_cls, field_map = _resolve_field_map(model)
     scalar_names: set[str] = set()
     for sel in _merge_aliased_selections(_included_field_selections(selections)):

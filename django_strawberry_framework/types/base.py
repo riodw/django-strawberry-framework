@@ -37,7 +37,7 @@ from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 from ..registry import registry
 from ..utils.strings import snake_case
-from .converters import convert_scalar, resolved_relation_annotation
+from .converters import convert_scalar
 from .definition import DjangoTypeDefinition
 from .relations import PendingRelation, PendingRelationAnnotation
 from .relay import install_is_type_of
@@ -61,8 +61,7 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "description",
         "optimizer_hints",
         "interfaces",
-        # TODO(spec-014-meta_primary-0_0_6.md Slice 2): add "primary" as a
-        # supported Meta key once the registry accepts primary tracking.
+        "primary",
     },
 )
 
@@ -91,14 +90,7 @@ class DjangoType:
 
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         optimizer_hints = _meta_optimizer_hints(meta)
-        # TODO(spec-014-meta_primary-0_0_6.md Slice 2): read
-        # primary = getattr(meta, "primary", False), store it on
-        # DjangoTypeDefinition, and pass primary=primary into
-        # registry.register_with_definition(...).
-        # Pseudo:
-        # - capture the Meta.primary bool after validation.
-        # - store it on DjangoTypeDefinition for read-only introspection.
-        # - forward it to registry.register_with_definition as primary=...
+        primary = getattr(meta, "primary", False)
         consumer_annotations = dict(getattr(cls, "__annotations__", {}))
         consumer_annotated_relation_fields = frozenset(
             field.name for field in fields if field.is_relation and field.name in consumer_annotations
@@ -138,8 +130,9 @@ class DjangoType:
             consumer_assigned_relation_fields=consumer_assigned_relation_fields,
             consumer_assigned_scalar_fields=consumer_assigned_scalar_fields,
             interfaces=interfaces,
+            primary=primary,
         )
-        registry.register_with_definition(meta.model, cls, definition)
+        registry.register_with_definition(meta.model, cls, definition, primary=primary)
         for pending_relation in pending:
             registry.add_pending_relation(pending_relation)
         cls.__annotations__ = {**synthesized, **consumer_annotations}
@@ -403,11 +396,10 @@ def _validate_meta(meta: type) -> tuple[type, ...]:
     if "fields" in declared and "exclude" in declared:
         raise ConfigurationError("Meta.fields and Meta.exclude are mutually exclusive")
 
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 2): validate Meta.primary
-    # before the unknown-key guard after "primary" is in ALLOWED_META_KEYS.
-    # Pseudo:
-    # - primary = getattr(meta, "primary", False)
-    # - if not isinstance(primary, bool): raise ConfigurationError(...)
+    primary = getattr(meta, "primary", False)
+    if not isinstance(primary, bool):
+        raise ConfigurationError("Meta.primary must be a bool")
+
     deferred = sorted(declared & DEFERRED_META_KEYS)
     if deferred:
         raise ConfigurationError(
@@ -552,12 +544,16 @@ def _build_annotations(
     """Build the annotation dict the Strawberry type decorator consumes.
 
     Field-by-field dispatch: scalar entries in ``fields`` are routed
-    through ``convert_scalar``. Relation entries are handled inline so
-    already-registered target types can use ``resolved_relation_annotation``
-    immediately, while unregistered target types leave a
-    ``PendingRelation`` record for the finalization pass. The caller
-    pre-computes the list with ``_select_fields(meta)`` so this function
-    does not need ``meta``.
+    through ``convert_scalar``. Auto-synthesized relation entries always
+    record a ``PendingRelation`` and set the annotation to
+    ``PendingRelationAnnotation``; ``finalize_django_types()`` resolves
+    them through ``registry.get(...)`` after every type has registered
+    so multi-type / primary semantics apply uniformly. Consumer-authored
+    relation fields (annotation overrides and assigned
+    ``strawberry.field`` objects) short-circuit out of the synthesis
+    loop before the deferral path runs. The caller pre-computes the
+    field list with ``_select_fields(meta)`` so this function does not
+    need ``meta``.
 
     When ``relay.Node`` appears in ``interfaces``, the primary-key field's
     synthesized scalar annotation is dropped from the returned dict so
@@ -632,25 +628,18 @@ def _build_annotations(
                     "a single GraphQL type. Exclude it via Meta.exclude, or supply an "
                     "explicit annotation or resolver.",
                 )
-            # TODO(spec-014-meta_primary-0_0_6.md Slice 4): always defer
-            # auto-synthesized relations instead of eager-binding when the
-            # target type is already registered. Preserve the consumer-authored
-            # short-circuit above so direct annotations and assigned
-            # strawberry.field resolvers can still target secondary types.
-            # Pseudo:
-            # - record the field in the pending relation list.
-            # - set the synthesized annotation to PendingRelationAnnotation.
-            # - remove registry.get()/resolved_relation_annotation eager branch.
-            target_type = registry.get(field.related_model)
-            if target_type is None:
-                pending.append(_record_pending_relation(cls, source_model, field, field_meta))
-                annotations[field.name] = PendingRelationAnnotation
-            else:
-                annotations[field.name] = resolved_relation_annotation(
-                    field,
-                    target_type,
-                    field_meta=field_meta,
-                )
+            # Always defer auto-synthesized relation annotations: the
+            # consumer_authored short-circuit above leaves consumer overrides
+            # alone, and every other relation field becomes a pending record
+            # that ``finalize_django_types()`` resolves through
+            # ``registry.get(...)`` (which returns the primary post-finalize,
+            # or the single registered type when no primary was declared).
+            # The earlier eager-bind branch froze the relation against
+            # whichever type was already registered at ``__init_subclass__``
+            # time, which mis-bound when a secondary was registered before
+            # the primary (the import-order trap closed by spec-014 H1).
+            pending.append(_record_pending_relation(cls, source_model, field, field_meta))
+            annotations[field.name] = PendingRelationAnnotation
         else:
             if field.name in consumer_authored_fields:
                 # A consumer-assigned ``StrawberryField`` (or annotation) on a

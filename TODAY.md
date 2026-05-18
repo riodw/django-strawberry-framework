@@ -259,3 +259,7 @@ Do not turn the commented rich fakeshop design into active code until the featur
 - filters, ordering, aggregates, and fieldsets
 - search fields
 - permission cascade helpers
+
+## Shipped capabilities available but not currently demonstrated in fakeshop
+
+- `Meta.primary` (shipped in `0.0.6`) — multiple `DjangoType` subclasses per Django model with one explicit primary. Fakeshop's `apps/products/schema.py` and `apps/library/schema.py` each declare one `DjangoType` per model, so the multi-type contract is not exercised in the example today; the feature is fully covered by the package test suite. See [`docs/FEATURES.md#metaprimary`](docs/FEATURES.md#metaprimary).

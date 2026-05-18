@@ -46,9 +46,8 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `WIP-ALPHA-014-0.0.6 — Multiple DjangoTypes per model with Meta.primary` — registry-multiplicity + primary-type-resolution work for the remaining `0.0.6` patch. Spec pending.
 - `WIP-ALPHA-015-0.0.6 — Consumer override semantics (scalar fields)` — extends the `DONE-006-0.0.4` relation-field override contract to scalar fields. Spec pending.
-- `0.0.6` shipped progress: `DONE-012-0.0.6` (`FieldMeta` consolidation) and `DONE-013-0.0.6` (deferred scalar conversions) landed in this version; the two WIP cards above complete the `0.0.6` patch.
+- `0.0.6` shipped progress: `DONE-012-0.0.6` (`FieldMeta` consolidation), `DONE-013-0.0.6` (deferred scalar conversions), and `DONE-014-0.0.6` (multiple `DjangoType`s per model with `Meta.primary`) landed in this version; `WIP-ALPHA-015-0.0.6` remains to complete the `0.0.6` patch.
 - Strategic differentiation roadmap (post-`0.0.5`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -66,7 +65,6 @@ For install, local development, testing, and the canonical documentation map, st
 - Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
 - `Meta.interfaces` and Relay Node wiring shipped in `0.0.5` (`DONE-011-0.0.5`); the foundation seam (finalizer phase 2.5, before `strawberry.type(cls)`, with the slot already on `DjangoTypeDefinition`) is the insertion point now applied.
 - Several DjangoType contract gaps remain:
-  - multiple `DjangoType`s per model / `Meta.primary`
   - stable consumer override semantics for **scalar** fields (the foundation slice pinned the contract for relation fields only)
   - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
   - deferred scalar conversions: `BigIntegerField`, `ArrayField`, `JSONField`, `HStoreField`
@@ -79,49 +77,6 @@ For install, local development, testing, and the canonical documentation map, st
 ## Board columns
 
 ## In progress
-
-### WIP-ALPHA-014-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`
-
-Priority: high
-
-Status: ready for a dedicated spec
-
-Current behavior:
-
-- `TypeRegistry.register()` enforces one type per model.
-- Registering a second type for the same model raises `ConfigurationError`.
-
-Why it matters:
-
-- DRF-style usage commonly needs public/admin/list/detail variants for the same model.
-- Relation conversion and optimizer reverse lookup need an explicit primary type instead of import-order behavior.
-
-Recommended direction:
-
-- Introduce `Meta.primary`.
-- Allow multiple types per model only when ambiguity is resolved.
-- Exactly one primary type should drive relation conversion and optimizer model/type reverse lookup.
-
-Definition of done:
-
-- New spec, probably `docs/spec-meta_primary.md`.
-- Registry stores multiple types per model plus one primary.
-- Ambiguity rules are explicit:
-  - one type only: allowed without `primary`
-  - multiple types, exactly one primary: allowed
-  - multiple primaries: error
-  - multiple non-primary types with no primary: error
-- Relation conversion, schema audit, and optimizer target lookup use the primary type consistently.
-- Tests cover all registration and relation-routing cases.
-
-Files likely touched:
-
-- `django_strawberry_framework/registry.py`
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/types/converters.py`
-- `django_strawberry_framework/optimizer/extension.py`
-- `tests/test_registry.py`
-- `tests/types/test_base.py`
 
 ### WIP-ALPHA-015-0.0.6 — Consumer override semantics (scalar fields)
 
@@ -1652,6 +1607,72 @@ Notes:
 - Originally tracked as `BETTER.md` item 35 ("`FieldMeta` single-source-of-truth consolidation and mirror retirement"). Promoted to a DONE card and removed from `BETTER.md` when the work shipped — per `BETTER.md`'s "graduate into a `KANBAN.md` card when scheduled" workflow. This is the first `BETTER.md` item to graduate; the precedent for shipped items: strike-through with SHIPPED status is fine while the item awaits a release; once a release is imminent, move the item to a `KANBAN.md` `DONE` card and delete it from `BETTER.md` so the strategic-differentiation file doesn't keep pointing at completed architecture debt.
 - The consolidation eliminates ~7 sites of duplicated relation-shape logic and removes legacy class-attribute residue that previously survived `registry.clear()`. Single source of truth for field metadata reduces drift surface whenever Django adds a new relation flag or changes a descriptor attribute.
 - Internal refactor only; no `Meta` key changes, no public surface changes, no consumer-visible behavior changes. Existing tests pass without modification.
+
+### DONE-014-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`
+
+Slice-by-slice scope (per `docs/spec-014-meta_primary-0_0_6.md`):
+
+- Registry stores multiple types per model (`_types: dict[Model, list[Type]]`).
+- New `Meta.primary: bool` flag (default `False`); validated in `_validate_meta`.
+- `registry.register(..., *, primary: bool = False) -> bool` and
+  `registry.register_with_definition(..., *, primary=...)` accept the flag.
+  `register()` now returns `bool` indicating whether state was added; drives
+  snapshot-restore rollback in `register_with_definition`.
+- New registry surface: `primary_for(model)`, `types_for(model)`,
+  `models_with_multiple_types()`.
+- `registry.get(model)` returns the primary if declared, else the single
+  registered type, else `None`. Multiple types with no primary is an
+  ambiguous-pending state that the finalizer audits.
+- `finalize_django_types()` runs `audit_primary_ambiguity()` first: any
+  model with `>=2` registered types and no primary raises
+  `ConfigurationError` naming the model and every registered class plus an
+  actionable fix sentence.
+- Two primary types for the same model: rejected at registration time
+  with message `"<class> is already declared primary as <existing>"`.
+- Relation conversion in `types/base.py` defers all **auto-synthesized**
+  relation annotations to `finalize_django_types()` (eager-bind shortcut
+  removed; eliminates the secondary-registered-before-source-before-
+  primary import-order trap). The existing `consumer_authored_fields`
+  short-circuit is preserved, so direct relation annotations (`category:
+  AdminCategoryType`) and assigned `strawberry.field` resolvers continue
+  to bypass synthesis entirely and may target a secondary `DjangoType`.
+  `types/converters.py` and `types/finalizer.py` resolve auto-synthesized
+  relations to the primary at finalize time.
+- Optimizer planning threads the resolved origin Strawberry type from
+  `optimizer/extension.py` through `plan_optimizations` to the walker's
+  root `_resolve_field_map(model, source_type=origin)` call. Root planning
+  uses the resolver's actual return type; nested relation steps continue
+  to use `registry.get(related_model)` (the primary). Plan cache key
+  includes the origin type so primary-return and secondary-return
+  resolvers on the same model do not share a cached plan.
+- Schema audit (`optimizer/extension.py`) iterates every reachable
+  registered type via `registry.iter_types()` and dedupes warning
+  collection. Secondary types whose relation fields the primary does not
+  expose are still audited; identical-string duplicate warnings from
+  overlapping field maps are collapsed.
+- `model_for_type` continues to work for any registered type so
+  secondary-type resolvers stay planable.
+- `DjangoTypeDefinition` gains `primary: bool = False`.
+- 100% coverage across `tests/test_registry.py`, `tests/types/test_base.py`,
+  `tests/test_registry.py` / `tests/types/test_definition_order.py`
+  (the existing finalize-test hosts), `tests/types/test_converters.py`
+  (the existing relation-conversion host), and `tests/optimizer/`.
+
+Design notes carried into `0.0.6`:
+
+- Single-type-no-primary stays backward compatible: `registry.get(model)`
+  still returns the lone type without requiring an explicit `primary` flag.
+- `Meta.primary` is a per-class declaration, not a registry-level
+  `set_primary(Model, Type)` mutation — keeps the contract immutable
+  after `__init_subclass__` runs.
+- Already-shipped consumer relation overrides (direct annotation
+  `category: AdminItemType` and assigned `category = strawberry.field(...)`)
+  stay in scope and are preserved by this card via the existing
+  `consumer_authored_fields` short-circuit — they may legitimately
+  target a secondary `DjangoType` after `Meta.primary` ships. A NEW
+  declarative override API (e.g., `Meta.field_types = {...}`) is the
+  `WIP-ALPHA-015-0.0.6 — Consumer override semantics` design space and
+  is out of scope here.
 
 ### DONE-013-0.0.6 — Deferred scalar conversions
 

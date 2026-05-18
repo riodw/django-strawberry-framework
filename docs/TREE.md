@@ -235,7 +235,7 @@ django_strawberry_framework/
 ├── apps.py                  # [alpha] Django AppConfig
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
-├── registry.py              # model→type registry (gains Meta.primary at beta)
+├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6)
 ├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
 ├── fieldset.py              # [beta] FieldSet (declarative field selection)
 ├── permissions.py           # [alpha] apply_cascade_permissions, per-field permission hooks

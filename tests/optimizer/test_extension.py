@@ -467,7 +467,7 @@ def test_optimizer_passes_through_unregistered_return_type(caplog):
 
 
 def test_resolve_model_from_return_type_unwraps_nested_wrappers():
-    """Recursive unwrap through NonNull(List(NonNull(ObjectType))) -> Django model."""
+    """Recursive unwrap through NonNull(List(NonNull(ObjectType))) -> (origin, Django model)."""
     from graphql import GraphQLList, GraphQLNonNull
 
     class CategoryType(DjangoType):
@@ -493,7 +493,10 @@ def test_resolve_model_from_return_type_unwraps_nested_wrappers():
         return_type=wrapped,
         schema=schema._schema,
     )
-    assert _resolve_model_from_return_type(info) is Category
+    result = _resolve_model_from_return_type(info)
+    assert result is not None
+    assert result.model is Category
+    assert result.origin is CategoryType
 
 
 def test_resolve_model_returns_none_for_non_object_leaf():
@@ -669,7 +672,7 @@ def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch):
     monkeypatch.setattr(
         extension_module,
         "plan_optimizations",
-        lambda selected_fields, model, info=None: OptimizationPlan(),
+        lambda selected_fields, model, info=None, *, source_type=None: OptimizationPlan(),
     )
     ctx = SimpleNamespace()
     result = schema.execute_sync("{ allCategories { name } }", context_value=ctx)
@@ -921,7 +924,7 @@ def test_cache_eviction_removes_old_entries(monkeypatch):
 
     ext = DjangoOptimizerExtension()
     monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 4)
-    ext._plan_cache = {(idx, frozenset(), Category, (f"root{idx}",)): object() for idx in range(4)}
+    ext._plan_cache = {(idx, frozenset(), Category, (f"root{idx}",), None): object() for idx in range(4)}
 
     @strawberry.type
     class Query:
@@ -936,7 +939,7 @@ def test_cache_eviction_removes_old_entries(monkeypatch):
     assert result.errors is None
     assert ext.cache_info().misses == 1
     assert ext.cache_info().size == 4
-    assert (0, frozenset(), Category, ("root0",)) not in ext._plan_cache
+    assert (0, frozenset(), Category, ("root0",), None) not in ext._plan_cache
 
 
 @pytest.mark.django_db
@@ -2887,3 +2890,191 @@ def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes():
     # Unknown shape with no ``.skip`` attribute must not raise — the
     # schema audit's "never raises" contract depends on this.
     assert hint_is_skip(object()) is False
+
+
+# ---------------------------------------------------------------------------
+# Slice 4 — H2 plan-cache origin separation + H3 multi-type audit dedupe
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_model():
+    """H2: a primary-return resolver and a secondary-return resolver do not collide.
+
+    Two root fields on the same schema return ``list[ItemType]`` and
+    ``list[AdminItemType]`` respectively. Both target ``Item`` but
+    carry different origin types, so the plan cache must hold two
+    distinct entries. Without the origin component of the cache key
+    the two queries would share one cached plan keyed by ``Item``
+    alone.
+    """
+    services.seed_data(1)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+        @strawberry.field
+        def all_admin_items(self) -> list[AdminItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    # Run the same selection through both root fields. Same response shape
+    # so doc_key + relevant_vars + target_model agree; only response_path
+    # and origin differ. With the new cache key both fields produce
+    # distinct entries.
+    schema.execute_sync("{ allItems { name } }")
+    schema.execute_sync("{ allAdminItems { name } }")
+    assert ext.cache_info().misses == 2
+    assert ext.cache_info().size == 2
+
+
+def test_schema_audit_warns_on_relation_field_exposed_only_on_secondary_type():
+    """H3: a relation field only present on a secondary still surfaces a warning.
+
+    ``ItemType`` (primary) excludes ``category``; ``AdminItemType``
+    (secondary) includes ``category`` with an unregistered target. The
+    audit must walk every reachable type so the secondary's relation is
+    audited and the missing-target warning is produced. Switching to a
+    primary-only iterator would silently drop this warning.
+    """
+
+    # Register CategoryType first so AdminItemType.category can resolve
+    # during __init_subclass__, then clear it before check_schema runs.
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_admin_items(self) -> list[AdminItemType]:
+            return []
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, types=[ItemType])
+    # Clear Category's registration so the audit sees the gap.
+    registry._types.pop(Category, None)
+    registry._models.pop(CategoryType, None)
+    registry._primaries.pop(Category, None)
+
+    warnings = DjangoOptimizerExtension.check_schema(schema)
+    # Item.category is the secondary-only relation; the audit must surface it.
+    assert any("Item.category" in w and "no registered target" in w for w in warnings)
+
+
+def test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_types():
+    """H3: identical (source_model, field_name) warnings collapse to one.
+
+    Both ``ItemType`` (primary) and ``AdminItemType`` (secondary) expose
+    ``category`` whose target ``Category`` has no registered
+    ``DjangoType``. Without dedupe, ``registry.iter_types()`` (one
+    yield per registered type) would produce two identical warnings.
+    """
+
+    # Register CategoryType so the type declarations succeed, then drop
+    # its registration before check_schema runs.
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            primary = True
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return []
+
+        @strawberry.field
+        def all_admin_items(self) -> list[AdminItemType]:
+            return []
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    registry._types.pop(Category, None)
+    registry._models.pop(CategoryType, None)
+    registry._primaries.pop(Category, None)
+
+    warnings = DjangoOptimizerExtension.check_schema(schema)
+    item_category_warnings = [w for w in warnings if "Item.category" in w]
+    assert len(item_category_warnings) == 1
+
+
+def test_model_for_type_reverse_lookup_works_for_secondary_type():
+    """Secondary types remain discoverable for the optimizer's reverse lookup.
+
+    Both ``ItemType`` and ``AdminItemType`` are registered against
+    ``Item``; ``registry.model_for_type`` returns the same ``Item`` for
+    either origin. The optimizer's ``_resolve_model_from_return_type``
+    composition surfaces both legs of the pair: ``origin`` is the
+    secondary, ``model`` is the underlying Django model.
+    """
+    from graphql import GraphQLList, GraphQLNonNull
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    assert registry.model_for_type(AdminItemType) is Item
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_admin_items(self) -> list[AdminItemType]:
+            return []
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, types=[ItemType])
+    inner = schema._schema.type_map["AdminItemType"]
+    wrapped = GraphQLNonNull(GraphQLList(GraphQLNonNull(inner)))
+    info = SimpleNamespace(return_type=wrapped, schema=schema._schema)
+    resolved = _resolve_model_from_return_type(info)
+    assert resolved is not None
+    assert resolved.origin is AdminItemType
+    assert resolved.model is Item

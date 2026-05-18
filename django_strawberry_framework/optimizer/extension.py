@@ -368,8 +368,26 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
     return reachable
 
 
-def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
-    """Trace ``info.return_type`` through graphql-core wrappers to a Django model.
+class _OriginAndModel(NamedTuple):
+    """Pair of resolved Strawberry origin type and underlying Django model.
+
+    Returned by :func:`_resolve_model_from_return_type` so the extension's
+    ``_optimize`` hook can feed the origin into ``_get_or_build_plan``
+    (for root field-map lookup and plan-cache identity) while still
+    using the model for the walker's root-level relation traversal.
+
+    Pair-or-``None`` contract: the helper returns ``None`` whenever
+    EITHER origin or model is unresolvable; the pair is returned ONLY
+    when both are resolved. Callers branch on ``resolved is None``
+    rather than dereferencing individual legs.
+    """
+
+    origin: type
+    model: type[models.Model]
+
+
+def _resolve_model_from_return_type(info: Any) -> _OriginAndModel | None:
+    """Trace ``info.return_type`` through graphql-core wrappers to ``(origin, model)``.
 
     graphql-core wraps resolver return types in layers of
     ``GraphQLNonNull`` and ``GraphQLList``. This function recursively
@@ -378,9 +396,10 @@ def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
     Strawberry type definition via the schema and reverse-maps to the
     Django model through the registry.
 
-    Returns ``None`` when any step fails (unregistered type, non-object
-    leaf, missing schema backref). The caller treats ``None`` as
-    "nothing to optimize" and passes the queryset through unchanged.
+    Returns ``None`` when any step fails (non-object leaf, missing
+    schema backref, missing schema type, unregistered origin). The
+    caller treats ``None`` as "nothing to optimize" and passes the
+    queryset through unchanged.
     """
     rt = unwrap_graphql_type(info.return_type)
     type_name = getattr(rt, "name", None)
@@ -393,22 +412,12 @@ def _resolve_model_from_return_type(info: Any) -> type[models.Model] | None:
     if definition is None:
         return None
     origin = getattr(definition, "origin", None)
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 4 / rev6 M2): return both
-    # origin and model so the optimizer can use the resolver's actual
-    # Strawberry type for root planning and plan-cache identity.
-    # Pseudo:
-    # - model = registry.model_for_type(origin)
-    # - if model is None or origin is None: return None  (either-leg failure)
-    # - return OriginAndModel(origin=origin, model=model) or (origin, model)
-    # Failure contract: this helper already returns None for non-object leaf
-    # types, missing Strawberry schema, and missing schema type (the early
-    # returns above). The expanded version returns None whenever EITHER
-    # origin OR model is unresolvable; it returns the pair ONLY when both
-    # are resolved. Callers (_optimize) keep their `if resolved is None`
-    # pass-through; the existing failure-case tests at
-    # tests/optimizer/test_extension.py:499, :508, :517 continue to assert
-    # None — only the success-case test at :469 asserts the pair shape.
-    return registry.model_for_type(origin)
+    if origin is None:
+        return None
+    model = registry.model_for_type(origin)
+    if model is None:
+        return None
+    return _OriginAndModel(origin=origin, model=model)
 
 
 class DjangoOptimizerExtension(SchemaExtension):
@@ -450,7 +459,7 @@ class DjangoOptimizerExtension(SchemaExtension):
             raise ValueError(msg)
         self.strictness = strictness
         self._plan_cache: dict[
-            tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...]],
+            tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...], type | None],
             Any,
         ] = {}
         self._cache_hits = 0
@@ -522,20 +531,15 @@ class DjangoOptimizerExtension(SchemaExtension):
         """
         if not isinstance(result, models.QuerySet):
             return result
-        # TODO(spec-014-meta_primary-0_0_6.md Slice 4): unpack origin+model
-        # from the return-type resolver; pass origin into _get_or_build_plan.
-        # Pseudo:
-        # - resolved = _resolve_origin_and_model_from_return_type(info)
-        # - if resolved is None: pass through unchanged
-        # - origin, target_model = resolved.origin, resolved.model
-        target_model = _resolve_model_from_return_type(info)
-        if target_model is None:
+        resolved = _resolve_model_from_return_type(info)
+        if resolved is None:
             logger.debug(
                 "Optimizer: return type for %s has no registered DjangoType; "
                 "passing queryset through unchanged.",
                 info.field_name,
             )
             return result
+        origin, target_model = resolved.origin, resolved.model
         if not info.field_nodes:
             return result
         # The O2 walker expects the children of the root field, so we
@@ -547,7 +551,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         from strawberry.types.nodes import convert_selections
 
         selections = convert_selections(info, info.field_nodes)
-        plan = self._get_or_build_plan(_root_child_selections(selections), target_model, info)
+        plan = self._get_or_build_plan(_root_child_selections(selections), target_model, info, origin)
         self._publish_plan_to_context(plan, info)
         if plan.is_empty:
             return result
@@ -562,32 +566,33 @@ class DjangoOptimizerExtension(SchemaExtension):
         plan, result = diff_plan_for_queryset(plan, result)
         return plan.apply(result)
 
-    def _get_or_build_plan(self, selections: list[Any], target_model: type, info: Any) -> Any:
-        """Return the cached plan for ``(info, target_model)`` or build and cache a new one.
+    def _get_or_build_plan(
+        self,
+        selections: list[Any],
+        target_model: type,
+        info: Any,
+        origin: type | None,
+    ) -> Any:
+        """Return the cached plan for ``(info, target_model, origin)`` or build a new one.
 
         B1: plan cache.  Cache hits increment ``_cache_hits``; misses run
         the walker, evict the oldest quarter when full, insert iff the
         plan is ``cacheable``, and increment ``_cache_misses``.
+
+        ``origin`` carries the resolver's actual Strawberry return type
+        so primary-return and secondary-return resolvers on the same
+        model do not share a cached plan. The extension's ``_plan_cache``
+        is root-only — this helper is the sole insertion site, so
+        ``origin`` always receives the concrete root origin in
+        production; ``None`` is reserved for direct/test-only callers
+        that deliberately build a plan without an origin.
         """
-        # TODO(spec-014-meta_primary-0_0_6.md Slice 4 / rev6 L1): accept
-        # origin: type | None, include it in the cache key, and pass it to
-        # plan_optimizations(..., source_type=origin).
-        # Pseudo:
-        # - cache_key = _build_cache_key(info, target_model, origin)
-        # - plan = plan_optimizations(selections, target_model, info=info, source_type=origin)
-        # Scope (rev6 L1): _plan_cache is root-only — this helper is the
-        # sole insertion site. Nested plans built inside walker recursion or
-        # _build_prefetch_child_queryset do NOT pass through _build_cache_key,
-        # so in production paths the `origin` slot always receives the
-        # concrete root origin type. The `None` value of the slot is reserved
-        # for direct/test-only callers that build a plan without an origin.
-        # Do NOT introduce a nested extension-cache path.
-        cache_key = self._build_cache_key(info, target_model)
+        cache_key = self._build_cache_key(info, target_model, origin)
         cached_plan = self._plan_cache.get(cache_key)
         if cached_plan is not None:
             self._cache_hits += 1
             return cached_plan
-        plan = plan_optimizations(selections, target_model, info=info)
+        plan = plan_optimizations(selections, target_model, info=info, source_type=origin)
         if plan.cacheable and len(self._plan_cache) >= _MAX_PLAN_CACHE_SIZE:
             # FIFO eviction: drop the oldest quarter at once to amortise
             # eviction cost across many subsequent inserts.  A cache hit
@@ -637,12 +642,15 @@ class DjangoOptimizerExtension(SchemaExtension):
         whether to raise based on the extension's ``strictness``.
         """
         reachable = _collect_schema_reachable_types(schema)
-        # TODO(spec-014-meta_primary-0_0_6.md Slice 4): dedupe warning
-        # collection after registry.iter_types() starts yielding one entry per
-        # registered type, while still auditing reachable secondary types.
-        # Pseudo:
-        # - seen: set[tuple[type[models.Model], str]] = set()
-        # - add one warning per (source_model, field_name) key.
+        # Dedupe (source_model, field_name) so multi-type models do not
+        # double-warn: registry.iter_types() yields one entry per registered
+        # type after spec-014 Slice 1, so a model with multiple types whose
+        # field maps overlap on the same unregistered-target relation would
+        # otherwise produce one identical warning per registered type. The
+        # dedupe is a multi-type artifact, not generic defensiveness — every
+        # reachable type is still audited (we cannot skip secondaries, since
+        # a secondary may expose a relation the primary hides).
+        seen: set[tuple[type[models.Model], str]] = set()
         warnings: list[str] = []
         for _model, type_cls in registry.iter_types():
             if type_cls not in reachable:
@@ -659,6 +667,10 @@ class DjangoOptimizerExtension(SchemaExtension):
                 if hint_is_skip(hints.get(field_name)):
                     continue
                 if meta.related_model is not None and registry.get(meta.related_model) is None:
+                    key = (_model, field_name)
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     warnings.append(
                         f"{_model.__name__}.{field_name} has no registered target DjangoType",
                     )
@@ -668,8 +680,9 @@ class DjangoOptimizerExtension(SchemaExtension):
     def _build_cache_key(
         info: Any,
         target_model: type[models.Model],
-    ) -> tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...]]:
-        """Build the plan-cache key from resolver info and target model.
+        origin: type | None = None,
+    ) -> tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...], type | None]:
+        """Build the plan-cache key from resolver info, target model, and origin type.
 
         Key components:
         1. The selected operation's printed AST plus the printed definitions
@@ -689,9 +702,9 @@ class DjangoOptimizerExtension(SchemaExtension):
            same operation can return different models).
         4. The root response path, so multiple root fields returning the
            same model do not share a plan within one operation.
-        5. TODO(spec-014-meta_primary-0_0_6.md Slice 4): add the resolver's
-           origin Strawberry type so primary-return and secondary-return
-           resolvers for the same model do not share a cached plan.
+        5. The resolver's origin Strawberry type so primary-return and
+           secondary-return resolvers for the same model do not share a
+           cached plan. Direct/test-only callers may pass ``None``.
         """
         operation = info.operation
         fragments = info.fragments or {}
@@ -720,9 +733,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         relevant_vars = frozenset(
             (k, variable_values[k]) for k in directive_var_names if k in variable_values
         )
-        # TODO(spec-014-meta_primary-0_0_6.md Slice 4): append origin as the
-        # fifth tuple member after updating the signature and cache type.
-        return (doc_key, relevant_vars, target_model, runtime_path_from_info(info))
+        return (doc_key, relevant_vars, target_model, runtime_path_from_info(info), origin)
 
     def plan_relation(
         self,

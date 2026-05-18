@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import strawberry
+from django.db import models
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
@@ -20,10 +21,11 @@ from .resolvers import _attach_relation_resolvers
 def _format_unresolved_targets_error(unresolved: list[PendingRelation]) -> str:
     """Return the canonical unresolved relation target error message.
 
-    Sibling convention: ``types/base.py:_format_unknown_fields_error`` owns the
-    other consumer-surface ``Meta.fields`` / ``Meta.exclude`` / ``Meta.optimizer_hints``
-    error strings. If consumer-surface ``Meta.*`` keys are renamed or supplemented,
-    update both formatters together.
+    Sibling convention: ``_format_ambiguity_error`` below owns the canonical
+    primary-ambiguity error string; ``types/base.py:_format_unknown_fields_error``
+    owns the other consumer-surface ``Meta.fields`` / ``Meta.exclude`` /
+    ``Meta.optimizer_hints`` error strings. If consumer-surface ``Meta.*`` keys
+    are renamed or supplemented, update the formatters together.
     """
     lines = []
     for pending in unresolved:
@@ -38,6 +40,50 @@ def _format_unresolved_targets_error(unresolved: list[PendingRelation]) -> str:
         "Declare a DjangoType for each unresolved target model, or exclude these "
         "relation fields via Meta.exclude / Meta.fields."
     )
+
+
+def _format_ambiguity_error(
+    offenders: list[tuple[type[models.Model], tuple[type, ...]]],
+) -> str:
+    """Return the canonical primary-ambiguity error message.
+
+    Sibling of ``_format_unresolved_targets_error`` above; both formatters live
+    at the top of this module so the finalize-time error strings stay
+    grep-stable for tests and consumer error matching. The fix sentence
+    (``Declare Meta.primary = True...``) is the actionable guidance the
+    audit's tests pin against (spec lines 127, 133).
+    """
+    parts = [f"  {model.__name__}: {', '.join(t.__name__ for t in types)}" for model, types in offenders]
+    body = "\n".join(parts)
+    return (
+        "Models with multiple registered DjangoType subclasses and no primary:\n"
+        f"{body}\n\n"
+        "Declare Meta.primary = True on exactly one of the registered "
+        "DjangoType subclasses."
+    )
+
+
+def audit_primary_ambiguity() -> None:
+    """Reject models with multiple registered DjangoTypes and no declared primary.
+
+    Walks ``registry.models_with_multiple_types()`` (the Slice 1 helper at
+    ``registry.py:200-206``); for each model whose ``registry.primary_for(...)``
+    is ``None``, collects the offending registered types via
+    ``registry.types_for(model)``. If the offender list is non-empty, raises
+    ``ConfigurationError`` with the canonical message built by
+    ``_format_ambiguity_error``.
+
+    Runs exactly once per build, inside ``finalize_django_types()`` after the
+    ``registry.is_finalized()`` short-circuit and before pending-relation
+    resolution (M1 fix per ``docs/spec-014-meta_primary-0_0_6.md:128``).
+    """
+    offenders: list[tuple[type[models.Model], tuple[type, ...]]] = []
+    for model in registry.models_with_multiple_types():
+        if registry.primary_for(model) is None:
+            offenders.append((model, registry.types_for(model)))
+    if not offenders:
+        return
+    raise ConfigurationError(_format_ambiguity_error(offenders))
 
 
 def finalize_django_types() -> None:
@@ -58,15 +104,8 @@ def finalize_django_types() -> None:
     if registry.is_finalized():
         return
 
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 3): run the primary-ambiguity
-    # audit here, after the finalized guard and before pending relation
-    # resolution, so ambiguous multi-type models fail before "unresolved target".
-    # Pseudo:
-    # - walk registry.models_with_multiple_types().
-    # - collect models where registry.primary_for(model) is None, paired with
-    #   registry.types_for(model) for the error body.
-    # - raise ConfigurationError with every model/type and the
-    #   "Declare Meta.primary = True on exactly one..." guidance.
+    audit_primary_ambiguity()
+
     unresolved: list[PendingRelation] = []
     resolved: list[tuple[PendingRelation, type]] = []
     consumer_authored: list[PendingRelation] = []

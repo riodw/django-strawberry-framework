@@ -39,13 +39,8 @@ class TypeRegistry:
     """
 
     def __init__(self) -> None:
-        # TODO(spec-014-meta_primary-0_0_6.md Slice 1): replace the one-type
-        # map with ordered per-model storage plus explicit primary tracking.
-        # Pseudo:
-        # - _types: dict[Model, list[type]] = {}
-        # - _primaries: dict[Model, type] = {}
-        # - keep _models as the type -> model reverse lookup.
-        self._types: dict[type[models.Model], type] = {}
+        self._types: dict[type[models.Model], list[type]] = {}
+        self._primaries: dict[type[models.Model], type] = {}
         self._models: dict[type, type[models.Model]] = {}
         self._enums: dict[tuple[type[models.Model], str], type[Enum]] = {}
         self._definitions: dict[type, DjangoTypeDefinition] = {}
@@ -77,46 +72,88 @@ class TypeRegistry:
         """
         return ConfigurationError(f"{name} is already registered {label} {existing_name}")
 
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 1): add keyword-only
-    # primary: bool = False and return bool for "state was added".
-    # Pseudo:
-    # - reject type_cls already mapped to a different model.
-    # - if type_cls is already in _types[model], compare primary to
-    #   (_primaries.get(model) is type_cls); flag flips raise.
-    # - if primary and a different primary exists, raise duplicate-primary.
-    # - append new types in registration order; set _models and _primaries.
-    # - return True for append, False for idempotent same-type no-op.
-    def register(self, model: type[models.Model], type_cls: type) -> None:
-        """Register ``type_cls`` as the ``DjangoType`` for ``model``.
+    def register(
+        self,
+        model: type[models.Model],
+        type_cls: type,
+        *,
+        primary: bool = False,
+    ) -> bool:
+        """Register ``type_cls`` as a ``DjangoType`` for ``model``.
 
-        Maintains both directions of the mapping so the optimizer can
-        reverse a ``DjangoType`` class back to its Django model in O(1).
+        Multiple types may register against the same model; the optional
+        ``primary`` keyword flags exactly one of them as the relation-
+        resolution target. ``_models`` is still one-to-one: the same
+        class cannot be registered against two different models.
+
+        Behavior:
+
+        - First registration appends ``type_cls`` to ``_types[model]`` and
+          sets ``_primaries[model] = type_cls`` when ``primary=True``.
+          Returns ``True``.
+        - Idempotent re-register of the same ``type_cls`` for the same
+          model is a no-op when the ``primary`` flag matches the stored
+          state; returns ``False``.  A mismatched ``primary`` flag in
+          either direction raises (primary status is a declaration, not a
+          mutable property).
+        - Registering a different ``type_cls`` for the same model appends
+          to ``_types[model]``. If ``primary=True`` and ``_primaries[model]``
+          is already set to a different class, raise ``ConfigurationError``.
+        - Returns ``True`` whenever state was added; the return value
+          drives the snapshot-conditional rollback in
+          ``register_with_definition``.
 
         Raises:
-            ConfigurationError: ``model`` already has a registered type,
-                ``type_cls`` is already registered against a different
-                model, or the registry is finalized.  The error message
-                names the conflicting class or model so the consumer can
-                identify the duplicate at import time.
+            ConfigurationError: reverse-collision (same ``type_cls``,
+                different ``model``); duplicate-primary collision; primary
+                flag flipped on idempotent re-register; the registry is
+                finalized.
         """
         self._check_mutable()
-        if model in self._types:
-            raise self._already_registered("as", model.__name__, self._types[model].__name__)
         existing_model = self._models.get(type_cls)
         if existing_model is not None and existing_model is not model:
             raise self._already_registered("against", type_cls.__name__, existing_model.__name__)
-        self._types[model] = type_cls
+        existing_types = self._types.setdefault(model, [])
+        if type_cls in existing_types:
+            stored_as_primary = self._primaries.get(model) is type_cls
+            if primary != stored_as_primary:
+                raise ConfigurationError(
+                    f"{type_cls.__name__} is already registered for {model.__name__}; "
+                    "primary flag cannot be flipped on re-register",
+                )
+            return False
+        if primary:
+            existing_primary = self._primaries.get(model)
+            if existing_primary is not None:
+                raise ConfigurationError(
+                    f"{type_cls.__name__} is already declared primary as {existing_primary.__name__}",
+                )
+        existing_types.append(type_cls)
         self._models[type_cls] = model
+        if primary:
+            self._primaries[model] = type_cls
+        return True
 
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 1): change lookup semantics to
-    # primary-first, single-type fallback, ambiguous-multiple-as-None.
-    # Pseudo:
-    # - if _primaries.get(model): return it
-    # - if len(_types.get(model, ())) == 1: return the only type
-    # - return None for no type or multiple types without primary.
     def get(self, model: type[models.Model]) -> type | None:
-        """Return the registered ``DjangoType`` for ``model``, or ``None``."""
-        return self._types.get(model)
+        """Return the relation-resolution target for ``model``, or ``None``.
+
+        Three return states:
+
+        - **Primary declared.** ``_primaries[model]`` is set; return it.
+        - **Single registered type, no primary flag.** Backward-compatible
+          path for the single-type-per-model case; return that type.
+        - **Multiple registered types and no declared primary.** Ambiguous
+          state pending the ``finalize_django_types()`` audit; return
+          ``None``. Callers cannot distinguish this from
+          "no type registered" without checking ``types_for(model)``.
+        """
+        primary = self._primaries.get(model)
+        if primary is not None:
+            return primary
+        candidates = self._types.get(model)
+        if candidates is not None and len(candidates) == 1:
+            return candidates[0]
+        return None
 
     def model_for_type(self, type_cls: type | None) -> type[models.Model] | None:
         """Reverse-lookup: return the Django model for a registered ``DjangoType``.
@@ -132,22 +169,41 @@ class TypeRegistry:
             return None
         return self._models.get(type_cls)
 
-    # TODO(spec-014-meta_primary-0_0_6.md Slice 1): add primary_for(model),
-    # types_for(model), and models_with_multiple_types(); update iter_types()
-    # to yield one (model, type_cls) pair for every registered type.
-    # Pseudo:
-    # - primary_for -> _primaries.get(model)
-    # - types_for -> tuple(_types.get(model, ()))
-    # - models_with_multiple_types -> models whose stored list has len >= 2.
     def iter_types(self) -> Iterator[tuple[type[models.Model], type]]:
-        """Yield ``(model, type_cls)`` pairs for every registered ``DjangoType``.
+        """Yield ``(model, type_cls)`` pairs once per registered type.
 
-        Public iterator so consumers (B6 schema audit, B7 walker) do not
-        reach into ``_types`` directly. Keeps the internal dict shape
-        private and provides a clean extension point for future filtering
-        (e.g., schema-scoped registries).
+        A model with multiple registered types appears multiple times in
+        the iterator; consumers that need a per-model action must dedupe
+        by model. Public iterator so consumers (B6 schema audit, B7
+        walker) do not reach into ``_types`` directly.
         """
-        yield from self._types.items()
+        for model, type_list in self._types.items():
+            for type_cls in type_list:
+                yield (model, type_cls)
+
+    def primary_for(self, model: type[models.Model]) -> type | None:
+        """Return the explicitly declared primary type for ``model``, or ``None``.
+
+        Strict ``_primaries`` lookup. Distinct from ``get()``: returns
+        ``None`` for the single-type-no-primary case where ``get()``
+        would return that lone type.
+        """
+        return self._primaries.get(model)
+
+    def types_for(self, model: type[models.Model]) -> tuple[type, ...]:
+        """Return every registered type for ``model`` in registration order.
+
+        Immutable snapshot. Returns ``()`` for an unregistered model.
+        """
+        return tuple(self._types.get(model, ()))
+
+    def models_with_multiple_types(self) -> Iterator[type[models.Model]]:
+        """Yield each model that has at least two registered types.
+
+        Drives ``audit_primary_ambiguity`` (Slice 3) without exposing the
+        internal ``_types`` dict to the finalizer.
+        """
+        return (model for model, types in self._types.items() if len(types) >= 2)
 
     def register_definition(self, type_cls: type, definition: DjangoTypeDefinition) -> None:
         """Register the collected definition object for ``type_cls``.
@@ -170,29 +226,35 @@ class TypeRegistry:
         model: type[models.Model],
         type_cls: type,
         definition: DjangoTypeDefinition,
+        *,
+        primary: bool = False,
     ) -> None:
         """Atomic ``register`` + ``register_definition`` pair.
 
-        If ``register_definition`` raises after ``register`` succeeded,
-        the model->type mapping is rolled back so the consumer sees the
-        real underlying error on the next re-import or test rerun
-        instead of "already registered". ``DjangoType.__init_subclass__``
-        is the only intended caller; see ``types/base.py``.
+        Snapshots ``_primaries[model]`` before calling ``register`` and
+        captures whether that call appended state.  If
+        ``register_definition`` then raises, only state added by THIS
+        call is rolled back — a pre-existing registration (idempotent
+        same-type re-register) survives a re-register-with-different-
+        definition failure intact. ``DjangoType.__init_subclass__`` is
+        the only intended caller; see ``types/base.py``.
         """
-        # TODO(spec-014-meta_primary-0_0_6.md Slice 1): forward primary= to
-        # register() and make rollback conditional on that call appending state.
-        # Pseudo:
-        # - pre_primary = _primaries.get(model)
-        # - appended = register(model, type_cls, primary=primary)
-        # - if register_definition raises and appended: remove only this type,
-        #   restore _models, and restore/pop _primaries back to pre_primary.
-        # - if appended is False: leave pre-existing registry state untouched.
-        self.register(model, type_cls)
+        pre_primary = self._primaries.get(model)
+        appended = self.register(model, type_cls, primary=primary)
         try:
             self.register_definition(type_cls, definition)
         except Exception:
-            self._types.pop(model, None)
-            self._models.pop(type_cls, None)
+            if appended:
+                types = self._types.get(model, [])
+                if type_cls in types:
+                    types.remove(type_cls)
+                if not types:
+                    self._types.pop(model, None)
+                self._models.pop(type_cls, None)
+                if pre_primary is None:
+                    self._primaries.pop(model, None)
+                else:
+                    self._primaries[model] = pre_primary
             raise
 
     def get_definition(self, type_cls: type) -> DjangoTypeDefinition | None:
@@ -284,8 +346,7 @@ class TypeRegistry:
         starts with a clean registry.
         """
         self._types.clear()
-        # TODO(spec-014-meta_primary-0_0_6.md Slice 1): clear _primaries here
-        # after adding explicit primary tracking.
+        self._primaries.clear()
         self._models.clear()
         self._enums.clear()
         self._definitions.clear()

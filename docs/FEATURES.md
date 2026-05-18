@@ -82,7 +82,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Meta.name`](#metaname) | shipped |
 | [`Meta.optimizer_hints`](#metaoptimizer_hints) | shipped (`0.0.3`) |
 | [`Meta.orderset_class`](#metaorderset_class) | planned for `0.0.8` |
-| [`Meta.primary`](#metaprimary) | planned for `0.0.6` |
+| [`Meta.primary`](#metaprimary) | shipped (`0.0.6`) |
 | [`Meta.search_fields`](#metasearch_fields) | planned for `0.1.2` |
 | [Multi-database cooperation](#multi-database-cooperation) | planned for `0.0.7` |
 | [`only()` projection](#only-projection) | shipped (`0.0.2`) |
@@ -381,10 +381,10 @@ Shipped capability:
 - type registry registration
 - definition-order-independent relation finalization (see [Definition-order independence](#definition-order-independence))
 - abstract / intermediate base support when a subclass has no `Meta`
+- multiple `DjangoType`s per Django model supported via [`Meta.primary`](#metaprimary)
 
 Current alpha constraints:
 
-- one `DjangoType` per Django model — [`Meta.primary`](#metaprimary) promotes this to a primary-declaration contract
 - manual override validation for relation cardinality is deferred; the package trusts relation-field annotations supplied by the consumer
 
 `Meta` validation: unknown `Meta` keys raise [`ConfigurationError`](#configurationerror); deferred `Meta` keys are rejected until the feature that owns them ships.
@@ -650,11 +650,22 @@ References an [`OrderSet`](#orderset) subclass that defines ordering input for t
 
 ## `Meta.primary`
 
-**Status:** planned for `0.0.6`.
+**Status:** shipped (`0.0.6`).
 
-Allows multiple `DjangoType` subclasses for one Django model. `Meta.primary = True` declares the type used for nested-relation resolution (`AdminItemType` vs `ItemType` for the same `Item` model). Today the registry rejects a second `DjangoType` for a model that already has one; this `Meta` key promotes the behavior to a primary-declaration contract with an explicit primary.
+Boolean flag (default `False`) declared on a `DjangoType`'s nested `Meta` to opt one of several types on the same Django model into the **primary** role. The primary type is the one auto-synthesized relation fields resolve to and the one [`registry.get(model)`](#djangotype) returns. Secondary types are still registered and reverse-discoverable via `registry.model_for_type(SecondaryType)`, so resolvers returning a secondary type stay planable through [`DjangoOptimizerExtension`](#djangooptimizerextension).
 
-**See also:** [`Meta.model`](#metamodel) · [`DjangoType`](#djangotype).
+Ambiguity rules:
+
+- One `DjangoType` for a model, `Meta.primary` absent or `False` — allowed (backward compat).
+- Multiple `DjangoType`s, exactly one with `Meta.primary = True` — allowed; relation targets resolve to the primary.
+- Multiple `DjangoType`s, two or more with `Meta.primary = True` — rejected at the second registration: `ConfigurationError("<class> is already declared primary as <existing>")`.
+- Multiple `DjangoType`s, none with `Meta.primary = True` — rejected at [`finalize_django_types()`](#finalize_django_types): `ConfigurationError` listing the model and every registered class, with fix sentence `"Declare Meta.primary = True on exactly one of the registered DjangoType subclasses."`.
+
+Registry surface: `primary_for(model)` returns the declared primary or `None`; `types_for(model)` returns the tuple of every registered type in declaration order; `models_with_multiple_types()` iterates models with two or more registered types (used by the finalize-time ambiguity audit).
+
+The already-shipped consumer relation-override paths (annotation overrides like `category: AdminCategoryType` and assigned `strawberry.field` relation resolvers) are preserved unchanged and may legitimately target a secondary `DjangoType`. The optimizer's plan cache keys include the resolver's origin Strawberry type, so a primary-return and a secondary-return resolver on the same model do not share a cached plan.
+
+**See also:** [`Meta.model`](#metamodel) · [`DjangoType`](#djangotype) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
 
 ## `Meta.search_fields`
 

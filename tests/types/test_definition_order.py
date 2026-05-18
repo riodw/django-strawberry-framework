@@ -43,8 +43,11 @@ def test_reverse_fk_resolves_when_parent_declared_before_child():
             model = Item
             fields = ("id", "name", "category")
 
+    # Pre-finalize: every auto-synthesized relation is the pending sentinel
+    # under spec-014 Slice 4's always-defer contract, regardless of whether
+    # the target type happens to already be registered.
     assert CategoryType.__annotations__["items"].__name__ == "PendingRelationAnnotation"
-    assert ItemType.__annotations__["category"] is CategoryType
+    assert ItemType.__annotations__["category"].__name__ == "PendingRelationAnnotation"
 
     finalize_django_types()
 
@@ -65,8 +68,10 @@ def test_reverse_fk_resolves_when_child_declared_before_parent():
             model = Category
             fields = ("id", "name", "items")
 
+    # Pre-finalize: every auto-synthesized relation is the pending sentinel
+    # under spec-014 Slice 4's always-defer contract.
     assert ItemType.__annotations__["category"].__name__ == "PendingRelationAnnotation"
-    assert CategoryType.__annotations__["items"] == list[ItemType]
+    assert CategoryType.__annotations__["items"].__name__ == "PendingRelationAnnotation"
 
     finalize_django_types()
 
@@ -343,3 +348,74 @@ def test_same_module_string_forward_reference_annotation_survives_finalization()
     finally:
         globals().pop("StringCategoryType", None)
         globals().pop("StringItemType", None)
+
+
+# ---------------------------------------------------------------------------
+# Slice 3 (spec-014-meta_primary-0_0_6.md) — ambiguity-audit interaction
+# with relation resolution. The raise-at-finalize and once-per-build
+# regression tests live in ``tests/test_registry.py``; this file hosts the
+# audit-success paths and the audit-vs-unresolved-target ordering test.
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_succeeds_when_model_has_multiple_types_one_primary():
+    """``finalize_django_types`` succeeds when one of the multi-type entries is primary."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    finalize_django_types()
+
+    assert registry.is_finalized() is True
+    assert registry.primary_for(Item) is AdminItemType
+
+
+def test_finalize_succeeds_when_model_has_single_type_no_primary():
+    """Backward-compat: a single registered type with no primary still finalizes cleanly."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    finalize_django_types()
+
+    assert registry.is_finalized() is True
+    assert registry.primary_for(Item) is None
+    assert registry.get(Item) is ItemType
+
+
+def test_finalize_ambiguity_error_fires_before_unresolved_target_error():
+    """The ambiguity audit runs before pending-relation resolution.
+
+    Sets up both conditions in one test: two ``DjangoType`` subclasses on
+    ``Item`` (neither primary) AND a relation to ``Category`` whose
+    ``DjangoType`` is not registered (would otherwise raise the
+    unresolved-target error). The audit MUST raise first.
+    """
+
+    class ItemTypeA(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    class ItemTypeB(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+
+    msg = str(exc_info.value)
+    assert "Models with multiple registered DjangoType subclasses and no primary" in msg
+    assert "Cannot finalize Django types" not in msg
+    assert "no registered DjangoType" not in msg

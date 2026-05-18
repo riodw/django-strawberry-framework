@@ -1527,3 +1527,163 @@ def test_ensure_connector_only_fields_adds_reverse_o2o_connector():
     _ensure_connector_only_fields(plan, parent_field)
 
     assert "patron_id" in plan.only_fields
+
+
+# ---------------------------------------------------------------------------
+# Slice 4 — H2 root origin-type propagation
+# ---------------------------------------------------------------------------
+
+
+def test_optimizer_walker_plans_root_from_resolver_return_type_when_secondary():
+    """H2: a root resolver returning a secondary plans from the secondary's hints.
+
+    Register an ``ItemType`` primary with ``OptimizerHint.SKIP`` on
+    ``category`` and an ``AdminItemType`` secondary with
+    ``OptimizerHint.force_prefetch()`` on ``category``. With
+    ``source_type=AdminItemType``, the planner must use the secondary's
+    hint (force_prefetch), not the primary's SKIP. Without the H2
+    threading, ``_resolve_field_map(Item)`` would route through
+    ``registry.get(Item)`` -> ``ItemType``, and the SKIP would suppress
+    the relation entirely.
+    """
+    registry.clear()
+
+    class ItemType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    class AdminItemType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    _register_type_definition(
+        Item,
+        ItemType,
+        optimizer_hints={"category": OptimizerHint.SKIP},
+    )
+    registry._primaries[Item] = ItemType
+    _register_type_definition(
+        Item,
+        AdminItemType,
+        optimizer_hints={"category": OptimizerHint.prefetch_related()},
+    )
+    try:
+        plan = plan_optimizations(
+            [_sel("category", selections=[_sel("name")])],
+            Item,
+            source_type=AdminItemType,
+        )
+    finally:
+        registry.clear()
+
+    # AdminItemType's force_prefetch wins; the prefetch_related bag is populated
+    # and select_related stays empty.
+    assert plan.select_related == ()
+    assert len(plan.prefetch_related) == 1
+
+
+def test_scalar_only_secondary_resolver_uses_secondary_field_map():
+    """H2 rev6 M1: a scalar-only selection routes through the root path.
+
+    Register an ``ItemType`` primary with a field_map missing ``name``
+    and an ``AdminItemType`` secondary with a field_map including
+    ``name``. With ``source_type=AdminItemType`` the root planner uses
+    the secondary's field_map; without it the primary's lookup would
+    treat ``name`` as unknown and drop the only-field projection.
+    """
+    registry.clear()
+
+    class ItemType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    class AdminItemType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    # Primary's field_map omits ``name``.
+    primary_fields = tuple(f for f in Item._meta.get_fields() if f.name != "name")
+    primary_field_map = {
+        snake_case(field.name): FieldMeta.from_django_field(field) for field in primary_fields
+    }
+    _register_type_definition(Item, ItemType, field_map=primary_field_map)
+    registry._primaries[Item] = ItemType
+    # Secondary's field_map includes ``name``.
+    _register_type_definition(Item, AdminItemType)
+    try:
+        plan = plan_optimizations(
+            [_sel("name")],
+            Item,
+            source_type=AdminItemType,
+        )
+    finally:
+        registry.clear()
+
+    # Secondary's field_map includes ``name`` so the only-field projection lands.
+    assert "name" in plan.only_fields
+
+
+def test_optimizer_walker_uses_primary_for_nested_relation_target():
+    """H2 nested contract: nested relation lookup still routes through the primary.
+
+    Multi-type ``Item`` (``ItemType`` primary, ``AdminItemType``
+    secondary) reached via a nested ``CategoryType.items`` relation.
+    Even without ``source_type`` on the root call, the walker descends
+    into the nested ``items`` step with ``source_type=None`` and routes
+    through ``registry.get(Item)`` -> ``ItemType``. The primary's
+    field_map (which omits ``name`` in this fixture) drives the nested
+    only_fields projection, confirming the nested target picks the
+    primary and not the secondary.
+    """
+    registry.clear()
+
+    class ItemType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    class AdminItemType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    class CategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    # Primary ItemType field_map deliberately omits ``name`` so we can
+    # detect which type's field_map was used for the nested step.
+    primary_fields = tuple(f for f in Item._meta.get_fields() if f.name != "name")
+    primary_field_map = {
+        snake_case(field.name): FieldMeta.from_django_field(field) for field in primary_fields
+    }
+    _register_type_definition(Item, ItemType, field_map=primary_field_map)
+    registry._primaries[Item] = ItemType
+    _register_type_definition(Item, AdminItemType)
+    _register_type_definition(Category, CategoryType)
+    try:
+        plan = plan_optimizations(
+            [_sel("items", selections=[_sel("name"), _sel("id")])],
+            Category,
+        )
+    finally:
+        registry.clear()
+
+    # The nested step uses ItemType's field_map (primary), which omits
+    # ``name``. So the prefetch's child queryset only_fields excludes
+    # ``name`` even though the selection asked for it.
+    prefetch = _prefetch_entry(plan)
+    assert isinstance(prefetch, Prefetch)
+    # The primary's field_map is what drove the nested resolution: the
+    # child queryset's only-fields contain ``id`` (which IS in the
+    # primary's field_map) but not ``name`` (which is NOT).
+    child_qs = prefetch.queryset
+    assert child_qs is not None
+    only_clause = set(child_qs.query.deferred_loading[0])
+    assert "id" in only_clause
+    assert "name" not in only_clause

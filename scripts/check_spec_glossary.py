@@ -202,7 +202,7 @@ def auto_link_terms(
         position = _find_first_outside(text, backtick, code_ranges, link_ranges)
         if position is not None:
             replacement = f"[`{term}`](FEATURES.md#{anchor})"
-            text = text[:position] + replacement + text[position + len(backtick):]
+            text = text[:position] + replacement + text[position + len(backtick) :]
             spec_path.write_text(text, encoding="utf-8")
             linked.append(term)
             continue
@@ -210,7 +210,7 @@ def auto_link_terms(
         position = _find_first_outside(text, term, code_ranges, link_ranges)
         if position is not None:
             replacement = f"[{term}](FEATURES.md#{anchor})"
-            text = text[:position] + replacement + text[position + len(term):]
+            text = text[:position] + replacement + text[position + len(term) :]
             spec_path.write_text(text, encoding="utf-8")
             linked.append(term)
             continue
@@ -292,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         if skipped:
             print(
                 f"auto-link: {len(skipped)} term(s) had no plain prose mention "
-                "outside code blocks / existing links:"
+                "outside code blocks / existing links:",
             )
             for term in skipped:
                 print(f"  - {term}")

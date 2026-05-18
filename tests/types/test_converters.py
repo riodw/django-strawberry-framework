@@ -1453,3 +1453,219 @@ def test_real_hstore_field_compatible_with_strawberry():
     result = schema.execute_sync("{ owner { data } }")
     assert result.errors is None
     assert result.data == {"owner": {"data": payload}}
+
+
+# ---------------------------------------------------------------------------
+# Slice 4 — multi-type relation conversion regressions (H1 always-defer)
+# ---------------------------------------------------------------------------
+
+
+def test_consumer_authored_relation_annotation_override_survives_always_defer():
+    """Consumer-authored annotation override targeting a secondary survives H1.
+
+    With ``Meta.primary = True`` on ``ItemType`` and ``AdminItemType`` as a
+    secondary, an annotation-only override on ``CategoryType.items`` that
+    points at ``AdminItemType`` must win over the primary-resolution path.
+    Pins that the ``consumer_authored_fields`` short-circuit still skips
+    relation synthesis for consumer-authored fields even though the
+    auto-synthesized path is now always-defer.
+    """
+    from apps.products.models import Category, Item
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    class CategoryType(DjangoType):
+        items: list[AdminItemType]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.consumer_authored_fields == frozenset({"items"})
+    assert definition.consumer_annotated_relation_fields == frozenset({"items"})
+
+    finalize_django_types()
+
+    # Consumer annotation wins: list[AdminItemType], not list[ItemType].
+    assert CategoryType.__annotations__["items"] == list[AdminItemType]
+
+
+def test_consumer_assigned_strawberry_field_relation_survives_always_defer():
+    """Consumer-assigned ``strawberry.field`` on a multi-type relation survives H1."""
+    from apps.products.models import Category, Item
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    class CategoryType(DjangoType):
+        @strawberry.field
+        def items(self) -> list[AdminItemType]:
+            return []
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.consumer_authored_fields == frozenset({"items"})
+    assert definition.consumer_assigned_relation_fields == frozenset({"items"})
+
+    # ``items`` is NOT in synthesized annotations — the consumer-authored
+    # short-circuit skipped it, so no PendingRelationAnnotation was recorded.
+    assert "items" not in CategoryType.__annotations__
+
+    finalize_django_types()
+
+    # Post-finalize: the consumer's resolver function is preserved and
+    # exposed via Strawberry's field definition.
+    items_field = next(
+        field for field in CategoryType.__strawberry_definition__.fields if field.python_name == "items"
+    )
+    assert items_field.base_resolver is not None
+    assert items_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.items")
+
+
+def test_relation_resolves_to_primary_type_when_target_model_has_multiple():
+    """Headline H1: a relation to a multi-type model resolves to the primary."""
+    from apps.products.models import Category, Item
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return []
+
+    schema = strawberry.Schema(query=Query)
+    items_field_type = _introspect_field_type(schema, "CategoryType", "items")
+    terminal = _walk_introspected_type(items_field_type)
+    # The reverse FK resolves to the primary ItemType, not AdminItemType.
+    assert terminal["name"] == "ItemType"
+
+
+def test_relation_resolves_to_primary_when_secondary_registered_before_source_before_primary():
+    """H1 import-order trap closure: declare secondary -> source -> primary in order.
+
+    Without always-defer, ``CategoryType.items`` would freeze against
+    ``AdminItemType`` (the only registered type on ``Item`` at the
+    moment ``CategoryType`` ran ``__init_subclass__``) and never pick
+    up the primary that registered later.
+    """
+    from apps.products.models import Category, Item
+
+    # 1. Secondary registers first (no primary flag).
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    # 2. Source references the reverse relation while only the secondary is known.
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    # 3. Primary registers AFTER the source.
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    finalize_django_types()
+
+    # Post-finalize annotation must resolve to the primary, not the secondary.
+    assert CategoryType.__annotations__["items"] == list[ItemType]
+
+    # And the schema-built field type also picks the primary.
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def categories(self) -> list[CategoryType]:
+            return []
+
+    schema = strawberry.Schema(query=Query)
+    items_field_type = _introspect_field_type(schema, "CategoryType", "items")
+    terminal = _walk_introspected_type(items_field_type)
+    assert terminal["name"] == "ItemType"
+
+
+def test_relation_resolves_when_target_model_has_one_type_no_primary():
+    """Backward-compat: a single registered type with no primary still resolves."""
+    from apps.products.models import Category, Item
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    finalize_django_types()
+    assert CategoryType.__annotations__["items"] == list[ItemType]
+
+
+def test_relation_target_with_multiple_no_primary_surfaces_audit_error_at_finalize():
+    """Slice 3 audit fires before unresolved-target when target is multi-type-no-primary."""
+    from apps.products.models import Category, Item
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+
+    msg = str(exc_info.value)
+    # The audit message is what fires — not the "no registered DjangoType"
+    # message of the unresolved-target path.
+    assert "Declare Meta.primary = True" in msg

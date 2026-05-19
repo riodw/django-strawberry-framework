@@ -487,3 +487,241 @@ Slice 1 closes the consumer override symmetry gap for scalar fields. `DjangoType
 ### Spec changes made (Worker 1 only)
 
 None.
+
+---
+
+## Maintainer-feedback revision plan (Worker 1)
+
+Source: `docs/feedback.md` (Implementation review — spec-015 consumer scalar overrides, Slice 1). The maintainer ran a full coverage-aware test pass externally after the build cycle's nominal close. Two findings were recorded; both route through the Slice 1 loop per BUILD.md "Final test-run gate" failure-handling ("If failures appear, record them in `bld-final.md`, then re-loop through whichever slice owns the failing behavior"). This section authorizes the Worker 2 apply-changes pass and the Worker 3 re-review pass; the artifact's top-level `Status:` is set to `revision-needed` accordingly.
+
+### M1 — `_id_annotation_is_relay_node_id`'s `id_hint is None` branch is unreachable and blocks 100% coverage
+
+**Feedback verbatim (`docs/feedback.md` M1):**
+
+Reference: `django_strawberry_framework/types/base.py:123-125`.
+
+```python
+id_hint = hints.get("id")
+if id_hint is None:
+    return False          # line 125 — never executed
+return _has_node_id_marker(id_hint)
+```
+
+The full-suite coverage run shows exactly one uncovered line in the package: `base.py:125`. The call site at `base.py:205` reads `if has_id_annotation and not _id_annotation_is_relay_node_id(cls):` where `has_id_annotation = "id" in cls.__annotations__`. By the time `_id_annotation_is_relay_node_id(cls)` is called, `"id"` is guaranteed to be in `cls.__annotations__`, so `typing.get_type_hints(cls, include_extras=True)` resolves `id` and `hints.get("id")` returns a non-`None` value. The defensive `if id_hint is None: return False` is dead code under the current call-site precondition. The reviewer's preferred resolution: REMOVE the redundant check entirely and call `return _has_node_id_marker(hints.get("id"))` directly — `_has_node_id_marker(None)` already returns False safely because `typing.get_origin(None)` is `None`, not `Annotated`, so the conjunction short-circuits.
+
+**Planned resolution.** REMOVE lines 123-125 of `django_strawberry_framework/types/base.py` (the `id_hint = hints.get("id"); if id_hint is None: return False; return _has_node_id_marker(id_hint)` block) and replace with the single line `return _has_node_id_marker(hints.get("id"))`. Rationale: (a) the defensive guard is unreachable under the sole call site's precondition (`has_id_annotation = "id" in cls.__annotations__` is True at `base.py:205`); (b) `_has_node_id_marker(None)` already returns False safely under the lazy-evaluation conjunction in its body, so the explicit `None` check carries no behavior; (c) the dead line blocks the Definition of done's DoD #4 ("`uv run pytest` passes locally with 100% package coverage" — `pyproject.toml [tool.coverage.report] fail_under = 100`). Reviewer's preferred option of three (REMOVE > `# pragma: no cover` > contrive-a-test) is adopted because it leaves the helper at its leanest faithful shape rather than papering over the dead code with a coverage exclusion or a synthetic test.
+
+Post-change body (verbatim target shape):
+
+```python
+def _id_annotation_is_relay_node_id(cls: type) -> bool:
+    # ... unchanged docstring ...
+    try:
+        hints = typing.get_type_hints(cls, include_extras=True)
+    except (NameError, AttributeError):
+        raw = cls.__annotations__.get("id")
+        if isinstance(raw, str):
+            return bool(_NODEID_STRING_RE.search(raw))
+        return _has_node_id_marker(raw)
+    return _has_node_id_marker(hints.get("id"))
+```
+
+Three lines removed (the `id_hint =` assignment, the `if id_hint is None:` line, and the `return False` line); one line added (`return _has_node_id_marker(hints.get("id"))`). Net: -2 lines.
+
+**Test impact.** None. The existing 19-test Slice 1 cluster already pins every observable contract:
+
+- The resolved-success path (NodeID marker present) is hit by `test_consumer_id_relay_nodeid_annotation_on_relay_node_type_is_accepted` and `test_consumer_id_resolved_string_relay_nodeid_annotation_on_relay_node_type_is_accepted_end_to_end`.
+- The resolved-reject path (non-NodeID type) is hit by `test_consumer_id_annotation_on_relay_node_type_raises`.
+- The fail-soft sub-case-1 paths (id-itself-unresolved-string) are hit by `test_consumer_id_unresolved_nodeid_shaped_string_on_relay_node_type_passes_guard_only` (accept) and `test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises` + `test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises` (reject).
+- The fail-soft sub-case-2 path (id-resolved-but-sibling-failed) is hit by `test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is_accepted`.
+
+The branch being removed is reachable in source today but unreachable from the call graph; removing it preserves every assertion shape verbatim because the new direct delegate has the same return value at every input the call site can ever pass. No new test is justified (per the reviewer: "I cannot construct a realistic call shape that produces that divergence, so this option [contrive a test] is least attractive").
+
+### L1 — `registry.clear()` between assertions in the typo-lookalike test is unnecessary
+
+**Feedback verbatim (`docs/feedback.md` L1):**
+
+Reference: `tests/types/test_definition_order.py:610-640`.
+
+`test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises` declares two classes (`CategoryNodeNot` with `id: "NotNodeID[int]"`, then `CategoryNodeMy` with `id: "MyNodeID[int]"`) in sequence, both inside `pytest.raises(ConfigurationError)` blocks, with an explicit `registry.clear()` at line 626 between them. The H1 guard raises at `base.py:206` **before** `base.py:240`'s `registry.register_with_definition(...)` call. Neither class registers with the registry, so there is no state to clear between the two `pytest.raises` blocks. The `_isolate_registry` autouse fixture at `tests/types/test_definition_order.py:29` handles per-test cleanup. Not a bug — harmless defensive code, no test-correctness impact. Reviewer is neutral.
+
+**Planned resolution.** DROP the `registry.clear()` call at `tests/types/test_definition_order.py:626` (one-line deletion plus the adjacent blank line if pre-existing; net -1 or -2 lines depending on surrounding whitespace). Worker 1's decision rationale: (a) the H1 guard raises BEFORE `registry.register_with_definition` per Decision 7's contract ("the guard fires before registry mutation"), so neither class registers and there is no inter-assertion state to clear; (b) the `_isolate_registry` autouse fixture (`tests/types/test_definition_order.py:29`) handles real per-test cleanup, so the inline `registry.clear()` would only matter if `pytest.raises` semantics could leak state between assertions inside a single test — which they cannot; (c) dropping the call makes the test body match the spec's contract (the guard fires before mutation) rather than reading as belt-and-suspenders cleanup against a failure mode that cannot occur; (d) reducing test-body noise marginally helps the reader. Reviewer is neutral ("harmless either way"), and the decision tips on the spec-contract-alignment principle rather than a behavior gain.
+
+**Test impact.** None functionally. The two `pytest.raises(ConfigurationError)` blocks each pin their own class-creation failure independently; removing the `registry.clear()` between them does not alter which exceptions fire or which assertion messages are tested. After the edit, `_isolate_registry` is the sole cleanup mechanism for this test (matching every other test in the file).
+
+### Spec changes made (Worker 1 only)
+
+Two edits to `docs/spec-015-consumer_overrides_scalar-0_0_6.md` in this revision pass:
+
+1. **`docs/spec-015-consumer_overrides_scalar-0_0_6.md:4`** — status line updated from `Status: draft (revision 10, post-rev9 review).` to `Status: draft (revision 11, post-build maintainer-feedback pass).` so the header reflects the new revision. Reason: rev11 records the maintainer's post-close finding and the resulting pseudocode tightening; the status line must name the active revision to stay accurate per worker-1.md's "Spec status-line re-verification" rule.
+
+2. **`docs/spec-015-consumer_overrides_scalar-0_0_6.md:654-657`** (Decision 7's pseudocode block, rev8 M1 entry's success path) — the three-line block
+
+   ```python
+   id_hint = hints.get("id")
+   if id_hint is None:
+       return False
+   return _has_node_id_marker(id_hint)
+   ```
+
+   was replaced with the single line `return _has_node_id_marker(hints.get("id"))` plus an inline rev11 comment block above it explaining why the redundant guard was dropped (unreachable under the call site's `has_id_annotation = "id" in cls.__annotations__` precondition, redundant given `_has_node_id_marker(None)` already short-circuits safely, blocked the 100% coverage gate). Reason: align the spec's literal pseudocode with the post-revision implementation so future readers of Decision 7 see one shape, not two. Per Worker 1 role: option (b) — edit the spec to drop the redundant guard — over option (a) — keep the spec literal and `# pragma: no cover` the implementation — because the pseudocode was tightened, not relaxed; the new shape is strictly leaner and the rev11 inline comment preserves the rev8-vs-rev11 audit trail.
+
+3. **`docs/spec-015-consumer_overrides_scalar-0_0_6.md` revision history** — appended a new `**Revision 11** (post-build maintainer-feedback pass) — one medium-severity dead-code fix surfaced by the maintainer's external coverage-aware test pass after the build cycle nominally closed; recorded in `docs/feedback.md` and routed back through the Slice 1 loop per BUILD.md "Final test-run gate" failure-handling:` block documenting the M1 fix and noting that the L1 nit is test-file-local and does not propagate into the spec body. Reason: the spec's revision history is the durable audit trail; appending rev11 keeps the chain unbroken.
+
+L1 is intentionally NOT a spec edit. The `registry.clear()` placement is test-file local and the spec's "the guard fires before registry mutation" contract is unchanged by either keeping or dropping the call. Worker 2 applies the L1 edit to `tests/types/test_definition_order.py:626` directly; no Decision-level commitment moves.
+
+### Build-plan checkbox
+
+Worker 0 must also un-tick Slice 1's checkbox in `docs/builder/build-015-consumer_overrides_scalar-0_0_6.md:22` (currently `- [x]` per build-plan state on read; per the maintainer's framing in the revision-pass dispatch, Slice 1 and the two downstream gates — Integration and Final — are all un-ticked pending re-run). Worker 1 does not edit build-plan checkboxes; that step is Worker 0's responsibility on the next dispatch.
+
+### What Worker 2 does next
+
+Two atomic edits in one apply-changes pass:
+
+1. `django_strawberry_framework/types/base.py:123-126` — replace the three-line success path with `return _has_node_id_marker(hints.get("id"))`. Drop the `id_hint =` assignment line and the `if id_hint is None: return False` two-liner.
+2. `tests/types/test_definition_order.py:626` — drop the `registry.clear()` call (preserve the surrounding blank-line spacing as it would naturally fall after the deletion).
+
+Then `uv run ruff format .` and `uv run ruff check --fix .` per AGENTS.md / START.md. No new tests required. No new imports required. The `# noqa` comments on the typo-lookalike test's `id: "NotNodeID[int]"` and `id: "MyNodeID[int]"` annotations stay unchanged.
+
+### What Worker 3 does next (on re-review)
+
+The re-review pass should confirm:
+
+- Both atomic edits landed at the cited lines and nothing else changed in `types/base.py` or `tests/types/test_definition_order.py`.
+- `_id_annotation_is_relay_node_id`'s success path now delegates directly to `_has_node_id_marker(hints.get("id"))` with no intermediate assignment or guard.
+- The 19-test Slice 1 cluster runs unchanged (Worker 3 may run a focused `uv run pytest tests/types/test_definition_order.py tests/types/test_converters.py --no-cov -q` to confirm pass, without coverage flags per BUILD.md).
+- No drift in `__init__.py` public exports (re-verify `git diff -- django_strawberry_framework/__init__.py` is empty for the apply-changes diff).
+- The spec edits at `docs/spec-015-consumer_overrides_scalar-0_0_6.md:4`, `:654-657`, and the new Revision 11 history block are present and match the artifact's `### Spec changes made (Worker 1 only)` description verbatim.
+
+No DRY scan is required — the apply-changes diff is two lines net.
+
+### What Worker 1 does after Worker 3 accepts
+
+A second `## Final verification (Worker 1, pass 2)` section is appended at the same top level (per BUILD.md "Re-pass sections"), the slice's `Status:` flips back to `final-accepted`, and Worker 0 re-ticks the Slice 1 checkbox in `docs/builder/build-015-consumer_overrides_scalar-0_0_6.md`. Then Worker 1 re-runs the final test-run gate (`docs/builder/bld-final.md`, regenerated or updated with a pass-2 section) — the gate's `uv run pytest --no-cov` must still report 707 passed / 2 skipped (or equivalent), and CI's coverage gate (`fail_under = 100`) is now satisfied because the dead line is gone.
+
+### Blockers
+
+None. The plan is mechanically applicable; both edits are line-local; no new fixtures, no new test models, no new imports, no public-surface changes. The integration-pass artifact and final-test-run-gate artifact will need pass-2 sections after this loop closes, but those are downstream of Worker 0's re-dispatch flow and not Worker 1's revision-plan responsibility here.
+
+---
+
+## Build report (Worker 2, pass 2)
+
+### Files touched
+
+- `django_strawberry_framework/types/base.py` — M1 fix: replaced the three-line block `id_hint = hints.get("id"); if id_hint is None: return False; return _has_node_id_marker(id_hint)` at lines 123-126 with the single line `return _has_node_id_marker(hints.get("id"))`. The defensive `id_hint is None` guard at line 125 was unreachable under the sole call site's precondition (`has_id_annotation = "id" in cls.__annotations__` at `base.py:205` is True before invocation, so `hints.get("id")` is non-None), and `_has_node_id_marker(None)` already returns False safely under its lazy-conjunction body. Net -2 lines.
+- `tests/types/test_definition_order.py` — L1 fix: removed the `registry.clear()` call at line 626 (between the two `pytest.raises(ConfigurationError)` blocks in `test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises`). The H1 guard raises before `registry.register_with_definition`, so neither `CategoryNodeNot` nor `CategoryNodeMy` registers and there is no inter-assertion state to clear; the `_isolate_registry` autouse fixture handles real per-test cleanup. Removed the line and one adjacent blank line; net -2 lines.
+
+### Tests added or updated
+
+None. The revision is dead-code removal plus an unnecessary-call removal; no behavioral change, no new test contracts. The existing 19-test Slice 1 cluster already pins every observable contract for the M1 success path (per the revision plan's "Test impact" analysis), and the L1 edit removes a setup line, not an assertion.
+
+### Validation run
+
+- `uv run ruff format .` — pass (100 files left unchanged after the two edits).
+- `uv run ruff check --fix .` — pass (All checks passed!).
+- `git status --short` — Slice-1-revision-intended (2 files): `django_strawberry_framework/types/base.py` (status `MM` — Slice 1 carry-over now layered with this pass's M1 edit) and `tests/types/test_definition_order.py` (status `MM` — Slice 1 carry-over now layered with this pass's L1 edit). All other modified files in the working tree are carry-over from prior Slices 1-5 and Worker 1's revision-plan setup (CHANGELOG.md, KANBAN.md, TODAY.md, docs/FEATURES.md, docs/README.md, docs/builder/BUILD.md, docs/builder/bld-final.md, docs/builder/bld-integration.md, docs/builder/bld-slice-{2,3,4,5}-*.md, docs/builder/build-015-*.md, docs/builder/worker-0.md, docs/feedback.md, docs/spec-015-consumer_overrides_scalar-0_0_6.md, pyproject.toml, tests/types/test_base.py, tests/types/test_converters.py, django_strawberry_framework/types/definition.py); these are out of scope for the Slice 1 revision's classification per the dispatch contract.
+- Focused pytest run: `uv run pytest tests/types/test_definition_order.py tests/types/test_relay_interfaces.py --no-cov -q` → 96 passed in 2.77s. No regression; the test count is unchanged (the L1 edit removed a single setup line, not an assertion).
+
+### Implementation notes
+
+- This pass 2 implements the maintainer-feedback revision plan exactly. No architectural decisions made. Worker 1's plan at lines 493-604 of this artifact specifies both edits verbatim (M1 at `base.py:123-126`, L1 at `tests/types/test_definition_order.py:626`); Worker 2 transcribes them mechanically. The line numbers on disk matched the plan exactly (re-verified via grep before each edit).
+- The `Edit` tool's exact-string-match contract was the natural enforcement for the L1 edit: matching a six-line context window around the `registry.clear()` call disambiguated it from the other `registry.clear()` calls in the file (lines 32, 34, 714) without needing `replace_all`.
+
+### Notes for Worker 3
+
+- Both atomic edits landed at the cited lines and nothing else changed in `types/base.py` or `tests/types/test_definition_order.py`. Verify by reading the diff against HEAD — the M1 change is a 4-line-to-1-line replacement inside `_id_annotation_is_relay_node_id` after the `except (NameError, AttributeError):` clause; the L1 change is the removal of a single `registry.clear()` line plus its adjacent blank line between the two `pytest.raises` blocks in `test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises`.
+- Verify the focused test count is unchanged (96 in `tests/types/test_definition_order.py` + `tests/types/test_relay_interfaces.py`). The L1 edit removes a setup line, not an assertion — the same 34 tests in `test_definition_order.py` should still collect and pass.
+- `__init__.py` public exports are unchanged — `git diff -- django_strawberry_framework/__init__.py` for this pass's working-tree delta is empty.
+- No DRY scan is required — the apply-changes diff is two lines net (one removal + one replacement).
+- No new helper, no new test, no new import. The `# noqa: F821` comments on the typo-lookalike test's `id: "NotNodeID[int]"` and `id: "MyNodeID[int]"` annotations stay unchanged.
+
+### Notes for Worker 1 (spec reconciliation)
+
+None expected. Worker 1 already edited the spec to rev 11 as part of the revision-plan pass (status line at `:4`, Decision 7 pseudocode at `:654-657`, and revision history block — see `### Spec changes made (Worker 1 only)` at line 552 of this artifact). This pass 2 lands the implementation exactly as the rev11 pseudocode specifies; no further spec edit is warranted.
+
+---
+
+## Review (Worker 3, pass 2)
+
+### High:
+
+None.
+
+### Medium:
+
+None.
+
+### Low:
+
+None.
+
+### DRY findings
+
+None. The pass-2 revision is a 2-line net dead-code/dead-call removal; no DRY surface is in play.
+
+### Public-surface check
+
+`git diff -- django_strawberry_framework/__init__.py` returns no output. `__all__` and the re-export list are unchanged. Matches the spec Definition of done's "no new public exports" requirement.
+
+### CHANGELOG sanity
+
+Not applicable; revision did not modify `CHANGELOG.md`.
+
+### Documentation / release sanity
+
+Worker 1 edited the active spec at `docs/spec-015-consumer_overrides_scalar-0_0_6.md` to revision 11 as part of the revision-plan pass (recorded under `### Spec changes made (Worker 1 only)` in this artifact at line 552). Re-verified against the on-disk spec:
+
+- **Status line (`:4`)** — reads `Status: draft (revision 11, post-build maintainer-feedback pass).` Matches Worker 1's recorded change verbatim.
+- **Decision 7 pseudocode (`:629-669`)** — the post-`except`-block success path is now the single-line `return _has_node_id_marker(hints.get("id"))` at `:669`, preceded by an inline rev11 comment block at `:655-668` documenting why the redundant guard was dropped (unreachable under call-site precondition; redundant given `_has_node_id_marker(None)` already short-circuits; blocked the 100% coverage gate). The rev8 M1 narrative comment block above the success path (`:650-654`) is preserved. The replacement removed the three-line `id_hint = hints.get("id"); if id_hint is None: return False; return _has_node_id_marker(id_hint)` block that rev8 M1 specified.
+- **Revision 11 history entry (`:60-61`)** — appended a new revision-11 paragraph documenting the M1 dead-code fix and the L1 nit's test-file-local scope (with the explicit "no spec edit required for L1" rationale). The rev10 entry at `:55-59` is preserved unchanged. Chain intact.
+
+No other docs/release/KANBAN/archive surfaces were touched by this pass (per `git diff` against the named files: `tests/types/test_definition_order.py` and `django_strawberry_framework/types/base.py` are the only two with pass-2-attributable hunks; the other M / MM entries in `git status --short` are carry-over from Slices 2-5 of the original build plus Worker 1's rev11 spec edit, all out of scope for this re-review).
+
+### What looks solid
+
+- **M1 implementation matches Worker 1's rev11 plan exactly.** The three-line block at the old `base.py:123-125` (`id_hint = hints.get("id"); if id_hint is None: return False; return _has_node_id_marker(id_hint)`) is replaced with the single-line `return _has_node_id_marker(hints.get("id"))` at `base.py:123`. `grep -n "id_hint is None\|id_hint = hints.get" django_strawberry_framework/types/base.py` returns 0 hits.
+- **L1 edit lands at the right site.** `grep -n "registry.clear()" tests/types/test_definition_order.py | head -10` returns three remaining call sites: `:32` and `:34` inside the `_isolate_registry` autouse fixture (pre-existing fixture cleanup), and `:712` inside the unresolved-NodeID-shaped-string `finally` block (rev9 L1 + rev10 M2 mandated recipe; correctly retained because that test DOES register state — the H1 guard passes for the rev8 M2 accept case, so the synthetic `UnresolvedRelayChild` class enters the registry and must be cleared). The `registry.clear()` between the two `pytest.raises` blocks in `test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises` (the rev10 L1 site Worker 2 was instructed to drop) is gone — verified by reading lines 610-640 of the test file: the second `pytest.raises(ConfigurationError)` block at `:626` now directly follows the first block's `assert "GlobalID" in msg` at `:624` with one blank line, no `registry.clear()` between.
+- **Helper structure after the edit.** `_id_annotation_is_relay_node_id` at `base.py:84-123` retains its docstring intact, retains the `try / except (NameError, AttributeError)` shape, retains the rev8 M2 fail-soft sub-case logic (string regex match + Annotated-object fallback), and the success path now delegates directly to `_has_node_id_marker(hints.get("id"))` as the rev11 pseudocode specifies. `_has_node_id_marker(None)` is verifiably safe under the lazy conjunction (`typing.get_origin(None) is Annotated` evaluates False, short-circuiting before `typing.get_args` runs).
+- **No surprise edits.** `git diff -- django_strawberry_framework/types/base.py tests/types/test_definition_order.py` shows exactly the two atomic edits Worker 1's revision plan called for: a 4-to-1 line replacement in `types/base.py` after the `except` block, and a 2-line removal (one `registry.clear()` line plus one blank line) in `test_definition_order.py` between the typo-lookalike test's two `pytest.raises` blocks. No other deltas in these two files. Net: -2 lines in `base.py`, -2 lines in `test_definition_order.py`.
+- **Focused tests pass.** `uv run pytest tests/types/test_definition_order.py tests/types/test_relay_interfaces.py --no-cov -q` → 96 passed in 2.84s (matches Worker 2's pass-2 report exactly).
+- **Broader sweep clean.** Ran `uv run pytest --no-cov -q` → 707 passed, 2 skipped in 25.92s. No regression in pass count from the maintainer's externally-run baseline of 707 passed / 2 skipped (the maintainer's `docs/feedback.md` "Test run" note); the L1 edit removes a setup line, not an assertion, and the M1 edit removes unreachable code, so test counts are stable by construction.
+- **Spec rev11 internally consistent.** Worker 1's three named spec edits (status line at `:4`, Decision 7 pseudocode at `:654-669`, revision-history entry at `:60-61`) all land on disk and match the artifact's `### Spec changes made (Worker 1 only)` description. The rev8 M1 comment block above the success path is preserved (audit trail intact); the new rev11 comment block at `:655-668` documents the rev8→rev11 transition explicitly.
+- **Helper skip correctly recorded.** Worker 2 did not invoke `scripts/review_inspect.py` for this pass — pure dead-code removal does not add logic, so the BUILD.md "When to run the helper during build" thresholds (Worker 3 helper required when the slice adds 30+ lines of new logic) do not fire. Skip is the correct default for this revision; recorded here for completeness.
+
+### Temp test verification
+
+Not applicable; no temp tests for the revision.
+
+### Notes for Worker 1 (spec reconciliation)
+
+- **No further spec edits warranted.** Worker 1's rev11 edits (status line, Decision 7 pseudocode, revision history) match the on-disk spec verbatim and are internally consistent. The rev11 comment block at `:655-668` of the spec preserves the rev8-vs-rev11 audit trail as Worker 1 intended.
+- **Build-plan checkbox is Worker 0's responsibility.** The artifact's revision plan correctly noted at `:573-575` that re-ticking the Slice 1 checkbox at `docs/builder/build-015-consumer_overrides_scalar-0_0_6.md:22` falls to Worker 0 after Worker 1's pass-2 `final-accepted` lands. The current checkbox state on disk is `- [ ]` (un-ticked) per Worker 0's revision dispatch; no Worker 3 action required.
+- **Integration and Final gates remain un-ticked.** `docs/builder/build-015-consumer_overrides_scalar-0_0_6.md:27-28` shows `- [ ]` for both, matching the maintainer's framing that those downstream gates re-run after this Slice 1 revision loop closes.
+
+### Review outcome
+
+`review-accepted`
+
+---
+
+## Final verification (Worker 1, pass 2)
+
+- **Maintainer feedback M1 — dead code removed**: pass. `grep "id_hint" django_strawberry_framework/types/base.py` returns 0 hits. The redundant `id_hint = hints.get("id"); if id_hint is None: return False; return _has_node_id_marker(id_hint)` block is gone; the success path now delegates directly to `return _has_node_id_marker(hints.get("id"))`. The dead line that the maintainer's coverage-aware test pass flagged at `base.py:125` no longer exists in source, so the 100% coverage gate is unblocked at the line level. The maintainer's CI run is the canonical confirmation that coverage restores to 100%; per BUILD.md "Coverage is the maintainer's gate, not a worker's tool", Worker 1 does not run `--cov*` here.
+- **Maintainer feedback L1 — unnecessary `registry.clear()` removed**: pass. `grep -n "registry.clear()" tests/types/test_definition_order.py` returns three remaining sites: lines 32 + 34 inside the `_isolate_registry` autouse fixture (per-test cleanup) and line 712 inside the rev8 M2 unresolved-NodeID-shaped-string `finally` block (rev9 L1 mandated cleanup for a test where class creation actually succeeds and registers state). The `registry.clear()` previously between the two `pytest.raises(ConfigurationError)` blocks in `test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises` (originally at `:626`) is gone — read of `tests/types/test_definition_order.py:610-640` confirms the second `pytest.raises(ConfigurationError) as exc_info:` at `:626` directly follows the first block's `assert "GlobalID" in msg` at `:624` with one blank line, no intervening `registry.clear()` call.
+- **Spec rev 11 internal consistency**: pass. Worker 1's three named earlier spec edits are coherent on disk:
+  - Status line at `docs/spec-015-consumer_overrides_scalar-0_0_6.md:4` reads `Status: draft (revision 11, post-build maintainer-feedback pass).` (verified).
+  - Decision 7 pseudocode success path at `spec:669` is the single line `return _has_node_id_marker(hints.get("id"))`, preceded by the rev11 rationale comment block at `:655-668`. The rev8 M1 comment block at `:650-654` is preserved (audit trail intact).
+  - Revision 11 history entry appended at `spec:60-61` (read end-to-end during artifact read; chain from rev1 through rev11 unbroken).
+- **Existing tests still pass — broader scope**: pass. `uv run pytest --no-cov` → `707 passed, 2 skipped, 3 warnings in 25.38s`. Test count unchanged from the original final-gate baseline (707 passed / 2 skipped per `bld-final.md`). The L1 edit removed a setup line, not an assertion; the M1 edit removed unreachable code; counts are stable by construction. No `--cov*` flags used.
+- **Coverage gate — maintainer-owned**: per BUILD.md "Coverage is the maintainer's gate, not a worker's tool", Worker 1 does not verify coverage at this gate. The M1 fix removes the single uncovered line the maintainer's external coverage-aware test pass identified (`base.py:125` in the pre-revision tree). The dead line is verifiably gone (zero `id_hint` grep hits); the maintainer is to re-run coverage at PR time to confirm 100% restoration.
+- **Spec slice checklist tick state**: pass. No new sub-checks were added in pass 2 (no new tests, no new helpers, no new spec sub-bullets). The artifact's `### Spec slice checklist (verbatim)` ticks established in the pass-1 final verification remain valid; no change.
+- **Final status**: `final-accepted`.
+
+### Summary
+
+Pass 2 closes the Slice 1 loop on the maintainer's post-close coverage-aware feedback. The M1 dead-code line at `base.py:125` is removed (Worker 2's pass-2 apply-changes edit delegated `_id_annotation_is_relay_node_id`'s success path directly to `_has_node_id_marker(hints.get("id"))`); the L1 unnecessary `registry.clear()` between the two `pytest.raises` blocks in the typo-lookalike test is dropped. The full suite at `uv run pytest --no-cov` reports `707 passed / 2 skipped` — same count as the original final-gate baseline, confirming the revision removed only dead code (M1) and an unnecessary setup line (L1) without altering any test contract. The spec rev 11 edits (status line, Decision 7 pseudocode tightening, Revision 11 history entry) are all on disk and internally consistent. The maintainer should re-run coverage at PR time to confirm the gate's `fail_under = 100` is restored; Worker 1 cannot verify coverage per BUILD.md.
+
+### Spec changes made (Worker 1 only)
+
+None in this pass; the spec edit was recorded in the Maintainer-feedback revision plan (Worker 1) section above.

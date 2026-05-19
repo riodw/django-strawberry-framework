@@ -120,10 +120,7 @@ def _id_annotation_is_relay_node_id(cls: type) -> bool:
         if isinstance(raw, str):
             return bool(_NODEID_STRING_RE.search(raw))
         return _has_node_id_marker(raw)
-    id_hint = hints.get("id")
-    if id_hint is None:
-        return False
-    return _has_node_id_marker(id_hint)
+    return _has_node_id_marker(hints.get("id"))
 
 
 def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:

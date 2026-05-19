@@ -623,8 +623,6 @@ def test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises():
     assert "relay.NodeID" in msg
     assert "GlobalID" in msg
 
-    registry.clear()
-
     with pytest.raises(ConfigurationError) as exc_info:
 
         class CategoryNodeMy(DjangoType):

@@ -1,7 +1,7 @@
 # Build: Final test-run gate — spec-015 (consumer_overrides_scalar / 0.0.6)
 
 Spec reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md`
-Status: final-accepted
+Status: final-accepted (re-run pass 2)
 
 ## Pytest gate
 
@@ -75,3 +75,37 @@ CHANGELOG entries match spec authorization verbatim across the five new `[Unrele
 Deferred work catalog walks all six artifacts; ten items recorded with citations. Three are integration-pass deferrals (two stylistic / one test-helper consolidation), six are intentional spec-level non-goals already declared in the spec body, and one is a maintainer-discretion lifecycle step (spec archival).
 
 **Final status: `final-accepted`.** All gates green; no failures to route through an owning slice loop.
+
+---
+
+## Re-run after Slice 1 maintainer-feedback revision (pass 2)
+
+Triggered by the maintainer-feedback revision in `docs/feedback.md` (M1 dead-code removal + L1 test cleanup). All gate commands re-run; all green.
+
+### Pytest gate
+
+- Command: `uv run pytest --no-cov`
+- Result: PASS — `707 passed, 2 skipped, 3 warnings in 25.35s` (identical to pass-1 baseline — M1 removed unreachable code and L1 removed unnecessary setup, neither changes assertion count)
+
+### Django consistency checks
+
+- `uv run python examples/fakeshop/manage.py check` — PASS (`System check identified no issues (0 silenced).`)
+- `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` — PASS (`No changes detected`)
+
+### Lint / format / diff gate
+
+- `uv run ruff format --check .` — PASS (`100 files already formatted`; pre-existing `COM812`-vs-formatter advisory warning is not a failure, same as pass 1)
+- `uv run ruff check .` — PASS (`All checks passed!`)
+- `git diff --check` — PASS (exit 0; no whitespace damage or conflict markers anywhere in the working tree)
+
+### CHANGELOG contract
+
+Unchanged from pass 1; the revision did not touch CHANGELOG. Verified via `git diff -- CHANGELOG.md` (no unstaged hunks; the five `[Unreleased]` entries staged by Slice 5 remain unmodified).
+
+### Deferred-work catalog
+
+Unchanged from pass 1; the maintainer feedback was resolved in-loop, not deferred. All ten items recorded in the pass-1 catalog remain valid (three integration-pass deferrals, six intentional spec-level non-goals, one maintainer-discretion lifecycle step).
+
+### Final status
+
+`final-accepted` (re-run). Maintainer should run coverage at PR time to confirm `fail_under = 100` is restored (M1 fix's intent).

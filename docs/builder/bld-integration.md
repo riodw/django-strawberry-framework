@@ -2,7 +2,7 @@
 
 Spec reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md`
 Slices reviewed: 1, 2, 3, 4, 5 (all final-accepted before this pass)
-Status: final-accepted
+Status: final-accepted (re-verified pass 2)
 
 ## DRY scan (Worker 1)
 
@@ -278,3 +278,21 @@ The cross-slice integration pass closed cleanly. One DRY consolidation — extra
 ### Spec changes made (Worker 1 only)
 
 None.
+
+---
+
+## Final verification (Worker 1, pass 2 — post-revision re-verification)
+
+Triggered by the Slice 1 maintainer-feedback revision. Re-verified that the revision's two atomic edits did not affect this pass's findings.
+
+- `_is_relay_shaped` helper and both call sites: unchanged. `grep -n "_is_relay_shaped\|issubclass(i, relay.Node)" django_strawberry_framework/types/base.py` returns exactly four lines — the helper definition at `:126`, its body's `issubclass(i, relay.Node)` at `:137` (sole occurrence in the file), and the two call sites at `:184` (H1 guard inside `__init_subclass__`) and `:740` (`suppress_pk_annotation` inside `_build_annotations`). The single-source-of-truth contract for the Relay-shape predicate is preserved.
+- DRY scan: unchanged. The pass-2 revision is two atomic edits — M1 collapses a three-line dead block to a single delegation line in `_id_annotation_is_relay_node_id`'s success path, and L1 removes one unnecessary `registry.clear()` call in `test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises`. Neither edit introduces duplication; neither edit touches the helper-cluster surface, the call-site surface, or any module-boundary shape.
+- Spec rev 11 internal consistency: confirmed. Decision 7 pseudocode lands the leaner shape (`return _has_node_id_marker(hints.get("id"))`) and the revision-history entry for rev 11 is present at the bottom of the revision history block. The Slice 1 pass-2 final-verification artifact records both edits on disk (`grep "id_hint"` → 0 hits in `base.py`; `registry.clear()` in `test_definition_order.py` shows only the autouse-fixture sites at `:32`/`:34` and the rev8-M2-recipe `finally` at `:712`).
+
+### Summary
+
+The Slice 1 pass-2 edits (M1 dead-code removal + L1 test cleanup) are localized to `_id_annotation_is_relay_node_id` and `test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises`; neither touches the integration pass's consolidation surface. Status re-`final-accepted`.
+
+### Spec changes made (Worker 1 only)
+
+None in this pass; the rev 11 edit was recorded in the Slice 1 artifact's Maintainer-feedback revision plan section.

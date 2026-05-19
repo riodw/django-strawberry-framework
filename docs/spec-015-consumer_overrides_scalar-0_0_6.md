@@ -1,7 +1,7 @@
 # Spec: Consumer override semantics for scalar fields
 
 Target release: `0.0.6`.
-Status: draft (revision 10, post-rev9 review).
+Status: draft (revision 11, post-build maintainer-feedback pass).
 Owner: package maintainer.
 Predecessors: [`docs/FEATURES.md`](FEATURES.md) (entries [`DjangoType`](FEATURES.md#djangotype), [`Scalar field conversion`](FEATURES.md#scalar-field-conversion), [`Scalar field override semantics`](FEATURES.md#scalar-field-override-semantics), [`Definition-order independence`](FEATURES.md#definition-order-independence), [`Relation handling`](FEATURES.md#relation-handling)), [`KANBAN.md`](../KANBAN.md) card `WIP-ALPHA-015-0.0.6`.
 Card line: ["Consumer override semantics (scalar fields) — extends the `DONE-006-0.0.4` relation-field override contract to scalar fields and closes out the remaining `0.0.6` patch."](../KANBAN.md)
@@ -57,6 +57,8 @@ Revision history (kept inline so the spec is self-contained):
   2. **M2**: rev9 L1 added `registry.clear()` to the M2 unresolved-NodeID-shaped-string test recipe in the spec, but the corresponding in-tree TODO anchor at `tests/types/test_definition_order.py:312` (the recipe block inside the Slice 1 cluster TODO) was not updated alongside — it still shows only `sys.modules.pop(stub_name, None)` in the `finally` block. Worker 1 reading the TODO as ground truth (rather than the spec) would write the test without registry cleanup, leaving a stale `UnresolvedRelayChild` registered against `Category` that could poison the rev6 L2 cross-type cache test if it runs later in the session. Fix: update the TODO recipe to include `registry.clear()` in the same `finally` block, with the same one-line rationale the spec carries.
   3. **L1**: rev9 L2 says Worker 1 may add the `_FakeUnsupportedField` fixture in `tests/types/test_definition_order.py` (default) OR `tests/types/test_converters.py` (alternative). Three downstream sections now imply only the nested-`ArrayField` bypass test is allowed outside `test_definition_order.py` — the `tests/types/test_definition_order.py` TODO says "18 of 19 Slice 1 tests land here", the Test strategy intro says "All new tests land in `test_definition_order.py` … single exception" (the `ArrayField` bypass), and the Definition of done names `test_converters.py` only for the `ArrayField` bypass. Allowing `_FakeUnsupportedField` to live in either file would break the "18 of 19" count and the "single exception" rule. Fix: tighten rev9 L2's recipe to mandate placement in `tests/types/test_definition_order.py` — the `_FakeUnsupportedField` fixture has no concrete fixture-locality reason to live outside the override-contract host (unlike `_FakeArrayField`, which has the existing converter-host precedent and shared monkeypatch surface).
   4. **L2**: rev8/rev9's expanded TODO pseudo-code blocks in `django_strawberry_framework/types/base.py` and `django_strawberry_framework/types/definition.py` trip 38 `ERA001 Found commented-out code` failures under `uv run ruff check`. The Definition of done gates on `uv run ruff check .` passing; that gate is post-Slice-1 (where the TODOs disappear), but `main`-branch CI may also run lint on this branch. Two options were considered: (a) add per-line `# noqa: ERA001` to the 38 flagged lines, or (b) accept the temporary lint failure until Slice 1 lands. Rev10 picks neither verbatim — instead, **add a temporary `[tool.ruff.lint.per-file-ignores]` entry in `pyproject.toml`** scoping `ERA001` to `django_strawberry_framework/types/base.py` and `django_strawberry_framework/types/definition.py`, with a comment naming `spec-015` Slice 1 as the reason. The Slice 1 commit that replaces the TODO bodies with real code also removes the two per-file-ignore lines. This keeps the lint clean throughout the planning phase, avoids 38 inline `noqa` markers, and the reversal is one-line atomic with the Slice 1 commit.
+- **Revision 11** (post-build maintainer-feedback pass) — one medium-severity dead-code fix surfaced by the maintainer's external coverage-aware test pass after the build cycle nominally closed; recorded in `docs/feedback.md` and routed back through the Slice 1 loop per BUILD.md "Final test-run gate" failure-handling:
+  1. **M1**: rev8 M1's pseudocode for `_id_annotation_is_relay_node_id`'s try-success path used `id_hint = hints.get("id"); if id_hint is None: return False; return _has_node_id_marker(id_hint)`. The `if id_hint is None: return False` defensive guard is unreachable under the helper's sole call site (`base.py:205` — `has_id_annotation = "id" in cls.__annotations__` is True by that point, so `typing.get_type_hints(cls, include_extras=True)` resolves `id` and `hints.get("id")` returns a non-`None` value). Coverage-aware test pass reports line 125 uncovered, blocking the Definition of done's 100% coverage gate. The check is also redundant given that `_has_node_id_marker(None)` already returns False safely (`typing.get_origin(None)` is `None`, not `Annotated`, so the conjunction short-circuits). Fix: drop the redundant guard from the pseudocode and delegate directly — `return _has_node_id_marker(hints.get("id"))`. The Slice 1 implementation is updated atomically in the same revision pass so spec and code stay aligned. No test changes required (the existing 19-test cluster covers the helper's behavior; removing dead code preserves every observable contract). The maintainer feedback also flagged a Low nit — `registry.clear()` between assertions in `test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises` (`tests/types/test_definition_order.py:626`) — but that wording is test-file local and does not propagate into the spec body; the spec's "the guard fires before registry mutation" contract is unchanged by either keeping or dropping the call, so no spec edit is required for L1.
 
 ## Key glossary references
 
@@ -650,11 +652,21 @@ def _id_annotation_is_relay_node_id(cls: type) -> bool:
     # through here means ``typing.get_type_hints`` succeeded and
     # ``hints`` is in scope. Rev7's pseudocode dangled this block at
     # module scope where ``hints`` is undefined; rev8 places it where
-    # Python can actually execute it.
-    id_hint = hints.get("id")
-    if id_hint is None:
-        return False
-    return _has_node_id_marker(id_hint)
+    # Python can actually execute it. Rev11 post-build maintainer
+    # feedback (M1 in `docs/feedback.md`): the rev8 pseudocode wrapped
+    # the ``hints.get("id")`` lookup in an ``if id_hint is None: return
+    # False`` defensive check before delegating to
+    # ``_has_node_id_marker``. That check is unreachable under the call
+    # site's precondition (``has_id_annotation = "id" in
+    # cls.__annotations__`` is True at ``base.py``'s sole call site, so
+    # ``typing.get_type_hints(cls, include_extras=True)`` resolves
+    # ``id`` and the lookup returns a non-``None`` value) AND redundant
+    # given ``_has_node_id_marker(None)`` already returns False safely
+    # (``typing.get_origin(None)`` is ``None``, not ``Annotated``, so
+    # the conjunction short-circuits). The redundant guard blocked the
+    # 100% coverage gate (line was uncovered). Rev11 drops the guard
+    # and delegates directly.
+    return _has_node_id_marker(hints.get("id"))
 ```
 
 **Rev3 narrowing — what the predicate excludes.** Two false-positive cases that rev2's broader predicate would have rejected:

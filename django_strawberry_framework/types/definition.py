@@ -27,11 +27,18 @@ class DjangoTypeDefinition:
     has_custom_get_queryset: bool
     consumer_authored_fields: frozenset[str] = frozenset()
     consumer_annotated_relation_fields: frozenset[str] = frozenset()
-    # TODO(docs/spec-015-consumer_overrides_scalar-0_0_6.md Slice 1):
-    # Add consumer_annotated_scalar_fields here, between annotated relation
-    # and assigned relation metadata.
-    # Pseudo: default to frozenset(); tests assert annotation-only scalar
-    # overrides populate this set without touching consumer_assigned_*.
+    # TODO(spec-015 Slice 1, rev2 L1 — grouped-by-style ordering):
+    # Insert here, between the two annotated-* sets and the two
+    # assigned-* sets (annotated-relation, annotated-scalar, assigned-
+    # relation, assigned-scalar). The existing two assigned-* lines
+    # below stay where they are — the cosmetic re-order lands in the
+    # same commit:
+    #
+    #     consumer_annotated_scalar_fields: frozenset[str] = frozenset()
+    #
+    # Tests in tests/types/test_definition_order.py
+    # (test_annotation_only_scalar_override_populates_definition_metadata
+    # and the rev6 L2 cross-type cache test) read this set directly.
     consumer_assigned_relation_fields: frozenset[str] = frozenset()
     consumer_assigned_scalar_fields: frozenset[str] = frozenset()
     primary: bool = False

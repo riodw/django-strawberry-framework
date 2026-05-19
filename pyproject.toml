@@ -105,6 +105,12 @@ ignore = [
 "**/views.py" = ["D101"]
 "**/urls.py" = ["D100"]
 "**/admin.py" = ["D101"]
+# Temporary: spec-015 Slice 1 TODO anchors carry pseudo-code blocks that trip
+# ERA001. Remove these two entries when Slice 1 lands and the TODO bodies are
+# replaced by real code (see docs/spec-015-consumer_overrides_scalar-0_0_6.md
+# revision 10 L2).
+"django_strawberry_framework/types/base.py" = ["ERA001"]
+"django_strawberry_framework/types/definition.py" = ["ERA001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["django_strawberry_framework"]

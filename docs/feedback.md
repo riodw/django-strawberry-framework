@@ -1,48 +1,55 @@
 # Review feedback — spec-015 consumer scalar overrides
 
-Scope: reviewed `docs/spec-015-consumer_overrides_scalar-0_0_6.md` against the current `DjangoType` collection/finalization path, scalar converter behavior, and the existing tests.
+Scope: reviewed the updated `docs/spec-015-consumer_overrides_scalar-0_0_6.md` against the current `DjangoType` collection/finalization path, Relay tests, and scalar converter behavior.
 
 ## Findings
 
-### H1. Relay `id` override edge case names the wrong failure phase and exception
+### H1. The proposed Relay guard rejects the advertised `relay.NodeID[...]` escape hatch
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:316`, `django_strawberry_framework/types/base.py:643-657`, `django_strawberry_framework/types/finalizer.py:156-165`.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:45`, `:338-357`, `:365`, `:414`; existing `relay.NodeID` coverage in `tests/types/test_relay_interfaces.py:240` and `:994`.
 
-The spec says a `DjangoType` with `Meta.interfaces = (relay.Node,)` and a consumer `id: int` annotation should "still raise `NodeIDAnnotationError` at finalization." That does not match the current lifecycle. With a consumer-authored `id`, `_build_annotations` hits `if field.name in consumer_authored_fields: continue` before the Relay primary-key suppression branch, so the consumer `id: int` remains on `cls.__annotations__`. Finalization itself succeeds; building `strawberry.Schema(...)` then fails with Strawberry's schema validation error because `Node.id` is `ID!` but the concrete type's `id` field is `Int!`.
+Revision 2 correctly moves the bad `id: int` case to an early package-owned `ConfigurationError`, but the specified predicate is too broad:
 
-The spec should choose and pin the actual intended contract:
+`pk_name in consumer_annotated_scalar_fields or pk_name in consumer_assigned_scalar_fields`
 
-- reject plain consumer `id` annotations on Relay-node-shaped types with a package-owned `ConfigurationError` before schema construction; or
-- document and test the current downstream schema-build failure, using the actual `ValueError` phase/message rather than `NodeIDAnnotationError` at finalization.
+For the common `id` primary key, `id: relay.NodeID[int]` is also an annotation on the scalar pk field, so it lands in `consumer_annotated_scalar_fields` and would be rejected by the new guard. That directly contradicts the error message and Decision 7, which tell consumers to use `relay.NodeID[...]` as the supported escape hatch. Current behavior accepts this shape: `id: relay.NodeID[int]` finalizes and builds a schema with `id: ID!`.
 
-If `relay.NodeID[...]` is the supported consumer escape hatch, the spec should say that explicitly and distinguish it from `id: int`.
+The guard also rejects custom-named primary keys that do not collide with `Node.id`. A model with `code = models.CharField(primary_key=True)` and a consumer override `code: str` can coexist with the Relay interface because the GraphQL fields are `id: ID!` and `code: String!`; there is no interface field collision.
 
-### H2. The new short-circuit bypasses scalar converter validations, but the spec only covers enum caching
+Suggested contract:
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:155`, `:184`, `:317`; `django_strawberry_framework/types/converters.py:95-196`; existing converter tests in `tests/types/test_converters.py`.
+- reject only consumer-authored fields whose GraphQL/Python name is `id` on a Relay-node-shaped type, unless the annotation is a valid `relay.NodeID[...]`;
+- keep `id: relay.NodeID[...]` accepted, with an explicit regression test;
+- keep non-`id` primary-key overrides accepted unless there is a separate reason to ban them, and document that separately if so.
 
-Adding annotation-only scalar names to `consumer_authored_fields` skips the whole scalar branch before `convert_scalar(...)` runs. That does more than prevent auto-synthesized annotations: it also bypasses every converter-side validation and side effect for that selected field, including unsupported field-type errors, grouped/empty/colliding choice validation, ArrayField/HStoreField rejection paths, null widening, and enum registration.
+### M1. The unsupported-field override test suggests `bytes`, which Strawberry cannot schema-build
 
-That may be the right consumer-authoritative contract, but the spec needs to state it directly. Today it only calls out the choice-enum cache behavior. Add a decision and mandatory tests for at least:
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:52`.
 
-- annotation-only override of an otherwise unsupported scalar field, documenting whether this is now allowed;
-- annotation-only override of a choice field with an invalid/generated-enum shape, documenting whether converter validation is intentionally bypassed;
-- the docs update needed for `docs/FEATURES.md`'s scalar-conversion text, which currently frames unsupported scalar fields as `ConfigurationError` cases with `Meta.exclude` as the recourse.
+The test proposal says to use `myfield: bytes` "or similar" for an unsupported Django field override. Strawberry rejects `bytes` as an unexpected type during schema construction, so that example can create a false failure unrelated to the converter-bypass contract.
 
-If those converter validations are still meant to run, the implementation cannot be just the proposed `consumer_authored_fields` short-circuit; it needs a separate "validate converter shape but do not synthesize annotation/register enum" path.
+Use a Strawberry-supported scalar annotation such as `str` or `int` for this test. That keeps the assertion focused on "Django converter was bypassed" rather than "consumer picked a GraphQL-unsupported Python type."
 
-### M1. The end-to-end introspection test query is not enough to assert `Int`
+### M2. The nested `ArrayField` bypass test needs an explicit fake-sentinel setup
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:44`, `:331`; existing helper pattern at `tests/types/test_converters.py:434`.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:54`; existing pattern in `tests/types/test_converters.py:1021`.
 
-The proposed introspection query reads `type { name }`, but `description: int` on the fakeshop `Category.description` field will be non-null in GraphQL, so the immediate `type.name` is `null`; the scalar name lives under `type.ofType.name`. The test should request `kind`, `name`, and nested `ofType` and unwrap to the terminal type, or reuse the existing `_introspect_field_type` helper shape from converter tests.
+The spec asks for an `ArrayField(base_field=ArrayField(...))` override test in `tests/types/test_definition_order.py`, but the current converter tests exercise this path by monkeypatching `django_strawberry_framework.types.converters._ARRAY_FIELD_CLS` to a local `_FakeArrayField`. Without that instruction, the new test can become environment-dependent on whether real `django.contrib.postgres.fields.ArrayField` imports cleanly.
 
-### L1. The definition-field insertion point is inconsistent
+Add the fixture/monkeypatch requirement to the spec, or place this one test in `tests/types/test_converters.py` beside the existing fake `ArrayField` tests.
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:37`, `:247-254`; `django_strawberry_framework/types/definition.py:28-31`.
+### L1. Several revision-2 cross-references and counts are stale
 
-Slice 1 says to add `consumer_annotated_scalar_fields` after the existing `consumer_assigned_scalar_fields`, but Decision 3's sample places it between `consumer_annotated_relation_fields` and `consumer_assigned_relation_fields`. Pick one order and make the checklist, sample, and tests agree. The grouped order in Decision 3 is clearer, but the spec should not leave Worker 1 to infer whether reordering the existing dataclass fields is expected.
+References:
+
+- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:4` still says revision 1.
+- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:24`, `:31`, and `:33` refer to Slice 6, but the checklist has Slice 5 as docs/KANBAN/CHANGELOG.
+- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:27` says the card adds no new error sites, but Revision 2 adds a `ConfigurationError` site for Relay collision.
+- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:403` still says Slice 1 has 4 tests and `+30/-1`, while the updated plan has 8 tests plus a new guard.
+- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:409` still estimates `~80` total added lines despite the expanded test and guard scope.
+
+These are not design blockers, but they will mislead Worker 1 during planning and closeout.
 
 ## Notes
 
-The core collection design is otherwise sound: collecting `consumer_annotated_scalar_fields` beside `consumer_annotated_relation_fields` and unioning it into `consumer_authored_fields` matches the existing relation path and uses the current `_build_annotations` scalar short-circuit correctly.
+The revision fixed the previous converter-bypass ambiguity well: Decision 7a now explicitly says scalar annotation overrides bypass `convert_scalar` validation and side effects, and the docs/CHANGELOG tasks reflect that behavior.

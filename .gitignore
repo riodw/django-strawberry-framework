@@ -187,6 +187,11 @@ docs/builder/worker-memory/
 # Deleted by Worker 0 at closeout; permanent tests live under the AGENTS.md trees.
 docs/builder/temp-tests/
 
+# Per-worker scratch memory used during an active DRY consolidation cycle.
+# Created by Worker 0 at plan time; persists across cycles (re-seeded empty each cycle).
+# The tracked permanent record is the dry-<0_0_X>.md plan, never these notes.
+docs/dry/worker-memory/
+
 # LSP config files
 pyrightconfig.json
 

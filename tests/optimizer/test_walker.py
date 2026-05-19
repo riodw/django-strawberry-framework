@@ -80,10 +80,10 @@ def _fragment_spread(name, type_condition, selections=None, directives=None):
     )
 
 
-def _register_type_definition(model, type_cls, *, optimizer_hints=None, field_map=None):
+def _register_type_definition(model, type_cls, *, optimizer_hints=None, field_map=None, primary=False):
     """Register a minimal definition for walker-only synthetic type classes."""
     selected_fields = tuple(model._meta.get_fields())
-    registry.register(model, type_cls)
+    registry.register(model, type_cls, primary=primary)
     registry.register_definition(
         type_cls,
         DjangoTypeDefinition(
@@ -1562,8 +1562,8 @@ def test_optimizer_walker_plans_root_from_resolver_return_type_when_secondary():
         Item,
         ItemType,
         optimizer_hints={"category": OptimizerHint.SKIP},
+        primary=True,
     )
-    registry.set_primary(Item, ItemType)
     _register_type_definition(
         Item,
         AdminItemType,
@@ -1610,8 +1610,7 @@ def test_scalar_only_secondary_resolver_uses_secondary_field_map():
     primary_field_map = {
         snake_case(field.name): FieldMeta.from_django_field(field) for field in primary_fields
     }
-    _register_type_definition(Item, ItemType, field_map=primary_field_map)
-    registry.set_primary(Item, ItemType)
+    _register_type_definition(Item, ItemType, field_map=primary_field_map, primary=True)
     # Secondary's field_map includes ``name``.
     _register_type_definition(Item, AdminItemType)
     try:
@@ -1662,8 +1661,7 @@ def test_optimizer_walker_uses_primary_for_nested_relation_target():
     primary_field_map = {
         snake_case(field.name): FieldMeta.from_django_field(field) for field in primary_fields
     }
-    _register_type_definition(Item, ItemType, field_map=primary_field_map)
-    registry.set_primary(Item, ItemType)
+    _register_type_definition(Item, ItemType, field_map=primary_field_map, primary=True)
     _register_type_definition(Item, AdminItemType)
     _register_type_definition(Category, CategoryType)
     try:

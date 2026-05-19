@@ -1121,78 +1121,12 @@ def test_audit_runs_once_per_build(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# L1 (docs/plan-registry-helpers.md) — set_primary + unregister public helpers.
-# Tests below exercise the new public surface that replaces the direct
-# private-map pokes in Slice 4 walker/extension fixtures and the older
-# check_schema-audit fixtures (primary slot, types list, model index, and
+# L1 (docs/plan-registry-helpers.md) — unregister public helper. Tests below
+# exercise the new public surface that replaces the direct private-map
+# pokes in Slice 4 walker/extension fixtures and the older
+# check_schema-audit fixtures (types list, model index, primary slot, and
 # definition map).
 # ---------------------------------------------------------------------------
-
-
-def test_set_primary_promotes_registered_type(fresh_registry):
-    """``set_primary`` flips ``primary_for`` to the supplied type when it's already registered."""
-
-    class ItemTypeA:
-        pass
-
-    class ItemTypeB:
-        pass
-
-    fresh_registry.register(Item, ItemTypeA)
-    fresh_registry.register(Item, ItemTypeB)
-    assert fresh_registry.primary_for(Item) is None
-
-    fresh_registry.set_primary(Item, ItemTypeB)
-    assert fresh_registry.primary_for(Item) is ItemTypeB
-
-
-def test_set_primary_is_idempotent_when_already_primary(fresh_registry):
-    """``set_primary`` is a no-op when ``type_cls`` is already the primary for ``model``."""
-
-    class ItemType:
-        pass
-
-    fresh_registry.register(Item, ItemType, primary=True)
-    fresh_registry.set_primary(Item, ItemType)  # no raise
-    assert fresh_registry.primary_for(Item) is ItemType
-
-
-def test_set_primary_raises_when_type_not_registered_for_model(fresh_registry):
-    """``set_primary`` rejects a type that has not been registered for the model."""
-
-    class ItemType:
-        pass
-
-    with pytest.raises(ConfigurationError, match="is not registered for Item"):
-        fresh_registry.set_primary(Item, ItemType)
-
-
-def test_set_primary_raises_when_different_type_is_already_primary(fresh_registry):
-    """``set_primary`` raises with the canonical 'already declared primary' phrasing."""
-
-    class ItemTypeA:
-        pass
-
-    class ItemTypeB:
-        pass
-
-    fresh_registry.register(Item, ItemTypeA, primary=True)
-    fresh_registry.register(Item, ItemTypeB)
-    with pytest.raises(ConfigurationError, match="already declared primary as ItemTypeA"):
-        fresh_registry.set_primary(Item, ItemTypeB)
-
-
-def test_set_primary_raises_after_finalize():
-    """``set_primary`` honours ``_check_mutable``: post-finalize calls raise."""
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-
-    finalize_django_types()
-    with pytest.raises(ConfigurationError, match="finalized"):
-        registry.set_primary(Item, ItemType)
 
 
 def test_unregister_removes_from_types_models_primaries_definitions(fresh_registry):
@@ -1294,13 +1228,14 @@ def test_unregister_is_noop_on_unknown_type(fresh_registry):
     assert fresh_registry.types_for(Item) == ()
 
 
-def test_unregister_works_after_finalize():
-    """``unregister`` is callable after ``finalize_django_types()``.
+def test_unregister_raises_after_finalize():
+    """``unregister`` honours ``_check_mutable``: post-finalize calls raise.
 
-    Deviates from the defensive ``_check_mutable`` guard the other
-    mutators apply: removing state cannot corrupt the schema build, and
-    the schema-audit tests in ``tests/optimizer/test_extension.py`` need
-    to simulate a missing registration *after* finalize has run.
+    The finalized registry is the runtime lookup source for optimizer
+    planning, the schema audit, and relation-target resolution. Removing
+    entries after ``finalize_django_types()`` would silently disable
+    planning for types still present in the built Strawberry schema, so
+    the public mutator refuses to corrupt the snapshot.
     """
 
     class CategoryType(DjangoType):
@@ -1309,6 +1244,5 @@ def test_unregister_works_after_finalize():
             fields = ("id", "name")
 
     finalize_django_types()
-    registry.unregister(CategoryType)
-    assert registry.model_for_type(CategoryType) is None
-    assert registry.get_definition(CategoryType) is None
+    with pytest.raises(ConfigurationError, match="finalized"):
+        registry.unregister(CategoryType)

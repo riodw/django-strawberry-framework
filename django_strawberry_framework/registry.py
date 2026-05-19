@@ -134,46 +134,6 @@ class TypeRegistry:
             self._primaries[model] = type_cls
         return True
 
-    def set_primary(self, model: type[models.Model], type_cls: type) -> None:
-        """Promote an already-registered ``type_cls`` to the primary for ``model``.
-
-        Public mutator wrapping the ``_primaries[model] = type_cls`` step
-        so test fixtures and consumer code do not have to reach into the
-        registry's private state. ``register(..., primary=True)`` remains
-        the canonical entry point at type-declaration time; this helper
-        covers the after-the-fact promote case where a model has multiple
-        registered types and the primary is chosen separately.
-
-        Behavior:
-
-        - ``type_cls`` must already be registered for ``model``. Raises
-          ``ConfigurationError("X is not registered for Y")`` otherwise.
-        - Idempotent when ``type_cls`` is already the primary for ``model``
-          (no-op return).
-        - Raises ``ConfigurationError`` (same wording as
-          ``register(..., primary=True)``) when a different class is
-          already the primary for ``model``.
-
-        Raises:
-            ConfigurationError: ``type_cls`` is not registered for ``model``;
-                a different class is already the primary; the registry is
-                finalized.
-        """
-        self._check_mutable()
-        existing_types = self._types.get(model, ())
-        if type_cls not in existing_types:
-            raise ConfigurationError(
-                f"{type_cls.__name__} is not registered for {model.__name__}",
-            )
-        existing_primary = self._primaries.get(model)
-        if existing_primary is type_cls:
-            return
-        if existing_primary is not None:
-            raise ConfigurationError(
-                f"{type_cls.__name__} is already declared primary as {existing_primary.__name__}",
-            )
-        self._primaries[model] = type_cls
-
     def unregister(self, type_cls: type) -> None:
         """Remove all traces of ``type_cls`` from the registry.
 
@@ -184,18 +144,21 @@ class TypeRegistry:
         teardown often wants "clean up if present" semantics, and
         consumers that need strictness can layer a check on top.
 
-        Intentionally **does not** call ``_check_mutable()``. The
-        defensive guard on the other mutators exists to prevent
-        accidental late *additions* from corrupting the post-finalization
-        snapshot. ``unregister`` only removes state, so it cannot corrupt
-        the schema build, and the schema-audit tests in
-        ``tests/optimizer/test_extension.py`` need to simulate a missing
-        registration *after* ``finalize_django_types()`` has run.
+        Honours ``_check_mutable()``: after ``finalize_django_types()`` the
+        finalized registry is the runtime lookup source for optimizer
+        planning, the schema audit, relation-target resolution, and the
+        reverse type/model lookup, so removing entries post-finalize
+        would silently disable planning or produce false missing-target
+        warnings for types that still exist in the built Strawberry
+        schema. Tests that need to simulate a removed registration after
+        finalize must use a test-local helper that bypasses the
+        registry's public mutators.
 
         When ``type_cls`` is the primary for its model, the model loses
-        its primary even if siblings remain — the caller is expected to
-        re-promote a sibling via ``set_primary(...)`` if needed.
+        its primary even if siblings remain — the caller is responsible
+        for re-declaring a primary via a fresh registration cycle.
         """
+        self._check_mutable()
         model = self._models.pop(type_cls, None)
         if model is None:
             return

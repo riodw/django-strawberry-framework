@@ -56,6 +56,31 @@ def _isolate_registry():
     registry.clear()
 
 
+def _force_unregister_after_finalize(type_cls):
+    """Test-only helper: drop ``type_cls`` from a *finalized* registry.
+
+    The schema-audit tests in this module build a Strawberry schema, then
+    want to simulate a missing registration so ``check_schema`` reports a
+    gap. The public ``registry.unregister`` honours ``_check_mutable``
+    and raises post-finalize because removing entries from a
+    runtime-active registry would silently disable optimizer planning
+    and produce false missing-target warnings; this helper exists only
+    so the test fixtures can poke that exact state without smuggling
+    the surgery into production code.
+    """
+    model = registry._models.pop(type_cls, None)
+    if model is None:
+        return
+    types = registry._types.get(model, [])
+    if type_cls in types:
+        types.remove(type_cls)
+    if not types:
+        registry._types.pop(model, None)
+    if registry._primaries.get(model) is type_cls:
+        registry._primaries.pop(model, None)
+    registry._definitions.pop(type_cls, None)
+
+
 # ---------------------------------------------------------------------------
 # End-to-end query-count tests (O3 unskips the first two)
 # ---------------------------------------------------------------------------
@@ -1807,7 +1832,7 @@ def test_check_schema_warns_unregistered_target():
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
     # Clear Category's registration so the audit finds a gap.
-    registry.unregister(CategoryType)
+    _force_unregister_after_finalize(CategoryType)
     warnings = DjangoOptimizerExtension.check_schema(schema)
     assert any("category" in w and "no registered target" in w for w in warnings)
 
@@ -1852,7 +1877,7 @@ def test_check_schema_descends_into_union_types():
     # must still surface the gap on ItemType.category. Without the union walk
     # ItemType is unreachable from the root, the audit skips it, and the
     # warning is silently lost.
-    registry.unregister(CategoryType)
+    _force_unregister_after_finalize(CategoryType)
     warnings = DjangoOptimizerExtension.check_schema(schema)
     assert any("category" in w and "no registered target" in w for w in warnings)
 
@@ -1908,7 +1933,7 @@ def test_check_schema_skip_hint_suppresses_warning():
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
     # Clear Category so the audit would normally warn — but SKIP suppresses.
-    registry.unregister(CategoryType)
+    _force_unregister_after_finalize(CategoryType)
     warnings = DjangoOptimizerExtension.check_schema(schema)
     # SKIP means category is intentionally unoptimized — no warning.
     assert not any("category" in w for w in warnings)
@@ -2991,7 +3016,7 @@ def test_schema_audit_warns_on_relation_field_exposed_only_on_secondary_type():
     finalize_django_types()
     schema = strawberry.Schema(query=Query, types=[ItemType])
     # Clear Category's registration so the audit sees the gap.
-    registry.unregister(CategoryType)
+    _force_unregister_after_finalize(CategoryType)
 
     warnings = DjangoOptimizerExtension.check_schema(schema)
     # Item.category is the secondary-only relation; the audit must surface it.
@@ -3037,7 +3062,7 @@ def test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_type
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
-    registry.unregister(CategoryType)
+    _force_unregister_after_finalize(CategoryType)
 
     warnings = DjangoOptimizerExtension.check_schema(schema)
     item_category_warnings = [w for w in warnings if "Item.category" in w]

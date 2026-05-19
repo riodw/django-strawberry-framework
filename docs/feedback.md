@@ -1,50 +1,37 @@
 # Review feedback — spec-015 consumer scalar overrides
 
-Scope: reviewed revision 3 of `docs/spec-015-consumer_overrides_scalar-0_0_6.md` against the current Relay, scalar-conversion, and override behavior.
+Scope: reviewed revision 4 of `docs/spec-015-consumer_overrides_scalar-0_0_6.md` against the current `DjangoType`, Relay, and converter behavior.
 
 ## Findings
 
-### H1. Relay guard timing/detection is still internally inconsistent
+### M1. Fail-soft `NodeID` detection leaves a broad escape hatch for invalid `id` annotations
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:52`, `:353-403`, `:479-480`; current string-annotation behavior is accepted by Strawberry at finalization/schema-build time.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:60`, `:428-439`, `:469-471`.
 
-The spec now says the bad `id: int` case raises at `DjangoType.__init_subclass__` time, and the reject test explicitly asserts class-creation failure. But Decision 7 still leaves Worker 1 free to implement `relay.NodeID[...]` detection with a Phase 2.5 `cls.resolve_id_attr()` probe. That option cannot satisfy the stated class-creation contract or the proposed reject test because the guard would run during `finalize_django_types()`, not during class definition.
+Revision 4 correctly pins the Relay collision guard to class-creation time and switches to `typing.get_type_hints(..., include_extras=True)` for stringified `relay.NodeID[...]`. The remaining issue is the fail-soft rule: on `NameError` / `AttributeError`, `_id_annotation_is_relay_node_id()` returns `True`.
 
-The recommended `typing.get_args(...)` option also needs one more constraint: it only works for already-evaluated `relay.NodeID[int]` annotations. The current package/Strawberry path accepts string annotations such as `id: "relay.NodeID[int]"` and future-annotations style declarations; a raw `get_args` check at `__init_subclass__` would treat those as non-`NodeID` and falsely reject the supported escape hatch.
+That accepts any unresolved string annotation on `id`, including non-NodeID shapes such as `id: "SomeMissingType"`. The spec then no longer guarantees that non-`NodeID` `id` annotations are caught at `__init_subclass__`; those cases fall back to Strawberry/schema-construction errors, which is the failure surface this guard was introduced to avoid.
 
-Please make the contract singular:
+Narrow the fail-soft path. For example: inspect the raw `cls.__annotations__["id"]` string first and only fail-soft accept unresolved strings that syntactically look like a `NodeID[...]` reference (`"relay.NodeID["`, `"NodeID["`, or whatever imports the spec wants to support). For other unresolved strings, raise the package `ConfigurationError`.
 
-- either require a class-creation-time helper that resolves/evaluates `id` annotations robustly enough to accept `relay.NodeID[...]` in direct and string/future-annotation forms, with tests for both;
-- or move the guard, tests, and CHANGELOG wording to finalize-time if reusing Strawberry's `resolve_id_attr()` probe is preferred.
+Add a reject test for an unresolved non-NodeID string, e.g. `id: "MissingType"`, so this contract stays pinned.
 
-### M1. Assigned `id` fields are always rejected even when they match `Node.id`
+### L1. Decision-7 anchors still say `rev3 narrowed`
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:52`, `:123-135`, `:353-383`.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:40`, `:60`, `:347`, `:522`, `:547`.
 
-Revision 3 still rejects any `id` assignment that is a `StrawberryField`. That includes valid Strawberry shapes such as:
+The Decision 7 title/link target still uses `h1-fix-rev3-narrowed`, even though revision 4 substantially changed the contract: class-creation-only detection, stringified `NodeID` support, and assigned-`id` rejection. This is a stale anchor/name issue, but it will make the spec harder to follow during implementation and closeout.
 
-`@strawberry.field def id(self) -> relay.GlobalID: ...`
+Rename the Decision 7 heading and all internal links to a rev4-neutral anchor such as `decision-7--relay-id-override-collision`.
 
-That field matches the Relay interface's `id: ID!` and currently builds a valid schema. If the intent is to ban all assigned `id` overrides and require `relay.NodeID[...]` / resolver hooks instead, the spec should call that out as an intentional restriction and add a regression test for the rejection. If the goal is only to prevent interface type mismatch, the guard should inspect assigned-field type enough to allow `relay.GlobalID` / `ID`-compatible assignments.
+### L2. The "100% coverage across test_definition_order.py" note conflicts with optional converter placement
 
-### M2. The pseudocode misses `id` annotations whose value is `None`
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:155`, `:530`, `:563`.
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:363-367`.
+The KANBAN body still says coverage is across `tests/types/test_definition_order.py`, but revision 4 explicitly allows the nested-`ArrayField` bypass test to live in `tests/types/test_converters.py`. The definition-of-done also says "three converter-bypass in `tests/types/test_definition_order.py`" before noting the `ArrayField` exception.
 
-`has_id_annotation = id_annotation is not None` fails to detect `id: None`, because `cls.__annotations__["id"]` is `None`. That is still a consumer-authored `id` annotation and should follow the Relay collision guard. Use key presence (`"id" in cls.__annotations__` or `"id" in consumer_annotations`) rather than value non-`None`.
-
-### L1. Slice 1 test count is still off
-
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:441`, `:462`, `:491`.
-
-The spec says Slice 1 has nine tests, but the listed groups are 4 core override tests + 3 converter-bypass tests + 3 Relay tests = 10 tests. Update the count, or identify which listed test is not intended to be new.
-
-### L2. The nested `ArrayField` recipe should require matching field/annotation names
-
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:61`.
-
-The recipe says to build a nested `_FakeArrayField(...)` instance and use a consumer `tags: list[list[int]]` annotation. Make explicit that the model field is named `tags` too. If the model field is named `arr` like the existing converter tests, the annotation must be `arr: list[list[int]]`; otherwise the converter bypass will not fire and the test will exercise the rejection path instead.
+Adjust the wording to "across the override-contract host and converter tests as applicable" or name both files consistently.
 
 ## Notes
 
-The previous broad-Relay-guard issue is otherwise addressed: rev3 now correctly keys the collision check to the GraphQL field name `id`, preserves non-`id` scalar overrides on Relay-node-shaped types, and keeps the converter-bypass contract explicit.
+The prior blockers are otherwise addressed: the guard is now keyed to GraphQL `id`, direct and stringified `relay.NodeID[...]` are explicitly accepted, assigned `id` rejection is intentional and tested, and the converter-bypass contract is clear.

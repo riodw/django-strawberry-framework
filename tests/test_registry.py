@@ -1041,7 +1041,7 @@ def test_models_with_multiple_types_yields_only_models_with_two_or_more(fresh_re
 
 # ---------------------------------------------------------------------------
 # Slice 3 (spec-014-meta_primary-0_0_6.md) — finalize-time ambiguity audit.
-# Tests below cover ``audit_primary_ambiguity()`` running inside
+# Tests below cover ``_audit_primary_ambiguity()`` running inside
 # ``finalize_django_types()``. The audit-success and audit-vs-unresolved
 # tests live in ``tests/types/test_definition_order.py``; this file hosts
 # the raise-at-finalize and once-per-build regression coverage.
@@ -1095,7 +1095,7 @@ def test_finalize_ambiguity_error_message_contains_actionable_fix():
 def test_audit_runs_once_per_build(monkeypatch):
     """The ambiguity audit runs exactly once per finalize-cycle build (M1 regression).
 
-    Pins that ``audit_primary_ambiguity`` sits *below* the
+    Pins that ``_audit_primary_ambiguity`` sits *below* the
     ``registry.is_finalized()`` short-circuit in ``finalize_django_types``;
     a second ``finalize_django_types()`` call must short-circuit without
     re-auditing.

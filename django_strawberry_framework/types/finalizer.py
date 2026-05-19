@@ -63,15 +63,16 @@ def _format_ambiguity_error(
     )
 
 
-def audit_primary_ambiguity() -> None:
+def _audit_primary_ambiguity() -> None:
     """Reject models with multiple registered DjangoTypes and no declared primary.
 
     Walks ``registry.models_with_multiple_types()`` (the Slice 1 helper at
     ``registry.py:200-206``); for each model whose ``registry.primary_for(...)``
     is ``None``, collects the offending registered types via
-    ``registry.types_for(model)``. If the offender list is non-empty, raises
-    ``ConfigurationError`` with the canonical message built by
-    ``_format_ambiguity_error``.
+    ``registry.types_for(model)``. Offenders are sorted by ``model.__name__``
+    so the error body is deterministic regardless of consumer import order.
+    If the offender list is non-empty, raises ``ConfigurationError`` with the
+    canonical message built by ``_format_ambiguity_error``.
 
     Runs exactly once per build, inside ``finalize_django_types()`` after the
     ``registry.is_finalized()`` short-circuit and before pending-relation
@@ -83,6 +84,7 @@ def audit_primary_ambiguity() -> None:
             offenders.append((model, registry.types_for(model)))
     if not offenders:
         return
+    offenders.sort(key=lambda entry: entry[0].__name__)
     raise ConfigurationError(_format_ambiguity_error(offenders))
 
 
@@ -104,7 +106,7 @@ def finalize_django_types() -> None:
     if registry.is_finalized():
         return
 
-    audit_primary_ambiguity()
+    _audit_primary_ambiguity()
 
     unresolved: list[PendingRelation] = []
     resolved: list[tuple[PendingRelation, type]] = []

@@ -200,7 +200,7 @@ class TypeRegistry:
     def models_with_multiple_types(self) -> Iterator[type[models.Model]]:
         """Yield each model that has at least two registered types.
 
-        Drives ``audit_primary_ambiguity`` (Slice 3) without exposing the
+        Drives ``_audit_primary_ambiguity`` (Slice 3) without exposing the
         internal ``_types`` dict to the finalizer.
         """
         return (model for model, types in self._types.items() if len(types) >= 2)
@@ -246,8 +246,7 @@ class TypeRegistry:
         except Exception:
             if appended:
                 types = self._types.get(model, [])
-                if type_cls in types:
-                    types.remove(type_cls)
+                types.remove(type_cls)
                 if not types:
                     self._types.pop(model, None)
                 self._models.pop(type_cls, None)

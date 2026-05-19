@@ -196,22 +196,22 @@ django_strawberry_framework/
 ├── py.typed
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
-├── registry.py              # model→type registry (+ iter_types() public iterator)
+├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6: primary_for, types_for, models_with_multiple_types; unregister test-fixture helper)
 ├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
 ├── types/                   # DjangoType subsystem (Layer 2) — shipped
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
 │   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
-│   ├── definition.py        # DjangoTypeDefinition (canonical per-type metadata with forward-reserved Layer-3 slots)
-│   ├── finalizer.py         # finalize_django_types() three-phase finalizer
+│   ├── definition.py        # DjangoTypeDefinition (canonical per-type metadata with Meta.primary flag and forward-reserved Layer-3 slots)
+│   ├── finalizer.py         # finalize_django_types(): _audit_primary_ambiguity + Phase 1 unresolved-target detection + Phase 2 resolver attachment + Phase 2.5 interfaces/Relay + Phase 3 strawberry.type decoration
 │   ├── relations.py         # PendingRelationAnnotation sentinel + metaclass
 │   ├── relay.py             # Relay Node interface wiring (resolve_* defaults, id suppression, is_type_of injection)
 │   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers, B3 N+1 detection
 ├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O6 + B1–B8 shipped
 │   ├── __init__.py          # re-exports DjangoOptimizerExtension
 │   ├── _context.py          # context-key constants and get_context_value helper
-│   ├── extension.py         # DjangoOptimizerExtension (O3 hook, B1 cache, B2 elision stash, B3 strictness, B5 context stash, B6 schema audit)
-│   ├── walker.py            # selection-tree walker (O2, O5 only fields, B2 FK-id elision, B4 hints, B7 cached field map)
+│   ├── extension.py         # DjangoOptimizerExtension (O3 hook, B1 cache w/ H2 origin-typed key, B2 elision stash, B3 strictness, B5 context stash, B6 schema audit w/ H3 multi-type dedupe)
+│   ├── walker.py            # selection-tree walker (O2, O5 only fields, B2 FK-id elision, B4 hints, B7 cached field map, H2 source_type origin routing)
 │   ├── plans.py             # OptimizationPlan data structure + resolver_key / runtime_path helpers
 │   ├── hints.py             # OptimizerHint typed wrapper (B4)
 │   └── field_meta.py        # FieldMeta precomputed field metadata (B7)

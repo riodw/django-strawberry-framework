@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-05-15
+Last refreshed: 2026-05-19
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -63,11 +63,9 @@ For install, local development, testing, and the canonical documentation map, st
   - `management/commands/export_schema.py`
   - `utils/queryset.py`
 - Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
-- `Meta.interfaces` and Relay Node wiring shipped in `0.0.5` (`DONE-011-0.0.5`); the foundation seam (finalizer phase 2.5, before `strawberry.type(cls)`, with the slot already on `DjangoTypeDefinition`) is the insertion point now applied.
 - Several DjangoType contract gaps remain:
   - stable consumer override semantics for **scalar** fields (the foundation slice pinned the contract for relation fields only)
   - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
-  - deferred scalar conversions: `BigIntegerField`, `ArrayField`, `JSONField`, `HStoreField`
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
   - connection-aware planning for Relay-style nested connection selections (new card `TODO-ALPHA-024-0.0.9`)

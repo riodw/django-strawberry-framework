@@ -1,55 +1,50 @@
 # Review feedback — spec-015 consumer scalar overrides
 
-Scope: reviewed the updated `docs/spec-015-consumer_overrides_scalar-0_0_6.md` against the current `DjangoType` collection/finalization path, Relay tests, and scalar converter behavior.
+Scope: reviewed revision 3 of `docs/spec-015-consumer_overrides_scalar-0_0_6.md` against the current Relay, scalar-conversion, and override behavior.
 
 ## Findings
 
-### H1. The proposed Relay guard rejects the advertised `relay.NodeID[...]` escape hatch
+### H1. Relay guard timing/detection is still internally inconsistent
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:45`, `:338-357`, `:365`, `:414`; existing `relay.NodeID` coverage in `tests/types/test_relay_interfaces.py:240` and `:994`.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:52`, `:353-403`, `:479-480`; current string-annotation behavior is accepted by Strawberry at finalization/schema-build time.
 
-Revision 2 correctly moves the bad `id: int` case to an early package-owned `ConfigurationError`, but the specified predicate is too broad:
+The spec now says the bad `id: int` case raises at `DjangoType.__init_subclass__` time, and the reject test explicitly asserts class-creation failure. But Decision 7 still leaves Worker 1 free to implement `relay.NodeID[...]` detection with a Phase 2.5 `cls.resolve_id_attr()` probe. That option cannot satisfy the stated class-creation contract or the proposed reject test because the guard would run during `finalize_django_types()`, not during class definition.
 
-`pk_name in consumer_annotated_scalar_fields or pk_name in consumer_assigned_scalar_fields`
+The recommended `typing.get_args(...)` option also needs one more constraint: it only works for already-evaluated `relay.NodeID[int]` annotations. The current package/Strawberry path accepts string annotations such as `id: "relay.NodeID[int]"` and future-annotations style declarations; a raw `get_args` check at `__init_subclass__` would treat those as non-`NodeID` and falsely reject the supported escape hatch.
 
-For the common `id` primary key, `id: relay.NodeID[int]` is also an annotation on the scalar pk field, so it lands in `consumer_annotated_scalar_fields` and would be rejected by the new guard. That directly contradicts the error message and Decision 7, which tell consumers to use `relay.NodeID[...]` as the supported escape hatch. Current behavior accepts this shape: `id: relay.NodeID[int]` finalizes and builds a schema with `id: ID!`.
+Please make the contract singular:
 
-The guard also rejects custom-named primary keys that do not collide with `Node.id`. A model with `code = models.CharField(primary_key=True)` and a consumer override `code: str` can coexist with the Relay interface because the GraphQL fields are `id: ID!` and `code: String!`; there is no interface field collision.
+- either require a class-creation-time helper that resolves/evaluates `id` annotations robustly enough to accept `relay.NodeID[...]` in direct and string/future-annotation forms, with tests for both;
+- or move the guard, tests, and CHANGELOG wording to finalize-time if reusing Strawberry's `resolve_id_attr()` probe is preferred.
 
-Suggested contract:
+### M1. Assigned `id` fields are always rejected even when they match `Node.id`
 
-- reject only consumer-authored fields whose GraphQL/Python name is `id` on a Relay-node-shaped type, unless the annotation is a valid `relay.NodeID[...]`;
-- keep `id: relay.NodeID[...]` accepted, with an explicit regression test;
-- keep non-`id` primary-key overrides accepted unless there is a separate reason to ban them, and document that separately if so.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:52`, `:123-135`, `:353-383`.
 
-### M1. The unsupported-field override test suggests `bytes`, which Strawberry cannot schema-build
+Revision 3 still rejects any `id` assignment that is a `StrawberryField`. That includes valid Strawberry shapes such as:
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:52`.
+`@strawberry.field def id(self) -> relay.GlobalID: ...`
 
-The test proposal says to use `myfield: bytes` "or similar" for an unsupported Django field override. Strawberry rejects `bytes` as an unexpected type during schema construction, so that example can create a false failure unrelated to the converter-bypass contract.
+That field matches the Relay interface's `id: ID!` and currently builds a valid schema. If the intent is to ban all assigned `id` overrides and require `relay.NodeID[...]` / resolver hooks instead, the spec should call that out as an intentional restriction and add a regression test for the rejection. If the goal is only to prevent interface type mismatch, the guard should inspect assigned-field type enough to allow `relay.GlobalID` / `ID`-compatible assignments.
 
-Use a Strawberry-supported scalar annotation such as `str` or `int` for this test. That keeps the assertion focused on "Django converter was bypassed" rather than "consumer picked a GraphQL-unsupported Python type."
+### M2. The pseudocode misses `id` annotations whose value is `None`
 
-### M2. The nested `ArrayField` bypass test needs an explicit fake-sentinel setup
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:363-367`.
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:54`; existing pattern in `tests/types/test_converters.py:1021`.
+`has_id_annotation = id_annotation is not None` fails to detect `id: None`, because `cls.__annotations__["id"]` is `None`. That is still a consumer-authored `id` annotation and should follow the Relay collision guard. Use key presence (`"id" in cls.__annotations__` or `"id" in consumer_annotations`) rather than value non-`None`.
 
-The spec asks for an `ArrayField(base_field=ArrayField(...))` override test in `tests/types/test_definition_order.py`, but the current converter tests exercise this path by monkeypatching `django_strawberry_framework.types.converters._ARRAY_FIELD_CLS` to a local `_FakeArrayField`. Without that instruction, the new test can become environment-dependent on whether real `django.contrib.postgres.fields.ArrayField` imports cleanly.
+### L1. Slice 1 test count is still off
 
-Add the fixture/monkeypatch requirement to the spec, or place this one test in `tests/types/test_converters.py` beside the existing fake `ArrayField` tests.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:441`, `:462`, `:491`.
 
-### L1. Several revision-2 cross-references and counts are stale
+The spec says Slice 1 has nine tests, but the listed groups are 4 core override tests + 3 converter-bypass tests + 3 Relay tests = 10 tests. Update the count, or identify which listed test is not intended to be new.
 
-References:
+### L2. The nested `ArrayField` recipe should require matching field/annotation names
 
-- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:4` still says revision 1.
-- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:24`, `:31`, and `:33` refer to Slice 6, but the checklist has Slice 5 as docs/KANBAN/CHANGELOG.
-- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:27` says the card adds no new error sites, but Revision 2 adds a `ConfigurationError` site for Relay collision.
-- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:403` still says Slice 1 has 4 tests and `+30/-1`, while the updated plan has 8 tests plus a new guard.
-- `docs/spec-015-consumer_overrides_scalar-0_0_6.md:409` still estimates `~80` total added lines despite the expanded test and guard scope.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:61`.
 
-These are not design blockers, but they will mislead Worker 1 during planning and closeout.
+The recipe says to build a nested `_FakeArrayField(...)` instance and use a consumer `tags: list[list[int]]` annotation. Make explicit that the model field is named `tags` too. If the model field is named `arr` like the existing converter tests, the annotation must be `arr: list[list[int]]`; otherwise the converter bypass will not fire and the test will exercise the rejection path instead.
 
 ## Notes
 
-The revision fixed the previous converter-bypass ambiguity well: Decision 7a now explicitly says scalar annotation overrides bypass `convert_scalar` validation and side effects, and the docs/CHANGELOG tasks reflect that behavior.
+The previous broad-Relay-guard issue is otherwise addressed: rev3 now correctly keys the collision check to the GraphQL field name `id`, preserves non-`id` scalar overrides on Relay-node-shaped types, and keeps the converter-bypass contract explicit.

@@ -1,0 +1,7 @@
+term,anchor,notes
+DjangoType,djangotype,Base class whose scalar-override gap this card closes.
+Scalar field conversion,scalar-field-conversion,Auto-synthesized scalar annotation path this card lets consumers override.
+Scalar field override semantics,scalar-field-override-semantics,Glossary entry this card flips to shipped (0.0.6).
+Relation handling,relation-handling,Relation-override path whose annotation-only contract this card mirrors for scalars.
+Definition-order independence,definition-order-independence,Foundation slice that pinned the relation-field override contract.
+ConfigurationError,configurationerror,Raised at type-creation time for unsupported shadow shapes; no new sites added.

@@ -1,52 +1,71 @@
 # Review feedback - spec-015 consumer scalar overrides
 
-Scope: reviewed revision 6 of `docs/spec-015-consumer_overrides_scalar-0_0_6.md` against the current `DjangoType` pipeline and Strawberry Relay `NodeID` behavior.
+Scope: reviewed revision 7 of `docs/spec-015-consumer_overrides_scalar-0_0_6.md` against the current `DjangoType` / Relay pipeline and the installed Strawberry `relay.NodeID` implementation.
 
 ## Findings
 
-### H1. The fail-soft string `NodeID` accept path is not end-to-end accepted
+### H1. Direct `relay.Node` inheritance is in the guard contract but not pinned by the new tests
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:72`, `:88`, `:490-538`, `:564-572`, `:664`.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:75`, `:446-449`, `:684`, `:710-721`.
 
-Revision 6 says the fail-soft branch accepts unresolved string annotations that contain `"NodeID["`, and the coverage section says `test_consumer_id_string_relay_nodeid_annotation_on_relay_node_type_is_accepted` can hit that branch by deliberately leaving `relay` unimported at module scope.
+The guard contract says a Relay-shaped type is either `Meta.interfaces` containing `relay.Node` or a class that directly subclasses `relay.Node`. The proposed tests, however, only describe the `Meta.interfaces = (relay.Node,)` shape.
 
-That class can pass the new guard, but it is not a valid end-to-end accepted type. Strawberry later resolves Relay annotations from the class module globals. If the module still does not expose `relay` / `NodeID`, schema construction fails with Strawberry's unresolved-field/type-resolution error. In other words, the proposed fail-soft acceptance only suppresses the package `ConfigurationError`; it does not make the annotation resolvable for `finalize_django_types()` / `strawberry.Schema(...)`.
+That leaves a behavior gap: an implementation could accidentally check only `interfaces` and still pass every new collision test, while `class CategoryNode(DjangoType, relay.Node): id: int ...` would fall through to the downstream Strawberry error surface the guard is meant to replace.
 
-Split the tests/contracts:
+Add at least one direct-inheritance guard test, or parametrize the core reject path over both declaration styles:
 
-- A resolved string-form acceptance test should keep `relay` or `strawberry` available at module scope and assert finalize/schema success.
-- A fail-soft branch test may assert class-creation acceptance only, unless the implementation also normalizes `cls.__annotations__["id"]` to a resolved `relay.NodeID[...]` object before Strawberry sees it.
+- `class Meta: interfaces = (relay.Node,)`
+- `class CategoryNode(DjangoType, relay.Node)` with no `Meta.interfaces`
 
-Also tighten the raw-string predicate if it remains: a plain substring check accepts typo shapes like `"NotNodeID[int]"`. Prefer a token-shaped check such as `(^|\.)NodeID\[` or an explicit normalization path.
+The minimum high-value pin is the annotation reject path for direct inheritance (`id: int` raises `ConfigurationError` at class creation). The assigned-`id` reject path could be parametrized the same way if you want full symmetry.
 
-### M1. The inherited `id: int` edge case expects the wrong downstream behavior
+### M1. The `_id_annotation_is_relay_node_id` pseudocode is mechanically wrong and under-specified
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:37`, `:91`, `:109`, `:185-187`, `:625`, `:651-660`, `:670`.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:517-608`.
 
-The spec says an inherited `id: int` annotation on a no-`Meta` base `DjangoType` subclass slips past the guard and then raises Strawberry's `ValueError` at schema construction because `Node.id` collides with `Int!`.
+The helper pseudocode has two problems that are easy for Worker 1 to copy into broken production code.
 
-That does not match the current pipeline. A base like:
+First, the `id_hint = hints.get("id")` success path is indented under nothing after `_NODEID_STRING_RE = re.compile(...)`, so the code block is not syntactically coherent. The regex constant should live outside the helper, and the `id_hint` block should remain inside the `try` success path after the `except` block.
 
-`class BaseWithId(DjangoType): id: int`
+Second, the marker-detection prose says to check "both the direct `relay.NodeID[T]` form (`typing.get_origin` returns NodeID-related marker) and the `Annotated[T, NodeIDPrivate]` form." In the installed Strawberry, `relay.NodeID[int]` is already `typing.Annotated[int, NodeIDPrivate()]`; `typing.get_origin(relay.NodeID[int])` is `typing.Annotated`, and the reliable marker is an instance of `strawberry.relay.types.NodeIDPrivate` in `typing.get_args(...)`.
 
-followed by a child `DjangoType` with `Meta.interfaces = (relay.Node,)` does not leave an `id: int` field on the child GraphQL type. `_build_annotations` suppresses the child's pk annotation for Relay, Strawberry supplies `id: ID!`, and `resolve_id_attr()` falls back to `"pk"` because the inherited `id: int` is not a `NodeID` marker. Schema construction succeeds.
+Tighten the spec to the concrete implementation shape:
 
-Update the inherited-id test and every doc sentence around it. Either drop the test, or invert it to pin the real contract: inherited non-`NodeID` `id` annotations on a no-`Meta` base are ignored by the guard and do not create a schema collision. If the intended behavior is actually to reject inherited non-`NodeID` `id` annotations, the spec needs a different implementation contract that explicitly walks the MRO.
+- import `re`, `typing`, `typing.Annotated`, and `NodeIDPrivate` from `strawberry.relay.types`;
+- define `_NODEID_STRING_RE` at module scope;
+- implement `_has_node_id_marker(hint)` as `typing.get_origin(hint) is Annotated and any(isinstance(arg, NodeIDPrivate) for arg in typing.get_args(hint))`;
+- put the `id_hint = hints.get("id")` success path inside `_id_annotation_is_relay_node_id`.
 
-### M2. The sibling-field workaround examples need a resolver
+The tests would catch a bad marker implementation eventually, but the spec currently points at an impossible `get_origin` branch.
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:34`, `:70-71`, `:109`, `:160-166`, `:413`, `:441-456`, `:677`.
+### M2. The unresolved string test recipe needs a precise class/module construction
 
-The assigned-`id` rejection message and docs point consumers to a sibling field like:
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:115-116`, `:630`, `:718`.
 
-`display_id: ID = strawberry.field(description="...")`
+The guard-only test for `id: "relay.NodeID[int]"` with `relay` not importable is conceptually right, but the spec leaves the setup to "types.new_class or synthetic stub module" without spelling out the critical detail: `typing.get_type_hints(cls, include_extras=True)` resolves class strings through `cls.__module__` globals.
 
-That attaches metadata, but it does not define a value source. Since `display_id` is not a Django model field, Strawberry's default resolver will look for a `display_id` attribute on the returned model instance and fail at query time unless the consumer also supplies a resolver or property.
+Make the test recipe explicit enough that it cannot accidentally become the resolved-string end-to-end test:
 
-Make the workaround explicit as a resolver-backed sibling, for example `@strawberry.field(description="...") def display_id(self) -> strawberry.ID: ...`, or `display_id: strawberry.ID = strawberry.field(resolver=..., description="...")`. The error-message example should not point at a field shape that is likely to build but fail when queried.
+- create a synthetic module name and register a `types.ModuleType` in `sys.modules`;
+- do not put `relay` in that module's globals;
+- build the `DjangoType` with `types.new_class(...)` and set `__module__` to the synthetic module inside `exec_body` before class creation completes;
+- set `__annotations__ = {"id": "relay.NodeID[int]"}` and a normal `Meta` in that namespace;
+- assert only class creation succeeds, then clean up `sys.modules`.
 
-### L1. The choice-enum edge-case note still points at the single-type test
+Without that specificity, the test can easily run in the real test module where `relay` is imported and accidentally exercise the resolved end-to-end path instead of the fail-soft branch.
 
-Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:626`.
+### L1. Decision 7a still says the bypass contract has three mandatory tests
 
-The edge-case bullet describes the new two-type enum-cache behavior, but its final sentence says the grouped-choices bypass test pins it. Revision 6 added `test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident_types` for that exact scenario. Update the sentence to name the cross-type cache test as the behavior pin.
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:665`, compared with `:673`, `:703-708`, and `:725`.
+
+Revision 7 consistently describes four converter-bypass tests elsewhere: unsupported scalar, grouped choices, nested `ArrayField`, and the cross-type enum-cache test. Decision 7a's closing sentence still says "the three Slice 1 tests" and lists only the first three.
+
+Update that sentence to say four tests and include `test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident_types`. This is low risk, but it is exactly the kind of stale count that causes implementation checklists to drift.
+
+### L2. The test-placement wording still contains a small contradiction
+
+Reference: `docs/spec-015-consumer_overrides_scalar-0_0_6.md:692`, `:708`, `:723-725`, and Definition of done around `:734`.
+
+The Test strategy opens with "All new tests land in `tests/types/test_definition_order.py`", then carves out the `ArrayField` exception and says the cross-type enum-cache test may live in either `test_definition_order.py` or `test_converters.py`. Later, the Definition of done treats the cross-type cache test as living in the override-contract host by default.
+
+This is not a behavior bug, but it is avoidable ambiguity. Pick one placement for the cross-type cache test in every section. The spec already leans toward `tests/types/test_definition_order.py`; make that mandatory unless there is a concrete fixture reason to move it.

@@ -309,6 +309,17 @@ def test_assigned_scalar_field_override_keeps_consumer_resolver():
     assert name_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.name")
 
 
+# TODO(docs/spec-015-consumer_overrides_scalar-0_0_6.md Slice 1):
+# Add the scalar annotation override, converter-bypass, enum-cache, and Relay
+# collision tests beside the existing four-corner override matrix.
+# Pseudo:
+# - description: int on a selected CharField wins before and after finalize.
+# - definition.consumer_annotated_scalar_fields contains the overridden name.
+# - _build_annotations omits the overridden scalar from synthesized output.
+# - unsupported scalar, grouped choices, and co-resident enum cache cases obey
+#   the consumer-authoritative bypass contract.
+# - Relay id annotations reject non-NodeID shapes, accept NodeID shapes, and
+#   keep inherited id annotations on the pk-suppression path.
 def test_scalar_field_class_attribute_shadowing_raises():
     """Unsupported class attributes cannot silently shadow scalar fields either."""
     with pytest.raises(ConfigurationError, match="shadows a Django scalar field"):

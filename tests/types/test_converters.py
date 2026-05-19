@@ -1037,6 +1037,16 @@ def test_array_field_multidim_rejected_via_fake_sentinel(monkeypatch):
                 fields = ("arr",)
 
 
+# TODO(docs/spec-015-consumer_overrides_scalar-0_0_6.md Slice 1):
+# Add the nested ArrayField override-bypass regression beside the rejection
+# case above.
+# Pseudo:
+# - monkeypatch _ARRAY_FIELD_CLS to _FakeArrayField.
+# - declare arr = _FakeArrayField(_FakeArrayField(models.IntegerField())).
+# - declare a DjangoType selecting arr with consumer annotation
+#   arr: list[list[int]].
+# - assert class creation and finalize_django_types succeed because the
+#   override skips convert_scalar's nested-array rejection.
 def test_array_field_choices_inner_via_fake_sentinel(monkeypatch):
     """``ArrayField(CharField(choices=...))`` produces ``list[<TypeName><FieldName>Enum]``.
 

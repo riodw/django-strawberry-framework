@@ -95,6 +95,14 @@ class DjangoType:
         consumer_annotated_relation_fields = frozenset(
             field.name for field in fields if field.is_relation and field.name in consumer_annotations
         )
+        # TODO(docs/spec-015-consumer_overrides_scalar-0_0_6.md Slice 1):
+        # Collect annotation-only scalar overrides next to the relation set.
+        # Pseudo:
+        # - build consumer_annotated_scalar_fields from selected fields where
+        #   not field.is_relation and field.name is in consumer_annotations.
+        # - add that set to consumer_authored_fields so _build_annotations
+        #   skips convert_scalar for consumer-owned scalar annotations.
+        # - pass the set into DjangoTypeDefinition for four-corner metadata.
         consumer_assigned_relation_fields, consumer_assigned_scalar_fields = _consumer_assigned_fields(
             cls.__dict__,
             fields,
@@ -106,6 +114,20 @@ class DjangoType:
                 *consumer_assigned_scalar_fields,
             },
         )
+        # TODO(docs/spec-015-consumer_overrides_scalar-0_0_6.md Slice 1):
+        # Add the Relay id collision guard here, before _build_annotations.
+        # Pseudo:
+        # - relay-shaped means Meta.interfaces contains relay.Node, or cls
+        #   directly subclasses relay.Node.
+        # - if cls owns an "id" StrawberryField assignment, raise
+        #   ConfigurationError with resolve_id, relay.NodeID, and resolver-
+        #   backed sibling-field guidance.
+        # - if cls owns an "id" annotation, accept only relay.NodeID-shaped
+        #   annotations; otherwise raise ConfigurationError before schema
+        #   construction.
+        # - helper uses typing.get_type_hints(include_extras=True), with a
+        #   fail-soft regex for unresolved token-shaped NodeID strings and a
+        #   resolved-object marker check when another annotation fails.
         synthesized, pending = _build_annotations(
             cls,
             fields,
@@ -208,6 +230,12 @@ def _consumer_assigned_fields(
     class_dict: dict[str, Any],
     fields: tuple[Any, ...],
 ) -> tuple[frozenset[str], frozenset[str]]:
+    # TODO(docs/spec-015-consumer_overrides_scalar-0_0_6.md Slice 3):
+    # After Slice 1 lands, expand this docstring from assignment-only routing
+    # to the full override matrix.
+    # Pseudo: annotation buckets plus assignment buckets feed the four
+    # consumer_*_fields sets, whose union is the _build_annotations
+    # consumer_authored_fields short-circuit.
     """Return (relation, scalar) names assigned to explicit Strawberry field objects.
 
     Walks every selected Django field, not just relations. A consumer

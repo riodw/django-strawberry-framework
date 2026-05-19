@@ -451,6 +451,11 @@ def test_meta_exclude_filters_concrete_fields():
         "tests/types/test_definition_order.py."
     ),
 )
+# TODO(docs/spec-015-consumer_overrides_scalar-0_0_6.md Slice 2):
+# Delete this skipped placeholder after Slice 1 moves the scalar annotation
+# override contract into tests/types/test_definition_order.py.
+# Pseudo: remove the skip block and body; then drop CATEGORY_SCALAR_FIELDS only
+# if no remaining test imports it.
 def test_consumer_annotation_overrides_synthesized():
     """A consumer-declared annotation wins over the auto-mapped type."""
 

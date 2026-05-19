@@ -27,6 +27,11 @@ class DjangoTypeDefinition:
     has_custom_get_queryset: bool
     consumer_authored_fields: frozenset[str] = frozenset()
     consumer_annotated_relation_fields: frozenset[str] = frozenset()
+    # TODO(docs/spec-015-consumer_overrides_scalar-0_0_6.md Slice 1):
+    # Add consumer_annotated_scalar_fields here, between annotated relation
+    # and assigned relation metadata.
+    # Pseudo: default to frozenset(); tests assert annotation-only scalar
+    # overrides populate this set without touching consumer_assigned_*.
     consumer_assigned_relation_fields: frozenset[str] = frozenset()
     consumer_assigned_scalar_fields: frozenset[str] = frozenset()
     primary: bool = False

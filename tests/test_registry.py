@@ -1118,3 +1118,197 @@ def test_audit_runs_once_per_build(monkeypatch):
     finalize_django_types()  # second call must hit the is_finalized() guard
 
     assert len(calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# L1 (docs/plan-registry-helpers.md) — set_primary + unregister public helpers.
+# Tests below exercise the new public surface that replaces the direct
+# private-map pokes in Slice 4 walker/extension fixtures and the older
+# check_schema-audit fixtures (primary slot, types list, model index, and
+# definition map).
+# ---------------------------------------------------------------------------
+
+
+def test_set_primary_promotes_registered_type(fresh_registry):
+    """``set_primary`` flips ``primary_for`` to the supplied type when it's already registered."""
+
+    class ItemTypeA:
+        pass
+
+    class ItemTypeB:
+        pass
+
+    fresh_registry.register(Item, ItemTypeA)
+    fresh_registry.register(Item, ItemTypeB)
+    assert fresh_registry.primary_for(Item) is None
+
+    fresh_registry.set_primary(Item, ItemTypeB)
+    assert fresh_registry.primary_for(Item) is ItemTypeB
+
+
+def test_set_primary_is_idempotent_when_already_primary(fresh_registry):
+    """``set_primary`` is a no-op when ``type_cls`` is already the primary for ``model``."""
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType, primary=True)
+    fresh_registry.set_primary(Item, ItemType)  # no raise
+    assert fresh_registry.primary_for(Item) is ItemType
+
+
+def test_set_primary_raises_when_type_not_registered_for_model(fresh_registry):
+    """``set_primary`` rejects a type that has not been registered for the model."""
+
+    class ItemType:
+        pass
+
+    with pytest.raises(ConfigurationError, match="is not registered for Item"):
+        fresh_registry.set_primary(Item, ItemType)
+
+
+def test_set_primary_raises_when_different_type_is_already_primary(fresh_registry):
+    """``set_primary`` raises with the canonical 'already declared primary' phrasing."""
+
+    class ItemTypeA:
+        pass
+
+    class ItemTypeB:
+        pass
+
+    fresh_registry.register(Item, ItemTypeA, primary=True)
+    fresh_registry.register(Item, ItemTypeB)
+    with pytest.raises(ConfigurationError, match="already declared primary as ItemTypeA"):
+        fresh_registry.set_primary(Item, ItemTypeB)
+
+
+def test_set_primary_raises_after_finalize():
+    """``set_primary`` honours ``_check_mutable``: post-finalize calls raise."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    finalize_django_types()
+    with pytest.raises(ConfigurationError, match="finalized"):
+        registry.set_primary(Item, ItemType)
+
+
+def test_unregister_removes_from_types_models_primaries_definitions(fresh_registry):
+    """``unregister`` drops the type from every registry map."""
+
+    class ItemType:
+        pass
+
+    sentinel = object()
+    fresh_registry.register(Item, ItemType, primary=True)
+    fresh_registry.register_definition(ItemType, sentinel)
+
+    fresh_registry.unregister(ItemType)
+
+    assert fresh_registry.types_for(Item) == ()
+    assert fresh_registry.model_for_type(ItemType) is None
+    assert fresh_registry.primary_for(Item) is None
+    assert fresh_registry.get_definition(ItemType) is None
+
+
+def test_unregister_removes_pending_relations_sourced_from_type(fresh_registry):
+    """``unregister`` discards pending relations whose ``source_type`` matches."""
+
+    class CategoryType:
+        pass
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Category, CategoryType)
+    fresh_registry.register(Item, ItemType)
+    field = Category._meta.get_field("items")
+    kind = relation_kind(field)
+    pending_keep = PendingRelation(
+        source_type=CategoryType,
+        source_model=Category,
+        field_name="items",
+        django_field=field,
+        related_model=Item,
+        relation_kind=kind,
+        nullable=False,
+    )
+    pending_drop = PendingRelation(
+        source_type=ItemType,
+        source_model=Item,
+        field_name="category",
+        django_field=Item._meta.get_field("category"),
+        related_model=Category,
+        relation_kind=relation_kind(Item._meta.get_field("category")),
+        nullable=False,
+    )
+    fresh_registry.add_pending_relation(pending_keep)
+    fresh_registry.add_pending_relation(pending_drop)
+
+    fresh_registry.unregister(ItemType)
+
+    remaining = list(fresh_registry.iter_pending_relations())
+    assert remaining == [pending_keep]
+
+
+def test_unregister_keeps_siblings_intact_in_multi_type_case(fresh_registry):
+    """``unregister`` of one type for a model leaves siblings registered.
+
+    When the unregistered type was the primary, the model loses its
+    primary slot — the caller is expected to ``set_primary`` a sibling
+    if needed. Siblings stay in ``types_for`` in their original
+    registration order.
+    """
+
+    class ItemTypeA:
+        pass
+
+    class ItemTypeB:
+        pass
+
+    class ItemTypeC:
+        pass
+
+    fresh_registry.register(Item, ItemTypeA, primary=True)
+    fresh_registry.register(Item, ItemTypeB)
+    fresh_registry.register(Item, ItemTypeC)
+
+    fresh_registry.unregister(ItemTypeA)
+
+    assert fresh_registry.types_for(Item) == (ItemTypeB, ItemTypeC)
+    assert fresh_registry.primary_for(Item) is None
+    assert fresh_registry.model_for_type(ItemTypeB) is Item
+    assert fresh_registry.model_for_type(ItemTypeC) is Item
+
+
+def test_unregister_is_noop_on_unknown_type(fresh_registry):
+    """``unregister`` returns silently when ``type_cls`` was never registered."""
+
+    class NotRegistered:
+        pass
+
+    fresh_registry.unregister(NotRegistered)  # no raise
+
+    assert fresh_registry.types_for(Item) == ()
+
+
+def test_unregister_works_after_finalize():
+    """``unregister`` is callable after ``finalize_django_types()``.
+
+    Deviates from the defensive ``_check_mutable`` guard the other
+    mutators apply: removing state cannot corrupt the schema build, and
+    the schema-audit tests in ``tests/optimizer/test_extension.py`` need
+    to simulate a missing registration *after* finalize has run.
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    registry.unregister(CategoryType)
+    assert registry.model_for_type(CategoryType) is None
+    assert registry.get_definition(CategoryType) is None

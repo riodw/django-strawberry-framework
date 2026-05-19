@@ -1807,8 +1807,7 @@ def test_check_schema_warns_unregistered_target():
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
     # Clear Category's registration so the audit finds a gap.
-    registry._types.pop(Category, None)
-    registry._models.pop(CategoryType, None)
+    registry.unregister(CategoryType)
     warnings = DjangoOptimizerExtension.check_schema(schema)
     assert any("category" in w and "no registered target" in w for w in warnings)
 
@@ -1853,8 +1852,7 @@ def test_check_schema_descends_into_union_types():
     # must still surface the gap on ItemType.category. Without the union walk
     # ItemType is unreachable from the root, the audit skips it, and the
     # warning is silently lost.
-    registry._types.pop(Category, None)
-    registry._models.pop(CategoryType, None)
+    registry.unregister(CategoryType)
     warnings = DjangoOptimizerExtension.check_schema(schema)
     assert any("category" in w and "no registered target" in w for w in warnings)
 
@@ -1910,8 +1908,7 @@ def test_check_schema_skip_hint_suppresses_warning():
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
     # Clear Category so the audit would normally warn — but SKIP suppresses.
-    registry._types.pop(Category, None)
-    registry._models.pop(CategoryType, None)
+    registry.unregister(CategoryType)
     warnings = DjangoOptimizerExtension.check_schema(schema)
     # SKIP means category is intentionally unoptimized — no warning.
     assert not any("category" in w for w in warnings)
@@ -2994,9 +2991,7 @@ def test_schema_audit_warns_on_relation_field_exposed_only_on_secondary_type():
     finalize_django_types()
     schema = strawberry.Schema(query=Query, types=[ItemType])
     # Clear Category's registration so the audit sees the gap.
-    registry._types.pop(Category, None)
-    registry._models.pop(CategoryType, None)
-    registry._primaries.pop(Category, None)
+    registry.unregister(CategoryType)
 
     warnings = DjangoOptimizerExtension.check_schema(schema)
     # Item.category is the secondary-only relation; the audit must surface it.
@@ -3042,9 +3037,7 @@ def test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_type
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
-    registry._types.pop(Category, None)
-    registry._models.pop(CategoryType, None)
-    registry._primaries.pop(Category, None)
+    registry.unregister(CategoryType)
 
     warnings = DjangoOptimizerExtension.check_schema(schema)
     item_category_warnings = [w for w in warnings if "Item.category" in w]

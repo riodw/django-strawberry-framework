@@ -278,7 +278,7 @@ def test_meta_optimizer_hints_for_selected_scalar_field_raises():
 
 
 def test_meta_primary_true_registers_type_as_primary():
-    """``Meta.primary = True`` populates ``registry._primaries`` for the model."""
+    """``Meta.primary = True`` makes ``registry.primary_for(model)`` return the type."""
 
     class ItemType(DjangoType):
         class Meta:

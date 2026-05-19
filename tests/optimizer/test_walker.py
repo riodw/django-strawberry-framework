@@ -1563,7 +1563,7 @@ def test_optimizer_walker_plans_root_from_resolver_return_type_when_secondary():
         ItemType,
         optimizer_hints={"category": OptimizerHint.SKIP},
     )
-    registry._primaries[Item] = ItemType
+    registry.set_primary(Item, ItemType)
     _register_type_definition(
         Item,
         AdminItemType,
@@ -1611,7 +1611,7 @@ def test_scalar_only_secondary_resolver_uses_secondary_field_map():
         snake_case(field.name): FieldMeta.from_django_field(field) for field in primary_fields
     }
     _register_type_definition(Item, ItemType, field_map=primary_field_map)
-    registry._primaries[Item] = ItemType
+    registry.set_primary(Item, ItemType)
     # Secondary's field_map includes ``name``.
     _register_type_definition(Item, AdminItemType)
     try:
@@ -1663,7 +1663,7 @@ def test_optimizer_walker_uses_primary_for_nested_relation_target():
         snake_case(field.name): FieldMeta.from_django_field(field) for field in primary_fields
     }
     _register_type_definition(Item, ItemType, field_map=primary_field_map)
-    registry._primaries[Item] = ItemType
+    registry.set_primary(Item, ItemType)
     _register_type_definition(Item, AdminItemType)
     _register_type_definition(Category, CategoryType)
     try:

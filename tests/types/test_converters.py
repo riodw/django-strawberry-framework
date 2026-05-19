@@ -157,11 +157,10 @@ def test_two_djangotypes_reading_same_choice_field_share_one_enum(choice_fixture
             model = choice_fixture_model
             fields = ("status",)
 
-    # Re-using the same model on a second DjangoType raises on type
-    # registration; clear the type-side maps but leave the enum cache
-    # intact so we can verify cross-type enum reuse.
-    registry._types.clear()
-    registry._models.clear()
+    # Drop FixtureTypeA from the registry's type/model maps but leave
+    # the enum cache intact so we can verify cross-type enum reuse via
+    # FixtureTypeB. ``unregister`` skips ``_enums``.
+    registry.unregister(FixtureTypeA)
 
     class FixtureTypeB(DjangoType):
         class Meta:

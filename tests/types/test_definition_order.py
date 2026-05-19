@@ -1,13 +1,29 @@
 """Acceptance tests for definition-order-independent DjangoType relations."""
 
+import sys
+import types
+import uuid
+
 import pytest
 import strawberry
 from apps.library.models import Book, Genre, MembershipCard, Patron, Shelf
 from apps.products.models import Category, Entry, Item, Property
+from django.db import models
+from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.base import _build_annotations
+
+
+class _FakeUnsupportedField(models.Field):
+    """One-line Django Field subclass with no SCALAR_MAP match.
+
+    Pins the unsupported-field-type bypass test for spec-015 Slice 1
+    Decision 7a — the consumer's annotation override is a recourse
+    parallel to ``Meta.exclude`` for unsupported scalar field types.
+    """
 
 
 @pytest.fixture(autouse=True)
@@ -309,123 +325,462 @@ def test_assigned_scalar_field_override_keeps_consumer_resolver():
     assert name_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.name")
 
 
-# TODO(spec-015 Slice 1 — 18 of 19 Slice 1 tests land here):
-# Add the Slice 1 test cluster beside the existing four-corner matrix
-# (the three relation overrides at :179/:206/:235 and the assigned-
-# scalar override at :278). One additional Slice 1 test
-# (test_annotation_override_of_arrayfield_with_nested_array_is_allowed)
-# lives in tests/types/test_converters.py per rev6 L3 — see its TODO.
+# ---------------------------------------------------------------------------
+# Spec-015 Slice 1: annotation-only scalar override matrix completion.
 #
-# Likely new imports at the top of this file:
-#     import re, sys, types, uuid
-#     from strawberry import relay
-#     from strawberry.relay.types import NodeIDPrivate
-#
-# Four core override tests:
-#   - test_annotation_only_scalar_field_override_wins_over_synthesized
-#       CategoryType(DjangoType) with `description: int` + Meta selecting
-#       "description"; pre- and post-finalize assert
-#       CategoryType.__annotations__["description"] is int.
-#   - test_annotation_only_scalar_override_populates_definition_metadata
-#       definition.consumer_annotated_scalar_fields == {"description"};
-#       consumer_authored_fields >= {"description"};
-#       consumer_assigned_scalar_fields == frozenset().
-#   - test_annotation_only_scalar_override_does_not_emit_synthesized_annotation
-#       _build_annotations's synthesized dict (first return-tuple
-#       element) does NOT contain "description".
-#   - test_annotation_only_scalar_override_survives_strawberry_finalization
-#       Build schema, __type(name=...) introspection, unwrap through
-#       NON_NULL, assert terminal ofType.name matches consumer's type.
-#
-# Four converter-bypass tests (Decision 7a; rev8 L1 — four, not three):
-#   - test_annotation_override_of_unsupported_scalar_field_type_is_allowed
-#       _FakeUnsupportedField(models.Field) + consumer myfield: str;
-#       no error at class creation; finalize_django_types() succeeds.
-#       (NOT bytes — Strawberry rejects bytes; rev2 M1.)
-#   - test_annotation_override_of_grouped_choices_field_is_allowed
-#       Grouped CharField choices + consumer status: str;
-#       registry.get_enum(model, "status") is None.
-#   - test_annotation_override_of_arrayfield_with_nested_array_is_allowed
-#       Lives in tests/types/test_converters.py (rev6 L3) — see its TODO.
-#   - test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident_types
-#       Two DjangoTypes on one choices= column: overriding (primary)
-#       contributes nothing; non-overriding populates the cache; the
-#       overriding type's GraphQL field is the consumer's annotation.
-#       Placement here is MANDATORY per rev8 L2 (not optional).
-#
-# Eleven Relay-collision tests (Decision 7; rev8 H1 added direct-inheritance):
-#   - test_consumer_id_annotation_on_relay_node_type_raises
-#       Meta.interfaces=(relay.Node,) + id: int → ConfigurationError
-#       (message contains both "relay.NodeID" and "GlobalID").
-#   - test_consumer_id_annotation_on_direct_relay_node_subclass_raises  [rev8 H1]
-#       class DirectRelayChild(DjangoType, relay.Node): id: int
-#       (NO Meta.interfaces line) → same error. Pins the
-#       issubclass(cls, relay.Node) half of the guard predicate.
-#   - test_consumer_id_assigned_strawberry_field_on_relay_node_type_raises
-#       Assigned id = strawberry.field(resolver=...) → error message
-#       contains "resolve_id", "relay.NodeID", AND one of
-#       "display_id"/"sibling" (resolver-backed sibling-field workaround
-#       per rev6 M1 + rev7 M2).
-#   - test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises
-#       id: "MissingType" → ConfigurationError (fail-soft regex rejects).
-#   - test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises
-#       id: "NotNodeID[int]" (and "MyNodeID[int]" — parametrize or two
-#       asserts) → ConfigurationError. The (?:^|\.)NodeID\[ regex
-#       rejects prefixed-substring lookalikes (rev7 H1 tightening).
-#   - test_consumer_id_relay_nodeid_annotation_on_relay_node_type_is_accepted
-#       id: relay.NodeID[int] (direct form) → finalize + schema build pass.
-#   - test_consumer_id_resolved_string_relay_nodeid_annotation_on_relay_node_type_is_accepted_end_to_end
-#       id: "relay.NodeID[int]" stringified, with `relay` imported at
-#       module scope → finalize + schema build pass.
-#   - test_consumer_id_unresolved_nodeid_shaped_string_on_relay_node_type_passes_guard_only
-#       MANDATORY recipe per rev8 M2 — DO NOT improvise. The setup is
-#       load-bearing because typing.get_type_hints resolves string
-#       annotations through sys.modules[cls.__module__].__dict__; the
-#       test must put the class in a synthetic module whose globals
-#       have no `relay` key, or it silently exercises the resolved-
-#       string path instead of the fail-soft branch:
-#
-#           stub_name = f"spec015_unresolved_relay_stub_{uuid.uuid4().hex}"
-#           sys.modules[stub_name] = types.ModuleType(stub_name)
-#           assert "relay" not in sys.modules[stub_name].__dict__
-#           try:
-#               def _body(ns):
-#                   ns["__module__"] = stub_name
-#                   ns["__annotations__"] = {"id": "relay.NodeID[int]"}
-#                   class _Meta:
-#                       model = Category
-#                       interfaces = (relay.Node,)
-#                   ns["Meta"] = _Meta
-#               cls = types.new_class(
-#                   "UnresolvedRelayChild", (DjangoType,), {}, _body,
-#               )
-#           finally:
-#               # rev9 L1 + rev10 M2: both cleanups are required.
-#               # sys.modules.pop prevents the synthetic module from
-#               # leaking across tests; registry.clear() prevents the
-#               # synthesized UnresolvedRelayChild — which IS registered
-#               # against Category the moment class creation passes the
-#               # guard — from poisoning the rev6 L2 cross-type cache
-#               # test (or any later Category-touching test) in the
-#               # same session.
-#               sys.modules.pop(stub_name, None)
-#               registry.clear()
-#
-#       Assert ONLY that class creation succeeds — DO NOT call
-#       finalize_django_types() or build strawberry.Schema (Strawberry
-#       would re-trigger the same unresolved lookup against the stub).
-#   - test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is_accepted
-#       id: relay.NodeID[int] + items: list["AdminItemType"] (sibling
-#       unresolved) → no ConfigurationError (rev6 H1 fail-soft sub-case 2).
-#   - test_consumer_non_id_scalar_override_on_relay_node_type_is_accepted
-#       Meta.interfaces=(relay.Node,) + description: int → accepted
-#       (the guard is keyed on the GraphQL field name "id", not on the
-#       model's pk name).
-#   - test_inherited_id_annotation_on_relay_node_subclass_is_handled_by_pk_suppression
-#       Base(DjangoType) with `id: int` (no Meta) → child with
-#       Meta.interfaces=(relay.Node,) builds + schema succeeds; the
-#       child's introspected id is ID! (Relay-supplied);
-#       resolve_id_attr() returns "pk".
+# Four core override tests pin the new annotation-only scalar override
+# path; four converter-bypass tests pin Decision 7a's "consumer is
+# authoritative" contract; eleven Relay-collision tests pin Decision 7's
+# H1 guard (five reject + six accept).
+# ---------------------------------------------------------------------------
+
+
+def test_annotation_only_scalar_field_override_wins_over_synthesized():
+    """A consumer ``description: int`` annotation survives __init_subclass__ and finalize."""
+
+    class CategoryType(DjangoType):
+        description: int
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+
+    assert CategoryType.__annotations__["description"] is int
+
+    finalize_django_types()
+
+    assert CategoryType.__annotations__["description"] is int
+    assert _strawberry_field(CategoryType, "description").type is int
+
+
+def test_annotation_only_scalar_override_populates_definition_metadata():
+    """``DjangoTypeDefinition`` carries the new ``consumer_annotated_scalar_fields`` set."""
+
+    class CategoryType(DjangoType):
+        description: int
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.consumer_annotated_scalar_fields == frozenset({"description"})
+    assert definition.consumer_authored_fields >= frozenset({"description"})
+    assert definition.consumer_assigned_scalar_fields == frozenset()
+
+
+def test_annotation_only_scalar_override_does_not_emit_synthesized_annotation():
+    """``_build_annotations``'s synthesized dict skips the overridden field."""
+
+    class CategoryType(DjangoType):
+        description: int
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+
+    definition = CategoryType.__django_strawberry_definition__
+    synthesized, _pending = _build_annotations(
+        CategoryType,
+        definition.selected_fields,
+        source_model=Category,
+        field_map=definition.field_map,
+        consumer_authored_fields=definition.consumer_authored_fields,
+        interfaces=definition.interfaces,
+    )
+    assert "description" not in synthesized
+
+
+def test_annotation_only_scalar_override_survives_strawberry_finalization():
+    """End-to-end: the consumer annotation surfaces in the GraphQL schema as ``Int!``."""
+
+    class CategoryType(DjangoType):
+        description: int
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def category(self) -> CategoryType:
+            return Category(id=1, name="x", description=42)
+
+    schema = strawberry.Schema(query=Query)
+    query = '{ __type(name: "CategoryType") { fields { name type { kind name ofType { kind name } } } } }'
+    result = schema.execute_sync(query)
+    assert result.errors is None, result.errors
+    fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
+    description_type = fields["description"]
+    assert description_type["kind"] == "NON_NULL"
+    assert description_type["ofType"]["name"] == "Int"
+
+
+# ---------------------------------------------------------------------------
+# Converter-bypass regressions (Decision 7a).
+# ---------------------------------------------------------------------------
+
+
+def test_annotation_override_of_unsupported_scalar_field_type_is_allowed():
+    """A consumer ``myfield: str`` annotation lets an unsupported scalar build."""
+
+    class UnsupportedFieldOwner(models.Model):
+        myfield = _FakeUnsupportedField()
+
+        class Meta:
+            app_label = "test_spec015_unsupported"
+
+    # Baseline: without the override, convert_scalar's MRO walk fails.
+    with pytest.raises(ConfigurationError):
+
+        class BaselineType(DjangoType):
+            class Meta:
+                model = UnsupportedFieldOwner
+                fields = ("myfield",)
+
+    class UnsupportedOwnerType(DjangoType):
+        myfield: str
+
+        class Meta:
+            model = UnsupportedFieldOwner
+            fields = ("myfield",)
+
+    definition = UnsupportedOwnerType.__django_strawberry_definition__
+    assert "myfield" in definition.consumer_annotated_scalar_fields
+    finalize_django_types()
+
+
+def test_annotation_override_of_grouped_choices_field_is_allowed():
+    """A consumer ``status: str`` annotation bypasses grouped-choices rejection."""
+
+    class GroupedChoiceOwner(models.Model):
+        status = models.CharField(
+            max_length=32,
+            choices=[("group1", [("a", "A"), ("b", "B")])],
+        )
+
+        class Meta:
+            app_label = "test_spec015_grouped_choices"
+
+    class GroupedChoiceOwnerType(DjangoType):
+        status: str
+
+        class Meta:
+            model = GroupedChoiceOwner
+            fields = ("status",)
+
+    finalize_django_types()
+    assert registry.get_enum(GroupedChoiceOwner, "status") is None
+
+
+def test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident_types():
+    """One overriding + one non-overriding type share enum from the non-overriding side alone."""
+
+    class CoResidentChoiceOwner(models.Model):
+        status = models.CharField(max_length=32, choices=[("a", "A"), ("b", "B")])
+
+        class Meta:
+            app_label = "test_spec015_co_resident"
+
+    class OverrideType(DjangoType):
+        status: str
+
+        class Meta:
+            model = CoResidentChoiceOwner
+            primary = True
+            fields = ("status",)
+
+    class NonOverrideType(DjangoType):
+        class Meta:
+            model = CoResidentChoiceOwner
+            fields = ("status",)
+
+    finalize_django_types()
+
+    cached = registry.get_enum(CoResidentChoiceOwner, "status")
+    assert cached is not None
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def override(self) -> OverrideType:
+            return CoResidentChoiceOwner(status="a")
+
+        @strawberry.field
+        def non_override(self) -> NonOverrideType:
+            return CoResidentChoiceOwner(status="a")
+
+    schema = strawberry.Schema(query=Query)
+    query = (
+        '{ __type(name: "OverrideType") { fields { name type { kind name '
+        "ofType { kind name } } } } "
+        '__overrideTwo: __type(name: "NonOverrideType") { fields { name type '
+        "{ kind name ofType { kind name } } } } }"
+    )
+    result = schema.execute_sync(query)
+    assert result.errors is None, result.errors
+
+    override_fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
+    override_status = override_fields["status"]
+    assert override_status["kind"] == "NON_NULL"
+    assert override_status["ofType"]["name"] == "String"
+
+    non_override_fields = {f["name"]: f["type"] for f in result.data["__overrideTwo"]["fields"]}
+    non_override_status = non_override_fields["status"]
+    assert non_override_status["kind"] == "NON_NULL"
+    assert non_override_status["ofType"]["name"] == cached.__name__
+
+
+# ---------------------------------------------------------------------------
+# Relay collision tests (Decision 7) — five reject + six accept.
+# ---------------------------------------------------------------------------
+
+
+def test_consumer_id_annotation_on_relay_node_type_raises():
+    """``id: int`` on a ``Meta.interfaces = (relay.Node,)`` type raises at class creation."""
+    with pytest.raises(ConfigurationError) as exc_info:
+
+        class CategoryNode(DjangoType):
+            id: int
+
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                interfaces = (relay.Node,)
+
+    msg = str(exc_info.value)
+    assert "relay.NodeID" in msg
+    assert "GlobalID" in msg
+
+
+def test_consumer_id_annotation_on_direct_relay_node_subclass_raises():
+    """``id: int`` on a direct ``relay.Node`` subclass raises (no ``Meta.interfaces``)."""
+    with pytest.raises(ConfigurationError) as exc_info:
+
+        class DirectRelayChild(DjangoType, relay.Node):
+            id: int
+
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+
+    msg = str(exc_info.value)
+    assert "relay.NodeID" in msg
+    assert "GlobalID" in msg
+
+
+def test_consumer_id_assigned_strawberry_field_on_relay_node_type_raises():
+    """Assigned ``id = strawberry.field(resolver=...)`` raises; message names the workarounds."""
+    with pytest.raises(ConfigurationError) as exc_info:
+
+        class CategoryNode(DjangoType):
+            id = strawberry.field(resolver=lambda root: "x")
+
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                interfaces = (relay.Node,)
+
+    msg = str(exc_info.value)
+    assert "resolve_id" in msg
+    assert "relay.NodeID" in msg
+    assert ("display_id" in msg) or ("sibling field" in msg)
+
+
+def test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises():
+    """``id: "MissingType"`` (unresolved, non-NodeID) raises via the fail-soft regex reject."""
+    with pytest.raises(ConfigurationError) as exc_info:
+
+        class CategoryNode(DjangoType):
+            id: "MissingType"  # noqa: F821 — deliberately unresolved
+
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                interfaces = (relay.Node,)
+
+    msg = str(exc_info.value)
+    assert "relay.NodeID" in msg
+    assert "GlobalID" in msg
+
+
+def test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises():
+    """Prefixed-substring lookalikes (e.g. ``"NotNodeID[int]"``) are rejected by the token regex."""
+    with pytest.raises(ConfigurationError) as exc_info:
+
+        class CategoryNodeNot(DjangoType):
+            id: "NotNodeID[int]"  # noqa: F821 — token regex rejects this prefix
+
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                interfaces = (relay.Node,)
+
+    msg = str(exc_info.value)
+    assert "relay.NodeID" in msg
+    assert "GlobalID" in msg
+
+    registry.clear()
+
+    with pytest.raises(ConfigurationError) as exc_info:
+
+        class CategoryNodeMy(DjangoType):
+            id: "MyNodeID[int]"  # noqa: F821 — token regex rejects this prefix
+
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                interfaces = (relay.Node,)
+
+    msg = str(exc_info.value)
+    assert "relay.NodeID" in msg
+    assert "GlobalID" in msg
+
+
+def test_consumer_id_relay_nodeid_annotation_on_relay_node_type_is_accepted():
+    """``id: relay.NodeID[int]`` (direct form) is the documented escape hatch."""
+
+    class CategoryNode(DjangoType):
+        id: relay.NodeID[int]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def category(self) -> CategoryNode:
+            return Category(id=1, name="x")
+
+    strawberry.Schema(query=Query)
+
+
+def test_consumer_id_resolved_string_relay_nodeid_annotation_on_relay_node_type_is_accepted_end_to_end():
+    """``id: "relay.NodeID[int]"`` with ``relay`` importable in module scope succeeds end-to-end."""
+
+    class CategoryNode(DjangoType):
+        id: "relay.NodeID[int]"
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def category(self) -> CategoryNode:
+            return Category(id=1, name="x")
+
+    schema = strawberry.Schema(query=Query)
+    query = '{ __type(name: "CategoryNode") { fields { name type { kind name ofType { kind name } } } } }'
+    result = schema.execute_sync(query)
+    assert result.errors is None, result.errors
+    fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
+    id_type = fields["id"]
+    assert id_type["kind"] == "NON_NULL"
+    assert id_type["ofType"]["name"] == "ID"
+
+
+def test_consumer_id_unresolved_nodeid_shaped_string_on_relay_node_type_passes_guard_only():
+    """Unresolved-but-NodeID-shaped string passes the guard; downstream resolution is consumer's."""
+    stub_name = f"spec015_unresolved_relay_stub_{uuid.uuid4().hex}"
+    sys.modules[stub_name] = types.ModuleType(stub_name)
+    assert "relay" not in sys.modules[stub_name].__dict__
+    try:
+
+        def _body(ns):
+            ns["__module__"] = stub_name
+            ns["__annotations__"] = {"id": "relay.NodeID[int]"}
+
+            class _Meta:
+                model = Category
+                interfaces = (relay.Node,)
+
+            ns["Meta"] = _Meta
+
+        types.new_class("UnresolvedRelayChild", (DjangoType,), {}, _body)
+    finally:
+        sys.modules.pop(stub_name, None)
+        registry.clear()
+
+
+def test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is_accepted():
+    """Resolved ``id: relay.NodeID[int]`` + unresolved sibling annotation is accepted."""
+
+    class CategoryNode(DjangoType):
+        id: relay.NodeID[int]
+        items: list["AdminItemType"]  # noqa: F821 — deliberately unresolved sibling
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+            interfaces = (relay.Node,)
+
+    # Class creation succeeded — the rev6 H1 fail-soft fix accepts the
+    # directly-resolved NodeID-marked id even when another annotation on
+    # the same class fails to resolve.
+    assert CategoryNode is not None
+
+
+def test_consumer_non_id_scalar_override_on_relay_node_type_is_accepted():
+    """A non-``id`` scalar override on a Relay-Node-shaped type does not collide with ``Node.id``."""
+
+    class CategoryNode(DjangoType):
+        description: int
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+            interfaces = (relay.Node,)
+
+    assert CategoryNode.__annotations__["description"] is int
+
+
+def test_inherited_id_annotation_on_relay_node_subclass_is_handled_by_pk_suppression():
+    """Inherited ``id: int`` slips past the guard; pk-suppression keeps Strawberry happy."""
+
+    class BaseWithId(DjangoType):
+        id: int
+
+    class ChildRelayType(BaseWithId):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    # Guard did not fire — the child's own __annotations__ has no "id" key
+    # because Python does not promote inherited annotations into the
+    # subclass's dict.
+    assert "id" not in dict(ChildRelayType.__dict__.get("__annotations__", {}))
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def category(self) -> ChildRelayType:
+            return Category(id=1, name="x")
+
+    schema = strawberry.Schema(query=Query, types=[ChildRelayType])
+    query = '{ __type(name: "ChildRelayType") { fields { name type { kind name ofType { kind name } } } } }'
+    result = schema.execute_sync(query)
+    assert result.errors is None, result.errors
+    fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
+    id_type = fields["id"]
+    assert id_type["kind"] == "NON_NULL"
+    assert id_type["ofType"]["name"] == "ID"
+
+
 def test_scalar_field_class_attribute_shadowing_raises():
     """Unsupported class attributes cannot silently shadow scalar fields either."""
     with pytest.raises(ConfigurationError, match="shadows a Django scalar field"):

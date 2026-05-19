@@ -46,8 +46,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `WIP-ALPHA-015-0.0.6 — Consumer override semantics (scalar fields)` — extends the `DONE-006-0.0.4` relation-field override contract to scalar fields. Spec pending.
-- `0.0.6` shipped progress: `DONE-012-0.0.6` (`FieldMeta` consolidation), `DONE-013-0.0.6` (deferred scalar conversions), and `DONE-014-0.0.6` (multiple `DjangoType`s per model with `Meta.primary`) landed in this version; `WIP-ALPHA-015-0.0.6` remains to complete the `0.0.6` patch.
+- `0.0.6` shipped progress: `DONE-012-0.0.6` (`FieldMeta` consolidation), `DONE-013-0.0.6` (deferred scalar conversions), `DONE-014-0.0.6` (multiple `DjangoType`s per model with `Meta.primary`), and `DONE-015-0.0.6` (consumer override semantics for scalar fields) landed in this version; the `0.0.6` patch is complete.
 - Strategic differentiation roadmap (post-`0.0.5`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -64,7 +63,6 @@ For install, local development, testing, and the canonical documentation map, st
   - `utils/queryset.py`
 - Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
 - Several DjangoType contract gaps remain:
-  - stable consumer override semantics for **scalar** fields (the foundation slice pinned the contract for relation fields only)
   - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
@@ -75,48 +73,6 @@ For install, local development, testing, and the canonical documentation map, st
 ## Board columns
 
 ## In progress
-
-### WIP-ALPHA-015-0.0.6 — Consumer override semantics (scalar fields)
-
-Priority: high
-
-Status: ready for design, not implementation-by-assumption
-
-Note: the foundation slice (`DONE-006-0.0.4`) pins the consumer-override contract for **relation fields only** (`DjangoTypeDefinition.consumer_annotated_relations`, finalizer skip). This card now covers the remaining scalar-field override semantics.
-
-Current behavior:
-
-- `DjangoType.__init_subclass__` merges consumer annotations over synthesized annotations for both scalar and relation fields, but only the relation-field path is part of the stable 0.0.4 contract.
-- Strawberry later rewrites class annotation/field metadata for scalars, so the scalar override is not a reliable public contract.
-- `test_consumer_annotation_overrides_synthesized` remains skipped.
-
-Why it matters:
-
-- Consumers need a stable way to customize generated scalar fields without abandoning `DjangoType`.
-- The package should not claim scalar-annotation overrides survive end-to-end until they actually do.
-
-Open design choices:
-
-- Use Strawberry field customization APIs.
-- Add explicit `Meta.field_overrides`.
-- Support annotation overrides by controlling the timing of Strawberry finalization (the foundation slice already moves Strawberry finalization into `finalize_django_types()`, which makes this design cheaper to land later).
-
-Definition of done:
-
-- New spec, probably `docs/spec-consumer_overrides.md`.
-- Clear supported override forms for scalars:
-  - type annotation override
-  - resolver override
-  - field description/deprecation/default metadata
-  - opt-out/removal behavior
-- The skipped override test is either unskipped and passes or replaced with the accepted explicit mechanism.
-- README and contract docs describe the supported path.
-
-Files likely touched:
-
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/types/resolvers.py`
-- `tests/types/test_base.py`
 
 ## To Do - Alpha (0.1.0)
 
@@ -1671,6 +1627,126 @@ Design notes carried into `0.0.6`:
   declarative override API (e.g., `Meta.field_types = {...}`) is the
   `WIP-ALPHA-015-0.0.6 — Consumer override semantics` design space and
   is out of scope here.
+
+### DONE-015-0.0.6 — Consumer override semantics (scalar fields)
+
+Slice-by-slice scope (per `docs/spec-015-consumer_overrides_scalar-0_0_6.md`):
+
+- `DjangoType.__init_subclass__` collected `consumer_annotated_scalar_fields`
+  parallel to `consumer_annotated_relation_fields`. Annotation-only scalar
+  overrides (e.g., `description: int` shadowing an auto-synthesized `str`)
+  are added to the unified `consumer_authored_fields` frozenset and skip
+  auto-synthesis in `_build_annotations`'s scalar branch via the existing
+  `if field.name in consumer_authored_fields: continue` short-circuit.
+- `DjangoTypeDefinition` gained `consumer_annotated_scalar_fields: frozenset[str]`.
+- The previously-skipped `test_consumer_annotation_overrides_synthesized`
+  landed as `test_annotation_only_scalar_field_override_wins_over_synthesized`
+  in `tests/types/test_definition_order.py` alongside the three relation
+  overrides and the assigned-scalar override. The four-corner matrix
+  (relation × annotation, relation × assigned, scalar × annotation,
+  scalar × assigned) is symmetric and complete.
+- End-to-end test pinned the override surviving `strawberry.type(...)`
+  decoration and showing up in the GraphQL schema with the consumer's type
+  (unwrapped through `NON_NULL` for non-nullable Django columns).
+- **Consumer annotation overrides are authoritative.** `_build_annotations`'s
+  scalar short-circuit bypasses every `convert_scalar` validation and side
+  effect for an overridden field: unsupported-field-type rejection,
+  grouped-choices rejection, `ArrayField` nested-array / outer-`choices`
+  rejection, `null=True` widening, and choice-enum registration into the
+  shared `(model, field_name)` cache. The contract matches the existing
+  relation-annotation override path (which also bypasses `convert_relation`
+  entirely) and treats annotation override as the consumer's escape from
+  auto-conversion. `Meta.exclude` and annotation override are now parallel
+  recourses for unsupported scalar fields. Cross-type cache behavior was
+  pinned by an explicit test: two `DjangoType`s on the same `choices=`
+  column where one overrides and one does not get the fresh enum from
+  the non-overriding type alone (the overriding type's GraphQL surface
+  uses the consumer's annotation; the cache is populated only by the
+  non-overriding type's `convert_scalar` call).
+- **`relay.Node` `id` collision rejected at type-creation time.** A consumer
+  who writes `id: <T>` (where `<T>` is not `relay.NodeID[...]`) or assigns
+  any `id = <StrawberryField>` on a `DjangoType` with
+  `Meta.interfaces = (relay.Node,)` now raises `ConfigurationError` from
+  `__init_subclass__`. The annotation-side error points at
+  `relay.NodeID[<pk_type>]` and `GlobalID`; the assigned-side error
+  points at `relay.NodeID[<pk_type>]`, `@classmethod resolve_id`, and a
+  **resolver-backed sibling-field workaround** (e.g.,
+  `@strawberry.field(description="…") def display_id(self) -> strawberry.ID: return str(self.pk)`
+  for the field-level GraphQL metadata use case — the rev4 M1 ban on
+  `id = <StrawberryField>` on Relay-Node-shaped types eliminated the
+  only path for attaching `description`/`deprecation_reason`/
+  `directives` to the Relay-supplied `id` field; rev6 M1 documented
+  the sibling-field workaround and rev7 M2 corrected the example
+  from the metadata-only `display_id: ID = strawberry.field(description="…")`
+  shape — which would build but fail at query time because Strawberry's
+  default resolver looks up `display_id` as an attribute on the
+  returned Django model instance — to the resolver-backed form that
+  carries the metadata AND defines a value source). Without the guard
+  the consumer would have seen a Strawberry-side `ValueError` only at
+  `strawberry.Schema(...)` construction, which obscured the source.
+  The guard is narrow: it fires only when the consumer authored an
+  `id` entry on a Relay-Node-shaped type AND the annotation is not a
+  `relay.NodeID[...]`-marked annotation. Detection uses
+  `typing.get_type_hints(cls, include_extras=True)` so direct, PEP
+  563 / `from __future__ import annotations`, and explicit-string
+  forms are all resolved against the consumer's module globals; the
+  fail-soft branch covers two sub-cases — id-itself-failed-to-
+  resolve (rev7 H1: accept only when the raw string matches the
+  token-shaped regex `(?:^|\.)NodeID\[`, so prefixed-substring
+  lookalikes like `"NotNodeID[int]"` are rejected) and id-resolved-
+  but-sibling-failed (rev6 H1: fall back to `_has_node_id_marker(raw)`
+  on the already-resolved object so directly-resolved `id:
+  relay.NodeID[int]` alongside a forward-referenced relation
+  annotation is accepted). The fail-soft accept window for unresolved
+  NodeID-shaped strings is package-level suppression only; Strawberry's
+  downstream schema construction also resolves the string and may
+  still error if the consumer's module globals don't expose `relay`
+  (rev7 H1). `id: relay.NodeID[int]` and `id: "relay.NodeID[int]"`
+  (the documented escape hatch in direct and stringified forms, with
+  `relay` importable at module scope) are accepted end-to-end; non-
+  `id` consumer scalar overrides (e.g., `description: int`, or `code:
+  str` on a model with `code` as pk) pass through unchanged;
+  **inherited `id` annotations on a subclass slip past the guard at
+  class-creation time and are silently handled by `_build_annotations`'s
+  pk-suppression branch** (rev6 L1 + rev7 M1: the guard does not
+  walk the MRO, but pk-suppression strips the synthesized `id`
+  annotation for any Relay-Node-shaped type and the post-merge
+  reassignment leaves the child without an `id` key; Strawberry
+  applies the Relay-supplied `id: GlobalID!` and `resolve_id_attr()`
+  falls back to `"pk"` — schema construction succeeds).
+- No new public API. No `Meta.field_overrides = {...}`-style key. Opt-out
+  / removal continues to go through `Meta.exclude`. Field description /
+  deprecation / default continues to go through the assigned
+  `strawberry.field(...)` path that shipped in `0.0.5`.
+- 100% coverage was reached across `tests/types/test_definition_order.py`
+  (the override-contract host, where the core + Relay-collision +
+  cross-type-cache tests live) and `tests/types/test_converters.py`
+  (the converter test host, where the nested-`ArrayField` bypass test
+  lives by default per the rev6 L3 placement decision).
+
+Design notes carried into `0.0.6`:
+
+- The four `consumer_*_fields` sets on `DjangoTypeDefinition`
+  (`consumer_annotated_relation_fields`, `consumer_assigned_relation_fields`,
+  `consumer_annotated_scalar_fields`, `consumer_assigned_scalar_fields`) are
+  the introspection surface. The unified `consumer_authored_fields` is the
+  single short-circuit input for `_build_annotations`.
+- Resolver / metadata overrides for scalars stay on the assigned
+  `strawberry.field(...)` path — the consumer writes
+  `description = strawberry.field(resolver=..., description="...", deprecation_reason=...)`
+  and `_consumer_assigned_fields` already routes it through the
+  `consumer_assigned_scalar_fields` short-circuit. Field-level GraphQL
+  metadata on the Relay-supplied `id` field is **not** configurable in
+  `0.0.6` (the rev4 M1 / rev6 M1 / rev7 M2 assigned-`id` ban applies
+  uniformly); the documented workaround is a **resolver-backed sibling
+  field** (`@strawberry.field(description="…") def display_id(self) ->
+  strawberry.ID: return str(self.pk)`) carrying both the metadata and
+  a value source.
+- Type-annotation overrides are the consumer's responsibility for runtime
+  correctness. `description: int` against a `CharField` will surface a
+  Strawberry-side serialization error at query time if the database returns
+  a non-integer value; the package does not pre-check annotation/field-type
+  compatibility (out of scope for this card).
 
 ### DONE-013-0.0.6 — Deferred scalar conversions
 

@@ -98,7 +98,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
 | [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.12` |
 | [Scalar field conversion](#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [Scalar field override semantics](#scalar-field-override-semantics) | planned for `0.0.6` |
+| [Scalar field override semantics](#scalar-field-override-semantics) | shipped (`0.0.6`) |
 | [Schema audit](#schema-audit) | shipped (`0.0.3`) |
 | [Schema export management command](#schema-export-management-command) | planned for `0.0.7` |
 | [`SerializerMutation`](#serializermutation) | planned for `0.0.11` |
@@ -238,7 +238,7 @@ Supported forward-reference / manual relation shapes:
 
 Unresolved relation targets fail during finalization with an error that names the source model, source field, and target model. The most common cause is that the Python module containing the target `DjangoType` was never imported before finalization.
 
-Validation that a manual relation annotation matches the Django relation cardinality is deferred. Manual scalar-field override semantics remain an implementation detail until [Scalar field override semantics](#scalar-field-override-semantics) ships.
+Validation that a manual relation annotation matches the Django relation cardinality is deferred.
 
 **See also:** [`finalize_django_types`](#finalize_django_types) · [`DjangoType`](#djangotype) · [Relation handling](#relation-handling).
 
@@ -876,7 +876,7 @@ Shipped scalar support:
 - `null=True` → `T | None`
 - Relay `GlobalID` mapping for auto IDs when [`Meta.interfaces = (relay.Node,)`](#metainterfaces) is declared
 
-**Subclass MRO walk.** Consumer subclasses of any supported Django field class (e.g., `class TrimmedCharField(models.CharField)`, third-party encrypted / money fields) resolve to the parent's annotation automatically — the converter walks `type(field).__mro__` until it matches, so subclasses inherit without explicit registration. Subclasses whose MRO contains no registered Django field class raise [`ConfigurationError`](#configurationerror) at type creation (with `Meta.exclude` named as the consumer recourse).
+**Subclass MRO walk.** Consumer subclasses of any supported Django field class (e.g., `class TrimmedCharField(models.CharField)`, third-party encrypted / money fields) resolve to the parent's annotation automatically — the converter walks `type(field).__mro__` until it matches, so subclasses inherit without explicit registration. Subclasses whose MRO contains no registered Django field class raise [`ConfigurationError`](#configurationerror) at type creation (with [`Meta.exclude`](#metaexclude) or a consumer annotation override — see [Scalar field override semantics](#scalar-field-override-semantics) — named as the consumer recourses).
 
 Choice support is documented separately under [Choice enum generation](#choice-enum-generation).
 
@@ -884,9 +884,17 @@ Choice support is documented separately under [Choice enum generation](#choice-e
 
 ## Scalar field override semantics
 
-**Status:** planned for `0.0.6`.
+**Status:** shipped (`0.0.6`).
 
-The stable contract layer for consumer-authored scalar field overrides, parallel to the shipped relation-override contract from `0.0.4`. Today consumers can override relation fields via annotation-only or `strawberry.field(resolver=...)` patterns; scalar field overrides remain an implementation detail until this card promotes the contract.
+The four-corner override matrix is now complete: annotation-only and assigned-`strawberry.field` scalar overrides land alongside the matching annotation-only and assigned-`strawberry.field` relation overrides. The consumer's annotation or assigned field wins over the auto-synthesized one via the unified `consumer_authored_fields` short-circuit in `DjangoType.__init_subclass__` and `_build_annotations`.
+
+Opt-out continues via [`Meta.exclude`](#metaexclude); field-level metadata (description, deprecation, default) continues through the assigned `strawberry.field(...)` path that shipped in `0.0.5`.
+
+**Converter validations are bypassed for overridden fields.** `_build_annotations`'s scalar short-circuit skips every `convert_scalar` validation and side effect for an overridden field, so the consumer's annotation is authoritative. Three behavior changes worth highlighting: (a) an unsupported scalar field — for example an `IntegerField` subclass whose MRO contains no registered ancestor that would otherwise raise [`ConfigurationError`](#configurationerror) — is overrideable now; (b) a grouped-choices field declared as `choices=[("g1", [...])]` that would otherwise raise is overrideable now; (c) a nested `ArrayField(ArrayField(...))` that would otherwise raise is overrideable now. [`Meta.exclude`](#metaexclude) and annotation override are now parallel consumer recourses for unsupported scalar fields (see [Scalar field conversion](#scalar-field-conversion)).
+
+**`relay.Node` `id` collision rejected at type-creation time.** Two sub-restrictions: (1) assigned `id = <StrawberryField>` overrides are uniformly rejected on Relay-Node-shaped types; the supported alternatives are `relay.NodeID[<pk_type>]` for a custom id annotation, `@classmethod resolve_id` for a custom id resolver, and a **resolver-backed sibling field** — `@strawberry.field(description="…") def display_id(self) -> strawberry.ID: return str(self.pk)` — for the field-level GraphQL metadata use case. A metadata-only sibling such as `display_id: ID = strawberry.field(description="…")` without a resolver would build but fail at query time because Strawberry's default resolver looks up `display_id` as an attribute on the returned Django model instance. (2) Inherited `id` annotations on a Relay-Node-shaped subclass slip past the guard at class-creation time and are silently handled by `_build_annotations`'s pk-suppression branch — Strawberry sees no `id` annotation on the child, applies the Relay-supplied `id: GlobalID!`, and `resolve_id_attr()` falls back to `"pk"`. Annotation `id: relay.NodeID[...]` is accepted in direct, PEP 563 / stringified, and mixed (resolved-id-with-unresolved-sibling) forms; non-`id` overrides are accepted unchanged.
+
+**Field-level GraphQL metadata on the Relay-supplied `id` field is not configurable in `0.0.6`.** The documented workaround is the resolver-backed sibling field named above; a metadata-only sibling without a resolver is NOT recommended.
 
 **See also:** [`DjangoType`](#djangotype) · [Definition-order independence](#definition-order-independence).
 

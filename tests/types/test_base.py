@@ -441,39 +441,6 @@ def test_meta_exclude_filters_concrete_fields():
     assert {"id", "name", "is_private", "created_date"} <= set(a)
 
 
-@pytest.mark.skip(
-    reason=(
-        "Deferred scalar-field override behavior: Strawberry's @strawberry.type "
-        "decorator regenerates cls.__annotations__ from its own field metadata "
-        "after our merge in DjangoType.__init_subclass__, so the consumer's "
-        "class-level scalar annotation loses to the synthesized one. This is "
-        "unrelated to the 0.0.4 relation-override contract, which is pinned in "
-        "tests/types/test_definition_order.py."
-    ),
-)
-# TODO(spec-015 Slice 2, rev6 L3 — delete is the default):
-# After Slice 1 lands, delete this entire block — the @pytest.mark.skip
-# decorator at tests/types/test_base.py:444-453 AND the test body at
-# :459-470 (rename to match the actual line numbers in the post-Slice-1
-# diff). Slice 1 supersedes it with
-# test_annotation_only_scalar_field_override_wins_over_synthesized in
-# tests/types/test_definition_order.py (plus 18 sibling tests). After
-# the delete, grep for CATEGORY_SCALAR_FIELDS — drop its definition
-# too if no other test imports it.
-def test_consumer_annotation_overrides_synthesized():
-    """A consumer-declared annotation wins over the auto-mapped type."""
-
-    class CategoryType(DjangoType):
-        # Illustrative override (str -> int); not idiomatic but exercises the merge.
-        description: int
-
-        class Meta:
-            model = Category
-            fields = CATEGORY_SCALAR_FIELDS
-
-    assert CategoryType.__annotations__["description"] is int
-
-
 # ---------------------------------------------------------------------------
 # Slice 2 — Strawberry finalization
 # ---------------------------------------------------------------------------

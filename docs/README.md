@@ -99,6 +99,7 @@ A quick summary:
 - `OptimizerHint` — per-relation overrides (`SKIP`, `select_related`, `prefetch_related`, custom `Prefetch`)
 - model / type registry and `auto` re-export from Strawberry
 - `Meta.primary` — multiple `DjangoType` subclasses per Django model with explicit primary-flag opt-in
+- annotation-only and `strawberry.field` consumer overrides for scalar fields, symmetric with the shipped relation-override contract (consumer overrides bypass `convert_scalar` validations; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time)
 
 **Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
 - `DjangoListField` (non-Relay list) and `DjangoConnectionField` (Relay connection)

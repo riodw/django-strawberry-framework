@@ -1037,38 +1037,28 @@ def test_array_field_multidim_rejected_via_fake_sentinel(monkeypatch):
                 fields = ("arr",)
 
 
-# TODO(spec-015 Slice 1, rev6 L3 — placement in test_converters.py):
-# Add test_annotation_override_of_arrayfield_with_nested_array_is_allowed
-# here, beside the nested-ArrayField rejection test above. This is the
-# ONLY Slice 1 test that lives in test_converters.py (not in
-# test_definition_order.py) — the _FakeArrayField fixture is local
-# here. The other 18 Slice 1 tests live in test_definition_order.py.
-#
-# Recipe (rev4 L2 — model-field name MUST match consumer-annotation name):
-#
-#     def test_annotation_override_of_arrayfield_with_nested_array_is_allowed(
-#         monkeypatch,
-#     ):
-#         monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
-#
-#         class NestedArrayOverrideOwner(models.Model):
-#             arr = _FakeArrayField(_FakeArrayField(models.IntegerField()))
-#             class Meta:
-#                 managed = False
-#                 app_label = "test_arrayfield"
-#
-#         class NestedArrayOverrideOwnerType(DjangoType):
-#             arr: list[list[int]]  # MUST be "arr" — see rev4 L2
-#             class Meta:
-#                 model = NestedArrayOverrideOwner
-#                 fields = ("arr",)
-#
-#         finalize_django_types()  # succeeds — the override bypasses
-#                                  # convert_scalar's nested-array rejection
-#
-# Pins Decision 7a's H2 converter-bypass contract for nested ArrayField.
-# Verify the existing nested-ArrayField rejection test above still passes
-# (un-overridden nested arrays continue to raise).
+def test_annotation_override_of_arrayfield_with_nested_array_is_allowed(monkeypatch):
+    """Consumer ``arr: list[list[int]]`` annotation bypasses nested-ArrayField rejection."""
+    monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
+
+    class NestedArrayOverrideOwner(models.Model):
+        arr = _FakeArrayField(_FakeArrayField(models.IntegerField()))
+
+        class Meta:
+            managed = False
+            app_label = "test_arrayfield"
+
+    class NestedArrayOverrideOwnerType(DjangoType):
+        arr: list[list[int]]
+
+        class Meta:
+            model = NestedArrayOverrideOwner
+            fields = ("arr",)
+
+    finalize_django_types()
+    assert NestedArrayOverrideOwnerType.__annotations__["arr"] == list[list[int]]
+
+
 def test_array_field_choices_inner_via_fake_sentinel(monkeypatch):
     """``ArrayField(CharField(choices=...))`` produces ``list[<TypeName><FieldName>Enum]``.
 

@@ -25,11 +25,14 @@ triggers the collection pipeline, which:
    pass.
 """
 
+import re
+import typing
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar
 
 from django.db import models
 from strawberry import relay
+from strawberry.relay.types import NodeIDPrivate
 from strawberry.types.field import StrawberryField
 
 from ..exceptions import ConfigurationError
@@ -66,6 +69,77 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
 )
 
 
+_NODEID_STRING_RE = re.compile(r"(?:^|\.)NodeID\[")
+
+
+def _has_node_id_marker(hint: object) -> bool:
+    """Return True when ``hint`` is ``Annotated[T, NodeIDPrivate()]``.
+
+    In the installed Strawberry, ``relay.NodeID[T]`` IS
+    ``typing.Annotated[T, NodeIDPrivate()]`` — the explicit ``Annotated``
+    form and the ``relay.NodeID`` sugar collapse to the same shape, so
+    ``typing.get_origin`` returns ``typing.Annotated`` for both and the
+    ``NodeIDPrivate`` instance lives in ``typing.get_args(...)``'s
+    metadata slot.
+    """
+    return typing.get_origin(hint) is Annotated and any(
+        isinstance(arg, NodeIDPrivate) for arg in typing.get_args(hint)
+    )
+
+
+def _id_annotation_is_relay_node_id(cls: type) -> bool:
+    r"""Return True when ``cls.__annotations__['id']`` resolves to ``relay.NodeID[...]``.
+
+    Uses ``typing.get_type_hints(cls, include_extras=True)`` so
+    stringified annotations (``from __future__ import annotations`` or
+    explicit string annotations like ``id: "relay.NodeID[int]"``)
+    evaluate against the consumer's module globals; ``include_extras``
+    preserves the ``Annotated[T, NodeIDPrivate]`` marker.
+
+    Fail-soft: ``typing.get_type_hints`` evaluates every annotation on
+    ``cls`` and walks the MRO. A single unresolved string annotation
+    anywhere on the class trips ``NameError``/``AttributeError`` even
+    when ``id`` itself resolves cleanly. Two fail-soft sub-cases:
+
+    1. ``id`` itself failed to resolve. ``cls.__annotations__["id"]``
+       is the raw string the consumer wrote. Accept only when the
+       string matches ``(?:^|\.)NodeID\[`` — qualified
+       (``"relay.NodeID[int]"``) and unqualified (``"NodeID[int]"``)
+       forms pass; prefixed-substring lookalikes (``"NotNodeID[int]"``,
+       ``"MyNodeID[int]"``) and non-NodeID typos
+       (``"MissingType"``) are rejected.
+    2. Some other annotation tripped the exception but ``id`` is
+       directly resolved. ``cls.__annotations__["id"]`` is the
+       ``Annotated[int, NodeIDPrivate]`` object, not a string; fall
+       back to ``_has_node_id_marker(raw)`` on the resolved object.
+    """
+    try:
+        hints = typing.get_type_hints(cls, include_extras=True)
+    except (NameError, AttributeError):
+        raw = cls.__annotations__.get("id")
+        if isinstance(raw, str):
+            return bool(_NODEID_STRING_RE.search(raw))
+        return _has_node_id_marker(raw)
+    id_hint = hints.get("id")
+    if id_hint is None:
+        return False
+    return _has_node_id_marker(id_hint)
+
+
+def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:
+    """Return True when ``cls`` or any entry in ``interfaces`` is a Relay-Node-shaped type.
+
+    Single source of truth for the predicate that drives both the H1
+    Relay ``id`` collision guard at ``DjangoType.__init_subclass__`` and
+    the synthesized-``id``-annotation suppression branch in
+    ``_build_annotations``. Both call sites compute the same boolean
+    from the same inputs at different timings (class-creation-time vs.
+    annotation-synthesis-time); centralizing the predicate keeps the
+    Relay-shape contract single-sited.
+    """
+    return any(issubclass(i, relay.Node) for i in interfaces) or issubclass(cls, relay.Node)
+
+
 class DjangoType:
     """Base class for Django-model-backed Strawberry GraphQL types."""
 
@@ -95,23 +169,9 @@ class DjangoType:
         consumer_annotated_relation_fields = frozenset(
             field.name for field in fields if field.is_relation and field.name in consumer_annotations
         )
-        # TODO(spec-015 Slice 1, Decision 1 — annotation-only scalar override collection):
-        # Mirror the relation collection above for scalars. Exact shape:
-        #
-        #     consumer_annotated_scalar_fields = frozenset(
-        #         field.name for field in fields
-        #         if not field.is_relation and field.name in consumer_annotations
-        #     )
-        #
-        # Three downstream wires:
-        #   1. Union into consumer_authored_fields below (add a fourth
-        #      splat entry next to the existing three).
-        #   2. Plumb through to DjangoTypeDefinition(...) at the
-        #      registration call below (line ~150) — passes alongside the
-        #      existing three consumer_*_fields kwargs.
-        #   3. No _build_annotations body change — its scalar branch
-        #      already short-circuits on consumer_authored_fields
-        #      membership (base.py:644 pre-Slice-1).
+        consumer_annotated_scalar_fields = frozenset(
+            field.name for field in fields if not field.is_relation and field.name in consumer_annotations
+        )
         consumer_assigned_relation_fields, consumer_assigned_scalar_fields = _consumer_assigned_fields(
             cls.__dict__,
             fields,
@@ -119,92 +179,37 @@ class DjangoType:
         consumer_authored_fields = frozenset(
             {
                 *consumer_annotated_relation_fields,
+                *consumer_annotated_scalar_fields,
                 *consumer_assigned_relation_fields,
                 *consumer_assigned_scalar_fields,
             },
         )
-        # TODO(spec-015 Slice 1, Decision 7 — Relay id collision guard):
-        # Fires here, after consumer_authored_fields is built (above) and
-        # before _build_annotations (below). Helpers live at module scope
-        # — see Decision 7 pseudocode block in the spec for the full body.
-        #
-        # Module-level imports to add at the top of this file:
-        #     import re
-        #     import typing
-        #     from typing import Annotated
-        #     from strawberry.relay.types import NodeIDPrivate
-        # (StrawberryField is already imported; ConfigurationError too.)
-        #
-        # Module-scope helpers to add above DjangoType (rev8 M1 — DO NOT
-        # nest these inside the function; _NODEID_STRING_RE must compile
-        # once per process, and _has_node_id_marker is used by both the
-        # try-success and except-fallback branches):
-        #
-        #     _NODEID_STRING_RE = re.compile(r"(?:^|\.)NodeID\[")
-        #
-        #     def _has_node_id_marker(hint: object) -> bool:
-        #         # In the installed Strawberry, relay.NodeID[T] IS
-        #         # Annotated[T, NodeIDPrivate()]; both forms collapse to
-        #         # the same shape — there is no separate get_origin
-        #         # branch (rev8 M1 corrected the rev7 framing).
-        #         return (
-        #             typing.get_origin(hint) is Annotated
-        #             and any(
-        #                 isinstance(arg, NodeIDPrivate)
-        #                 for arg in typing.get_args(hint)
-        #             )
-        #         )
-        #
-        #     def _id_annotation_is_relay_node_id(cls: type) -> bool:
-        #         try:
-        #             hints = typing.get_type_hints(cls, include_extras=True)
-        #         except (NameError, AttributeError):
-        #             raw = cls.__annotations__.get("id")
-        #             if isinstance(raw, str):
-        #                 return bool(_NODEID_STRING_RE.search(raw))
-        #             return _has_node_id_marker(raw)
-        #         # Success path lives INSIDE the helper, after the except
-        #         # block (rev8 M1 — rev7 dangled this at module scope):
-        #         id_hint = hints.get("id")
-        #         if id_hint is None:
-        #             return False
-        #         return _has_node_id_marker(id_hint)
-        #
-        # Guard body (rev8 H1 — both relay-shaped declaration styles):
-        #
-        #     relay_shaped = (
-        #         any(issubclass(i, relay.Node) for i in interfaces)
-        #         or issubclass(cls, relay.Node)  # rev8 H1: direct subclass
-        #     )
-        #     if relay_shaped:
-        #         has_id_assignment = isinstance(
-        #             cls.__dict__.get("id"), StrawberryField,
-        #         )
-        #         has_id_annotation = "id" in cls.__annotations__  # rev4 M2
-        #         if has_id_assignment:
-        #             raise ConfigurationError(
-        #                 f"{cls.__name__}: cannot override id on a Relay-"
-        #                 "Node-shaped type with an assigned strawberry."
-        #                 "field. Use @classmethod resolve_id, "
-        #                 "id: relay.NodeID[<pk_type>], or a resolver-"
-        #                 "backed sibling field "
-        #                 "(@strawberry.field(description=...) def "
-        #                 "display_id(self) -> strawberry.ID: "
-        #                 "return str(self.pk)) for field metadata; or "
-        #                 "remove relay.Node from Meta.interfaces.",
-        #             )
-        #         if has_id_annotation and not _id_annotation_is_relay_node_id(cls):
-        #             raise ConfigurationError(
-        #                 f"{cls.__name__}: cannot override id on a Relay-"
-        #                 "Node-shaped type without strawberry.relay."
-        #                 "NodeID[...]. Relay supplies id: GlobalID!; use "
-        #                 "relay.NodeID[<pk_type>] for a custom id shape "
-        #                 "or remove relay.Node from Meta.interfaces.",
-        #             )
-        #
-        # The 11 Slice 1 Relay-collision tests (5 reject + 6 accept) live
-        # in tests/types/test_definition_order.py — see the TODO there
-        # for the full test list with the rev8 M2 unresolved-string recipe.
+        relay_shaped = _is_relay_shaped(cls, interfaces)
+        if relay_shaped:
+            has_id_assignment = isinstance(cls.__dict__.get("id"), StrawberryField)
+            has_id_annotation = "id" in cls.__annotations__
+            if has_id_assignment:
+                raise ConfigurationError(
+                    f"{cls.__name__}: cannot override the id field on a "
+                    "relay.Node-shaped type with an assigned strawberry.field. "
+                    "Use @classmethod resolve_id for a custom id resolver, "
+                    "id: relay.NodeID[<pk_type>] for a custom id annotation, "
+                    "or declare a resolver-backed sibling field — e.g., "
+                    "`@strawberry.field(description=...) def display_id(self) -> "
+                    "strawberry.ID: return str(self.pk)` — if you only need "
+                    "GraphQL field-level metadata on a custom identifier "
+                    "(a metadata-only sibling without a resolver builds but "
+                    "fails at query time); "
+                    "or remove relay.Node from Meta.interfaces.",
+                )
+            if has_id_annotation and not _id_annotation_is_relay_node_id(cls):
+                raise ConfigurationError(
+                    f"{cls.__name__}: cannot override the id field on a "
+                    "relay.Node-shaped type without using strawberry.relay.NodeID[...]. "
+                    "The Relay interface supplies id: GlobalID! — declare the id "
+                    "field via relay.NodeID[<pk_type>] if you need a different id "
+                    "shape, or remove relay.Node from Meta.interfaces.",
+                )
         synthesized, pending = _build_annotations(
             cls,
             fields,
@@ -226,6 +231,7 @@ class DjangoType:
             has_custom_get_queryset=has_custom_get_queryset,
             consumer_authored_fields=consumer_authored_fields,
             consumer_annotated_relation_fields=consumer_annotated_relation_fields,
+            consumer_annotated_scalar_fields=consumer_annotated_scalar_fields,
             consumer_assigned_relation_fields=consumer_assigned_relation_fields,
             consumer_assigned_scalar_fields=consumer_assigned_scalar_fields,
             interfaces=interfaces,
@@ -307,15 +313,34 @@ def _consumer_assigned_fields(
     class_dict: dict[str, Any],
     fields: tuple[Any, ...],
 ) -> tuple[frozenset[str], frozenset[str]]:
-    # TODO(spec-015 Slice 3 — docstring polish, documentation-only):
-    # After Slice 1 lands, name the four override-routing sets in this
-    # docstring: consumer_annotated_relation_fields and
-    # consumer_annotated_scalar_fields (collected by __init_subclass__
-    # walking cls.__annotations__) plus consumer_assigned_relation_fields
-    # and consumer_assigned_scalar_fields (this function's return).
-    # Their union is consumer_authored_fields, the single short-circuit
-    # input for _build_annotations. No behavior change in this slice.
     """Return (relation, scalar) names assigned to explicit Strawberry field objects.
+
+    One of four collection sites that together pin the consumer-override
+    contract for ``DjangoType``. The four corners are:
+
+    - **relation × annotation** — ``consumer_annotated_relation_fields``,
+      collected at ``DjangoType.__init_subclass__`` by walking
+      ``cls.__annotations__`` for names that match a selected relation
+      field. Honours a consumer-written ``items: list["AdminItemType"]``-
+      style annotation.
+    - **relation × assigned** — ``consumer_assigned_relation_fields``,
+      this function's first return value. Honours a consumer-written
+      ``items = strawberry.field(resolver=...)`` assignment on a relation
+      column.
+    - **scalar × annotation** — ``consumer_annotated_scalar_fields``,
+      collected in the same ``__init_subclass__`` walk. Honours a
+      consumer-written ``description: int``-style annotation override on
+      a scalar column.
+    - **scalar × assigned** — ``consumer_assigned_scalar_fields``, this
+      function's second return value. Honours a consumer-written
+      ``description = strawberry.field(resolver=...)`` assignment on a
+      scalar column.
+
+    The four sets are stored on ``DjangoTypeDefinition`` as the
+    introspection surface. Their union, ``consumer_authored_fields``, is
+    the single short-circuit input that ``_build_annotations`` reads at
+    its relation branch and its scalar branch to skip auto-synthesis for
+    any name the consumer authored.
 
     Walks every selected Django field, not just relations. A consumer
     who writes ``name = strawberry.field(resolver=...)`` on a scalar
@@ -656,11 +681,13 @@ def _build_annotations(
     ``PendingRelationAnnotation``; ``finalize_django_types()`` resolves
     them through ``registry.get(...)`` after every type has registered
     so multi-type / primary semantics apply uniformly. Consumer-authored
-    relation fields (annotation overrides and assigned
-    ``strawberry.field`` objects) short-circuit out of the synthesis
-    loop before the deferral path runs. The caller pre-computes the
-    field list with ``_select_fields(meta)`` so this function does not
-    need ``meta``.
+    fields short-circuit out of the synthesis loop on both branches: a
+    name in ``consumer_authored_fields`` skips relation deferral at the
+    ``field.is_relation`` branch and skips ``convert_scalar`` at the
+    scalar branch. See ``_consumer_assigned_fields`` for the four-corner
+    override contract that populates ``consumer_authored_fields``. The
+    caller pre-computes the field list with ``_select_fields(meta)`` so
+    this function does not need ``meta``.
 
     When ``relay.Node`` appears in ``interfaces``, the primary-key field's
     synthesized scalar annotation is dropped from the returned dict so
@@ -713,7 +740,7 @@ def _build_annotations(
     # interface class, and a consumer subclass like
     # ``@strawberry.interface class CustomNode(relay.Node)`` is the
     # canonical way to extend Relay-Node behavior.
-    suppress_pk_annotation = any(issubclass(i, relay.Node) for i in interfaces) or issubclass(cls, relay.Node)
+    suppress_pk_annotation = _is_relay_shaped(cls, interfaces)
     # ``pk_name`` (not ``pk_attname``): ``_meta.pk.name`` is the Django
     # field NAME, not the column attname. For a relation primary key
     # (``OneToOneField(primary_key=True)``) those differ — ``name="user"``

@@ -1191,9 +1191,9 @@ def test_unregister_keeps_siblings_intact_in_multi_type_case(fresh_registry):
     """``unregister`` of one type for a model leaves siblings registered.
 
     When the unregistered type was the primary, the model loses its
-    primary slot — the caller is expected to ``set_primary`` a sibling
-    if needed. Siblings stay in ``types_for`` in their original
-    registration order.
+    primary slot — the caller is responsible for re-declaring a primary
+    via a fresh registration cycle. Siblings stay in ``types_for`` in
+    their original registration order.
     """
 
     class ItemTypeA:

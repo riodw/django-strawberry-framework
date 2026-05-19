@@ -334,7 +334,7 @@ tests/                       # Package-internal tests (current state)
 │   ├── __init__.py
 │   ├── test_base.py         # ← DjangoType + Meta validation + scalar/relation synthesis
 │   ├── test_converters.py   # ← convert_scalar / convert_relation / convert_choices_to_enum
-│   ├── test_definition_order.py        # ← definition-order-independent relation finalization
+│   ├── test_definition_order.py        # ← consumer override contract (four-corner matrix) + definition-order-independent relation finalization
 │   ├── test_definition_order_schema.py # ← schema-build / strawberry.type decoration interactions
 │   ├── test_generic_foreign_key.py     # ← GenericForeignKey rejection contract
 │   ├── test_relay_interfaces.py        # ← Meta.interfaces + Relay Node wiring

@@ -22,7 +22,7 @@ Worker 0 may edit:
 
 - `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`
 - `docs/builder/worker-memory/worker-0.md`
-- `docs/builder/worker-memory/` at plan-creation time (create the directory if missing; (re-)seed four empty files truncating any prior-build content). Worker 0 does NOT delete the directory at closeout — it persists on disk as the maintainer's reference and is re-seeded at the next build's plan time.
+- `docs/builder/worker-memory/` at plan-creation time, after the `BUILD.md` pre-flight cleanup has deleted prior-build memory (create the directory if missing; seed four empty files).
 - `docs/builder/BUILD.md` and `docs/builder/worker-*.md` only for closeout retrospective improvements after maintainer approval
 
 Worker 0 must not:
@@ -61,13 +61,13 @@ Create the active build plan from the spec. Version-bump correctness is the main
 5. Add `bld-slice-<N>-<slug>.md` artifacts for every spec slice.
 6. Add `docs/builder/bld-integration.md` and `docs/builder/bld-final.md`.
 7. Leave every checkbox unchecked.
-8. Create `docs/builder/worker-memory/` and seed four empty files:
+8. After the `BUILD.md` pre-flight cleanup has deleted old build artifacts and cleared `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/`, create `docs/builder/worker-memory/` and seed four empty files:
    - `docs/builder/worker-memory/worker-0.md`
    - `docs/builder/worker-memory/worker-1.md`
    - `docs/builder/worker-memory/worker-2.md`
    - `docs/builder/worker-memory/worker-3.md`
 
-   The directory and files are gitignored. They persist across slices within this build, and after closeout they remain on disk as the maintainer's reference. The next build's plan-creation step (this section) re-seeds the four files empty.
+   The directory and files are gitignored. They persist only across slices within this build. The next build's pre-flight cleanup clears them before any worker reads memory for the new cycle.
 
 ## Per-slice dispatch
 
@@ -140,7 +140,7 @@ After all build-plan checkboxes are complete:
 4. Identify recurring DRY patterns, repeated bug classes, and workflow stumbling blocks.
 5. Provide final feedback to the maintainer.
 6. Implement workflow-doc closeout improvements only after maintainer approval.
-7. Leave `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/` on disk. These gitignored directories persist across builds; the next cycle's plan-creation step re-seeds the memory files, and the helper / Worker 3 repopulate shadow / temp-tests as needed.
+7. Delete `docs/builder/shadow/` contents and `docs/builder/temp-tests/` contents after the retrospective is complete. Worker memory may remain until the retrospective is finished, but it is scratch state; the next build's pre-flight cleanup clears it before Worker 0 seeds fresh memory files.
 
 Retrospective notes must stay general. Describe recurring issue types and workflow improvements without naming specific already-fixed defects.
 

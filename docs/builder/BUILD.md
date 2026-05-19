@@ -29,7 +29,7 @@ The standing worker instructions live beside this overview:
 - [Worker 2: builder / implementer](worker-2.md)
 - [Worker 3: code reviewer and DRY enforcer](worker-3.md)
 
-Permanent workflow files under `docs/builder/` are tracked: `BUILD.md`, `worker-*.md`, `build-*.md`, and every `bld-*.md` build artifact. They are committed to git and kept as the permanent record of the build cycle. The only intentionally untracked paths are generated scratch directories: `docs/builder/shadow/`, `docs/builder/worker-memory/`, and `docs/builder/temp-tests/`.
+Standing workflow files under `docs/builder/` are tracked: `BUILD.md` and `worker-*.md`. Per-build plans and artifacts (`build-*.md` and `bld-*.md`) are tracked only for the active build cycle and must start from a clean slate; before a new build starts, delete any old build-plan or build-artifact files that remain from a prior cycle. The only intentionally untracked paths are generated scratch directories: `docs/builder/shadow/`, `docs/builder/worker-memory/`, and `docs/builder/temp-tests/`.
 
 `AGENTS.md` and `START.md` still apply during build runs. This workflow adds the per-worker artifact discipline on top; it does not override standing validation, formatting, commit, or test-placement rules.
 
@@ -69,11 +69,11 @@ Before Worker 0 creates `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`, verify th
 
 1. **Working-tree baseline is explicit.** Run `git status --short` and record whether the tree is clean. If unrelated uncommitted changes exist, stop and ask the maintainer to commit them, move them aside, or explicitly include them in the build baseline before creating the plan. The slice diffs and review prompts are only useful when everyone agrees which changes predate the build.
 2. **`scripts/review_inspect.py` runs.** Smoke invocation from the repo root: `uv run python scripts/review_inspect.py <pick_a_dst_module>.py --output-dir docs/builder/shadow --stdout`. Confirm the overview prints and the shadow file lands. If the helper is broken, Worker 1's planning pass and Worker 3's review pass for any `types/`-touching or `optimizer/`-touching slice cannot run as specified — escalate to the maintainer before starting.
-3. **Planned artifact names are free.** The exact plan path and every `bld-*.md` path Worker 0 intends to create for this build must not already exist. Pre-existing root-level `bld-*.md` artifacts from an interrupted prior cycle should be committed (if part of an earlier build's permanent record) or moved aside before the new build starts. Never overwrite an existing build artifact.
+3. **Build artifacts are reset.** Before creating the new plan, delete any old `docs/builder/build-*.md` and `docs/builder/bld-*.md` files left from a prior cycle. Then verify the exact new plan path and every `bld-*.md` path Worker 0 intends to create for this build do not already exist. Never overwrite an existing build artifact in place; remove stale artifacts first, then create the new files.
 4. **`.gitignore` lists the untracked scratch paths.** Confirm `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/` are gitignored. Without this, Worker 0's seeded memory files, the helper's shadow output, and Worker 3's temp tests would accidentally enter git tracking.
-5. **Scratch directories are fresh or intentionally cleared.** `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/` should not contain stale files from a prior cycle. Worker 0 creates `worker-memory/` at plan time; the helper recreates `shadow/` as needed; Worker 3 may create `temp-tests/` during review. Delete stale ignored scratch files only after confirming nothing tracked or manually important is being lost.
+5. **Scratch directories are cleared.** Delete every file under `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/` before the new build plan is created. This clears all prior worker memory, removes stale static-inspection shadow output, and removes Worker 3 temp-test files. Recreate the directories if needed; Worker 0 seeds fresh empty memory files at plan time, the helper recreates `shadow/` output as needed, and Worker 3 recreates `temp-tests/` during review when useful.
 
-Record the outcome in the build plan's preamble (`Pre-flight: passed on YYYY-MM-DD; baseline: clean` or `Pre-flight: <issue>, resolved by <action>; baseline: <summary>`). If any check fails and can't be resolved without maintainer input, escalate before creating the build plan.
+Record the outcome in the build plan's preamble (`Pre-flight: passed on YYYY-MM-DD; baseline: clean; cleanup: old artifacts removed, memory/shadow/temp-tests cleared` or `Pre-flight: <issue>, resolved by <action>; baseline: <summary>; cleanup: <summary>`). If any check fails and can't be resolved without maintainer input, escalate before creating the build plan.
 
 ## Versioned build plan
 
@@ -82,7 +82,7 @@ Worker 0 is **handed** the active spec file (e.g. `docs/spec-<NNN>-<topic>-<0_0_
 1. Read the active spec file at `docs/spec-<NNN>-<topic>-<0_0_X>.md`.
 2. Identify the spec's topic slug and target release version from the spec itself; convert the target release dots to underscores (e.g. `0.0.5` becomes `0_0_5`). Version-bump correctness is the maintainer's responsibility — Worker 0 does not validate `pyproject.toml`, `__init__.py`, or the shipped-status of the target version.
 3. Create `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`. For a spec at `docs/spec-NNN-example_topic-0_0_X.md`, this is `docs/builder/build-NNN-example_topic-0_0_X.md`.
-4. The plan file is the canonical checklist for the whole build and is committed alongside the implementation changes. It is kept in git as the permanent record of the cycle.
+4. The plan file is the canonical checklist for the whole build and is committed alongside the implementation changes for that cycle. Later cleanup may delete it from the working tree before the next build; git history remains the durable record.
 
 If the spec is missing, malformed, or its slice checklist cannot be parsed, stop and record that mismatch in the plan before any slice work starts.
 
@@ -169,7 +169,7 @@ Use the actual slice list from the spec when creating the plan. Do not invent sl
 
 ## Build artifact naming
 
-Per-slice, integration, and final build artifacts are tracked Markdown files under `docs/builder/`. They are committed alongside the source changes they describe and form a permanent record of the build cycle.
+Per-slice, integration, and final build artifacts are tracked Markdown files under `docs/builder/` for the active cycle. They are committed alongside the source changes they describe, then treated as old build artifacts at the next build's pre-flight cleanup. Git history is the durable record; the working tree starts each new build without stale `bld-*.md` files.
 
 Naming rules:
 
@@ -534,7 +534,7 @@ Each worker keeps a private scratch memory file that **persists across slices wi
 - `docs/builder/worker-memory/worker-2.md` — Worker 2's implementation notebook
 - `docs/builder/worker-memory/worker-3.md` — Worker 3's review notebook
 
-These files are gitignored. Worker 0 creates the directory at plan time and (re-)seeds the four files empty, truncating any prior-build content. The directory persists after closeout — the files stay on disk as the workers' own running record, available for the maintainer to inspect later. The tracked permanent record is the `bld-*.md` artifacts and the spec edits, not these notes.
+These files are gitignored. Worker 0 creates the directory at plan time and seeds the four files empty after the pre-flight cleanup has deleted any prior-build memory. Worker memory persists only within a single build cycle. It is never carried into a later build; the next build's pre-flight cleanup clears the directory again before Worker 0 re-seeds the files.
 
 **What a worker writes to its memory.** At the end of each cycle, the worker appends a short entry — typically 3-5 lines — capturing what to carry into the next cycle:
 
@@ -569,9 +569,9 @@ Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.
 
 **Lifecycle.**
 
-- Worker 0 creates `docs/builder/worker-memory/` and (re-)seeds four empty files (one per worker) at plan-creation time, truncating any prior-build content.
+- Worker 0 creates `docs/builder/worker-memory/` and seeds four empty files (one per worker) at plan-creation time, after pre-flight cleanup has deleted any prior-build memory.
 - Workers read their own file at the start of every spawn and append at the end.
-- The directory persists after closeout. The files stay on disk as the maintainer's reference; the next build's plan-creation step (above) re-seeds them empty. Worker 0 does NOT delete the directory at closeout.
+- The directory may exist on disk after closeout, but its contents are not durable. The next build's pre-flight cleanup deletes all worker-memory files before Worker 0 seeds the new cycle's empty files.
 
 ### Recovery from interrupted subagent runs
 
@@ -779,5 +779,5 @@ When all checklist items are marked `- [x]` (every slice plus integration plus f
 3. Worker 0 identifies recurring DRY patterns, repeated bug classes, and workflow stumbling blocks.
 4. Worker 0 provides a brief retrospective to the maintainer.
 5. After maintainer approval, Worker 0 updates `docs/builder/BUILD.md` or the worker role files with general retrospective notes — describing recurring patterns and workflow improvements **without naming specific already-shipped fixes**.
-6. Worker 0 leaves `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/` on disk. These directories are gitignored and persist across builds; the maintainer can inspect them when reviewing the cycle, and the next build's Worker 0 re-seeds the memory files (and the helper / Worker 3 re-populate shadow / temp-tests as needed) at plan-creation time. The tracked permanent record remains the `bld-*.md` artifacts, the build plan, and the spec edits — not the scratch contents.
-7. The maintainer commits the updated `docs/builder/` workflow docs along with the now-completed `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` plan and any remaining `bld-*.md` artifacts to finish the build cycle. The plan and artifacts stay in git as the permanent record of the build.
+6. Worker 0 deletes `docs/builder/shadow/` contents and `docs/builder/temp-tests/` contents after the retrospective is complete. Worker memory may remain long enough for the retrospective, but it is scratch state, not a durable record, and the next build's pre-flight cleanup clears it before any worker reads it.
+7. The maintainer commits the updated `docs/builder/` workflow docs along with the now-completed `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` plan and any `bld-*.md` artifacts the maintainer wants to keep for that just-finished build. Before the next build starts, those per-build files become old build artifacts and are deleted by pre-flight cleanup unless the maintainer explicitly moves them somewhere outside `docs/builder/`.

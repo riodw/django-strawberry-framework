@@ -5,7 +5,7 @@ Target release: `0.0.6`
 Date created: 2026-05-19
 Build rule: one slice at a time. Plan first, build second, review third, reconcile fourth.
 DRY rule: every slice must justify shared/duplicated patterns before merging.
-Pre-flight: passed on 2026-05-19 after archiving build-014 artifacts; baseline: clean (after `git rm` of `build-014-meta_primary-0_0_6.md`, `bld-integration.md`, `bld-final.md`, and the six build-014 `bld-slice-*.md` artifacts — committed by maintainer alongside this plan, per pre-flight check 3 and the precedent commit 6407e91 for spec-013 archival; helper smoke `scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/builder/shadow --stdout` produced overview and stripped shadow file; `.gitignore` already lists `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/`; scratch directories empty or to-be-recreated; planned artifact names now free).
+Pre-flight: passed on 2026-05-19 after archiving build-014 artifacts; baseline: clean (after `git rm` of `build-014-meta_primary-0_0_6.md`, `bld-integration.md`, `bld-final.md`, and the six build-014 `bld-slice-*.md` artifacts — committed by maintainer alongside this plan, per pre-flight check 3 and the precedent commit 6407e91 for spec-013 archival; helper smoke `scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/shadow --stdout` produced overview and stripped shadow file; `.gitignore` already lists `docs/builder/worker-memory/`, `docs/shadow/`, and `docs/builder/temp-tests/`; scratch directories empty or to-be-recreated; planned artifact names now free).
 
 ## Artifact list
 

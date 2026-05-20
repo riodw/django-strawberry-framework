@@ -44,7 +44,7 @@ Worker 3 must not:
 4. Compare implementation against the spec and plan. The Plan's `### Spec slice checklist (verbatim)` is the slice's contract — walk every `- [ ]` box and confirm the diff addresses it (or that the artifact already records a deferral). A sub-check that the diff does not address and that has no recorded deferral is a Medium finding.
 5. Review DRY first: duplicated logic, repeated literals, repeated error shapes, misplaced helpers, and parallel data flows.
 6. Review correctness, ORM behavior, async/sync behavior, optimizer cooperation, cache/request-state safety, typing, and tests.
-7. Run `scripts/review_inspect.py` with `--output-dir docs/builder/shadow` when `BUILD.md` requires it.
+7. Run `scripts/review_inspect.py` with `--output-dir docs/shadow` when `BUILD.md` requires it.
 8. Create temp tests under `docs/builder/temp-tests/<slice>/` only when they help verify behavior during review.
 9. Append a `Review (Worker 3)` section, or `Review (Worker 3, pass N)` on re-review.
 10. Set the artifact `Status:` line to `review-accepted` (every High/Medium/Low finding addressed or intentionally rejected with a recorded reason) or `revision-needed`.
@@ -114,7 +114,7 @@ Recommend the most readable reusable shape, not the most abstract shape.
 
 ## Static helper use
 
-Run `scripts/review_inspect.py` with `--output-dir docs/builder/shadow` per the canonical rules in `docs/builder/BUILD.md` "When to run the helper during build":
+Run `scripts/review_inspect.py` with `--output-dir docs/shadow` per the canonical rules in `docs/builder/BUILD.md` "When to run the helper during build":
 
 - The slice adds a new `.py` file of any size, **unless** it is a pure-class-definition module (only `class` declarations with docstrings, no logic). For pure-class modules, skip the helper and record the skip and reason in the artifact.
 - The slice touches an existing `.py` file under `django_strawberry_framework/optimizer/` or `django_strawberry_framework/types/`.
@@ -128,7 +128,7 @@ Use original source-file line numbers in the artifact. Shadow-file line numbers 
 
 If Worker 2 used a shadow view (recorded under `Notes for Worker 3`), or you re-ran the helper yourself during review, apply this rule:
 
-The shadow file strips comments and may strip docstrings; its line numbers will not match the original source or the build artifact. Treat original source-file line numbers and `docs/builder/bld-*.md` line references as canonical. Use the shadow only to understand control flow.
+The shadow file strips comments and replaces every string-literal token (including docstrings) with `...` — with `--strip-docstrings`, docstring statements are removed entirely instead. Either way, its line numbers will not match the original source or the build artifact. Treat original source-file line numbers and `docs/builder/bld-*.md` line references as canonical. Use the shadow only to understand control flow.
 
 Do not cite shadow-file line numbers in review feedback.
 

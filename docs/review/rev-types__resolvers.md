@@ -130,7 +130,7 @@ _EMPTY_FROZENSET: frozenset[str] = frozenset()
 
 ## What looks solid
 
-- Static helper ran cleanly (`docs/review/shadow/django_strawberry_framework__types__resolvers.overview.md`); only one control-flow hotspot (`_make_relation_resolver`, 54 lines / 3 branches), no repeated string literals, no TODO comments.
+- Static helper ran cleanly (`docs/shadow/django_strawberry_framework__types__resolvers.overview.md`); only one control-flow hotspot (`_make_relation_resolver`, 54 lines / 3 branches), no repeated string literals, no TODO comments.
 - Symmetric read/write seam with `optimizer/_context.py`'s `get_context_value` / `stash_on_context` and the four `DST_OPTIMIZER_*` constants — this file consumes exactly what `optimizer/extension.py:635-644` produces, and the cross-module contract is the documented load-bearing parallel (sentinel-discipline + symmetric-helpers pattern from `worker-memory/worker-1.md`).
 - Single-direction dependency on `optimizer/` (this module reads optimizer-built records but writes nothing back); no circular-import risk; module-docstring at `types/resolvers.py:16-21` explicitly explains the sibling-of-`types.base` layering for the same reason.
 - Test coverage is comprehensive across every cardinality branch and every strictness/elision dispatch (`tests/types/test_resolvers.py:136-590` — 14 direct unit tests covering many-side, reverse OneToOne `DoesNotExist`-to-None, forward FK-id elision with stub building, parent-type isolation, bare-key rejection, prefetch-cache recognition, and the four strictness modes).

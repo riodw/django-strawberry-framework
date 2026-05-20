@@ -61,7 +61,7 @@ Create the active build plan from the spec. Version-bump correctness is the main
 5. Add `bld-slice-<N>-<slug>.md` artifacts for every spec slice.
 6. Add `docs/builder/bld-integration.md` and `docs/builder/bld-final.md`.
 7. Leave every checkbox unchecked.
-8. After the `BUILD.md` pre-flight cleanup has deleted old build artifacts and cleared `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/`, create `docs/builder/worker-memory/` and seed four empty files:
+8. After the `BUILD.md` pre-flight cleanup has deleted old build artifacts and cleared `docs/builder/worker-memory/`, `docs/shadow/`, and `docs/builder/temp-tests/`, create `docs/builder/worker-memory/` and seed four empty files:
    - `docs/builder/worker-memory/worker-0.md`
    - `docs/builder/worker-memory/worker-1.md`
    - `docs/builder/worker-memory/worker-2.md`
@@ -140,7 +140,7 @@ After all build-plan checkboxes are complete:
 4. Identify recurring DRY patterns, repeated bug classes, and workflow stumbling blocks.
 5. Provide final feedback to the maintainer.
 6. Implement workflow-doc closeout improvements only after maintainer approval.
-7. Delete `docs/builder/shadow/` contents and `docs/builder/temp-tests/` contents after the retrospective is complete. Worker memory may remain until the retrospective is finished, but it is scratch state; the next build's pre-flight cleanup clears it before Worker 0 seeds fresh memory files.
+7. Delete `docs/shadow/` contents and `docs/builder/temp-tests/` contents after the retrospective is complete. Worker memory may remain until the retrospective is finished, but it is scratch state; the next build's pre-flight cleanup clears it before Worker 0 seeds fresh memory files.
 
 Retrospective notes must stay general. Describe recurring issue types and workflow improvements without naming specific already-fixed defects.
 

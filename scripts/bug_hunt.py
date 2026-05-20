@@ -1,11 +1,11 @@
 """Generate the per-commit bug-hunt checklist markdown.
 
 The script resolves the current branch's HEAD commit hash, refreshes
-``docs/bug_hunt/current/`` in-process via
+``docs/shadow/bug_hunt/current/`` in-process via
 ``review_current_from_commit.main([<head-sha>])``, reads the passed-in
 dicta (default ``docs/bug_hunt/dicta.md``), appends the static
 single-file review boilerplate, and emits one checkbox + prompt block
-per ``*.stripped.py`` file under ``docs/bug_hunt/current/``.
+per ``*.stripped.py`` file under ``docs/shadow/bug_hunt/current/``.
 
 The output path defaults to ``docs/bug_hunt/bug_hunt.<short-sha>.md``.
 
@@ -27,7 +27,7 @@ from review_current_from_commit import DEFAULT_PACKAGE_DIR
 from review_current_from_commit import main as review_current_from_commit_main
 
 BUG_HUNT_DIR = Path("docs/bug_hunt")
-CURRENT_DIR = BUG_HUNT_DIR / "current"
+CURRENT_DIR = Path("docs/shadow/bug_hunt/current")
 DICTA_PATH = BUG_HUNT_DIR / "dicta.md"
 
 # Fallback dicta used when ``--dicta`` points at a missing file.
@@ -145,7 +145,7 @@ def _clear_dir_contents(directory: Path) -> None:
 
 
 def _refresh_current_snapshot(commit: str, package_dir: str, current_dir: Path) -> None:
-    """Rebuild ``docs/bug_hunt/current/`` from ``commit`` in-process.
+    """Rebuild ``docs/shadow/bug_hunt/current/`` from ``commit`` in-process.
 
     Output is silenced here; ``bug_hunt.py`` prints its own status line.
     """
@@ -191,7 +191,7 @@ def _read_dicta(dicta_path: Path) -> str:
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Resolve HEAD, refresh docs/bug_hunt/current/ from that commit, "
+            "Resolve HEAD, refresh docs/shadow/bug_hunt/current/ from that commit, "
             "then generate the per-commit bug-hunt checklist by combining "
             "the passed-in dicta, the static how-to-review boilerplate, and "
             "one prompt per .stripped.py file."

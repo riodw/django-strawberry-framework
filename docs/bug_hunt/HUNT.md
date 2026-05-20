@@ -14,14 +14,14 @@ the input parameter for Step 2.
 
 Then run `scripts/bug_hunt.py`. The script:
 - Resolves the current branch's HEAD commit hash first.
-- Wipes `docs/bug_hunt/current/` and refreshes it in-process by running
+- Wipes `docs/shadow/bug_hunt/current/` and refreshes it in-process by running
   `scripts/review_current_from_commit.py <head-sha>` (same package-dir
   default, or the `--package-dir` value you passed through).
 
 - Reads `docs/bug_hunt/dicta.md` and prepends it as the header.
 - Appends a static "how to review a single file" section baked into
   the script itself.
-- Enumerates every `*.stripped.py` under `docs/bug_hunt/current/`,
+- Enumerates every `*.stripped.py` under `docs/shadow/bug_hunt/current/`,
   derives the matching original source path from each stem, and emits
   one checkbox + prompt block per file.
 - Writes the result to `docs/bug_hunt/bug_hunt.<short-sha>.md`, where

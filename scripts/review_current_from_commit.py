@@ -3,7 +3,7 @@
 Enumerates every ``.py`` file under a target package directory at a given
 commit and runs ``review_inspect`` against each file's content as it existed
 *at that commit* (the working tree is never read). Outputs land in
-``docs/bug_hunt/current/`` with the usual ``a__b__c`` stem scheme.
+``docs/shadow/bug_hunt/current/`` with the usual ``a__b__c`` stem scheme.
 
 Use this when you want a static review snapshot of the entire package at
 some historical checkout, without actually checking that commit out and
@@ -21,7 +21,7 @@ The ``uv run`` prefix is required so the script sees the project's virtual
 environment (it imports ``review_inspect`` and the inspector depends on the
 project's pinned Python / dependency versions). Run from anywhere inside
 the repository; the orchestrator resolves ``git rev-parse --show-toplevel``
-and writes outputs under ``docs/bug_hunt/current/`` at the repo root.
+and writes outputs under ``docs/shadow/bug_hunt/current/`` at the repo root.
 
 Example:
     uv run python scripts/review_current_from_commit.py 9096519590040fa25484e05b6a104cb5652b9676
@@ -41,7 +41,7 @@ from pathlib import Path
 
 from review_inspect import main as review_inspect_main
 
-OUTPUT_CURRENT = Path("docs/bug_hunt/current")
+OUTPUT_CURRENT = Path("docs/shadow/bug_hunt/current")
 DEFAULT_PACKAGE_DIR = "django_strawberry_framework"
 
 

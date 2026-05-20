@@ -116,12 +116,12 @@ Quick rules:
 Example:
 
 ```shell
-python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/review/shadow
+python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/shadow
 ```
 
-Use `python scripts/review_inspect.py --all --output-dir docs/review/shadow` when Worker 0 or a folder/project pass needs fresh shadow output for the full package tree.
+Use `python scripts/review_inspect.py --all --output-dir docs/shadow` when Worker 0 or a folder/project pass needs fresh shadow output for the full package tree.
 
-Every review-cycle helper invocation must pass `--output-dir docs/review/shadow`. The helper writes ignored shadow byproducts under that path. The tracked, committed review artifact is the `docs/review/rev-<folder__file_name>.md` file you produce.
+Every review-cycle helper invocation must pass `--output-dir docs/shadow`. The helper writes ignored shadow byproducts under that path. The tracked, committed review artifact is the `docs/review/rev-<folder__file_name>.md` file you produce.
 
 ## Final test-run gate job
 

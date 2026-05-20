@@ -161,9 +161,9 @@ poetry.toml
 # ruff
 .ruff_cache/
 
-# Review workflow shadow files (static-analysis byproducts)
-# Review artifacts, plan files, and worker instructions under docs/review/ are tracked.
-docs/review/shadow/
+# Shared workflow shadow files (static-analysis byproducts)
+# Review/build artifacts, plan files, and worker instructions remain tracked.
+docs/shadow/
 
 # Per-worker scratch memory used during an active review cycle.
 # Created by Worker 0 at plan time; deleted by Worker 0 at closeout.
@@ -173,10 +173,6 @@ docs/review/worker-memory/
 # Temp test files Worker 3 may create to verify behavior during a review cycle.
 # Deleted by Worker 0 at closeout; permanent tests live under the AGENTS.md trees.
 docs/review/temp-tests/
-
-# Build workflow shadow files (static-analysis byproducts).
-# Build artifacts, plan files, and worker instructions under docs/builder/ are tracked.
-docs/builder/shadow/
 
 # Per-worker scratch memory used during an active build cycle.
 # Created by Worker 0 at plan time; deleted by Worker 0 at closeout.

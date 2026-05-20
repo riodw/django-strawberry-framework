@@ -15,7 +15,7 @@ The standing worker instructions live beside this overview:
 - [Worker 2: fix implementer](worker-2.md)
 - [Worker 3: fix verifier](worker-3.md)
 
-Permanent workflow files under `docs/review/` are tracked: `REVIEW.md`, `worker-*.md`, `review-*.md`, and every `rev-*.md` review artifact. They are committed to git and kept as the permanent record of the review cycle. The only intentionally untracked paths are generated scratch directories: `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`.
+Permanent workflow files under `docs/review/` are tracked: `REVIEW.md`, `worker-*.md`, `review-*.md`, and every `rev-*.md` review artifact. They are committed to git and kept as the permanent record of the review cycle. The only intentionally untracked paths are generated scratch directories: `docs/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`.
 
 `AGENTS.md` and `START.md` still apply during review runs. This review workflow adds the per-worker artifact discipline on top; it does not override standing validation, formatting, test-running, commit, or test-placement rules.
 
@@ -55,7 +55,7 @@ Worker 0 creates the active review plan from these instructions and [Worker 0's 
 3. Convert the release version from dots to underscores.
    - `0.0.6` becomes `0_0_6`.
 4. If `docs/review/review-<0_0_X>.md` already exists, stop before clearing scratch files or creating a new plan.
-5. Clear only the generated review scratch directories before a fresh run: `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`.
+5. Clear only the generated review scratch directories before a fresh run: `docs/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`.
    - Never delete, glob, or recursively wipe `docs/review/` itself; permanent `review-*.md`, `rev-*.md`, `REVIEW.md`, and `worker-*.md` files are tracked source of truth.
 6. Create `docs/review/review-<0_0_X>.md`.
    - For release `0.0.6`, create `docs/review/review-0_0_6.md`.
@@ -400,16 +400,16 @@ Worker 2 **must re-read** the overview already written by Worker 1 before implem
 From the repository root:
 
 ```shell
-python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/review/shadow
+python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/shadow
 ```
 
 To refresh shadow output for every package `.py` file recursively:
 
 ```shell
-python scripts/review_inspect.py --all --output-dir docs/review/shadow
+python scripts/review_inspect.py --all --output-dir docs/shadow
 ```
 
-Every review-cycle helper invocation must pass `--output-dir docs/review/shadow` so generated artifacts land inside the review sandbox and never collide with other workflows' shadow output.
+Every review-cycle helper invocation must pass `--output-dir docs/shadow` so generated artifacts land in the shared shadow sandbox.
 
 Useful flags:
 
@@ -423,12 +423,12 @@ Useful flags:
 
 #### Output files
 
-Two files land under `docs/review/shadow/<stable-stem>`:
+Two files land under `docs/shadow/<stable-stem>`:
 
-- `<stem>.stripped.py` — target source with `#` comments and docstring statements removed; other string-literal contents are replaced by `...`.
+- `<stem>.stripped.py` — target source with `#` comments removed and every string-literal token (including docstrings) replaced by `...`; with `--strip-docstrings`, docstring statements are removed entirely instead.
 - `<stem>.overview.md` — static AST overview with the sections described below.
 
-`docs/review/shadow/` is gitignored: the shadow file and overview are throwaway analysis byproducts. The tracked, committed review artifact is the `docs/review/rev-*.md` file Worker 1 produces.
+`docs/shadow/` is gitignored: the shadow file and overview are throwaway analysis byproducts. The tracked, committed review artifact is the `docs/review/rev-*.md` file Worker 1 produces.
 
 #### Reading the overview — section-by-section guidance
 
@@ -449,13 +449,13 @@ Two files land under `docs/review/shadow/<stable-stem>`:
 
 When writing a folder-level artifact, Worker 1 must:
 
-1. Confirm the helper has been run on every Python file in the folder (overviews exist under `docs/review/shadow/`).
+1. Confirm the helper has been run on every Python file in the folder (overviews exist under `docs/shadow/`).
 2. Compare the **Repeated string literals** sections across sibling overviews. A literal that appears in two or more files is a folder-level DRY candidate; record it in the folder artifact's Medium or Low section depending on severity.
 3. Compare the **Imports** sections across sibling overviews to confirm one-way dependency direction inside the folder and to spot a sibling that has started importing from outside the documented boundary.
 
 #### Shadow-file line numbers are NOT canonical
 
-The shadow file strips `#` comments (and optionally docstrings), so its line numbers do not match the original source. Review artifacts, Worker 3 feedback, and source edits must cite **original source-file line numbers**, never shadow-file line numbers. The shadow file is read-only for review purposes; never edit or commit it. If Worker 2 used the shadow file during fix implementation, Worker 3's first verification pass must include the shadow-file caveat (see the `worker-3.md` shadow-file dicta).
+The shadow file strips `#` comments and replaces every string-literal token (including docstrings) with `...`; with `--strip-docstrings`, docstring statements are removed entirely instead. Either way, its line numbers do not match the original source. Review artifacts, Worker 3 feedback, and source edits must cite **original source-file line numbers**, never shadow-file line numbers. The shadow file is read-only for review purposes; never edit or commit it. If Worker 2 used the shadow file during fix implementation, Worker 3's first verification pass must include the shadow-file caveat (see the `worker-3.md` shadow-file dicta).
 
 If a review identifies coverage that would seem to belong under frozen `tests/base/`, follow `AGENTS.md`: do not add new files there. Route new coverage to the correct existing parallel package test path or extend an allowed existing file only when that matches the standing rules.
 
@@ -524,9 +524,9 @@ Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.
 
 **Lifecycle.**
 
-- Worker 0 clears only generated review scratch directories (`docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`) at plan-creation time, then creates `docs/review/worker-memory/` and seeds four empty files (`worker-0.md`, `worker-1.md`, `worker-2.md`, `worker-3.md`).
+- Worker 0 clears only generated review scratch directories (`docs/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`) at plan-creation time, then creates `docs/review/worker-memory/` and seeds four empty files (`worker-0.md`, `worker-1.md`, `worker-2.md`, `worker-3.md`).
 - Workers 0/1/2/3 read their own file at the start of every spawn and append at the end.
-- Worker 0 deletes `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/` at cycle closeout, after the retrospective is written.
+- Worker 0 deletes `docs/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/` at cycle closeout, after the retrospective is written.
 
 ## Worker process
 
@@ -578,7 +578,7 @@ Worker 2 and Worker 3 must always run as separate subagent invocations. The revi
 
 Worker 3 runs as a fresh subagent invocation per cycle item. It reads [Worker 3's role instructions](worker-3.md), `docs/review/worker-memory/worker-3.md` (its own running notes from prior cycles), and reviews Worker 2's diff against the `docs/review/rev-<folder__file_name>.md` artifact. Worker 3 may not read `worker-memory/worker-1.md` or `worker-memory/worker-2.md`. Worker 3 has cycle-spanning history of what kinds of fixes it has accepted before, but no in-context memory of *this* cycle's implementation reasoning — that is the point of the dispatch.
 
-If Worker 2 used a shadow view, Worker 3's first-pass prompt must explicitly say: "The shadow file strips comments and may strip docstrings; its line numbers will not match the original source or the review artifact. Treat original source-file line numbers and the `docs/review/rev-<folder__file_name>.md` line references as canonical. Use the shadow only to understand control flow."
+If Worker 2 used a shadow view, Worker 3's first-pass prompt must explicitly say: "The shadow file strips comments and replaces every string-literal token (including docstrings) with `...` — with `--strip-docstrings`, docstring statements are removed entirely instead. Either way, its line numbers will not match the original source or the review artifact. Treat original source-file line numbers and the `docs/review/rev-<folder__file_name>.md` line references as canonical. Use the shadow only to understand control flow."
 
 Worker 3 should:
 
@@ -669,5 +669,5 @@ When all checklist items are marked `- [x]` (every file, folder pass, project pa
 4. Worker 0 provides a brief retrospective to the maintainer.
 5. After maintainer approval, Worker 0 applies approved closeout changes to `docs/review/REVIEW.md` or the worker role files — describing recurring patterns and workflow improvements **without naming specific already-fixed defects**.
 6. Worker 0 may inspect `CHANGELOG.md` review-cycle entries and consolidate them only if the maintainer explicitly authorizes that consolidation.
-7. Worker 0 deletes `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes — the shadow output, scratch memory, and temp tests have served their purpose.
+7. Worker 0 deletes `docs/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes — the shadow output, scratch memory, and temp tests have served their purpose.
 8. The maintainer commits the updated `docs/review/` workflow docs along with the now-completed `docs/review/review-<0_0_X>.md` plan and any remaining `docs/review/rev-*.md` artifacts to finish the review cycle. The plan and artifacts stay in git as the permanent record of the release review.

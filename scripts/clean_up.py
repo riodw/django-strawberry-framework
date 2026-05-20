@@ -2,11 +2,10 @@
 
 This script intentionally targets only known generated paths:
 
-- contents of ``docs/review/shadow/``
+- contents of ``docs/shadow/`` including static-helper and bug-hunt shadow byproducts
 - ``rev-*.py`` and case-sensitive ``review-*.py`` files directly under ``docs/review/``
-- contents of ``docs/builder/shadow/`` and ``docs/builder/temp-tests/``
+- contents of ``docs/builder/temp-tests/``
 - ``bld-*.py`` and case-sensitive ``review-*.py`` files directly under ``docs/builder/``
-- the entire ``docs/bug_hunt/current/`` directory
 - ``docs/bug_hunt/dicta.md``
 - ``docs/bug_hunt/bug_hunt.*.md``
 
@@ -73,7 +72,7 @@ def clean_up() -> list[Path]:
     """Delete all configured generated artifacts and return deleted paths."""
     deleted: list[Path] = []
 
-    deleted.extend(_clear_directory(_repo_path("docs/review/shadow")))
+    deleted.extend(_clear_directory(_repo_path("docs/shadow")))
     for path in _glob_files(_repo_path("docs/review"), "rev-*.py"):
         if _delete_file(path):
             deleted.append(path)
@@ -81,7 +80,6 @@ def clean_up() -> list[Path]:
         if _delete_file(path):
             deleted.append(path)
 
-    deleted.extend(_clear_directory(_repo_path("docs/builder/shadow")))
     deleted.extend(_clear_directory(_repo_path("docs/builder/temp-tests")))
     for path in _glob_files(_repo_path("docs/builder"), "bld-*.py"):
         if _delete_file(path):
@@ -89,10 +87,6 @@ def clean_up() -> list[Path]:
     for path in _glob_files(_repo_path("docs/builder"), "review-*.py"):
         if _delete_file(path):
             deleted.append(path)
-
-    bug_hunt_current = _repo_path("docs/bug_hunt/current")
-    if _delete_tree(bug_hunt_current):
-        deleted.append(bug_hunt_current)
 
     dicta = _repo_path("docs/bug_hunt/dicta.md")
     if _delete_file(dicta):

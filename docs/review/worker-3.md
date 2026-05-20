@@ -36,7 +36,7 @@ Worker 3 must not:
 
 If Worker 2 used a shadow view, the first verification pass must include this rule:
 
-The shadow file strips comments and may strip docstrings; its line numbers will not match the original source or the review artifact. Treat original source-file line numbers and the `docs/review/rev-<folder__file_name>.md` line references as canonical. Use the shadow only to understand control flow.
+The shadow file strips comments and replaces every string-literal token (including docstrings) with `...` — with `--strip-docstrings`, docstring statements are removed entirely instead. Either way, its line numbers will not match the original source or the review artifact. Treat original source-file line numbers and the `docs/review/rev-<folder__file_name>.md` line references as canonical. Use the shadow only to understand control flow.
 
 Do not cite shadow-file line numbers in review feedback.
 

@@ -56,7 +56,7 @@ For the current slice:
 3. Read the active build plan and target slice.
 4. Read the active spec section for the slice and any referenced decisions.
 5. Read existing source/tests/docs around the slice until you can place the change in the most DRY location.
-6. Run `scripts/review_inspect.py` with `--output-dir docs/builder/shadow` when `BUILD.md` requires it.
+6. Run `scripts/review_inspect.py` with `--output-dir docs/shadow` when `BUILD.md` requires it.
 7. Create or update the slice artifact, including the `Status:` line set to `planned` after the plan is written.
 8. Fill the `Plan (Worker 1)` section.
 9. Include a DRY analysis that cites existing files/helpers to reuse or extend.

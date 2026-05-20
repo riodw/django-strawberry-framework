@@ -334,7 +334,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("docs/review/shadow"),
+        default=Path("docs/shadow"),
         help="Directory for generated shadow and overview files.",
     )
     parser.add_argument(

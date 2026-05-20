@@ -29,7 +29,7 @@ The standing worker instructions live beside this overview:
 - [Worker 2: builder / implementer](worker-2.md)
 - [Worker 3: code reviewer and DRY enforcer](worker-3.md)
 
-Standing workflow files under `docs/builder/` are tracked: `BUILD.md` and `worker-*.md`. Per-build plans and artifacts (`build-*.md` and `bld-*.md`) are tracked only for the active build cycle and must start from a clean slate; before a new build starts, delete any old build-plan or build-artifact files that remain from a prior cycle. The only intentionally untracked paths are generated scratch directories: `docs/builder/shadow/`, `docs/builder/worker-memory/`, and `docs/builder/temp-tests/`.
+Standing workflow files under `docs/builder/` are tracked: `BUILD.md` and `worker-*.md`. Per-build plans and artifacts (`build-*.md` and `bld-*.md`) are tracked only for the active build cycle and must start from a clean slate; before a new build starts, delete any old build-plan or build-artifact files that remain from a prior cycle. The only intentionally untracked paths are generated scratch directories: `docs/shadow/`, `docs/builder/worker-memory/`, and `docs/builder/temp-tests/`.
 
 `AGENTS.md` and `START.md` still apply during build runs. This workflow adds the per-worker artifact discipline on top; it does not override standing validation, formatting, commit, or test-placement rules.
 
@@ -68,10 +68,10 @@ Workers never read another worker's memory file during the cycle; see "Subagent 
 Before Worker 0 creates `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`, verify the build-environment preconditions. One-time, catches issues that would otherwise stall the cycle late:
 
 1. **Working-tree baseline is explicit.** Run `git status --short` and record whether the tree is clean. If unrelated uncommitted changes exist, stop and ask the maintainer to commit them, move them aside, or explicitly include them in the build baseline before creating the plan. The slice diffs and review prompts are only useful when everyone agrees which changes predate the build.
-2. **`scripts/review_inspect.py` runs.** Smoke invocation from the repo root: `uv run python scripts/review_inspect.py <pick_a_dst_module>.py --output-dir docs/builder/shadow --stdout`. Confirm the overview prints and the shadow file lands. If the helper is broken, Worker 1's planning pass and Worker 3's review pass for any `types/`-touching or `optimizer/`-touching slice cannot run as specified — escalate to the maintainer before starting.
+2. **`scripts/review_inspect.py` runs.** Smoke invocation from the repo root: `uv run python scripts/review_inspect.py <pick_a_dst_module>.py --output-dir docs/shadow --stdout`. Confirm the overview prints and the shadow file lands. If the helper is broken, Worker 1's planning pass and Worker 3's review pass for any `types/`-touching or `optimizer/`-touching slice cannot run as specified — escalate to the maintainer before starting.
 3. **Build artifacts are reset.** Before creating the new plan, delete any old `docs/builder/build-*.md` and `docs/builder/bld-*.md` files left from a prior cycle. Then verify the exact new plan path and every `bld-*.md` path Worker 0 intends to create for this build do not already exist. Never overwrite an existing build artifact in place; remove stale artifacts first, then create the new files.
-4. **`.gitignore` lists the untracked scratch paths.** Confirm `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/` are gitignored. Without this, Worker 0's seeded memory files, the helper's shadow output, and Worker 3's temp tests would accidentally enter git tracking.
-5. **Scratch directories are cleared.** Delete every file under `docs/builder/worker-memory/`, `docs/builder/shadow/`, and `docs/builder/temp-tests/` before the new build plan is created. This clears all prior worker memory, removes stale static-inspection shadow output, and removes Worker 3 temp-test files. Recreate the directories if needed; Worker 0 seeds fresh empty memory files at plan time, the helper recreates `shadow/` output as needed, and Worker 3 recreates `temp-tests/` during review when useful.
+4. **`.gitignore` lists the untracked scratch paths.** Confirm `docs/builder/worker-memory/`, `docs/shadow/`, and `docs/builder/temp-tests/` are gitignored. Without this, Worker 0's seeded memory files, the helper's shadow output, and Worker 3's temp tests would accidentally enter git tracking.
+5. **Scratch directories are cleared.** Delete every file under `docs/builder/worker-memory/`, `docs/shadow/`, and `docs/builder/temp-tests/` before the new build plan is created. This clears all prior worker memory, removes stale static-inspection shadow output, and removes Worker 3 temp-test files. Recreate the directories if needed; Worker 0 seeds fresh empty memory files at plan time, the helper recreates `shadow/` output as needed, and Worker 3 recreates `temp-tests/` during review when useful.
 
 Record the outcome in the build plan's preamble (`Pre-flight: passed on YYYY-MM-DD; baseline: clean; cleanup: old artifacts removed, memory/shadow/temp-tests cleared` or `Pre-flight: <issue>, resolved by <action>; baseline: <summary>; cleanup: <summary>`). If any check fails and can't be resolved without maintainer input, escalate before creating the build plan.
 
@@ -479,16 +479,16 @@ Worker 2 **may re-run** the helper when refreshed output would help implementati
 From the repository root:
 
 ```shell
-python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/builder/shadow
+python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/shadow
 ```
 
 To refresh shadow output for every package `.py` file recursively:
 
 ```shell
-python scripts/review_inspect.py --all --output-dir docs/builder/shadow
+python scripts/review_inspect.py --all --output-dir docs/shadow
 ```
 
-Every build-cycle helper invocation must pass `--output-dir docs/builder/shadow` so generated artifacts land inside the build sandbox.
+Every build-cycle helper invocation must pass `--output-dir docs/shadow` so generated artifacts land in the shared shadow sandbox.
 
 Useful flags:
 
@@ -513,16 +513,16 @@ Useful flags:
 
 #### Output files
 
-Two files land under `docs/builder/shadow/<stable-stem>`:
+Two files land under `docs/shadow/<stable-stem>`:
 
-- `<stem>.stripped.py` — target source with `#` comments and docstring statements removed; other string-literal contents are replaced by `...`.
+- `<stem>.stripped.py` — target source with `#` comments removed and every string-literal token (including docstrings) replaced by `...`; with `--strip-docstrings`, docstring statements are removed entirely instead.
 - `<stem>.overview.md` — static AST overview.
 
-`docs/builder/shadow/` is gitignored.
+`docs/shadow/` is gitignored.
 
 #### Shadow-file line numbers are NOT canonical
 
-The shadow file strips `#` comments (and optionally docstrings), so its line numbers do not match the original source. Build artifacts, code-review feedback, and source edits must cite **original source-file line numbers**, never shadow-file line numbers. The shadow file is read-only; never edit or commit it.
+The shadow file strips `#` comments and replaces every string-literal token (including docstrings) with `...`; with `--strip-docstrings`, docstring statements are removed entirely instead. Either way, its line numbers do not match the original source. Build artifacts, code-review feedback, and source edits must cite **original source-file line numbers**, never shadow-file line numbers. The shadow file is read-only; never edit or commit it.
 
 ## Subagent dispatch and worker memory
 
@@ -786,5 +786,5 @@ When all checklist items are marked `- [x]` (every slice plus integration plus f
 3. Worker 0 identifies recurring DRY patterns, repeated bug classes, and workflow stumbling blocks.
 4. Worker 0 provides a brief retrospective to the maintainer.
 5. After maintainer approval, Worker 0 updates `docs/builder/BUILD.md` or the worker role files with general retrospective notes — describing recurring patterns and workflow improvements **without naming specific already-shipped fixes**.
-6. Worker 0 deletes `docs/builder/shadow/` contents and `docs/builder/temp-tests/` contents after the retrospective is complete. Worker memory may remain long enough for the retrospective, but it is scratch state, not a durable record, and the next build's pre-flight cleanup clears it before any worker reads it.
+6. Worker 0 deletes `docs/shadow/` contents and `docs/builder/temp-tests/` contents after the retrospective is complete. Worker memory may remain long enough for the retrospective, but it is scratch state, not a durable record, and the next build's pre-flight cleanup clears it before any worker reads it.
 7. The maintainer commits the updated `docs/builder/` workflow docs along with the now-completed `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` plan and any `bld-*.md` artifacts the maintainer wants to keep for that just-finished build. Before the next build starts, those per-build files become old build artifacts and are deleted by pre-flight cleanup unless the maintainer explicitly moves them somewhere outside `docs/builder/`.

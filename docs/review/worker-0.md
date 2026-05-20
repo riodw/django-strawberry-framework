@@ -22,7 +22,7 @@ Worker 0 may edit:
 - `docs/review/review-<0_0_X>.md`
 - `docs/review/REVIEW.md`
 - `docs/review/worker-*.md`
-- `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/` (clear at plan time; delete at closeout)
+- `docs/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/` (clear at plan time; delete at closeout)
 - `docs/review/worker-memory/worker-0.md` — append-only updates to its own memory file
 - `CHANGELOG.md` during closeout consolidation **only when the maintainer explicitly authorizes the consolidation**
 - source or tests only when the maintainer explicitly asks Worker 0 to implement closeout fixes
@@ -45,7 +45,7 @@ Create the active release review plan.
 3. If they differ, stop and record the mismatch in `docs/review/review-<0_0_X>.md` before review work starts.
 4. Convert the version dots to underscores.
 5. If `docs/review/review-<0_0_X>.md` already exists, stop before clearing scratch files or creating a new plan.
-6. Clear only the generated review scratch directories: `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`.
+6. Clear only the generated review scratch directories: `docs/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`.
    - Never delete, glob, or recursively wipe `docs/review/` itself; permanent `review-*.md`, `rev-*.md`, `REVIEW.md`, and `worker-*.md` files are tracked source of truth.
 7. Create `docs/review/review-<0_0_X>.md`.
 8. Build the package tree from tracked files under `django_strawberry_framework/`.
@@ -134,7 +134,7 @@ After all checklist items are marked complete (every file, folder pass, project 
 5. Provide a brief retrospective to the maintainer.
 6. After maintainer approval, apply approved closeout changes to `docs/review/REVIEW.md` or `docs/review/worker-*.md` — describing recurring patterns and workflow improvements **without naming specific already-fixed defects**.
 7. May inspect and consolidate `CHANGELOG.md` review-cycle entries only if the maintainer explicitly authorizes the consolidation.
-8. Delete `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes; the shadow output, scratch memory, and temp tests have served their purpose.
+8. Delete `docs/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes; the shadow output, scratch memory, and temp tests have served their purpose.
 
 The maintainer then commits the updated workflow docs along with the now-completed plan and artifacts.
 

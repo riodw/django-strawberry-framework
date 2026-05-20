@@ -53,7 +53,7 @@ hints configured"). ...
 - `reload_settings` mutates the singleton in place rather than rebinding the module global (`django_strawberry_framework/conf.py:152-153`). The docstring at lines 144-151 explains why, and the test `test_reload_settings_updates_already_imported_reference` (`tests/base/test_conf.py:87-101`) pins the `from .conf import settings` contract — a regression to rebinding would surface immediately.
 - The signal-connect import-time side effect uses `dispatch_uid` (`django_strawberry_framework/conf.py:161`), guaranteeing idempotence under re-import, and the comment at lines 156-160 justifies why `AppConfig.ready()` is not a viable home (test-bootstrap import order). `test_setting_changed_receiver_uses_dispatch_uid` (`tests/base/test_conf.py:136-145`) pins the no-op re-connect.
 - The `setting_changed` receiver signature accepts `**kwargs` (`django_strawberry_framework/conf.py:143`), which absorbs Django's `sender` and `enter` keyword arguments without coupling to the signal's payload shape.
-- Static helper was run (`scripts/review_inspect.py` against `django_strawberry_framework/conf.py`, output under `docs/review/shadow/`); no control-flow hotspots, no Django/ORM markers, and only the expected reflective-access sites (two `isinstance` calls and one `getattr` in `_normalize_user_settings` / `user_settings`).
+- Static helper was run (`scripts/review_inspect.py` against `django_strawberry_framework/conf.py`, output under `docs/shadow/`); no control-flow hotspots, no Django/ORM markers, and only the expected reflective-access sites (two `isinstance` calls and one `getattr` in `_normalize_user_settings` / `user_settings`).
 
 ### Summary
 

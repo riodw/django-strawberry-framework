@@ -83,17 +83,17 @@ Respect `AGENTS.md` test-placement rules. Do not add new files under frozen `tes
 
 The full rules live in `docs/review/REVIEW.md` under "Static review helper". Worker 2 follows this shape:
 
-- **Re-read the overview** Worker 1 already produced under `docs/review/shadow/<stem>.overview.md` before implementing any non-trivial fix. The Django/ORM markers, control-flow hotspots, and calls-of-interest sections are the same checklist that drove the review; consult them while planning the edit so the fix does not regress an unrelated marker line.
-- **Re-run the helper** when refreshed output would help implementation. Every review-cycle invocation must pass `--output-dir docs/review/shadow`:
+- **Re-read the overview** Worker 1 already produced under `docs/shadow/<stem>.overview.md` before implementing any non-trivial fix. The Django/ORM markers, control-flow hotspots, and calls-of-interest sections are the same checklist that drove the review; consult them while planning the edit so the fix does not regress an unrelated marker line.
+- **Re-run the helper** when refreshed output would help implementation. Every review-cycle invocation must pass `--output-dir docs/shadow`:
 
 ```shell
-python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/review/shadow
+python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/shadow
 ```
 
 - **Pass the shadow path to Worker 3** on the first verification pass when the shadow was used during fix implementation. Worker 3's first-pass prompt must include the shadow-file caveat (see worker-3.md).
 - **Cite original source-file line numbers** in source edits, tests, commit messages, and changelog entries. Shadow-file line numbers do not match the original source after comment / docstring stripping.
 
-Generated shadow files under `docs/review/shadow/` are read-only review aids. Never edit or commit them.
+Generated shadow files under `docs/shadow/` are read-only review aids. Never edit or commit them.
 
 ## Comment and changelog dicta
 

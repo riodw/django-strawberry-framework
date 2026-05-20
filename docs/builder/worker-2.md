@@ -85,7 +85,7 @@ New helpers must have one clear reason to exist. Do not extract helpers just to 
 
 ## Static helper use
 
-Use `scripts/review_inspect.py` when the plan or prior review asks for it. Always pass `--output-dir docs/builder/shadow`.
+Use `scripts/review_inspect.py` when the plan or prior review asks for it. Always pass `--output-dir docs/shadow`.
 
 If you used a shadow file or overview to implement the fix, record that in the artifact's `Notes for Worker 3` section. Cite original source-file line numbers, never shadow-file line numbers.
 

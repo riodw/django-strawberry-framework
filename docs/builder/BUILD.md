@@ -17,7 +17,7 @@ Spec files live at `docs/spec-<NNN>-<topic>-<0_0_X>.md`; build plans live at `do
 Examples: spec `docs/spec-013-deferred_scalars-0_0_6.md` pairs with build plan `docs/builder/build-013-deferred_scalars-0_0_6.md` during the active build (the spec for `0.0.6` was later opt-in-archived to `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`; the build plan stays at the working location). Earlier specs predating this pattern may live without the NNN/version segments; new specs and their build plans use the pattern.
 
 !!IMPORTANT!!
-Begin by reading `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/FEATURES.md`, `GOAL.md`, and the active spec file at `docs/spec-<NNN>-<topic>-<0_0_X>.md`.
+Begin by reading `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/GLOSSARY.md`, `GOAL.md`, and the active spec file at `docs/spec-<NNN>-<topic>-<0_0_X>.md`.
 
 !!IMPORTANT — DRY FIRST!!
 Every plan, every implementation, every review pass must answer one question before anything else: **is this the maximally DRY shape that stays readable?** Duplicated logic, parallel data flows, near-copies between modules, and repeated string/key/tuple literals are all build-time defects. Worker 1 plans for DRY before code is written; Worker 3 enforces DRY before code is accepted; Worker 1 re-checks DRY across slices at the integration pass.
@@ -49,7 +49,7 @@ Every worker reads the standing project docs and its own role file before acting
 | `docs/builder/worker-2.md` | — | — | yes | — |
 | `docs/builder/worker-3.md` | — | — | — | yes |
 | `GOAL.md` | yes | yes | — | — |
-| `docs/FEATURES.md` | yes | yes | — | — |
+| `docs/GLOSSARY.md` | yes | yes | — | — |
 | `CHANGELOG.md` | — | yes | — | — |
 | `docs/TREE.md` | — | — | yes | — |
 | `docs/README.md` | — | — | — | yes |
@@ -326,7 +326,7 @@ If the slice's diff includes documentation, release metadata, KANBAN movement, o
 - moved KANBAN cards are removed from their old section and appear in the target section exactly once
 - Markdown links introduced or moved by the slice point at existing files or documented future files
 - active-spec archival, if planned, preserves the historical record and leaves the live follow-up source of truth in the durable doc named by the spec
-- when the slice copies verbatim text from the spec (e.g. KANBAN card bodies, CHANGELOG entries, FEATURES.md entry text), confirm character-for-character via `diff` against the spec source with any indent-strip applied; for fenced-code drop-ins where the inner fence backtick count matches the outer, confirm the outer fence used four backticks (or another non-conflicting form) so markdown rendering is intact
+- when the slice copies verbatim text from the spec (e.g. KANBAN card bodies, CHANGELOG entries, GLOSSARY.md entry text), confirm character-for-character via `diff` against the spec source with any indent-strip applied; for fenced-code drop-ins where the inner fence backtick count matches the outer, confirm the outer fence used four backticks (or another non-conflicting form) so markdown rendering is intact
 - no obsolete "coming soon", "planned", or old-version wording remains in files the slice deliberately updated
 
 If the slice does not touch those surfaces, write `Not applicable; slice did not modify docs/release/KANBAN/archive surfaces.`.
@@ -766,7 +766,7 @@ If a spec edit fundamentally changes the slice contract that Worker 2 already im
 
 ## Spec stays at its working location
 
-Specs are written at `docs/spec-<NNN>-<topic>-<0_0_X>.md` and stay there after the build closes. Closing a build does NOT require, default to, or imply moving the spec to an archive location. Live follow-up state belongs in the durable docs the spec named (`docs/FEATURES.md`, `KANBAN.md`, `CHANGELOG.md`); the spec itself remains at its working path so cross-references continue to resolve.
+Specs are written at `docs/spec-<NNN>-<topic>-<0_0_X>.md` and stay there after the build closes. Closing a build does NOT require, default to, or imply moving the spec to an archive location. Live follow-up state belongs in the durable docs the spec named (`docs/GLOSSARY.md`, `KANBAN.md`, `CHANGELOG.md`); the spec itself remains at its working path so cross-references continue to resolve.
 
 If a future spec explicitly declares spec archival or relocation as part of its own slice checklist, that is an opt-in lifecycle step the spec itself authorizes. In that case:
 

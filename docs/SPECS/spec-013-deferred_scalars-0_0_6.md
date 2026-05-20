@@ -3,7 +3,7 @@
 Target release: `0.0.6`.
 Status: draft (revision 10, post-feedback2 re-review).
 Owner: package maintainer.
-Predecessors: [`docs/FEATURES.md`](../FEATURES.md) (entries [Scalar field conversion](../FEATURES.md#scalar-field-conversion), [Specialized scalar conversions](../FEATURES.md#specialized-scalar-conversions), [`BigInt` scalar](../FEATURES.md#bigint-scalar)), [`KANBAN.md`](../../KANBAN.md) card `TODO-ALPHA-013-0.0.6`.
+Predecessors: [`docs/GLOSSARY.md`](../GLOSSARY.md) (entries [Scalar field conversion](../GLOSSARY.md#scalar-field-conversion), [Specialized scalar conversions](../GLOSSARY.md#specialized-scalar-conversions), [`BigInt` scalar](../GLOSSARY.md#bigint-scalar)), [`KANBAN.md`](../../KANBAN.md) card `TODO-ALPHA-013-0.0.6`.
 Card line: ["Add `BigInt` scalar with string serialization and `int` parsing. Add `JSONField` mapping to Strawberry JSON. Add `HStoreField` where available. Add `ArrayField` recursion through `field.base_field`. Use synthetic unmanaged test models where fakeshop does not naturally exercise the fields. Keep coverage at 100%."](../../KANBAN.md)
 
 Revision history (kept inline so the spec is self-contained):
@@ -11,9 +11,9 @@ Revision history (kept inline so the spec is self-contained):
 - **Revision 1** — initial draft.
 - **Revision 2** (post-pass-1 review) — HStore `JSON`; sentinel-guarded `isinstance`; fake-field-class test doubles; `HStoreField` moved into a sentinel branch; GraphQL 32-bit `Int` boundary recast as primary driver; `PositiveBigIntegerField` mapped to `BigInt`; `SCALAR_MAP` value-type widened to `Any`; `schema.execute_sync` required for every public mapping; CHANGELOG permission granted.
 - **Revision 3** (post-pass-2 review) — Release-alignment quartet expanded; `_FakeArrayField` metadata propagation; explicit `_resolve_*_field()` helper tests; `PositiveBigIntegerField` MRO rationale corrected; `BigAutoField` recourse sequenced behind WIP-ALPHA-015; `IntValueTooLargeError` → observable `GraphQLError` shape; `BigInt` redefined using `NewType` (later proven insufficient — see revision 4).
-- **Revision 4** (post-pass-3 review) — Strawberry deprecation warning accepted for `0.0.6`; strict `BigInt` parser introduced; test layout matched to `docs/TREE.md` mirror rule; atomic version bump expanded to a *quintet*; KANBAN card body to be rewritten (not just status-flipped); `FEATURES.md` BigInt entry update made explicit.
+- **Revision 4** (post-pass-3 review) — Strawberry deprecation warning accepted for `0.0.6`; strict `BigInt` parser introduced; test layout matched to `docs/TREE.md` mirror rule; atomic version bump expanded to a *quintet*; KANBAN card body to be rewritten (not just status-flipped); `GLOSSARY.md` BigInt entry update made explicit.
 - **Revision 5** (post-pass-4 review) — Strict parser tightened with `re.fullmatch(r"^(0|-?[1-9][0-9]*)$", value)` (rejects `"1_000"`, `"+1"`, `"１２"`, `"01"`, `"-0"`); `scalar_map` follow-up rationale corrected; float-rejection sentence fixed (`int(1.9) == 1` is the silent-truncation bug).
-- **Revision 6** (post-sr-dev review) — `managed = False` requirement and explicit `monkeypatch.setattr(converters, "_*_FIELD_CLS", ...)` step pinned in Decision 7; redundant inner `_ARRAY_FIELD_CLS is not None` removed; outer `choices` on `ArrayField` rejected with `ConfigurationError`; `T | None` hedge dropped (verified on Python 3.10+); Slice 5 split into Slice 5 (atomic version-bump quintet) and Slice 6 (docs/KANBAN/CHANGELOG/archive) — now six slices; `__all__` exact tuple text pinned; deprecation-warning emission test added (later replaced in revision 7); inline KANBAN Done-card body drafted; explicit `docs/FEATURES.md:910` deletion target; plus polish for L1–L4, L6, L7, and 9 missing tests.
+- **Revision 6** (post-sr-dev review) — `managed = False` requirement and explicit `monkeypatch.setattr(converters, "_*_FIELD_CLS", ...)` step pinned in Decision 7; redundant inner `_ARRAY_FIELD_CLS is not None` removed; outer `choices` on `ArrayField` rejected with `ConfigurationError`; `T | None` hedge dropped (verified on Python 3.10+); Slice 5 split into Slice 5 (atomic version-bump quintet) and Slice 6 (docs/KANBAN/CHANGELOG/archive) — now six slices; `__all__` exact tuple text pinned; deprecation-warning emission test added (later replaced in revision 7); inline KANBAN Done-card body drafted; explicit `docs/GLOSSARY.md:910` deletion target; plus polish for L1–L4, L6, L7, and 9 missing tests.
 - **Revision 7** (post-second-pass review) — Seven structural changes plus polish:
   1. **B1**: `BigInt` definition wrapped in a tightly scoped `warnings.catch_warnings()` filter so Strawberry's class-direct-to-`scalar()` `DeprecationWarning` does **not** escape to consumers at package-import time. Previously, importing `django_strawberry_framework` (or anything from it) leaked the warning; under `-W error::DeprecationWarning`, the import failed entirely. Revision 6's `test_bigint_scalar_definition_emits_strawberry_deprecation_warning` is replaced with `test_package_import_does_not_emit_strawberry_deprecation_warning`, which forces a re-import under `warnings.catch_warnings(record=True)` and asserts no Strawberry deprecation escapes. CHANGELOG entry restructured accordingly. The suppression is intentional debt for `0.0.6`; the warning-free design is roadmapped as `TODO-ALPHA-045-0.0.7 — Warning-free scalar registration via StrawberryConfig.scalar_map`, added in Slice 6.
   2. **B2**: New strict serializer `_serialize_bigint(value: Any) -> str` replaces `serialize=str`. Rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. Three new unit tests (`test_bigint_serialize_rejects_bool`, `test_bigint_serialize_rejects_float`, `test_bigint_serialize_rejects_non_int_types`) plus a schema-execution test (`test_bigint_resolver_returning_bool_raises_via_schema_execution`) pin the output side's strictness symmetric with the input parser.
@@ -48,17 +48,17 @@ Revision history (kept inline so the spec is self-contained):
 
 ## Key glossary references
 
-Skim these [`docs/FEATURES.md`](../FEATURES.md) entries first — they anchor the vocabulary used throughout the spec:
+Skim these [`docs/GLOSSARY.md`](../GLOSSARY.md) entries first — they anchor the vocabulary used throughout the spec:
 
-- [`DjangoType`](../FEATURES.md#djangotype) — the base class whose field-conversion table this card extends.
-- [Scalar field conversion](../FEATURES.md#scalar-field-conversion) — the shipped scalar coverage and the **subclass MRO walk** that the spec's [Edge cases](#edge-cases-and-constraints) section relies on.
-- [Specialized scalar conversions](../FEATURES.md#specialized-scalar-conversions) — the planned umbrella entry this card flips from `planned for 0.0.6` to `shipped (0.0.6)`.
-- [`BigInt` scalar](../FEATURES.md#bigint-scalar) — the new public scalar this card introduces.
-- [`ConfigurationError`](../FEATURES.md#configurationerror) — raised for unsupported fields, nested `ArrayField`, and outer `choices` on `ArrayField`.
-- [`Meta.exclude`](../FEATURES.md#metaexclude) — consumer-side recourse named in the existing unsupported-field error message.
-- [`finalize_django_types`](../FEATURES.md#finalize_django_types) — where the new annotations land. The [Schema test fixture pattern](#decision-7--test-strategy) requires every test that defines a synthetic `DjangoType` to call this.
-- [Choice enum generation](../FEATURES.md#choice-enum-generation) — `ArrayField(CharField(choices=...))` on the *base field* is the tested edge case; outer `choices` on `ArrayField` is rejected.
-- [Scalar field override semantics](../FEATURES.md#scalar-field-override-semantics) — planned for `0.0.6` (WIP-ALPHA-015). The `BigAutoField` deferral depends on that contract.
+- [`DjangoType`](../GLOSSARY.md#djangotype) — the base class whose field-conversion table this card extends.
+- [Scalar field conversion](../GLOSSARY.md#scalar-field-conversion) — the shipped scalar coverage and the **subclass MRO walk** that the spec's [Edge cases](#edge-cases-and-constraints) section relies on.
+- [Specialized scalar conversions](../GLOSSARY.md#specialized-scalar-conversions) — the planned umbrella entry this card flips from `planned for 0.0.6` to `shipped (0.0.6)`.
+- [`BigInt` scalar](../GLOSSARY.md#bigint-scalar) — the new public scalar this card introduces.
+- [`ConfigurationError`](../GLOSSARY.md#configurationerror) — raised for unsupported fields, nested `ArrayField`, and outer `choices` on `ArrayField`.
+- [`Meta.exclude`](../GLOSSARY.md#metaexclude) — consumer-side recourse named in the existing unsupported-field error message.
+- [`finalize_django_types`](../GLOSSARY.md#finalize_django_types) — where the new annotations land. The [Schema test fixture pattern](#decision-7--test-strategy) requires every test that defines a synthetic `DjangoType` to call this.
+- [Choice enum generation](../GLOSSARY.md#choice-enum-generation) — `ArrayField(CharField(choices=...))` on the *base field* is the tested edge case; outer `choices` on `ArrayField` is rejected.
+- [Scalar field override semantics](../GLOSSARY.md#scalar-field-override-semantics) — planned for `0.0.6` (WIP-ALPHA-015). The `BigAutoField` deferral depends on that contract.
 
 Project conventions to follow:
 
@@ -185,22 +185,22 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
       - [ ] `test_hstore_field_outer_choices_rejected_via_fake_sentinel` — declares `_FakeHStoreField(choices=[("a", "A")])`; asserts `ConfigurationError` is raised at type creation (H1 fix)
       - [ ] `test_hstore_field_sentinel_none_path` — monkey-patch sentinel to `None`
   - [ ] Optional gated test: `test_real_hstore_field_compatible_with_strawberry` — `pytest.importorskip("django.contrib.postgres.fields")`; declares a `DjangoType` with `HStoreField()` on a `managed = False` model, calls `finalize_django_types()`, introspects the schema, asserts the field type is `JSON!` (introspection chain: `NON_NULL → SCALAR { name: "JSON" }`; walk the `kind / ofType` structure explicitly), **and** exercises a resolver returning `{"k1": "v", "k2": None}` via `schema.execute_sync`, asserting the dict shape including the `None` value is preserved in the response.
-- [ ] Slice 5: Atomic version-bump quintet (single commit). **Deliberate scope note:** the quintet covers programmatically-checked version sites — `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`'s pinned `__version__`, the `docs/FEATURES.md` "Current package version" line, and `uv.lock`. The two consumer-facing version strings (`README.md:45` and `docs/README.md:89`) are deferred to Slice 6 so the atomic-bump commit stays scoped to sites where staleness causes CI / introspection failures. The result is a controlled inconsistency between Slice 5 landing and Slice 6 closing: PyPI metadata reads `0.0.6` but `README.md` / `docs/README.md` still say `0.0.5`. The PyPI publish gate in [Definition of done](#definition-of-done) closes this gap.
+- [ ] Slice 5: Atomic version-bump quintet (single commit). **Deliberate scope note:** the quintet covers programmatically-checked version sites — `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`'s pinned `__version__`, the `docs/GLOSSARY.md` "Current package version" line, and `uv.lock`. The two consumer-facing version strings (`README.md:45` and `docs/README.md:89`) are deferred to Slice 6 so the atomic-bump commit stays scoped to sites where staleness causes CI / introspection failures. The result is a controlled inconsistency between Slice 5 landing and Slice 6 closing: PyPI metadata reads `0.0.6` but `README.md` / `docs/README.md` still say `0.0.5`. The PyPI publish gate in [Definition of done](#definition-of-done) closes this gap.
   - [ ] `pyproject.toml` — `version = "0.0.5"` → `version = "0.0.6"`
   - [ ] `django_strawberry_framework/__init__.py` — `__version__ = "0.0.5"` → `__version__ = "0.0.6"`
   - [ ] `tests/base/test_init.py` — update pinned `__version__` assertion to `"0.0.6"`
-  - [ ] `docs/FEATURES.md` — update "Current package version: `0.0.5`" line to `0.0.6`
+  - [ ] `docs/GLOSSARY.md` — update "Current package version: `0.0.5`" line to `0.0.6`
   - [ ] `uv.lock` — re-lock with `uv lock`; the lockfile's package-version line moves from `0.0.5` to `0.0.6`
-- [ ] Slice 6: Docs, KANBAN, CHANGELOG, archive (separate commit; may follow Slice 5 by any interval). **Size note:** this is the largest commit of the six — ~7 files with substantive markdown rewrites (including the verbatim DONE-013 body + the verbatim TODO-045 body for KANBAN.md). Consider opening as a draft PR via `gh pr create --draft` for staged review before merge. **Optional fallback:** if reviewer feedback flags the commit size during the PR, split into Slice 6a (shipped-state propagation: DONE-013 body + `docs/FEATURES.md` + `docs/README.md` + root `README.md` + `docs/TREE.md` + `TODAY.md` + `CHANGELOG.md` + spec archive) and Slice 6b (forward-look: `TODO-ALPHA-045-0.0.7` card creation in `KANBAN.md`). The shipped-state half is reviewable independently from the forward-look half.
+- [ ] Slice 6: Docs, KANBAN, CHANGELOG, archive (separate commit; may follow Slice 5 by any interval). **Size note:** this is the largest commit of the six — ~7 files with substantive markdown rewrites (including the verbatim DONE-013 body + the verbatim TODO-045 body for KANBAN.md). Consider opening as a draft PR via `gh pr create --draft` for staged review before merge. **Optional fallback:** if reviewer feedback flags the commit size during the PR, split into Slice 6a (shipped-state propagation: DONE-013 body + `docs/GLOSSARY.md` + `docs/README.md` + root `README.md` + `docs/TREE.md` + `TODAY.md` + `CHANGELOG.md` + spec archive) and Slice 6b (forward-look: `TODO-ALPHA-045-0.0.7` card creation in `KANBAN.md`). The shipped-state half is reviewable independently from the forward-look half.
   - [ ] Root `README.md` — update the package-version line (`README.md:45`) from `0.0.5` to `0.0.6`
   - [ ] `docs/README.md` — update the "shipped today is `0.0.5`" line (`docs/README.md:89`) to `0.0.6`; **move specialized scalar conversions out of the "Coming in `0.1.0`" callouts (`docs/README.md:101` and `docs/README.md:112`)** into shipped/current-capability text
   - [ ] `docs/TREE.md` — add `django_strawberry_framework/scalars.py` to the current package layout (near `converters.py` at `docs/TREE.md:203`) and to the target package layout (near `docs/TREE.md:245`)
-  - [ ] `docs/FEATURES.md` entries updated:
-    - [Specialized scalar conversions](../FEATURES.md#specialized-scalar-conversions) → `shipped (0.0.6)`. **Replace the existing line at `docs/FEATURES.md:910`** (currently reads `PostgreSQL HStoreField → dict[str, str | None] (soft-registered, only when django.contrib.postgres is installed)`) with `PostgreSQL HStoreField → strawberry.scalars.JSON (soft-registered, only when django.contrib.postgres.fields imports successfully)`. Update the `PositiveBigIntegerField` bullet to read `→ BigInt`.
-    - [`BigInt` scalar](../FEATURES.md#bigint-scalar) → `shipped (0.0.6)`. **Entry text** (drop-in for the dev): "JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntegerField` and `PositiveBigIntegerField` (not `BigAutoField`). Technically arbitrary-precision: serialized via Python `str(int_value)`, which handles any `int`. Wire format is a decimal string to survive GraphQL's signed 32-bit `Int` boundary (executing a query returning an `int`-annotated value past `2**31 - 1` raises a `GraphQLError` with message containing `Int cannot represent non 32-bit signed integer value`). Strict parser accepts Python `int` (excluding `bool`) and strings matching `^(0|-?[1-9][0-9]*)$` — plain ASCII decimal, optional leading minus for non-zero, no leading zeroes (except `"0"` itself), no underscores, no plus sign, no Unicode digits. Strict serializer rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. Part of [Specialized scalar conversions](#specialized-scalar-conversions)."
-    - [Scalar field conversion](../FEATURES.md#scalar-field-conversion) → add the new field-type bullets; note the `PositiveBigIntegerField` change.
-    - [Index](../FEATURES.md#index) → update status badges for the two flipped entries.
-    - [Public exports](../FEATURES.md#public-exports) → add `BigInt`. Note: the import path is now clean — no Strawberry deprecation warning escapes (the deprecation is suppressed at the definition site in `scalars.py`).
+  - [ ] `docs/GLOSSARY.md` entries updated:
+    - [Specialized scalar conversions](../GLOSSARY.md#specialized-scalar-conversions) → `shipped (0.0.6)`. **Replace the existing line at `docs/GLOSSARY.md:910`** (currently reads `PostgreSQL HStoreField → dict[str, str | None] (soft-registered, only when django.contrib.postgres is installed)`) with `PostgreSQL HStoreField → strawberry.scalars.JSON (soft-registered, only when django.contrib.postgres.fields imports successfully)`. Update the `PositiveBigIntegerField` bullet to read `→ BigInt`.
+    - [`BigInt` scalar](../GLOSSARY.md#bigint-scalar) → `shipped (0.0.6)`. **Entry text** (drop-in for the dev): "JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntegerField` and `PositiveBigIntegerField` (not `BigAutoField`). Technically arbitrary-precision: serialized via Python `str(int_value)`, which handles any `int`. Wire format is a decimal string to survive GraphQL's signed 32-bit `Int` boundary (executing a query returning an `int`-annotated value past `2**31 - 1` raises a `GraphQLError` with message containing `Int cannot represent non 32-bit signed integer value`). Strict parser accepts Python `int` (excluding `bool`) and strings matching `^(0|-?[1-9][0-9]*)$` — plain ASCII decimal, optional leading minus for non-zero, no leading zeroes (except `"0"` itself), no underscores, no plus sign, no Unicode digits. Strict serializer rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. Part of [Specialized scalar conversions](#specialized-scalar-conversions)."
+    - [Scalar field conversion](../GLOSSARY.md#scalar-field-conversion) → add the new field-type bullets; note the `PositiveBigIntegerField` change.
+    - [Index](../GLOSSARY.md#index) → update status badges for the two flipped entries.
+    - [Public exports](../GLOSSARY.md#public-exports) → add `BigInt`. Note: the import path is now clean — no Strawberry deprecation warning escapes (the deprecation is suppressed at the definition site in `scalars.py`).
   - [ ] `TODAY.md` — expand the "What fakeshop model fields work today" section with the four new scalars.
   - [ ] `KANBAN.md` — move `TODO-ALPHA-013-0.0.6` → `DONE-013-0.0.6`. **Drop in the verbatim body below**:
 
@@ -218,9 +218,9 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
     - `ArrayField` rejects nested arrays and outer `choices` with `ConfigurationError`.
     - `SCALAR_MAP`'s declared value type widened from `dict[type[models.Field], type]` to `dict[type[models.Field], Any]`.
     - `BigInt` added to `django_strawberry_framework.__all__`; `tests/base/test_init.py`'s pinned `__all__` and `__version__` assertions updated.
-    - Atomic version-bump quintet: `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `docs/FEATURES.md` package-version line, `uv.lock`.
+    - Atomic version-bump quintet: `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `docs/GLOSSARY.md` package-version line, `uv.lock`.
     - 100% coverage via `tests/test_scalars.py` (new flat file) and `tests/types/test_converters.py` (extended). Includes a `test_package_import_does_not_emit_strawberry_deprecation_warning` guard so future regressions to the suppression are explicit.
-    - Docs: `docs/FEATURES.md`, `docs/README.md`, `README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`.
+    - Docs: `docs/GLOSSARY.md`, `docs/README.md`, `README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`.
 
     Design notes carried into `0.0.6`:
 
@@ -243,7 +243,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
 
 ## Problem statement
 
-[`docs/FEATURES.md`'s Scalar field conversion entry](../FEATURES.md#scalar-field-conversion) advertises broad Django scalar coverage but explicitly defers four: plain `BigIntegerField`, `JSONField`, PostgreSQL `ArrayField`, and PostgreSQL `HStoreField`. The deferral has lived in `types/converters.py` as three TODO comments (lines 32-47). This card converts those TODOs into shipped behavior.
+[`docs/GLOSSARY.md`'s Scalar field conversion entry](../GLOSSARY.md#scalar-field-conversion) advertises broad Django scalar coverage but explicitly defers four: plain `BigIntegerField`, `JSONField`, PostgreSQL `ArrayField`, and PostgreSQL `HStoreField`. The deferral has lived in `types/converters.py` as three TODO comments (lines 32-47). This card converts those TODOs into shipped behavior.
 
 Five constraints shape the design:
 
@@ -399,7 +399,7 @@ Target Django fields:
 
 - `BigIntegerField` → `BigInt` (new). Always.
 - `PositiveBigIntegerField` → `BigInt` (changed from `int`). Explicit `SCALAR_MAP` entry for regression protection.
-- `BigAutoField` → `int` (preserved). No current-day consumer recourse for the `2**31` boundary — wait for [Scalar field override semantics](../FEATURES.md#scalar-field-override-semantics).
+- `BigAutoField` → `int` (preserved). No current-day consumer recourse for the `2**31` boundary — wait for [Scalar field override semantics](../GLOSSARY.md#scalar-field-override-semantics).
 
 ### Decision 2 — `ArrayField` dimensionality cap and outer-`choices` rejection
 
@@ -487,7 +487,7 @@ if _HSTORE_FIELD_CLS is not None and isinstance(field, _HSTORE_FIELD_CLS):
 
 ### Decision 6 — `BigInt` public-export status and migration contract
 
-`BigInt` becomes a public export (`from django_strawberry_framework import BigInt`). [`docs/FEATURES.md`'s Public exports](../FEATURES.md#public-exports) entry gains the new symbol. The pinned `__all__` assertion in `tests/base/test_init.py` is updated in Slice 1.
+`BigInt` becomes a public export (`from django_strawberry_framework import BigInt`). [`docs/GLOSSARY.md`'s Public exports](../GLOSSARY.md#public-exports) entry gains the new symbol. The pinned `__all__` assertion in `tests/base/test_init.py` is updated in Slice 1.
 
 **Import-time warning posture:** Strawberry's class-direct-to-`scalar()` `DeprecationWarning` is **suppressed at the definition site** in `scalars.py` (tight `warnings.catch_warnings()` filter). Consumers importing the package — directly or transitively — see no warning. The suppression is documented in code comments and verified by `test_package_import_does_not_emit_strawberry_deprecation_warning`.
 
@@ -620,7 +620,7 @@ Change `SCALAR_MAP`'s declared value type from `dict[type[models.Field], type]` 
 
 ## User-facing API
 
-After this card ships, [`docs/FEATURES.md`'s Scalar field conversion entry](../FEATURES.md#scalar-field-conversion) gains four new mappings and one changed mapping:
+After this card ships, [`docs/GLOSSARY.md`'s Scalar field conversion entry](../GLOSSARY.md#scalar-field-conversion) gains four new mappings and one changed mapping:
 
 | Django field | Generated annotation | Notes |
 |---|---|---|
@@ -659,11 +659,11 @@ Files: `django_strawberry_framework/types/converters.py` (sentinel + branch retu
 
 ### Slice 5 — Atomic version-bump quintet
 
-Single commit; five files: `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `docs/FEATURES.md` package-version line, `uv.lock`.
+Single commit; five files: `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `docs/GLOSSARY.md` package-version line, `uv.lock`.
 
 ### Slice 6 — Docs, KANBAN, CHANGELOG, archive
 
-Separate commit. Files: root `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/FEATURES.md` (entries beyond the version line), `TODAY.md`, `KANBAN.md` (move + verbatim body), `CHANGELOG.md` (`Added` / `Changed` / `Notes`), `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` (archive this spec).
+Separate commit. Files: root `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/GLOSSARY.md` (entries beyond the version line), `TODAY.md`, `KANBAN.md` (move + verbatim body), `CHANGELOG.md` (`Added` / `Changed` / `Notes`), `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` (archive this spec).
 
 ## Edge cases and constraints
 
@@ -680,7 +680,7 @@ Separate commit. Files: root `README.md`, `docs/README.md`, `docs/TREE.md`, `doc
 - **Strict parser tradeoffs.** Regex narrower than `int(str)` — predictability over leniency.
 - **Strict serializer tradeoffs.** Resolver returning a non-`int` value raises at the schema boundary instead of silently stringifying. Consumers wanting permissive output can wrap the serializer at their layer; the package surface stays strict.
 - **`BigInt` is arbitrary-precision** — see [Decision 1](#decision-1--bigint-wire-format-and-target-fields) for the canonical framing.
-- **Custom `from_db_value` on a `BigIntegerField` subclass.** If a consumer subclasses `BigIntegerField` and overrides `from_db_value` to return a non-`int` Python value (e.g. a domain type like a money object), `_serialize_bigint` raises `TypeError` at the schema boundary — a behavioral change from a permissive `serialize=str` (which would have silently stringified the domain object via `__str__`). Not a regression of shipped behavior (`BigInt` is new in `0.0.6`), but worth documenting so consumers hitting this have a referenceable "we did this deliberately." Recourse: keep the column type-pure at the GraphQL boundary, or override the scalar annotation on the affected field once [Scalar field override semantics](../FEATURES.md#scalar-field-override-semantics) (WIP-ALPHA-015) ships.
+- **Custom `from_db_value` on a `BigIntegerField` subclass.** If a consumer subclasses `BigIntegerField` and overrides `from_db_value` to return a non-`int` Python value (e.g. a domain type like a money object), `_serialize_bigint` raises `TypeError` at the schema boundary — a behavioral change from a permissive `serialize=str` (which would have silently stringified the domain object via `__str__`). Not a regression of shipped behavior (`BigInt` is new in `0.0.6`), but worth documenting so consumers hitting this have a referenceable "we did this deliberately." Recourse: keep the column type-pure at the GraphQL boundary, or override the scalar annotation on the affected field once [Scalar field override semantics](../GLOSSARY.md#scalar-field-override-semantics) (WIP-ALPHA-015) ships.
 
 ## Test plan
 
@@ -737,9 +737,9 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- Filter input shapes — [`FilterSet`](../FEATURES.md#filterset), TODO-ALPHA-020-0.0.8.
-- Mutation input types for `BigInt` — [Mutations subsystem](../FEATURES.md#djangomutation), TODO-ALPHA-026-0.0.11.
-- Multi-database routing — [Multi-database cooperation](../FEATURES.md#multi-database-cooperation), TODO-ALPHA-019-0.0.7.
+- Filter input shapes — [`FilterSet`](../GLOSSARY.md#filterset), TODO-ALPHA-020-0.0.8.
+- Mutation input types for `BigInt` — [Mutations subsystem](../GLOSSARY.md#djangomutation), TODO-ALPHA-026-0.0.11.
+- Multi-database routing — [Multi-database cooperation](../GLOSSARY.md#multi-database-cooperation), TODO-ALPHA-019-0.0.7.
 - Multi-dimensional `ArrayField`.
 - Dedicated `HStore` scalar.
 - `BigAutoField` → `BigInt`.
@@ -755,7 +755,7 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 - `SCALAR_MAP`'s value type annotation widened to `Any`.
 - Atomic version-bump quintet aligned at `0.0.6`.
 - Root `README.md`, `docs/README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`, `KANBAN.md` (with both the verbatim `DONE-013-0.0.6` body AND the new `TODO-ALPHA-045-0.0.7` card body added to To-Do) all reflect shipped state.
-- `docs/FEATURES.md` updated entries: [Specialized scalar conversions](../FEATURES.md#specialized-scalar-conversions), [`BigInt` scalar](../FEATURES.md#bigint-scalar), [Scalar field conversion](../FEATURES.md#scalar-field-conversion), [Index](../FEATURES.md#index), [Public exports](../FEATURES.md#public-exports).
+- `docs/GLOSSARY.md` updated entries: [Specialized scalar conversions](../GLOSSARY.md#specialized-scalar-conversions), [`BigInt` scalar](../GLOSSARY.md#bigint-scalar), [Scalar field conversion](../GLOSSARY.md#scalar-field-conversion), [Index](../GLOSSARY.md#index), [Public exports](../GLOSSARY.md#public-exports).
 - `BigInt` strict parser **and strict serializer** unit-tested in `tests/test_scalars.py` and exercised at schema-execution level in `tests/types/test_converters.py`.
 - Deprecation-suppression pinned via `test_package_import_does_not_emit_strawberry_deprecation_warning` (subprocess-based).
 - `ArrayField` outer-`choices` rejection tested.

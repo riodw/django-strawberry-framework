@@ -1,9 +1,9 @@
-# BETTER.md
+# BACKLOG.md
 ## Purpose
 
 This file tracks the strategic-differentiation design surface where `django-strawberry-framework` can be **strictly better** than both `graphene-django` and `strawberry-graphql-django` — not just on-par.
 
-Roadmap parity with the inspirations (filters / orders / aggregates / fieldsets / cascade permissions / connection fields, all reproducing the `django-graphene-filters` feature surface) is tracked in [`KANBAN.md`](KANBAN.md). **`BETTER.md` is for strategic differentiation** — ideas neither inspiration ships cleanly that we should consider pulling onto the roadmap once parity items have landed.
+Roadmap parity with the inspirations (filters / orders / aggregates / fieldsets / cascade permissions / connection fields, all reproducing the `django-graphene-filters` feature surface) is tracked in [`KANBAN.md`](KANBAN.md). **`BACKLOG.md` is for strategic differentiation** — ideas neither inspiration ships cleanly that we should consider pulling onto the roadmap once parity items have landed.
 
 Each item below is **an idea, not a commitment**. No item carries a target version. Items here graduate into `KANBAN.md` cards when scheduled.
 
@@ -129,14 +129,14 @@ A second mutation with the same `request_id` within the TTL returns the cached f
 
 - ship implementation end-to-end before becoming public
 - have tests pinning consumer-visible behavior
-- be marked shipped in `docs/FEATURES.md`
+- be marked shipped in `docs/GLOSSARY.md`
 - have a stable enough name to live with for the alpha/beta/stable arc
 - update top-level `__all__` and subpackage exports together (not one without the other)
 - match status markers in `README.md` / `docs/TREE.md` to actual implementation state
 
 **Why it matters**: the current public surface is small (`DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto`, `__version__`) — keeping it disciplined as the package grows is a real maintainability win. Prevents the *"we accidentally exported a private helper and now we're stuck with it"* class of mistakes.
 
-**Framework integration**: applies to every `BETTER.md` item that lands. Each one introducing a new public name (or extending an existing one) must follow this discipline. Could also live in `AGENTS.md` or a `CONTRIBUTING.md` doc — it's a process rule rather than a discrete feature.
+**Framework integration**: applies to every `BACKLOG.md` item that lands. Each one introducing a new public name (or extending an existing one) must follow this discipline. Could also live in `AGENTS.md` or a `CONTRIBUTING.md` doc — it's a process rule rather than a discrete feature.
 
 ### 36. Shared queryset introspection helpers (`utils/queryset.py`)
 
@@ -313,7 +313,7 @@ class TransitionalType(DjangoType):
 | **Multi-tenant with scope-bound IDs** | Some teams want different GraphQL types to mint disjoint ID spaces over the same backing model. They opt into `"type"` per type. Documented as the legitimate use case for the legacy convention. |
 | **Debug tooling** | Some introspection tools decode GlobalIDs to show the type name. With `"model"` encoding, they show `products.item:42` instead of `ItemType:42` — arguably more useful for Django-shop debugging. A `manage.py decode_globalid <gid>` helper covers both representations. |
 
-#### Composition with other `BETTER.md` items
+#### Composition with other `BACKLOG.md` items
 
 - **Item 39 (Relay magic)** — sub-feature 1 (GlobalID migrations) collapses to a tiny *"app-move alias helper"* once `"model"` is the default. The full migration system this item replaces was always a workaround for the type-name convention's fragility; with model identity as the durable anchor, the migration system isn't needed for the common case.
 - **Item 15 (Content-versioned Node types)** — composes cleanly; content versions are computed off the row data, not the encoding strategy.
@@ -830,7 +830,7 @@ schema = strawberry.Schema(
 
 Sensible defaults: if a `DjangoType` declares no `Meta.dos_classes`, the global stack still applies. If a schema is built without `DjangoDoSExtension`, no DoS protection is active — consumers opt in explicitly. The package ships a `manage.py audit_dos` command that warns on schemas with no DoS extension configured in production.
 
-#### Composition with other `BETTER.md` items
+#### Composition with other `BACKLOG.md` items
 
 **This item is the architectural seam** through which several other items deliver their concrete behavior. The relationship is *additive, not replacement*: items 10 / 17 / 24 remain meaningful standalone designs — they describe **what** the policy does; this item describes **how** policies plug together. Building any one of them in isolation produces a useful feature; building all three through the framework produces a *coherent* defense.
 
@@ -1225,7 +1225,7 @@ curl -H "Accept: text/csv" \
 
 For nested lists (e.g. `allOrders { lineItems { … } }`), the row is "one line per line-item" with the parent order's columns repeated — same row-flattening semantics pandas uses for `explode`. Configurable per-field via `Meta.tabular = {"explode": ["line_items"]}`.
 
-#### Composition with other `BETTER.md` items
+#### Composition with other `BACKLOG.md` items
 
 - **Item 17 (cost & complexity limits)** — `Meta.cost` budget enforced pre-execution; rejections produce `code="dst.matrix.cost_exceeded"`.
 - **Item 18 (HTTP-spec transport)** — `Accept` negotiation is exactly the HTTP-semantic path item 18 already documents; `Cache-Control` on idempotent matrix queries lets CDNs cache aggregated reports.
@@ -1665,7 +1665,7 @@ for await (const order of stream) {
 
 For non-TS clients (Python `httpx`, Go, `curl` + `jq` shell pipelines), the protocol is plain HTTP + NDJSON: a 20-line library can speak it without any GraphQL client library at all.
 
-#### Composition with other `BETTER.md` items
+#### Composition with other `BACKLOG.md` items
 
 - **Item 17 (query cost & complexity limits)** — a result-count over `max_snapshot_size` is its own typed rejection; cost analysis runs on the *streaming plan*, not the materialized one, so query cost stays bounded.
 - **Item 18 (HTTP-spec transport)** — `Range` header support and `Cache-Control: private, no-store` on download streams come for free from the same view rewrite.
@@ -1939,7 +1939,7 @@ const client = new OrdersServiceClient("https://api.example.com");
 const order  = await client.getOrder({ id: 42 });
 ```
 
-#### Composition with other `BETTER.md` items
+#### Composition with other `BACKLOG.md` items
 
 - **Item 17 (cost & complexity limits)** — gRPC requests carry the same cost-budget logic via the same selection walker; rejections become `RESOURCE_EXHAUSTED` gRPC status with the typed error envelope from item 19 in the trailers.
 - **Item 18 (HTTP-spec transport)** — N/A; gRPC has its own HTTP/2 semantics. Caching headers don't apply, but item 15's content-versioned-node hashes can ride in gRPC response metadata for client-side caches.
@@ -1991,9 +1991,9 @@ Nothing in the Django ecosystem does this today. `django-grpc-framework` ships g
 **Framework integration**: builds on the shipped cooperation contract from `TODO-ALPHA-019-0.0.7`. Composes with `Meta.get_queryset` (the routing decision could live there per-type, in tandem with the explicit `Meta.preferred_database`). Composes with `TODO-ALPHA-024` (Connection-aware optimizer — sharded connection pagination). Composes with item 33 (DoS policy stack — per-shard rate limits and cost budgets). Composes with item 19 (typed error envelope — surfacing cross-shard routing errors with a stable error code). Composes with item 4 (polymorphic / `GenericForeignKey`) when the polymorphic targets live on different shards.
 
 ## How to use this file
-- When scheduling a slice after parity items land, pull a high-`Realistic` `BETTER.md` item that isn't already on `KANBAN.md`.
+- When scheduling a slice after parity items land, pull a high-`Realistic` `BACKLOG.md` item that isn't already on `KANBAN.md`.
 - Promote it to a `KANBAN.md` `TODO-*` card (or `BACKLOG-*` if it's not committed to a milestone yet).
 - Write its `docs/spec-<NNN>-<topic>-<0_0_X>.md` and follow the existing slice cadence.
-- When the slice ships, cross-reference the `BETTER.md` item from the new `KANBAN.md` `DONE-*` card so the differentiation story stays traceable.
+- When the slice ships, cross-reference the `BACKLOG.md` item from the new `KANBAN.md` `DONE-*` card so the differentiation story stays traceable.
 
-If a `BETTER.md` item turns out to be wrong (the upstream packages ship it, real-world adopters don't want it, or the architectural cost is too high), strike it through with a one-line note explaining why; do not delete it. The history of rejected differentiators is itself useful design context.
+If a `BACKLOG.md` item turns out to be wrong (the upstream packages ship it, real-world adopters don't want it, or the architectural cost is too high), strike it through with a one-line note explaining why; do not delete it. The history of rejected differentiators is itself useful design context.

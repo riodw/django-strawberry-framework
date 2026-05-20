@@ -44,7 +44,7 @@ Cross-file analysis:
 
 - **Slice 3's docstring update consolidated the narrative voice.** The canonical four-corner narrative lives in `_consumer_assigned_fields`'s docstring; `_build_annotations`'s docstring cross-references via "See `_consumer_assigned_fields` for the four-corner override contract that populates `consumer_authored_fields`". No "two voices of the same story" risk.
 
-- **Slice 5's narrative voices across FEATURES.md / KANBAN / CHANGELOG / TODAY / docs/README.md** are intentionally separate audiences of the same contract (Worker 3's Slice 5 review verified cross-file consistency). The resolver-backed sibling-field workaround example appears identically in KANBAN, FEATURES, and CHANGELOG; this is a documentation-narrative repetition, not a code-duplication concern.
+- **Slice 5's narrative voices across GLOSSARY.md / KANBAN / CHANGELOG / TODAY / docs/README.md** are intentionally separate audiences of the same contract (Worker 3's Slice 5 review verified cross-file consistency). The resolver-backed sibling-field workaround example appears identically in KANBAN, FEATURES, and CHANGELOG; this is a documentation-narrative repetition, not a code-duplication concern.
 
 ### Module responsibility boundaries
 
@@ -171,7 +171,7 @@ _To be appended below this line by Worker 2's build report and Worker 3's review
     - `KANBAN.md`
     - `TODAY.md`
     - `django_strawberry_framework/types/definition.py`
-    - `docs/FEATURES.md`
+    - `docs/GLOSSARY.md`
     - `docs/README.md`
     - `pyproject.toml`
     - `tests/types/test_base.py`

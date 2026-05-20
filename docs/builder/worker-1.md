@@ -10,7 +10,7 @@ Read the docs marked `yes` in the **Worker 1** column of the Required reading pe
 
 For planning a slice, also read the relevant source files, tests, and docs named by the spec slice. For integration and final verification, read every prior `docs/builder/bld-*.md` artifact (per the strict-reading rule in BUILD.md's "Cross-slice integration pass" section).
 
-Optional supplementary context when relevant: `TODAY.md`, `BETTER.md`, `docs/README.md`, `docs/TREE.md`, `examples/fakeshop/test_query/README.md`.
+Optional supplementary context when relevant: `TODAY.md`, `BACKLOG.md`, `docs/README.md`, `docs/TREE.md`, `examples/fakeshop/test_query/README.md`.
 
 **Forbidden reads.** Worker 1 must not read `docs/builder/worker-memory/worker-0.md`, `worker-2.md`, or `worker-3.md`.
 

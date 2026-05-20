@@ -11,7 +11,7 @@ Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 - `<STATUS>` — the column the card lives in: `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), `BLOCKED` (waiting on a dependency), or `DONE` (shipped). Updated when the card moves between columns.
 - `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `TODO`, `WIP`, and `BLOCKED` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-035-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-044-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is planned to be completed (every other card, ordered by planned ship version, ties broken by intra-version dependency order). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
-- `X.Y.Z` — the package version the card shipped in (Done cards) or is planned to ship in (everything else). Alpha cards span `0.0.6` through `0.0.12` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Anything beyond `1.0.0` lives in [`BETTER.md`](BETTER.md), not here.
+- `X.Y.Z` — the package version the card shipped in (Done cards) or is planned to ship in (everything else). Alpha cards span `0.0.6` through `0.0.12` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Anything beyond `1.0.0` lives in [`BACKLOG.md`](BACKLOG.md), not here.
 
 For install, local development, testing, and the canonical documentation map, start from [`README.md`](README.md).
 
@@ -48,7 +48,7 @@ For install, local development, testing, and the canonical documentation map, st
 ### In progress
 
 - Nothing currently active. `0.0.7` is the next patch — see the `TODO-ALPHA-016-0.0.7` … `TODO-ALPHA-045-0.0.7` cluster below for the queued cards.
-- Strategic differentiation roadmap (post-`0.0.6`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
+- Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`](BACKLOG.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
 
@@ -159,15 +159,15 @@ Definition of done:
 - `docs/spec-multi_db.md` exists and documents the cooperation contract.
 - `tests/optimizer/test_multi_db.py` covers: optimizer plan under `.using()`, `Prefetch` routing inheritance, strictness mode under multi-db, `get_queryset` downgrade routing.
 - `examples/fakeshop/test_query/test_library_api.py` (or a sibling under `examples/fakeshop/test_query/`) exercises the same selection shapes against a `FAKESHOP_SHARDED=1` configuration.
-- `docs/FEATURES.md` gains a "Multi-database cooperation" subsection (status: shipped, since the in-source cooperation is what the card is documenting).
-- `docs/README.md`'s `### Sharded mode (multi-DB)` subsection gets a one-line forward-pointer to the new `FEATURES.md` subsection so the example-project mode is grounded in a package commitment.
+- `docs/GLOSSARY.md` gains a "Multi-database cooperation" subsection (status: shipped, since the in-source cooperation is what the card is documenting).
+- `docs/README.md`'s `### Sharded mode (multi-DB)` subsection gets a one-line forward-pointer to the new `GLOSSARY.md` subsection so the example-project mode is grounded in a package commitment.
 
 Files likely touched:
 
 - `docs/spec-multi_db.md` (new)
 - `tests/optimizer/test_multi_db.py` (new)
 - `examples/fakeshop/test_query/test_library_api.py` (or new sibling)
-- `docs/FEATURES.md`
+- `docs/GLOSSARY.md`
 - `docs/README.md`
 
 Dependencies:
@@ -176,7 +176,7 @@ Dependencies:
 
 Out of scope:
 
-- First-class sharding-aware planning — cross-shard joins, automatic shard selection based on FK, multi-shard aggregates, `Meta.preferred_database`. That's post-stable differentiation territory and lives in [`BETTER.md`](BETTER.md) under "First-class multi-database / sharding-aware optimizer".
+- First-class sharding-aware planning — cross-shard joins, automatic shard selection based on FK, multi-shard aggregates, `Meta.preferred_database`. That's post-stable differentiation territory and lives in [`BACKLOG.md`](BACKLOG.md) under "First-class multi-database / sharding-aware optimizer".
 
 ### TODO-ALPHA-045-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
 
@@ -236,7 +236,7 @@ Definition of done:
 - `GOAL.md` schema-setup section updated.
 - `examples/fakeshop/config/schema.py` updated to use the helper.
 - `examples/fakeshop/apps/library/schema.py` (and any other example schemas) audited for direct `BigInt` usage — no change should be needed if they only use it indirectly via Django field-to-scalar mapping.
-- `docs/FEATURES.md` updated: `BigInt scalar` entry covers the new construction pattern; new entry for the helper symbol; `Public exports` updated; `Quick start` and `Schema setup` walk-throughs (if present) updated.
+- `docs/GLOSSARY.md` updated: `BigInt scalar` entry covers the new construction pattern; new entry for the helper symbol; `Public exports` updated; `Quick start` and `Schema setup` walk-throughs (if present) updated.
 - `CHANGELOG.md`:
   - `Changed`: "Public-API migration — `BigInt` now requires `config=strawberry_config()` in `strawberry.Schema(...)`. Single-line change for consumers using `BigInt` directly."
   - `Removed`: "Internal `warnings.catch_warnings()` suppression in `scalars.py` (no longer needed)."
@@ -254,7 +254,7 @@ Files likely touched (subject to the follow-up spec settling final locations):
 - `tests/test_config.py` (new)
 - `tests/test_scalars.py`
 - `docs/README.md`
-- `docs/FEATURES.md`
+- `docs/GLOSSARY.md`
 - `docs/TREE.md` (if the new module location requires it)
 - `GOAL.md`
 - `examples/fakeshop/config/schema.py`
@@ -556,7 +556,7 @@ Definition of done:
 - Scalar conversion in `types/converters.py` returns `DjangoFileType` / `DjangoImageType` (or local equivalents) for `FileField` / `ImageField`.
 - Mutation input-type generation (`TODO-ALPHA-026-0.0.11`) maps the same fields to Strawberry's `Upload` scalar.
 - Synthetic-model tests cover both read and write paths.
-- `docs/FEATURES.md` documents the conversion table change.
+- `docs/GLOSSARY.md` documents the conversion table change.
 
 Files likely touched:
 
@@ -790,7 +790,7 @@ Definition of done:
 - Coverage stays at 100% for the package source tree.
 - Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
 - `CHANGELOG.md` `[Unreleased]` block promoted to `## [0.1.0] - YYYY-MM-DD` with a one-paragraph release summary plus the cumulative Added / Changed / Fixed / Removed sections covering `0.0.6` through `0.0.12`.
-- `README.md`, `docs/README.md`, `docs/FEATURES.md`, and `docs/TREE.md` cross-checked against the actual shipped surface; "shipped" / "planned" status markers updated.
+- `README.md`, `docs/README.md`, `docs/GLOSSARY.md`, and `docs/TREE.md` cross-checked against the actual shipped surface; "shipped" / "planned" status markers updated.
 - Audit pass against the parity findings: every ⚛️ and 🍓 card from the two upstream audits is either `DONE` or explicitly deferred with a recorded reason.
 - Tag the release in git and publish to PyPI.
 
@@ -801,7 +801,7 @@ Files likely touched:
 - `tests/base/test_init.py`
 - `uv.lock`
 - `CHANGELOG.md`
-- `README.md`, `docs/README.md`, `docs/FEATURES.md`, `docs/TREE.md`
+- `README.md`, `docs/README.md`, `docs/GLOSSARY.md`, `docs/TREE.md`
 
 ## To Do - Beta (1.0.0)
 
@@ -979,14 +979,14 @@ Potential scope:
 Definition of done:
 
 - New docs are added for the two major migration paths.
-- README and `FEATURES.md` link to the migration docs.
+- README and `GLOSSARY.md` link to the migration docs.
 - Guides distinguish shipped migration steps from planned Layer 3 migration targets.
 
 Files likely touched:
 
 - future migration docs under `docs/`
 - `docs/README.md`
-- `docs/FEATURES.md`
+- `docs/GLOSSARY.md`
 
 
 ### TODO-STABLE-044-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)
@@ -1011,7 +1011,7 @@ Definition of done:
 - Security review: input-validation surfaces (mutations, filters, GlobalID decoding) audited for injection / authorization gaps.
 - Version bumped to `1.0.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
 - `CHANGELOG.md` `[Unreleased]` block promoted to `## [1.0.0] - YYYY-MM-DD`. Release summary mentions the parity story (graphene-django + strawberry-graphql-django), the django-graphene-filters depth, and the SemVer policy switch.
-- Final pass through `BETTER.md` to mark differentiators that landed and refresh the post-1.0 roadmap.
+- Final pass through `BACKLOG.md` to mark differentiators that landed and refresh the post-1.0 roadmap.
 - Tag, publish to PyPI, write the 1.0 announcement.
 
 Files likely touched:
@@ -1021,8 +1021,8 @@ Files likely touched:
 - `tests/base/test_init.py`
 - `uv.lock`
 - `CHANGELOG.md`
-- `README.md`, `docs/README.md`, `docs/FEATURES.md`, `docs/TREE.md`
-- `BETTER.md`
+- `README.md`, `docs/README.md`, `docs/GLOSSARY.md`, `docs/TREE.md`
+- `BACKLOG.md`
 
 ## Blocked
 
@@ -1032,7 +1032,7 @@ Priority: high
 
 Severity: **major** — Relay is the canonical GraphQL identity + pagination spec; the foundation shipped in `DONE-011-0.0.5` only becomes useful end-to-end when paired with this card's Connection + Root + validation surface.
 
-Status: blocked on `TODO-ALPHA-022-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BETTER.md`](BETTER.md) item 39 — they extend this story rather than block it.
+Status: blocked on `TODO-ALPHA-022-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`](BACKLOG.md) item 39 — they extend this story rather than block it.
 
 This is the umbrella spec for the **complete Relay surface at `0.0.9`** — Node foundation + Connection + Root entry points + schema validation + test helpers. The Node half shipped in `DONE-011-0.0.5`; the Connection half is its own implementation slice (`TODO-ALPHA-022-0.0.9`); this card carries the connective tissue that ties them together into one end-to-end Relay story.
 
@@ -1138,7 +1138,7 @@ The library app already has live `/graphql/` acceptance tests for the Node found
 
 The fakeshop activation itself depends on Layer-3 subsystems (filters, orders, aggregates, fieldsets, search) so the *full* Relay-shaped schema lights up at `1.0.0`. This card delivers the **mechanics** that activation depends on.
 
-#### Out-of-scope (lives in `BETTER.md` item 39)
+#### Out-of-scope (lives in `BACKLOG.md` item 39)
 
 Explicitly *not* in this card; they're post-`1.0.0` Relay-magic differentiators:
 
@@ -1184,7 +1184,7 @@ These all build on `BLOCKED-ALPHA-023`'s mechanics. Shipping `BLOCKED-ALPHA-023`
 - `examples/fakeshop/test_query/test_library_api.py` — Relay-shape HTTP tests
 - `examples/fakeshop/apps/products/schema.py` — Relay surface activation (lit up at fakeshop activation time)
 - `docs/spec-relay_connection.md` (new)
-- `docs/FEATURES.md` — Relay surface description
+- `docs/GLOSSARY.md` — Relay surface description
 
 #### Unblocks
 
@@ -1281,7 +1281,7 @@ Evidence:
 
 Notes:
 
-- Shipped behavior is consolidated into `docs/FEATURES.md`; source/tests are the truth for optimizer behavior.
+- Shipped behavior is consolidated into `docs/GLOSSARY.md`; source/tests are the truth for optimizer behavior.
 
 ### DONE-003-0.0.3 — Optimizer beyond slices B1-B8
 
@@ -1321,13 +1321,13 @@ Priority: completed enough for current alpha
 Scope:
 
 - `docs/README.md` gives a quickstart, package positioning, optimizer value, and status.
-- `docs/FEATURES.md` describes shipped, planned, deferred, and alpha-constrained capabilities.
+- `docs/GLOSSARY.md` describes shipped, planned, deferred, and alpha-constrained capabilities.
 - `docs/TREE.md` preserves detailed package/test tree responsibilities.
 
 Evidence:
 
 - `docs/README.md`
-- `docs/FEATURES.md`
+- `docs/GLOSSARY.md`
 - `docs/TREE.md`
 
 Notes:
@@ -1342,7 +1342,7 @@ Scope:
 
 - Root `README.md` is the canonical documentation map and operational entry point.
 - `docs/README.md` is code-first: quickstart, three-minute path, optimizer behavior, and status.
-- `docs/FEATURES.md` is the capability catalog with value-led optimizer language and comparison table.
+- `docs/GLOSSARY.md` is the capability catalog with value-led optimizer language and comparison table.
 - `docs/TREE.md` is the detailed layout/test-tree reference.
 - `CHANGELOG.md` is condensed and no longer relies on design-doc pointers for release context.
 - Completed design-doc content is folded into durable docs, while remaining specs preserve design history and follow-up work.
@@ -1351,7 +1351,7 @@ Evidence:
 
 - `README.md`
 - `docs/README.md`
-- `docs/FEATURES.md`
+- `docs/GLOSSARY.md`
 - `docs/TREE.md`
 - `CHANGELOG.md`
 
@@ -1375,7 +1375,7 @@ Scope:
 - MRO-aware `_detect_custom_get_queryset` so abstract bases without `Meta` still flip the `has_custom_get_queryset` sentinel for downstream concrete subclasses.
 - Real cardinality coverage through the `library` example app (`Patron`, `MembershipCard`, `Genre`, `Book`, `Shelf`, `Branch`, `Loan`) instead of test-only fixture models.
 - Dedicated test files: `tests/types/test_definition_order.py`, `tests/types/test_definition_order_schema.py`, `tests/optimizer/test_definition_order.py`, plus `tests/test_registry.py` extensions for idempotency / phase-1 atomicity / phase-2/3 partial-mutation contract / pending-set cleanup / class-mutation residue.
-- Documentation sweep: `README.md`, `docs/README.md`, `docs/FEATURES.md`, `TODAY.md`, and `CHANGELOG.md`.
+- Documentation sweep: `README.md`, `docs/README.md`, `docs/GLOSSARY.md`, `TODAY.md`, and `CHANGELOG.md`.
 - Version bump to `0.0.4` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`.
 - Deletion of `TypeRegistry.lazy_ref`; unsupported and unresolved relations now fail with explicit `ConfigurationError` messages at annotation-building or finalization time.
 
@@ -1509,7 +1509,7 @@ Evidence:
 - `examples/fakeshop/test_query/test_library_api.py`
 - `examples/fakeshop/apps/library/schema.py` (`GenreType` declares `Meta.interfaces = (relay.Node,)`)
 - `CHANGELOG.md`
-- `docs/FEATURES.md`
+- `docs/GLOSSARY.md`
 - `docs/README.md`
 - `TODAY.md`
 - `pyproject.toml`
@@ -1559,7 +1559,7 @@ Evidence:
 
 Notes:
 
-- Originally tracked as `BETTER.md` item 35 ("`FieldMeta` single-source-of-truth consolidation and mirror retirement"). Promoted to a DONE card and removed from `BETTER.md` when the work shipped — per `BETTER.md`'s "graduate into a `KANBAN.md` card when scheduled" workflow. This is the first `BETTER.md` item to graduate; the precedent for shipped items: strike-through with SHIPPED status is fine while the item awaits a release; once a release is imminent, move the item to a `KANBAN.md` `DONE` card and delete it from `BETTER.md` so the strategic-differentiation file doesn't keep pointing at completed architecture debt.
+- Originally tracked as `BACKLOG.md` item 35 ("`FieldMeta` single-source-of-truth consolidation and mirror retirement"). Promoted to a DONE card and removed from `BACKLOG.md` when the work shipped — per `BACKLOG.md`'s "graduate into a `KANBAN.md` card when scheduled" workflow. This is the first `BACKLOG.md` item to graduate; the precedent for shipped items: strike-through with SHIPPED status is fine while the item awaits a release; once a release is imminent, move the item to a `KANBAN.md` `DONE` card and delete it from `BACKLOG.md` so the strategic-differentiation file doesn't keep pointing at completed architecture debt.
 - The consolidation eliminates ~7 sites of duplicated relation-shape logic and removes legacy class-attribute residue that previously survived `registry.clear()`. Single source of truth for field metadata reduces drift surface whenever Django adds a new relation flag or changes a descriptor attribute.
 - Internal refactor only; no `Meta` key changes, no public surface changes, no consumer-visible behavior changes. Existing tests pass without modification.
 
@@ -1762,9 +1762,9 @@ Slice-by-slice scope (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`):
 - `ArrayField` rejects nested arrays and outer `choices` with `ConfigurationError`.
 - `SCALAR_MAP`'s declared value type widened from `dict[type[models.Field], type]` to `dict[type[models.Field], Any]`.
 - `BigInt` added to `django_strawberry_framework.__all__`; `tests/base/test_init.py`'s pinned `__all__` and `__version__` assertions updated.
-- Atomic version-bump quintet: `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `docs/FEATURES.md` package-version line, `uv.lock`.
+- Atomic version-bump quintet: `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `docs/GLOSSARY.md` package-version line, `uv.lock`.
 - 100% coverage via `tests/test_scalars.py` (new flat file) and `tests/types/test_converters.py` (extended). Includes a `test_package_import_does_not_emit_strawberry_deprecation_warning` guard so future regressions to the suppression are explicit.
-- Docs: `docs/FEATURES.md`, `docs/README.md`, `README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`.
+- Docs: `docs/GLOSSARY.md`, `docs/README.md`, `README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`.
 
 Design notes carried into `0.0.6`:
 
@@ -1776,7 +1776,7 @@ Before a release:
 
 - `pyproject.toml` and `django_strawberry_framework/__init__.py` versions match.
 - README status matches actual top-level exports.
-- `docs/README.md`, `docs/FEATURES.md`, `docs/TREE.md`, and any active design docs agree on shipped/planned state.
+- `docs/README.md`, `docs/GLOSSARY.md`, `docs/TREE.md`, and any active design docs agree on shipped/planned state.
 - No stale skipped tests refer to already-shipped slices.
 - New source modules have mirrored tests in the correct tree.
 - `uv run ruff format .` passes.
@@ -1789,4 +1789,4 @@ Before a release:
 - When a card moves to Done, update the evidence and remove stale blocker language.
 - When a future spec creates a new subsystem, add it here as a card with a definition of done.
 - Keep `CHANGELOG.md` out of routine updates unless explicitly requested.
-- Strategic differentiation candidates (features neither `graphene-django` nor `strawberry-graphql-django` ship cleanly) live in [`BETTER.md`](BETTER.md). When a `BETTER.md` item is scheduled, promote it to a `TODO-NNN-X.Y.Z` or `TODO-NNN-X.Y.Z` card here and cross-reference back.
+- Strategic differentiation candidates (features neither `graphene-django` nor `strawberry-graphql-django` ship cleanly) live in [`BACKLOG.md`](BACKLOG.md). When a `BACKLOG.md` item is scheduled, promote it to a `TODO-NNN-X.Y.Z` or `TODO-NNN-X.Y.Z` card here and cross-reference back.

@@ -71,7 +71,7 @@ class CategoryNode(DjangoType):
 finalize_django_types()
 ```
 
-See [`FEATURES.md`'s Relay Node integration subsection](FEATURES.md#relay-node-integration) for the resolver list, composite-pk constraint, and the `is_type_of` injection contract.
+See [`GLOSSARY.md`'s Relay Node integration subsection](GLOSSARY.md#relay-node-integration) for the resolver list, composite-pk constraint, and the `is_type_of` injection contract.
 
 ## What just happened?
 
@@ -82,7 +82,7 @@ See [`FEATURES.md`'s Relay Node integration subsection](FEATURES.md#relay-node-i
 
 ## Today and coming next
 
-For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`](../TODAY.md). For the per-feature glossary covering every shipped / planned / deferred capability (deep-linkable by anchor — `FEATURES.md#filterset`, `FEATURES.md#fk-id-elision`, …), see [`FEATURES.md`](FEATURES.md). For the long-term destination and the migration-shape diffs against `graphene-django` and `strawberry-graphql-django`, see [`../GOAL.md`](../GOAL.md).
+For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`](../TODAY.md). For the per-feature glossary covering every shipped / planned / deferred capability (deep-linkable by anchor — `GLOSSARY.md#filterset`, `GLOSSARY.md#fk-id-elision`, …), see [`GLOSSARY.md`](GLOSSARY.md). For the long-term destination and the migration-shape diffs against `graphene-django` and `strawberry-graphql-django`, see [`../GOAL.md`](../GOAL.md).
 
 A quick summary:
 
@@ -95,7 +95,7 @@ A quick summary:
 - generated relation resolvers, with annotation-only and `strawberry.field` consumer overrides preserved
 - definition-order-independent relation finalization via `finalize_django_types()`
 - `get_queryset` visibility hook (cooperates with the optimizer via `Prefetch` downgrade)
-- `DjangoOptimizerExtension` — automatic ORM optimization: one selection-tree walk produces a `select_related` / `prefetch_related` / `only()` plan that cooperates with querysets you've already shaped (consumer entries are respected, not clobbered). Plan caching, FK-id elision for `{ relation { id } }`, `get_queryset` → `Prefetch` downgrade so visibility filters survive joins, and strictness mode (`off` / `warn` / `raise`) for accidental-N+1 detection are all in the box. See [`FEATURES.md`](FEATURES.md) for the full optimizer surface.
+- `DjangoOptimizerExtension` — automatic ORM optimization: one selection-tree walk produces a `select_related` / `prefetch_related` / `only()` plan that cooperates with querysets you've already shaped (consumer entries are respected, not clobbered). Plan caching, FK-id elision for `{ relation { id } }`, `get_queryset` → `Prefetch` downgrade so visibility filters survive joins, and strictness mode (`off` / `warn` / `raise`) for accidental-N+1 detection are all in the box. See [`GLOSSARY.md`](GLOSSARY.md) for the full optimizer surface.
 - `OptimizerHint` — per-relation overrides (`SKIP`, `select_related`, `prefetch_related`, custom `Prefetch`)
 - model / type registry and `auto` re-export from Strawberry
 - `Meta.primary` — multiple `DjangoType` subclasses per Django model with explicit primary-flag opt-in

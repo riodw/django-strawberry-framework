@@ -32,7 +32,7 @@ Worker 1 must not:
 - review more than one checklist item
 - produce a separate narrative response after the artifact is created
 - read or edit `docs/review/worker-memory/worker-2.md` or `worker-3.md`
-- truncate or rewrite history in `worker-memory/worker-1.md` — append only (consolidate via merge if the file exceeds ~50 lines)
+- truncate or rewrite history in `worker-memory/worker-1.md` — append only (consolidate via merge when the file **approaches ~45 lines**)
 - commit. Only the maintainer commits; Worker 1 never commits, even if asked
 
 ## Job
@@ -41,7 +41,7 @@ Worker 1 must not:
 2. Read the active plan.
 3. Find the first checklist item not marked `- [x]` (or use the item Worker 0's spawn prompt named explicitly).
 4. Review only that file, folder pass, or final project pass.
-5. Create the exact artifact named by the plan, including a `Status: under-review` line at the top and a `## DRY analysis` section that answers the three questions in the artifact template.
+5. Create the exact artifact named by the plan, including a `Status: under-review` line at the top and a `## DRY analysis` section listing actionable DRY opportunities per the artifact template (recap of patterns already reused goes in `## What looks solid`, not here).
 6. Append a short entry (3-5 lines) to `docs/review/worker-memory/worker-1.md`: what kind of review this was, what patterns or severity calibrations are worth carrying forward, anything you noticed that the next cycle should pay attention to.
 7. Stop.
 
@@ -49,13 +49,14 @@ The artifact is the only inter-worker output. Your memory entry is for your own 
 
 ### DRY analysis shape
 
-The `## DRY analysis` section in the artifact answers three explicit bullets, each citing file paths and line ranges:
+The `## DRY analysis` section lists **actionable** DRY consolidation candidates only — each top-level bullet is one opportunity a future DRY cycle could pick up. Two legitimate bullet shapes:
 
-- **Existing patterns reused.** Which functions, classes, validators, or test fixtures already exist that the reviewed file calls or extends? Cite `path/file.py:NN-MM`.
-- **New helpers a fix might justify.** Name the single responsibility and the call sites the helper would serve.
-- **Duplication risk in the current file.** Cite repeated literals, near-copies, or branches that already drift from a sibling module.
+- **Act-now opportunities.** Name the consolidation shape, cite the call sites, recommend the helper signature or shared dataclass. Example: "Extract `_walk_relation_target(sel, related_model, plan, prefix, info, runtime_paths)` from `walker.py:302-309` and `walker.py:369-376`; both branches share six of seven arguments."
+- **Defer-with-trigger opportunities.** Same shape, but explicitly gated. Quote the trigger condition verbatim so the next DRY cycle can grep for it and re-triage when the trigger fires. Example: "Defer until a third walker lands; collapse `walker.py:302-309` and `walker.py:369-376` then."
 
-If any answer is "none", say so explicitly. Silence on DRY is not acceptance.
+If no real opportunities exist for the file, write a single bullet `- None — <one sentence why the current factoring is correct>`. Silence on DRY is not acceptance.
+
+The positive audit trail — "Existing patterns reused", "No new helper needed at this granularity", "Considered-and-rejected duplication" — belongs in the artifact's `## What looks solid` section, NOT in `## DRY analysis`. The DRY-cycle export script (`docs/dry/export_dry_review.py`) extracts every top-level bullet from `## DRY analysis` as a finding, so recap bullets become noise in the consolidation plan and force every DRY cycle to re-triage them.
 
 ### Memory entry shape
 
@@ -68,7 +69,7 @@ Append a brief block per cycle. Example:
 - Carry forward: check converter/registry layers for the same "validates A but not the intersection of A and B" pattern.
 ```
 
-Keep entries terse. If the file approaches 50 lines, merge similar entries into a single pattern observation before adding more.
+Keep entries terse. If the file **approaches ~45 lines**, merge similar entries into a single pattern observation before adding more (the earlier threshold keeps each consolidation a real merge instead of a frantic compaction at the limit).
 
 ## Review order
 
@@ -134,6 +135,17 @@ When Worker 0 dispatches Worker 1 to produce `docs/review/rev-final.md`:
 5. On fail, set `Status: revision-needed`, record the failing tests in the artifact, and stop. Worker 0 will dispatch the owning cycle item again before re-running the gate.
 
 Worker 2 and Worker 3 are **not** involved in the final test-run gate. The artifact uses the same `Status:` line as ordinary `rev-*.md` artifacts but bypasses the normal Worker 2 → Worker 3 loop.
+
+### Coverage-gate vs test-failure: read the summary line, not the exit code
+
+`pyproject.toml` configures `[tool.coverage.report] fail_under = 100` and `pytest-cov` is wired into the default `uv run pytest` invocation, so a sub-100% coverage run produces:
+
+- a `=== N passed, M skipped ===` summary line that means the test suite passed, AND
+- a non-zero process exit code driven by `--cov-fail-under` reporting a coverage shortfall.
+
+**The gate cares about the summary line, not the exit code.** A pytest non-zero exit driven by `--cov-fail-under` is NOT a test failure for this gate — coverage gating belongs to CI and the maintainer per `REVIEW.md` ("Do NOT inspect or assert line coverage at this stage"). Only a `failed` count in the summary line, a collection error, or a test-assertion error flips the gate to `revision-needed`.
+
+Parse the `=== N passed, ... ===` line as the source of truth. Record the coverage-shortfall message (if any) in the artifact's `## Notes` section as a follow-up signal for the maintainer; do not flip the gate.
 
 ## Artifact dicta
 

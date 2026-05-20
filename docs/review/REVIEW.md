@@ -3,7 +3,7 @@
 This document defines the reusable process for reviewing every file under `django_strawberry_framework/`. It does not track a specific review run. A review run is tracked in a versioned plan file under `docs/review/`.
 
 !!IMPORTANT!!
-Begin by reading README.md and docs/README.md and docs/TREE.md and docs/FEATURES.md and GOAL.md
+Begin by reading README.md and docs/README.md and docs/TREE.md and docs/GLOSSARY.md and GOAL.md
 
 !!IMPORTANT — DRY FIRST!!
 Every review pass, every fix, every verification must answer one question before anything else: **is the change moving the package toward the maximally DRY shape that stays readable?** Duplicated logic, parallel data flows, near-copies between modules, and repeated string/key/tuple literals are review-time defects. Worker 1 flags DRY findings in every artifact; Worker 2 implements them like any other finding; Worker 3 enforces DRY before accepting a fix; Worker 1 re-checks DRY across files at every folder pass and at the project pass.
@@ -28,23 +28,29 @@ Every worker reads the standing project docs and its own role file before acting
 | Document | W0 | W1 | W2 | W3 |
 |---|---|---|---|---|
 | `AGENTS.md` | yes | yes | yes | yes |
-| `START.md` | yes | yes | yes | yes |
-| `docs/review/REVIEW.md` | yes | yes | yes | yes |
+| `START.md` | yes | yes | yes | — |
+| `docs/review/REVIEW.md` | yes | yes | — | — |
 | `docs/review/worker-0.md` | yes | — | — | — |
 | `docs/review/worker-1.md` | — | yes | — | — |
 | `docs/review/worker-2.md` | — | — | yes | — |
 | `docs/review/worker-3.md` | — | — | — | yes |
-| `pyproject.toml` | yes (plan + closeout) | — | — | — |
-| `django_strawberry_framework/__init__.py` | yes (plan + closeout) | — | — | — |
-| `CHANGELOG.md` | yes (closeout only) | — | yes (when the plan or maintainer authorizes a changelog pass) | yes (verifies changelog handling) |
-| active `docs/review/review-<0_0_X>.md` | yes (owns) | yes | yes | yes |
-| current `docs/review/rev-*.md` artifact | yes (read-only) | yes (owns findings + DRY analysis) | yes (writes fix reports + comment pass + changelog disposition) | yes (writes verification + sets `Status:`) |
+| `pyproject.toml` | plan + closeout | — | — | — |
+| `django_strawberry_framework/__init__.py` | plan + closeout | — | — | — |
+| `CHANGELOG.md` | closeout only | — | when authorized (else skip) | — (use `git diff -- CHANGELOG.md` instead) |
+| active `docs/review/review-<0_0_X>.md` | yes (owns) | yes | — | yes (marks checkbox) |
+| current `docs/review/rev-*.md` artifact | read-only | yes (owns findings + DRY analysis) | yes (writes fix reports + comment pass + changelog disposition) | yes (writes verification + sets `Status:`) |
 | sibling `docs/review/rev-*.md` artifacts for folder/project pass | — | yes (read-only) | — | — |
 | own `docs/review/worker-memory/worker-N.md` | yes | yes | yes | yes |
 | target source / tests | — | yes (read-only) | yes (writes) | yes (read-only) |
 | Worker 2's diff | — | — | — | yes |
 
 Workers never read another worker's memory file during the cycle; see "Subagent dispatch and worker memory" below. Adding a new standing doc is a one-line change to this table.
+
+**Why `REVIEW.md` is absent for Worker 2 / Worker 3:** their role files (`worker-2.md`, `worker-3.md`) are self-contained references — the artifact template, the `Status:` legend, the shadow-file caveat, the temp-test rules, and the no-op / skip lifecycle shapes are inlined directly so a fresh subagent spawn does not have to load REVIEW.md to do its job. `REVIEW.md` remains the canonical workflow spec (Worker 0 / Worker 1 use it directly); the inlined sections in the role files must be kept in sync with REVIEW.md when either is edited.
+
+**Why `START.md` is absent for Worker 3:** `START.md` is style and discipline advice for code-writing work (trailing commas, line 110, `services.seed_data` first, "don't preemptively populate"). Worker 3 verifies a diff against an artifact — it never writes source code and never communicates with the maintainer. The few rules that do apply ("formatting only — don't run pytest preemptively") are inlined in `worker-3.md`.
+
+**Why `CHANGELOG.md` for Worker 3 is `git diff` only:** Worker 3 verifies whether the cycle's disposition matches the working tree. The content of `CHANGELOG.md` is never material to that check; only the diff is. Use `git diff -- CHANGELOG.md` directly.
 
 ## Versioned review plan
 
@@ -175,11 +181,15 @@ Status: under-review | fix-implemented | revision-needed | verified
 
 ## DRY analysis
 
-- Existing patterns reused: which functions, classes, validators, or test fixtures already exist that the reviewed file calls or extends? Cite `path/file.py:NN-MM`. If none, say so explicitly.
-- New helpers a fix might justify: name the single responsibility and the call sites it would serve.
-- Duplication risk in the current file: cite repeated literals, near-copies, or branches that already drift from a sibling module.
+Actionable DRY consolidation candidates only. Each top-level bullet is one opportunity a future DRY cycle could pick up — either to implement now or to defer with a stated trigger condition. The DRY-cycle export script (`docs/dry/export_dry_review.py`) extracts every top-level bullet from this section as a finding, so a bullet that is not actionable is noise in the consolidation plan.
 
-If any answer is "none", say so explicitly. Silence on DRY is not acceptance.
+Each bullet must:
+
+- name the consolidation shape (helper signature, shared dataclass, named constant, or specific duplication to remove)
+- cite the call sites involved (`path/file.py:NN-MM`)
+- state whether to act now OR defer with an explicit trigger condition (e.g. "Defer until a third walker lands; ...")
+
+If no real opportunities exist, write a single bullet `- None — <one sentence why the current factoring is correct>`. Do NOT include recap bullets like "Existing patterns reused" or "No new helpers needed" here — that positive audit trail belongs in the `## What looks solid` section. Silence on DRY is not acceptance.
 
 ## High:
 
@@ -212,6 +222,11 @@ Relevant excerpt or pseudo-diff context.
 ```
 
 ## What looks solid
+
+Positive audit trail for the reviewed file. Covers two complementary kinds of observation:
+
+1. **DRY recap.** Which canonical helpers the file already reuses (`path/file.py:NN-MM`); why "no new helper is needed" is the right answer at this granularity; where considered-and-rejected duplication risk was deliberately preserved as intentional sibling design. This is the recap content that used to live as the three sub-bullets of `## DRY analysis` — it stays as audit trail but no longer pollutes the DRY-cycle plan.
+2. **Other positives.** Design choices, test discipline, error-handling shapes, and other observations the review considered correct.
 
 - List thing one.
 - List thing two.
@@ -270,6 +285,8 @@ One of:
 
 Interim sub-pass acceptances are recorded as prose in this section and do not change the top-level `Status:` line. Only `cycle accepted; verified` or `revision-needed` change the top-level `Status:`.
 
+**Rejected findings must cite contradicting evidence.** "Intentionally rejected with a recorded reason" requires the reason to be falsifiable. When Worker 2 reverts a recommended change because the artifact's premise is contradicted (a "silent dead branch" turns out to be reached by an existing test, an "unused decorator" turns out to be exercised, a "redundant default" is load-bearing under a specific input), the verification block MUST name the contradicting evidence by file path and line range or by test name — never as bare "rejected as false premise". Worker 3 confirms the contradicting evidence exists before accepting the rejection. Without that citation, the rejection is indistinguishable from a silent skip and is grounds for `revision-needed`.
+
 ---
 
 ## Comment/docstring pass
@@ -280,7 +297,13 @@ After Worker 3 records `logic accepted; awaiting comment pass`, Worker 2 returns
 
 ## Changelog disposition
 
-After Worker 3 records `comments accepted; awaiting changelog disposition`, Worker 2 records the **changelog disposition** here regardless of whether an edit was made: warranted/not warranted, reason, and what was done. Edits to `CHANGELOG.md` are made only when the active review plan or the maintainer has explicitly authorized them; otherwise the disposition records that no edit was made and why (e.g. not user-visible, deferred to maintainer). Worker 2 sets `Status: fix-implemented`. Worker 3 verifies and records `cycle accepted; verified` (setting top-level `Status: verified`) or `revision-needed`.
+After Worker 3 records `comments accepted; awaiting changelog disposition`, Worker 2 records the **changelog disposition** here regardless of whether an edit was made. The disposition is one of three states; the artifact must name which state applies and include the reason:
+
+- **Not warranted** — the cycle's edits are internal-only (refactors against canonical helpers, docstring polish, type tightening inside an existing pinned contract, semantically equivalent simplifications, additive substring-compatible wording). Cite `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed") AND the active plan's silence on changelog authorization; either citation alone is too thin. No `CHANGELOG.md` edit.
+- **Warranted and edited** — only when the active plan or the maintainer has explicitly authorized a `CHANGELOG.md` edit for this cycle. Record what was added and where in the file (which release section).
+- **Warranted but deferred to maintainer** — the cycle fixes a real consumer-visible change (typed-error contract, public symbol removal, behavioural fix at a public surface) but the plan does not authorize the edit. The disposition MUST preserve a maintainer-ready entry text verbatim under a clearly-named subsection so the maintainer can lift it at release time without re-derivation. Without that text, the bug-fix entry risks being lost between review and release.
+
+Worker 2 sets `Status: fix-implemented`. Worker 3 verifies and records `cycle accepted; verified` (setting top-level `Status: verified`) or `revision-needed`. For "warranted but deferred", Worker 3 must reject if the suggested entry text is missing or evasive.
 
 ---
 
@@ -302,9 +325,9 @@ Every `rev-*.md` artifact carries a `Status:` line. Status transitions are owned
 
 Worker 0 never writes to `Status:`. Worker 0 reads it to drive dispatch. If the field is missing or ambiguous, treat that as a stop condition.
 
-## No-op and skip lifecycle
+## No-op, skip, and consolidated single-spawn lifecycles
 
-Three cycle shapes exit the loop without any source changes:
+Four cycle shapes exit with a single Worker 2 spawn and a single Worker 3 verification instead of the three-sub-pass shape (logic → comment → changelog):
 
 ### Normal file review with no findings
 
@@ -318,7 +341,25 @@ Worker 1 produces a skip artifact explaining why the file has no review-worthy l
 
 Same as the no-findings file case: Worker 1 writes the folder/project artifact with `None.` severities, Worker 2 records a no-op `Fix report` pass, Worker 3 verifies and marks the checkbox.
 
-In all three shapes, the artifact still carries the full template structure; the workers simply note `None.` or "no-op" in each section. The artifact remains the inter-worker contract.
+### Cycle with no in-scope edits (all Lows deferred or DRY-equivalent)
+
+A variant on the no-op cycle: Worker 1's artifact carries Low (or Medium-tier-but-deferred) findings, but each is explicitly forward-looking per Worker 1's own prose ("defer until a third walker lands", "the next time the parser is touched", "Worth recording so the next maintainer understands") OR each is a DRY consolidation against a canonical helper that returns identical outputs to the inline form (delegation only; no semantic change). In both cases the in-cycle edit set is one trivial edit (or none) and the comment pass is legitimately a no-op because the existing docstrings still describe the (unchanged) semantics.
+
+Worker 2 runs a single consolidated spawn that records `## Fix report`, `## Comment/docstring pass`, AND `## Changelog disposition` together (still records both ruff commands; still flips `Status:` to `fix-implemented` exactly once). Worker 3 verifies once with a single `## Verification (Worker 3)` block that covers logic + comments + changelog and writes the terminal `cycle accepted; verified`.
+
+Use this shape when:
+
+- All Lows are forward-looking per the artifact's own prose AND nothing in the artifact requires an in-cycle edit; OR
+- The cycle's edits are exclusively DRY delegations to canonical helpers (semantics preserved by construction) AND the existing docstrings still match the post-delegation behavior; OR
+- The cycle's edit is a single trivially-localised docstring sentence with no logic change.
+
+Do NOT use this shape when:
+
+- Any High or substantive Medium requires a real behaviour change.
+- The logic pass needs Worker 3 approval before the comment pass can know what to describe.
+- Two or more independent dispositions interact (e.g., a Medium logic fix whose error wording is then polished in the comment pass).
+
+In all four shapes the artifact still carries the full template structure; the workers simply collapse multiple sub-passes into one when the cycle's content allows it. The artifact remains the inter-worker contract.
 
 ## Severity definitions
 
@@ -348,6 +389,17 @@ Low:
 - minor typing/API polish
 - localized simplification
 - comments or docstrings that are stale but not harmful
+
+### Deferral idioms
+
+When a Low is correct today but might warrant action under a future condition, prefer **trigger-condition phrasing** over a bare "defer":
+
+- ✓ "Defer until a third walker lands; then fold all three through a shared visitor."
+- ✓ "Defer until the planner gains an 11th argument; the dataclass collapses the call sites at that point."
+- ✓ "Defer until a second sentinel of this shape lands and the pattern duplicates."
+- ✗ "Defer; cosmetic." (the next reviewer cannot tell when to revisit)
+
+Quote the trigger condition verbatim in the artifact's Low body so the next cycle's reviewer can grep for it and resurface the finding when the condition fires. Trigger-conditioned deferrals are the strongest audit-trail shape for Lows that span releases.
 
 ## What each review checks
 
@@ -501,7 +553,7 @@ These files are gitignored. Worker 0 creates the directory at plan time and dele
 - Worker 2: implementation patterns that worked (validation guard shapes, test scaffolding, comment polish style), maintainer pushback to remember.
 - Worker 3: kinds of fixes that passed muster, kinds that bit later, calibration on when to reject vs accept.
 
-Entries are append-only. If a worker's memory exceeds ~50 lines, the worker must consolidate (merge similar entries into a single pattern observation) before adding more — never delete without consolidating first.
+Entries are append-only. If a worker's memory **approaches ~45 lines**, the worker must consolidate (merge similar entries into a single pattern observation) before adding more — never delete without consolidating first. The earlier threshold catches the file before the very next append pushes it past a comfortable read length; waiting until 50 lines means the file is already too long when the consolidation lands.
 
 **Read isolation rules.** A worker may read **only** its own memory file:
 
@@ -518,7 +570,13 @@ Entries are append-only. If a worker's memory exceeds ~50 lines, the worker must
 2. Worker 2 subagent — implements fixes, appends to `worker-2.md`, returns.
 3. Worker 3 subagent — verifies, marks the checkbox, appends to `worker-3.md`, returns.
 
-Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.md`, `REVIEW.md`, the worker's own role file), the active plan, the cycle's artifact (Workers 2 and 3) or source target (Worker 1), and the worker's own memory file contents. The subagent's prompt must explicitly forbid reading the other workers' memory files.
+Each subagent's prompt must include the docs marked `yes` for that worker in the "Required reading per worker" matrix above, the active plan or current artifact as appropriate to the role, the cycle's source target (Worker 1) or the artifact + diff (Workers 2 and 3), and the worker's own memory file contents. Concretely:
+
+- **Worker 1 spawn prompt:** `AGENTS.md`, `START.md`, `REVIEW.md`, `worker-1.md`, active plan, source target, `worker-memory/worker-1.md`.
+- **Worker 2 spawn prompt:** `AGENTS.md`, `START.md`, `worker-2.md`, current artifact, source/tests, `worker-memory/worker-2.md`. (No `REVIEW.md`, no active plan unless the cycle item is ambiguous from the artifact alone, no `CHANGELOG.md` unless the maintainer or plan authorised an edit this cycle.)
+- **Worker 3 spawn prompt:** `AGENTS.md`, `worker-3.md`, current artifact, Worker 2's diff (via `git diff`), source/tests for spot-checks, `worker-memory/worker-3.md`. (No `START.md`, no `REVIEW.md`, no `CHANGELOG.md` content — use `git diff -- CHANGELOG.md` directly to verify the cycle's changelog disposition.)
+
+The subagent's prompt must explicitly forbid reading the other workers' memory files.
 
 **No cross-worker chatter.** Subagents do not message each other directly. All inter-worker information flows through the artifact (`rev-<folder__file_name>.md`) and the diff. If Worker 2 needs to flag something to Worker 3 (e.g., "I used the shadow view"), it goes in the artifact. If Worker 3 wants another Worker 2 pass, it goes in the artifact's verification feedback section.
 
@@ -602,6 +660,10 @@ After Worker 3 marks the item done:
 4. If Worker 1's re-check is clean, the maintainer may request any final adjustments. The **maintainer** then commits the source changes together with the corresponding `docs/review/rev-<folder__file_name>.md` artifact and the updated `docs/review/review-<0_0_X>.md` checkbox so the review record is preserved in git.
 5. Worker 0 moves on to the next unchecked item.
 
+**Empty-diff exception.** If the cycle item produced no source/test diff (skip artifact, all-Lows-forward-looking, all-recording-only project-pass forwards), the Worker 1 re-check is empty by construction and may be skipped. Worker 0 confirms by running `git diff --stat -- django_strawberry_framework/ tests/ CHANGELOG.md` against the prior cycle's accepted state and seeing no new changes; the maintainer notification still happens. For any cycle that produced source or test edits, the re-check is required — do not skip it because the cycle "felt small".
+
+**Autonomous-mode override.** When the maintainer explicitly authorises Worker 0 to run multiple cycles without per-cycle pauses ("do not pause for maintainer review here on out"), Worker 0 still runs the Worker 1 re-check for source-bearing cycles and still appends a one-line note to `worker-memory/worker-0.md` after each closure. The maintainer is notified at autonomous-mode boundaries (start / blocker / end), not per cycle.
+
 Only the maintainer commits. Workers never commit, even if asked.
 
 ## Folder-level passes
@@ -625,6 +687,10 @@ The folder-level artifact uses the same High/Medium/Low template. It may cite mu
 After every file and folder pass is complete, Worker 1 creates `docs/review/rev-django_strawberry_framework.md`.
 
 Record all package-wide DRY or structure findings inside `rev-django_strawberry_framework.md`. Do **not** write findings into `docs/review/review-<0_0_X>.md`; the plan is the canonical checklist and progress tracker, not a findings log. The only edits to the plan file are checklist/status progress and newly required artifacts (e.g., adding an entry if a project-pass finding warrants a new follow-up artifact).
+
+### Per-file → project-pass forwarding mechanism
+
+Per-file artifacts that identify a concern requiring package-wide context forward the finding by citing `docs/review/rev-django_strawberry_framework.md` by path in the relevant Low (or Medium) body. The project-pass spawn collects these forwards by reading each per-file artifact's Low section in addition to its own static analysis. The mechanism is explicit by convention: when Worker 1 finds a cross-module invariant, an export-consistency question, or a "this only makes sense once every file has been audited" concern, the in-file body names `rev-django_strawberry_framework.md` so the forward chain is recoverable later. Worker 1's project-pass dispatch prompt should include the instruction to re-read every per-file artifact's Low/Medium sections specifically for those forwards.
 
 Focus on:
 

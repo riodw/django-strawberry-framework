@@ -2,7 +2,7 @@
 Target release: `0.0.5`.
 Status: final, primary spec for the `0.0.5` slice. This document is the merged, canonical result of three superseded drafts (`-1.md`, `-2.md`, and `-3.md`), all of which have been deleted; this file is the single source of truth for the `READY-004` slice.
 Owner: package maintainer.
-Predecessors: `docs/FEATURES.md`, `GOAL.md`, `KANBAN.md` card `READY-004`.
+Predecessors: `docs/GLOSSARY.md`, `GOAL.md`, `KANBAN.md` card `READY-004`.
 Influences: the local checkouts referenced from `docs/TREE.md` — `/Users/riordenweber/projects/strawberry-django-main/strawberry_django` and `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters`.
 ## Slice checklist
 Each top-level item maps to one of the five commits in the "Implementation plan" section. Indented items are the discrete sub-parts to complete inside that slice.
@@ -83,7 +83,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
 - [ ] Slice 5: Promotion + docs + version
   - [ ] Move `"interfaces"` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` (`types/base.py:41-56`)
   - [ ] Doc updates
-    - [ ] `docs/FEATURES.md` — move `Meta.interfaces` and Relay GlobalID mapping from deferred to shipped; add the "Relay Node integration" subsection; update version mention
+    - [ ] `docs/GLOSSARY.md` — move `Meta.interfaces` and Relay GlobalID mapping from deferred to shipped; add the "Relay Node integration" subsection; update version mention
     - [ ] `docs/README.md` — add the gated "Relay Node" subsection with a short example next to the quick start
     - [ ] `TODAY.md` — drop `Meta.interfaces` and `Relay node` from the "wait for" list; update fakeshop guidance if a `library` schema starts using `relay.Node`
     - [ ] `KANBAN.md` — move `IN-PROGRESS-001` to `DONE-011` with shipped scope, borrowed patterns, and test-file evidence; advance the recommended hybrid sequence past Relay
@@ -104,7 +104,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
 `DjangoType` users cannot declare GraphQL interfaces (Relay `Node` or otherwise) through `class Meta`. Today `Meta.interfaces` is rejected with `ConfigurationError` because the package does not apply it end-to-end. The result is that:
 - `GOAL.md`'s target API (`interfaces = (relay.Node,)`) is unreachable today.
 - `TODAY.md` lists Relay node and connection support as a hard blocker for the rich fakeshop schema.
-- `docs/FEATURES.md` lists `Meta.interfaces` and `GlobalID` mapping in the deferred set.
+- `docs/GLOSSARY.md` lists `Meta.interfaces` and `GlobalID` mapping in the deferred set.
 - `KANBAN.md` `READY-004` and `BACKLOG-005` cannot land without a Relay foundation.
 - `NEXT-005` (`DjangoConnectionField`) and `NEXT-006` (permissions) cannot start a stable design until interface application is decided.
 
@@ -118,7 +118,7 @@ The target is not a full connection/query-field release. The target is to make m
 - `django_strawberry_framework/types/converters.py:49-116` synthesizes `id` from `AutoField` / `BigAutoField` / `SmallAutoField` (`SCALAR_MAP` at `converters.py:49-76`, applied via `convert_scalar` at `converters.py:79-116`). Until this slice, every Django auto-id column produces a GraphQL `id: Int!`, which collides with Strawberry's `Node._id -> id: GlobalID!`.
 - `DjangoType.get_queryset(cls, queryset, info, **kwargs)` (`types/base.py:140-154`) is the existing visibility hook. It is stable through `0.1.0` per `README.md:16` and `docs/README.md:98`, so the Relay node resolvers can call into it without compatibility risk.
 - `DjangoOptimizerExtension` is consultable through `info.context` (`optimizer/extension.py`); the four Relay resolvers can opt into optimizer cooperation the same way root resolvers do today.
-- The `0.0.4` lifecycle contract is pinned in `docs/FEATURES.md:93`: "Declaring a new concrete `DjangoType` after finalization raises `ConfigurationError`; tests should use `registry.clear()` and fresh type classes when they need a new registry lifecycle." The Relay slice must preserve this contract bit-for-bit.
+- The `0.0.4` lifecycle contract is pinned in `docs/GLOSSARY.md:93`: "Declaring a new concrete `DjangoType` after finalization raises `ConfigurationError`; tests should use `registry.clear()` and fresh type classes when they need a new registry lifecycle." The Relay slice must preserve this contract bit-for-bit.
 ## Pre-implementation spike outcome
 A minimal local spike against the installed Strawberry version showed that mutating bases before `strawberry.type(...)` works:
 
@@ -155,7 +155,7 @@ Local source path: `/Users/riordenweber/projects/strawberry-django-main/strawber
 - **`resolve_id` shape** — `strawberry_django/relay/utils.py:306-339`. Read from `root.__dict__[id_attr]` first, fall back to `getattr(root, id_attr)`, coerce to `str`. The dict-cache check is what avoids an extra ORM hit when the row was already loaded into the Django identity map. Justification: matches our `_will_lazy_load` philosophy in `types/resolvers.py:67-90` and the rest of our optimizer cooperation story.
 - **`resolve_id_attr` shape** — `strawberry_django/relay/utils.py:285-303`. Calls `super(source, source).resolve_id_attr()` and catches `NodeIDAnnotationError` to fall back to `"pk"`. This single try/except is what lets a consumer write `id: relay.NodeID[str]` (e.g. for a slug column) and have it work without our framework adding any new `Meta` key. Justification: zero extra surface, exact alignment with Strawberry's documented `NodeID` mechanism.
 - **`resolve_node` / `resolve_nodes` queryset shape** — `strawberry_django/relay/utils.py:102-198` and `:223-282`. Use `_default_manager.all()`, pass through `run_type_get_queryset(qs, origin, info)`, filter on `id_attr` when ids are supplied, then consult the optimizer extension. Justification: every step has a direct counterpart already shipped (`cls.get_queryset(...)` for `run_type_get_queryset`, our `DjangoOptimizerExtension` for theirs). The borrow is structural, not implementation-level.
-- **`MAP_AUTO_ID_AS_GLOBAL_ID` behavior** — `strawberry_django/type.py:104-109`. We borrow the *behavior* of stripping the Django `id` from generated annotations when `relay.Node` is in play, but tie it to the per-type `Meta.interfaces` declaration instead of a global setting. Justification: a global setting fights the existing "loud rejection of unshipped behavior" posture documented in `docs/FEATURES.md:53-54`; per-type opt-in keeps the contract local to the class declaration.
+- **`MAP_AUTO_ID_AS_GLOBAL_ID` behavior** — `strawberry_django/type.py:104-109`. We borrow the *behavior* of stripping the Django `id` from generated annotations when `relay.Node` is in play, but tie it to the per-type `Meta.interfaces` declaration instead of a global setting. Justification: a global setting fights the existing "loud rejection of unshipped behavior" posture documented in `docs/GLOSSARY.md:53-54`; per-type opt-in keeps the contract local to the class declaration.
 - **`is_type_of` virtual subclass** — `strawberry_django/type.py:204-211`. We commit to borrowing this. Justification: our root resolvers and relation resolvers (`types/resolvers.py:142-173`) return Django model instances, not Strawberry-typed wrappers. Strawberry's interface dispatch uses `is_type_of` to identify the concrete type at runtime; without it, an ORM instance returned through a Node-typed field can fail the isinstance check Strawberry uses for interfaces. Strawberry-django chose this exact borrow for the exact same reason; we have no architectural daylight from them on that point.
 ### From `django-graphene-filters` and `graphene-django` — borrow only the user-facing shape and the validation philosophy
 Local source path: `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters` (referenced from `docs/TREE.md:160-186`).
@@ -279,7 +279,7 @@ Justification:
 When `relay.Node` is among `Meta.interfaces` for a given `DjangoType`:
 - `id` is removed from synthesized scalar annotations during `_build_annotations` so the Relay-supplied `id: GlobalID!` is not shadowed by a Django `int` field.
 - The Django `id` column itself is still selected for ORM/optimizer purposes (it is the connector column the optimizer relies on); only the Strawberry annotation is suppressed.
-- If the consumer includes `"id"` in `Meta.fields` while declaring `relay.Node`, the slice does not raise — the field is simply not generated on the GraphQL side. Document this clearly in `docs/FEATURES.md`.
+- If the consumer includes `"id"` in `Meta.fields` while declaring `relay.Node`, the slice does not raise — the field is simply not generated on the GraphQL side. Document this clearly in `docs/GLOSSARY.md`.
 - If `relay.Node` is not in `Meta.interfaces`, behavior is unchanged from `0.0.4`: `id: int!` is generated as before.
 
 This mirrors strawberry-django's `MAP_AUTO_ID_AS_GLOBAL_ID` behavior but is opt-in per type rather than a global setting. A global setting can be added later if real-world adopters need it.
@@ -332,7 +332,7 @@ Validation rules:
 Composition with `Meta.optimizer_hints`: the two keys are independent. `optimizer_hints` continues to apply unchanged. Suppressing the synthesized `id` annotation when `relay.Node` is declared has no effect on the optimizer field map (`FieldMeta` is keyed off Django's field selection, not Strawberry's annotations) — `id` is still selected as the connector column.
 ### Decision 5: lifecycle and idempotency
 - Calling `finalize_django_types()` twice is still a no-op via the existing short-circuit at `finalizer.py:39-40`.
-- `registry.clear()` (`registry.py:172-185`) already drops `_definitions`, `_pending`, `_finalized`, `_types`, `_models`, and `_enums`. Test isolation continues to require **fresh class objects** after `clear()`, exactly as documented in `docs/FEATURES.md:93`. No new tracking state is added on `DjangoTypeDefinition` for the Relay slice — the source of truth is `cls.__bases__` itself for interface injection and the `relay.Node` MRO check for resolver injection. Justification: any new state would be redundant with `cls.__bases__` and would have to be re-validated for clear/redefine cycles, increasing the surface this slice has to test.
+- `registry.clear()` (`registry.py:172-185`) already drops `_definitions`, `_pending`, `_finalized`, `_types`, `_models`, and `_enums`. Test isolation continues to require **fresh class objects** after `clear()`, exactly as documented in `docs/GLOSSARY.md:93`. No new tracking state is added on `DjangoTypeDefinition` for the Relay slice — the source of truth is `cls.__bases__` itself for interface injection and the `relay.Node` MRO check for resolver injection. Justification: any new state would be redundant with `cls.__bases__` and would have to be re-validated for clear/redefine cycles, increasing the surface this slice has to test.
 - New finalizer step ordering relative to the existing three-loop structure at `finalizer.py:42-83`:
   - Phase 1 unchanged (`finalizer.py:42-66`): resolve pending relations.
   - Phase 2 unchanged (`finalizer.py:68-75`): `_attach_relation_resolvers` for every non-finalized definition.
@@ -353,7 +353,7 @@ The new `Meta.interfaces` consumer-override contract is:
 Relay node support must not regress shipped optimizer behavior. Required invariants:
 
 - **Primary-key projection.** When GraphQL selects Relay `id` on a Relay-declared `DjangoType`, the optimizer's `only()` projection must include the concrete primary-key attname. Reference: `optimizer/walker.py:91` (`_walk_selection`), `optimizer/walker.py:117` (where scalar selections are appended to `only_fields`), and `optimizer/walker.py:183` (relation select planning). Justification: Strawberry resolves Relay `id` via `_resolve_id_default`, which reads `root.__dict__[attname]` first; the only way that path produces no extra query is if the optimizer kept `attname` in `only()`.
-- **Connector-column preservation.** Existing connector-column behavior (`docs/FEATURES.md:211`) for `select_related`, reverse FK, FK/OneToOne, and M2M attachment paths is unchanged. The Relay slice does not modify the walker.
+- **Connector-column preservation.** Existing connector-column behavior (`docs/GLOSSARY.md:211`) for `select_related`, reverse FK, FK/OneToOne, and M2M attachment paths is unchanged. The Relay slice does not modify the walker.
 - **FK-id elision scoping.** B2 FK-id elision (`types/resolvers.py:42-50`, `optimizer/walker.py:65`) is scoped to forward relation selections. The Relay slice does not introduce a code path where `GlobalID` is fed into FK-id elision logic. Justification: GlobalID handling lives entirely in the Relay resolvers (`types/relay.py`); the walker continues to see the Django primary-key column it always saw.
 - **No avoidable lazy loads on `resolve_id`.** `_resolve_id_default` reads from `root.__dict__` first; if the optimizer kept the pk in `only()`, the `__dict__` cache hit avoids any lazy load. The cache-then-`getattr` order in `strawberry_django/relay/utils.py:306-339` is the exact reason we chose that borrow.
 - **Relation traversal across Relay node targets.** `select_related` / `prefetch_related` planning for relations whose target is a Relay-declared `DjangoType` continues to work unchanged. The optimizer reads target metadata from `DjangoTypeDefinition`, not from the Strawberry `__strawberry_definition__`, so suppressing the synthesized scalar `id` annotation does not affect the optimizer's view of the model.
@@ -373,7 +373,7 @@ The four `resolve_*` defaults must work in both sync and async resolver contexts
 
 - `_resolve_id_attr_default(cls)` and `_resolve_id_default(cls, root, info)` are sync. They do not touch the database; they read class state, `root.__dict__`, and `getattr`. Justification: matches strawberry-django's `get_node_id_attr` / `get_node_id` shape; promoting these to async would force `await` plumbing through every Relay node serialization for no benefit.
 - `_resolve_node_default` and `_resolve_nodes_default` execute querysets and ship both sync and async paths. Implementation: detect the resolver context (Strawberry's `info` carries an `is_awaitable` signal; `asgiref.sync.iscoroutinefunction` is the fallback), and route through Django's native async queryset API (`aget`, `afirst`, `aiter`, `acount`) when async, falling back to `sync_to_async(qs.first)` / `sync_to_async(qs.get)` for operations that do not yet have native async equivalents. Justification: this is the exact pattern strawberry-django ships in `strawberry_django/relay/utils.py:102-282` and the only one that survives ASGI / Channels contexts cleanly.
-- The optimizer's existing async resolver support (`docs/FEATURES.md` Optimizer extension entry, "async resolver support") carries through unchanged because the new resolvers call `ext.optimize(qs, info=info)` with the same signature the existing root-gated optimizer uses.
+- The optimizer's existing async resolver support (`docs/GLOSSARY.md` Optimizer extension entry, "async resolver support") carries through unchanged because the new resolvers call `ext.optimize(qs, info=info)` with the same signature the existing root-gated optimizer uses.
 - A consumer-authored `async def resolve_node(...)` overrides the framework default per Decision 6's `__func__` identity test, exactly the same way a sync override does. The override discriminator does not care about the function's awaitability.
 
 Risk: Django's async ORM is still maturing (Django 4.2+). If a needed async ORM API is missing in the supported Django range, fall back to `sync_to_async` wrapping the equivalent sync call. The package does not need to bump its Django lower bound for `0.0.5`.
@@ -512,7 +512,7 @@ These pin Decision 7's invariants:
 ### `examples/fakeshop/test_query/test_library_api.py` (extend)
 - Add one HTTP test where a `library` model declares `interfaces = (relay.Node,)` and a `/graphql/` query selects `id` (`GlobalID`) and a scalar field. Assert the response decodes the GlobalID back to the expected database id. Follow the existing reload pattern at the top of `test_library_api.py` (clear the global registry, reload app schema modules, then reload the project schema and URLconf).
 ## Doc updates
-- `docs/FEATURES.md`
+- `docs/GLOSSARY.md`
   - Move `Meta.interfaces` and `Relay GlobalID mapping for auto IDs` from deferred to shipped.
   - Add a "Relay Node integration" subsection under "DRF-shaped GraphQL API" describing the four `resolve_*` methods, the id suppression behavior, and the composite-pk constraint.
   - Update the `0.0.5` version mention.
@@ -542,7 +542,7 @@ Each item names a preferred answer for `0.0.5` and a fallback if implementation 
 
 - **Should non-Relay interfaces ship in 0.0.5?** Preferred answer: yes. Generic interface base application with Strawberry validation is in scope; Relay receives the package-installed Django defaults; non-Relay interfaces do not. Fallback: if generic interfaces complicate the slice, narrow to `relay.Node` only and keep non-Relay interfaces rejected with a focused error.
 
-- **Should Relay ID mapping be configurable globally?** Preferred answer for `0.0.5`: no. Relay ID mapping activates per-type when `relay.Node` is declared. Fallback: a future setting can be added if real-world adopters need to decouple Node participation from `id` field mapping; until then, the per-type opt-in matches `docs/FEATURES.md:53-54`'s loud-rejection posture.
+- **Should Relay ID mapping be configurable globally?** Preferred answer for `0.0.5`: no. Relay ID mapping activates per-type when `relay.Node` is declared. Fallback: a future setting can be added if real-world adopters need to decouple Node participation from `id` field mapping; until then, the per-type opt-in matches `docs/GLOSSARY.md:53-54`'s loud-rejection posture.
 
 - **Should `resolve_node` use the optimizer?** Preferred answer for `0.0.5`: apply `cls.get_queryset(...)` and consult the optimizer extension only if it is straightforward. Justification: root `QuerySet` optimization is already shipped and well-tested; deeper Node-field optimization becomes load-bearing when `DjangoNodeField` ships.
 
@@ -578,7 +578,7 @@ The `0.0.5` slice is complete when all of the following are true:
 5. Optimizer invariants in Decision 7 hold: `only()` includes the pk attname when Relay `id` is selected, `resolve_id` does not trigger an avoidable lazy load, and relation traversal across Relay-declared targets is unchanged.
 6. Tests in `tests/types/test_relay_interfaces.py` (new), and the extensions to `tests/types/test_definition_order_schema.py`, `tests/optimizer/`, `tests/test_registry.py`, and `examples/fakeshop/test_query/test_library_api.py` listed in the Test plan all pass.
 7. Package coverage stays at 100% (`pyproject.toml [tool.coverage.report] fail_under = 100`).
-8. `docs/FEATURES.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, and `CHANGELOG.md` reflect the shipped state per the "Doc updates" section.
+8. `docs/GLOSSARY.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, and `CHANGELOG.md` reflect the shipped state per the "Doc updates" section.
 9. Version bumped to `0.0.5` in `pyproject.toml:4`, `django_strawberry_framework/__init__.py:14`, and the assertion in `tests/base/test_init.py`; `uv.lock` regenerated by running `uv lock`.
 10. `KANBAN.md` `READY-004` moves to a new Done card describing the shipped scope (the next available `DONE-NNN` id), and the recommended hybrid sequence advances past Relay/`Meta.interfaces`.
 11. No new public exports. The public surface stays `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto`, `__version__` (`django_strawberry_framework/__init__.py:16-23`). Justification: the public-surface promise in `README.md:16` says today's names remain stable through `0.1.0`; `0.0.5` only changes what `Meta.interfaces` enables, not the import surface.

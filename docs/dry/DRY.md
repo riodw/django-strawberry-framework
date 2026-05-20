@@ -33,7 +33,7 @@ Every worker reads the standing project docs and its own role file before acting
 | `pyproject.toml` | yes (plan + closeout) | — | — |
 | `django_strawberry_framework/__init__.py` | yes (plan + closeout) | — | — |
 | `GOAL.md` | yes | yes | — |
-| `docs/FEATURES.md` | yes | yes | — |
+| `docs/GLOSSARY.md` | yes | yes | — |
 | active `docs/dry/dry-<0_0_X>.md` | yes (owns boxes + deletions) | yes (appends Triage / Verification sub-bullets) | yes (appends Implementation sub-bullets) |
 | source artifacts the plan extracted from (`bld-*.md` / `rev-*.md`) | yes (read-only, when dispatching) | yes (read-only) | yes (read-only) |
 | relevant source / tests | — | yes (read-only) | yes (writes) |

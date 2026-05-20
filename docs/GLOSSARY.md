@@ -1,4 +1,4 @@
-# Features
+# Glossary
 
 Glossary of every public symbol, `Meta` key, configuration argument, and named behavior in `django-strawberry-framework`. Every entry below has a stable anchor — `#djangotype`, `#fk-id-elision`, `#metafilterset_class`, and so on — so this file is intended to be linked directly from documentation, code comments, example projects, and migration notes.
 
@@ -7,7 +7,7 @@ Companion files:
 - [`../GOAL.md`](../GOAL.md) — the pitch / vision and a complete `1.0.0`-shape walkthrough (the astronomy showcase).
 - [`../TODAY.md`](../TODAY.md) — the current example-app usage snapshot.
 - [`../KANBAN.md`](../KANBAN.md) — per-card ship sequencing.
-- [`../BETTER.md`](../BETTER.md) — strategic post-`1.0.0` differentiators.
+- [`../BACKLOG.md`](../BACKLOG.md) — strategic post-`1.0.0` differentiators.
 
 ## Status legend
 
@@ -15,7 +15,7 @@ Companion files:
 - `planned for X.Y.Z` — committed package direction, not implemented yet; tracked in [`../KANBAN.md`](../KANBAN.md) against a target patch version.
 - `deferred` — reserved for later design or blocked on another feature.
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
-- `post-1.0.0` — strategic differentiation tracked in [`../BETTER.md`](../BETTER.md), not on the roadmap to `1.0.0`.
+- `post-1.0.0` — strategic differentiation tracked in [`../BACKLOG.md`](../BACKLOG.md), not on the roadmap to `1.0.0`.
 
 Current package version: `0.0.6`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
@@ -679,9 +679,9 @@ Declarative search across model fields (and relation paths). Single `search: Str
 
 **Status:** planned for `0.0.7`.
 
-Pins the existing `router.db_for_read` cooperation in `types/resolvers.py` with a spec, tests, and a `FEATURES.md` status entry. Multi-db cooperation already exists in source today — this card documents it as a contract: the optimizer plans correctly under `.using()`, `Prefetch` chains respect routing, strictness mode tracks the originating connection, [`get_queryset`](#get_queryset-visibility-hook) downgrades respect routing.
+Pins the existing `router.db_for_read` cooperation in `types/resolvers.py` with a spec, tests, and a `GLOSSARY.md` status entry. Multi-db cooperation already exists in source today — this card documents it as a contract: the optimizer plans correctly under `.using()`, `Prefetch` chains respect routing, strictness mode tracks the originating connection, [`get_queryset`](#get_queryset-visibility-hook) downgrades respect routing.
 
-Companion `BETTER.md` item 41 covers first-class sharding-aware planning post-`1.0.0`.
+Companion `BACKLOG.md` item 41 covers first-class sharding-aware planning post-`1.0.0`.
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`get_queryset` visibility hook](#get_queryset-visibility-hook).
 
@@ -981,7 +981,7 @@ Goals that the Layer-3 cards collectively satisfy by `1.0.0`:
 
 ## Beyond `1.0.0`
 
-Strategic differentiators that go past `1.0.0` parity live in [`../BETTER.md`](../BETTER.md). Roadmap-adjacent items already tracked there:
+Strategic differentiators that go past `1.0.0` parity live in [`../BACKLOG.md`](../BACKLOG.md). Roadmap-adjacent items already tracked there:
 
 - Apollo Federation support — `BETTER` item 34
 - Model-property / cached-property optimizer hints — folded into `BETTER` item 14 (`Meta.computed_fields`)

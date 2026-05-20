@@ -224,9 +224,9 @@ django_strawberry_framework/
 
 ## django_strawberry_framework (target package layout)
 
-This package target layout is separate from the fakeshop example-project layout above. It adds query-surface modules on top of the current `django_strawberry_framework/` package. It is derived from the three reference trees above and the package direction captured in [`FEATURES.md`](FEATURES.md).
+This package target layout is separate from the fakeshop example-project layout above. It adds query-surface modules on top of the current `django_strawberry_framework/` package. It is derived from the three reference trees above and the package direction captured in [`GLOSSARY.md`](GLOSSARY.md).
 
-Modules are tagged with `[alpha]`, `[beta]`, or `[stable]` to indicate which development phase they land in (matching the `MILESTONE` convention in [`../KANBAN.md`](../KANBAN.md)). `[alpha]` modules land before `0.1.0` and `[beta]` modules land before `1.0.0` — both are tracked in [`../KANBAN.md`](../KANBAN.md). `[stable]` modules are post-`1.0.0` and tracked in [`../BETTER.md`](../BETTER.md); they appear here only so the tree is comprehensive, not because they are committed.
+Modules are tagged with `[alpha]`, `[beta]`, or `[stable]` to indicate which development phase they land in (matching the `MILESTONE` convention in [`../KANBAN.md`](../KANBAN.md)). `[alpha]` modules land before `0.1.0` and `[beta]` modules land before `1.0.0` — both are tracked in [`../KANBAN.md`](../KANBAN.md). `[stable]` modules are post-`1.0.0` and tracked in [`../BACKLOG.md`](../BACKLOG.md); they appear here only so the tree is comprehensive, not because they are committed.
 
 ```text
 django_strawberry_framework/

@@ -58,6 +58,13 @@ Create the active release review plan.
    - `docs/review/worker-memory/worker-3.md`
 
    The directory and files are gitignored. They persist across cycles within this release; Worker 0 deletes them at closeout (see "Closeout job" below).
+12. Refresh the shadow overviews for every in-scope file in one shot:
+
+    ```shell
+    python scripts/review_inspect.py --all --output-dir docs/shadow
+    ```
+
+   Running the helper once at plan time (rather than per-file inside each Worker 1 spawn) is cheaper and keeps every spawn's shadow available the moment Worker 1 reads its memory file. Worker 1 may still re-run the helper on a single target if a fix-pass needs a fresh overview, but the initial sweep belongs to plan creation.
 
 ## Cycle item status legend
 
@@ -74,15 +81,17 @@ Worker 0 never writes to `Status:`. Worker 0 only reads it to drive dispatch. If
 
 Worker 0 orchestrates each cycle by spawning the three worker subagents in order. The split exists so the worker that verifies a fix has no in-context memory of the worker that wrote it.
 
-For each unchecked item in the plan, drive the loop by reading the artifact `Status:` field and dispatching the matching worker:
+For each unchecked item in the plan, drive the loop by reading the artifact `Status:` field and dispatching the matching worker. The standing-docs set differs per role (see the Required reading matrix in `REVIEW.md`):
 
-1. Item has no artifact yet → **Spawn Worker 1 subagent.** Pass: standing docs (`AGENTS.md`, `START.md`, `REVIEW.md`, `worker-1.md`), the active plan, the cycle's source target, and the contents of `docs/review/worker-memory/worker-1.md`. Forbid reading any other worker's memory file. Worker 1 produces the artifact with `Status: under-review`, appends to its memory file, and returns.
-2. `under-review` → **Spawn Worker 2 subagent.** Pass: standing docs, `worker-2.md`, the artifact, the source file, and the contents of `docs/review/worker-memory/worker-2.md`. Forbid reading any other worker's memory file. Worker 2 implements fixes; on return the artifact status should be `fix-implemented`.
-3. `fix-implemented` → **Spawn Worker 3 subagent.** Pass: standing docs, `worker-3.md`, the artifact, Worker 2's diff, and the contents of `docs/review/worker-memory/worker-3.md`. Forbid reading any other worker's memory file. Worker 3 verifies; on return the artifact status should be `verified` or `revision-needed`.
+1. Item has no artifact yet → **Spawn Worker 1 subagent.** Pass: `AGENTS.md`, `START.md`, `REVIEW.md`, `worker-1.md`, the active plan, the cycle's source target, and the contents of `docs/review/worker-memory/worker-1.md`. Forbid reading any other worker's memory file. Worker 1 produces the artifact with `Status: under-review`, appends to its memory file, and returns.
+2. `under-review` → **Spawn Worker 2 subagent.** Pass: `AGENTS.md`, `START.md`, `worker-2.md`, the artifact, the source file(s) and relevant tests, and the contents of `docs/review/worker-memory/worker-2.md`. Do NOT pass `REVIEW.md` (Worker 2 is self-contained via `worker-2.md`), the active plan (unless cycle-item ambiguity requires it), or `CHANGELOG.md` (unless the plan or maintainer authorised a changelog edit this cycle). Forbid reading any other worker's memory file. Worker 2 implements fixes; on return the artifact status should be `fix-implemented`.
+3. `fix-implemented` → **Spawn Worker 3 subagent.** Pass: `AGENTS.md`, `worker-3.md`, the artifact, Worker 2's diff (via `git diff` in the working tree), source/tests for spot-checks, and the contents of `docs/review/worker-memory/worker-3.md`. Do NOT pass `START.md`, `REVIEW.md`, or `CHANGELOG.md` content — Worker 3 verifies the changelog disposition via `git diff -- CHANGELOG.md` directly. Forbid reading any other worker's memory file. Worker 3 verifies; on return the artifact status should be `verified` or `revision-needed`.
 4. `revision-needed` → re-spawn Worker 2 with the updated artifact. On return status should be `fix-implemented` again.
 5. `verified` → Worker 3 has already marked the checklist box; append a short progress note to `docs/review/worker-memory/worker-0.md` and advance to the next item.
 
 Worker 0 does not act as a courier between subagents beyond passing the artifact and diff. All inter-worker information flows through the tracked artifact, never through prose in the spawn prompt.
+
+**Empty-diff Worker 1 re-check.** Per `REVIEW.md` "Maintainer checkpoint", the cycle-closing Worker 1 re-check is **skippable when the cycle item produced no source/test diff** (skip artifact, all-Lows-forward-looking, recording-only project-pass forwards). Confirm via `git diff --stat -- django_strawberry_framework/ tests/ CHANGELOG.md` showing no new changes against the prior cycle's accepted state; record the skip in `worker-memory/worker-0.md`. For any cycle that produced source or test edits, the re-check is required — do not skip on judgment alone.
 
 The generated plan must include:
 
@@ -148,7 +157,7 @@ Worker 0 appends a brief block to `docs/review/worker-memory/worker-0.md` after 
 - Carry forward: items touching `types/base.py` __init_subclass__ tend to ship comment-pass changes; budget extra dispatch time.
 ```
 
-Entries are append-only. If the file approaches ~50 lines, consolidate similar entries into one pattern observation before adding more.
+Entries are append-only. If the file **approaches ~45 lines**, consolidate similar entries into one pattern observation before adding more (the earlier threshold keeps the file readable at every append rather than catching it at the limit).
 
 ## Stop conditions
 

@@ -44,7 +44,7 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 
 **`0.0.6`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening.
 
-For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`](TODAY.md). The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/FEATURES.md`](docs/FEATURES.md). Per-card sequencing for both releases lives in [`KANBAN.md`](KANBAN.md).
+For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`](TODAY.md). The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/GLOSSARY.md`](docs/GLOSSARY.md). Per-card sequencing for both releases lives in [`KANBAN.md`](KANBAN.md).
 
 ## Get started → [`docs/README.md`](docs/README.md)
 
@@ -53,12 +53,12 @@ Installation, quick start, schema-setup walkthrough, running the example project
 ## Project documentation
 
 - [`docs/README.md`](docs/README.md) — install, quick start, walkthrough, status
-- [`docs/FEATURES.md`](docs/FEATURES.md) — shipped/planned/deferred capability catalog + migration notes
+- [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — shipped/planned/deferred capability catalog + migration notes
 - [`GOAL.md`](GOAL.md) — long-term destination and rich-schema north star
 - [`TODAY.md`](TODAY.md) — current package capability snapshot for examples and early adopters
 - [`docs/TREE.md`](docs/TREE.md) — package and test layout reference
 - [`KANBAN.md`](KANBAN.md) — contributor/maintainer board for shipped, planned, and blocked work
-- [`BETTER.md`](BETTER.md) — strategic differentiators beyond parity (post-`1.0.0`)
+- [`BACKLOG.md`](BACKLOG.md) — strategic differentiators beyond parity (post-`1.0.0`)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup, format, test, build, publish
 
 ## Inspired by

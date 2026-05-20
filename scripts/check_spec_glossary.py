@@ -2,9 +2,9 @@ r"""Validate that a spec's project-specific terms are glossary-anchored.
 
 Two checks per term in the spec's companion ``*-terms.csv``:
 
-1. ``docs/FEATURES.md`` has a ``## <heading>`` whose GitHub auto-anchor
+1. ``docs/GLOSSARY.md`` has a ``## <heading>`` whose GitHub auto-anchor
    matches the term's ``anchor`` column.
-2. The spec markdown contains at least one ``](...FEATURES.md#<anchor>)``
+2. The spec markdown contains at least one ``](...GLOSSARY.md#<anchor>)``
    link pointing to that anchor.
 
 Exits 0 when every term passes both checks, 1 when any term fails, and 2
@@ -15,22 +15,22 @@ Usage::
     uv run python scripts/check_spec_glossary.py \
         --spec docs/spec-014-meta_primary-0_0_6.md \
         --terms docs/spec-014-meta_primary-0_0_6-terms.csv \
-        --features docs/FEATURES.md \
+        --glossary docs/GLOSSARY.md \
         --auto-link
 
 Only ``--spec`` is required. ``--terms`` defaults to the spec path with
 ``-terms.csv`` appended to the stem (e.g.
 ``docs/spec-014-meta_primary-0_0_6.md`` →
-``docs/spec-014-meta_primary-0_0_6-terms.csv``). ``--features``
-defaults to ``docs/FEATURES.md`` and accepts an override for testing or
+``docs/spec-014-meta_primary-0_0_6-terms.csv``). ``--glossary``
+defaults to ``docs/GLOSSARY.md`` and accepts an override for testing or
 for validating against a fork's renamed glossary.
 
 Pass ``--auto-link`` to also rewrite the spec in place: for every term
 listed as missing a link, the script finds the first prose mention
 outside fenced code blocks and existing links, and wraps it as a
-``[term](FEATURES.md#anchor)`` reference. The backtick-wrapped form is
+``[term](GLOSSARY.md#anchor)`` reference. The backtick-wrapped form is
 preferred when the spec already says e.g. ``Meta.fields`` in inline
-code — the rewrite becomes ``[Meta.fields](FEATURES.md#metafields)``
+code — the rewrite becomes ``[Meta.fields](GLOSSARY.md#metafields)``
 with the inline-code backticks preserved inside the link label. The
 run is idempotent: a second pass is a no-op once every term has at
 least one link.
@@ -48,13 +48,13 @@ import sys
 from pathlib import Path
 
 HEADING_PATTERN = re.compile(r"^##\s+(.+?)\s*$")
-LINK_PATTERN = re.compile(r"\]\([^)]*FEATURES\.md#([^)]+)\)")
+LINK_PATTERN = re.compile(r"\]\([^)]*GLOSSARY\.md#([^)]+)\)")
 FENCE_PATTERN = re.compile(r"^```", re.MULTILINE)
 EXISTING_LINK_PATTERN = re.compile(r"\[[^\]]*\]\([^)]*\)")
 
 
 def github_anchor(heading: str) -> str:
-    """Approximate GitHub's H2 auto-anchor slugger for ``docs/FEATURES.md``.
+    """Approximate GitHub's H2 auto-anchor slugger for ``docs/GLOSSARY.md``.
 
     Drops backticks, lowercases, strips non-word characters other than
     whitespace and hyphens, then collapses whitespace runs to single
@@ -86,10 +86,10 @@ def load_terms(csv_path: Path) -> list[tuple[str, str]]:
     return rows
 
 
-def features_anchors(features_path: Path) -> dict[str, str]:
-    """Return ``{anchor: heading_text}`` for every H2 in ``FEATURES.md``."""
+def glossary_anchors(glossary_path: Path) -> dict[str, str]:
+    """Return ``{anchor: heading_text}`` for every H2 in ``GLOSSARY.md``."""
     anchors: dict[str, str] = {}
-    with features_path.open(encoding="utf-8") as handle:
+    with glossary_path.open(encoding="utf-8") as handle:
         for line in handle:
             match = HEADING_PATTERN.match(line)
             if match:
@@ -99,21 +99,21 @@ def features_anchors(features_path: Path) -> dict[str, str]:
 
 
 def spec_link_anchors(spec_path: Path) -> set[str]:
-    """Return the set of ``FEATURES.md`` anchors linked from the spec."""
+    """Return the set of ``GLOSSARY.md`` anchors linked from the spec."""
     text = spec_path.read_text(encoding="utf-8")
     return {match.group(1) for match in LINK_PATTERN.finditer(text)}
 
 
 def check_terms(
     terms: list[tuple[str, str]],
-    features_index: dict[str, str],
+    glossary_index: dict[str, str],
     spec_anchors: set[str],
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """Return ``(missing_glossary, missing_links)`` lists of ``(term, anchor)``."""
     missing_glossary: list[tuple[str, str]] = []
     missing_links: list[tuple[str, str]] = []
     for term, anchor in terms:
-        if anchor not in features_index:
+        if anchor not in glossary_index:
             missing_glossary.append((term, anchor))
         if anchor not in spec_anchors:
             missing_links.append((term, anchor))
@@ -172,17 +172,17 @@ def auto_link_terms(
     spec_path: Path,
     missing_links: list[tuple[str, str]],
 ) -> tuple[list[str], list[str]]:
-    """Insert ``](FEATURES.md#anchor)`` links at the first valid mention of each term.
+    """Insert ``](GLOSSARY.md#anchor)`` links at the first valid mention of each term.
 
     For each ``(term, anchor)`` in ``missing_links``:
 
     1. Locate the first backtick-wrapped occurrence of the term that is
        not inside a fenced code block or an existing link, and wrap it
-       as ``[backtick-term](FEATURES.md#anchor)`` so the inline-code
+       as ``[backtick-term](GLOSSARY.md#anchor)`` so the inline-code
        formatting survives inside the link label.
     2. If the backtick-wrapped form is absent, look for the plain prose
        form under the same exclusion rules and wrap it as
-       ``[term](FEATURES.md#anchor)``.
+       ``[term](GLOSSARY.md#anchor)``.
 
     The spec file is re-read between terms so each replacement sees a
     fresh code-block / link map (cheap for spec-sized files, avoids the
@@ -201,7 +201,7 @@ def auto_link_terms(
         backtick = f"`{term}`"
         position = _find_first_outside(text, backtick, code_ranges, link_ranges)
         if position is not None:
-            replacement = f"[`{term}`](FEATURES.md#{anchor})"
+            replacement = f"[`{term}`](GLOSSARY.md#{anchor})"
             text = text[:position] + replacement + text[position + len(backtick) :]
             spec_path.write_text(text, encoding="utf-8")
             linked.append(term)
@@ -209,7 +209,7 @@ def auto_link_terms(
 
         position = _find_first_outside(text, term, code_ranges, link_ranges)
         if position is not None:
-            replacement = f"[{term}](FEATURES.md#{anchor})"
+            replacement = f"[{term}](GLOSSARY.md#{anchor})"
             text = text[:position] + replacement + text[position + len(term) :]
             spec_path.write_text(text, encoding="utf-8")
             linked.append(term)
@@ -242,10 +242,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--features",
+        "--glossary",
         type=Path,
-        default=Path("docs/FEATURES.md"),
-        help="Path to the glossary (default: docs/FEATURES.md).",
+        default=Path("docs/GLOSSARY.md"),
+        help="Path to the glossary (default: docs/GLOSSARY.md).",
     )
     parser.add_argument(
         "--auto-link",
@@ -253,7 +253,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help=(
             "Rewrite the spec in place: for each term in the missing-link list, "
             "wrap the first non-code, non-link occurrence as "
-            "[term](FEATURES.md#anchor). Idempotent."
+            "[term](GLOSSARY.md#anchor). Idempotent."
         ),
     )
     return parser.parse_args(argv)
@@ -270,7 +270,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.terms is None:
         args.terms = _default_terms_path(args.spec)
 
-    for path in (args.spec, args.terms, args.features):
+    for path in (args.spec, args.terms, args.glossary):
         if not path.exists():
             print(f"error: missing file: {path}", file=sys.stderr)
             return 2
@@ -280,9 +280,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: no terms loaded from {args.terms}", file=sys.stderr)
         return 2
 
-    features_index = features_anchors(args.features)
+    glossary_index = glossary_anchors(args.glossary)
     spec_anchors = spec_link_anchors(args.spec)
-    missing_glossary, missing_links = check_terms(terms, features_index, spec_anchors)
+    missing_glossary, missing_links = check_terms(terms, glossary_index, spec_anchors)
 
     if args.auto_link and missing_links:
         linked, skipped = auto_link_terms(args.spec, missing_links)
@@ -301,19 +301,19 @@ def main(argv: list[str] | None = None) -> int:
             print()
         # Re-read spec so the post-rewrite missing-link list is accurate.
         spec_anchors = spec_link_anchors(args.spec)
-        missing_glossary, missing_links = check_terms(terms, features_index, spec_anchors)
+        missing_glossary, missing_links = check_terms(terms, glossary_index, spec_anchors)
 
     if missing_glossary:
         _print_section(
-            f"Missing glossary entries in {args.features}:",
+            f"Missing glossary entries in {args.glossary}:",
             missing_glossary,
             "add `## <heading>` whose slug is `{anchor}`",
         )
     if missing_links:
         _print_section(
-            f"Spec terms missing a link to {args.features.name}:",
+            f"Spec terms missing a link to {args.glossary.name}:",
             missing_links,
-            "add at least one `](FEATURES.md#{anchor})` reference",
+            "add at least one `](GLOSSARY.md#{anchor})` reference",
         )
 
     if missing_glossary or missing_links:

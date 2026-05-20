@@ -4,13 +4,13 @@
 
 `django-strawberry-framework` should be **the DRF-shaped, `class Meta`-driven Django integration for Strawberry GraphQL**. The destination is the developer experience proven by `django-graphene-filters` — declarative `Meta` classes, automatic input-type generation, rich filter / order / aggregate / fieldset sidecars, layered permissions including cascade visibility — on a modern Strawberry foundation, without Graphene runtime baggage.
 
-For the shipped surface today, see [`docs/FEATURES.md`](docs/FEATURES.md). For the per-card sequencing toward this north star, see [`KANBAN.md`](KANBAN.md).
+For the shipped surface today, see [`docs/GLOSSARY.md`](docs/GLOSSARY.md). For the per-card sequencing toward this north star, see [`KANBAN.md`](KANBAN.md).
 
 ## What success looks like in your code
 
 When the package is feature-complete at `1.0.0`, a single Django app — call it `astronomy`, with one parent model (`Galaxy`) and one child model (`CelestialBody`) — is laid out across six files. Every file is short. Nothing is hand-rolled that the package can generate.
 
-> **Reading this as a glossary lookup**: every symbol you see below (`DjangoType`, `FilterSet`, `RelatedFilter`, `apply_cascade_permissions`, `Meta.filterset_class`, `Meta.orderset_class`, `Meta.aggregate_class`, `Meta.fields_class`, `Meta.search_fields`, `DjangoConnectionField`, `DjangoNodeField`, `OrderSet`, `RelatedOrder`, `AggregateSet`, `RelatedAggregate`, `FieldSet`, …) has a per-feature entry in [`docs/FEATURES.md`](docs/FEATURES.md). Use that file when a symbol is unfamiliar — it answers *"is this shipped today, and what exactly does it do?"* for every symbol shown below. The [alphabetical Index](docs/FEATURES.md#index) at the top of `FEATURES.md` is the fastest entry point — every entry is deep-linked, so you can also URL-jump straight to e.g. [`#filterset`](docs/FEATURES.md#filterset) or [`#metafilterset_class`](docs/FEATURES.md#metafilterset_class).
+> **Reading this as a glossary lookup**: every symbol you see below (`DjangoType`, `FilterSet`, `RelatedFilter`, `apply_cascade_permissions`, `Meta.filterset_class`, `Meta.orderset_class`, `Meta.aggregate_class`, `Meta.fields_class`, `Meta.search_fields`, `DjangoConnectionField`, `DjangoNodeField`, `OrderSet`, `RelatedOrder`, `AggregateSet`, `RelatedAggregate`, `FieldSet`, …) has a per-feature entry in [`docs/GLOSSARY.md`](docs/GLOSSARY.md). Use that file when a symbol is unfamiliar — it answers *"is this shipped today, and what exactly does it do?"* for every symbol shown below. The [alphabetical Index](docs/GLOSSARY.md#index) at the top of `GLOSSARY.md` is the fastest entry point — every entry is deep-linked, so you can also URL-jump straight to e.g. [`#filterset`](docs/GLOSSARY.md#filterset) or [`#metafilterset_class`](docs/GLOSSARY.md#metafilterset_class).
 
 ```text
 apps/astronomy/
@@ -440,7 +440,7 @@ The decorator becomes a nested `Meta` class — same Strawberry engine, Django-s
 + finalize_django_types()
 ```
 
-The optimizer, scalar conversions, and relation resolution machinery are richer than the upstream's — plan caching, FK-id elision, queryset diffing, strictness mode for accidental N+1 detection. See [`docs/FEATURES.md`](docs/FEATURES.md) for the enhancement catalog.
+The optimizer, scalar conversions, and relation resolution machinery are richer than the upstream's — plan caching, FK-id elision, queryset diffing, strictness mode for accidental N+1 detection. See [`docs/GLOSSARY.md`](docs/GLOSSARY.md) for the enhancement catalog.
 
 ### Coming from DRF + `django-filter`
 
@@ -476,7 +476,7 @@ GraphQL becomes another transport for the same business logic — no parallel fi
 
 ## Working reference
 
-`django-graphene-filters` is the working feature-complete reference. The goal is not to copy its Graphene internals — it's to recreate **what the package enables for the schema author**: declarative filter / order / aggregate / fieldset sidecars, lazy related class references, generated input / output types with stable class-derived names, layered permissions including cascade visibility, async aggregate paths, and Relay-node-shaped output. The `Galaxy` / `CelestialBody` example above is a structural twin of the `django-graphene-filters` `recipes` cookbook (`ObjectType` / `Object` / `Attribute` / `Value`), reduced to two models so the shape stays legible. The per-feature shipped / planned breakdown lives in [`docs/FEATURES.md`](docs/FEATURES.md).
+`django-graphene-filters` is the working feature-complete reference. The goal is not to copy its Graphene internals — it's to recreate **what the package enables for the schema author**: declarative filter / order / aggregate / fieldset sidecars, lazy related class references, generated input / output types with stable class-derived names, layered permissions including cascade visibility, async aggregate paths, and Relay-node-shaped output. The `Galaxy` / `CelestialBody` example above is a structural twin of the `django-graphene-filters` `recipes` cookbook (`ObjectType` / `Object` / `Attribute` / `Value`), reduced to two models so the shape stays legible. The per-feature shipped / planned breakdown lives in [`docs/GLOSSARY.md`](docs/GLOSSARY.md).
 
 ## Success criteria
 

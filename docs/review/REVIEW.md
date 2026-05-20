@@ -393,7 +393,7 @@ Worker 1 **may skip** the helper for:
 
 When the helper is skipped, the `What looks solid` section of the artifact must say so explicitly with a short reason. (Non-`.py` files and standalone `__init__.py` reviews are out of scope per the Review scope rules; the helper question does not apply to them.)
 
-Worker 2 **must re-read** the overview already written by Worker 1 before implementing any non-trivial fix on a file the helper was run against. Worker 2 may re-run the helper with `--strip-docstrings` when the logic is hard to read with docstrings inline; in that case, the shadow file's path is passed to Worker 3 on the first verification pass.
+Worker 2 **must re-read** the overview already written by Worker 1 before implementing any non-trivial fix on a file the helper was run against. If Worker 2 re-runs the helper and uses the shadow file during implementation, the shadow file's path is passed to Worker 3 on the first verification pass.
 
 #### How to run
 
@@ -403,11 +403,17 @@ From the repository root:
 python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/review/shadow
 ```
 
+To refresh shadow output for every package `.py` file recursively:
+
+```shell
+python scripts/review_inspect.py --all --output-dir docs/review/shadow
+```
+
 Every review-cycle helper invocation must pass `--output-dir docs/review/shadow` so generated artifacts land inside the review sandbox and never collide with other workflows' shadow output.
 
 Useful flags:
 
-- `--strip-docstrings` — also strip module/class/function docstrings from the shadow file. Use when docstrings obscure the control flow being read.
+- `--all` — inspect every `.py` file under `django_strawberry_framework/` recursively. Do not pass a single-file target with this flag.
 - `--outline-only` — overview keeps only Imports, Symbols, Control-flow hotspots, and Django/ORM markers. Use for a fast-scan pass on a file you have already reviewed.
 - `--stdout` — print the overview to stdout in addition to writing it. Useful for quick triage from the terminal.
 - `--marker NAME` — add a custom marker to the Django/ORM marker table. Repeatable. Use when a file traffics in a name (e.g., `Connection`, `relay`) the default marker list does not cover.
@@ -419,7 +425,7 @@ Useful flags:
 
 Two files land under `docs/review/shadow/<stable-stem>`:
 
-- `<stem>.stripped.py` — target source with `#` comments removed (and docstrings, with `--strip-docstrings`).
+- `<stem>.stripped.py` — target source with `#` comments and docstring statements removed; other string-literal contents are replaced by `...`.
 - `<stem>.overview.md` — static AST overview with the sections described below.
 
 `docs/review/shadow/` is gitignored: the shadow file and overview are throwaway analysis byproducts. The tracked, committed review artifact is the `docs/review/rev-*.md` file Worker 1 produces.
@@ -428,15 +434,16 @@ Two files land under `docs/review/shadow/<stable-stem>`:
 
 | Section | Reviewer use |
 |---|---|
+| **Quick scan** | Count summary for imports, symbols, hotspots, executable marker lines, calls of interest, TODOs, and repeated string literals. Use it to decide which detailed sections need the most attention. |
 | **Imports** | Confirm the file's place in the dependency graph: local / first-party / django / strawberry / standard. New cross-folder imports are usually structural changes worth flagging. |
 | **Symbols** | Use as a fast table of contents. Jump straight to the function being reviewed. The class/parent column flags methods that may belong elsewhere. |
 | **Control-flow hotspots** | Functions over 40 lines or 8 branches surface here. Apply Medium-tier "complexity / branchy" attention to every hotspot. If a hotspot has no test exercising every branch, that is a Medium-tier "missing tests for important branches" finding. |
-| **Django / ORM markers** | **Audit checklist for ORM-heavy files.** Every line in this table touches `QuerySet`, `select_related`, `prefetch_related`, `Prefetch`, `only`, `_meta`, `get_queryset`, `_prefetched_objects_cache`, `fields_cache`, `DjangoType`, `OptimizationPlan`, `OptimizerHint`, `dst_optimizer_plan`, or `_optimizer_field_map`. Walk every entry. Each one needs either a one-line justification ("this is correct because …") or a finding. |
-| **Calls of interest** | Reflective-access audit: every `getattr` / `hasattr` / `isinstance` / `setattr` and every container-coercion (`dict`, `frozenset`, `iter`, `len`, `list`, `set`, `tuple`) lands here. These are the typical sites of shape-contract bugs and missing defensive defaults. |
+| **Django / ORM markers** | **Audit checklist for ORM-heavy files.** Every line in this table has an executable-code match for `QuerySet`, `select_related`, `prefetch_related`, `Prefetch`, `only`, `_meta`, `get_queryset`, `_prefetched_objects_cache`, `fields_cache`, `DjangoType`, `OptimizationPlan`, `OptimizerHint`, `dst_optimizer_plan`, or `_optimizer_field_map`; comment and string-literal mentions are ignored. Walk every entry. Each one needs either a one-line justification ("this is correct because …") or a finding. |
+| **Calls of interest** | Reflective-access audit: every `getattr` / `hasattr` / `isinstance` / `setattr` and every container-coercion (`dict`, `frozenset`, `iter`, `len`, `list`, `set`, `tuple`) lands here, with a summary by call before the line items. These are the typical sites of shape-contract bugs and missing defensive defaults. |
 | **Comments and docstrings → Docstrings** | Verify every public function/class has a docstring describing the *final* approved behavior (after logic changes are accepted). |
 | **Comments and docstrings → TODO comments** | Comment-pass checklist: each TODO must still be actionable and must match its anchored spec; remove the anchor in the same change that ships the slice (per AGENTS.md). |
 | **Comments and docstrings → Comment inventory** | Spot stale or restating-the-obvious comments. Comment polish belongs in the comment pass, not the logic pass. |
-| **Repeated string literals** | DRY signal. Useful at the per-file pass for catching string-keyed dispatch (e.g., context keys); essential at the folder pass for catching cross-file duplication (`logger = logging.getLogger("django_strawberry_framework")` in three files would surface as the same literal in three overviews). |
+| **Repeated string literals** | DRY signal for executable string literals. Useful at the per-file pass for catching string-keyed dispatch (e.g., context keys); essential at the folder pass for catching cross-file duplication (`logger = logging.getLogger("django_strawberry_framework")` in three files would surface as the same literal in three overviews). Docstrings are excluded from this count. |
 
 #### Folder-pass repeated-literal check
 

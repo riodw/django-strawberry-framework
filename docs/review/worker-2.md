@@ -84,10 +84,10 @@ Respect `AGENTS.md` test-placement rules. Do not add new files under frozen `tes
 The full rules live in `docs/review/REVIEW.md` under "Static review helper". Worker 2 follows this shape:
 
 - **Re-read the overview** Worker 1 already produced under `docs/review/shadow/<stem>.overview.md` before implementing any non-trivial fix. The Django/ORM markers, control-flow hotspots, and calls-of-interest sections are the same checklist that drove the review; consult them while planning the edit so the fix does not regress an unrelated marker line.
-- **Re-run the helper** with `--strip-docstrings` when the logic is hard to read with docstrings inline. Every review-cycle invocation must pass `--output-dir docs/review/shadow`:
+- **Re-run the helper** when refreshed output would help implementation. Every review-cycle invocation must pass `--output-dir docs/review/shadow`:
 
 ```shell
-python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --strip-docstrings --output-dir docs/review/shadow
+python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/review/shadow
 ```
 
 - **Pass the shadow path to Worker 3** on the first verification pass when the shadow was used during fix implementation. Worker 3's first-pass prompt must include the shadow-file caveat (see worker-3.md).

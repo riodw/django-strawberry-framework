@@ -110,14 +110,16 @@ Quick rules:
 
 - **Run the helper before reviewing** any `.py` file ≥150 lines, any file under `optimizer/` or `types/`, or any file whose folder pass is next on the checklist (folder passes need an overview for every sibling, including the folder's `__init__.py`).
 - **Skip the helper** for pure-class-definition modules like `exceptions.py`. State the skip and the reason in the artifact's `What looks solid` section. (Non-`.py` files and standalone `__init__.py` reviews are out of scope entirely — see `REVIEW.md` "Review scope".)
-- **Use the overview as a checklist.** The Django/ORM markers section enumerates every line that touches the ORM and is the audit list for ORM-heavy files; the control-flow hotspots section flags branchy functions for Medium-tier complexity attention; the calls-of-interest section surfaces reflective-access sites; the repeated-literals section drives the folder-pass DRY check.
-- **Cite original source-file line numbers** in the artifact, never shadow-file line numbers — comments and docstrings are stripped from the shadow file and the line numbers will not match.
+- **Use the overview as a checklist.** The Django/ORM markers section enumerates executable-code marker lines and is the audit list for ORM-heavy files; the control-flow hotspots section flags branchy functions for Medium-tier complexity attention; the calls-of-interest section surfaces reflective-access sites; the repeated-literals section drives the folder-pass DRY check.
+- **Cite original source-file line numbers** in the artifact, never shadow-file line numbers — comments and docstring statements are removed from the shadow file, other string literals are replaced, and the line numbers will not match.
 
 Example:
 
 ```shell
 python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/review/shadow
 ```
+
+Use `python scripts/review_inspect.py --all --output-dir docs/review/shadow` when Worker 0 or a folder/project pass needs fresh shadow output for the full package tree.
 
 Every review-cycle helper invocation must pass `--output-dir docs/review/shadow`. The helper writes ignored shadow byproducts under that path. The tracked, committed review artifact is the `docs/review/rev-<folder__file_name>.md` file you produce.
 

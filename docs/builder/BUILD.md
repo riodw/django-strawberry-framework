@@ -472,7 +472,7 @@ Worker 3 uses the **Repeated string literals** and **Imports** sections to catch
 
 Worker 1 and Worker 3 may also skip the helper for files where the artifact will be a "no review-worthy logic" disposition (pure re-exports, single-line constants, etc.). When the helper is skipped, the artifact must say so explicitly with a short reason.
 
-Worker 2 **may re-run** the helper with `--strip-docstrings` when the logic is hard to read with docstrings inline. If Worker 2 used the shadow file during implementation, that must be noted in the artifact's "Notes for Worker 3" section.
+Worker 2 **may re-run** the helper when refreshed output would help implementation. If Worker 2 used the shadow file during implementation, that must be noted in the artifact's "Notes for Worker 3" section.
 
 #### How to run
 
@@ -482,11 +482,17 @@ From the repository root:
 python scripts/review_inspect.py django_strawberry_framework/optimizer/walker.py --output-dir docs/builder/shadow
 ```
 
+To refresh shadow output for every package `.py` file recursively:
+
+```shell
+python scripts/review_inspect.py --all --output-dir docs/builder/shadow
+```
+
 Every build-cycle helper invocation must pass `--output-dir docs/builder/shadow` so generated artifacts land inside the build sandbox.
 
 Useful flags:
 
-- `--strip-docstrings` — also strip module/class/function docstrings from the shadow file. Use when docstrings obscure the control flow being read.
+- `--all` — inspect every `.py` file under `django_strawberry_framework/` recursively. Do not pass a single-file target with this flag.
 - `--outline-only` — keep only Imports, Symbols, Control-flow hotspots, and Django/ORM markers in the overview. Use for fast-scan passes on a file already inspected.
 - `--stdout` — print the overview to stdout in addition to writing it. Useful for quick triage from the terminal.
 - `--marker NAME` — add a custom marker to the Django/ORM marker table. Repeatable. Use when the slice traffics in a name (e.g. `Connection`, `relay`) the default marker list does not cover.
@@ -496,19 +502,20 @@ Useful flags:
 
 #### Overview sections — what each one tells you
 
+- **Quick scan** — count summary for imports, symbols, hotspots, executable marker lines, calls of interest, TODOs, and repeated string literals. Use it to decide which detailed sections need the most attention.
 - **Imports** — every import categorized as local / first-party / django / strawberry / standard-or-third-party. Cross-folder imports are usually structural changes worth flagging.
 - **Symbols** — table of contents for the file's classes and functions, with line ranges and parent class. Use to jump to the symbol under review.
 - **Control-flow hotspots** — functions exceeding the line or branch thresholds. Apply Medium-tier complexity attention to every hotspot.
-- **Django / ORM markers** — every line that touches `QuerySet`, `select_related`, `prefetch_related`, `Prefetch`, `only`, `_meta`, `get_queryset`, `_prefetched_objects_cache`, `fields_cache`, `DjangoType`, `OptimizationPlan`, `OptimizerHint`, `dst_optimizer_plan`, or `_optimizer_field_map`. Walk every entry; each needs either a one-line justification or a finding.
-- **Calls of interest** — reflective-access and container-coercion calls (`getattr`, `hasattr`, `isinstance`, `setattr`, `dict`, `frozenset`, `iter`, `len`, `list`, `set`, `tuple`). These are the typical sites of shape-contract bugs and missing defensive defaults.
+- **Django / ORM markers** — every line with an executable-code match for `QuerySet`, `select_related`, `prefetch_related`, `Prefetch`, `only`, `_meta`, `get_queryset`, `_prefetched_objects_cache`, `fields_cache`, `DjangoType`, `OptimizationPlan`, `OptimizerHint`, `dst_optimizer_plan`, or `_optimizer_field_map`; comment and string-literal mentions are ignored. Walk every entry; each needs either a one-line justification or a finding.
+- **Calls of interest** — reflective-access and container-coercion calls (`getattr`, `hasattr`, `isinstance`, `setattr`, `dict`, `frozenset`, `iter`, `len`, `list`, `set`, `tuple`), with a summary by call before the line items. These are the typical sites of shape-contract bugs and missing defensive defaults.
 - **Comments and docstrings** — docstring inventory, TODO comments, and the full comment inventory. Use to verify docstrings describe the final approved behavior and that TODOs are still actionable.
-- **Repeated string literals** — DRY signal. Essential at the cross-slice integration pass for catching cross-file duplication.
+- **Repeated string literals** — DRY signal for executable string literals; docstrings are excluded. Essential at the cross-slice integration pass for catching cross-file duplication.
 
 #### Output files
 
 Two files land under `docs/builder/shadow/<stable-stem>`:
 
-- `<stem>.stripped.py` — target source with `#` comments removed.
+- `<stem>.stripped.py` — target source with `#` comments and docstring statements removed; other string-literal contents are replaced by `...`.
 - `<stem>.overview.md` — static AST overview.
 
 `docs/builder/shadow/` is gitignored.

@@ -4,9 +4,11 @@ The target file is parsed as text/AST only. It is never imported or executed,
 so this helper is safe for files that touch Django settings, registries, or
 Strawberry type creation at import time.
 
-The generated shadow file strips comments and string-literal contents so review
-passes can focus on executable structure. With ``--strip-docstrings``, docstring
-statements are removed entirely instead of being replaced by ``...``.
+The generated shadow file strips comments and docstring statements, then
+replaces remaining string-literal contents so review passes can focus on
+executable structure. Marker detection uses that stripped view to avoid
+comment/docstring false positives, while rendered marker lines still cite the
+original source text.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 import argparse
 import ast
 import io
+import re
 import sys
 import tokenize
 from collections import Counter
@@ -68,6 +71,14 @@ CALLS_OF_INTEREST = {
 }
 _FSTRING_START = getattr(tokenize, "FSTRING_START", -1)
 _FSTRING_END = getattr(tokenize, "FSTRING_END", -1)
+_ALL_TARGET_ROOT = Path("django_strawberry_framework")
+# Markers that are common substrings inside unrelated identifiers need tighter
+# matching; ``only`` still intentionally covers the optimizer's ``only_fields``.
+_TOKEN_BOUNDARY_MARKERS = {
+    "_meta": re.compile(r"(?<![A-Za-z0-9_])_meta(?![A-Za-z0-9_])"),
+    "only": re.compile(r"(?<![A-Za-z0-9_])(?:only|only_fields)(?![A-Za-z0-9_])"),
+    "Prefetch": re.compile(r"(?<![A-Za-z0-9_])Prefetch(?![A-Za-z0-9_])"),
+}
 
 
 @dataclass(frozen=True)
@@ -136,8 +147,8 @@ class _HotspotRecord:
     branches: int
 
 
-class _DocstringRange(NamedTuple):
-    """Source range occupied by a docstring."""
+class _LineRange(NamedTuple):
+    """Source line range."""
 
     start: int
     end: int
@@ -181,7 +192,7 @@ class _StaticVisitor(ast.NodeVisitor):
     def visit_Module(self, node: ast.Module) -> None:  # noqa: N802
         """Record the module docstring and then visit the module body."""
         self._record_docstring(node, "<module>")
-        self.generic_visit(node)
+        self._visit_children_excluding_docstring(node)
 
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         """Record an import statement."""
@@ -207,7 +218,7 @@ class _StaticVisitor(ast.NodeVisitor):
         self._record_symbol("class", node, "")
         self._record_docstring(node, node.name)
         self._parent_stack.append(node.name)
-        self.generic_visit(node)
+        self._visit_children_excluding_docstring(node)
         self._parent_stack.pop()
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
@@ -240,7 +251,7 @@ class _StaticVisitor(ast.NodeVisitor):
         self._record_docstring(node, qualified_name)
         self._record_hotspot(node, qualified_name)
         self._parent_stack.append(node.name)
-        self.generic_visit(node)
+        self._visit_children_excluding_docstring(node)
         self._parent_stack.pop()
 
     def _record_symbol(
@@ -274,6 +285,16 @@ class _StaticVisitor(ast.NodeVisitor):
         if line_count >= self.long_function_lines or branch_count >= self.long_function_branches:
             self.hotspots.append(_HotspotRecord(node.lineno, name, line_count, branch_count))
 
+    def _visit_children_excluding_docstring(
+        self,
+        node: ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> None:
+        docstring = _docstring_expr(node)
+        for child in ast.iter_child_nodes(node):
+            if child is docstring:
+                continue
+            self.visit(child)
+
     def _categorize_import(self, module_or_names: str) -> str:
         if module_or_names.startswith("."):
             return "local"
@@ -302,9 +323,14 @@ def _branch_count_excluding_nested(node: ast.FunctionDef | ast.AsyncFunctionDef)
 
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate static review aids for a Python file without importing it.",
+        description="Generate static review aids for Python files without importing them.",
     )
-    parser.add_argument("target", type=Path, help="Python file to inspect.")
+    parser.add_argument("target", nargs="?", type=Path, help="Python file to inspect.")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Inspect every .py file under django_strawberry_framework/ recursively.",
+    )
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -316,11 +342,6 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         type=Path,
         default=Path.cwd(),
         help="Root used to compute stable output names. Defaults to the current directory.",
-    )
-    parser.add_argument(
-        "--strip-docstrings",
-        action="store_true",
-        help="Remove module/class/function docstring statements entirely from the generated shadow file.",
     )
     parser.add_argument(
         "--outline-only",
@@ -448,27 +469,27 @@ def _replace_range_with_ellipsis(lines: list[str], token_range: _TokenRange) -> 
         lines[index] = "\n" if lines[index].endswith("\n") else ""
 
 
-def _strip_docstrings(source: str, tree: ast.AST) -> str:
-    ranges = _docstring_ranges(tree)
+def _remove_docstring_statements(source: str, tree: ast.AST) -> str:
+    ranges = _docstring_statement_ranges(tree)
     if not ranges:
         return source
 
     lines = source.splitlines(keepends=True)
-    for docstring_range in ranges:
-        for index in range(docstring_range.start - 1, docstring_range.end):
+    for line_range in ranges:
+        for index in range(line_range.start - 1, line_range.end):
             if 0 <= index < len(lines):
                 lines[index] = "\n" if lines[index].endswith("\n") else ""
     return "".join(lines)
 
 
-def _docstring_ranges(tree: ast.AST) -> list[_DocstringRange]:
-    ranges: list[_DocstringRange] = []
+def _docstring_statement_ranges(tree: ast.AST) -> list[_LineRange]:
+    ranges: list[_LineRange] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         expr = _docstring_expr(node)
         if expr is not None:
-            ranges.append(_DocstringRange(expr.lineno, expr.end_lineno or expr.lineno))
+            ranges.append(_LineRange(expr.lineno, expr.end_lineno or expr.lineno))
     return ranges
 
 
@@ -494,13 +515,27 @@ def _comments(source: str) -> list[_CommentRecord]:
     return records
 
 
-def _markers(source_lines: Sequence[str], markers: Sequence[str]) -> list[_MarkerRecord]:
+def _markers(
+    source_lines: Sequence[str],
+    marker_lines: Sequence[str],
+    markers: Sequence[str],
+) -> list[_MarkerRecord]:
     records: list[_MarkerRecord] = []
-    for lineno, line in enumerate(source_lines, start=1):
+    for lineno, marker_line in enumerate(marker_lines, start=1):
+        if not marker_line.strip():
+            continue
+        source_line = source_lines[lineno - 1] if lineno <= len(source_lines) else marker_line
         for marker in markers:
-            if marker in line:
-                records.append(_MarkerRecord(lineno, marker, line.strip()))
+            if _marker_matches(marker_line, marker):
+                records.append(_MarkerRecord(lineno, marker, source_line.strip()))
     return records
+
+
+def _marker_matches(line: str, marker: str) -> bool:
+    pattern = _TOKEN_BOUNDARY_MARKERS.get(marker)
+    if pattern is not None:
+        return pattern.search(line) is not None
+    return marker in line
 
 
 def _call_name(node: ast.AST) -> str | None:
@@ -542,6 +577,10 @@ def _render_overview(
         "- The target module was parsed statically; it was not imported or executed.",
         "- Shadow-file line numbers are not canonical. Use original source line numbers in review artifacts.",
         f"- Shadow file: `{shadow_path}`",
+        "",
+        "## Quick scan",
+        "",
+        _render_quick_scan(visitor, comment_records, marker_records, markers, outline_only),
         "",
         "## Imports",
         "",
@@ -585,6 +624,31 @@ def _render_imports(records: Sequence[_ImportRecord]) -> str:
     return "\n".join(f"- line {record.lineno}: `{record.text}` ({record.category})" for record in records)
 
 
+def _render_quick_scan(
+    visitor: _StaticVisitor,
+    comments: Sequence[_CommentRecord],
+    marker_records: Sequence[_MarkerRecord],
+    markers: Sequence[str],
+    outline_only: bool,
+) -> str:
+    duplicate_count = sum(1 for count in visitor.duplicate_literals.values() if count > 1)
+    lines = [
+        f"- imports: {len(visitor.imports)}",
+        f"- symbols: {len(visitor.symbols)}",
+        f"- control-flow hotspots: {len(visitor.hotspots)}",
+        f"- executable marker lines: {len(marker_records)}",
+    ]
+    if not outline_only:
+        lines.extend(
+            [
+                f"- calls of interest: {len(_interesting_calls(visitor.calls, markers))}",
+                f"- TODO comments: {sum(1 for record in comments if 'TODO' in record.text.upper())}",
+                f"- repeated string literals: {duplicate_count}",
+            ],
+        )
+    return "\n".join(lines)
+
+
 def _render_symbols(records: Sequence[_SymbolRecord]) -> str:
     if not records:
         return "None."
@@ -619,30 +683,56 @@ def _render_hotspots(records: Sequence[_HotspotRecord]) -> str:
 def _render_markers(records: Sequence[_MarkerRecord]) -> str:
     if not records:
         return "None."
-    return "\n".join(
+    lines = [
+        "Matched against comment- and string-stripped code; rendered text is the original source line.",
+        "",
+    ]
+    lines.extend(
         _with_truncation_notice(
             [f"- line {record.lineno}: `{record.marker}` in `{record.text}`" for record in records],
             limit=50,
         ),
     )
+    return "\n".join(lines)
+
+
+def _interesting_calls(records: Sequence[_CallRecord], markers: Sequence[str]) -> list[_CallRecord]:
+    return [
+        record
+        for record in records
+        if any(marker in record.name for marker in markers) or record.name in CALLS_OF_INTEREST
+    ]
 
 
 def _render_calls(records: Sequence[_CallRecord], markers: Sequence[str]) -> str:
     if not records:
         return "None."
-    interesting = [
-        record
-        for record in records
-        if any(marker in record.name for marker in markers) or record.name in CALLS_OF_INTEREST
-    ]
+    interesting = _interesting_calls(records, markers)
     if not interesting:
         return "None."
-    return "\n".join(
+    lines = ["Summary by call:"]
+    lines.extend(
+        _with_truncation_notice(
+            [
+                f"- {count}x `{name}()`"
+                for name, count in Counter(record.name for record in interesting).most_common()
+            ],
+            limit=20,
+        ),
+    )
+    lines.extend(
+        [
+            "",
+            "Line items:",
+        ],
+    )
+    lines.extend(
         _with_truncation_notice(
             [f"- line {record.lineno}: `{record.name}()`" for record in interesting],
             limit=75,
         ),
     )
+    return "\n".join(lines)
 
 
 def _render_comments_and_docstrings(
@@ -694,10 +784,11 @@ def _render_literals(counter: Counter[str]) -> str:
     return "\n".join(lines)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    """Run the review inspection helper."""
-    args = _parse_args(sys.argv[1:] if argv is None else argv)
-    target = args.target.resolve()
+def _target_files_for_all(package_root: Path) -> list[Path]:
+    return sorted(path for path in package_root.rglob("*.py") if path.is_file())
+
+
+def _inspect_target(target: Path, args: argparse.Namespace, markers: Sequence[str], output_dir: Path) -> int:
     if not target.exists():
         print(f"Target does not exist: {target}", file=sys.stderr)
         return 2
@@ -705,7 +796,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Target must be a Python file: {target}", file=sys.stderr)
         return 2
 
-    markers = (*DEFAULT_MARKERS, *args.marker)
     source = target.read_text(encoding="utf-8")
     try:
         tree = ast.parse(source, filename=str(target))
@@ -714,8 +804,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     stripped = _strip_comments(source)
-    if args.strip_docstrings:
-        stripped = _strip_docstrings(stripped, tree)
+    stripped = _remove_docstring_statements(stripped, tree)
     stripped = _strip_string_literals(stripped)
 
     source_lines = source.splitlines()
@@ -729,8 +818,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     visitor.visit(tree)
 
-    output_dir = args.output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
     stem = _stable_stem(target, args.root)
     shadow_path = output_dir / f"{stem}.stripped.py"
     overview_path = output_dir / f"{stem}.overview.md"
@@ -741,7 +828,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         shadow_path,
         visitor,
         _comments(source),
-        _markers(source_lines, markers),
+        _markers(source_lines, stripped.splitlines(), markers),
         markers,
         args.outline_only,
     )
@@ -753,6 +840,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Wrote {shadow_path}")
         print(f"Wrote {overview_path}")
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the review inspection helper."""
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    if args.all and args.target is not None:
+        print("Pass either --all or a single target file, not both.", file=sys.stderr)
+        return 2
+    if not args.all and args.target is None:
+        print("Target is required unless --all is passed.", file=sys.stderr)
+        return 2
+
+    markers = (*DEFAULT_MARKERS, *args.marker)
+    output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.all:
+        package_root = (args.root / _ALL_TARGET_ROOT).resolve()
+        if not package_root.is_dir():
+            print(f"Package directory does not exist: {package_root}", file=sys.stderr)
+            return 2
+        targets = _target_files_for_all(package_root)
+        if not targets:
+            print(f"No Python files found under {package_root}", file=sys.stderr)
+            return 2
+        for target in targets:
+            exit_code = _inspect_target(target, args, markers, output_dir)
+            if exit_code != 0:
+                return exit_code
+        if not args.stdout:
+            print(f"Wrote inspections for {len(targets)} files under {package_root}")
+        return 0
+
+    return _inspect_target(args.target.resolve(), args, markers, output_dir)
 
 
 if __name__ == "__main__":

@@ -45,14 +45,15 @@ Each prompt below targets exactly one source file. Treat it as a focused
 review pass, not a tour:
 
 - Read the `.overview.md` shadow first. It is a structural index —
-  imports, symbols, control-flow hotspots, Django/ORM markers, calls of
-  interest, and any repeated string literals — pulled from the AST
-  without executing the file. Use it to plan the read, not as the
-  source of truth.
-- Read the `.stripped.py` shadow next. Comments and string literals
-  are removed so the executable structure is easier to scan. **Line
-  numbers in the stripped file are not canonical.** Cite original
-  source-file line numbers in every finding and every fix.
+  quick-scan counts, imports, symbols, control-flow hotspots, executable
+  Django/ORM marker lines, calls of interest, and repeated executable
+  string literals — pulled from the AST without executing the file. Use
+  it to plan the read, not as the source of truth.
+- Read the `.stripped.py` shadow next. Comments and docstring statements
+  are removed, and other string literals are replaced, so the executable
+  structure is easier to scan. **Line numbers in the stripped file are
+  not canonical.** Cite original source-file line numbers in every
+  finding and every fix.
 - Open the original source file alongside (named in the prompt) and
   reconcile the shadow view against the real code before declaring a
   defect.

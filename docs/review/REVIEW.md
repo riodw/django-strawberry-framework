@@ -4,7 +4,6 @@ This document defines the reusable process for reviewing every file under `djang
 
 !!IMPORTANT!!
 Begin by reading README.md and docs/README.md and docs/TREE.md and docs/FEATURES.md and GOAL.md
-Begin by reading README.md and docs/README.md and docs/TREE.md and docs/FEATURES.md and GOAL.md
 
 !!IMPORTANT — DRY FIRST!!
 Every review pass, every fix, every verification must answer one question before anything else: **is the change moving the package toward the maximally DRY shape that stays readable?** Duplicated logic, parallel data flows, near-copies between modules, and repeated string/key/tuple literals are review-time defects. Worker 1 flags DRY findings in every artifact; Worker 2 implements them like any other finding; Worker 3 enforces DRY before accepting a fix; Worker 1 re-checks DRY across files at every folder pass and at the project pass.
@@ -54,10 +53,13 @@ Worker 0 creates the active review plan from these instructions and [Worker 0's 
 1. Read `pyproject.toml` and `django_strawberry_framework/__init__.py`.
 2. Confirm both version values match.
 3. Convert the release version from dots to underscores.
-   - `0.0.4` becomes `0_0_4`.
-4. Create `docs/review/review-<0_0_X>.md`.
-   - For the current `0.0.4` release, create `docs/review/review-0_0_4.md`.
-5. The plan file is the canonical checklist for the whole release review and is committed alongside the review-cycle source changes. It is kept in git as the permanent record of the cycle.
+   - `0.0.6` becomes `0_0_6`.
+4. If `docs/review/review-<0_0_X>.md` already exists, stop before clearing scratch files or creating a new plan.
+5. Clear only the generated review scratch directories before a fresh run: `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`.
+   - Never delete, glob, or recursively wipe `docs/review/` itself; permanent `review-*.md`, `rev-*.md`, `REVIEW.md`, and `worker-*.md` files are tracked source of truth.
+6. Create `docs/review/review-<0_0_X>.md`.
+   - For release `0.0.6`, create `docs/review/review-0_0_6.md`.
+7. The plan file is the canonical checklist for the whole release review and is committed alongside the review-cycle source changes. It is kept in git as the permanent record of the cycle.
 
 If the version values do not match, stop and record that mismatch in the plan before any file review starts.
 
@@ -98,7 +100,7 @@ Then it must include a tree-like checklist for the package. Every file, every fo
 ### Template shape:
 
 ```text
-# Package review plan: 0.0.4
+# Package review plan: 0.0.6
 
 Source root: `django_strawberry_framework/`
 Review rule: one file or folder-summary pass at a time.
@@ -515,9 +517,9 @@ Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.
 
 **Lifecycle.**
 
-- Worker 0 creates `docs/review/worker-memory/` and seeds four empty files (`worker-0.md`, `worker-1.md`, `worker-2.md`, `worker-3.md`) at plan-creation time.
+- Worker 0 clears only generated review scratch directories (`docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`) at plan-creation time, then creates `docs/review/worker-memory/` and seeds four empty files (`worker-0.md`, `worker-1.md`, `worker-2.md`, `worker-3.md`).
 - Workers 0/1/2/3 read their own file at the start of every spawn and append at the end.
-- Worker 0 deletes `docs/review/worker-memory/` and `docs/review/temp-tests/` at cycle closeout, after the retrospective is written.
+- Worker 0 deletes `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/` at cycle closeout, after the retrospective is written.
 
 ## Worker process
 
@@ -660,5 +662,5 @@ When all checklist items are marked `- [x]` (every file, folder pass, project pa
 4. Worker 0 provides a brief retrospective to the maintainer.
 5. After maintainer approval, Worker 0 applies approved closeout changes to `docs/review/REVIEW.md` or the worker role files — describing recurring patterns and workflow improvements **without naming specific already-fixed defects**.
 6. Worker 0 may inspect `CHANGELOG.md` review-cycle entries and consolidate them only if the maintainer explicitly authorizes that consolidation.
-7. Worker 0 deletes `docs/review/worker-memory/` and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes — the scratch memory and temp tests have served their purpose.
+7. Worker 0 deletes `docs/review/shadow/`, `docs/review/worker-memory/`, and `docs/review/temp-tests/`. The tracked permanent record is the `rev-*.md` artifacts, the plan, and the source/test changes — the shadow output, scratch memory, and temp tests have served their purpose.
 8. The maintainer commits the updated `docs/review/` workflow docs along with the now-completed `docs/review/review-<0_0_X>.md` plan and any remaining `docs/review/rev-*.md` artifacts to finish the review cycle. The plan and artifacts stay in git as the permanent record of the release review.

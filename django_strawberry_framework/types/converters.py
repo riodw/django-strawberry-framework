@@ -23,7 +23,12 @@ Public surface:
   supported Django field — ``convert_scalar``'s MRO walk picks up the
   parent's scalar without registration. ``SCALAR_MAP[FieldCls] = py_type``
   is the non-subclass extension hook (e.g. unrelated third-party fields
-  that store to a non-mapped column type).
+  that store to a non-mapped column type). Notably absent from the
+  default map: ``DurationField`` (no first-party Strawberry scalar — a
+  consumer must register a custom scalar via ``SCALAR_MAP[DurationField]
+  = MyDurationScalar``) and ``BinaryField`` (no first-party Strawberry
+  scalar either; ``strawberry.scalars.Base64`` is the conventional plug:
+  ``SCALAR_MAP[BinaryField] = strawberry.scalars.Base64``).
 
 All field-shape introspection lives here so ``types/base.py`` stays
 focused on ``Meta`` orchestration.

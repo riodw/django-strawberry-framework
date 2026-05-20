@@ -432,23 +432,28 @@ def _apply_hint(
         # the plan non-cacheable so the plan cache cannot serve one
         # request's queryset to the next.
         plan.cacheable = False
-        type_name = type_cls.__name__ if type_cls is not None else "UnknownType"
+        # ``_apply_hint`` is only entered when ``_resolve_optimizer_hints``
+        # returned a non-empty hints map, which it cannot do for
+        # ``type_cls is None`` (it short-circuits to ``{}``). The hint
+        # error attribution can therefore read ``type_cls.__name__``
+        # unguarded; a future direct caller with ``type_cls=None`` will
+        # ``AttributeError`` loudly rather than rotting behind a silent
+        # ``"UnknownType"`` literal.
         append_prefetch_unique(
             plan.prefetch_related,
             _prefetch_hint_for_path(
                 hint.prefetch_obj,
                 django_name=django_name,
                 full_path=full_path,
-                type_name=type_name,
+                type_name=type_cls.__name__,
             ),
         )
         return True
     if hint.force_select:
         kind = relation_kind(django_field)
         if is_many_side_relation_kind(kind):
-            type_name = type_cls.__name__ if type_cls is not None else "UnknownType"
             raise ConfigurationError(
-                f"OptimizerHint.select_related() on {type_name}.{django_name}: "
+                f"OptimizerHint.select_related() on {type_cls.__name__}.{django_name}: "
                 f"Django requires prefetch_related for {kind} relations; "
                 "use OptimizerHint.prefetch_related() or OptimizerHint.prefetch(obj) instead.",
             )

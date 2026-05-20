@@ -547,6 +547,13 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
 
     declared = {k for k in meta.__dict__ if not k.startswith("_")}
 
+    # Use ``getattr(..., None) is not None`` rather than ``meta.__dict__``
+    # membership so a child Meta inheriting ``fields`` from a base Meta
+    # still trips the mutual-exclusion check when it declares ``exclude``
+    # (and vice versa). ``fields = None`` (or ``exclude = None``)
+    # remains "unset" — matches ``_normalize_fields_spec``'s treatment
+    # of ``None`` and the broader convention that an explicit ``None``
+    # means "no preference".
     has_fields = getattr(meta, "fields", None) is not None
     has_exclude = getattr(meta, "exclude", None) is not None
     if has_fields and has_exclude:
@@ -602,8 +609,13 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], mo
             shape-checked by ``_meta_optimizer_hints`` inside
             ``_validate_meta``). Empty dict short-circuits.
         fields: The Meta-filtered list of Django field objects produced
-            by ``_select_fields``. Used to derive the model and the
-            selected relation field names.
+            by ``_select_fields``. Used to derive the selected relation
+            field names so excluded or scalar fields with hints raise.
+        model: The Django model whose ``_meta.get_fields()`` defines the
+            valid hint key surface. Threaded from ``meta.model`` so the
+            empty-``fields`` shape (e.g. ``Meta.exclude`` covering every
+            field) is not fatal — earlier shapes inferred the model from
+            ``fields[0].model`` and ``IndexError``'d here.
     """
     if not hints:
         return

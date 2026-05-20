@@ -21,6 +21,7 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.base import _build_annotations, _validate_interfaces
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.relay import (
+    _model_for,
     _resolve_id_attr_default,
     _resolve_id_default,
     _resolve_node_default,
@@ -1083,6 +1084,26 @@ def test_apply_interfaces_wraps_typeerror_as_configuration_error():
 
     with pytest.raises(ConfigurationError, match="cannot add interface"):
         apply_interfaces(_Host, _SyntheticDef)
+
+
+def test_model_for_returns_registered_model():
+    """``_model_for(cls)`` returns ``cls.__django_strawberry_definition__.model``.
+
+    Pins the single-source-of-truth contract for the
+    ``cls.__django_strawberry_definition__.model`` lookup that
+    ``install_is_type_of``, ``_check_composite_pk_for_relay_node``,
+    ``_initial_queryset``, and ``_order_nodes`` all share. A divergence
+    between the helper and the direct attribute read would surface here.
+    """
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    assert _model_for(CategoryNode) is Category
+    assert _model_for(CategoryNode) is CategoryNode.__django_strawberry_definition__.model
 
 
 def test_resolve_id_default_unit_dict_cache_and_getattr_branches():

@@ -749,7 +749,13 @@ def test_register_primary_flag_sets_primary_for(fresh_registry):
 
 
 def test_register_two_primaries_for_same_model_raises_configuration_error(fresh_registry):
-    """Second ``primary=True`` on the same model raises with ``already declared primary``."""
+    """Second ``primary=True`` on the same model raises naming attempt, model, and incumbent primary.
+
+    Pins all three load-bearing identifiers in the error message so a future
+    cosmetic refactor can't silently drop the attempt name (``AdminItemType``),
+    the model name (``Item``), or the incumbent primary (``ItemType``) — the
+    grep-from-a-stack-trace triage path needs each one.
+    """
 
     class ItemType:
         pass
@@ -758,7 +764,10 @@ def test_register_two_primaries_for_same_model_raises_configuration_error(fresh_
         pass
 
     fresh_registry.register(Item, ItemType, primary=True)
-    with pytest.raises(ConfigurationError, match="already declared primary as ItemType"):
+    with pytest.raises(
+        ConfigurationError,
+        match=r"Cannot register AdminItemType as primary for Item;.*ItemType is already the primary type",
+    ):
         fresh_registry.register(Item, AdminItemType, primary=True)
     # The duplicate-primary attempt did not append AdminItemType.
     assert fresh_registry.types_for(Item) == (ItemType,)

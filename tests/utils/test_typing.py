@@ -1,5 +1,8 @@
 """Tests for ``django_strawberry_framework.utils.typing``."""
 
+import typing
+from typing import Any
+
 from django_strawberry_framework.utils import unwrap_graphql_type
 from django_strawberry_framework.utils.typing import unwrap_return_type
 
@@ -11,6 +14,28 @@ def test_unwrap_return_type_handles_typing_list():
         pass
 
     assert unwrap_return_type(list[Inner]) is Inner
+
+
+def test_unwrap_return_type_handles_bare_typing_list():
+    """``typing.List`` (no parameter) returns ``Any``.
+
+    ``get_origin(typing.List) is list`` so the list branch fires, but
+    ``get_args(typing.List)`` returns ``()``. The earlier shape indexed
+    ``get_args(rt)[0]`` and ``IndexError``'d here; the fix returns ``Any``
+    as the "unknown element type" sentinel.
+    """
+    assert unwrap_return_type(typing.List) is Any
+
+
+def test_unwrap_return_type_handles_bare_builtin_list():
+    """A bare ``list`` (no parameter) returns ``Any``.
+
+    ``get_origin(list)`` is ``None`` (a bare builtin is not a generic
+    alias), so the list-origin branch does not fire and the dedicated
+    ``rt is list`` branch returns the same ``Any`` sentinel as
+    ``typing.List``.
+    """
+    assert unwrap_return_type(list) is Any
 
 
 def test_unwrap_return_type_handles_strawberry_of_type():

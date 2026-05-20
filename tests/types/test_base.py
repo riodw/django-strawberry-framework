@@ -72,7 +72,10 @@ def test_registry_collision_raises_configuration_error():
             fields = CATEGORY_SCALAR_FIELDS
             primary = True
 
-    with pytest.raises(ConfigurationError, match="already declared primary"):
+    with pytest.raises(
+        ConfigurationError,
+        match=r"Cannot register CategoryTypeB as primary for Category;.*CategoryTypeA is already the primary type",
+    ):
 
         class CategoryTypeB(DjangoType):
             class Meta:
@@ -167,6 +170,27 @@ def test_meta_fields_and_exclude_mutually_exclusive():
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
                 exclude = ["description"]
+
+
+def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance():
+    """A ``fields`` value inherited from a parent ``Meta`` still trips the guard.
+
+    Pins the ``getattr(meta, ..., None) is not None`` semantics: an earlier
+    shape that gated on ``meta.__dict__`` membership would miss this case and
+    silently let both directives coexist, with confusing field-selection
+    semantics downstream. The child only declares ``exclude``; ``fields``
+    comes in from the base class.
+    """
+
+    class BaseMeta:
+        fields = ("id", "name")
+
+    with pytest.raises(ConfigurationError, match="mutually exclusive"):
+
+        class T(DjangoType):
+            class Meta(BaseMeta):
+                model = Category
+                exclude = ("description",)
 
 
 @pytest.mark.parametrize(
@@ -270,6 +294,32 @@ def test_meta_optimizer_hints_for_selected_scalar_field_raises():
                 model = Category
                 fields = ("id", "name")
                 optimizer_hints = {"name": OptimizerHint.SKIP}
+
+
+def test_meta_optimizer_hints_with_empty_field_selection_raises_configuration_error():
+    """``optimizer_hints`` on an exclude-all selection raises ``ConfigurationError``, not ``IndexError``.
+
+    Earlier shapes inferred the model from ``fields[0].model``; when
+    ``Meta.exclude`` covered every concrete + relation field the resulting
+    empty ``fields`` tuple ``IndexError``'d before the consumer could see a
+    typed error. The fix threads ``meta.model`` through explicitly so the
+    selected-relation gate fires with a normal ``ConfigurationError``.
+    """
+    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
+
+        class T(DjangoType):
+            class Meta:
+                model = Category
+                exclude = (
+                    "id",
+                    "name",
+                    "description",
+                    "is_private",
+                    "created_date",
+                    "updated_date",
+                    "items",
+                )
+                optimizer_hints = {"items": OptimizerHint.prefetch_related()}
 
 
 # ---------------------------------------------------------------------------
@@ -386,7 +436,10 @@ def test_two_primary_types_same_model_raises():
             fields = ("id", "name")
             primary = True
 
-    with pytest.raises(ConfigurationError, match="already declared primary"):
+    with pytest.raises(
+        ConfigurationError,
+        match=r"Cannot register AdminItemType as primary for Item;.*ItemType is already the primary type",
+    ):
 
         class AdminItemType(DjangoType):
             class Meta:

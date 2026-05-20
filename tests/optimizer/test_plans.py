@@ -6,11 +6,14 @@ in ``test_walker.py`` exercise construction; these tests verify that the
 plan's own methods work correctly in isolation.
 """
 
+from types import SimpleNamespace
+
 from apps.products.models import Category, Entry, Item, Property
 from django.db.models import Prefetch
 
 from django_strawberry_framework.optimizer.plans import (
     OptimizationPlan,
+    _consumer_only_fields,
     _flatten_select_related,
     diff_plan_for_queryset,
     lookup_paths,
@@ -221,6 +224,53 @@ class TestFlattenSelectRelated:
             "category",
             "category__parent",
         }
+
+
+class TestConsumerOnlyFields:
+    """``_consumer_only_fields`` defends Django's private ``deferred_loading`` contract.
+
+    The function is fed real ``QuerySet`` objects from ``diff_plan_for_queryset``,
+    but the contract it reads (``query.deferred_loading`` — a private 2-tuple
+    of ``(field_set, defer_flag)``) is volatile across Django versions, so
+    the function defends against missing-attribute, wrong-shape, defer-mode,
+    and wildcard-``.only()`` inputs by returning ``None``. These pins cover
+    each defensive branch directly so the guards cannot rot silently.
+    """
+
+    def test_returns_none_for_non_queryset_without_deferred_loading(self):
+        """Pins the missing-attribute branch.
+
+        A ``getattr(query, "deferred_loading", None)`` lookup returns ``None``
+        when ``queryset.query`` is absent or has no ``deferred_loading`` —
+        e.g. when the optimizer is fed a plain ``Manager`` or a test double.
+        """
+        assert _consumer_only_fields(object()) is None
+        assert _consumer_only_fields(SimpleNamespace(query=SimpleNamespace())) is None
+
+    def test_returns_none_for_malformed_deferred_loading_shape(self):
+        """Pins the ``except (TypeError, ValueError)`` guard.
+
+        Django's contract is ``(field_set, defer_flag)``; a future Django
+        version (or a test double) returning a non-iterable, a non-2-tuple,
+        or any other unpacking-incompatible value falls through to ``None``
+        instead of crashing the optimizer.
+        """
+        bad_three_tuple = SimpleNamespace(query=SimpleNamespace(deferred_loading=(set(), False, "extra")))
+        bad_scalar = SimpleNamespace(query=SimpleNamespace(deferred_loading=42))
+        assert _consumer_only_fields(bad_three_tuple) is None
+        assert _consumer_only_fields(bad_scalar) is None
+
+    def test_returns_none_for_wildcard_only_with_empty_field_set(self):
+        """Pins the ``not field_set`` branch.
+
+        ``(set(), False)`` is not a meaningful consumer projection — Django's
+        wildcard ``.only()`` collapses to the defer-mode default
+        ``(set(), True)``, so this shape is mostly synthetic, but the guard
+        keeps the contract symmetric with the wildcard explanation in the
+        docstring.
+        """
+        empty_only = SimpleNamespace(query=SimpleNamespace(deferred_loading=(set(), False)))
+        assert _consumer_only_fields(empty_only) is None
 
 
 class TestDiffPlanForQueryset:

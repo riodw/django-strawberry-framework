@@ -280,8 +280,17 @@ def test_decorator_relation_field_override_routes_schema_query_through_consumer_
 
 
 def test_relation_field_class_attribute_shadowing_raises():
-    """Unsupported class attributes cannot silently shadow relation fields."""
-    with pytest.raises(ConfigurationError, match="shadows a Django relation field"):
+    """Unsupported class attributes cannot silently shadow relation fields.
+
+    The error is attributed to the consumer's ``DjangoType`` subclass
+    (``CategoryType``), not the underlying Django model — the shadow lives on
+    the class attribute, which is the consumer-visible site, so a stack-trace
+    grep for the offending site lands on the right class.
+    """
+    with pytest.raises(
+        ConfigurationError,
+        match=r"CategoryType\.items shadows a Django relation field",
+    ):
 
         class CategoryType(DjangoType):
             items = None
@@ -780,8 +789,16 @@ def test_inherited_id_annotation_on_relay_node_subclass_is_handled_by_pk_suppres
 
 
 def test_scalar_field_class_attribute_shadowing_raises():
-    """Unsupported class attributes cannot silently shadow scalar fields either."""
-    with pytest.raises(ConfigurationError, match="shadows a Django scalar field"):
+    """Unsupported class attributes cannot silently shadow scalar fields either.
+
+    Pins the same ``cls.__name__`` attribution as the relation case so a
+    cosmetic refactor of the message can't silently switch back to the Django
+    model's name.
+    """
+    with pytest.raises(
+        ConfigurationError,
+        match=r"CategoryType\.name shadows a Django scalar field",
+    ):
 
         class CategoryType(DjangoType):
             name = 42

@@ -1205,7 +1205,10 @@ def test_plan_force_select_hint_raises_for_many_side_relation():
         optimizer_hints={"items": OptimizerHint.select_related()},
     )
     try:
-        with pytest.raises(ConfigurationError, match=r"OptimizerHint\.select_related.*'items'"):
+        with pytest.raises(
+            ConfigurationError,
+            match=r"OptimizerHint\.select_related\(\) on CategoryType\.items",
+        ):
             plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
     finally:
         registry.clear()
@@ -1476,18 +1479,22 @@ def test_prefetch_hint_for_path_rejects_prefetch_without_lookup():
     so the ``None`` branch is reachable only when a malformed surrogate is
     passed in.  A duck-typed object with ``prefetch_through is None`` surfaces
     the defensive guard so the consumer learns about a missing lookup at plan
-    time, not as a silent missed prefetch downstream.
+    time, not as a silent missed prefetch downstream. The pin also covers the
+    ``type_name.field_name`` attribution so a future cosmetic refactor cannot
+    silently drop the type name from the error.
     """
     no_lookup = SimpleNamespace(prefetch_through=None, queryset=None, to_attr=None)
 
     with pytest.raises(
         ConfigurationError,
-        match="requires a Prefetch with a lookup path",
+        match=r"OptimizerHint\.prefetch\(obj\) on CategoryType\.items "
+        r"requires a Prefetch with a lookup path",
     ):
         _prefetch_hint_for_path(
             no_lookup,
             django_name="items",
             full_path="category__items",
+            type_name="CategoryType",
         )
 
 
@@ -1506,6 +1513,7 @@ def test_prefetch_hint_for_path_adapts_nested_lookup_under_parent():
         explicit,
         django_name="items",
         full_path="category__items",
+        type_name="CategoryType",
     )
 
     assert rebased is not explicit
@@ -1527,12 +1535,14 @@ def test_prefetch_hint_for_path_rejects_mismatched_lookup():
 
     with pytest.raises(
         ConfigurationError,
-        match="lookup must target the hinted relation 'items'",
+        match=r"OptimizerHint\.prefetch\(obj\) lookup on CategoryType\.items "
+        r"must target the hinted relation 'items'",
     ):
         _prefetch_hint_for_path(
             explicit,
             django_name="items",
             full_path="category__items",
+            type_name="CategoryType",
         )
 
 

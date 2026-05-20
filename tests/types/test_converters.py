@@ -405,6 +405,49 @@ def test_convert_scalar_unknown_field_type_still_raises():
         convert_scalar(field, "OwnerType")
 
 
+def test_convert_scalar_duration_field_raises_unsupported():
+    """``DurationField`` is intentionally absent from ``SCALAR_MAP``.
+
+    Strawberry refuses ``datetime.timedelta`` at schema construction time
+    (no first-party scalar), so leaving the entry in mapped it to a type
+    that crashed downstream with a less-localized ``TypeError`` from the
+    Strawberry frame. Surfacing the error at class-definition time via the
+    standard ``Unsupported Django field type`` raise keeps the failure
+    grep-stable for the consumer. A custom scalar is the supported
+    extension path (``SCALAR_MAP[DurationField] = MyDurationScalar``).
+    """
+
+    class _Owner(models.Model):
+        elapsed = models.DurationField()
+
+        class Meta:
+            app_label = "test_choice_enums"
+
+    field = _Owner._meta.get_field("elapsed")
+    with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
+        convert_scalar(field, "OwnerType")
+
+
+def test_convert_scalar_binary_field_raises_unsupported():
+    """``BinaryField`` is intentionally absent from ``SCALAR_MAP``.
+
+    Same reasoning as ``DurationField``: Strawberry has no first-party
+    ``bytes`` scalar so the prior mapping crashed at schema build. The
+    documented extension hook is
+    ``SCALAR_MAP[BinaryField] = strawberry.scalars.Base64``.
+    """
+
+    class _Owner(models.Model):
+        blob = models.BinaryField()
+
+        class Meta:
+            app_label = "test_choice_enums"
+
+    field = _Owner._meta.get_field("blob")
+    with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
+        convert_scalar(field, "OwnerType")
+
+
 # ---------------------------------------------------------------------------
 # BigInt scalar — schema-execution field-mapping tests (Slice 1)
 #

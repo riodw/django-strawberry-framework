@@ -47,7 +47,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- Nothing currently active. `0.0.7` is the next patch — see the `TODO-ALPHA-016-0.0.7` … `TODO-ALPHA-045-0.0.7` cluster below for the queued cards.
+- `0.0.7` is the active patch. Five WIP cards opened together so the small parity-driven slices land in one release: `WIP-ALPHA-016-0.0.7` (`DjangoListField`), `WIP-ALPHA-017-0.0.7` (`apps.py` and Django app config), `WIP-ALPHA-018-0.0.7` (schema-export management command), `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract), and `WIP-ALPHA-045-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`). Full card detail lives under the `## In progress` board column below.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`](BACKLOG.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -75,11 +75,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## In progress
 
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
-
-### TODO-ALPHA-016-0.0.7 — `DjangoListField` (non-Relay list)
+### WIP-ALPHA-016-0.0.7 — `DjangoListField` (non-Relay list)
 
 Priority: medium (⚛️ parity-required)
 
@@ -109,7 +105,7 @@ Files likely touched:
 - `tests/test_list_field.py`
 - `examples/fakeshop/apps/library/schema.py`
 
-### TODO-ALPHA-017-0.0.7 — `apps.py` and Django app config
+### WIP-ALPHA-017-0.0.7 — `apps.py` and Django app config
 
 Priority: medium
 
@@ -121,7 +117,7 @@ Definition of done:
 - Add `tests/test_apps.py`.
 - Do not add settings placeholders unless a shipped feature consumes them.
 
-### TODO-ALPHA-018-0.0.7 — Schema export management command
+### WIP-ALPHA-018-0.0.7 — Schema export management command
 
 Priority: medium
 
@@ -133,7 +129,7 @@ Definition of done:
 - Add `tests/management/test_export_schema.py`.
 - Test through `django.core.management.call_command`, not direct `handle()` calls.
 
-### TODO-ALPHA-019-0.0.7 — Multi-database cooperation contract
+### WIP-ALPHA-019-0.0.7 — Multi-database cooperation contract
 
 Priority: medium (small polish; pins existing shipped cooperation)
 
@@ -178,7 +174,7 @@ Out of scope:
 
 - First-class sharding-aware planning — cross-shard joins, automatic shard selection based on FK, multi-shard aggregates, `Meta.preferred_database`. That's post-stable differentiation territory and lives in [`BACKLOG.md`](BACKLOG.md) under "First-class multi-database / sharding-aware optimizer".
 
-### TODO-ALPHA-045-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
+### WIP-ALPHA-045-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
 
 Priority: medium
 
@@ -268,6 +264,10 @@ Open design questions for the spec (not blocking; spec author decides):
 - Deprecation-window details: should the recommended hard-break (matching `PositiveBigIntegerField` in `0.0.6`) be revisited after surveying real `0.0.6` consumer adoption? If softened to a one-release `DeprecationWarning` from the package, what does the warning shape look like?
 - Helper module location: top-level export in `__init__.py`, or `django_strawberry_framework/config.py` (new module)?
 - Helper signature beyond `extra_scalar_map=`: nothing more, or a small set of curated optional parameters? (Note: `extra_extensions=` does not fit here — extensions are passed to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig`. If extension composition becomes a need, it requires a separate helper returning a schema-construction bundle, not a `StrawberryConfig`.)
+
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 ### TODO-ALPHA-020-0.0.8 — Filtering subsystem
 

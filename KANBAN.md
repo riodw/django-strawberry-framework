@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-05-19
+Last refreshed: 2026-05-20
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -68,7 +68,7 @@ For install, local development, testing, and the canonical documentation map, st
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
   - connection-aware planning for Relay-style nested connection selections (new card `TODO-ALPHA-024-0.0.9`)
-- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract (`BACKLOG-046-1.0.x`).
+- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract ([`BACKLOG.md`](BACKLOG.md) item 38).
 - The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
 
 ## Board columns
@@ -821,7 +821,7 @@ Why first:
 Foundation-slice seam:
 
 - `DjangoTypeDefinition.fields_class` is the forward-reserved slot the collection phase will populate.
-- `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also `BACKLOG-046-1.0.x` for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
+- `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also [`BACKLOG.md`](BACKLOG.md) item 38 for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
 
 Definition of done:
 

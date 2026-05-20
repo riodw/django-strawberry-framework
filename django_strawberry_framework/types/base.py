@@ -28,7 +28,7 @@ triggers the collection pipeline, which:
 import re
 import typing
 from collections.abc import Mapping, Sequence
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, NamedTuple
 
 from django.db import models
 from strawberry import relay
@@ -145,6 +145,12 @@ class DjangoType:
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Collect model/type metadata without finalizing the Strawberry type."""
         super().__init_subclass__(**kwargs)
+        # The ``_is_default_get_queryset`` sentinel must be stamped BEFORE the
+        # ``meta is None`` early-return and the finalized-registry guard so an
+        # abstract base that overrides ``get_queryset`` without declaring Meta
+        # still flips the flag — concrete subclasses inheriting from it then
+        # report ``has_custom_get_queryset() is True`` correctly. Pinned by
+        # ``test_has_custom_get_queryset_inherits_through_abstract_base_without_meta``.
         has_custom_get_queryset = _detect_custom_get_queryset(cls)
         cls._is_default_get_queryset = not has_custom_get_queryset
         meta = cls.__dict__.get("Meta")
@@ -155,14 +161,12 @@ class DjangoType:
                 f"finalize_django_types() already ran; cannot register {cls.__name__} "
                 "after finalization. Call registry.clear() first if this is a test.",
             )
-        interfaces = _validate_meta(meta)
+        validated = _validate_meta(meta)
         fields = _select_fields(meta)
-        _validate_optimizer_hints(meta, fields)
+        _validate_optimizer_hints(validated.optimizer_hints, fields)
 
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
-        optimizer_hints = _meta_optimizer_hints(meta)
-        primary = getattr(meta, "primary", False)
-        consumer_annotations = dict(getattr(cls, "__annotations__", {}))
+        consumer_annotations = dict(cls.__annotations__)
         consumer_annotated_relation_fields = frozenset(
             field.name for field in fields if field.is_relation and field.name in consumer_annotations
         )
@@ -181,7 +185,7 @@ class DjangoType:
                 *consumer_assigned_scalar_fields,
             },
         )
-        relay_shaped = _is_relay_shaped(cls, interfaces)
+        relay_shaped = _is_relay_shaped(cls, validated.interfaces)
         if relay_shaped:
             has_id_assignment = isinstance(cls.__dict__.get("id"), StrawberryField)
             has_id_annotation = "id" in cls.__annotations__
@@ -213,28 +217,28 @@ class DjangoType:
             source_model=meta.model,
             field_map=field_map,
             consumer_authored_fields=consumer_authored_fields,
-            interfaces=interfaces,
+            interfaces=validated.interfaces,
         )
         definition = DjangoTypeDefinition(
             origin=cls,
             model=meta.model,
             name=getattr(meta, "name", None),
             description=getattr(meta, "description", None),
-            fields_spec=_normalize_fields_spec(getattr(meta, "fields", None)),
-            exclude_spec=_normalize_sequence_spec(getattr(meta, "exclude", None)),
+            fields_spec=validated.fields_spec,
+            exclude_spec=validated.exclude_spec,
             selected_fields=tuple(fields),
             field_map=field_map,
-            optimizer_hints=optimizer_hints,
+            optimizer_hints=validated.optimizer_hints,
             has_custom_get_queryset=has_custom_get_queryset,
             consumer_authored_fields=consumer_authored_fields,
             consumer_annotated_relation_fields=consumer_annotated_relation_fields,
             consumer_annotated_scalar_fields=consumer_annotated_scalar_fields,
             consumer_assigned_relation_fields=consumer_assigned_relation_fields,
             consumer_assigned_scalar_fields=consumer_assigned_scalar_fields,
-            interfaces=interfaces,
-            primary=primary,
+            interfaces=validated.interfaces,
+            primary=validated.primary,
         )
-        registry.register_with_definition(meta.model, cls, definition, primary=primary)
+        registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
         for pending_relation in pending:
             registry.add_pending_relation(pending_relation)
         cls.__annotations__ = {**synthesized, **consumer_annotations}
@@ -435,8 +439,9 @@ def _validate_interfaces(meta: type) -> tuple[type, ...]:
     - Rejects duplicates.
 
     The composite-pk constraint and ``relay.Node`` MRO inspection live
-    in Slice 4's Phase 2.5; this helper only validates the shape and
-    contents of the ``Meta.interfaces`` tuple itself.
+    in ``finalize_django_types()`` (Relay finalization phase); this
+    helper only validates the shape and contents of the
+    ``Meta.interfaces`` tuple itself.
     """
     raw = getattr(meta, "interfaces", None)
     if raw is None:
@@ -458,7 +463,7 @@ def _validate_interfaces(meta: type) -> tuple[type, ...]:
             raise ConfigurationError(
                 f"{meta.model.__name__}.Meta.interfaces must contain interface classes, "
                 f"not strings (got {entry!r}). Lazy/forward-reference interface lookup is "
-                "out of scope for 0.0.5.",
+                "deferred (no current spec home).",
             )
         if not isinstance(entry, type):
             raise ConfigurationError(
@@ -489,7 +494,24 @@ def _validate_interfaces(meta: type) -> tuple[type, ...]:
     return entries
 
 
-def _validate_meta(meta: type) -> tuple[type, ...]:
+class _ValidatedMeta(NamedTuple):
+    """Single-pass snapshot of validated ``Meta`` attributes.
+
+    Threading the validated values back from ``_validate_meta`` keeps the
+    caller from re-reading ``getattr(meta, ...)`` for the same keys and
+    avoids re-running the shape gates (``_normalize_fields_spec``,
+    ``_normalize_sequence_spec``, ``_meta_optimizer_hints``) at multiple
+    sites in ``__init_subclass__``.
+    """
+
+    interfaces: tuple[type, ...]
+    primary: bool
+    optimizer_hints: dict[str, Any]
+    fields_spec: tuple[str, ...] | str | None
+    exclude_spec: tuple[str, ...] | None
+
+
+def _validate_meta(meta: type) -> _ValidatedMeta:
     """Validate a ``DjangoType`` subclass's nested ``Meta`` class.
 
     Validation order:
@@ -503,13 +525,15 @@ def _validate_meta(meta: type) -> tuple[type, ...]:
        declaration shapes before field selection or hint validation uses
        them.
     6. If ``Meta.interfaces`` is declared, validate it per
-       ``_validate_interfaces`` (Decision 4) and return the normalized
-       tuple.
+       ``_validate_interfaces`` (Decision 4).
 
     Returns:
-        The normalized ``Meta.interfaces`` tuple, or ``()`` when the key
-        is absent or empty. The caller threads this through to
-        ``DjangoTypeDefinition.interfaces``.
+        A ``_ValidatedMeta`` snapshot bundling the validated interfaces
+        tuple, the ``primary`` bool, the normalized ``optimizer_hints``
+        dict, and the normalized ``fields``/``exclude`` specs. The caller
+        threads these through to ``DjangoTypeDefinition`` and
+        ``_validate_optimizer_hints`` so the shape gates run exactly once
+        per class definition.
 
     Raises:
         ConfigurationError: any of the above violations.
@@ -539,19 +563,26 @@ def _validate_meta(meta: type) -> tuple[type, ...]:
     if unknown:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
 
-    _normalize_fields_spec(getattr(meta, "fields", None))
-    _normalize_sequence_spec(getattr(meta, "exclude", None))
-    _meta_optimizer_hints(meta)
+    fields_spec = _normalize_fields_spec(getattr(meta, "fields", None))
+    exclude_spec = _normalize_sequence_spec(getattr(meta, "exclude", None))
+    optimizer_hints = _meta_optimizer_hints(meta)
+    interfaces = _validate_interfaces(meta)
 
-    return _validate_interfaces(meta)
+    return _ValidatedMeta(
+        interfaces=interfaces,
+        primary=primary,
+        optimizer_hints=optimizer_hints,
+        fields_spec=fields_spec,
+        exclude_spec=exclude_spec,
+    )
 
 
-def _validate_optimizer_hints(meta: type, fields: tuple[Any, ...]) -> None:
+def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...]) -> None:
     """Validate ``Meta.optimizer_hints`` keys and values in one pass.
 
     Combines the field-surface and value checks in one place:
 
-    1. Every hint key names a field on ``meta.model`` (typo guard).
+    1. Every hint key names a field on the model (typo guard).
     2. Every hint key is in the type's selected relation field set.
        Excluded fields and selected scalar fields would silently drop
        optimizer intent otherwise — the walker only reads hints after
@@ -562,11 +593,18 @@ def _validate_optimizer_hints(meta: type, fields: tuple[Any, ...]) -> None:
     so the consumer-visible shape matches ``Meta.fields`` /
     ``Meta.exclude`` typo guards; value errors use a dedicated
     ``OptimizerHint`` message.
+
+    Args:
+        hints: The pre-normalized ``Meta.optimizer_hints`` dict (already
+            shape-checked by ``_meta_optimizer_hints`` inside
+            ``_validate_meta``). Empty dict short-circuits.
+        fields: The Meta-filtered list of Django field objects produced
+            by ``_select_fields``. Used to derive the model and the
+            selected relation field names.
     """
-    hints = _meta_optimizer_hints(meta)
     if not hints:
         return
-    model = meta.model
+    model = fields[0].model
     valid_field_names = {f.name for f in model._meta.get_fields()}
     selected_relation_names = {f.name for f in fields if f.is_relation}
 
@@ -769,7 +807,17 @@ def _build_annotations(
             # whichever type was already registered at ``__init_subclass__``
             # time, which mis-bound when a secondary was registered before
             # the primary (the import-order trap closed by spec-014 H1).
-            pending.append(_record_pending_relation(cls, source_model, field, field_meta))
+            pending.append(
+                PendingRelation(
+                    source_type=cls,
+                    source_model=source_model,
+                    field_name=field.name,
+                    django_field=field,
+                    related_model=field.related_model,
+                    relation_kind=field_meta.relation_kind,
+                    nullable=field_meta.nullable,
+                ),
+            )
             annotations[field.name] = PendingRelationAnnotation
         else:
             if field.name in consumer_authored_fields:
@@ -788,21 +836,3 @@ def _build_annotations(
                 continue
             annotations[field.name] = convert_scalar(field, cls.__name__)
     return annotations, pending
-
-
-def _record_pending_relation(
-    cls: type,
-    source_model: type[models.Model],
-    field: Any,
-    field_meta: FieldMeta,
-) -> PendingRelation:
-    """Build a pending relation record from a selected Django relation field."""
-    return PendingRelation(
-        source_type=cls,
-        source_model=source_model,
-        field_name=field.name,
-        django_field=field,
-        related_model=field.related_model,
-        relation_kind=field_meta.relation_kind,
-        nullable=field_meta.nullable,
-    )

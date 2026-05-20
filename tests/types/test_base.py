@@ -35,7 +35,7 @@ from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.base import _detect_custom_get_queryset
-from django_strawberry_framework.types.converters import convert_relation, convert_scalar
+from django_strawberry_framework.types.converters import convert_scalar, resolved_relation_annotation
 from django_strawberry_framework.types.relations import PendingRelationAnnotation
 
 CATEGORY_SCALAR_FIELDS = (
@@ -692,13 +692,6 @@ def test_relation_unregistered_target_raises():
     assert "no registered DjangoType" in msg
 
 
-def test_convert_relation_returns_pending_annotation_for_unregistered_target():
-    """The direct converter returns the pending sentinel when the target type is absent."""
-    item_category = Item._meta.get_field("category")
-
-    assert convert_relation(item_category) is PendingRelationAnnotation
-
-
 def test_relation_full_chain_when_all_targets_registered():
     """Every fakeshop relation resolves cleanly when types are declared in order."""
 
@@ -731,13 +724,13 @@ def test_relation_full_chain_when_all_targets_registered():
     assert EntryType.__annotations__["item"] is ItemType
 
 
-def test_convert_relation_nullable_fk_widens_to_optional(monkeypatch):
+def test_resolved_relation_annotation_nullable_fk_widens_to_optional(monkeypatch):
     """Nullable forward FK widens to ``T | None``.
 
     No fakeshop FK declares ``null=True``, so monkeypatch the Item.category
-    field for the duration of this test. ``convert_relation`` reads
-    ``field.null`` directly; the widening branch is exercised without the
-    rest of the pipeline.
+    field for the duration of this test. ``resolved_relation_annotation``
+    reads ``field.null`` via ``FieldMeta.from_django_field``; the widening
+    branch is exercised without the rest of the pipeline.
     """
 
     class CategoryType(DjangoType):
@@ -747,5 +740,5 @@ def test_convert_relation_nullable_fk_widens_to_optional(monkeypatch):
 
     item_category = Item._meta.get_field("category")
     monkeypatch.setattr(item_category, "null", True)
-    annotation = convert_relation(item_category)
+    annotation = resolved_relation_annotation(item_category, CategoryType)
     assert annotation == (CategoryType | None)

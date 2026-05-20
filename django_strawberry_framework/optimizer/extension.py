@@ -38,6 +38,7 @@ from graphql.language.ast import (
     VariableNode,
 )
 from graphql.language.printer import print_ast
+from graphql.type.definition import GraphQLInterfaceType
 from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
@@ -272,7 +273,7 @@ def _root_child_selections(selections: list[Any]) -> list[Any]:
 
 
 class CacheInfo(NamedTuple):
-    """Plan-cache statistics, modeled on ``functools.lru_cache``."""
+    """Plan-cache statistics (hits, misses, current size)."""
 
     hits: int
     misses: int
@@ -321,10 +322,15 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
     """Return the set of ``DjangoType`` classes reachable from the schema's root types.
 
     Traverses from ``query_type``, ``mutation_type``, and
-    ``subscription_type`` through their field return types recursively.
-    Only types reachable from a root operation are included; orphan
-    types passed via ``types=[]`` at schema construction are excluded
-    to avoid false-positive audit warnings.
+    ``subscription_type`` through their field return types recursively,
+    descending into object fields, union members, and the concrete
+    implementations of any interface type encountered (so a
+    ``DjangoType`` reachable only via an interface-typed root field —
+    e.g. ``relay.Node`` implementers — still participates in the
+    ``check_schema`` audit).  Only types reachable from a root
+    operation are included; orphan types passed via ``types=[]`` at
+    schema construction are excluded to avoid false-positive audit
+    warnings.
     """
     reachable: set[type] = set()
     gql_schema = getattr(schema, "_schema", None)
@@ -361,6 +367,23 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
         if union_types is not None:
             for u_type in union_types:
                 _walk_gql_type(u_type)
+
+        # Recurse into interface implementations so a ``DjangoType``
+        # reachable only via an interface-typed root field still
+        # participates in the audit. graphql-core 3.x exposes
+        # ``schema.get_implementations(interface_type) -> InterfaceImplementations``
+        # with an ``.objects`` tuple of concrete implementers. The
+        # ``hasattr`` guard keeps the call safe across graphql-core
+        # versions.
+        if isinstance(gql_type, GraphQLInterfaceType) and hasattr(
+            gql_schema,
+            "get_implementations",
+        ):
+            impls = gql_schema.get_implementations(gql_type)
+            impl_objects = getattr(impls, "objects", None)
+            if impl_objects is not None:
+                for impl_type in impl_objects:
+                    _walk_gql_type(impl_type)
 
     for root_type in (gql_schema.query_type, gql_schema.mutation_type, gql_schema.subscription_type):
         if root_type is not None:
@@ -431,6 +454,12 @@ class DjangoOptimizerExtension(SchemaExtension):
             extensions=[DjangoOptimizerExtension()],  # instance!
         )
 
+    The plan cache is correctness-safe under concurrent / async access
+    (a missed insert or a double-evict only reduces hit rate; it cannot
+    return wrong data), but the hit-rate and counter introspection
+    exposed via ``cache_info()`` is best-effort — see ``cache_info``
+    for the full caveat.
+
     Hooks:
 
     - ``on_execute`` — sets a ``ContextVar`` marking the optimizer as
@@ -439,6 +468,12 @@ class DjangoOptimizerExtension(SchemaExtension):
       only). Calls ``_next``, checks ``isinstance(QuerySet)``, traces
       the Django model from the graphql-core return type, runs the O2
       walker, applies the plan.
+
+    Resolver-shape contract: a root resolver that returns a Django
+    ``Manager`` (e.g. ``Model.objects`` shorthand) is coerced to a
+    ``QuerySet`` via ``.all()`` before the ``isinstance(QuerySet)`` gate
+    in ``_optimize``, so the optimizer is applied uniformly whether the
+    consumer wrote ``Model.objects`` or ``Model.objects.all()``.
     """
 
     def __init__(
@@ -466,7 +501,17 @@ class DjangoOptimizerExtension(SchemaExtension):
         self._cache_misses = 0
 
     def cache_info(self) -> CacheInfo:
-        """Return plan-cache statistics (hits, misses, current size)."""
+        """Return plan-cache statistics (hits, misses, current size).
+
+        The extension instance is shared across requests, and the plan
+        cache and counters are mutated without a lock. Under concurrent
+        or async access the hit/miss counters and the reported ``size``
+        are best-effort: two threads racing ``+= 1`` can drop a count,
+        and two concurrent inserts at the eviction threshold can evict
+        twice. The cache itself is correctness-neutral — a missed insert
+        or a double-evict only reduces hit rate; it cannot return wrong
+        data.
+        """
         return CacheInfo(
             hits=self._cache_hits,
             misses=self._cache_misses,
@@ -520,15 +565,22 @@ class DjangoOptimizerExtension(SchemaExtension):
 
         Steps:
 
-        1. Non-``QuerySet`` results pass through unchanged.
-        2. Trace the graphql-core return type to a Django model.
-        3. Build (or fetch from cache) an ``OptimizationPlan`` via
+        1. ``Manager`` results are coerced via ``.all()`` so a resolver
+           returning ``Model.objects`` (the Django shorthand) is
+           optimized instead of being silently passed through. The
+           manager's ``.all()`` returns a fresh unevaluated ``QuerySet``;
+           no rows are fetched at this step.
+        2. Non-``QuerySet`` results pass through unchanged.
+        3. Trace the graphql-core return type to a Django model.
+        4. Build (or fetch from cache) an ``OptimizationPlan`` via
            ``_get_or_build_plan``.
-        4. Publish the plan + strictness sentinels to ``info.context``
+        5. Publish the plan + strictness sentinels to ``info.context``
            via ``_publish_plan_to_context``.
-        5. Reconcile against the consumer's existing queryset
+        6. Reconcile against the consumer's existing queryset
            optimizations and apply.
         """
+        if isinstance(result, models.Manager):
+            result = result.all()
         if not isinstance(result, models.QuerySet):
             return result
         resolved = _resolve_model_from_return_type(info)
@@ -627,8 +679,8 @@ class DjangoOptimizerExtension(SchemaExtension):
             _stash_on_context(info.context, DST_OPTIMIZER_LOOKUP_PATHS, lookup_paths(plan))
             _stash_on_context(info.context, DST_OPTIMIZER_STRICTNESS, self.strictness)
 
-    @classmethod
-    def check_schema(cls, schema: Any) -> list[str]:
+    @staticmethod
+    def check_schema(schema: Any) -> list[str]:
         """Audit schema-reachable types for unoptimized relations.
 
         Walks only the ``DjangoType``s reachable from the schema's root
@@ -672,7 +724,8 @@ class DjangoOptimizerExtension(SchemaExtension):
                         continue
                     seen.add(key)
                     warnings.append(
-                        f"{_model.__name__}.{field_name} has no registered target DjangoType",
+                        f"{type_cls.__name__} ({_model.__name__}.{field_name}) "
+                        "has no registered target DjangoType",
                     )
         return warnings
 

@@ -20,6 +20,7 @@ caller pre-computes the field list with ``base._select_fields(meta)`` and
 passes it in).
 """
 
+from collections.abc import Callable
 from typing import Any
 
 import strawberry
@@ -27,6 +28,9 @@ from django.db import router
 from strawberry.types import Info
 
 from ..exceptions import OptimizerError
+
+# Share the optimizer subpackage's logger so consumers configuring
+# "django_strawberry_framework" see N+1 warnings.
 from ..optimizer import logger as _resolver_logger
 from ..optimizer._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
@@ -39,11 +43,11 @@ from ..optimizer._context import (
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..registry import registry
-from ..utils.relations import is_many_side_relation_kind
+from ..utils.relations import is_many_side_relation_kind, relation_kind
 
 # Module-level immutable sentinel for the "no elisions registered" branch so
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
-_EMPTY_FROZENSET: frozenset[str] = frozenset()
+_EMPTY_ELISIONS: frozenset[str] = frozenset()
 
 
 def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
@@ -57,7 +61,7 @@ def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None
     elisions = _get_context_value(
         getattr(info, "context", None),
         DST_OPTIMIZER_FK_ID_ELISIONS,
-        _EMPTY_FROZENSET,
+        _EMPTY_ELISIONS,
     )
     key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
     return key in elisions
@@ -118,16 +122,17 @@ def _check_n1(
     field_name: str,
     parent_type: type | None = None,
     *,
-    kind: str | None = None,
+    kind: str | None,
 ) -> None:
     """B3: warn or raise if the relation is not planned and would lazy-load.
 
-    ``kind`` accepts the ``relation_kind`` of the field being resolved.
-    ``"many"`` and ``"reverse_many_to_one"`` use the many-side cache
-    check; every other known relation shape uses the single-valued cache
-    check. When ``kind`` is ``None`` (legacy direct calls in tests), the
-    function falls back to the single-valued cache check, which is the
-    conservative shape that used to be the only branch.
+    ``kind`` is required (keyword-only) and accepts the ``relation_kind``
+    of the field being resolved. ``"many"`` and ``"reverse_many_to_one"``
+    use the many-side cache check; every other known relation shape uses
+    the single-valued cache check. Pass ``kind=None`` only when you
+    explicitly want the legacy single-valued check — the absence of
+    ``kind`` in a new caller is a programming error, since production
+    ``_make_relation_resolver`` always supplies the relation kind.
     """
     context = getattr(info, "context", None)
     planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
@@ -149,18 +154,25 @@ def _check_n1(
         _resolver_logger.warning("Potential N+1 on %s", field_name)
 
 
-def _name_resolver(resolver: Any, field_name: str) -> Any:
+def _name_resolver(resolver: Callable[..., Any], field_name: str) -> Callable[..., Any]:
     """Stamp ``resolver.__name__`` to ``resolve_<field_name>``.
 
     Keeps GraphiQL traces readable and centralises the three
     cardinality-branch rename calls in ``_make_relation_resolver``.
+    Assumes ``resolver`` is a Python-function callable with a writeable
+    ``__name__`` attribute (all production call sites pass a module-local
+    ``def`` closure).
     """
     resolver.__name__ = f"resolve_{field_name}"
     return resolver
 
 
 def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
-    """Return registered ``FieldMeta`` for ``field`` when the parent type exposes it."""
+    """Return registered ``FieldMeta`` for ``field`` when the parent type exposes it.
+
+    The ``None`` default exists for test-double direct calls; production calls always
+    supply ``parent_type=cls``.
+    """
     if parent_type is not None:
         definition = registry.get_definition(parent_type)
         if definition is not None:
@@ -168,15 +180,32 @@ def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
             if meta is not None:
                 return meta
     if not hasattr(field, "is_relation"):
+        # Mirror the cardinality-gated nullable rule + target-column reads
+        # from ``FieldMeta.from_django_field`` (optimizer/field_meta.py:135-170)
+        # so the test-double fallback advertises the same shape the canonical
+        # builder would. Many-side cardinalities short-circuit to
+        # ``nullable=False`` (manager/queryset is never ``None``); reverse
+        # OneToOne short-circuits to ``True``; every other single-relation
+        # shape follows ``field.null`` via ``getattr`` default ``False``.
+        is_m2m = bool(getattr(field, "many_to_many", False))
+        is_o2m = bool(getattr(field, "one_to_many", False))
+        target_field = getattr(field, "target_field", None)
+        if is_m2m or is_o2m:
+            nullable = False
+        else:
+            nullable = relation_kind(field) == "reverse_one_to_one" or bool(getattr(field, "null", False))
         return FieldMeta(
             name=field.name,
             is_relation=True,
-            many_to_many=bool(getattr(field, "many_to_many", False)),
-            one_to_many=bool(getattr(field, "one_to_many", False)),
+            many_to_many=is_m2m,
+            one_to_many=is_o2m,
             one_to_one=bool(getattr(field, "one_to_one", False)),
-            nullable=bool(getattr(field, "null", False)),
+            nullable=nullable,
             related_model=getattr(field, "related_model", None),
             attname=getattr(field, "attname", None),
+            target_field_name=getattr(target_field, "name", None),
+            target_field_attname=getattr(target_field, "attname", None),
+            reverse_connector_attname=getattr(getattr(field, "field", None), "attname", None),
             auto_created=bool(getattr(field, "auto_created", False)),
         )
     return FieldMeta.from_django_field(field)
@@ -184,6 +213,9 @@ def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
 
 def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     """Generate a resolver for a Django relation field.
+
+    The ``None`` default exists for test-double direct calls; production calls always
+    supply ``parent_type=cls``.
 
     Cardinality-specific shapes:
 
@@ -218,7 +250,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         return _name_resolver(many_resolver, field_name)
 
     if field_meta.one_to_one and field_meta.auto_created:
-        related_does_not_exist = field.related_model.DoesNotExist
+        related_does_not_exist = field_meta.related_model.DoesNotExist
 
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
             _check_n1(info, root, field_name, parent_type, kind=kind)

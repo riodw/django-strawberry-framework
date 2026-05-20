@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Protocol, TypeAlias, runtime_checkable
+from typing import Literal, Protocol, TypeAlias
 
 RelationKind: TypeAlias = Literal[
     "many",
@@ -19,7 +19,6 @@ MANY_SIDE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 )
 
 
-@runtime_checkable
 class _RelationFieldLike(Protocol):
     """Shape contract for the four Django relation flags this classifier reads.
 
@@ -52,7 +51,14 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
     - ``"reverse_one_to_one"`` — the reverse side of a
       ``OneToOneField`` (``one_to_one=True`` + ``auto_created=True``).
     - ``"forward_single"`` — every other forward single-row relation
-      (``ForeignKey``, forward ``OneToOneField``).
+      (``ForeignKey``, forward ``OneToOneField`` — i.e.,
+      ``auto_created=False``).
+
+    Examples:
+        ``ManyToManyField``-like -> ``"many"``;
+        ``ManyToOneRel``-like -> ``"reverse_many_to_one"``;
+        ``OneToOneRel``-like -> ``"reverse_one_to_one"``;
+        ``ForeignKey``-like -> ``"forward_single"``.
     """
     if getattr(field, "many_to_many", False):
         return "many"
@@ -65,6 +71,6 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
     return "forward_single"
 
 
-def is_many_side_relation_kind(kind: object) -> bool:
+def is_many_side_relation_kind(kind: RelationKind | None) -> bool:
     """Return ``True`` for relation kinds represented as GraphQL lists."""
     return kind in MANY_SIDE_RELATION_KINDS

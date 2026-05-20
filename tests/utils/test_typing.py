@@ -63,3 +63,15 @@ def test_unwrap_return_type_returns_direct_class_when_unwrapped():
         pass
 
     assert unwrap_return_type(Inner) is Inner
+
+
+def test_unwrap_graphql_type_passes_through_none():
+    """``None`` carries no ``of_type`` attribute and passes through unchanged.
+
+    The optimizer's ``_walk_gql_type`` recursion at
+    ``optimizer/extension.py`` feeds ``getattr(field_obj, "type", None)``
+    into this helper; the post-peel ``type_name is None`` gate downstream
+    relies on the passthrough holding so the recursion terminates cleanly.
+    """
+
+    assert unwrap_graphql_type(None) is None

@@ -54,6 +54,11 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
       ``context.get(key, default)``; this matches Strawberry's normal
       usage and lets ``Box``-style dict subclasses that *also* expose
       attribute access still resolve through ``__getitem__`` first.
+      Values stashed by code outside this module via ``setattr`` on a
+      dict subclass are intentionally invisible to this branch — the
+      read helper preserves write/read symmetry with
+      ``stash_on_context``, which routes ``dict`` writes through
+      ``__setitem__``.
     - Non-``dict`` contexts try attribute access first via ``getattr``;
       if the attribute is genuinely absent (sentinel ``_MISSING``) the
       helper falls through to ``context[key]``. The fallback is

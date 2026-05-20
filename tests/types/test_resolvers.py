@@ -372,7 +372,7 @@ def test_check_n1_ignores_bare_field_name_key():
     )
 
     with pytest.raises(OptimizerError, match="Unplanned N\\+1"):
-        _check_n1(fake_info, SimpleNamespace(), "category", ItemType)
+        _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind=None)
 
 
 def test_check_n1_returns_when_relation_is_already_loaded():
@@ -392,7 +392,7 @@ def test_check_n1_returns_when_relation_is_already_loaded():
         path=_path("allItems", 0, "category"),
     )
 
-    _check_n1(fake_info, SimpleNamespace(category="cached"), "category", ItemType)
+    _check_n1(fake_info, SimpleNamespace(category="cached"), "category", ItemType, kind=None)
 
 
 def test_check_n1_warns_for_unplanned_lazy_load(caplog):
@@ -413,7 +413,7 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog):
     )
 
     caplog.set_level("WARNING", logger="django_strawberry_framework")
-    _check_n1(fake_info, SimpleNamespace(), "category", ItemType)
+    _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind=None)
 
     assert any("Potential N+1 on category" in r.message for r in caplog.records)
 

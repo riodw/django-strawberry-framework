@@ -186,6 +186,41 @@ def test_field_meta_is_frozen():
         fm.name = "other"  # type: ignore[misc]
 
 
+def test_is_many_side_pins_every_relation_kind():
+    """``is_many_side`` is ``True`` for many-side kinds and ``False`` otherwise.
+
+    Pins the delegation to ``utils.relations.is_many_side_relation_kind`` for
+    every value of ``RelationKind`` directly, rather than indirectly via the
+    ``nullable`` short-circuits exercised by the ``from_django_field`` cases.
+    """
+    forward_m2m = FieldMeta(name="forward_m2m", is_relation=True, many_to_many=True)
+    reverse_fk = FieldMeta(
+        name="reverse_fk",
+        is_relation=True,
+        one_to_many=True,
+        auto_created=True,
+    )
+    reverse_o2o = FieldMeta(
+        name="reverse_o2o",
+        is_relation=True,
+        one_to_one=True,
+        auto_created=True,
+    )
+    forward_single = FieldMeta(name="forward_single", is_relation=True)
+
+    assert forward_m2m.relation_kind == "many"
+    assert forward_m2m.is_many_side is True
+
+    assert reverse_fk.relation_kind == "reverse_many_to_one"
+    assert reverse_fk.is_many_side is True
+
+    assert reverse_o2o.relation_kind == "reverse_one_to_one"
+    assert reverse_o2o.is_many_side is False
+
+    assert forward_single.relation_kind == "forward_single"
+    assert forward_single.is_many_side is False
+
+
 # ---------------------------------------------------------------------------
 # DjangoTypeDefinition.field_map on DjangoType
 # ---------------------------------------------------------------------------

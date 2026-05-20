@@ -17,3 +17,12 @@ def test_pascal_case_handles_snake_case_inputs():
     assert pascal_case("_leading") == "Leading"
     assert pascal_case("trailing_") == "Trailing"
     assert pascal_case("double__underscore") == "DoubleUnderscore"
+
+
+def test_pascal_case_empty_output_edges():
+    # Pin the silent-empty contract: every segment filtered out by ``if part``
+    # collapses to ``""``.  Unreachable through the documented call chain
+    # (Django field names are never empty and never ``"_"``); pinning prevents
+    # a future filter "fix" from silently changing generated enum names.
+    assert pascal_case("") == ""
+    assert pascal_case("_") == ""

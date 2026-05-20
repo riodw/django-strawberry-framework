@@ -1184,6 +1184,33 @@ def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
     assert prefetch.queryset.query.where
 
 
+def test_plan_force_select_hint_raises_for_many_side_relation():
+    """B4: ``force_select`` on a reverse-FK relation raises ``ConfigurationError`` at plan time.
+
+    Django's ``select_related`` rejects reverse-FK / M2M paths at queryset execution.
+    The walker catches the cardinality mismatch before dispatch so the consumer sees
+    a typed error naming ``OptimizerHint.select_related()`` and the offending field
+    instead of a deep Django ``FieldError`` stack trace.
+    """
+    registry.clear()
+
+    class CategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    _register_type_definition(
+        Category,
+        CategoryType,
+        optimizer_hints={"items": OptimizerHint.select_related()},
+    )
+    try:
+        with pytest.raises(ConfigurationError, match=r"OptimizerHint\.select_related.*'items'"):
+            plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
+    finally:
+        registry.clear()
+
+
 def test_plan_no_flag_hint_falls_through_to_default_dispatch():
     """``OptimizerHint()`` with no flag set is a no-op: the walker falls back to default cardinality dispatch.
 

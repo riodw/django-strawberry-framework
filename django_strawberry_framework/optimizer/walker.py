@@ -100,6 +100,13 @@ def _resolve_field_map(
     Nested ``_walk_selections`` calls leave ``source_type`` ``None``,
     which routes through ``registry.get(model)`` and resolves nested
     relation targets to the primary (the spec-014 nested contract).
+
+    The fallback path (when no ``DjangoType`` is registered for the
+    model) returns raw Django field objects keyed by name. Downstream
+    walker code reads attributes via ``getattr(..., default)`` so both
+    ``FieldMeta`` and raw Django field shapes satisfy the consumer
+    contract; treat the values as ``FieldMeta | Any`` until the
+    registry-coverage gate lands.
     """
     type_cls = source_type if source_type is not None else registry.get(model)
     definition = registry.get_definition(type_cls) if type_cls is not None else None
@@ -156,6 +163,11 @@ def _walk_selections(
     ``_build_prefetch_child_queryset`` below) intentionally omit it so
     nested relation targets keep routing through ``registry.get(model)``
     and resolve to the primary type.
+
+    The default ``runtime_prefixes=((),)`` encodes "one empty-path
+    prefix" for direct or test-only callers without ``info``;
+    ``plan_optimizations`` always passes an explicit single-tuple via
+    ``runtime_path_from_info(info)``.
     """
     type_cls, field_map = _resolve_field_map(model, source_type=source_type)
     merged = _merge_aliased_selections(_included_field_selections(selections))
@@ -401,11 +413,12 @@ def _apply_hint(
 ) -> bool:
     """Apply a Meta-level ``OptimizerHint`` to ``plan``; return ``True`` when handled.
 
-    Dispatches the four documented hint shapes (``SKIP``, ``prefetch_obj``,
-    ``force_select``, ``force_prefetch``) and returns ``True`` after the
-    matching action has been taken.  Returns ``False`` for hints that
-    set no flag — the caller falls back to the default cardinality
-    dispatch in that case.  ``OptimizerHint.__post_init__`` already
+    Dispatches the four configurable hint shapes (``SKIP``,
+    ``prefetch_obj``, ``force_select``, ``force_prefetch``) plus the
+    no-op empty form. Returns ``True`` when one of the configurable
+    shapes is matched. Returns ``False`` for an ``OptimizerHint()`` with
+    no flag set — the caller falls back to the default cardinality
+    dispatch in that case. ``OptimizerHint.__post_init__`` already
     rejects conflicting flag combinations, so the priority order here
     is documentation, not collision arbitration.
     """
@@ -425,6 +438,13 @@ def _apply_hint(
         )
         return True
     if hint.force_select:
+        kind = relation_kind(django_field)
+        if is_many_side_relation_kind(kind):
+            raise ConfigurationError(
+                f"OptimizerHint.select_related() on {django_name!r}: "
+                f"Django requires prefetch_related for {kind} relations; "
+                "use OptimizerHint.prefetch_related() or OptimizerHint.prefetch(obj) instead.",
+            )
         if _target_has_custom_get_queryset(target_type):
             _plan_prefetch_relation(
                 sel,
@@ -664,13 +684,10 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             response_key = _response_key(sel)
             if response_key not in merged._optimizer_response_keys:
                 merged._optimizer_response_keys.append(response_key)
-            # Forward-compat signal: today's walker ignores ``arguments``,
-            # so divergent arguments between aliased selections are
-            # harmless.  When a future slice plans differently per
-            # argument set this branch will need to plan per-response-key
-            # instead of merging — emitting at DEBUG level here gives
-            # that author a fast trace without changing current
-            # behaviour.
+            # Today's walker ignores ``arguments``, so divergent arguments
+            # between aliased selections are harmless. If a future slice
+            # plans per-argument, this merge must become per-response-key
+            # instead of merging.
             sel_arguments = getattr(sel, "arguments", None) or {}
             if sel_arguments != merged.arguments:
                 logger.debug(

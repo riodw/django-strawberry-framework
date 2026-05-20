@@ -3,8 +3,10 @@
 Maps Django models to their generated ``DjangoType`` and ``(model,
 field_name)`` to generated ``Enum`` classes. Used by:
 
-- ``types.converters.convert_relation`` for relation resolution once
-  target types are registered.
+- ``types.finalizer.resolved_relation_annotation`` for relation
+  resolution once target types are registered (called from the
+  per-entry finalize loop via ``iter_pending_relations`` /
+  ``discard_pending``).
 - ``types.converters.convert_choices_to_enum`` for enum reuse across
   multiple ``DjangoType`` subclasses reading the same choice column.
 
@@ -66,9 +68,13 @@ class TypeRegistry:
     def _already_registered(label: str, name: str, existing_name: str) -> ConfigurationError:
         """Build the canonical "already registered" ``ConfigurationError``.
 
-        Centralizes the phrasing so the three mutator collision messages
-        (``register`` forward, ``register`` reverse, ``register_enum``)
-        stay grep-stable for tests and consumer error matching.
+        Centralizes the phrasing for the two cross-key collision sites —
+        ``register``'s reverse-collision (same ``type_cls`` for a different
+        model) and ``register_enum``'s ``(model, field_name)`` collision —
+        so consumer error matching stays grep-stable. The inline
+        ``ConfigurationError(...)`` raises in ``register``'s primary-flip
+        and duplicate-primary branches and in ``register_definition`` use
+        distinct phrasings test-pinned by substring.
         """
         return ConfigurationError(f"{name} is already registered {label} {existing_name}")
 
@@ -140,9 +146,13 @@ class TypeRegistry:
         Public mutator that drops ``type_cls`` from ``_types[model]``,
         ``_models``, ``_primaries`` (when ``type_cls`` was the primary),
         ``_definitions``, and any pending relation whose ``source_type``
-        is ``type_cls``. No-op when ``type_cls`` is not registered: test
-        teardown often wants "clean up if present" semantics, and
-        consumers that need strictness can layer a check on top.
+        is ``type_cls``. No-op when ``type_cls`` is not registered AND the
+        registry has not been finalized — the ``_check_mutable()`` guard
+        fires before the registration check, so post-finalize calls raise
+        ``ConfigurationError`` even for unknown types. Test teardown that
+        wants "clean up if present" semantics must run before
+        ``finalize_django_types()``; consumers that need strictness can
+        layer a check on top.
 
         Honours ``_check_mutable()``: after ``finalize_django_types()`` the
         finalized registry is the runtime lookup source for optimizer
@@ -284,8 +294,9 @@ class TypeRegistry:
         try:
             self.register_definition(type_cls, definition)
         except Exception:
+            # Inverse of register's mutations above; mirror any new register side-effect here on rollback.
             if appended:
-                types = self._types.get(model, [])
+                types = self._types[model]
                 types.remove(type_cls)
                 if not types:
                     self._types.pop(model, None)

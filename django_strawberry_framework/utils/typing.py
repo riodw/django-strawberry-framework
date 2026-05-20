@@ -12,7 +12,19 @@ from typing import Any, get_args, get_origin
 
 
 def unwrap_graphql_type(gql_type: Any) -> Any:
-    """Peel all graphql-core / Strawberry ``of_type`` wrapper layers."""
+    """Peel all graphql-core / Strawberry ``of_type`` wrapper layers.
+
+    Returns the innermost type when ``gql_type`` is a
+    ``GraphQLNonNull``/``GraphQLList`` (or Strawberry ``of_type``)
+    wrapper stack, or returns ``gql_type`` itself when there is no
+    wrapper to peel (including ``None`` and any object that does not
+    expose ``of_type``).
+
+    Examples:
+        ``NonNull(List(NonNull(Inner)))`` -> ``Inner``;
+        ``Inner`` -> ``Inner`` (no wrapper to peel);
+        ``None`` -> ``None`` (no ``of_type`` attribute).
+    """
     while hasattr(gql_type, "of_type"):
         gql_type = gql_type.of_type
     return gql_type

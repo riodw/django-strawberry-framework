@@ -118,6 +118,55 @@ def test_optimizer_applies_select_related_for_forward_fk(django_assert_num_queri
 
 
 @pytest.mark.django_db
+def test_optimize_coerces_manager_through_all(django_assert_num_queries):
+    """A root resolver returning a Manager (not ``.all()``) is still optimized.
+
+    Django consumers commonly write ``return Model.objects`` rather
+    than ``return Model.objects.all()``; both shapes resolve the same
+    data in Strawberry's default resolver path. Without the defensive
+    ``Manager`` coercion the ``isinstance(QuerySet)`` gate would let
+    the manager pass through unoptimized, producing N+1 on a forward
+    FK selection. ``.all()`` on a manager is a no-op that returns a
+    fresh unevaluated QuerySet — the optimizer can then apply its
+    plan.
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            # Return the Manager itself, not ``Manager.all()``.
+            return Item.objects  # type: ignore[return-value]
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+
+    # 1 SQL query: SELECT items + JOIN categories via select_related.
+    # If the Manager had been silently passed through unoptimized this
+    # would issue 1 + 25 = 26 queries (one per item's ``category``).
+    with django_assert_num_queries(1):
+        result = schema.execute_sync("{ allItems { name category { name } } }")
+    assert result.errors is None
+    assert len(result.data["allItems"]) == 25
+    # The plan was built (miss recorded), proving the Manager was NOT
+    # short-circuited by the QuerySet-only gate.
+    assert ext.cache_info().misses == 1
+
+
+@pytest.mark.django_db
 def test_optimizer_plans_merged_duplicate_root_field_nodes(django_assert_num_queries):
     """Merged duplicate root fields contribute all child selections to one plan."""
     services.seed_data(1)
@@ -1301,6 +1350,51 @@ def test_strictness_warn_stashes_sentinel():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("mode", ["warn", "raise"])
+def test_strictness_with_empty_plan_does_not_raise_or_warn(mode, caplog):
+    """B3/M2: an empty plan plus strictness='warn'/'raise' must not raise or warn.
+
+    ``_publish_plan_to_context`` stashes the strictness sentinels (planned set,
+    lookup paths, mode) before ``_optimize`` short-circuits on ``plan.is_empty``.
+    The invariant is that an empty plan implies no relation selections, so the
+    downstream resolver path never compares against the empty planned set.  This
+    test pins the invariant for the enabled-optimizer path under both ``warn``
+    and ``raise`` — a scalar-only query against a registered type produces an
+    empty plan and must resolve cleanly with no warning emitted and no
+    exception raised.
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    ext = DjangoOptimizerExtension(strictness=mode)
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[ext])
+    ctx = SimpleNamespace()
+    with caplog.at_level("WARNING", logger=optimizer_logger.name):
+        result = schema.execute_sync("{ allCategories { name } }", context_value=ctx)
+    # No GraphQL execution errors (would surface a "raise" strictness trip).
+    assert result.errors is None
+    # No optimizer-level warning logged (would surface a "warn" strictness trip).
+    assert not any(
+        record.name == optimizer_logger.name and record.levelname == "WARNING" for record in caplog.records
+    )
+    # Strictness sentinels are still stashed (the plan is published before the
+    # is_empty short-circuit); the planned set is just empty.
+    assert getattr(ctx, "dst_optimizer_strictness") == mode
+    assert getattr(ctx, "dst_optimizer_planned") == set()
+
+
+@pytest.mark.django_db
 def test_strictness_includes_fk_id_elision_in_planned_paths(caplog):
     """B2+B3: FK-id-elided relations are planned and do not warn."""
     services.seed_data(1)
@@ -1811,7 +1905,7 @@ def test_check_schema_skips_unreachable_and_missing_field_map(monkeypatch):
 def test_check_schema_warns_unregistered_target():
     """B6: check_schema warns when a relation's target has no registered DjangoType."""
 
-    # Must register CategoryType first so convert_relation succeeds,
+    # Must register CategoryType first so ItemType's category relation resolves at finalize time,
     # then clear it from the registry so check_schema sees the gap.
     class CategoryType(DjangoType):
         class Meta:
@@ -1882,6 +1976,59 @@ def test_check_schema_descends_into_union_types():
     assert any("category" in w and "no registered target" in w for w in warnings)
 
 
+def test_check_schema_descends_into_interface_implementations():
+    """B6: interface implementers are reachable in check_schema's audit walk.
+
+    GraphQL interfaces expose their concrete implementers via
+    ``schema.get_implementations(interface_type).objects``, not via
+    ``.fields`` or ``.types``. When a root field is typed as an
+    interface and the only ``DjangoType``s involved are the concrete
+    implementations, the schema walker must descend into those
+    implementations so each implementer's relations still participate
+    in the audit. Without that, ``check_schema`` silently skips missing
+    -target warnings for any relation that lives on an interface
+    implementer.
+    """
+    from strawberry import relay
+
+    from django_strawberry_framework.optimizer.extension import _collect_schema_reachable_types
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            interfaces = (relay.Node,)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def some_node(self) -> relay.Node:  # type: ignore[valid-type]
+            return None  # pragma: no cover
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, types=[CategoryNode, ItemNode])
+
+    # Internal reachable set must include both implementers even though
+    # the root field is typed as the ``Node`` interface.
+    reachable = _collect_schema_reachable_types(schema)
+    assert ItemNode in reachable
+    assert CategoryNode in reachable
+
+    # User-visible consequence: drop Category's registration and the
+    # audit must still surface the gap on ItemNode.category. Without
+    # interface descent ItemNode would not be reachable and the warning
+    # would be silently lost.
+    _force_unregister_after_finalize(CategoryNode)
+    warnings = DjangoOptimizerExtension.check_schema(schema)
+    assert any("category" in w and "no registered target" in w for w in warnings)
+
+
 def test_check_schema_no_warnings_when_all_covered():
     """B6: check_schema returns no warnings when all relations have registered targets."""
 
@@ -1912,7 +2059,7 @@ def test_check_schema_skip_hint_suppresses_warning():
     """B6: relations with OptimizerHint.SKIP are not flagged."""
     from django_strawberry_framework import OptimizerHint
 
-    # Register CategoryType so convert_relation succeeds.
+    # Register CategoryType so the ItemType.category PendingRelation resolves at finalize time.
     class CategoryType(DjangoType):
         class Meta:
             model = Category
@@ -3067,6 +3214,56 @@ def test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_type
     warnings = DjangoOptimizerExtension.check_schema(schema)
     item_category_warnings = [w for w in warnings if "Item.category" in w]
     assert len(item_category_warnings) == 1
+
+
+def test_schema_audit_warning_names_the_source_type_for_multi_type_models():
+    """B6/M1: the warning text includes ``type_cls.__name__`` for multi-type models.
+
+    Per-source-model dedupe collapses warnings to one per ``(model, field_name)``
+    even when two registered types for the same model expose the same relation.
+    The warning string must still identify *which* type's audit produced the
+    entry so a consumer can disambiguate; the source type's name is rendered
+    alongside ``model.field`` so the dedupe artifact never loses provenance.
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+            primary = True
+
+    class AdminItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return []
+
+        @strawberry.field
+        def all_admin_items(self) -> list[AdminItemType]:
+            return []
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    _force_unregister_after_finalize(CategoryType)
+
+    warnings = DjangoOptimizerExtension.check_schema(schema)
+    item_category_warnings = [w for w in warnings if "Item.category" in w]
+    # Dedupe still applies — one warning per (model, field_name).
+    assert len(item_category_warnings) == 1
+    # The surviving warning must name the source type (the first one iterated)
+    # so the consumer can identify which type's audit produced the entry.
+    [warning] = item_category_warnings
+    assert "ItemType" in warning or "AdminItemType" in warning
 
 
 def test_model_for_type_reverse_lookup_works_for_secondary_type():

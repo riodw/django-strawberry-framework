@@ -396,6 +396,60 @@ class TestDiffPlanForQueryset:
         assert delta_qs is not qs
         assert delta_qs._prefetch_related_lookups == (unrelated,)
 
+    def test_drops_only_fields_when_consumer_applied_only(self):
+        # M1: Django's ``QuerySet.only(...).only(...)`` replaces (not
+        # merges) the deferred-field set. If the consumer already
+        # restricted columns via ``.only()`` (e.g., to enforce a
+        # column-level permission boundary), the optimizer must drop
+        # its own ``only_fields`` rather than silently overwriting the
+        # consumer projection. The diff result has ``only_fields=()``
+        # so ``apply()`` does not call ``.only()`` again.
+        plan = OptimizationPlan(select_related=["category"], only_fields=["id"])
+        qs = Item.objects.only("name")
+        delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
+        assert delta_plan is not plan
+        assert delta_plan.only_fields == ()
+        # The consumer's projection survives untouched.
+        fields, is_deferred = delta_qs.query.deferred_loading
+        assert fields == {"name"}
+        assert is_deferred is False
+        # Original plan untouched (B1 cache invariant).
+        assert plan.only_fields == ["id"]
+
+    def test_keeps_only_fields_when_consumer_did_not_apply_only(self):
+        # Counterpart to the drop case: without a consumer ``.only()``,
+        # the optimizer's ``only_fields`` passes through unchanged and
+        # ``apply()`` applies it.
+        plan = OptimizationPlan(only_fields=["id"])
+        qs = Item.objects.all()
+        delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
+        assert delta_plan is plan
+        assert delta_plan.only_fields == ["id"]
+        applied = delta_plan.apply(delta_qs)
+        fields, is_deferred = applied.query.deferred_loading
+        assert fields == {"id"}
+        assert is_deferred is False
+
+    def test_keeps_only_fields_when_consumer_used_defer(self):
+        # ``.defer()`` is not a consumer projection in the
+        # ``.only()`` sense — Django composes ``.only()`` after
+        # ``.defer()`` cleanly. The optimizer keeps its ``only_fields``.
+        plan = OptimizationPlan(only_fields=["id"])
+        qs = Item.objects.defer("name")
+        delta_plan, _ = diff_plan_for_queryset(plan, qs)
+        assert delta_plan is plan
+        assert delta_plan.only_fields == ["id"]
+
+    def test_drops_only_fields_when_consumer_chained_only(self):
+        # Django's chained ``.only().only()`` collapses to the most
+        # recent argument; the consumer's effective ``.only()`` still
+        # triggers the drop because ``deferred_loading`` is still
+        # ``(<non-empty set>, False)``.
+        plan = OptimizationPlan(only_fields=["id"])
+        qs = Item.objects.only("name").only("category_id")
+        delta_plan, _ = diff_plan_for_queryset(plan, qs)
+        assert delta_plan.only_fields == ()
+
     def test_consumer_prefetch_with_queryset_keeps_consumer_drops_optimizer(self):
         # When the consumer passes their own ``Prefetch`` with a custom
         # queryset, we cannot losslessly replace it.  Consumer wins,

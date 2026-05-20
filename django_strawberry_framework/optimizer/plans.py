@@ -81,7 +81,11 @@ class OptimizationPlan:
 
     @property
     def is_empty(self) -> bool:
-        """Return ``True`` when no optimization directives were collected."""
+        """Return ``True`` when no optimization directives were collected.
+
+        ``cacheable`` is metadata about cache reuse and is excluded from the
+        emptiness check.
+        """
         return (
             not self.select_related
             and not self.prefetch_related
@@ -262,6 +266,37 @@ def _consumer_prefetch_lookups(queryset: Any) -> list[Any]:
     return list(getattr(queryset, "_prefetch_related_lookups", ()) or ())
 
 
+def _consumer_only_fields(queryset: Any) -> frozenset[str] | None:
+    """Return the consumer-applied ``.only()`` field set, or ``None``.
+
+    Centralizes the brittle Django-private contract for
+    ``QuerySet.query.deferred_loading``, a ``(field_set, defer_flag)``
+    tuple where ``defer_flag is False`` means ``.only()`` was applied
+    (Django's "load only this set" mode) and ``defer_flag is True`` is
+    the default ``.defer()``-or-nothing mode.
+
+    Returns the non-empty only-set when the consumer applied ``.only()``;
+    returns ``None`` otherwise (no ``.only()`` applied, ``.defer()`` mode,
+    or the attribute is missing on a non-QuerySet input). The wildcard
+    ``.only()`` with no args is not a meaningful consumer projection
+    (Django collapses it to the default empty set in defer mode) and is
+    handled implicitly by the non-empty check.
+    """
+    query = getattr(queryset, "query", None)
+    deferred_loading = getattr(query, "deferred_loading", None)
+    if deferred_loading is None:
+        return None
+    try:
+        field_set, defer_flag = deferred_loading
+    except (TypeError, ValueError):
+        return None
+    if defer_flag is not False:
+        return None
+    if not field_set:
+        return None
+    return frozenset(field_set)
+
+
 def _optimizer_can_absorb(
     opt_entry: Any,
     consumer_paths: Sequence[str],
@@ -312,6 +347,20 @@ def diff_plan_for_queryset(
     are dropped from the plan; the wildcard form (``True``) is treated
     as no overlap so explicit nullable-FK entries still apply.
 
+    ``only_fields`` — dropped entirely when the consumer already
+    applied ``.only(...)`` to the queryset (detected via
+    ``query.deferred_loading`` with ``defer_flag is False`` and a
+    non-empty field set). Django's ``QuerySet.only(...).only(...)``
+    chaining *replaces* the previous deferred-field set rather than
+    merging, so applying the optimizer's ``only_fields`` on top of a
+    consumer ``.only()`` would silently drop the consumer's projection
+    — including columns the consumer may have restricted to enforce a
+    permission boundary. The conservative consumer-wins choice is to
+    drop the optimizer's ``only_fields`` whenever the consumer has
+    already restricted columns; ``.defer(...)`` is not treated as a
+    consumer projection because ``.defer()`` and ``.only()`` compose
+    cleanly in Django.
+
     ``prefetch_related`` — compared by ``prefetch_to`` with ancestry
     awareness. For each optimizer entry we gather the consumer entries
     on the same subtree (exact path or any descendant of it) and
@@ -340,15 +389,23 @@ def diff_plan_for_queryset(
     """
     new_select = _diff_select_related(plan.select_related, queryset)
     new_prefetch, new_queryset = _diff_prefetch_related(plan.prefetch_related, queryset)
+    drop_only_fields = bool(plan.only_fields) and _consumer_only_fields(queryset) is not None
+    new_only_fields: Sequence[str] = () if drop_only_fields else plan.only_fields
 
     if (
         len(new_select) == len(plan.select_related)
         and len(new_prefetch) == len(plan.prefetch_related)
         and new_queryset is queryset
+        and not drop_only_fields
     ):
         return plan, queryset
     return (
-        replace(plan, select_related=new_select, prefetch_related=new_prefetch).finalize(),
+        replace(
+            plan,
+            select_related=new_select,
+            prefetch_related=new_prefetch,
+            only_fields=new_only_fields,
+        ).finalize(),
         new_queryset,
     )
 

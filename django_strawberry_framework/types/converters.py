@@ -1,15 +1,32 @@
 """Convert Django model fields to Strawberry-compatible Python types.
 
-Two halves:
+Public surface:
 
 - ``convert_scalar(field, type_name)`` — scalar columns
-  (``CharField`` -> ``str`` etc.) and choice fields (-> generated ``Enum``).
-- ``convert_relation(field)`` — FK / OneToOne / reverse / M2M, returning
-  the registered target ``DjangoType`` in the correct GraphQL cardinality
-  shape.
+  (``CharField`` -> ``str`` etc.). Walks ``type(field).__mro__`` against
+  ``SCALAR_MAP``, then delegates to ``convert_choices_to_enum`` when
+  ``field.choices`` is set, then widens to ``T | None`` on ``field.null``.
+- ``convert_choices_to_enum(field, type_name)`` — generate (or fetch
+  cached) Strawberry ``Enum`` from a Django choice field; called from
+  ``convert_scalar`` when ``field.choices`` is set and also importable
+  directly for tests / custom resolvers.
+- ``resolved_relation_annotation(field, target_type, *, field_meta=None)``
+  — render the final relation annotation for ``field`` pointing at a
+  resolved ``DjangoType`` (``target_type``). Cardinality / null widening
+  is sourced from ``FieldMeta``; reused by ``types/finalizer.py``'s
+  deferred-resolution path.
+- ``SCALAR_MAP`` — module-level ``dict[type[models.Field], Any]`` mapping
+  Django field classes to their Python / Strawberry scalar. Mutable,
+  last-write-wins, read on every ``convert_scalar`` call (no caching), so
+  post-``finalize_django_types()`` mutations remain visible. The canonical
+  extension path for a third-party / consumer field is to **subclass** a
+  supported Django field — ``convert_scalar``'s MRO walk picks up the
+  parent's scalar without registration. ``SCALAR_MAP[FieldCls] = py_type``
+  is the non-subclass extension hook (e.g. unrelated third-party fields
+  that store to a non-mapped column type).
 
-All field-shape introspection lives here so ``types.py`` stays focused on
-``Meta`` orchestration.
+All field-shape introspection lives here so ``types/base.py`` stays
+focused on ``Meta`` orchestration.
 """
 
 import datetime
@@ -28,7 +45,6 @@ from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
 from ..scalars import BigInt
 from ..utils.strings import pascal_case
-from .relations import PendingRelationAnnotation
 
 SCALAR_MAP: dict[type[models.Field], Any] = {
     models.AutoField: int,
@@ -60,6 +76,9 @@ SCALAR_MAP: dict[type[models.Field], Any] = {
     models.FileField: str,
     models.ImageField: str,
 }
+
+_NON_IDENT = re.compile(r"\W+", flags=re.ASCII)
+_GRAPHQL_RESERVED_ENUM_VALUES = frozenset({"false", "null", "true"})
 
 
 def _resolve_array_field() -> type[models.Field] | None:
@@ -172,7 +191,7 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
             )
         py_type = strawberry.scalars.JSON
         return py_type | None if field.null else py_type
-    py_type: Any = None
+    py_type = None
     # Walk the field's MRO so consumer-defined subclasses of a supported
     # Django field (e.g. ``class TrimmedCharField(models.CharField)`` or
     # third-party encrypted/money field subclasses that ultimately store
@@ -194,10 +213,6 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
     if field.null:
         py_type = py_type | None
     return py_type
-
-
-_NON_IDENT = re.compile(r"\W+", flags=re.ASCII)
-_GRAPHQL_RESERVED_ENUM_VALUES = frozenset({"false", "null", "true"})
 
 
 def _sanitize_member_name(value: Any) -> str:
@@ -307,44 +322,3 @@ def resolved_relation_annotation(
     if meta.nullable:
         return target_type | None
     return target_type
-
-
-def convert_relation(field: models.Field) -> Any:
-    """Map a Django relation field to its target ``DjangoType``.
-
-    Cardinality table:
-
-    - Forward FK (``many_to_one``) -> target type, nullable iff ``field.null``.
-    - Forward OneToOne (``one_to_one`` and not ``auto_created``) -> target
-      type, nullable iff ``field.null``.
-    - Reverse OneToOne (``one_to_one`` and ``auto_created``) -> target type
-      or ``None`` (always conceptually nullable; the reverse row may not
-      exist).
-    - Reverse FK (``one_to_many``) -> ``list[target_type]``.
-    - Forward / reverse M2M (``many_to_many``) -> ``list[target_type]``.
-
-    If the target type is not registered yet, return
-    ``PendingRelationAnnotation``. The caller records the matching
-    ``PendingRelation`` and ``finalize_django_types()`` rewrites the
-    annotation after all modules have imported. Callers must record a
-    ``PendingRelation`` for any field that returns
-    ``PendingRelationAnnotation``; otherwise ``finalize_django_types()``
-    cannot rewrite the annotation and Strawberry will raise during schema
-    construction.
-
-    Args:
-        field: A bound Django relation field or related-object descriptor.
-            Forward FK / OneToOne / M2M live on the source model;
-            reverse-side fields live on the related model and surface
-            here via ``Model._meta.get_fields()``.
-
-    """
-    target_model = field.related_model
-    target_type = registry.get(target_model)
-    if target_type is None:
-        return PendingRelationAnnotation
-    return resolved_relation_annotation(
-        field,
-        target_type,
-        field_meta=FieldMeta.from_django_field(field),
-    )

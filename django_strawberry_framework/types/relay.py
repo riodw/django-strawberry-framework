@@ -134,6 +134,8 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     model = type_cls.__django_strawberry_definition__.model
     if not isinstance(model._meta.pk, CompositePrimaryKey):
         return
+    # Phase 2.5 ordering note: this calls upstream ``relay.Node.resolve_id_attr``
+    # (our default is installed after this gate runs).
     try:
         type_cls.resolve_id_attr()  # type: ignore[attr-defined]
     except NodeIDAnnotationError:
@@ -179,6 +181,11 @@ def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:
     already loaded the row) and falls back to ``getattr(root, id_attr)``
     (spec line 313 / Decision 7's "no avoidable lazy loads on
     ``resolve_id``").
+
+    Keying on ``root.__class__._meta.pk.attname`` is deliberate: the
+    alternative ``cls.__django_strawberry_definition__.model._meta.pk.attname``
+    would mis-key the ``__dict__`` lookup for proxy-model rows whose actual
+    class differs from the declared DjangoType model.
     """
     id_attr = cls.resolve_id_attr()
     if id_attr == "pk":
@@ -247,11 +254,11 @@ def _apply_node_filter(
     node_id: Any = None,
     node_ids: list[Any] | None = None,
 ) -> models.QuerySet:
-    """Apply the Relay-id filter to ``qs`` (sync; no get_queryset involvement).
+    """Apply the Relay-id filter to ``qs`` (color-agnostic).
 
-    The post-``get_queryset`` queryset is sync-iterable (or
-    async-iterable in the async branch); the filter itself is a pure ORM
-    operation and identical across both paths.
+    The lazy ``.filter`` call is identical on sync and async paths; the
+    terminal materialization is what differs (``.get``/``.first`` on the
+    sync path, ``.aget``/``.afirst`` on the async path).
     """
     if node_id is not None:
         coerced = _coerce_node_id(node_id)

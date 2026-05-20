@@ -128,6 +128,13 @@ class Settings:
         Dunder names short-circuit with a plain ``AttributeError`` so
         introspection tools (``copy``, ``deepcopy``, ``inspect``) get
         readable traces instead of the "Invalid setting" message.
+
+        Only ``KeyError`` is caught and converted to ``AttributeError``; a
+        malformed ``DJANGO_STRAWBERRY_FRAMEWORK`` value (non-mapping) makes
+        the lazy ``self.user_settings`` read raise ``ConfigurationError``,
+        which propagates through ``hasattr`` and ``getattr(default=...)``
+        probes by design — bad configuration should fail loud rather than
+        masquerade as a missing attribute.
         """
         if name.startswith("__"):
             raise AttributeError(name)

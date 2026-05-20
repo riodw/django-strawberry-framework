@@ -50,6 +50,16 @@ def pascal_case(name: str) -> str:
     keeps generated GraphQL type names stable when consumers use names
     like ``_legacy_id`` or ``status_``.
 
+    Strict ``snake_case`` only — acronyms inside a segment are *not*
+    preserved.  Per-segment ``str.capitalize()`` upper-cases the first
+    character and lower-cases every interior upper-case character, so
+    an input like ``"my_HTTP_response"`` becomes ``"MyHttpResponse"``
+    rather than ``"MyHTTPResponse"``; this is unreachable through the
+    documented call chain (Django field names cannot contain
+    upper-case characters) but is documented here so a future direct
+    caller is not surprised.  Mirrors the analogous acronym caveat on
+    ``snake_case``.
+
     Examples:
         ``"is_active"`` -> ``"IsActive"``;
         ``"status"`` -> ``"Status"``;

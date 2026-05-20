@@ -20,16 +20,19 @@ eliminating per-request Django introspection overhead.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol
 
-from django_strawberry_framework.exceptions import OptimizerError
-from django_strawberry_framework.utils.relations import RelationKind, relation_kind
+from ..exceptions import OptimizerError
+from ..utils.relations import (
+    RelationKind,
+    is_many_side_relation_kind,
+    relation_kind,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from django.db import models
 
 
-@runtime_checkable
 class _DjangoFieldLike(Protocol):
     """Structural contract for the inputs ``from_django_field`` accepts.
 
@@ -100,20 +103,12 @@ class FieldMeta:
     @property
     def relation_kind(self) -> RelationKind:
         """Return this relation's GraphQL/runtime cardinality classifier."""
-        if self.many_to_many:
-            return "many"
-        if self.one_to_many:
-            if self.auto_created:
-                return "reverse_many_to_one"
-            return "many"
-        if self.one_to_one and self.auto_created:
-            return "reverse_one_to_one"
-        return "forward_single"
+        return relation_kind(self)
 
     @property
     def is_many_side(self) -> bool:
         """Return whether this relation resolves as a GraphQL list."""
-        return self.relation_kind in {"many", "reverse_many_to_one"}
+        return is_many_side_relation_kind(self.relation_kind)
 
     @classmethod
     def from_django_field(cls, field: _DjangoFieldLike) -> FieldMeta:

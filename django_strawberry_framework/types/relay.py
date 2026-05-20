@@ -75,7 +75,7 @@ def install_is_type_of(type_cls: type) -> None:
     """
     if "is_type_of" in type_cls.__dict__:
         return
-    model = type_cls.__django_strawberry_definition__.model
+    model = _model_for(type_cls)
 
     def is_type_of(obj: object, info: object) -> bool:
         return isinstance(obj, (type_cls, model))
@@ -131,7 +131,7 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     otherwise; only the latter case is the contract violation this
     gate is meant to catch.
     """
-    model = type_cls.__django_strawberry_definition__.model
+    model = _model_for(type_cls)
     if not isinstance(model._meta.pk, CompositePrimaryKey):
         return
     # Phase 2.5 ordering note: this calls upstream ``relay.Node.resolve_id_attr``
@@ -268,6 +268,18 @@ def _apply_node_filter(
     return qs
 
 
+def _model_for(cls: type) -> type[models.Model]:
+    """Return the registered model for ``cls.__django_strawberry_definition__``.
+
+    Centralizes the ``cls.__django_strawberry_definition__.model`` lookup
+    so model-only reads share one source of truth with the queryset-variant
+    lookup in ``_initial_queryset``. Mirrors ``_initial_queryset``'s
+    contract: callers are responsible for ``cls`` being a registered
+    ``DjangoType``; a missing definition surfaces as a raw ``AttributeError``.
+    """
+    return cls.__django_strawberry_definition__.model
+
+
 def _initial_queryset(cls: type) -> models.QuerySet:
     """Return ``model._default_manager.all()`` for the declared model.
 
@@ -275,7 +287,7 @@ def _initial_queryset(cls: type) -> models.QuerySet:
     lookup so both the sync and async assembly paths share one source of
     truth for step 1 of the Decision 3 four-step shape.
     """
-    return cls.__django_strawberry_definition__.model._default_manager.all()
+    return _model_for(cls)._default_manager.all()
 
 
 def _order_nodes(
@@ -301,7 +313,7 @@ def _order_nodes(
     """
     index = {str(getattr(obj, id_attr)): obj for obj in results}
     output: list = []
-    model = cls.__django_strawberry_definition__.model
+    model = _model_for(cls)
     for key in coerced_keys:
         if required:
             try:

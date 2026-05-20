@@ -132,7 +132,8 @@ class TypeRegistry:
             existing_primary = self._primaries.get(model)
             if existing_primary is not None:
                 raise ConfigurationError(
-                    f"{type_cls.__name__} is already declared primary as {existing_primary.__name__}",
+                    f"Cannot register {type_cls.__name__} as primary for {model.__name__}; "
+                    f"{existing_primary.__name__} is already the primary type",
                 )
         existing_types.append(type_cls)
         self._models[type_cls] = model

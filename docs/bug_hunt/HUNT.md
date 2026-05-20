@@ -1,12 +1,12 @@
 # HUNT
 Generate a bug-hunt checklist for `django_strawberry_framework` in
-two steps. The checklist is fed to Gemini 3.1 Pro (via Antigravity),
-which acts as the bug hunter — Claude prepares the input; Gemini does
-the hunting. Expect scratch files and live-code probes as part of
-the search; those aren't artifacts to keep.
+two steps, then execute it one file at a time with a hunter agent.
+The generator prepares the input; the hunter does the probing. Expect
+scratch files and live-code probes as part of the search; those aren't
+artifacts to keep.
 
-The per-file prompt Gemini receives is the static "how to review a
-single file" block baked into `scripts/bug_hunt.py`. To tune Gemini's
+The per-file prompt each hunter receives is the static "how to review a
+single file" block baked into `scripts/bug_hunt.py`. To tune the hunter's
 behavior, edit that script — HUNT.md is just orchestration.
 
 ## Step 1: distill the current dicta
@@ -17,7 +17,7 @@ one markdown block specific to this package.
 Frame each pitfall as a **probing question** the hunter should ask
 while reading a file ("does this branch handle the None case?") rather
 than a verification rule ("this branch must handle the None case").
-Bias Gemini toward exploration, not checklist confirmation. Include
+Bias the hunter toward exploration, not checklist confirmation. Include
 severity calibration as priorities, not gates — the hunter decides
 what to escalate.
 
@@ -47,11 +47,21 @@ Then run `scripts/bug_hunt.py`. The script:
 
 ## How to use the generated checklist
 Open `docs/bug_hunt/bug_hunt.<short-sha>.md` and feed the per-file
-prompts into Gemini one at a time. Gemini writes its findings to
-`docs/bug_hunt/hunt-<flat-path>.md`, mirroring the review workflow's
-`rev-<flat-path>.md` convention (`/` in the source path becomes `__`
-in the file name; e.g.
-`django_strawberry_framework/optimizer/walker.py` →
-`docs/bug_hunt/hunt-optimizer__walker.md`). Every per-file pass
-writes a hunt note, even when nothing is found — "no issues" is a
-valid finding. Tick the checkbox after the note lands on disk.
+prompts into hunter agents one at a time. For a Warp subagent run,
+point the agent at `docs/bug_hunt/dicta.md`, include exactly the
+current item's `Prompt:` text, and tell it to work from the repo root.
+
+Keep checklist ownership with the orchestrator, not the hunter:
+- The hunter may edit the source file named by the prompt.
+- Scratch probes should stay outside the repo, or be removed before
+  handoff if they must be created inside the working tree.
+- The hunter should not edit `docs/bug_hunt/bug_hunt.<short-sha>.md`.
+- The hunter should not commit.
+- If the hunter edits code, it should run the required ruff commands
+  for the touched source file and report what passed.
+
+After the hunter reports done, write a concise `Result:` line under the
+matching checklist item and tick that item. "No issues" is a valid
+finding, but it should still be recorded explicitly in the generated
+checklist. Per-file `docs/bug_hunt/hunt-<flat-path>.md` notes are
+optional handoff scratch, not the canonical completion record.

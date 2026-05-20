@@ -432,16 +432,23 @@ def _apply_hint(
         # the plan non-cacheable so the plan cache cannot serve one
         # request's queryset to the next.
         plan.cacheable = False
+        type_name = type_cls.__name__ if type_cls is not None else "UnknownType"
         append_prefetch_unique(
             plan.prefetch_related,
-            _prefetch_hint_for_path(hint.prefetch_obj, django_name=django_name, full_path=full_path),
+            _prefetch_hint_for_path(
+                hint.prefetch_obj,
+                django_name=django_name,
+                full_path=full_path,
+                type_name=type_name,
+            ),
         )
         return True
     if hint.force_select:
         kind = relation_kind(django_field)
         if is_many_side_relation_kind(kind):
+            type_name = type_cls.__name__ if type_cls is not None else "UnknownType"
             raise ConfigurationError(
-                f"OptimizerHint.select_related() on {django_name!r}: "
+                f"OptimizerHint.select_related() on {type_name}.{django_name}: "
                 f"Django requires prefetch_related for {kind} relations; "
                 "use OptimizerHint.prefetch_related() or OptimizerHint.prefetch(obj) instead.",
             )
@@ -488,11 +495,20 @@ def _apply_hint(
     return False
 
 
-def _prefetch_hint_for_path(prefetch: Prefetch, *, django_name: str, full_path: str) -> Prefetch:
+def _prefetch_hint_for_path(
+    prefetch: Prefetch,
+    *,
+    django_name: str,
+    full_path: str,
+    type_name: str,
+) -> Prefetch:
     """Return ``prefetch`` adapted from a type-relative lookup to ``full_path``."""
     lookup = getattr(prefetch, "prefetch_through", None)
     if lookup is None:
-        raise ConfigurationError("OptimizerHint.prefetch(obj) requires a Prefetch with a lookup path.")
+        raise ConfigurationError(
+            f"OptimizerHint.prefetch(obj) on {type_name}.{django_name} "
+            "requires a Prefetch with a lookup path.",
+        )
     if lookup == full_path or lookup.startswith(f"{full_path}__"):
         return prefetch
     if lookup == django_name:
@@ -501,8 +517,8 @@ def _prefetch_hint_for_path(prefetch: Prefetch, *, django_name: str, full_path: 
         adjusted_lookup = f"{full_path}{lookup.removeprefix(django_name)}"
     else:
         raise ConfigurationError(
-            "OptimizerHint.prefetch(obj) lookup must target the hinted relation "
-            f"{django_name!r}; got {lookup!r}.",
+            f"OptimizerHint.prefetch(obj) lookup on {type_name}.{django_name} "
+            f"must target the hinted relation {django_name!r}; got {lookup!r}.",
         )
     return Prefetch(
         adjusted_lookup,

@@ -166,110 +166,128 @@ obvious.
         - Read docs/shadow/django_strawberry_framework__exceptions.stripped.py and docs/shadow/django_strawberry_framework__exceptions.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/exceptions.py
     - Result: Pure class definitions; nothing executable to probe.
 
-- [ ] django_strawberry_framework/optimizer/_context.py
+- [x] django_strawberry_framework/optimizer/_context.py
     - docs/shadow/django_strawberry_framework__optimizer___context.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer___context.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer___context.stripped.py and docs/shadow/django_strawberry_framework__optimizer___context.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/_context.py
+    - Result: Reviewed every branch and exception handler against the current source; the context dispatch logic accurately handles dicts, objects, frozen instances, and QueryDicts symmetrically, and no concerns surfaced.
 
-- [ ] django_strawberry_framework/optimizer/extension.py
+- [x] django_strawberry_framework/optimizer/extension.py
     - docs/shadow/django_strawberry_framework__optimizer__extension.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__extension.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__extension.stripped.py and docs/shadow/django_strawberry_framework__optimizer__extension.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/extension.py
+    - Result: Reviewed every branch, cache lifecycle, and schema-audit path against the current source; no concerns surfaced.
 
-- [ ] django_strawberry_framework/optimizer/field_meta.py
+- [x] django_strawberry_framework/optimizer/field_meta.py
     - docs/shadow/django_strawberry_framework__optimizer__field_meta.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__field_meta.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__field_meta.stripped.py and docs/shadow/django_strawberry_framework__optimizer__field_meta.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/field_meta.py
+    - Result: Reviewed the current source and shadow files; no active bugs or concerns surfaced.
 
-- [ ] django_strawberry_framework/optimizer/hints.py
+- [x] django_strawberry_framework/optimizer/hints.py
     - docs/shadow/django_strawberry_framework__optimizer__hints.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__hints.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__hints.stripped.py and docs/shadow/django_strawberry_framework__optimizer__hints.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/hints.py
+    - Result: Reviewed every branch listed against current source; no concerns surfaced.
 
-- [ ] django_strawberry_framework/optimizer/plans.py
+- [x] django_strawberry_framework/optimizer/plans.py
     - docs/shadow/django_strawberry_framework__optimizer__plans.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__plans.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__plans.stripped.py and docs/shadow/django_strawberry_framework__optimizer__plans.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/plans.py
+    - Result: Reviewed every branch listed against current source; no concerns surfaced.
 
-- [ ] django_strawberry_framework/optimizer/walker.py
+- [x] django_strawberry_framework/optimizer/walker.py
     - docs/shadow/django_strawberry_framework__optimizer__walker.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__walker.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__walker.stripped.py and docs/shadow/django_strawberry_framework__optimizer__walker.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/walker.py
+    - Result: High-priority triage defect fixed in `django_strawberry_framework/optimizer/walker.py`: `ConfigurationError` messages for invalid `OptimizerHint` usage now include the Django type name as well as the field name (original source lines 441-447, 491-506). Validation: `uv run ruff format django_strawberry_framework/optimizer/walker.py` and `uv run ruff check --fix django_strawberry_framework/optimizer/walker.py` passed after line-length cleanup.
 
-- [ ] django_strawberry_framework/registry.py
+- [x] django_strawberry_framework/registry.py
     - docs/shadow/django_strawberry_framework__registry.stripped.py
     - docs/shadow/django_strawberry_framework__registry.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__registry.stripped.py and docs/shadow/django_strawberry_framework__registry.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/registry.py
+    - Result: Highest-priority triage defect fixed in `django_strawberry_framework/registry.py`: duplicate-primary `ConfigurationError` messages now include the model name and clearer type context (original source lines 134-136). Validation: `uv run ruff format django_strawberry_framework/registry.py` and `uv run ruff check --fix django_strawberry_framework/registry.py` passed.
 
-- [ ] django_strawberry_framework/scalars.py
+- [x] django_strawberry_framework/scalars.py
     - docs/shadow/django_strawberry_framework__scalars.stripped.py
     - docs/shadow/django_strawberry_framework__scalars.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__scalars.stripped.py and docs/shadow/django_strawberry_framework__scalars.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/scalars.py
+    - Result: Reviewed every branch listed against current source; no concerns surfaced.
 
-- [ ] django_strawberry_framework/types/base.py
+- [x] django_strawberry_framework/types/base.py
     - docs/shadow/django_strawberry_framework__types__base.stripped.py
     - docs/shadow/django_strawberry_framework__types__base.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__base.stripped.py and docs/shadow/django_strawberry_framework__types__base.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/base.py
+    - Result: Fixed two high-severity validation bugs and one medium-severity triage issue in `django_strawberry_framework/types/base.py`: inherited `Meta.fields`/`Meta.exclude` are now treated as mutually exclusive, optimizer-hint validation receives the target model explicitly instead of deriving it from the first selected field, and shadowing errors cite the `DjangoType` subclass where the invalid assignment occurred. Validation: scratch inheritance repro raised the expected `ConfigurationError`; `uv run ruff format` and `uv run ruff check` passed.
 
-- [ ] django_strawberry_framework/types/converters.py
+- [x] django_strawberry_framework/types/converters.py
     - docs/shadow/django_strawberry_framework__types__converters.stripped.py
     - docs/shadow/django_strawberry_framework__types__converters.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__converters.stripped.py and docs/shadow/django_strawberry_framework__types__converters.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/converters.py
+    - Result: Highest-priority schema-generation bug fixed in `django_strawberry_framework/types/converters.py`: `DurationField` and `BinaryField` were removed from `SCALAR_MAP` because Strawberry has no built-in scalar for `datetime.timedelta` or `bytes`, so these fields now raise `ConfigurationError` and require a custom scalar or exclusion. Validation reported: `tests/types/test_converters.py` passed, quick schema repro confirmed the crash shape, and ruff format/check passed.
 
-- [ ] django_strawberry_framework/types/definition.py
+- [x] django_strawberry_framework/types/definition.py
     - docs/shadow/django_strawberry_framework__types__definition.stripped.py
     - docs/shadow/django_strawberry_framework__types__definition.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__definition.stripped.py and docs/shadow/django_strawberry_framework__types__definition.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/definition.py
+    - Result: Pure dataclass definition with no executable logic to probe; no concerns surfaced.
 
-- [ ] django_strawberry_framework/types/finalizer.py
+- [x] django_strawberry_framework/types/finalizer.py
     - docs/shadow/django_strawberry_framework__types__finalizer.stripped.py
     - docs/shadow/django_strawberry_framework__types__finalizer.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__finalizer.stripped.py and docs/shadow/django_strawberry_framework__types__finalizer.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/finalizer.py
+    - Result: Reviewed every branch and finalization phase listed against the current source; the failure-atomic Phase 1 resolution, Phase 2 resolver attachment, Phase 2.5 interface base-injection/Relay defaults, and Phase 3 decoration order are fully robust, and no concerns surfaced.
 
-- [ ] django_strawberry_framework/types/relations.py
+- [x] django_strawberry_framework/types/relations.py
     - docs/shadow/django_strawberry_framework__types__relations.stripped.py
     - docs/shadow/django_strawberry_framework__types__relations.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__relations.stripped.py and docs/shadow/django_strawberry_framework__types__relations.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/relations.py
+    - Result: Reviewed current source and confirmed the `PendingRelation` identity-hash behavior and related documentation/test coverage are already implemented; no new concerns surfaced. Validation reported: `uv run pytest tests/types/test_relations.py` passed and `uv run ruff check django_strawberry_framework/types/relations.py` passed.
 
-- [ ] django_strawberry_framework/types/relay.py
+- [x] django_strawberry_framework/types/relay.py
     - docs/shadow/django_strawberry_framework__types__relay.stripped.py
     - docs/shadow/django_strawberry_framework__types__relay.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__relay.stripped.py and docs/shadow/django_strawberry_framework__types__relay.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/relay.py
+    - Result: Reviewed every branch and check listed in the dicta against the current source; no concerns surfaced.
 
-- [ ] django_strawberry_framework/types/resolvers.py
+- [x] django_strawberry_framework/types/resolvers.py
     - docs/shadow/django_strawberry_framework__types__resolvers.stripped.py
     - docs/shadow/django_strawberry_framework__types__resolvers.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__resolvers.stripped.py and docs/shadow/django_strawberry_framework__types__resolvers.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/resolvers.py
+    - Result: Reviewed every branch and helper function listed in the dicta against current source; no active bugs or concerns surfaced.
 
-- [ ] django_strawberry_framework/utils/relations.py
+- [x] django_strawberry_framework/utils/relations.py
     - docs/shadow/django_strawberry_framework__utils__relations.stripped.py
     - docs/shadow/django_strawberry_framework__utils__relations.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__utils__relations.stripped.py and docs/shadow/django_strawberry_framework__utils__relations.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/utils/relations.py
+    - Result: Reviewed every branch listed against current source; no concerns surfaced.
 
-- [ ] django_strawberry_framework/utils/strings.py
+- [x] django_strawberry_framework/utils/strings.py
     - docs/shadow/django_strawberry_framework__utils__strings.stripped.py
     - docs/shadow/django_strawberry_framework__utils__strings.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__utils__strings.stripped.py and docs/shadow/django_strawberry_framework__utils__strings.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/utils/strings.py
+    - Result: Reviewed every branch listed above against current source; no concerns surfaced.
 
-- [ ] django_strawberry_framework/utils/typing.py
+- [x] django_strawberry_framework/utils/typing.py
     - docs/shadow/django_strawberry_framework__utils__typing.stripped.py
     - docs/shadow/django_strawberry_framework__utils__typing.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__utils__typing.stripped.py and docs/shadow/django_strawberry_framework__utils__typing.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/utils/typing.py
+    - Result: High-severity public API defect fixed in `django_strawberry_framework/utils/typing.py`: `unwrap_return_type` now handles bare `typing.List` and built-in `list` annotations by returning `typing.Any` instead of crashing with `IndexError` or returning the unpeeled list type. Validation: `uv run ruff format django_strawberry_framework/utils/typing.py`, `uv run ruff check --fix django_strawberry_framework/utils/typing.py`, and `uv run pytest tests/utils/test_typing.py` passed.

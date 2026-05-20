@@ -163,7 +163,7 @@ class DjangoType:
             )
         validated = _validate_meta(meta)
         fields = _select_fields(meta)
-        _validate_optimizer_hints(validated.optimizer_hints, fields)
+        _validate_optimizer_hints(validated.optimizer_hints, fields, model=meta.model)
 
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         consumer_annotations = dict(cls.__annotations__)
@@ -174,7 +174,7 @@ class DjangoType:
             field.name for field in fields if not field.is_relation and field.name in consumer_annotations
         )
         consumer_assigned_relation_fields, consumer_assigned_scalar_fields = _consumer_assigned_fields(
-            cls.__dict__,
+            cls,
             fields,
         )
         consumer_authored_fields = frozenset(
@@ -311,7 +311,7 @@ def _normalize_sequence_spec(value: Any) -> tuple[str, ...] | None:
 
 
 def _consumer_assigned_fields(
-    class_dict: dict[str, Any],
+    cls: type,
     fields: tuple[Any, ...],
 ) -> tuple[frozenset[str], frozenset[str]]:
     """Return (relation, scalar) names assigned to explicit Strawberry field objects.
@@ -354,6 +354,7 @@ def _consumer_assigned_fields(
     """
     relation_assigned: set[str] = set()
     scalar_assigned: set[str] = set()
+    class_dict = cls.__dict__
     for field in fields:
         if field.name not in class_dict:
             continue
@@ -366,7 +367,7 @@ def _consumer_assigned_fields(
             continue
         kind = "relation" if field.is_relation else "scalar"
         raise ConfigurationError(
-            f"{field.model.__name__}.{field.name} shadows a Django {kind} field with an unsupported "
+            f"{cls.__name__}.{field.name} shadows a Django {kind} field with an unsupported "
             "class attribute. Use a type annotation for type overrides, or use "
             "strawberry.field(resolver=...) / @strawberry.field for resolver overrides.",
         )
@@ -546,7 +547,9 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
 
     declared = {k for k in meta.__dict__ if not k.startswith("_")}
 
-    if "fields" in declared and "exclude" in declared:
+    has_fields = getattr(meta, "fields", None) is not None
+    has_exclude = getattr(meta, "exclude", None) is not None
+    if has_fields and has_exclude:
         raise ConfigurationError("Meta.fields and Meta.exclude are mutually exclusive")
 
     primary = getattr(meta, "primary", False)
@@ -577,7 +580,7 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
     )
 
 
-def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...]) -> None:
+def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], model: type) -> None:
     """Validate ``Meta.optimizer_hints`` keys and values in one pass.
 
     Combines the field-surface and value checks in one place:
@@ -604,7 +607,6 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...]) ->
     """
     if not hints:
         return
-    model = fields[0].model
     valid_field_names = {f.name for f in model._meta.get_fields()}
     selected_relation_names = {f.name for f in fields if f.is_relation}
 

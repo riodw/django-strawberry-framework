@@ -58,5 +58,8 @@ def unwrap_return_type(rt: Any) -> Any:
     if inner is not None:
         return inner
     if get_origin(rt) is list:
-        return get_args(rt)[0]
+        args = get_args(rt)
+        return args[0] if args else Any
+    if rt is list:
+        return Any
     return rt

@@ -69,10 +69,8 @@ SCALAR_MAP: dict[type[models.Field], Any] = {
     models.DateField: datetime.date,
     models.DateTimeField: datetime.datetime,
     models.TimeField: datetime.time,
-    models.DurationField: datetime.timedelta,
     models.JSONField: strawberry.scalars.JSON,
     models.UUIDField: uuid.UUID,
-    models.BinaryField: bytes,
     models.FileField: str,
     models.ImageField: str,
 }

@@ -22,6 +22,7 @@ Tracked under `docs/review/`: `REVIEW.md`, `worker-*.md`, `review-*.md`, every `
 | Document | W0 | W1 | W2 | W3 |
 |---|---|---|---|---|
 | `AGENTS.md` | yes | yes | yes | yes |
+| `START.md` | yes | yes | yes | yes |
 | `docs/review/REVIEW.md` | yes | yes | — | — |
 | `docs/review/worker-N.md` (own) | yes | yes | yes | yes |
 | `pyproject.toml` | plan + closeout | — | — | — |

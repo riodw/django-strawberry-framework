@@ -93,35 +93,13 @@ Worker 0 does not act as a courier between subagents beyond passing the artifact
 
 **Empty-diff Worker 1 re-check.** Per `REVIEW.md` "Maintainer checkpoint", the cycle-closing Worker 1 re-check is **skippable when the cycle item produced no source/test diff** (skip artifact, all-Lows-forward-looking, recording-only project-pass forwards). Confirm via `git diff --stat -- django_strawberry_framework/ tests/ CHANGELOG.md` showing no new changes against the prior cycle's accepted state; record the skip in `worker-memory/worker-0.md`. For any cycle that produced source or test edits, the re-check is required — do not skip on judgment alone.
 
-The generated plan must include:
+Plan header + checklist follow the template in `REVIEW.md` "Required plan structure". Per-cycle build rules:
 
-- release version
-- source root
-- date created
-- the one-file-at-a-time rule
-- a short DRY-first rule (every `rev-*.md` artifact must include a `## DRY analysis` section)
-- links to `docs/review/REVIEW.md` and `docs/review/worker-*.md`
-- the complete artifact list, including `docs/review/rev-final.md`
-- the complete tree checklist, including the final test-run gate item
-- severity definitions
-- logic-first, comment-second review order
-- folder-level and project-level pass requirements
-- the shadow-file line-number caveat
-- the High-severity test requirement
-- the no-commit rule
-
-## Checklist dicta
-
-Use these rules when building the plan:
-
-- Use the actual on-disk package tree. Do not invent files.
-- Keep review order stable and folder-by-folder.
-- Include only tracked **`.py`** files. Skip non-`.py` files (e.g., `py.typed`) — they are governed by packaging configuration and are out of scope for per-file logic review.
-- Skip every `__init__.py`. The subpackage `__init__.py` is reviewed as part of its folder pass; the top-level `django_strawberry_framework/__init__.py` is reviewed as part of the project pass.
-- Add a folder-level pass after all files in each folder.
-- Add one final project-level pass for `django_strawberry_framework/`.
-- Point each checklist item to its exact `docs/review/rev-*.md` artifact.
-- Leave all checkboxes unchecked at plan creation.
+- Use the actual on-disk package tree; do not invent files.
+- Tracked **`.py`** files only. Skip non-`.py` (e.g. `py.typed`) and every `__init__.py` (covered by folder/project pass per `REVIEW.md` "Review scope").
+- Folder-by-folder order; one folder pass per folder; one project pass at the end; `rev-final.md` last.
+- Point each checklist item at its exact `docs/review/rev-*.md` artifact.
+- All checkboxes unchecked at creation.
 
 ## Final test-run gate
 

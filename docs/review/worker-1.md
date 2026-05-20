@@ -105,35 +105,7 @@ Keep entries terse. If the file **approaches ~45 lines**, merge similar entries 
 
 ## Review order
 
-Run the logic review first.
-
-Focus on:
-
-- correctness and edge cases
-- public API behavior and backward compatibility
-- Django ORM correctness and database-query behavior
-- optimizer behavior, N+1 risk, and relation loading
-- cache/request-state mutation bugs
-- async/sync hazards
-- performance and memory use
-- redundancy and DRY opportunities
-- module responsibility and Two Scoops of Django structure
-- import-time side effects and circular imports
-- typing and runtime annotation behavior
-- tests needed to prove a recommended change
-
-Run the comment/docstring review second.
-
-Focus on:
-
-- stale comments
-- comments that restate obvious code
-- missing comments for non-obvious Django or optimizer behavior
-- docstrings that promise behavior the implementation does not provide
-- obsolete TODOs or deleted-spec references
-- public API docstrings that need consumer-visible constraints
-
-Do not recommend comment polish before logic is correct.
+Logic first, then comments/docstrings. Full focus checklists live in `REVIEW.md` "Review focus". Do not recommend comment polish before logic is correct.
 
 ## Static helper use
 

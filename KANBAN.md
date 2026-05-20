@@ -37,6 +37,7 @@ For install, local development, testing, and the canonical documentation map, st
   - Fail-loud unresolved-target finalization error names source model, source field, and target model.
   - OneToOne / M2M cardinality coverage now uses the real `library` example app; the old `tests.fixtures.apps.TestsCardinalityConfig` fixture app has been removed.
 - 0.0.5 shipped after this foundation slice and is recorded separately as `DONE-011-0.0.5`.
+- 0.0.6 shipped as the patch closing the foundation phase: `DONE-012-0.0.6` (`FieldMeta` consolidation), `DONE-013-0.0.6` (deferred scalar conversions), `DONE-014-0.0.6` (multiple `DjangoType`s per model with `Meta.primary`), and `DONE-015-0.0.6` (consumer override semantics for scalar fields).
 - Test suite structure has caught up with the package shape:
   - `tests/optimizer/` covers `extension.py`, `walker.py`, `plans.py`, `hints.py`, `field_meta.py`, and `definition_order.py`.
   - `tests/types/` covers `base.py`, `converters.py`, `resolvers.py`, `definition_order.py`, and `definition_order_schema.py`.
@@ -46,8 +47,8 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.6` shipped progress: `DONE-012-0.0.6` (`FieldMeta` consolidation), `DONE-013-0.0.6` (deferred scalar conversions), `DONE-014-0.0.6` (multiple `DjangoType`s per model with `Meta.primary`), and `DONE-015-0.0.6` (consumer override semantics for scalar fields) landed in this version; the `0.0.6` patch is complete.
-- Strategic differentiation roadmap (post-`0.0.5`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
+- Nothing currently active. `0.0.7` is the next patch — see the `TODO-ALPHA-016-0.0.7` … `TODO-ALPHA-045-0.0.7` cluster below for the queued cards.
+- Strategic differentiation roadmap (post-`0.0.6`) captured in [`BETTER.md`](BETTER.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
 
@@ -1413,14 +1414,14 @@ Status: complete.
 Scope:
 
 - Replaced stale M2M and forward-reference skips with definition-order tests.
-- Kept the remaining scalar override skip documented as a separate scalar-field concern under `WIP-ALPHA-015-0.0.6`.
+- Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-015-0.0.6`.
 
 Evidence:
 
 - `tests/types/test_definition_order.py`
 - `tests/types/test_definition_order_schema.py`
 - `tests/optimizer/test_definition_order.py`
-- `WIP-ALPHA-015-0.0.6`
+- `DONE-015-0.0.6`
 
 ### DONE-008-0.0.4 — 0.0.4 version and release alignment
 
@@ -1625,12 +1626,12 @@ Design notes carried into `0.0.6`:
   `consumer_authored_fields` short-circuit — they may legitimately
   target a secondary `DjangoType` after `Meta.primary` ships. A NEW
   declarative override API (e.g., `Meta.field_types = {...}`) is the
-  `WIP-ALPHA-015-0.0.6 — Consumer override semantics` design space and
+  `DONE-015-0.0.6 — Consumer override semantics` design space and
   is out of scope here.
 
 ### DONE-015-0.0.6 — Consumer override semantics (scalar fields)
 
-Slice-by-slice scope (per `docs/spec-015-consumer_overrides_scalar-0_0_6.md`):
+Slice-by-slice scope (per `docs/SPECS/spec-015-consumer_overrides_scalar-0_0_6.md`):
 
 - `DjangoType.__init_subclass__` collected `consumer_annotated_scalar_fields`
   parallel to `consumer_annotated_relation_fields`. Annotation-only scalar
@@ -1755,7 +1756,7 @@ Slice-by-slice scope (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`):
 - Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based) with the Strawberry class-direct-to-`scalar()` `DeprecationWarning` suppressed at the definition site so consumers see no warning at import time.
 - Strict `BigInt` parser via regex `^(0|-?[1-9][0-9]*)$` — rejects `bool`, `float`, empty / whitespace-padded strings, non-decimal strings, underscores, plus signs, leading zeroes, `-0`, and Unicode digits.
 - Strict `BigInt` serializer — rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`.
-- `BigIntegerField → BigInt` and `PositiveBigIntegerField → BigInt` in `SCALAR_MAP`. `BigAutoField` preserved as `int` (no current-day override recourse; wait for WIP-ALPHA-015).
+- `BigIntegerField → BigInt` and `PositiveBigIntegerField → BigInt` in `SCALAR_MAP`. `BigAutoField` preserved as `int` (no override recourse at the time of DONE-013; annotation-override recourse now available via `DONE-015-0.0.6`).
 - `JSONField → strawberry.scalars.JSON` in `SCALAR_MAP`.
 - `ArrayField` and `HStoreField` mapped via sentinel-guarded branches in `convert_scalar`. `HStoreField` not added to `SCALAR_MAP`.
 - `ArrayField` rejects nested arrays and outer `choices` with `ConfigurationError`.

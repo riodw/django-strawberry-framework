@@ -4,9 +4,7 @@ Status: verified
 
 ## DRY analysis
 
-- Existing patterns reused: `_normalize_user_settings` is the single shape-contract gate, and it is the only path that produces the cached `dict[str, Any]`. The three write sites (`Settings.__init__` at `django_strawberry_framework/conf.py:100`, `Settings.user_settings` at `django_strawberry_framework/conf.py:110-113`, `Settings.reload` at `django_strawberry_framework/conf.py:123`) all funnel through it, which is the consolidation the module's docstring promises (`django_strawberry_framework/conf.py:70-73`). `ConfigurationError` is reused from `django_strawberry_framework/exceptions.py:24-34` rather than redefined locally. No other helper from the package is currently appropriate to reuse here.
-- New helpers a fix might justify: none. The module is already at the minimum surface for its responsibility (one normalization helper, one accessor class, one signal receiver). Extracting any of these further would split a coherent responsibility.
-- Duplication risk in the current file: the `None` -> "no settings configured" branch is repeated in three call sites (`django_strawberry_framework/conf.py:100`, `django_strawberry_framework/conf.py:110-113`, `django_strawberry_framework/conf.py:123`) but the repetition is structural — each call site has a different upstream value source (constructor arg vs Django settings vs signal payload) and the `None`-guard is the cheapest local form. Folding them into `_normalize_user_settings` itself would require all three sites to lose the `None`-vs-pass-through distinction (the constructor and `reload` use `None` as "defer to lazy reload" while `user_settings` already passes `None` to mean "missing key"). The current shape is correct; flagging only for the project pass to confirm no other module is repeating the same "coerce None to empty mapping" idiom outside the two seams the module docstring acknowledges.
+- None — `conf.py` is at the minimum surface for its responsibility (one normalization helper, one accessor class, one signal receiver); the `None`-guard repetition across the three write sites is structural because each site has a different upstream value source (constructor arg vs Django settings vs signal payload).
 
 ## High:
 
@@ -34,7 +32,7 @@ def __getattr__(self, name: str) -> Any:
 
 ### Module docstring asserts a contract — "Defensive `None` stance (package-wide)" — that is enforced outside this file
 
-The module docstring at `django_strawberry_framework/conf.py:17-35` documents the **two** authorised `None`-coercion seams (here and `Meta.optimizer_hints` in `types/base.py`). That cross-module assertion belongs in the project-pass artifact, not this file's contract — the local file cannot enforce or test the `types/base.py` half of the claim, and a future drift in `types/base.py` would silently invalidate this docstring. Flag for the project-level pass (`docs/review/rev-django_strawberry_framework.md`) to confirm the documented invariant still holds across both seams and consider whether the prose should live in a single canonical location (e.g. `AGENTS.md` or `docs/FEATURES.md`) rather than duplicated in the `conf.py` module docstring.
+The module docstring at `django_strawberry_framework/conf.py:17-35` documents the **two** authorised `None`-coercion seams (here and `Meta.optimizer_hints` in `types/base.py`). That cross-module assertion belongs in the project-pass artifact, not this file's contract — the local file cannot enforce or test the `types/base.py` half of the claim, and a future drift in `types/base.py` would silently invalidate this docstring. Flag for the project-level pass (`docs/review/rev-django_strawberry_framework.md`) to confirm the documented invariant still holds across both seams and consider whether the prose should live in a single canonical location (e.g. `AGENTS.md` or `docs/GLOSSARY.md`) rather than duplicated in the `conf.py` module docstring.
 
 ```django_strawberry_framework/conf.py:17-35
 Defensive ``None`` stance (package-wide). Two top-level
@@ -46,6 +44,14 @@ hints configured"). ...
 ```
 
 ## What looks solid
+
+### DRY recap
+
+- Existing patterns reused: `_normalize_user_settings` is the single shape-contract gate, and it is the only path that produces the cached `dict[str, Any]`. The three write sites (`Settings.__init__` at `django_strawberry_framework/conf.py:100`, `Settings.user_settings` at `django_strawberry_framework/conf.py:110-113`, `Settings.reload` at `django_strawberry_framework/conf.py:123`) all funnel through it, which is the consolidation the module's docstring promises (`django_strawberry_framework/conf.py:70-73`). `ConfigurationError` is reused from `django_strawberry_framework/exceptions.py:24-34` rather than redefined locally. No other helper from the package is currently appropriate to reuse here.
+- New helpers a fix might justify: none. The module is already at the minimum surface for its responsibility (one normalization helper, one accessor class, one signal receiver). Extracting any of these further would split a coherent responsibility.
+- Duplication risk in the current file: the `None` -> "no settings configured" branch is repeated in three call sites (`django_strawberry_framework/conf.py:100`, `django_strawberry_framework/conf.py:110-113`, `django_strawberry_framework/conf.py:123`) but the repetition is structural — each call site has a different upstream value source (constructor arg vs Django settings vs signal payload) and the `None`-guard is the cheapest local form. Folding them into `_normalize_user_settings` itself would require all three sites to lose the `None`-vs-pass-through distinction (the constructor and `reload` use `None` as "defer to lazy reload" while `user_settings` already passes `None` to mean "missing key"). The current shape is correct; flagging only for the project pass to confirm no other module is repeating the same "coerce None to empty mapping" idiom outside the two seams the module docstring acknowledges.
+
+### Other positives
 
 - `_normalize_user_settings` is a tight, single-responsibility validator with four explicit branches and a docstring that names each one (`django_strawberry_framework/conf.py:50-83`). All three write sites funnel through it, so the shape contract is enforced uniformly.
 - The `dict` fast-path preserves identity (`django_strawberry_framework/conf.py:81-82`) — the docstring explicitly calls out the consumer expectation that "tests that capture the same dict by reference observe their mutations". This is the right call for a settings module: consumers do mutate the live dict during tests via `pytest-django`'s `settings` fixture, and copying would silently break those mutations.
@@ -121,7 +127,7 @@ Docstring updated as described. The new sentences describe the existing behavior
 
 ### Finding 2 disposition
 
-Intentionally not edited in this comment pass. Worker 1's Low-section guidance was: "Flag for the project-level pass (`docs/review/rev-django_strawberry_framework.md`) to confirm the documented invariant still holds across both seams and consider whether the prose should live in a single canonical location (e.g. `AGENTS.md` or `docs/FEATURES.md`) rather than duplicated in the `conf.py` module docstring." The module docstring stays as-is until the project pass decides whether to relocate the cross-module assertion.
+Intentionally not edited in this comment pass. Worker 1's Low-section guidance was: "Flag for the project-level pass (`docs/review/rev-django_strawberry_framework.md`) to confirm the documented invariant still holds across both seams and consider whether the prose should live in a single canonical location (e.g. `AGENTS.md` or `docs/GLOSSARY.md`) rather than duplicated in the `conf.py` module docstring." The module docstring stays as-is until the project pass decides whether to relocate the cross-module assertion.
 
 ### Validation run
 

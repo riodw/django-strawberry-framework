@@ -56,7 +56,39 @@ The `## DRY analysis` section lists **actionable** DRY consolidation candidates 
 
 If no real opportunities exist for the file, write a single bullet `- None — <one sentence why the current factoring is correct>`. Silence on DRY is not acceptance.
 
-The positive audit trail — "Existing patterns reused", "No new helper needed at this granularity", "Considered-and-rejected duplication" — belongs in the artifact's `## What looks solid` section, NOT in `## DRY analysis`. The DRY-cycle export script (`docs/dry/export_dry_review.py`) extracts every top-level bullet from `## DRY analysis` as a finding, so recap bullets become noise in the consolidation plan and force every DRY cycle to re-triage them.
+The positive audit trail — "Existing patterns reused", "No new helper needed at this granularity", "Considered-and-rejected duplication" — belongs in the artifact's `## What looks solid` section under a `### DRY recap` H3 subsection, NOT in `## DRY analysis`. The DRY-cycle export script (`docs/dry/export_dry_review.py`) extracts every top-level bullet from `## DRY analysis` as a finding, so recap bullets become noise in the consolidation plan and force every DRY cycle to re-triage them.
+
+### `## What looks solid` subsection structure
+
+Worker 1 writes `## What looks solid` with **two H3 subsections in this order**:
+
+```
+## What looks solid
+
+### DRY recap
+
+- **Existing patterns reused.** <which canonical helpers the file already reuses; cite path/file.py:NN-MM>
+- **New helpers considered.** <candidates evaluated and rejected, or deferred without trigger conditions; state why>
+- **Duplication risk in the current file.** <repeated literals / near-copies that are intentional sibling design; state why correct>
+
+### Other positives
+
+- <design choice, test discipline, error-handling shape, etc.>
+- <design choice, test discipline, error-handling shape, etc.>
+
+### Summary
+
+<one paragraph>
+```
+
+Rules:
+
+- Use the exact heading text: `### DRY recap` and `### Other positives` (no trailing colon, no variation).
+- `### DRY recap` carries the positive audit trail that used to live as the three sub-bullets of `## DRY analysis` under the previous template. Keep the `**Existing patterns reused.**` / `**New helpers considered.**` / `**Duplication risk in the current file.**` bold-prefixed shape so the audit trail is greppable across artifacts.
+- If a recap category is genuinely empty (e.g. a pure-class skip artifact), drop that bullet rather than writing "None." — the recap is audit trail, not a checklist.
+- `### Other positives` keeps the artifact's positive-observation bullets in the same flat-list shape they used before.
+- `### Summary` follows immediately after `### Other positives`.
+- The DRY-cycle export script does NOT scan `## What looks solid`, so recap content placed here will not be re-promoted to findings.
 
 ### Memory entry shape
 

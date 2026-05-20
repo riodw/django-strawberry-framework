@@ -223,10 +223,17 @@ Relevant excerpt or pseudo-diff context.
 
 ## What looks solid
 
-Positive audit trail for the reviewed file. Covers two complementary kinds of observation:
+Positive audit trail for the reviewed file, split into two H3 subsections — `### DRY recap` (audit trail that used to be the three sub-bullets of `## DRY analysis`, now moved here so the DRY-cycle plan stays high-signal) followed by `### Other positives` (everything else the review considered correct). Use the exact subsection headings shown below; the DRY-cycle export script (`docs/dry/export_dry_review.py`) does NOT extract from `## What looks solid`, so recap content placed here will not be re-promoted to findings.
 
-1. **DRY recap.** Which canonical helpers the file already reuses (`path/file.py:NN-MM`); why "no new helper is needed" is the right answer at this granularity; where considered-and-rejected duplication risk was deliberately preserved as intentional sibling design. This is the recap content that used to live as the three sub-bullets of `## DRY analysis` — it stays as audit trail but no longer pollutes the DRY-cycle plan.
-2. **Other positives.** Design choices, test discipline, error-handling shapes, and other observations the review considered correct.
+### DRY recap
+
+- **Existing patterns reused.** Which functions, classes, validators, or test fixtures the reviewed file already calls or extends. Cite `path/file.py:NN-MM`. If none, say so explicitly.
+- **New helpers considered.** Candidates evaluated and rejected (or deferred without a trigger condition). State the rejection reason; deferred-with-trigger candidates belong in `## DRY analysis`, not here.
+- **Duplication risk in the current file.** Repeated literals, near-copies, or branches that look like drift but are intentional sibling design. State why the current shape is correct.
+
+If a category is genuinely empty (e.g. a pure-class skip artifact), drop that bullet rather than writing "None." — the recap is audit trail, not a checklist.
+
+### Other positives
 
 - List thing one.
 - List thing two.

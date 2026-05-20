@@ -4,18 +4,8 @@ Status: verified
 
 ## DRY analysis
 
-- **Existing patterns reused.** Reaches across the optimizer subpackage rather than reimplementing:
-  - Context stash dispatched through `_context.stash_on_context` (`django_strawberry_framework/optimizer/_context.py:90-141`) via the underscore-prefixed re-export at `extension.py:53-55,67`; the sentinel keys at `_context.py:34-38` are imported instead of re-declared.
-  - Plan construction delegated to `walker.plan_optimizations` (`django_strawberry_framework/optimizer/walker.py:28-58`); per-relation strategy delegated to `walker.plan_relation` (`walker.py:61-..`), with the `DjangoOptimizerExtension.plan_relation` method at `extension.py:738-755` declared as an instance-method override seam (subclass test fixtures rely on this).
-  - Plan reconciliation and lookup-path extraction routed through `plans.diff_plan_for_queryset` and `plans.lookup_paths` (`django_strawberry_framework/optimizer/plans.py:295,415-419`); runtime path tuple via `plans.runtime_path_from_info` (`plans.py:148-..`).
-  - Skip-hint check goes through `hints.hint_is_skip` (`django_strawberry_framework/optimizer/hints.py:129`) rather than reimplementing the `OptimizerHint.SKIP` test.
-  - Registry interactions (`registry.model_for_type`, `registry.get`, `registry.get_definition`, `registry.iter_types`) at `extension.py:351,417,651,655,669` all use the documented public surface from `registry.py:206-310`.
-  - `unwrap_graphql_type` from `utils/typing.py` is reused at `extension.py:338,404` rather than re-implementing the `GraphQLNonNull`/`GraphQLList` peel.
-  - The two AST walkers (`_walk_directives`, `_walk_reachable_fragment_definitions`) already share `_child_selections` (`extension.py:130-144`) and `_unvisited_fragment_definition` (`extension.py:147-174`), which is the right shape for the recursion guard.
-- **New helpers a fix might justify.** None large. The two small fits are:
-  - A single `_walk_selection_tree` visitor that takes a per-node hook (directives collector OR fragment-def collector) would let the two walkers collapse to one. Call sites: `_walk_directives` and `_walk_reachable_fragment_definitions`. Worth doing only if a third walker lands; today the saving is marginal and the duplication is already DRY'd one layer down via `_child_selections`/`_unvisited_fragment_definition`. Flagged Low.
-  - If a third place ever needs `(origin, model)` resolution from a graphql-core type, the inner closure in `_collect_schema_reachable_types._walk_gql_type` (`extension.py:336-363`) and `_resolve_model_from_return_type` (`extension.py:389-420`) share enough of the schema-lookup steps to justify a `_resolve_origin_for_type_name(strawberry_schema, type_name)` helper. Not justified today — only two call sites — but worth carrying to the folder pass.
-- **Duplication risk in the current file.** The two parallel AST walkers (`_walk_directives` at 91-127 and `_walk_reachable_fragment_definitions` at 198-226) are the only structural near-copy. They are deliberately parallel (both walk children, both follow fragment spreads, both share the visited-fragments cycle guard), and the divergence at the recursion body is the actual work — the parallelism is mostly carried by the already-extracted helpers. The `_strawberry_schema_from_schema` / `_strawberry_schema_from_info` pair at 300-317 is a deliberate two-entry-point shape (object vs `info`), correctly extracted. Repeated string literals: only `"_strawberry_schema"` appears twice (overview line 215), already in the helper pair above. No bare `"dst_optimizer_*"` literals — all sentinel imports come from `_context.py`, satisfying the carry-forward from the previous `_context.py` review.
+- Defer until a third walker lands: extract a single `_walk_selection_tree(node, fragments, visited, *, on_node)` visitor that takes a per-node hook (directives collector OR fragment-def collector), collapsing `_walk_directives` (`extension.py:91-127`) and `_walk_reachable_fragment_definitions` (`extension.py:198-226`). Today the duplication is already DRY'd one layer down via `_child_selections`/`_unvisited_fragment_definition`.
+- Defer until a third call site lands: extract `_resolve_origin_for_type_name(strawberry_schema, type_name)` to share `(origin, model)` resolution between `_collect_schema_reachable_types._walk_gql_type` (`extension.py:336-363`) and `_resolve_model_from_return_type` (`extension.py:389-420`). Only two call sites today.
 
 ## High:
 
@@ -177,6 +167,20 @@ if not isinstance(result, models.QuerySet):
 ```
 
 ## What looks solid
+
+### DRY recap
+
+- **Existing patterns reused.** Reaches across the optimizer subpackage rather than reimplementing:
+  - Context stash dispatched through `_context.stash_on_context` (`django_strawberry_framework/optimizer/_context.py:90-141`) via the underscore-prefixed re-export at `extension.py:53-55,67`; the sentinel keys at `_context.py:34-38` are imported instead of re-declared.
+  - Plan construction delegated to `walker.plan_optimizations` (`django_strawberry_framework/optimizer/walker.py:28-58`); per-relation strategy delegated to `walker.plan_relation` (`walker.py:61-..`), with the `DjangoOptimizerExtension.plan_relation` method at `extension.py:738-755` declared as an instance-method override seam (subclass test fixtures rely on this).
+  - Plan reconciliation and lookup-path extraction routed through `plans.diff_plan_for_queryset` and `plans.lookup_paths` (`django_strawberry_framework/optimizer/plans.py:295,415-419`); runtime path tuple via `plans.runtime_path_from_info` (`plans.py:148-..`).
+  - Skip-hint check goes through `hints.hint_is_skip` (`django_strawberry_framework/optimizer/hints.py:129`) rather than reimplementing the `OptimizerHint.SKIP` test.
+  - Registry interactions (`registry.model_for_type`, `registry.get`, `registry.get_definition`, `registry.iter_types`) at `extension.py:351,417,651,655,669` all use the documented public surface from `registry.py:206-310`.
+  - `unwrap_graphql_type` from `utils/typing.py` is reused at `extension.py:338,404` rather than re-implementing the `GraphQLNonNull`/`GraphQLList` peel.
+  - The two AST walkers (`_walk_directives`, `_walk_reachable_fragment_definitions`) already share `_child_selections` (`extension.py:130-144`) and `_unvisited_fragment_definition` (`extension.py:147-174`), which is the right shape for the recursion guard.
+- **Duplication risk in the current file.** The two parallel AST walkers (`_walk_directives` at 91-127 and `_walk_reachable_fragment_definitions` at 198-226) are the only structural near-copy. They are deliberately parallel (both walk children, both follow fragment spreads, both share the visited-fragments cycle guard), and the divergence at the recursion body is the actual work — the parallelism is mostly carried by the already-extracted helpers. The `_strawberry_schema_from_schema` / `_strawberry_schema_from_info` pair at 300-317 is a deliberate two-entry-point shape (object vs `info`), correctly extracted. Repeated string literals: only `"_strawberry_schema"` appears twice (overview line 215), already in the helper pair above. No bare `"dst_optimizer_*"` literals — all sentinel imports come from `_context.py`, satisfying the carry-forward from the previous `_context.py` review.
+
+### Other positives
 
 - The `ContextVar` lifecycle in `on_execute` (`extension.py:476-484`) sets *and* resets both `_optimizer_active` and `_printed_ast_cache`, guaranteeing per-execution isolation for async invocations sharing the same extension instance. The pair-reset under `try/finally` is the right shape.
 - The `_printed_ast_cache` memo (`extension.py:294-297,718-726`) is correctly per-execution rather than per-extension, so two operations with the same `id(operation)` across separate executions (e.g., after GC reuses the same object slot) cannot collide.

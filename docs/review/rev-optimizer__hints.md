@@ -4,9 +4,7 @@ Status: verified
 
 ## DRY analysis
 
-- **Existing patterns reused.** The file builds on `ConfigurationError` from `django_strawberry_framework/exceptions.py:1-45` (one of four documented exception types) and the runtime `Prefetch` import is consumed once at `hints.py:93` for the same validation pattern the walker re-applies at `optimizer/walker.py:471-491`. The consumer surface in `types/base.py:382-387` and `types/base.py:593-598` is the matching gate on the `Meta.optimizer_hints` mapping shape (mapping-of-name-to-`OptimizerHint`); `hint_is_skip` is the canonical dispatch helper consumed at exactly two sites — `optimizer/walker.py:412` (planning) and `optimizer/extension.py:683` (schema audit). The `SKIP` sentinel pattern is parallel to (but distinct from) the `_MISSING` sentinel in `optimizer/_context.py:40-42`; both are module-level singletons that use object identity (`is`) for "no real value" dispatch.
-- **New helpers a fix might justify.** None at this scope. A `Final[OptimizerHint]` annotation on `SKIP` would be the only structural change worth raising at the project pass (see Low §1). No new helpers required.
-- **Duplication risk in the current file.** Two near-copies of the consumer-facing factory-name list inside `__post_init__` error messages: `"select_related(), prefetch_related(), or prefetch(obj)"` at `hints.py:86` and `"select_related() or prefetch_related()"` at `hints.py:91, 101`. These are intentional consumer-readable error prose, not dispatch keys, and they do not power any code path — collapsing them into a constant would actually hurt readability. Flagged here for completeness; not a finding.
+- None — `hints.py` is at the right granularity (one `OptimizerHint` dataclass + one `SKIP` sentinel + one `hint_is_skip` dispatch helper); the consumer-facing factory-name error prose duplications inside `__post_init__` are intentional consumer-readable error messages, not dispatch keys.
 
 ## High:
 
@@ -68,6 +66,14 @@ The dataclass annotation at line 62 (`prefetch_obj: Prefetch | None = field(defa
 ```
 
 ## What looks solid
+
+### DRY recap
+
+- **Existing patterns reused.** The file builds on `ConfigurationError` from `django_strawberry_framework/exceptions.py:1-45` (one of four documented exception types) and the runtime `Prefetch` import is consumed once at `hints.py:93` for the same validation pattern the walker re-applies at `optimizer/walker.py:471-491`. The consumer surface in `types/base.py:382-387` and `types/base.py:593-598` is the matching gate on the `Meta.optimizer_hints` mapping shape (mapping-of-name-to-`OptimizerHint`); `hint_is_skip` is the canonical dispatch helper consumed at exactly two sites — `optimizer/walker.py:412` (planning) and `optimizer/extension.py:683` (schema audit). The `SKIP` sentinel pattern is parallel to (but distinct from) the `_MISSING` sentinel in `optimizer/_context.py:40-42`; both are module-level singletons that use object identity (`is`) for "no real value" dispatch.
+- **New helpers a fix might justify.** None at this scope. A `Final[OptimizerHint]` annotation on `SKIP` would be the only structural change worth raising at the project pass (see Low §1). No new helpers required.
+- **Duplication risk in the current file.** Two near-copies of the consumer-facing factory-name list inside `__post_init__` error messages: `"select_related(), prefetch_related(), or prefetch(obj)"` at `hints.py:86` and `"select_related() or prefetch_related()"` at `hints.py:91, 101`. These are intentional consumer-readable error prose, not dispatch keys, and they do not power any code path — collapsing them into a constant would actually hurt readability. Flagged here for completeness; not a finding.
+
+### Other positives
 
 - Sentinel discipline is correct: `SKIP` is a frozen-dataclass singleton bound once after the class body (`hints.py:155`), every consumer uses identity-or-attribute via `hint_is_skip` (`hints.py:129-146`) rather than open-coding the check, and `tests/optimizer/test_extension.py:2961-2971` pins the contract across the supported shapes including `None`, the sentinel, a freshly-constructed skip-shaped hint, and an unrelated `object()`.
 - The `hint_is_skip` defensive `getattr(hint, "skip", False)` fallback at `hints.py:146` is deliberately documented at `hints.py:130-138` as the schema audit's "never raises" pin, and `tests/optimizer/test_extension.py:2971` (`assert hint_is_skip(object()) is False`) exercises exactly that fallback. This is the same calibration the prior cycle's `_context.py` review called out — narrow-exception or defensive defaults documented *and* test-pinned are a positive pattern worth carrying forward.

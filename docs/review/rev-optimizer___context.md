@@ -4,9 +4,7 @@ Status: verified
 
 ## DRY analysis
 
-- **Existing patterns reused.** The five `DST_OPTIMIZER_*` constants (lines 34-38) are the single source of truth for the optimizer's context-key namespace and are correctly imported (not redefined) at every write site (`optimizer/extension.py:46-51`, with stash calls at `optimizer/extension.py:619-628`) and read site (`types/resolvers.py:31-38`, with reads at `types/resolvers.py:57-61, 133, 145`). The two helpers `get_context_value` and `stash_on_context` are the single entry points for read/write — `types/resolvers.py:37` aliases the read helper as `_get_context_value`, and `optimizer/extension.py:54` aliases the write helper as `_stash_on_context` with a deliberate test-compatibility re-export (`optimizer/extension.py:67`).
-- **New helpers a fix might justify.** None. The two helpers already encapsulate the full read/write dispatch; the constants centralize the key namespace. The module is the DRY landing zone for the rest of the optimizer/resolver hand-off and does not itself call anything that would justify a further helper.
-- **Duplication risk in the current file.** None at the file level. The two helpers are deliberately *parallel* (dispatch order mirrors each other per docstring lines 48-51 and 88-90); the parallelism is correctness-load-bearing, not a near-copy DRY violation. The `isinstance(context, dict)` test is repeated twice in `get_context_value` (lines 73 and 78) and twice in `stash_on_context` (line 117 only; the second call site moved to the unconditional tail), which is the minimal shape needed for the dict-first/object-fallback dispatch. No repeated string literals (per shadow overview "Repeated string literals: None"). No `# noqa` markers, no TODOs.
+- None — `_context.py` is the DRY landing zone for the optimizer/resolver hand-off; the two helpers (`get_context_value`/`stash_on_context`) and five `DST_OPTIMIZER_*` constants already centralize the read/write dispatch, and the read/write parallelism is correctness-load-bearing rather than a near-copy.
 
 ## High:
 
@@ -46,6 +44,13 @@ The leading underscore on `_context.py` signals "private to the optimizer subpac
 ```
 
 ## What looks solid
+
+### DRY recap
+
+- **Existing patterns reused.** The five `DST_OPTIMIZER_*` constants (lines 34-38) are the single source of truth for the optimizer's context-key namespace and are correctly imported (not redefined) at every write site (`optimizer/extension.py:46-51`, with stash calls at `optimizer/extension.py:619-628`) and read site (`types/resolvers.py:31-38`, with reads at `types/resolvers.py:57-61, 133, 145`). The two helpers `get_context_value` and `stash_on_context` are the single entry points for read/write — `types/resolvers.py:37` aliases the read helper as `_get_context_value`, and `optimizer/extension.py:54` aliases the write helper as `_stash_on_context` with a deliberate test-compatibility re-export (`optimizer/extension.py:67`).
+- **Duplication risk in the current file.** None at the file level. The two helpers are deliberately *parallel* (dispatch order mirrors each other per docstring lines 48-51 and 88-90); the parallelism is correctness-load-bearing, not a near-copy DRY violation. The `isinstance(context, dict)` test is repeated twice in `get_context_value` (lines 73 and 78) and twice in `stash_on_context` (line 117 only; the second call site moved to the unconditional tail), which is the minimal shape needed for the dict-first/object-fallback dispatch. No repeated string literals (per shadow overview "Repeated string literals: None"). No `# noqa` markers, no TODOs.
+
+### Other positives
 
 - Static helper ran cleanly per the mandatory `optimizer/` rule. Two symbols, one control-flow hotspot (`stash_on_context` at 52 lines / 6 branches — branchy but every branch is exercised by a dedicated test; see test inventory below). No Django ORM markers beyond docstring/constant mentions of `dst_optimizer_*` and the word "only". No repeated string literals across the file. No TODOs.
 - **Constants live with the helpers that consume them.** The five `DST_OPTIMIZER_*` literals are defined exactly once (lines 34-38) and every in-package consumer imports the symbol, not the bare string. `grep '"dst_optimizer' django_strawberry_framework/optimizer/extension.py django_strawberry_framework/types/resolvers.py` returns zero hits — no drifted literal anywhere in production code. This is the textbook "name the magic string once, import it everywhere" shape.

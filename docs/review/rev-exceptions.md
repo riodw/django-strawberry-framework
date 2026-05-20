@@ -4,9 +4,7 @@ Status: verified
 
 ## DRY analysis
 
-- Existing patterns reused: the file defines the package's exception root and does not call into anything (zero imports beyond the implicit `Exception`). All sibling modules that need these classes import them from here — `django_strawberry_framework/conf.py:44`, `django_strawberry_framework/registry.py:24`, `django_strawberry_framework/types/converters.py:26`, `django_strawberry_framework/types/finalizer.py:8`, `django_strawberry_framework/types/relay.py:35`, `django_strawberry_framework/types/resolvers.py:29`. No sibling redefines or shadows any of the three names; the canonical-error helper `Registry._already_registered` at `django_strawberry_framework/registry.py:66-73` is built on top of `ConfigurationError` rather than introducing a parallel hierarchy.
-- New helpers a fix might justify: none. The file has no logic surface — no constructors, no factory functions, no message templates. Any error-message DRY work (e.g., consolidating "already registered" phrasings) belongs in the modules that *raise*, not here.
-- Duplication risk in the current file: none. Three `class` declarations with docstrings only, an `__all__` tuple in alphabetical order, and a module docstring. No repeated literals, no near-copies, no drift against a sibling module.
+- None — `exceptions.py` is a pure-class-definition module with zero logic surface; any error-message DRY work belongs in the modules that *raise* these exceptions, not here.
 
 ## High:
 
@@ -21,6 +19,14 @@ None.
 None.
 
 ## What looks solid
+
+### DRY recap
+
+- Existing patterns reused: the file defines the package's exception root and does not call into anything (zero imports beyond the implicit `Exception`). All sibling modules that need these classes import them from here — `django_strawberry_framework/conf.py:44`, `django_strawberry_framework/registry.py:24`, `django_strawberry_framework/types/converters.py:26`, `django_strawberry_framework/types/finalizer.py:8`, `django_strawberry_framework/types/relay.py:35`, `django_strawberry_framework/types/resolvers.py:29`. No sibling redefines or shadows any of the three names; the canonical-error helper `Registry._already_registered` at `django_strawberry_framework/registry.py:66-73` is built on top of `ConfigurationError` rather than introducing a parallel hierarchy.
+- New helpers a fix might justify: none. The file has no logic surface — no constructors, no factory functions, no message templates. Any error-message DRY work (e.g., consolidating "already registered" phrasings) belongs in the modules that *raise*, not here.
+- Duplication risk in the current file: none. Three `class` declarations with docstrings only, an `__all__` tuple in alphabetical order, and a module docstring. No repeated literals, no near-copies, no drift against a sibling module.
+
+### Other positives
 
 - **Static helper deliberately skipped.** Per `docs/review/worker-1.md` ("Worker 1 may skip the helper for: Pure-class-definition modules whose body is only `class` declarations with docstrings (e.g., `exceptions.py`)"), the file is exactly that shape: module docstring, `__all__`, then three empty class bodies whose only content is a docstring. No imports beyond the implicit `Exception` base, no functions, no module-level statements with branching, no reflective access, no ORM markers — there is nothing for the helper to surface beyond what one read of the 45-line file already shows.
 - **Documented surface matches the package contract.** `AGENTS.md` line 8 names this file as defining `DjangoStrawberryFrameworkError`, `ConfigurationError`, and `OptimizerError`; `__all__` exposes exactly those three in alphabetical order (`exceptions.py:8-12`) and the class definitions match (`exceptions.py:15`, `:24`, `:37`). No undocumented surface, no missing surface.

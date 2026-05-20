@@ -1,11 +1,11 @@
 """Generate the per-commit bug-hunt checklist markdown.
 
 The script resolves the current branch's HEAD commit hash, refreshes
-``docs/shadow/bug_hunt/current/`` in-process via
+``docs/shadow/`` in-process via
 ``review_current_from_commit.main([<head-sha>])``, reads the passed-in
 dicta (default ``docs/bug_hunt/dicta.md``), appends the static
 single-file review boilerplate, and emits one checkbox + prompt block
-per ``*.stripped.py`` file under ``docs/shadow/bug_hunt/current/``.
+per ``*.stripped.py`` file under ``docs/shadow/``.
 
 The output path defaults to ``docs/bug_hunt/bug_hunt.<short-sha>.md``.
 
@@ -27,7 +27,7 @@ from review_current_from_commit import DEFAULT_PACKAGE_DIR
 from review_current_from_commit import main as review_current_from_commit_main
 
 BUG_HUNT_DIR = Path("docs/bug_hunt")
-CURRENT_DIR = Path("docs/shadow/bug_hunt/current")
+SHADOW_DIR = Path("docs/shadow")
 DICTA_PATH = BUG_HUNT_DIR / "dicta.md"
 
 # Fallback dicta used when ``--dicta`` points at a missing file.
@@ -127,29 +127,11 @@ def _stripped_files(current_dir: Path) -> list[Path]:
     return sorted(current_dir.glob("*.stripped.py"))
 
 
-def _clear_dir_contents(directory: Path) -> None:
-    """Delete every file and subdirectory directly under ``directory``."""
-    if not directory.exists():
-        directory.mkdir(parents=True, exist_ok=True)
-        return
-    for child in directory.iterdir():
-        if child.is_dir():
-            for nested in sorted(child.rglob("*"), reverse=True):
-                if nested.is_file() or nested.is_symlink():
-                    nested.unlink()
-                else:
-                    nested.rmdir()
-            child.rmdir()
-        else:
-            child.unlink()
-
-
 def _refresh_current_snapshot(commit: str, package_dir: str, current_dir: Path) -> None:
-    """Rebuild ``docs/shadow/bug_hunt/current/`` from ``commit`` in-process.
+    """Rebuild ``docs/shadow/`` from ``commit`` in-process.
 
     Output is silenced here; ``bug_hunt.py`` prints its own status line.
     """
-    _clear_dir_contents(current_dir)
     with contextlib.redirect_stdout(io.StringIO()):
         exit_code = review_current_from_commit_main(
             [
@@ -191,7 +173,7 @@ def _read_dicta(dicta_path: Path) -> str:
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Resolve HEAD, refresh docs/shadow/bug_hunt/current/ from that commit, "
+            "Resolve HEAD, refresh docs/shadow/ from that commit, "
             "then generate the per-commit bug-hunt checklist by combining "
             "the passed-in dicta, the static how-to-review boilerplate, and "
             "one prompt per .stripped.py file."
@@ -221,7 +203,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=DEFAULT_PACKAGE_DIR,
         help=(
             "Repo-relative directory passed through to "
-            "review_current_from_commit.py when refreshing current/. "
+            "review_current_from_commit.py when refreshing docs/shadow/. "
             f"Defaults to {DEFAULT_PACKAGE_DIR!r}."
         ),
     )
@@ -235,7 +217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     repo_root = Path(_run_git(["rev-parse", "--show-toplevel"]).strip())
     head_sha = _head_sha()
     short_sha = _short_sha(head_sha)
-    current_dir = (repo_root / CURRENT_DIR).resolve()
+    current_dir = (repo_root / SHADOW_DIR).resolve()
     dicta_path = (repo_root / args.dicta).resolve()
 
     if args.output is None:
@@ -274,7 +256,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     rel_output = output_path.relative_to(repo_root)
     print(
-        f"Refreshed {CURRENT_DIR.as_posix()}/ from {head_sha} "
+        f"Refreshed {SHADOW_DIR.as_posix()}/ from {head_sha} "
         f"({args.package_dir}) and wrote {len(stripped_files)} prompts to "
         f"{rel_output.as_posix()}",
     )

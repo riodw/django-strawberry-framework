@@ -3,7 +3,10 @@
 Enumerates every ``.py`` file under a target package directory at a given
 commit and runs ``review_inspect`` against each file's content as it existed
 *at that commit* (the working tree is never read). Outputs land in
-``docs/shadow/bug_hunt/current/`` with the usual ``a__b__c`` stem scheme.
+``docs/shadow/`` with the usual ``a__b__c`` stem scheme. **Existing files
+under ``docs/shadow/`` (including the ``bug_hunt/`` subtree) are deleted
+before the new snapshot is written**, so any prior review/build helper
+output or diff-helper output there is discarded.
 
 Use this when you want a static review snapshot of the entire package at
 some historical checkout, without actually checking that commit out and
@@ -21,7 +24,7 @@ The ``uv run`` prefix is required so the script sees the project's virtual
 environment (it imports ``review_inspect`` and the inspector depends on the
 project's pinned Python / dependency versions). Run from anywhere inside
 the repository; the orchestrator resolves ``git rev-parse --show-toplevel``
-and writes outputs under ``docs/shadow/bug_hunt/current/`` at the repo root.
+and writes outputs under ``docs/shadow/`` at the repo root.
 
 Example:
     uv run python scripts/review_current_from_commit.py 9096519590040fa25484e05b6a104cb5652b9676
@@ -41,7 +44,7 @@ from pathlib import Path
 
 from review_inspect import main as review_inspect_main
 
-OUTPUT_CURRENT = Path("docs/shadow/bug_hunt/current")
+SHADOW_DIR = Path("docs/shadow")
 DEFAULT_PACKAGE_DIR = "django_strawberry_framework"
 
 
@@ -114,6 +117,23 @@ def _inspect_quiet(target: Path, output_dir: Path, root: Path) -> None:
         )
 
 
+def _clear_shadow_output(output_dir: Path) -> None:
+    """Delete existing shadow output before writing a fresh snapshot."""
+    if not output_dir.exists():
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return
+    for child in sorted(output_dir.iterdir()):
+        if child.is_dir():
+            for nested in sorted(child.rglob("*"), reverse=True):
+                if nested.is_file() or nested.is_symlink():
+                    nested.unlink()
+                else:
+                    nested.rmdir()
+            child.rmdir()
+        else:
+            child.unlink()
+
+
 def _write_snapshot(commit: str, path: str, repo_root: Path) -> None:
     """Materialize ``commit:path`` under a temp root and inspect it.
 
@@ -122,7 +142,7 @@ def _write_snapshot(commit: str, path: str, repo_root: Path) -> None:
     would get from the working tree, so the output names stay consistent
     across snapshots.
     """
-    out_dir = repo_root / OUTPUT_CURRENT
+    out_dir = repo_root / SHADOW_DIR
     contents = _file_at_commit(commit, path)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_root = Path(tmp)
@@ -154,8 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _validate_commit(args.commit_hash)
 
     repo_root = Path(_run_git(["rev-parse", "--show-toplevel"]).strip())
-    out_dir = repo_root / OUTPUT_CURRENT
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = repo_root / SHADOW_DIR
 
     paths = _package_python_files_at_commit(args.commit_hash, args.package_dir)
     if not paths:
@@ -166,11 +185,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
+    _clear_shadow_output(out_dir)
     for path in paths:
         _write_snapshot(args.commit_hash, path, repo_root)
 
     print(
-        f"Wrote {len(paths)} snapshots from {args.commit_hash} to {OUTPUT_CURRENT.as_posix()}/",
+        f"Wrote {len(paths)} snapshots from {args.commit_hash} to {SHADOW_DIR.as_posix()}/",
     )
     for entry in sorted(out_dir.iterdir()):
         print(entry.name)

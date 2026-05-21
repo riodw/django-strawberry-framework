@@ -1,0 +1,14 @@
+term,anchor,notes
+Schema export management command,schema-export-management-command,Central term — the entry this spec flips from planned for 0.0.7 to shipped (0.0.7)
+Django AppConfig,django-appconfig,Predecessor shipped under spec-017; INSTALLED_APPS-driven discovery resolves through this AppConfig
+DjangoType,djangotype,Consumer-facing type the exported SDL describes; not imported by the command but the reason it exists
+DjangoOptimizerExtension,djangooptimizerextension,Present on the consumer's strawberry.Schema(...) but not exercised at export time
+finalize_django_types,finalize_django_types,Consumer-owned sync point — runs as side effect of resolving the schema symbol; command does NOT auto-call
+ConfigurationError,configurationerror,Reserved for DjangoType/Meta validation; explicitly NOT raised by this command (Django's CommandError is used instead)
+DjangoListField,djangolistfield,Referenced as a sibling shipped 0.0.7 surface in CHANGELOG entry context
+Multi-database cooperation,multi-database-cooperation,Out-of-scope cross-reference; sibling 0.0.7 card WIP-ALPHA-019
+DjangoGraphQLProtocolRouter,djangographqlprotocolrouter,Out-of-scope cross-reference for 0.0.12
+Debug-toolbar middleware,debug-toolbar-middleware,Out-of-scope cross-reference for 0.0.12
+Response-extensions debug middleware,response-extensions-debug-middleware,Out-of-scope cross-reference for 0.0.12
+TestClient,testclient,Out-of-scope cross-reference for 0.0.12
+GraphQLTestCase,graphqltestcase,Out-of-scope cross-reference for 0.0.12

@@ -1,10 +1,30 @@
 """GraphQL schema for library acceptance coverage."""
 
+from typing import Any
+
 import strawberry
 from strawberry import relay
+from strawberry.types import Info
 
 from apps.library import models
 from django_strawberry_framework import DjangoListField, DjangoType, OptimizerHint
+
+# Consumer ``resolver=`` helper exercising the ``_post_process_consumer_sync``
+# ``Manager`` coercion line at ``django_strawberry_framework/list_field.py:33``.
+# The README rule at ``examples/fakeshop/test_query/README.md:7`` requires
+# coverage lines reachable from a live ``/graphql/`` query to land here. Returns
+# ``models.Branch.objects`` (a ``Manager``) — NOT ``.all()`` — so the field-
+# wrapper's coercion fires per rev4 M1. The async equivalent
+# (``list_field.py:41``) is genuinely unreachable from the sync ``GraphQLView``
+# mounted at ``/graphql/`` (Strawberry's sync execution rejects async resolvers
+# with ``RuntimeError: GraphQL execution failed to complete synchronously``),
+# so the async ``Manager`` coercion stays in ``tests/test_list_field.py`` per
+# the README's "genuinely unreachable" fallback.
+
+
+def _branches_manager_resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+    return models.Branch.objects
+
 
 # The DjangoType declaration order is intentionally awkward. Several
 # relation targets are declared after their consumers so the example schema
@@ -85,6 +105,11 @@ class Query:
 
     all_library_branches_via_list_field: list[BranchType] = DjangoListField(
         BranchType,
+    )
+
+    all_library_branches_via_list_field_manager_resolver: list[BranchType] = DjangoListField(
+        BranchType,
+        resolver=_branches_manager_resolver,
     )
 
     @strawberry.field

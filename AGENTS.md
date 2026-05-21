@@ -28,3 +28,4 @@ FAKESHOP_SHARDED=1 swaps DATABASES to db_shard_a.sqlite3 (default) and db_shard_
 Sharded-specific tests live behind FAKESHOP_SHARDED and do not run under the default pytest invocation
 Bump pyproject.toml [project].version and django_strawberry_framework/__init__.py __version__ together; both must match
 Only the maintainer commits; do not auto-commit unless explicitly asked
+Unexpected file modifications (files dirty at task start, or appearing modified mid-task without your edits) are presumptively the maintainer's or another dev's in-progress work since this repo is worked on concurrently; ignore them as out-of-scope or investigate whether they belong in the current task, if they do belong in current task recalculate current task, never auto-revert without explicit maintainer authorization

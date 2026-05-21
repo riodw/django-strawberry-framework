@@ -29,19 +29,25 @@ Wire each stub up as the corresponding slice produces the implementation:
     Slice 3 → un-skip the 14 behavior tests; implement bodies.
 """
 
-# TODO(spec-016, Slice 1): once ``django_strawberry_framework.list_field``
-# ships its factory function, replace the placeholder import block below
-# with the real imports. The shape is:
-#
-#     import pytest
-#     from django.db import models
-#     from django_strawberry_framework import DjangoListField, DjangoType
-#     from django_strawberry_framework.exceptions import ConfigurationError
-#     # ...plus the test models / Strawberry schema fixtures needed by Slice 3.
-#
-# The Slice 0 verification spike (rev3 H1) MUST pass before any of these
-# imports become runnable; until then this module is import-clean but
-# collects zero tests.
+import pytest
+from apps.products.models import Category
+
+from django_strawberry_framework import DjangoListField, DjangoType
+from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.registry import registry
+
+
+@pytest.fixture(autouse=True)
+def _isolate_global_registry() -> None:
+    """Clear the global registry on entry/exit so tests touching it don't leak.
+
+    Mirrors the autouse fixture in ``tests/test_registry.py:34-39``. Tests
+    that declare ``DjangoType`` subclasses at function scope would otherwise
+    leave registered types behind for subsequent tests.
+    """
+    registry.clear()
+    yield
+    registry.clear()
 
 
 # =============================================================================
@@ -53,29 +59,69 @@ Wire each stub up as the corresponding slice produces the implementation:
 # raises ``ConfigurationError`` with the documented message shape.
 
 
-# TODO(spec-016, Slice 2): implement
-# ``test_djangolistfield_rejects_non_class_argument`` — pass a string, an
-# int, an instance; each call raises ``ConfigurationError`` matching
-# "DjangoListField requires a DjangoType class; got <repr>." per Decision 5.
+@pytest.mark.parametrize(
+    "non_class",
+    [
+        "BranchType",
+        42,
+        DjangoType(),
+        None,
+    ],
+)
+def test_djangolistfield_rejects_non_class_argument(non_class: object) -> None:
+    """Non-class arguments trip the first guard (spec line 546)."""
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField requires a DjangoType class; got",
+    ):
+        DjangoListField(non_class)  # type: ignore[arg-type]
 
 
-# TODO(spec-016, Slice 2): implement
-# ``test_djangolistfield_rejects_non_djangotype_class`` — pass a plain
-# class that does NOT subclass ``DjangoType``; assert ``ConfigurationError``
-# with "DjangoListField requires a DjangoType subclass; got <name>."
+def test_djangolistfield_rejects_non_djangotype_class() -> None:
+    """A plain class that doesn't subclass ``DjangoType`` is rejected (spec line 547)."""
+
+    class NotADjangoType:
+        pass
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField requires a DjangoType subclass; got NotADjangoType",
+    ):
+        DjangoListField(NotADjangoType)
 
 
-# TODO(spec-016, Slice 2): implement
-# ``test_djangolistfield_rejects_djangotype_without_definition`` — pass an
-# abstract ``DjangoType`` base without a ``Meta``; ``hasattr(arg,
-# "__django_strawberry_definition__")`` is False (rev3 M3 anchor at
-# ``types/base.py:245``); assert the "not a registered DjangoType" message.
+def test_djangolistfield_rejects_djangotype_without_definition() -> None:
+    """An abstract ``DjangoType`` base without ``Meta`` is rejected (spec line 548).
+
+    Per ``types/base.py:156-158``, the absence of a ``Meta`` makes
+    ``__init_subclass__`` return early WITHOUT setting
+    ``__django_strawberry_definition__`` (assigned at
+    ``types/base.py:245``), so ``hasattr(..., "__django_strawberry_definition__")``
+    is the discriminator the guard relies on.
+    """
+
+    class AbstractBase(DjangoType):
+        pass
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField target AbstractBase is not a registered DjangoType",
+    ):
+        DjangoListField(AbstractBase)
 
 
-# TODO(spec-016, Slice 2): implement
-# ``test_djangolistfield_rejects_non_callable_resolver`` — call
-# ``DjangoListField(SomeType, resolver="not callable")``; assert
-# ``ConfigurationError`` with "DjangoListField resolver must be callable."
+def test_djangolistfield_rejects_non_callable_resolver() -> None:
+    """A non-callable ``resolver=`` is rejected after target-type guards pass (spec line 549)."""
+
+    class _T(DjangoType):
+        class Meta:
+            model = Category
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField resolver must be callable\.",
+    ):
+        DjangoListField(_T, resolver="not callable")  # type: ignore[arg-type]
 
 
 # (Rev2 H2 — DROPPED — ``test_djangolistfield_rejects_non_bool_nullable_list``

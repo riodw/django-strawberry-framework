@@ -93,7 +93,18 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
 
 - [ ] Slice 0: Pre-implementation verification (rev3 H1; no code lands; throw-away spike)
   - [ ] **Confirm `info: Info` import path** (rev5 H3; rev6 L1 dropped the non-falsifiable `Info.__module__ == "..."` equality check) — run `python -c "from strawberry.types import Info; print(Info.__module__)"` against the installed Strawberry; confirm the import raises no `ImportError`. Record `Info.__module__` for the post-spike Risks note so a future maintainer can see which module path the installed Strawberry exposed. If the import fails, fall back to `import strawberry; Info = strawberry.Info` and pin that shape in Decision 1. Without this verification, Slice 1's resolver signatures may compile but fail schema construction.
-  - [ ] Write a 10-line throw-away stub in a sandbox: `def DjangoListFieldStub(target_type): return strawberry.field(resolver=lambda root, info: target_type.__django_strawberry_definition__.model._default_manager.all())`.
+  - [ ] Write a throw-away stub in a sandbox using an annotated module-level resolver (rev6 post-Slice-0 reconciliation — the bare-lambda `lambda root, info: ...` shape originally pinned here raises `MissingArgumentsAnnotationsError` at `strawberry.field(resolver=...)` call time on the installed Strawberry, BEFORE `@strawberry.type`'s class-body walk runs, so the lambda cannot be used to verify the class-body-discovery contract; the annotated `def` shape below is the only viable form and matches the rev4 H1 / Slice 1 pinned `(root: Any, info: Info)` signature):
+    ```python
+    from typing import Any
+    from strawberry.types import Info
+    import strawberry
+
+    def _stub_resolver(root: Any, info: Info):
+        return target_type.__django_strawberry_definition__.model._default_manager.all()
+
+    def DjangoListFieldStub(target_type):
+        return strawberry.field(resolver=_stub_resolver)
+    ```
   - [ ] Assign it to a Query attribute under `@strawberry.type`: `all_branches: list[BranchType] = DjangoListFieldStub(BranchType)`.
   - [ ] Build a Strawberry schema and confirm the field is picked up with annotation-derived GraphQL type `[BranchType!]!` (rev6 M2 — verification mechanism pinned to an introspection query rather than `print(schema)` or SDL substring assertions; the latter are fragile across Strawberry minor versions). Concretely: `result = schema.execute_sync('{ __type(name: \"Query\") { fields { name type { kind ofType { kind ofType { kind name } } } } } }')`; locate `fields[name == "allBranches"]`; assert the outer `type.kind == "NON_NULL"`, the wrapped `ofType.kind == "LIST"`, the inner `ofType.ofType.kind == "NON_NULL"`, and the leaf `ofType.ofType.ofType.name == "BranchType"`. Run a real `schema.execute_sync('{ allBranches { id name } }')` query afterward and confirm rows return.
   - [ ] Build a second stub that uses an explicitly annotated resolver — `def resolver(root: Any, info: Info)` with `from strawberry.types import Info` — and confirm Strawberry's schema construction accepts it without raising `MissingArgumentsAnnotationsError` (rev5 H3, the import verification's other half).

@@ -8,8 +8,19 @@ Package tests; system-under-test is ``django_strawberry_framework``
 single-file Layer-3 module's mirror per ``docs/TREE.md:453``.
 
 Holds the Slice-2 validation cluster (4 tests) and the Slice-3 behavior
-cluster (14 tests) — 18 total, pinned one-to-one against the spec's Test
-plan section.
+cluster (15 tests) — 19 total, pinned against the spec's Test plan
+section. The spec's Slice-3 inventory at line 129 calls out
+"``Manager``/``QuerySet``" together for the consumer-resolver returns;
+both arms are load-bearing per rev4 M1 (the field wrapper owns the
+``Manager → QuerySet`` coercion; the optimizer's downstream coercion is
+a safety net, not a substitute). The **sync** ``Manager``-return arm
+lives in ``examples/fakeshop/test_query/test_library_api.py::
+test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http``
+per the live-HTTP-first rule at ``examples/fakeshop/test_query/README.md:7``;
+the **async** ``Manager``-return arm stays here because async resolvers
+are genuinely unreachable from the sync ``GraphQLView`` mounted at
+``/graphql/`` (Strawberry's sync execution rejects them with
+``RuntimeError: GraphQL execution failed to complete synchronously``).
 """
 
 from types import SimpleNamespace
@@ -360,6 +371,11 @@ def test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_app
     assert all(not name.startswith("a") for name in names)
 
 
+# The sync ``Manager``-return arm (``list_field.py:33`` coverage) lives in
+# ``examples/fakeshop/test_query/test_library_api.py::test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http``
+# per the live-HTTP-first rule at ``examples/fakeshop/test_query/README.md:7``.
+
+
 @pytest.mark.django_db
 def test_djangolistfield_consumer_resolver_python_list_return_passes_through() -> None:
     """Sync consumer resolver returning a Python ``list`` bypasses ``target_type.get_queryset(...)``.
@@ -437,6 +453,52 @@ async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_
 
     async def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
         return await sync_to_async(lambda: Category.objects.all())()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_queryset_applied(
+    monkeypatch,
+) -> None:
+    """Async consumer resolver returning a ``Manager`` receives ``target_type.get_queryset(...)``.
+
+    Pins the async field-wrapper's ``Manager → QuerySet`` coercion at
+    ``list_field.py:40-41`` — ``_post_process_consumer_async`` calls
+    ``result.all()`` on a ``Manager`` return BEFORE the isinstance check
+    so the subsequent ``await _apply_get_queryset_async(...)`` runs on a
+    real ``QuerySet`` (rev4 M1 symmetry with the sync path; spec line 40).
+    The ``DJANGO_ALLOW_ASYNC_UNSAFE`` env override unblocks Strawberry's
+    list-completion iteration of the returned QuerySet under
+    ``await schema.execute(...)``.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    async def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+        # Return the ``Manager`` itself, not a ``QuerySet`` — exercises
+        # the coercion branch at ``list_field.py:41``.
+        return Category.objects
 
     @strawberry.type
     class Query:

@@ -1,6 +1,8 @@
 # NEW.md — New Spec Builder Agent Flow
 
-You have been invoked to author a new spec file under `docs/SPECS/` for the next-up Work-In-Progress card in this repository.
+You have been invoked to author a new spec file under `docs/` for the next-up Work-In-Progress card in this repository.
+
+Spec files live at the root of `docs/` (e.g. `docs/spec-016-list_field-0_0_7.md`), NOT under `docs/SPECS/`. The older `docs/SPECS/spec-*.md` files are legacy locations — read them from there for structural reference (Step 5), but new specs you create land in `docs/`.
 
 Execute the steps below **in strict order**. Do not skip ahead. Do not read files outside the batch named in the current step. Do not start writing the spec before Step 6.
 
@@ -62,7 +64,7 @@ No headers, no bullet lists. One paragraph, then move to Step 5.
 
 ## Step 5 — Study the existing spec format
 
-Read **the most-recently-shipped existing `docs/SPECS/spec-*.md` file in full** — it is the canonical template for voice, depth, and section layout. For the rest, you only need to internalize structure:
+Existing specs may live in either `docs/spec-*.md` (the canonical new location) or `docs/SPECS/spec-*.md` (the legacy location for specs authored before the path change). Check both directories. Read **the most-recently-shipped spec file in full** — it is the canonical template for voice, depth, and section layout. For the rest, you only need to internalize structure:
 
 - For each older `spec-*.md`, run `grep -n "^##\|^###" <path>` to capture its section list — do not read the body unless a specific decision shape requires it.
 - The recent specs run 500–800 lines and may exceed the Read tool's 25k-token limit. If a full read fails, use `grep` to find anchors first, then read with `offset` / `limit` to grab just the sections you need.
@@ -82,7 +84,7 @@ What to internalize:
 Create the new file at:
 
 ```
-docs/SPECS/spec-<NNN>-<topic>-<0_0_X>.md
+docs/spec-<NNN>-<topic>-<0_0_X>.md
 ```
 
 Where:
@@ -93,7 +95,7 @@ Where:
 
 The spec must:
 
-- Match the structure, voice, and depth of the most-recently-shipped existing spec under `docs/SPECS/`.
+- Match the structure, voice, and depth of the most-recently-shipped existing spec (either `docs/spec-*.md` or `docs/SPECS/spec-*.md`, whichever is most recent).
 - Carry every constraint, recommended architectural direction, and open design question from the KANBAN card body into the spec body — expanded with rationale, not merely quoted. If the card already pre-pins a "Recommended architectural direction" block (some do, some don't), preserve it as a Decision and add the alternatives-rejected language; do not re-litigate it.
 - Cite source files with repository-relative paths (e.g., `django_strawberry_framework/types/base.py`). You MAY read source files during Step 6 to ground decisions — that is not a boundary violation; only file modification is.
 - Resolve as many of the card's open design questions as the available evidence supports; leave the remainder as entries inside the `Risks and open questions` section (not a standalone section), naming a preferred answer for the target version and a fallback.

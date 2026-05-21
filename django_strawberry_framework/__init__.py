@@ -22,10 +22,22 @@ from .optimizer.hints import OptimizerHint  # noqa: E402
 from .scalars import BigInt  # noqa: E402
 from .types import DjangoType, finalize_django_types  # noqa: E402
 
+# TODO(spec-016, Slice 1 — Decision 1 public-export discipline): when
+# ``list_field.py`` ships, add::
+#
+#     from .list_field import DjangoListField  # noqa: E402
+#
+# in alphabetical position immediately after the ``BigInt`` import above,
+# and insert ``"DjangoListField"`` into ``__all__`` between ``BigInt`` and
+# ``DjangoOptimizerExtension`` (also alphabetical). The matching assertion
+# in ``tests/base/test_init.py`` is updated in the SAME commit so the
+# ``__all__`` surface check stays accurate (Slice 1 checkbox).
+
 __version__ = "0.0.6"
 
 __all__ = (
     "BigInt",
+    # TODO(spec-016, Slice 1): insert ``"DjangoListField"`` here.
     "DjangoOptimizerExtension",
     "DjangoType",
     "OptimizerHint",

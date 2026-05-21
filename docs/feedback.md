@@ -1,227 +1,71 @@
-# Bug-hunt review — `django_strawberry_framework/` staged changes
+# Review feedback - `docs/spec-016-list_field-0_0_7.md`
 
-Reviewed against staged diff (`git diff --staged django_strawberry_framework/`) and
-`docs/bug_hunt/bug_hunt.57ce0bf.md` per-file result notes.
+Reviewed the revised spec against `docs/SPECS/NEW.md`, the current KANBAN card, the installed Strawberry behavior, `graphene_django/fields.py`, and the fakeshop library schema/tests.
 
-Files reviewed: `optimizer/walker.py`, `registry.py`, `types/base.py`,
-`types/converters.py`, `utils/typing.py`.
+## Resolved From Prior Review
 
-Each finding cites the bug-hunt result notes; verification artefacts (scratch
-`test_*.py` repros and one ad-hoc pytest run) are noted inline.
+The earlier high-risk issues around graphene-django parity, `nullable_list=`, the wrong `(type_cls, info)` resolver pseudocode, and dropping `all_library_branches.order_by("id")` are directionally fixed. The spec now chooses a factory function, drives outer nullability from the consumer annotation, applies `get_queryset` to queryset-shaped consumer resolver returns, and avoids mutating the existing ordered library resolver.
 
-## Verified valid fixes
+## High
 
-### `optimizer/walker.py` — `OptimizerHint` error messages now name the type
-`_apply_hint` and `_prefetch_hint_for_path` previously raised `ConfigurationError`
-messages that mentioned only the Django field name (`'items'`); the staged
-change threads `type_cls.__name__` through so messages now read
-`OptimizerHint.select_related() on CategoryType.items: …`. Matches the dicta
-"can a consumer grep the error message back to the specific model / field /
-site that caused it?" rule and aligns the wording with the spec-014 H1 audit
-style. **Confirmed valid.**
+### Resolver signatures still do not build under Strawberry as written
 
-### `registry.py` — duplicate-primary error now names the model
-The pre-existing message (`"X is already declared primary as Y"`) omitted the
-model name. The new message includes it: `"Cannot register X as primary for
-Model; Y is already the primary type"`. Matches the same triage-by-grep rule.
-**Confirmed valid.**
+Spec locations: `docs/spec-016-list_field-0_0_7.md:74`, `:232`, `:244`, `:301`, `:315`, `:325-326`, `:363`, `:670`.
 
-### `types/base.py` — three fixes, all valid
-1. `_validate_optimizer_hints` now receives `model` explicitly instead of
-   inferring it via `fields[0].model`. The old shape would raise `IndexError`
-   on an empty `fields` tuple (e.g. a `Meta.exclude` covering every field with
-   `optimizer_hints` set). The replacement is also clearer at the call site —
-   `meta.model` is the authoritative source. **Confirmed valid.**
-2. `Meta.fields` / `Meta.exclude` mutual-exclusivity check switched from
-   `meta.__dict__` membership to `getattr(meta, ..., None) is not None`, so it
-   now also fires when `fields` or `exclude` is inherited from a parent
-   `class BaseMeta`. Verified with `test_inherited_meta.py`: both the
-   declared-on-child case and the inherited-from-`BaseMeta` case now raise
-   `Meta.fields and Meta.exclude are mutually exclusive`. **Confirmed valid.**
-3. Shadow error in `_consumer_assigned_fields` now reports
-   `f"{cls.__name__}.{field.name} shadows …"` instead of `field.model.__name__`.
-   The error is about a class-attribute on the `DjangoType` subclass, not the
-   underlying Django model, so the `cls.__name__` attribution is the correct
-   one. **Confirmed valid.**
+The spec repeatedly names the resolver shape as `(root, info, **kwargs)`, and the pseudocode defines `_default(root, info, **kwargs)` / `_wrap(root, info, **kwargs)`. In the installed Strawberry version, `info` must be annotated as `strawberry.types.Info`, and `**kwargs` is not a harmless catch-all for this zero-argument field. A stub matching the spec fails schema construction: unannotated `info` raises `MissingArgumentsAnnotationsError`; annotated `**kwargs: Any` is treated as a GraphQL argument and later fails with `Unexpected type 'typing.Any'`.
 
-### `types/converters.py` — `DurationField` / `BinaryField` removed from `SCALAR_MAP`
-Verified directly that Strawberry refuses both types at schema construction
-time:
-
-```
-$ uv run python test_strawberry_timedelta.py
-Schema creation failed: TypeError Query fields cannot be resolved.
-  Unexpected type '<class 'datetime.timedelta'>'
-$ uv run python test_strawberry_bytes.py
-bytes Schema creation failed: TypeError Query fields cannot be resolved.
-  Unexpected type '<class 'bytes'>'
-```
-
-With the staged change `convert_scalar` raises `ConfigurationError(
-"Unsupported Django field type …")` at class-definition time instead of
-letting Strawberry's downstream `TypeError` fire later from a less-localized
-frame. **Confirmed valid.**
-
-### `utils/typing.py` — `unwrap_return_type` handles bare `list` / `typing.List`
-Verified with `test_typing_verify.py`:
-
-```
-unwrap_return_type(typing.List): typing.Any   # was IndexError before
-unwrap_return_type(list):        typing.Any   # was 'list' (un-peeled) before
-unwrap_return_type(list[int]):   <class 'int'>
-unwrap_return_type(int):         <class 'int'>
-```
-
-The pre-existing `get_args(rt)[0]` branch crashed when `rt is typing.List`
-(bare, no parameters) because `get_origin(typing.List) is list` but
-`get_args(typing.List)` returns `()`. The new code returns `typing.Any` for
-both bare forms, which is the correct "unknown element type" sentinel.
-**Confirmed valid.**
-
-## Issues introduced by the bug-hunt fixes
-
-### High — 5 existing tests now fail because the fixes did not update their pins
-AGENTS.md mandates "Add tests in the same change as code; sweep all three
-test trees for orphan imports when removing code". The dicta itself echoes
-that under "For every High-priority bug suspected: is there a test that
-pins the corrected behavior?". The fixes shipped without updating tests
-that already pinned the old error wording / function signature, so the
-package test suite is now red:
-
-1. `tests/test_registry.py::test_register_two_primaries_for_same_model_raises_configuration_error`
-   (test file line 761) — regex `"already declared primary as ItemType"`
-   no longer matches the new message
-   `"Cannot register AdminItemType as primary for Item; ItemType is already
-   the primary type"`. Fix: replace the pin with something like
-   `match="ItemType is already the primary type"` (or `"Cannot register .* as
-   primary for Item"`) — needs to be grep-stable post-rename.
-
-2. `tests/optimizer/test_walker.py::test_plan_force_select_hint_raises_for_many_side_relation`
-   (test file line 1208) — regex `r"OptimizerHint\.select_related.*'items'"`
-   expected single-quoted `'items'`; new message is
-   `OptimizerHint.select_related() on CategoryType.items: …` (unquoted,
-   dotted). Fix: switch the pin to
-   `r"OptimizerHint\.select_related\(\) on CategoryType\.items"` or similar.
-
-3. `tests/optimizer/test_walker.py::test_prefetch_hint_for_path_rejects_prefetch_without_lookup`
-   (test file lines 1483-1491) — calls `_prefetch_hint_for_path(no_lookup,
-   django_name=..., full_path=...)`. The function now requires `type_name`
-   as a keyword-only argument; the test raises
-   `TypeError: _prefetch_hint_for_path() missing 1 required keyword-only
-   argument: 'type_name'`. Fix: pass a dummy `type_name="ItemType"` (or
-   similar) in this test and the next two.
-
-4. `tests/optimizer/test_walker.py::test_prefetch_hint_for_path_adapts_nested_lookup_under_parent`
-   (test file lines 1505-1509) — same `TypeError` for the missing
-   `type_name`.
-
-5. `tests/optimizer/test_walker.py::test_prefetch_hint_for_path_rejects_mismatched_lookup`
-   (test file lines 1532-1536) — same `TypeError` for the missing
-   `type_name`.
-
-Verification: `uv run pytest …test_prefetch_hint_for_path_rejects_prefetch_without_lookup
-…test_prefetch_hint_for_path_adapts_nested_lookup_under_parent
-…test_prefetch_hint_for_path_rejects_mismatched_lookup
-…test_plan_force_select_hint_raises_for_many_side_relation` reports four
-failures; `uv run pytest …test_register_two_primaries_for_same_model_raises_configuration_error`
-reports the fifth.
-
-Also worth adding (the dicta calls these "untested territory"):
-  - A positive test that the new error messages **include** the type name
-    (e.g. `match="CategoryType\\.items"` on the `select_related` raise),
-    so a future cosmetics-only refactor of the message can't silently drop
-    the type name again.
-  - A test that `_validate_optimizer_hints` does not `IndexError` when
-    `fields` is empty (the empty-`fields` shape is the bug the new
-    `model` parameter defends against).
-  - A test that `Meta.fields` inherited from a parent `Meta` raises when
-    the child declares `exclude` — the inheritance branch is the actual
-    new behavior introduced by the `getattr(…, None) is not None` switch.
-  - A test that `DurationField` / `BinaryField` on `Meta.fields = "__all__"`
-    raise `Unsupported Django field type` (or at least one of them) so
-    the regression cannot creep back via someone re-adding the entry.
-
-### Medium — stale docstring on `_validate_optimizer_hints`
-In `types/base.py:600-606` the `Args` block still reads:
-
-```
-fields: The Meta-filtered list of Django field objects produced
-    by ``_select_fields``. Used to derive the model and the
-    selected relation field names.
-```
-
-The `model` is no longer derived from `fields`; the new `model` keyword
-parameter is not documented at all. Recommend:
-  - Drop the "Used to derive the model" clause from the `fields` doc.
-  - Add a new `model:` entry: `"The Django model whose ``_meta.get_fields()``
-    defines the valid hint key surface. Threaded from ``meta.model`` so the
-    empty-``fields`` shape is no longer fatal."`
-
-Dicta category: "Refactor leftovers — Did a refactor change a signature or
-return shape but leave the docstring describing the old contract?".
-
-### Medium — `"UnknownType"` fallback in `walker.py` is unreachable in practice
-The staged change adds `type_name = type_cls.__name__ if type_cls is not
-None else "UnknownType"` at three sites in `_apply_hint` /
-`_prefetch_hint_for_path` (walker.py lines 435, 449, and indirectly via
-the 509/520 paths once the helper is reached from `_apply_hint`).
-
-Tracing the call graph in `_walk_selections` (walker.py:241-256):
+Recommendation: rewrite the resolver contract to the shape that works for this field today:
 
 ```python
-hints_map = _resolve_optimizer_hints(type_cls)
-hint = hints_map.get(django_name)
-if hint is not None and _apply_hint(...):
+from typing import Any
+from strawberry.types import Info
+
+def _default(root: Any, info: Info):
+    ...
 ```
 
-`_resolve_optimizer_hints(None)` returns `{}` (walker.py:121-122), so when
-`type_cls is None` the `hints_map` is empty, `hint` is always `None`, and
-`_apply_hint` is never entered. The `"UnknownType"` literal is therefore
-dead under the production code path. Two options:
-  - Drop the fallback (replace with plain `type_cls.__name__`) and let
-    `AttributeError` fire if a future caller invokes `_apply_hint`
-    directly — the dicta prefers "fails loud" over silent defaults.
-  - Keep the fallback **and** add a direct-call test that pins the
-    `"UnknownType.<name>"` shape; otherwise the literal will rot.
+Do the same for `_wrap` and for the public custom-resolver example. Drop `**kwargs` unless this card intentionally adds GraphQL arguments, which it currently does not. If future filter/order args need forwarding, that should land with those argument-bearing specs.
 
-Dicta category: "Where a default value is 'obviously unreachable' — try
-to reach it. Defaults marked dead are often load-bearing under one input
-shape." In this case the default is genuinely unreachable, so it should
-either be deleted or covered by a test that proves a reachable input.
+### Async consumer resolvers returning a queryset bypass `get_queryset`
 
-### Medium — `converters.py` removal is a public-API change without a pin
-The bug-hunt note for `types/converters.py` claims `tests/types/test_converters.py
-passed`. Running it confirms 54 tests pass, but **none of those tests
-exercise `DurationField` or `BinaryField`** — grep on the test file is
-empty for both names. The new fail-fast `ConfigurationError` is therefore
-unpinned. A consumer using `Meta.fields = "__all__"` on a model with
-either field type will hit the new error at class-definition time rather
-than at schema build, which is a behaviour change worth a regression test
-(see the High-severity "untested territory" suggestion above).
+Spec locations: `docs/spec-016-list_field-0_0_7.md:84`, `:244`, `:325-334`, `:350-351`, `:586-587`, `:651`, `:680`.
 
-A secondary concern: the docstring on `SCALAR_MAP` (converters.py:22-27)
-advertises `SCALAR_MAP[FieldCls] = py_type` as the extension hook. For
-`BinaryField` a consumer can plug in `strawberry.scalars.Base64`; for
-`DurationField` there is no first-party Strawberry scalar at all — the
-consumer has to define a custom scalar themselves. A short inline note
-near the removed entries (or near the unsupported-type raise in
-`convert_scalar`) pointing consumers at the SCALAR_MAP hook and at
-`strawberry.scalars.Base64` would soften the breakage.
+The spec promises `target_type.get_queryset(qs, info)` is applied to every consumer resolver return value that is a `Manager` or `QuerySet`. The pseudocode only checks the immediate return from `user_resolver(...)`. If the consumer resolver is `async def` and returns a `QuerySet`, the immediate value is a coroutine, so the wrapper falls through at line 334 and returns it unchanged. Strawberry will await it later, but the field wrapper has already missed the chance to apply `get_queryset`.
 
-### Low — subtle behaviour shift in `fields`/`exclude` exclusivity check
-The old check (`"fields" in declared and "exclude" in declared` over
-`meta.__dict__`) counted any literal class-body assignment, including
-`fields = None`. The new check (`getattr(meta, "fields", None) is not None`)
-treats an explicit `fields = None` as "unset". The new semantics are
-arguably more intuitive (`None` ≡ "not specified"), and they match the
-`_normalize_fields_spec` rule that returns `None` for `None`. Worth a
-one-line code comment near the new `has_fields` / `has_exclude` block
-explaining the inheritance intent so a future maintainer doesn't "fix"
-it back to `__dict__`-membership.
+Recommendation: make the wrapper await awaitable consumer results before deciding whether the final value is a `Manager` / `QuerySet`, or explicitly declare async custom resolvers out of scope. The better fit with the rest of the spec is to support them and add two tests: async custom resolver returning a `QuerySet` gets `get_queryset`, and async custom resolver returning a Python `list` passes through.
 
-## Net assessment
-All five findings the bug hunt surfaced were valid bugs, and the patches
-are directionally correct. The blocker for landing the staged diff is the
-five broken tests; secondary cleanups (stale docstring, dead
-`"UnknownType"` fallback, missing positive pins) can land in the same
-change or as immediate follow-ups.
+### The fakeshop plan no longer satisfies the KANBAN card's replacement requirement
+
+Spec locations: `docs/spec-016-list_field-0_0_7.md:96`, `:117-125`, `:142`, `:155`, `:501-516`, `:674`.
+
+The KANBAN card's Definition of done says live HTTP coverage should replace one hand-rolled `all_library_*` resolver. The revised spec instead adds a sibling `all_library_branches_via_list_field` and leaves all existing resolvers untouched. That is a reasonable risk-reduction move for ordering, but it no longer removes any example boilerplate and no longer satisfies the card as written.
+
+Recommendation: either change the spec back to replacing one resolver while preserving deterministic behavior, or explicitly call this out as an intentional departure from the KANBAN card and require the implementation slice to update the card's wording when it moves to Done. The current spec presents the add-only strategy as if it still fulfills the original replacement scope.
+
+## Medium
+
+### Manager coercion is described as optimizer-owned even though the field wrapper must do it
+
+Spec location: `docs/spec-016-list_field-0_0_7.md:178`.
+
+The borrowing-posture section says `Manager -> QuerySet` coercion happens automatically inside `DjangoOptimizerExtension._optimize`, but the field wrapper must also coerce `Manager` before applying `target_type.get_queryset`. The pseudocode correctly does `result.all()` before the hook; the prose should match that. Otherwise an implementer could remove the wrapper-side coercion and silently skip `get_queryset` for `Model.objects` returns.
+
+Recommendation: say the field wrapper performs Manager coercion for visibility-hook correctness, while the optimizer's Manager coercion remains a downstream safety net for non-`DjangoListField` root resolvers.
+
+### Several revision-tracking lines are stale
+
+Spec locations: `docs/spec-016-list_field-0_0_7.md:4`, `:538-551`.
+
+The header still says `Status: draft (revision 1, initial)` even though the body has Revision 3. The implementation plan says "five commits" while the table and next paragraph describe six slices including Slice 0.
+
+Recommendation: update the status line to revision 3 and change the implementation-plan prose to "six slices" or clarify that Slice 0 is not a commit.
+
+## Low
+
+### A few add-vs-replace references remain stale
+
+Spec locations: `docs/spec-016-list_field-0_0_7.md:104`, `:142`.
+
+The Slice 5 `TODAY.md` bullet still says "if the new resolver replaces a hand-rolled one", and Current state says the library app is the home "where one resolver-replacement is enough". Both now conflict with the add-only strategy.
+
+Recommendation: update both to the new sibling-field language.

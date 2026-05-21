@@ -24,7 +24,7 @@ def test_unwrap_return_type_handles_bare_typing_list():
     ``get_args(rt)[0]`` and ``IndexError``'d here; the fix returns ``Any``
     as the "unknown element type" sentinel.
     """
-    assert unwrap_return_type(typing.List) is Any
+    assert unwrap_return_type(typing.List) is Any  # noqa: UP006
 
 
 def test_unwrap_return_type_handles_bare_builtin_list():

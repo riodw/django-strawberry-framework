@@ -1,4 +1,30 @@
-"""Live GraphQL HTTP tests for the library acceptance app."""
+"""Live GraphQL HTTP tests for the library acceptance app.
+
+TODO(spec-016, Slice 4 — Decision 4 end-to-end contract):
+    Add ``test_library_branches_via_djangolistfield_optimized_nested_selection``
+    (or extend an existing test in this file) covering the new
+    ``all_library_branches_via_list_field`` root field added in
+    ``examples/fakeshop/apps/library/schema.py``. The test issues::
+
+        { allLibraryBranchesViaListField { id name shelves { id code } } }
+
+    against ``/graphql/`` and asserts:
+      * every branch row is in the response (order-agnostic — sort by ``id``
+        in the assertion; the new field has no ``order_by``);
+      * the optimizer planned ``prefetch_related("shelves")`` for the nested
+        selection (via the existing ``assertNumQueries`` / SQL-sniffer
+        pattern used elsewhere in this file).
+
+    ``cls.get_queryset`` cooperation is NOT asserted here (spec rev2 M2 —
+    adding a custom ``BranchType.get_queryset`` would mutate every
+    ``BranchType`` path in the schema and break sibling tests). Package-
+    internal ``tests/test_list_field.py`` carries that coverage against
+    isolated fixtures.
+
+    The HTTP test follows the existing reload pattern from
+    ``docs/TREE.md:457-459`` automatically via the ``_reload_project_schema_for_acceptance_tests``
+    autouse fixture below — no new reload plumbing is needed.
+"""
 
 import base64
 import importlib

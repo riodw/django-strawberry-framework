@@ -32,8 +32,15 @@ def test_public_api_surface_is_pinned():
     # re-export of an internal name) shows up at test time. New public
     # names only land when a future spec adds them; routine slices
     # bump ``__version__`` without widening the surface.
+    #
+    # TODO(spec-016, Slice 1 — Decision 1): when ``DjangoListField`` is
+    # re-exported from ``django_strawberry_framework/__init__.py``, insert
+    # ``"DjangoListField"`` into the tuple below between ``"BigInt"`` and
+    # ``"DjangoOptimizerExtension"`` (alphabetical position). This update
+    # MUST land in the same commit as the re-export change.
     assert django_strawberry_framework.__all__ == (
         "BigInt",
+        # TODO(spec-016, Slice 1): insert ``"DjangoListField"`` here.
         "DjangoOptimizerExtension",
         "DjangoType",
         "OptimizerHint",

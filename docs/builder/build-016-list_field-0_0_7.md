@@ -23,8 +23,8 @@ Pre-flight: passed on 2026-05-20; baseline: clean (`git status --short` empty); 
 - [x] Slice 0: Pre-implementation verification (rev3 H1; no code lands; throw-away spike) -> `docs/builder/bld-slice-0-preimpl_verification.md`
 - [x] Slice 1: Module + factory function -> `docs/builder/bld-slice-1-module_factory.md`
 - [x] Slice 2: Validation -> `docs/builder/bld-slice-2-validation.md`
-- [ ] Slice 3: Optimizer + `get_queryset` cooperation tests -> `docs/builder/bld-slice-3-optimizer_get_queryset_tests.md`
-- [ ] Slice 4: Live HTTP coverage -> `docs/builder/bld-slice-4-live_http_coverage.md`
-- [ ] Slice 5: Promotion + docs + version -> `docs/builder/bld-slice-5-promotion_docs_version.md`
-- [ ] Cross-slice integration pass -> `docs/builder/bld-integration.md`
-- [ ] Final test-run gate -> `docs/builder/bld-final.md`
+- [x] Slice 3: Optimizer + `get_queryset` cooperation tests -> `docs/builder/bld-slice-3-optimizer_get_queryset_tests.md`
+- [x] Slice 4: Live HTTP coverage -> `docs/builder/bld-slice-4-live_http_coverage.md`
+- [x] Slice 5: Promotion + docs + version -> `docs/builder/bld-slice-5-promotion_docs_version.md`
+- [x] Cross-slice integration pass -> `docs/builder/bld-integration.md`
+- [x] Final test-run gate -> `docs/builder/bld-final.md`

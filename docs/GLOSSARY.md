@@ -24,6 +24,7 @@ Current package version: `0.0.6`. Alpha-quality — suitable for internal tools 
 Symbols re-exported from `django_strawberry_framework`:
 
 - [`BigInt`](#bigint-scalar) — JSON-safe scalar for 64-bit integer fields.
+- [`DjangoListField`](#djangolistfield) — non-Relay `list[T]` factory function for root Query fields.
 - [`DjangoType`](#djangotype) — model-backed Strawberry type base class.
 - [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
@@ -55,7 +56,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`DjangoFormMutation`](#djangoformmutation) | planned for `0.0.11` |
 | [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) | planned for `0.0.12` |
 | [`DjangoImageType`](#djangoimagetype) | planned for `0.0.11` |
-| [`DjangoListField`](#djangolistfield) | planned for `0.0.7` |
+| [`DjangoListField`](#djangolistfield) | shipped (`0.0.7`) |
 | [`DjangoModelFormMutation`](#djangomodelformmutation) | planned for `0.0.11` |
 | [`DjangoMutation`](#djangomutation) | planned for `0.0.11` |
 | [`DjangoNodeField`](#djangonodefield) | planned for `0.0.9` |
@@ -298,9 +299,9 @@ Output type for `ImageField` carrying `name` / `path` / `size` / `url` plus imag
 
 ## `DjangoListField`
 
-**Status:** planned for `0.0.7`.
+**Status:** shipped (`0.0.7`).
 
-Non-Relay `list[T]` root and nested fields. The smallest entry point for migrants coming from `graphene-django`'s `DjangoListField` and for use cases that do not need pagination, edges, or page-info. Accepts a `DjangoType`, derives the queryset from `Meta.model`, applies the type-level [`get_queryset`](#get_queryset-visibility-hook), cooperates with [`DjangoOptimizerExtension`](#djangooptimizerextension), and accepts filter / ordering input when those subsystems are configured.
+Non-Relay `list[T]` **root Query field**. The smallest entry point for migrants coming from `graphene-django`'s `DjangoListField` and for use cases that do not need pagination, edges, or page-info. Implemented as a **factory function** (not a class): consumer usage is `all_branches: list[BranchType] = DjangoListField(BranchType)`, and Strawberry's `@strawberry.type` class-body walk picks up the factory's return value the same way it picks up `strawberry.field(...)`. Outer-list nullability is driven by the consumer's class-attribute annotation — `list[T]` renders as `[T!]!` and `list[T] | None` renders as `[T!]`. The default resolver pulls `target_type.__django_strawberry_definition__.model._default_manager.all()` and applies the type-level [`get_queryset`](#get_queryset-visibility-hook) in both sync and async contexts (the sync path rejects an async `get_queryset` with `ConfigurationError`, mirroring the Relay defaults). A consumer-supplied `resolver=` overrides the default body; when its return value is a Django `Manager` or `QuerySet`, the wrapper coerces the `Manager` to a `QuerySet` and applies `target_type.get_queryset(qs, info)` (graphene-django parity), so a custom resolver still honors the visibility hook. Async consumer resolvers are detected at construction time via `inspect.iscoroutinefunction` and routed through an `async def` wrapper that awaits the coroutine before applying the isinstance check. Python `list` returns from sync or async resolvers pass through unchanged. Optimizer cooperation rides the existing root-gated [`DjangoOptimizerExtension`](#djangooptimizerextension) hook (`info.path.prev is None`), so root-position `DjangoListField` selections receive `select_related` / `prefetch_related` / `only` planning automatically; nested non-root usage is functional but not root-optimized in `0.0.7`. Standard field-level metadata pass-through (`description`, `deprecation_reason`, `directives`) is forwarded into the inner `strawberry.field(...)` call.
 
 **See also:** [`DjangoConnectionField`](#djangoconnectionfield) (the Relay-shaped equivalent).
 

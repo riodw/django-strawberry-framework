@@ -96,13 +96,14 @@ A quick summary:
 - definition-order-independent relation finalization via `finalize_django_types()`
 - `get_queryset` visibility hook (cooperates with the optimizer via `Prefetch` downgrade)
 - `DjangoOptimizerExtension` — automatic ORM optimization: one selection-tree walk produces a `select_related` / `prefetch_related` / `only()` plan that cooperates with querysets you've already shaped (consumer entries are respected, not clobbered). Plan caching, FK-id elision for `{ relation { id } }`, `get_queryset` → `Prefetch` downgrade so visibility filters survive joins, and strictness mode (`off` / `warn` / `raise`) for accidental-N+1 detection are all in the box. See [`GLOSSARY.md`](GLOSSARY.md) for the full optimizer surface.
+- `DjangoListField` — non-Relay `list[T]` factory for root Query fields (new in `0.0.7`); default resolver pulls `model._default_manager.all()` and applies the type's `get_queryset` in sync + async contexts. See [`GLOSSARY.md#djangolistfield`](GLOSSARY.md#djangolistfield).
 - `OptimizerHint` — per-relation overrides (`SKIP`, `select_related`, `prefetch_related`, custom `Prefetch`)
 - model / type registry and `auto` re-export from Strawberry
 - `Meta.primary` — multiple `DjangoType` subclasses per Django model with explicit primary-flag opt-in
 - annotation-only and `strawberry.field` consumer overrides for scalar fields, symmetric with the shipped relation-override contract (consumer overrides bypass `convert_scalar` validations; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time)
 
 **Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
-- `DjangoListField` (non-Relay list) and `DjangoConnectionField` (Relay connection)
+- `DjangoConnectionField` (Relay connection)
 - filters, orders, and permissions / cascade permissions
 - mutations + auto-generated `Input` types, plus form-based and DRF-serializer-based mutation flavors
 - `Upload` scalar and file-field mapping

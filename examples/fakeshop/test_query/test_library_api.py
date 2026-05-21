@@ -1,30 +1,4 @@
-"""Live GraphQL HTTP tests for the library acceptance app.
-
-TODO(spec-016, Slice 4 — Decision 4 end-to-end contract):
-    Add ``test_library_branches_via_djangolistfield_optimized_nested_selection``
-    (or extend an existing test in this file) covering the new
-    ``all_library_branches_via_list_field`` root field added in
-    ``examples/fakeshop/apps/library/schema.py``. The test issues::
-
-        { allLibraryBranchesViaListField { id name shelves { id code } } }
-
-    against ``/graphql/`` and asserts:
-      * every branch row is in the response (order-agnostic — sort by ``id``
-        in the assertion; the new field has no ``order_by``);
-      * the optimizer planned ``prefetch_related("shelves")`` for the nested
-        selection (via the existing ``assertNumQueries`` / SQL-sniffer
-        pattern used elsewhere in this file).
-
-    ``cls.get_queryset`` cooperation is NOT asserted here (spec rev2 M2 —
-    adding a custom ``BranchType.get_queryset`` would mutate every
-    ``BranchType`` path in the schema and break sibling tests). Package-
-    internal ``tests/test_list_field.py`` carries that coverage against
-    isolated fixtures.
-
-    The HTTP test follows the existing reload pattern from
-    ``docs/TREE.md:457-459`` automatically via the ``_reload_project_schema_for_acceptance_tests``
-    autouse fixture below — no new reload plumbing is needed.
-"""
+"""Live GraphQL HTTP tests for the library acceptance app."""
 
 import base64
 import importlib
@@ -520,6 +494,70 @@ def test_library_relation_override_shapes_http_response_data():
     # The observable baseline is root query + planned prefetch + one
     # override manager query per Branch row.
     assert len(captured) == 4
+
+
+@pytest.mark.django_db
+def test_library_branches_via_djangolistfield_optimized_nested_selection():
+    """End-to-end pipeline coverage for ``DjangoListField`` via ``/graphql/``.
+
+    Pins the Slice 4 end-to-end contract (spec Decision 4 + rev3 M6, spec line
+    534): URL routing + view + schema execution + JSON serialization + optimizer
+    cooperation through the real Django + Strawberry HTTP stack. The package-
+    internal return-shape contract is pinned separately by
+    ``tests/test_list_field.py::test_djangolistfield_at_root_position_is_optimized``
+    (rev2 M3, spec line 532).
+
+    Query count derivation (rev6 M6, spec line 63 — exact ``assertNumQueries(N)``):
+      * 1 SELECT for the ``Branch`` root queryset (the ``DjangoListField``
+        default resolver returns ``Branch._default_manager.all()``; the
+        root-gated ``DjangoOptimizerExtension`` plans
+        ``prefetch_related("shelves")`` for the nested ``shelves`` selection).
+      * 1 SELECT for the planned ``prefetch_related("shelves")`` prefetch
+        (loads all ``Shelf`` rows for the two seeded branches).
+      * 2 SELECTs (one per seeded ``Branch``) for the consumer-override
+        ``BranchType.shelves`` resolver at ``apps/library/schema.py`` (which
+        evaluates ``self.shelves.order_by("-code")`` and bypasses the
+        prefetch cache). This mirrors the baseline established by
+        ``test_library_relation_override_shapes_http_response_data`` above
+        for the same nested-selection shape.
+
+    Total: 1 + 1 + 2 = 4 queries. If a future maintainer adds ``order_by`` to
+    the new field, removes the consumer override on ``BranchType.shelves``, or
+    changes the seeded branch count, recompute N accordingly.
+    """
+    _seed_branch_with_two_shelves("ListField West")
+    _seed_branch_with_two_shelves("ListField East")
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryBranchesViaListField {
+                id
+                name
+                shelves { id code }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    branches = payload["data"]["allLibraryBranchesViaListField"]
+    # Order-agnostic comparison: the new field has no ``order_by`` (rev2 M1 —
+    # the add-only posture deliberately does NOT inherit ``order_by("id")``
+    # from the sibling ``all_library_branches`` resolver because the new field
+    # exercises the default-resolver code path, not a consumer resolver).
+    branches_by_name = {b["name"]: b for b in branches}
+    assert set(branches_by_name) == {"ListField West", "ListField East"}
+    for branch in branches_by_name.values():
+        assert {shelf["code"] for shelf in branch["shelves"]} == {"A-1", "B-2"}
+    assert len(captured) == 4
+    assert "library_branch" in captured[0]["sql"]
+    assert "library_shelf" in captured[1]["sql"]
+    assert "library_shelf" in captured[2]["sql"]
+    assert "library_shelf" in captured[3]["sql"]
 
 
 def _decode_global_id(global_id: str) -> tuple[str, str]:

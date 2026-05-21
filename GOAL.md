@@ -418,6 +418,8 @@ The package's audience is teams who already know one of three stacks. Each migra
 + finalize_django_types()
 ```
 
+- `DjangoListField` replaces graphene-django's symbol of the same name with no shape change at the migration site: `all_branches: list[BranchType] = DjangoListField(BranchType)` is the same one-line declaration graphene-django consumers already type — the package picks up the consumer's class-attribute annotation for outer nullability and the type-level `get_queryset` keeps cooperating with the optimizer.
+
 Your `Meta.filterset_class` / `Meta.orderset_class` / `Meta.fields_class` / `Meta.search_fields` declarations carry over verbatim. The mental model is identical; only the import line and the GraphQL engine underneath change.
 
 ### Coming from `strawberry-graphql-django`

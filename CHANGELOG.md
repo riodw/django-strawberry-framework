@@ -19,6 +19,9 @@ See [`KANBAN.md`](KANBAN.md) for the per-card sequencing and the version scope o
 ## [Unreleased]
 
 ## [0.0.7] - 2026-05-20
+### Added
+- `DjangoListField` — non-Relay `list[T]` field for **root Query fields**, with default `model._default_manager.all()` resolver, `cls.get_queryset(...)` cooperation in sync + async contexts and on consumer-resolver `Manager`/`QuerySet` returns (graphene-django parity), optimizer cooperation via root-gating, outer nullability driven by the consumer's class-attribute annotation, and standard field-level metadata pass-through (`description`, `deprecation_reason`, `directives`). Tracked as `DONE-016-0.0.7` in [`KANBAN.md`](KANBAN.md).
+
 ### Changed
 - Internal refactor: model lookups in `types/relay.py` consolidated through a new private `_model_for(cls)` helper. The four sites that previously read `cls.__django_strawberry_definition__.model` directly (`install_is_type_of`, `_check_composite_pk_for_relay_node`, `_initial_queryset`, `_order_nodes`) now route through the helper so model-only reads share one source of truth with the queryset-variant lookup in `_initial_queryset`. Missing-definition cases still surface as a raw `AttributeError` per the existing contract. No public surface or consumer-visible behavior change.
 

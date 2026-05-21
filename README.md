@@ -42,7 +42,7 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 
 ## Status
 
-**`0.0.6`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening.
+**`0.0.6`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening. Newest shipped surface: `DjangoListField` — the non-Relay `list[T]` factory for root Query fields, new in `0.0.7` (default resolver pulls `model._default_manager.all()` and applies `cls.get_queryset(...)` in sync + async contexts).
 
 For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`](TODAY.md). The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/GLOSSARY.md`](docs/GLOSSARY.md). Per-card sequencing for both releases lives in [`KANBAN.md`](KANBAN.md).
 

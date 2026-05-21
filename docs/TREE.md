@@ -198,6 +198,7 @@ django_strawberry_framework/
 ├── exceptions.py            # error hierarchy
 ├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6: primary_for, types_for, models_with_multiple_types; unregister test-fixture helper)
 ├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
+├── list_field.py            # DjangoListField (non-Relay list[T] factory for root Query fields; shipped in 0.0.7)
 ├── types/                   # DjangoType subsystem (Layer 2) — shipped
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
@@ -238,8 +239,9 @@ django_strawberry_framework/
 ├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6)
 ├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
 ├── fieldset.py              # [beta] FieldSet (declarative field selection)
+├── list_field.py            # [alpha] DjangoListField (non-Relay list[T])
 ├── permissions.py           # [alpha] apply_cascade_permissions, per-field permission hooks
-├── connection.py            # [alpha] DjangoConnectionField + DjangoListField (Relay + non-Relay)
+├── connection.py            # [alpha] DjangoConnectionField (Relay)
 ├── routers.py               # [alpha] DjangoGraphQLProtocolRouter (Channels; soft dep)
 ├── types/                   # DjangoType subsystem (Layer 2)
 │   ├── __init__.py
@@ -327,6 +329,7 @@ Tests live across three roots, each with a focused responsibility. The root `tes
 ```text
 tests/                       # Package-internal tests (current state)
 ├── __init__.py
+├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
 ├── test_registry.py         # model→type registry
 ├── base/                    # FROZEN: only conf and version checks
 │   ├── __init__.py
@@ -399,6 +402,7 @@ tests/                       # Package-internal tests (target as Layer-3 subsyst
 ├── test_registry.py         # model→type registry
 ├── test_exceptions.py       # error hierarchy
 ├── test_fieldset.py         # FieldSet (single-file Layer-3 module)
+├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
 ├── test_permissions.py      # apply_cascade_permissions, per-field hooks
 ├── test_connection.py       # DjangoConnectionField
 ├── types/

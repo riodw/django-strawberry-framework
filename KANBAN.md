@@ -47,7 +47,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.7` is the active patch. Five WIP cards opened together so the small parity-driven slices land in one release: `WIP-ALPHA-016-0.0.7` (`DjangoListField`), `WIP-ALPHA-017-0.0.7` (`apps.py` and Django app config), `WIP-ALPHA-018-0.0.7` (schema-export management command), `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract), and `WIP-ALPHA-045-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`). Full card detail lives under the `## In progress` board column below.
+- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; `DONE-016-0.0.7` (`DjangoListField`) shipped first, and the remaining four are still in progress: `WIP-ALPHA-017-0.0.7` (`apps.py` and Django app config), `WIP-ALPHA-018-0.0.7` (schema-export management command), `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract), and `WIP-ALPHA-045-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`). Full card detail lives under the `## In progress` board column below; `DONE-016-0.0.7` is in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/spec-016-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`](BACKLOG.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -74,36 +74,6 @@ For install, local development, testing, and the canonical documentation map, st
 ## Board columns
 
 ## In progress
-
-### WIP-ALPHA-016-0.0.7 — `DjangoListField` (non-Relay list)
-
-Priority: medium (⚛️ parity-required)
-
-Severity: **medium**
-
-Status: planned; small slice; can ship ahead of filters because it has no Layer-3 dependencies
-
-Why it matters:
-
-- `graphene-django` ships `DjangoListField` as the simple list-shape primitive for consumers who want `list[T]` rather than a Relay connection. The default resolver derives the queryset from `model.objects`, applies the type's `get_queryset`, and is the easiest possible "all objects" entry point.
-- The library example schema (`examples/fakeshop/apps/library/schema.py`) currently hand-rolls every list resolver (`all_library_branches`, `all_library_shelves`, etc.). A package-supplied `DjangoListField` removes that boilerplate for the common case and gives graphene-django migrants the same primitive they're used to.
-
-Verified in upstream:
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/fields.py` — `class DjangoListField(Field)` (lines 21+): wraps `List(NonNull(_type))`, derives queryset from `_type._meta.model.objects`, calls `_type.get_queryset(queryset, info)` from the default resolver.
-
-Definition of done:
-
-- Implement `DjangoListField` in `django_strawberry_framework/list_field.py` (or alongside `DjangoConnectionField` in `connection.py` from `TODO-ALPHA-022-0.0.9` — decide during the spec).
-- Default resolver pulls `model.objects.all()`, calls `cls.get_queryset(queryset, info)`, and returns the queryset; composes with the existing optimizer extension (root querysets are already planned).
-- Tests under `tests/test_list_field.py`.
-- Live HTTP coverage replacing one of the hand-rolled `all_library_*` resolvers in `examples/fakeshop/apps/library/schema.py`.
-
-Files likely touched:
-
-- `django_strawberry_framework/list_field.py` (new) — or merged into `django_strawberry_framework/connection.py`
-- `tests/test_list_field.py`
-- `examples/fakeshop/apps/library/schema.py`
 
 ### WIP-ALPHA-017-0.0.7 — `apps.py` and Django app config
 
@@ -1769,6 +1739,18 @@ Slice-by-slice scope (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`):
 Design notes carried into `0.0.6`:
 
 - The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `TODO-ALPHA-045-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor.
+
+### DONE-016-0.0.7 — `DjangoListField` (non-Relay list)
+
+Shipped the `DjangoListField` factory function in `django_strawberry_framework/list_field.py` as a one-line `field: list[T] = DjangoListField(TargetType)` shape for root Query fields. The default resolver pulls `target_type.__django_strawberry_definition__.model._default_manager.all()` and applies `cls.get_queryset(...)` in both sync and async contexts; a consumer-supplied `resolver=` overrides the default body and any `Manager`/`QuerySet` return value receives `target_type.get_queryset(qs, info)` (graphene-django parity per rev2 H1 of `docs/spec-016-list_field-0_0_7.md`), with `Manager → QuerySet` coercion handled by the field wrapper before `get_queryset` runs. Async consumer resolvers are detected at construction time via `inspect.iscoroutinefunction` and routed through an `async def` wrapper. Outer-list nullability is driven by the consumer's class-attribute annotation (`list[T]` → `[T!]!`, `list[T] | None` → `[T!]`). Optimizer cooperation rides the existing root-gated `info.path.prev is None` planning hook (`optimizer/extension.py:553`).
+
+Added a new `all_library_branches_via_list_field` root field via `DjangoListField` to the library example schema. This is an intentional **card-text departure** from the original "Live HTTP coverage replacing one of the hand-rolled `all_library_*` resolvers" wording, per [Decision 9](../docs/spec-016-list_field-0_0_7.md) "Card-text departure" (rev4 H3): the add-only posture keeps `all_library_branches`'s `order_by("id")` intact so the existing live HTTP determinism tests stay green; no existing `all_library_*` resolver was replaced. A new live HTTP test `test_library_branches_via_djangolistfield_optimized_nested_selection` in `examples/fakeshop/test_query/test_library_api.py` pins the response shape and the optimizer's `prefetch_related("shelves")` plan via `CaptureQueriesContext`.
+
+Validation tests in `tests/test_list_field.py` cover: non-class targets, non-`DjangoType` subclasses, unregistered types, non-callable `resolver=`, default-resolver shape, sync coroutine rejection in `get_queryset`, sync + async `get_queryset` paths, sync + async consumer-resolver `QuerySet` returns receiving `get_queryset`, sync + async Python `list` pass-through, nullable-outer / non-nullable-outer rendering, root-position optimizer planning, FK-id elision, and `Meta.primary` interaction (explicit primary + explicit secondary). The version bump from `0.0.6` is deferred to the last `0.0.7` card to ship per Decision 10 of the spec; this card leaves `pyproject.toml`, `__version__`, and `tests/base/test_init.py`'s version assertion at `0.0.6`.
+
+Files touched: `django_strawberry_framework/list_field.py` (new), `django_strawberry_framework/__init__.py`, `tests/test_list_field.py` (new), `tests/base/test_init.py`, `examples/fakeshop/apps/library/schema.py`, `examples/fakeshop/test_query/test_library_api.py`, plus the Slice 5 doc sweep across `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `GOAL.md`, `TODAY.md`, `KANBAN.md`, `CHANGELOG.md`.
+
+Spec: `docs/spec-016-list_field-0_0_7.md`. Build plan: `docs/builder/build-016-list_field-0_0_7.md`.
 
 ## Release readiness checklist
 

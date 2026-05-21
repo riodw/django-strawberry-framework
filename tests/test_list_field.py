@@ -7,32 +7,28 @@ Package tests; system-under-test is ``django_strawberry_framework``
 (spec rev5 L3 — framing matches ``AGENTS.md`` line 5). The file is the flat
 single-file Layer-3 module's mirror per ``docs/TREE.md:453``.
 
-This file is a SCAFFOLD authored under Slice 1 of the spec. The body
-contains TODO test stubs that name every test the Test plan pins:
-
-- 4 validation tests land in Slice 2 (``test_djangolistfield_rejects_*``).
-- 14 behavior tests land in Slice 3 (``test_djangolistfield_*`` covering
-  default resolver, async ``get_queryset``, dual-execution, sync coroutine
-  rejection, sync + async consumer resolver shapes, outer nullability,
-  root-position optimization, FK-id elision, ``Meta.primary`` interaction).
-
-The TODO stubs intentionally do NOT import from
-``django_strawberry_framework.list_field`` yet — the module currently
-contains only pseudo-code (Slice 1 has not produced runnable code).
-Importing it now would fail collection and break the 100% coverage gate.
-
-Wire each stub up as the corresponding slice produces the implementation:
-
-    Slice 1 → fill in ``_DjangoTypeFixture``-style fixtures + ensure
-              ``DjangoListField`` is importable from the package root.
-    Slice 2 → un-skip the 4 validation tests; implement bodies.
-    Slice 3 → un-skip the 14 behavior tests; implement bodies.
+Holds the Slice-2 validation cluster (4 tests) and the Slice-3 behavior
+cluster (14 tests) — 18 total, pinned one-to-one against the spec's Test
+plan section.
 """
 
-import pytest
-from apps.products.models import Category
+from types import SimpleNamespace
+from typing import Any
 
-from django_strawberry_framework import DjangoListField, DjangoType
+import pytest
+import strawberry
+from apps.products import services
+from apps.products.models import Category, Item
+from asgiref.sync import sync_to_async
+from django.db.models import Prefetch
+from strawberry.types import Info
+
+from django_strawberry_framework import (
+    DjangoListField,
+    DjangoOptimizerExtension,
+    DjangoType,
+    finalize_django_types,
+)
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 
@@ -134,107 +130,662 @@ def test_djangolistfield_rejects_non_callable_resolver() -> None:
 # =============================================================================
 #
 # Slice 3 ships 14 tests (rev5 M1 — one-to-one with the named methods in the
-# spec Test plan; rev5 M3 — adds the dual-execution test). Each TODO bullet
-# below corresponds to one named test.
+# spec Test plan; rev5 M3 — adds the dual-execution test). Tests pin the
+# production contract through ``schema.execute_sync(...)`` /
+# ``await schema.execute(...)`` against real Django models; the autouse
+# fixture above isolates each test's registry state.
 
 
-# TODO(spec-016, Slice 3 — Decision 2 default resolver sync path):
-# ``test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_queryset``
-# — declare a ``DjangoType`` whose ``get_queryset`` filters ``is_private=False``;
-# assert the default resolver returns a queryset that excludes private rows.
+# -----------------------------------------------------------------------------
+# Group A — Default-resolver shape and ``cls.get_queryset`` invocation.
+# -----------------------------------------------------------------------------
 
 
-# TODO(spec-016, Slice 3 — Decision 2 default resolver async path):
-# ``test_djangolistfield_async_get_queryset_is_awaited`` — declare a
-# ``DjangoType`` with an ``async def get_queryset(...)``; assert the default
-# resolver awaits the coroutine in an async context and returns the
-# filtered queryset.
+@pytest.mark.django_db
+def test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_queryset() -> None:
+    """Default resolver applies ``cls.get_queryset(qs, info)`` in a sync context.
+
+    Pins the sync branch at ``list_field.py:101`` —
+    ``return _apply_get_queryset_sync(target_type, qs, info)`` — by declaring
+    a ``DjangoType`` whose ``get_queryset`` excludes the categories whose
+    names start with ``"a"`` (e.g. ``address``, ``automotive``) and
+    asserting those names are absent from the resolved field output
+    (spec Decision 2, line 482; spec line 739).
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
 
 
-# TODO(spec-016, Slice 3 — rev5 M3 dual-execution):
-# ``test_djangolistfield_default_resolver_works_under_sync_and_async_schema_execution``
-# — declare a ``DjangoType`` with a SYNC ``get_queryset(...)``; execute the
-# field via ``schema.execute_sync(...)`` AND ``await schema.execute(...)``;
-# assert both return the filtered queryset. Pins the runtime
-# ``in_async_context()`` branch in the default resolver (the case where
-# ``in_async_context()`` is True but ``get_queryset`` is sync). Without this
-# test the dual-execution shape promised in Edge cases is unverified.
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_async_get_queryset_is_awaited(monkeypatch) -> None:
+    """Default resolver awaits an ``async def get_queryset(...)`` under ``await schema.execute(...)``.
+
+    Pins the async branch at ``list_field.py:94-100`` — the
+    ``_apply_get_queryset_async(target_type, qs, info)`` call when
+    ``in_async_context()`` returns True and ``get_queryset`` is
+    ``async def`` (spec Decision 2 async path; Decision 3
+    ``_apply_get_queryset_async``; spec line 740).
+
+    ``DJANGO_ALLOW_ASYNC_UNSAFE`` is set for the duration of the test so
+    Strawberry's GraphQL list-completion can iterate the returned
+    QuerySet inside ``await schema.execute(...)`` without raising
+    ``SynchronousOnlyOperation``. The contract under test is the
+    ``DjangoListField`` async-detection / ``get_queryset`` cooperation,
+    NOT Django's async-ORM rules — the env var is the documented bypass
+    for sync ORM access from an async context in tests.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return await sync_to_async(
+                lambda: queryset.exclude(name__startswith="a"),
+            )()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
 
 
-# TODO(spec-016, Slice 3 — Decision 3 coroutine rejection):
-# ``test_djangolistfield_sync_path_rejects_coroutine_from_get_queryset`` —
-# declare a ``DjangoType`` with an ``async def get_queryset(...)``; assert
-# the sync resolver path raises ``ConfigurationError`` matching the
-# ``types/relay.py:215-220`` contract.
+# -----------------------------------------------------------------------------
+# Group B — Dual-execution (rev5 M3).
+# -----------------------------------------------------------------------------
 
 
-# TODO(spec-016, Slice 3 — rev2 H1 graphene-django parity, sync queryset):
-# ``test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_applied``
-# — supply a SYNC ``resolver=`` returning ``Model.objects.filter(...)``;
-# give the target a ``get_queryset`` that filters out a known row; assert
-# that row is absent from the field's output.
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_default_resolver_works_under_sync_and_async_schema_execution(
+    monkeypatch,
+) -> None:
+    """A sync ``get_queryset`` resolves correctly under both schema-execution shapes.
+
+    Pins the runtime ``in_async_context()`` branch at ``list_field.py:95``
+    — both arms when ``get_queryset`` is SYNC. The ``False`` arm fires
+    under ``schema.execute_sync(...)`` (returns ``_apply_get_queryset_sync``
+    directly); the ``True`` arm fires under ``await schema.execute(...)``
+    (returns the coroutine from ``_apply_get_queryset_async`` for
+    Strawberry's ``AwaitableOrValue`` dispatch). The Edge cases section
+    (spec line 697) promises both call shapes work; without this test the
+    promise is unverified (rev5 M3, spec line 49).
+
+    ``DJANGO_ALLOW_ASYNC_UNSAFE`` is set so the async-branch QuerySet
+    iteration in Strawberry's list-completion can proceed without
+    raising ``SynchronousOnlyOperation``; this test pins the field's
+    in-async-context dispatch, not Django's async-ORM rules.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    sync_result = await sync_to_async(schema.execute_sync)(
+        "{ allCategories { id name } }",
+    )
+    async_result = await schema.execute("{ allCategories { id name } }")
+    assert sync_result.errors is None
+    assert async_result.errors is None
+    assert sync_result.data == async_result.data
+    names = [row["name"] for row in sync_result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
 
 
-# TODO(spec-016, Slice 3 — rev2 H1 graphene-django parity, sync list):
-# ``test_djangolistfield_consumer_resolver_python_list_return_passes_through``
-# — supply a SYNC ``resolver=`` returning a Python ``list[T]`` containing a
-# row that ``get_queryset`` would have filtered out; assert the row
-# survives (``get_queryset`` is NOT applied to non-queryset returns).
+# -----------------------------------------------------------------------------
+# Group C — Sync coroutine rejection (Decision 3).
+# -----------------------------------------------------------------------------
 
 
-# TODO(spec-016, Slice 3 — rev4 H2 async parity, queryset):
-# ``test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_queryset_applied``
-# — supply an ``async def resolver(...)`` returning ``Model.objects.filter(...)``;
-# execute through Strawberry's async schema execution; assert the queryset
-# has been threaded through ``target_type.get_queryset(qs, info)`` exactly
-# the same way as the sync test. Pins that the wrapper awaits the consumer
-# coroutine BEFORE the isinstance check.
+@pytest.mark.django_db
+def test_djangolistfield_sync_path_rejects_coroutine_from_get_queryset() -> None:
+    """Sync resolver path raises ``ConfigurationError`` when ``get_queryset`` is async.
+
+    Pins the coroutine-rejection guard at ``types/relay.py:213-221``. The
+    field reuses the production helper per Decision 3 Option A (spec
+    lines 510-513); this test asserts the production message prefix
+    rather than re-implementing the rejection in a test mock
+    (spec line 742).
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allCategories { id name } }")
+    assert result.errors is not None
+    assert len(result.errors) == 1
+    assert "returned a coroutine in a sync resolver context" in str(result.errors[0])
 
 
-# TODO(spec-016, Slice 3 — rev4 H2 async parity, list):
-# ``test_djangolistfield_async_consumer_resolver_python_list_return_passes_through``
-# — supply an ``async def resolver(...)`` returning a Python ``list[T]``;
-# assert ``target_type.get_queryset(...)`` is NOT applied. Pins that the
-# await-then-isinstance ordering is symmetric across return shapes.
+# -----------------------------------------------------------------------------
+# Group D — Sync consumer-resolver paths (rev2 H1).
+# -----------------------------------------------------------------------------
 
 
-# TODO(spec-016, Slice 3 — rev2 M3 root-only optimizer cooperation):
-# ``test_djangolistfield_at_root_position_is_optimized`` — declare a
-# ``DjangoType`` with relations; query through a root ``DjangoListField``
-# with a nested selection; assert the optimizer planned ``select_related``
-# / ``prefetch_related`` (via ``assertNumQueries`` / SQL-sniffer pattern).
-# This is the regression net for the root-only contract (Decision 4).
+@pytest.mark.django_db
+def test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_applied() -> None:
+    """Sync consumer resolver returning a ``QuerySet`` receives ``target_type.get_queryset(...)``.
+
+    Pins the sync consumer-resolver wrapper at ``list_field.py:120-125``
+    — specifically that ``_post_process_consumer_sync`` (line 121)
+    applies ``target_type.get_queryset(...)`` to a ``Manager``/``QuerySet``
+    return (rev2 H1, graphene-django parity; spec line 743).
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+        return Category.objects.all()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
 
 
-# TODO(spec-016, Slice 3 — rev2 H2 nullable outer):
-# ``test_djangolistfield_nullable_outer_via_consumer_annotation`` — declare
-# ``field_or_none: list[BranchType] | None = DjangoListField(BranchType)``;
-# assert the rendered GraphQL type is ``[BranchType!]`` (nullable outer,
-# non-null items).
+@pytest.mark.django_db
+def test_djangolistfield_consumer_resolver_python_list_return_passes_through() -> None:
+    """Sync consumer resolver returning a Python ``list`` bypasses ``target_type.get_queryset(...)``.
+
+    Pins the sync consumer-resolver wrapper at ``list_field.py:120-125``
+    — specifically that ``_post_process_consumer_sync`` returns the
+    non-``QuerySet`` result unchanged (the ``return result``
+    pass-through arm at line 36; spec line 744). The resolver returns a
+    Python ``list`` that contains a row matching the ``get_queryset``
+    exclusion filter; the row's presence in the output proves
+    ``get_queryset`` was NOT applied to the list return.
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+        return list(Category.objects.all())
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert any(name.startswith("a") for name in names), (
+        "expected an 'a'-prefixed row to survive when consumer returned a list "
+        "(get_queryset would have filtered it from a QuerySet return)"
+    )
 
 
-# TODO(spec-016, Slice 3 — rev2 H2 non-nullable outer default):
-# ``test_djangolistfield_non_nullable_outer_default_via_consumer_annotation``
-# — declare ``field: list[BranchType] = DjangoListField(BranchType)``;
-# assert the rendered GraphQL type is ``[BranchType!]!`` (non-null outer,
-# non-null items).
+# -----------------------------------------------------------------------------
+# Group E — Async consumer-resolver paths (rev4 H2).
+# -----------------------------------------------------------------------------
 
 
-# TODO(spec-016, Slice 3 — FK-id elision):
-# ``test_djangolistfield_fk_id_elision_survives`` — query
-# ``{ allBranches { shelves { id } } }`` (or equivalent); assert no JOIN
-# was issued for the ``id``-only relation selection (FK-id elision still
-# fires).
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_queryset_applied(
+    monkeypatch,
+) -> None:
+    """Async consumer resolver returning a ``QuerySet`` receives ``target_type.get_queryset(...)``.
+
+    Pins the async consumer-resolver wrapper at ``list_field.py:108-117``
+    — specifically that the awaited consumer return is fed to
+    ``_post_process_consumer_async`` (lines 113-117), and the
+    ``_apply_get_queryset_async`` call (line 43) fires on a ``QuerySet``
+    result. Pins that the wrapper awaits the consumer coroutine BEFORE
+    the isinstance check (rev4 H2, spec line 745). The
+    ``DJANGO_ALLOW_ASYNC_UNSAFE`` env override unblocks Strawberry's
+    list-completion iteration of the returned QuerySet under
+    ``await schema.execute(...)``.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    async def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+        return await sync_to_async(lambda: Category.objects.all())()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
 
 
-# TODO(spec-016, Slice 3 — Decision 6 primary target):
-# ``test_djangolistfield_with_meta_primary_true_returns_primary_queryset``
-# — declare two ``DjangoType``s on the same model, one with
-# ``Meta.primary = True``; ``DjangoListField(PrimaryType)`` returns rows
-# queried via the primary's ``get_queryset``.
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_async_consumer_resolver_python_list_return_passes_through() -> None:
+    """Async consumer resolver returning a Python ``list`` bypasses ``target_type.get_queryset(...)``.
+
+    Pins the async consumer-resolver wrapper at ``list_field.py:108-117``
+    — specifically that ``_post_process_consumer_async`` returns a
+    non-``QuerySet`` result unchanged (the ``return result``
+    pass-through arm at line 44). Pins that the await-then-isinstance
+    ordering is symmetric across return shapes (rev4 H2, spec line 746).
+    """
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    async def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+        return await sync_to_async(lambda: list(Category.objects.all()))()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert any(name.startswith("a") for name in names), (
+        "expected an 'a'-prefixed row to survive when async consumer returned a list "
+        "(get_queryset would have filtered it from a QuerySet return)"
+    )
 
 
-# TODO(spec-016, Slice 3 — Decision 6 secondary target):
-# ``test_djangolistfield_with_secondary_target_uses_secondary_get_queryset``
-# — declare two types, point the field at the SECONDARY; assert the
-# secondary's ``get_queryset`` is applied, not the primary's.
+# -----------------------------------------------------------------------------
+# Group G — Root-position optimizer cooperation (rev2 M3).
+# (Listed BEFORE the outer-nullability pair to preserve the spec Test plan's
+# stated order; the spec lists the root-optimization test at line 747, then
+# the nullable-outer pair at 748-749.)
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_djangolistfield_at_root_position_is_optimized(django_assert_num_queries) -> None:
+    """Root-position ``DjangoListField`` triggers ``DjangoOptimizerExtension.resolve``.
+
+    Pins the rev2 M3 root-only contract (Decision 4, spec line 532). The
+    root-gated ``DjangoOptimizerExtension.resolve`` hook
+    (``optimizer/extension.py:553`` — the ``info.path.prev is not None``
+    early-return) fires on a ``DjangoListField``-served root query, and
+    the planning hook produces ``prefetch_related`` for the nested
+    ``items`` selection.
+
+    Query-count derivation (rev6 M6, spec line 63): ``N`` = 1 base SELECT
+    + 1 SELECT per ``prefetch_related`` relation in the nested selection.
+    For ``{ allCategories { id name items { id name } } }`` against
+    ``Category`` with ``items`` as a reverse-FK, ``N = 2`` — one Category
+    SELECT, one Item prefetch SELECT. Pin via ``assertNumQueries(2)``;
+    do NOT use a ``<= N`` bound (a refactor that quietly changes the
+    per-query count would otherwise slide past unnoticed).
+    """
+    services.seed_data(1)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(2):
+        result = schema.execute_sync(
+            "{ allCategories { id name items { id name } } }",
+            context_value=ctx,
+        )
+    assert result.errors is None
+    plan = ctx.dst_optimizer_plan
+    assert plan is not None
+    # The reverse-FK ``items`` relation is planned as a single
+    # ``prefetch_related`` entry. The optimizer emits a ``Prefetch``
+    # object (carrying the queryset shape) rather than a bare string so
+    # downstream FK-id / ``only()`` projection can attach to it; the
+    # ``prefetch_to`` attribute names the relation accessor.
+    assert len(plan.prefetch_related) == 1
+    assert isinstance(plan.prefetch_related[0], Prefetch)
+    assert plan.prefetch_related[0].prefetch_to == "items"
+
+
+# -----------------------------------------------------------------------------
+# Group F — Outer-nullability via consumer annotation (rev2 H2).
+# -----------------------------------------------------------------------------
+
+
+def test_djangolistfield_nullable_outer_via_consumer_annotation() -> None:
+    """``list[CategoryType] | None`` renders as ``[CategoryType!]`` (nullable outer).
+
+    Pins that the consumer's class-attribute annotation drives the
+    rendered GraphQL type, NOT a constructor argument (rev2 H2, spec
+    line 14). Verification uses an introspection query against
+    ``__type(name: "Query")`` (rev6 M2, spec line 59 — robust against
+    SDL formatting drift); spec line 748.
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] | None = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync(
+        '{ __type(name: "Query") { fields { name type { kind ofType { kind ofType { kind name } } } } } }',
+    )
+    assert result.errors is None
+    fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
+    field_type = fields["allCategories"]
+    # Outer ``NON_NULL`` wrapper is absent here — that is the load-bearing
+    # difference vs the non-nullable test below.
+    assert field_type["kind"] == "LIST"
+    assert field_type["ofType"]["kind"] == "NON_NULL"
+    assert field_type["ofType"]["ofType"]["kind"] == "OBJECT"
+    assert field_type["ofType"]["ofType"]["name"] == "CategoryType"
+
+
+def test_djangolistfield_non_nullable_outer_default_via_consumer_annotation() -> None:
+    """``list[CategoryType]`` renders as ``[CategoryType!]!`` (non-null outer + items).
+
+    Pins that the default annotation (``list[T]`` without ``| None``)
+    renders as ``[T!]!`` — four levels of unwrap match Slice 0's pinned
+    introspection shape (spec line 109; rev2 H2, spec line 14; rev6 M2,
+    spec line 59); spec line 749.
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync(
+        '{ __type(name: "Query") { fields { name type '
+        "{ kind ofType { kind ofType { kind ofType { kind name } } } } } } }",
+    )
+    assert result.errors is None
+    fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
+    field_type = fields["allCategories"]
+    assert field_type["kind"] == "NON_NULL"
+    assert field_type["ofType"]["kind"] == "LIST"
+    assert field_type["ofType"]["ofType"]["kind"] == "NON_NULL"
+    assert field_type["ofType"]["ofType"]["ofType"]["kind"] == "OBJECT"
+    assert field_type["ofType"]["ofType"]["ofType"]["name"] == "CategoryType"
+
+
+# -----------------------------------------------------------------------------
+# Group G (continued) — FK-id elision (mirrors
+# ``tests/optimizer/test_extension.py:287-325``).
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_djangolistfield_fk_id_elision_survives(django_assert_num_queries) -> None:
+    """FK-id elision fires under a root ``DjangoListField`` for ``id``-only selections.
+
+    Pins the FK-id elision plan emission for a forward-FK
+    ``category { id }`` selection: no JOIN, no prefetch, ``only_fields``
+    includes ``category_id``, and the plan's ``fk_id_elisions`` tuple
+    carries the resolver key. Mirrors the existing integration pattern at
+    ``tests/optimizer/test_extension.py:287-325`` (spec line 750).
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        all_items: list[ItemType] = DjangoListField(ItemType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ctx = SimpleNamespace()
+
+    with django_assert_num_queries(1):
+        result = schema.execute_sync(
+            "{ allItems { name category { id } } }",
+            context_value=ctx,
+        )
+    assert result.errors is None
+    assert all(item["category"]["id"] for item in result.data["allItems"])
+    plan = ctx.dst_optimizer_plan
+    assert plan.select_related == ()
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ("name", "category_id")
+    assert plan.fk_id_elisions == ("ItemType.category@allItems.category",)
+    assert ctx.dst_optimizer_fk_id_elisions == {"ItemType.category@allItems.category"}
+
+
+# -----------------------------------------------------------------------------
+# Group H — ``Meta.primary`` interaction (Decision 6).
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_djangolistfield_with_meta_primary_true_returns_primary_queryset() -> None:
+    """``DjangoListField(PrimaryType)`` invokes the primary's ``get_queryset``.
+
+    Pins that when two ``DjangoType``s exist on the same model and one
+    carries ``Meta.primary = True``, ``DjangoListField(PrimaryType)``
+    returns rows queried via the primary's ``get_queryset``. The test
+    discriminates by giving the two types' ``get_queryset``s different
+    filtering behavior; pointing the field at the primary picks the
+    primary's behavior (Decision 6 multi-type-per-model; spec line 583).
+    """
+    services.seed_data(1)
+
+    class PrimaryCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            primary = True
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    class SecondaryCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="b")
+
+    @strawberry.type
+    class Query:
+        all_primary: list[PrimaryCategoryType] = DjangoListField(PrimaryCategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allPrimary { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allPrimary"]]
+    assert names, "expected at least one row from the primary's queryset"
+    # The primary's exclusion fired (no ``a``-prefixed rows survive).
+    assert all(not name.startswith("a") for name in names)
+    # The secondary's exclusion did NOT fire (``b``-prefixed rows survive).
+    assert any(name.startswith("b") for name in names), (
+        "expected a 'b'-prefixed row to survive — the secondary's get_queryset "
+        "must NOT have been applied when the field targets the primary"
+    )
+
+
+@pytest.mark.django_db
+def test_djangolistfield_with_secondary_target_uses_secondary_get_queryset() -> None:
+    """``DjangoListField(SecondaryType)`` invokes the secondary's ``get_queryset``.
+
+    Pins that the registry's ``Meta.primary`` discriminator does NOT
+    override the explicit-target argument: pointing the field at the
+    secondary returns the secondary's ``get_queryset`` filter, NOT the
+    primary's (Decision 6; spec line 584).
+    """
+    services.seed_data(1)
+
+    class PrimaryCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            primary = True
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    class SecondaryCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="b")
+
+    @strawberry.type
+    class Query:
+        all_secondary: list[SecondaryCategoryType] = DjangoListField(SecondaryCategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allSecondary { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allSecondary"]]
+    assert names, "expected at least one row from the secondary's queryset"
+    # The secondary's exclusion fired (no ``b``-prefixed rows survive).
+    assert all(not name.startswith("b") for name in names)
+    # The primary's exclusion did NOT fire (``a``-prefixed rows survive).
+    assert any(name.startswith("a") for name in names), (
+        "expected an 'a'-prefixed row to survive — the primary's get_queryset "
+        "must NOT have been applied when the field targets the secondary"
+    )

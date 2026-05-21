@@ -2,7 +2,7 @@
 
 You have been invoked to author a new spec file under `docs/` for the next-up Work-In-Progress card in this repository.
 
-Spec files live at the root of `docs/` (e.g. `docs/spec-016-list_field-0_0_7.md`), NOT under `docs/SPECS/`. The older `docs/SPECS/spec-*.md` files are legacy locations — read them from there for structural reference (Step 5), but new specs you create land in `docs/`.
+Spec files live at the root of `docs/` (e.g. `docs/spec-017-apps-0_0_7.md`), NOT under `docs/SPECS/`. The older `docs/SPECS/spec-*.md` files are legacy / archived locations — read them from there for structural reference (Step 5), but new specs you create land in `docs/`.
 
 Execute the steps below **in strict order**. Do not skip ahead. Do not read files outside the batch named in the current step. Do not start writing the spec before Step 6.
 
@@ -150,12 +150,68 @@ Repeat the CSV edit / checker run cycle until the script exits 0. The CSV is the
 
 ---
 
+## Step 8 — Archive prior specs and update cross-references
+
+After Step 7 exits 0, archive every OTHER spec file that lives in `docs/` so the active working directory only contains the spec you just authored. Each prior spec moves to its legacy home under `docs/SPECS/` and every cross-reference to it gets rewritten in the same pass so no link goes stale. The active WIP card in `KANBAN.md` also gets a reference to the active spec added or updated as part of the same sweep.
+
+The "active" spec is the one you just authored in Step 6. Every other `spec-*.md` (and its companion `*-terms.csv` if present) is a prior in-flight spec from an earlier card cycle that should now live under `docs/SPECS/` alongside the older legacy specs.
+
+Concrete sequence:
+
+1. **List candidates.** Enumerate every `spec-*.md` file at the top level of `docs/` (do NOT recurse into `docs/SPECS/`, which is the destination):
+
+   ```
+   ls docs/spec-*.md
+   ```
+
+   Subtract the new spec you just authored. The remainder is the archive set.
+2. **Move each candidate** (and its companion CSV when present) into `docs/SPECS/`, preserving filename:
+
+   ```
+   git mv docs/spec-<old_NNN>-<old_topic>-<old_version>.md docs/SPECS/
+   git mv docs/spec-<old_NNN>-<old_topic>-<old_version>-terms.csv docs/SPECS/
+   ```
+
+   Use `git mv` rather than `mv` so the rename is tracked. If the file is not yet tracked by git, fall back to `mv`.
+3. **Rewrite cross-references in the new spec.** Search the spec you just authored for markdown links that point at any moved spec — match patterns like `](spec-<old_NNN>-…)`, `](./spec-<old_NNN>-…)`, and `](docs/spec-<old_NNN>-…)`. Each match becomes the new path under `docs/SPECS/` (relative-path discipline: from a spec in `docs/`, the moved sibling is now at `SPECS/spec-<old_NNN>-…`).
+4. **Rewrite cross-references in every other doc, INCLUDING `KANBAN.md`.** Enumerate every doc that references the moved spec(s):
+
+   ```
+   grep -rln "spec-<old_NNN>-<old_topic>-<old_version>" docs/ README.md GOAL.md TODAY.md AGENTS.md KANBAN.md
+   ```
+
+   For each hit, rewrite the path so the link still resolves after the move. Relative-path discipline: from `docs/GLOSSARY.md` the moved file is `SPECS/spec-…`; from repo-root `README.md` / `KANBAN.md` / `GOAL.md` / `TODAY.md` / `AGENTS.md` it is `docs/SPECS/spec-…`; from another spec under `docs/` it is `SPECS/spec-…`. Apply every rewrite in place — `KANBAN.md` is part of this sweep, not exempt from it.
+5. **Add or update the active WIP card's reference to the new spec.** The card you targeted in Step 3 should point at the spec file you just authored. Open `KANBAN.md` at the active WIP card body and verify it contains a link to `docs/spec-<NNN>-<topic>-<0_0_X>.md`. Three cases:
+
+   - **No reference present** — add one. Typical placement: a `Spec:` or `Active spec:` line at the top of the card body (or under the card's existing "Files likely touched" section if the card uses that convention), with a markdown link to the new spec at its `docs/spec-<NNN>-…` path.
+   - **Reference present but pointing at a different path** (e.g., a stale `docs/SPECS/spec-…` from a prior archive cycle, or a now-renamed slug) — rewrite to point at the active path.
+   - **Reference present at the correct path** — no action.
+
+   When the active card lives in a column other than `## In progress` by the time you reach this step (e.g., the maintainer moved it to `## Done` between Step 3 and Step 8), follow the reference to the new column and update in place there. The reference belongs with the card, not with the column.
+6. **`CHANGELOG.md` stays reserved.** `CHANGELOG.md` has its own maintainer-edited protocol and is NOT rewritten by this step even when it references a moved spec. If `grep` finds matches in `CHANGELOG.md`, surface them as a one-line report at the end of the flow ("`CHANGELOG.md` references moved spec(s) at lines …; maintainer must update") and STOP — do not silently edit.
+7. **Re-run the checker** against the new spec one more time:
+
+   ```
+   uv run python scripts/check_spec_glossary.py --spec docs/spec-<NNN>-<topic>-<0_0_X>.md
+   ```
+
+   The archive pass may have shifted markdown link paths inside the new spec; the script's earlier exit-0 must still hold. If it now fails, fix the cross-reference rewrites until it exits 0 again.
+
+This step is idempotent. A second pass with no other specs at `docs/` top-level and a `KANBAN.md` already pointing at the active spec is a clean no-op.
+
+The flow is complete when Step 8 finishes: only the active spec and its CSV live at `docs/spec-*`, every prior spec is at `docs/SPECS/spec-*`, every cross-reference resolves (including in `KANBAN.md`), and the checker exits 0 against the active spec.
+
+---
+
 ## Boundaries
 
-- Do **not** modify `KANBAN.md`, `CHANGELOG.md`, `TODAY.md`, or any file other than the new spec file and its companion `*-terms.csv`.
+- Do **not** modify `CHANGELOG.md` under any circumstance during this flow — even path-update edits triggered by Step 8 must be surfaced as a maintainer-report rather than silently applied.
+- Do **not** modify `TODAY.md` except as a Step 8 path-update (rewriting a moved spec's path); content edits to `TODAY.md` outside that narrow purpose are out of scope.
+- `KANBAN.md` IS in scope for Step 8 — apply path-updates for moved specs in place, AND add or rewrite the active WIP card's spec reference per Step 8 action 5. No other edits to `KANBAN.md` (no column moves, no card-body content changes beyond the spec-reference line).
+- Do **not** modify any file other than the new spec file, its companion `*-terms.csv`, the spec files being archived under Step 8, and the cross-reference updates Step 8 prescribes in `docs/`, `README.md`, `GOAL.md`, `TODAY.md`, `AGENTS.md`, and `KANBAN.md`.
 - Do **not** commit.
-- Do **not** run pytest, ruff, or any other tooling unless Step 7 prescribes it (the `scripts/check_spec_glossary.py` run, including its `--auto-link` rewrite mode, is part of the flow) or you need to settle a question inside the spec.
-- The new spec file and its companion `*-terms.csv` are the only artifacts this flow produces.
-- The flow is not complete until `scripts/check_spec_glossary.py` exits 0 against the new spec and its CSV.
+- Do **not** run pytest, ruff, or any other tooling unless Step 7 or Step 8 prescribes it (the `scripts/check_spec_glossary.py` run including its `--auto-link` rewrite, and the `git mv` / `grep` invocations Step 8 names, are all part of the flow) or you need to settle a question inside the spec.
+- The artifacts this flow produces: the new spec file, its companion `*-terms.csv`, the moves of every prior `spec-*.md` (and companion CSV) from `docs/` to `docs/SPECS/`, path-only cross-reference updates in every doc that pointed at a moved spec, and the active WIP card's spec-reference line in `KANBAN.md`.
+- The flow is not complete until (a) `scripts/check_spec_glossary.py` exits 0 against the new spec and its CSV, (b) Step 8 has run and no `spec-*.md` other than the active one remains at `docs/` top-level, AND (c) the active WIP card in `KANBAN.md` carries a link to `docs/spec-<NNN>-<topic>-<0_0_X>.md`.
 - If the WIP card's body conflicts with something you read in Step 1, prefer the card and call out the conflict as an entry in the spec's `Risks and open questions` section — do not silently reconcile.
 - Reading source files, existing specs, or test files during Step 6 is allowed and expected. The boundary is on **writes**, not reads.

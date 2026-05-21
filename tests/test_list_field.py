@@ -8,12 +8,18 @@ Package tests; system-under-test is ``django_strawberry_framework``
 single-file Layer-3 module's mirror per ``docs/TREE.md:453``.
 
 Holds the Slice-2 validation cluster (5 tests) and the Slice-3 behavior
-cluster (16 tests) — 21 total. Two of the tests are post-016 review
-regressions from ``docs/feedback.md``: the own-class-registration guard
-(High #1 — rejects ``DjangoType`` subclass that omits its own ``Meta``)
-and the async-callable-object detection (High #2 — detects ``async def
-__call__`` at construction time so the coroutine return doesn't bypass
-``_post_process_consumer_async``).
+cluster (17 tests) — 22 total. Three of the tests are post-016 review
+additions from ``docs/feedback.md``: two are real bug fixes — the
+own-class-registration guard (High #1, rejects ``DjangoType`` subclass
+that omits its own ``Meta``) and the async-callable-object detection
+(High #2, detects ``async def __call__`` at construction time so the
+coroutine return doesn't bypass ``_post_process_consumer_async``). The
+third is a contract pin for ``functools.partial``-wrapped async
+resolvers: the post-High-#2 review note suggested an explicit ``.func``
+unwrap, but Python's ``inspect.iscoroutinefunction`` already looks
+through ``functools.partial`` natively (3.8+), so the case is correctly
+handled by the first branch of ``_is_async_callable``; the test pins
+the end-to-end behavior and guards against a future Python regression.
 
 The spec's Slice-3 inventory at line 129 calls out
 "``Manager``/``QuerySet``" together for the consumer-resolver returns;
@@ -29,6 +35,7 @@ are genuinely unreachable from the sync ``GraphQLView`` mounted at
 ``RuntimeError: GraphQL execution failed to complete synchronously``).
 """
 
+import functools
 from types import SimpleNamespace
 from typing import Any
 
@@ -583,6 +590,60 @@ async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_
     @strawberry.type
     class Query:
         all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_AsyncResolver())
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied(
+    monkeypatch,
+) -> None:
+    """``functools.partial`` wrapping an ``async def`` resolver is detected as async.
+
+    Contract pin (not a fix for a bug that exists today): Python's
+    ``inspect.iscoroutinefunction`` looks through ``functools.partial`` wrappers
+    natively since 3.8 (empirically verified against the installed Python at
+    review time), so the first branch of ``_is_async_callable`` already routes
+    partial-wrapped async resolvers to the async wrapper. This test pins that
+    contract end-to-end through the field's pipeline: ``get_queryset``'s
+    ``startswith("a")`` exclusion fires on the awaited QuerySet, proving the
+    partial reached ``_post_process_consumer_async`` and not the sync wrapper.
+    The post-High-#2 review note in ``docs/feedback.md`` suggested the gap was
+    real and recommended an explicit ``.func`` unwrap; empirical check at the
+    review point showed ``inspect.iscoroutinefunction(partial(async_fn))`` is
+    True directly, so the unwrap would be dead code and this test guards
+    against a future Python regression that would re-open the bug.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    async def _async_resolver(prefix: str, root: Any, info: Info) -> Any:  # noqa: ARG001
+        # The ``prefix`` arg makes the partial application non-trivial; the
+        # remaining signature ``(root, info)`` is what Strawberry inspects.
+        return await sync_to_async(lambda: Category.objects.all())()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=functools.partial(_async_resolver, "ignored"),
+        )
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)

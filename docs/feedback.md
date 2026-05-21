@@ -1,35 +1,34 @@
-# Review feedback - package Python diff from `6adbe630287c3ce890384a573634db4513dd8eab`
+# Review feedback — fixes for prior `feedback.md` Highs
 
-Scope: generated stripped diffs with `scripts/review_diff_from_commit.py 6adbe630287c3ce890384a573634db4513dd8eab`, then reviewed only `.py` changes under `django_strawberry_framework/`. The package files in scope were `django_strawberry_framework/list_field.py` and `django_strawberry_framework/types/base.py`; the generated example-app diff was intentionally ignored.
+Scope: reviewed the `.py` changes in `f2aba83` (HEAD) vs `c6888ad` — specifically the `django_strawberry_framework/list_field.py` fixes for the two High findings in the prior `feedback.md`, plus the regression tests in `tests/test_list_field.py`. The example-app schema and earlier `types/base.py` deltas were intentionally out of scope.
 
-## High
+## Resolved
 
-### `DjangoListField` accepts unregistered subclasses through inherited framework metadata
+### High #1: own-class registration check
 
-Location: `django_strawberry_framework/list_field.py:75`.
+`list_field.py:101-107` replaces the inherited-attribute `hasattr` check with `getattr(target_type, "__django_strawberry_definition__", None)` plus `getattr(definition, "origin", None) is not target_type`. `DjangoTypeDefinition.origin` is assigned exactly once at `types/base.py:229` (`origin=cls`) inside `DjangoType.__init_subclass__`, so `origin is target_type` is the correct own-class invariant. The new guard rejects both the abstract-base case (where `definition is None`) and the bare-subclass case (where the inherited `definition.origin` is the parent class). The updated error string names the inheritance failure shape explicitly. Regression pinned at `tests/test_list_field.py:126-150` (`test_djangolistfield_rejects_djangotype_subclass_without_own_meta` constructs `ChildCategoryType(ParentCategoryType): pass` and asserts the `ConfigurationError`).
 
-The registered-target guard uses `hasattr(target_type, "__django_strawberry_definition__")`. `hasattr` walks the MRO, so a subclass of a concrete `DjangoType` that omits its own `Meta` inherits the parent's `__django_strawberry_definition__` and passes validation even though that subclass was never registered as its own framework type.
+### High #2: async-callable detection
 
-Concrete failure shape:
-
-- `class CategoryType(DjangoType): class Meta: model = Category`
-- `class ChildCategoryType(CategoryType): pass`
-- `DjangoListField(ChildCategoryType)` passes the constructor guard because the parent definition is visible through inheritance.
-
-That leaves the field bound to a target whose definition, selected fields, optimizer metadata, `Meta.primary` state, and model all belong to the parent class. Depending on when schema construction/finalization happens, the failure can surface as a confusing Strawberry type error, or worse, as a field that queries and applies hooks through the wrong definition.
-
-Recommendation: make target registration an own-class invariant instead of an inherited-attribute check. For example, read `target_type.__dict__.get("__django_strawberry_definition__")` and reject when it is missing or when `definition.origin is not target_type`. Add a regression test that defines a concrete `DjangoType`, subclasses it without `Meta`, and asserts `DjangoListField(Subclass)` raises the same registered-target `ConfigurationError`.
-
-### Awaitable-returning callable resolvers can bypass `get_queryset`
-
-Location: `django_strawberry_framework/list_field.py:107-125`.
-
-The consumer resolver branch decides sync vs async once with `inspect.iscoroutinefunction(user_resolver)`. The constructor accepts any callable, but not every callable that returns an awaitable is itself detected by `inspect.iscoroutinefunction`; callable instances with `async __call__` are the clearest public shape. Those resolvers land in the sync `_wrap` branch, where `user_resolver(root, info)` returns a coroutine. `_post_process_consumer_sync` sees a coroutine, not a `Manager` or `QuerySet`, and returns it unchanged.
-
-Under async schema execution, Strawberry may still await that coroutine, so the field can appear to work, but any awaited `Manager` / `QuerySet` result has already skipped `_post_process_consumer_async` and therefore skipped `target_type.get_queryset(...)`. That violates the visibility-hook contract for queryset-shaped consumer resolver returns.
-
-Recommendation: do not rely solely on `inspect.iscoroutinefunction(user_resolver)` for a public `Callable` API. Either normalize async-callable objects at construction time, or add a runtime awaitable branch that awaits the result before post-processing on async execution paths and raises a targeted `ConfigurationError` on sync execution paths. Add coverage with a callable object whose `async __call__` returns a `QuerySet` and whose target type filters rows in `get_queryset`; the filtered rows should be absent from the GraphQL result.
+`list_field.py:47-63` introduces `_is_async_callable(fn)`; the consumer-resolver dispatch at `list_field.py:133` now routes through it. The helper checks both `inspect.iscoroutinefunction(fn)` and `inspect.iscoroutinefunction(fn.__call__)`, covering callable instances whose `__call__` is `async def`. The docstring is explicit that `functools.partial(async_fn, ...)` is deliberately undetected per rev5 H1 YAGNI — the gap is documented, not silent. Regression pinned at `tests/test_list_field.py:551-595` (`test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied` uses an instance with `async def __call__`, defines a filtering `get_queryset`, and asserts the filter still applies).
 
 ## Notes
 
-I did not find a blocking issue in the `django_strawberry_framework/types/base.py` change. The new direct `cls.__annotations__["id"]` read is consistent with the existing call-site precondition and the tests already cover the accepted direct and string `relay.NodeID[...]` forms plus the rejected lookalikes.
+No blocking issues in either fix. Two small observations, neither blocking:
+
+### Stale comment block above the registration guard
+
+`list_field.py:79-85` still describes the OLD discriminator:
+
+```
+# ``__django_strawberry_definition__`` is
+# assigned at ``types/base.py:245`` only for concrete ``DjangoType``
+# subclasses with a ``Meta`` carrying ``model``; ``hasattr(...)`` is a
+# sufficient discriminator for "registered concrete ``DjangoType``".
+```
+
+The line anchor is stale (`:245` → `:251`) and the "`hasattr(...)` is a sufficient discriminator" claim is exactly what High #1 disproved. The newer comment block at `list_field.py:94-100` carries the correct rationale; the older block should either be deleted or rewritten so the file does not document two contradictory discriminators in adjacent paragraphs.
+
+### `functools.partial(async_fn, ...)` gap matches the High #2 failure shape
+
+`_is_async_callable`'s docstring honestly flags this gap and points at rev5 H1 YAGNI. The gap is real: a `partial`-wrapped async resolver lands in the sync wrapper, `user_resolver(root, info)` returns a coroutine, `_post_process_consumer_sync` sees neither a `Manager` nor a `QuerySet` and passes the coroutine through; under async execution Strawberry awaits the result and the awaited `QuerySet` silently skips `target_type.get_queryset(...)` — the same shape High #2 closed for `async __call__`. Two reasonable dispositions: keep the YAGNI posture and let the next real-consumer report drive the fix, OR add a two-line unwrap (`if hasattr(fn, "func") and inspect.iscoroutinefunction(fn.func): return True`) and a parallel regression test. The current state is internally consistent — flagging only because the rationale is "no one has needed it yet" rather than "it can't fail."

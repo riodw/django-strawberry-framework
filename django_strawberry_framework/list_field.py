@@ -47,15 +47,27 @@ async def _post_process_consumer_async(target_type: type, result: Any, info: Inf
 def _is_async_callable(fn: Any) -> bool:
     """True if calling ``fn`` returns a coroutine.
 
-    ``inspect.iscoroutinefunction`` catches ``async def`` functions but not
-    callable instances whose ``__call__`` is ``async def``. Without checking
-    ``__call__``, an async-callable-object resolver lands in the sync wrapper,
-    its coroutine return bypasses ``_post_process_consumer_sync`` (which sees
-    neither a ``Manager`` nor a ``QuerySet`` in the coroutine), and the awaited
-    QuerySet would silently skip ``target_type.get_queryset(...)``.
+    Two checks cover the practical resolver shapes:
 
-    ``functools.partial``-wrapped async functions remain undetected by design
-    (rev5 H1 YAGNI posture); consumers wrap in ``async def`` instead.
+    - ``inspect.iscoroutinefunction(fn)`` — catches ``async def`` functions
+      AND ``functools.partial`` / ``functools.partialmethod`` wrapping them.
+      Python's ``inspect`` module unwraps ``partial.func`` natively since 3.8
+      (verified at run time against the installed Python in
+      ``tests/test_list_field.py::test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied``;
+      a manual ``.func`` unwrap branch would be dead code on Python 3.10+).
+    - ``inspect.iscoroutinefunction(fn.__call__)`` — catches callable
+      instances whose ``__call__`` is ``async def``. ``iscoroutinefunction``
+      checks the function flag of the immediate argument, so a callable
+      instance is False; descending into ``__call__`` recovers the async flag.
+      Without this branch an async-callable-object resolver would land in the
+      sync wrapper, its coroutine return would bypass
+      ``_post_process_consumer_sync``, and the awaited QuerySet would silently
+      skip ``target_type.get_queryset(...)`` (``docs/feedback.md`` High #2).
+
+    Resolvers whose sync entry point returns an awaitable (e.g., a plain ``def``
+    that produces a coroutine from somewhere else) remain undetected — the
+    contract is that resolvers signal sync-vs-async through the standard
+    coroutine-function flag, not through opaque awaitable returns.
     """
     if inspect.iscoroutinefunction(fn):
         return True
@@ -79,10 +91,9 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
     # Decision 5 validation guards (spec lines 542-549): four constructor-site
     # checks that fail at the line that wrote ``DjangoListField(...)`` rather
     # than at finalize-time. Order is load-bearing: each target-type check
-    # assumes the previous one passed. ``__django_strawberry_definition__`` is
-    # assigned at ``types/base.py:245`` only for concrete ``DjangoType``
-    # subclasses with a ``Meta`` carrying ``model``; ``hasattr(...)`` is a
-    # sufficient discriminator for "registered concrete ``DjangoType``".
+    # assumes the previous one passed. The own-class registration check
+    # (third guard, below) is the strict invariant — see its comment block for
+    # the inheritance failure mode that ``hasattr`` would silently accept.
     if not inspect.isclass(target_type):
         raise ConfigurationError(
             f"DjangoListField requires a DjangoType class; got {target_type!r}.",

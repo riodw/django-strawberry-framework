@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-05-20
+Last refreshed: 2026-05-21
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -47,7 +47,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; two have shipped (`DONE-016-0.0.7` `DjangoListField` and `DONE-017-0.0.7` `apps.py` and Django app config) and the remaining three are still in progress: `WIP-ALPHA-018-0.0.7` (schema-export management command), `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract), and `WIP-ALPHA-045-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`). Full card detail lives under the `## In progress` board column below; `DONE-016-0.0.7` and `DONE-017-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
+- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; two have shipped (`DONE-016-0.0.7` `DjangoListField` and `DONE-017-0.0.7` `apps.py` and Django app config). `WIP-ALPHA-018-0.0.7` (schema-export management command) is now the active spec target — fleshed out and ready for design. The remaining two — `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract) and `WIP-ALPHA-045-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`) — stay queued behind 018. Full card detail lives under the `## In progress` board column below; `DONE-016-0.0.7` and `DONE-017-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`](BACKLOG.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -59,7 +59,6 @@ For install, local development, testing, and the canonical documentation map, st
   - `fieldset.py`
   - `connection.py`
   - `permissions.py`
-  - `apps.py`
   - `management/commands/export_schema.py`
   - `utils/queryset.py`
 - Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
@@ -79,13 +78,78 @@ For install, local development, testing, and the canonical documentation map, st
 
 Priority: medium
 
-Status: planned
+Severity: minor (parity-required; small surface)
+
+Status: ready for design
+
+Predecessors: `DONE-017-0.0.7` (the `AppConfig` that shipped under [`docs/spec-017-apps-0_0_7.md`](docs/spec-017-apps-0_0_7.md) is what makes `management/commands/export_schema.py` discoverable through Django's `INSTALLED_APPS`-based command resolution); [`docs/README.md`](docs/README.md) `Coming in 0.1.0` line which still carries `- schema export management command` for this card to remove (DONE-017-0.0.7 surgically removed only the `Django AppConfig` half).
+
+Why it matters:
+
+- Schema export is a common dev / CI workflow: emit the GraphQL SDL for client codegen (e.g., `graphql-codegen`), schema-diffing in CI, SDL-as-artifact in releases, and human-readable schema review. Without the command, consumers hand-roll a script that imports their schema and calls `strawberry.printer.print_schema`.
+- Both upstreams ship the command, and consumers migrating from either expect the surface. Migrants from `strawberry-graphql-django` know it as `manage.py export_schema`; migrants from `graphene-django` know it as `manage.py graphql_schema`. We borrow strawberry-django's name + shape (SDL output, positional schema dotted-path).
+- DONE-017-0.0.7's [Decision 4](docs/spec-017-apps-0_0_7.md) deliberately deferred any `AppConfig.ready()` body — Django's management-command discovery is directory-convention-based (`management/commands/`), NOT AppConfig-method-based, so this card needs no follow-up to 017's AppConfig. The two cards compose cleanly.
+
+Verified in upstream:
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/management/commands/export_schema.py` — 38-line `Command(BaseCommand)`. Positional `schema` (dotted path), optional `--path` (write to file vs stdout). Uses `strawberry.utils.importer.import_module_symbol(..., default_symbol_name="schema")` for resolution, `strawberry.printer.print_schema` for SDL output. `CommandError` on `ImportError` / `AttributeError` and on a resolved symbol that is not a `strawberry.Schema` instance.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/management/commands/graphql_schema.py` — 111-line `Command`. `--schema` (dotted path), `--out` (path or `-` for stdout), `--indent`, `--watch` (via `django.utils.autoreload`), JSON-by-default with `.graphql`/`.json` extension inference. Settings-backed defaults from `graphene_settings.SCHEMA` / `SCHEMA_OUTPUT` / `SCHEMA_INDENT`. We deliberately do NOT borrow the JSON / `--watch` / `--indent` / settings-backed defaults — they are post-`1.0.0` differentiators if consumer demand surfaces.
+
+Recommended architectural direction (pinned here so the spec doesn't re-litigate the command shape):
+
+- **Command name + signature borrowed verbatim from `strawberry-django`.** Command class lives at `django_strawberry_framework/management/commands/export_schema.py`; `Command.help = "Export the GraphQL schema"`; positional `schema` (dotted path to a `strawberry.Schema` symbol — defaults to the symbol name `schema` when the path doesn't include a `:symbol_name` suffix); optional `--path` (write to file). Absent `--path` writes to stdout.
+- **Symbol resolution.** Reuse `strawberry.utils.importer.import_module_symbol(options["schema"][0], default_symbol_name="schema")` — already on the dependency tree via `strawberry-graphql`, and matches the upstream contract. No re-invention of dotted-path parsing.
+- **SDL output via `strawberry.printer.print_schema`.** Matches the upstream's posture: SDL is the Strawberry-native serialization. Consumers needing JSON pipe SDL through external tools (`graphql-codegen`, `graphql-cli`); this is consistent with the broader Strawberry ecosystem.
+- **Error handling.** `CommandError` for: (a) the dotted path fails to import (catch `ImportError` / `AttributeError`); (b) the imported symbol is not a `strawberry.Schema` instance; (c) the positional argument is missing (Django's argparse layer already covers this, but the test plan pins it). Error messages name the failing input so the consumer can act.
+- **No settings-backed defaults.** [`AGENTS.md`](AGENTS.md) line 20 explicitly forbids preemptive settings — add a key only when the feature needs it. Consumers wrap the command in a shell alias / `Makefile` entry instead. If real demand surfaces, a follow-up card adds the setting alongside the consuming behavior.
+- **No `--watch` mode in `0.0.7`.** Reasonable post-`1.0.0` differentiator. The 0.0.7 surface is the minimum useful command; bells and whistles ship when justified.
 
 Definition of done:
 
-- Add `django_strawberry_framework/management/commands/export_schema.py`.
-- Add `tests/management/test_export_schema.py`.
-- Test through `django.core.management.call_command`, not direct `handle()` calls.
+- New spec: `docs/spec-018-export_schema-0_0_7.md` settling the command's final argument shape, error message wording, test placement under `tests/management/` vs `tests/test_export_schema.py`, and whether to ship a `tests/management/__init__.py` (AGENTS.md line 6's "do not add `__init__.py`" rule applies only to `examples/fakeshop/tests/` and `examples/fakeshop/test_query/`; package-tests subdirectories like `tests/optimizer/` and `tests/types/` already carry `__init__.py`, so `tests/management/__init__.py` follows that convention).
+- New module: `django_strawberry_framework/management/__init__.py` (empty marker).
+- New module: `django_strawberry_framework/management/commands/__init__.py` (empty marker).
+- New module: `django_strawberry_framework/management/commands/export_schema.py` implementing the strawberry-django-shaped `Command`.
+- New test file: `tests/management/test_export_schema.py` (and a sibling `__init__.py` if the spec decides) exercising every error branch and the happy path. **Tests use `django.core.management.call_command`, NOT direct `handle()` calls** — pinned here because direct `handle()` calls bypass Django's argument parsing and let dev errors slip past the test contract.
+- Live coverage: a fakeshop test under `examples/fakeshop/test_query/` (or `examples/fakeshop/tests/` if not HTTP-shaped) exercises `call_command("export_schema", "config.schema", "--path", str(tmp_path))` against the fakeshop schema at `examples/fakeshop/config/schema.py`'s top-level `schema = strawberry.Schema(...)` symbol and asserts the produced SDL contains a known type from the library app (e.g., `type Branch`).
+- `CommandError` raised AND tested for: unimportable dotted path; importable symbol that is not a `strawberry.Schema`; missing positional argument (Django's argparse layer catches this; the test asserts the error surface).
+- `--path` writes SDL to the named file (UTF-8); absent `--path` writes to stdout (capture via `StringIO` in the test).
+- [`docs/GLOSSARY.md`](docs/GLOSSARY.md) gains a `Schema export management command` entry flipped to `shipped (0.0.7)`; Index-table row updated.
+- [`docs/README.md`](docs/README.md) `Coming in 0.1.0` bullet at line 112 (post-DONE-017 line numbering) has `- schema export management command` **removed entirely** — this card owns the final cleanup of that line. DONE-017-0.0.7 surgically left this half for 018; the bullet ceases to exist when 018 ships.
+- [`docs/TREE.md`](docs/TREE.md) adds `management/` (with the `commands/` subdir and `export_schema.py`) to the current on-disk package-layout section; removes any `[alpha]` tag from the target-layout entry if one is reserved there. Adds `tests/management/test_export_schema.py` to the current test-tree layout.
+- [`KANBAN.md`](KANBAN.md) moves `WIP-ALPHA-018-0.0.7` to the Done column with the next `DONE-NNN-0.0.7` id (next after `DONE-017-0.0.7` at merge time). Past-tense body summarizes the shipped scope.
+- [`CHANGELOG.md`](CHANGELOG.md) **appends** to the existing `[0.0.7]` `### Added` subsection (do NOT create a second `[0.0.7]` heading — every `0.0.7` card under the joint cut appends per [`docs/spec-016-list_field-0_0_7.md`](docs/SPECS/spec-016-list_field-0_0_7.md) Decision 10).
+- Version bump from `0.0.6` stays deferred to the last `0.0.7` card to ship per [`docs/SPECS/spec-016-list_field-0_0_7.md`](docs/SPECS/spec-016-list_field-0_0_7.md) Decision 10. This card does NOT bump `pyproject.toml`, `django_strawberry_framework/__init__.py`'s `__version__`, or `tests/base/test_init.py`'s version assertion unless it ships last.
+- Zero new public exports — the management command is import-time plumbing, not a consumer-facing symbol. `__all__` in `django_strawberry_framework/__init__.py` is unchanged.
+- `uv run ruff format .` passes; `uv run ruff check --fix .` passes; `uv run pytest --no-cov` passes (per BUILD.md "Coverage is the maintainer's gate, not a worker's tool" — coverage stays the CI gate, not the worker's).
+
+Files likely touched:
+
+- `docs/spec-018-export_schema-0_0_7.md` (new)
+- `django_strawberry_framework/management/__init__.py` (new)
+- `django_strawberry_framework/management/commands/__init__.py` (new)
+- `django_strawberry_framework/management/commands/export_schema.py` (new)
+- `tests/management/__init__.py` (new — TBD by spec; mirror tests/optimizer/ / tests/types/ convention)
+- `tests/management/test_export_schema.py` (new)
+- `examples/fakeshop/test_query/` (new test file OR amended existing) — live coverage of the command against the fakeshop schema
+- `docs/GLOSSARY.md`
+- `docs/README.md`
+- `docs/TREE.md`
+- `KANBAN.md` (move to Done; rewrite body)
+- `CHANGELOG.md`
+
+Dependencies:
+
+- `DONE-017-0.0.7` — Django's management-command discovery is driven by `INSTALLED_APPS`, and the explicit `AppConfig` that 017 shipped is the canonical entry point Django resolves to find `management/commands/`. The command would still work via Django's package-name fallback without 017's explicit AppConfig, but the explicit class is the modern Django convention this card lands on top of.
+- None on the unshipped side.
+
+Out of scope (explicitly tracked elsewhere or deferred):
+
+- JSON introspection output (graphene-django's default mode). SDL is the Strawberry-native serialization; consumers needing JSON pipe SDL through external tools.
+- `--watch` mode (file-system watcher + Django autoreload). Reasonable post-`1.0.0` differentiator if consumer demand surfaces.
+- Settings-backed default schema dotted path (graphene-django's `GRAPHENE.SCHEMA` / `SCHEMA_OUTPUT` / `SCHEMA_INDENT` analogs). [`AGENTS.md`](AGENTS.md) line 20 forbids preemptive settings. Consumers wrap the command in a shell alias or `Makefile` entry; a follow-up card adds settings keys alongside the consuming behavior if demand appears.
+- An `--indent` / formatting option. SDL is whitespace-agnostic.
+- A `dump_schema` / `print_schema` alias. One command name, one canonical invocation; aliasing fragments documentation and consumer mental models.
 
 ### WIP-ALPHA-019-0.0.7 — Multi-database cooperation contract
 

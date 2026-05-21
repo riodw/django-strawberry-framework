@@ -88,39 +88,45 @@ def _has_node_id_marker(hint: object) -> bool:
 
 
 def _id_annotation_is_relay_node_id(cls: type) -> bool:
-    r"""Return True when ``cls.__annotations__['id']`` resolves to ``relay.NodeID[...]``.
+    r"""Return True when ``cls.__annotations__['id']`` is ``relay.NodeID[...]``.
 
-    Uses ``typing.get_type_hints(cls, include_extras=True)`` so
-    stringified annotations (``from __future__ import annotations`` or
-    explicit string annotations like ``id: "relay.NodeID[int]"``)
-    evaluate against the consumer's module globals; ``include_extras``
-    preserves the ``Annotated[T, NodeIDPrivate]`` marker.
+    Reads ``cls.__annotations__`` directly — no ``typing.get_type_hints``
+    call. The result does not depend on whether other annotations on the
+    class resolve (an unrelated forward reference on a sibling attribute
+    cannot mask the ``id`` annotation), and the function's behavior is
+    identical on every supported Python version (``typing.get_type_hints``
+    handles nested forward references differently across 3.10 vs 3.11+,
+    which previously left a code branch reachable only on the newer
+    interpreter — that divergence is gone).
 
-    Fail-soft: ``typing.get_type_hints`` evaluates every annotation on
-    ``cls`` and walks the MRO. A single unresolved string annotation
-    anywhere on the class trips ``NameError``/``AttributeError`` even
-    when ``id`` itself resolves cleanly. Two fail-soft sub-cases:
+    Two annotation forms are accepted:
 
-    1. ``id`` itself failed to resolve. ``cls.__annotations__["id"]``
-       is the raw string the consumer wrote. Accept only when the
-       string matches ``(?:^|\.)NodeID\[`` — qualified
-       (``"relay.NodeID[int]"``) and unqualified (``"NodeID[int]"``)
-       forms pass; prefixed-substring lookalikes (``"NotNodeID[int]"``,
-       ``"MyNodeID[int]"``) and non-NodeID typos
-       (``"MissingType"``) are rejected.
-    2. Some other annotation tripped the exception but ``id`` is
-       directly resolved. ``cls.__annotations__["id"]`` is the
-       ``Annotated[int, NodeIDPrivate]`` object, not a string; fall
-       back to ``_has_node_id_marker(raw)`` on the resolved object.
+    1. **String form** (``id: "relay.NodeID[int]"`` or
+       ``id: "NodeID[int]"``, typical under
+       ``from __future__ import annotations`` or any explicit string
+       annotation). Matched against ``(?:^|\.)NodeID\[`` — qualified and
+       unqualified token-shaped NodeID references pass; prefixed-substring
+       lookalikes (``"NotNodeID[int]"``, ``"MyNodeID[int]"``) and
+       non-NodeID typos (``"MissingType"``) are rejected. Downstream
+       Strawberry schema construction is responsible for resolving the
+       string to a real ``NodeID[T]`` annotation; this function only
+       confirms the shape so the H1 collision guard can accept the
+       escape hatch at class-creation time.
+    2. **Resolved-object form** (``id: relay.NodeID[int]``, evaluated at
+       class-creation time). Delegated to ``_has_node_id_marker`` which
+       checks for ``Annotated[T, NodeIDPrivate()]``.
+
+    Precondition: ``"id" in cls.__annotations__``. The only call site
+    (the Relay-id collision guard in ``DjangoType.__init_subclass__``)
+    already gates on ``has_id_annotation`` before invoking this function,
+    so the subscript below cannot ``KeyError`` from real flow. A future
+    caller that violates the precondition gets a loud ``KeyError`` rather
+    than a misleading ``False`` return.
     """
-    try:
-        hints = typing.get_type_hints(cls, include_extras=True)
-    except (NameError, AttributeError):
-        raw = cls.__annotations__.get("id")
-        if isinstance(raw, str):
-            return bool(_NODEID_STRING_RE.search(raw))
-        return _has_node_id_marker(raw)
-    return _has_node_id_marker(hints.get("id"))
+    raw = cls.__annotations__["id"]
+    if isinstance(raw, str):
+        return bool(_NODEID_STRING_RE.search(raw))
+    return _has_node_id_marker(raw)
 
 
 def _is_relay_shaped(cls: type, interfaces: tuple[type, ...]) -> bool:

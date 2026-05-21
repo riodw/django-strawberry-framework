@@ -1,0 +1,13 @@
+term,anchor,notes
+Django AppConfig,django-appconfig,The entry this card flips from `planned for 0.0.7` to `shipped (0.0.7)`.
+finalize_django_types,finalize_django_types,Consumer-owned synchronization point; this card explicitly does NOT move it into `AppConfig.ready()`.
+DjangoType,djangotype,Primary public surface; AppConfig must not eagerly import `DjangoType` modules.
+ConfigurationError,configurationerror,Not raised by this card; cited so future-spec authors see `apps.py` is intentionally validation-free.
+DjangoListField,djangolistfield,Sibling `0.0.7` card (`DONE-016`); referenced when comparing this card's no-public-export posture against spec-016's `__all__` widening.
+Schema export management command,schema-export-management-command,Sibling `0.0.7` card (`WIP-ALPHA-018`); listed in Out of scope because Django's command-discovery is directory-based, not AppConfig-based.
+Multi-database cooperation,multi-database-cooperation,Sibling `0.0.7` card (`WIP-ALPHA-019`); listed in Out of scope.
+DjangoGraphQLProtocolRouter,djangographqlprotocolrouter,Channels ASGI router planned for `0.0.12`; listed in Out of scope.
+Debug-toolbar middleware,debug-toolbar-middleware,Planned for `0.0.12`; listed in Out of scope.
+Response-extensions debug middleware,response-extensions-debug-middleware,Planned for `0.0.12`; listed in Out of scope.
+TestClient,testclient,Planned for `0.0.12`; listed in Out of scope.
+GraphQLTestCase,graphqltestcase,Planned for `0.0.12`; listed in Out of scope.

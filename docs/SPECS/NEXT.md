@@ -1,4 +1,4 @@
-# NEW.md — New Spec Builder Agent Flow
+# NEXT.md — New Spec Builder Agent Flow
 
 You have been invoked to author a new spec file under `docs/` for the next-up Work-In-Progress card in this repository.
 
@@ -105,11 +105,57 @@ The spec must:
 
 ---
 
+## Step 7 — Anchor every project-specific term to the glossary
+
+Author a companion `*-terms.csv` next to the new spec at:
+
+```
+docs/spec-<NNN>-<topic>-<0_0_X>-terms.csv
+```
+
+CSV columns: `term,anchor,notes` (header row required). One row per project-specific symbol or concept the spec references — every `DjangoType`, `Meta.*` key, named subsystem (`FilterSet`, `OrderSet`, `AggregateSet`, …), helper symbol (`apply_cascade_permissions`, `OptimizerHint`, …), and shipped/planned capability that has (or should have) a `## <heading>` in `docs/GLOSSARY.md`. The `term` column is the surface form the consumer writes (e.g., `Meta.primary`, `DjangoConnectionField`); the `anchor` column is the GitHub auto-anchor for the matching `## <heading>` (lowercased, backticks dropped, non-word characters except whitespace/hyphens stripped, whitespace runs collapsed to single hyphens — so `## \`Meta.primary\`` → `metaprimary` and `## Relation handling` → `relation-handling`); the `notes` column is free-form (use it to record why a term was included, ambiguity callouts, or status hints like `planned for 0.0.9`).
+
+**Populate the CSV OVER-ZEALOUSLY on the first pass.** Under-population is the common failure mode and the checker cannot catch it — a term that appears in the spec body but is missing from the CSV is silently unanchored and ships that way. Over-population, by contrast, surfaces loudly: the checker flags every CSV term whose anchor has no matching GLOSSARY heading, and you delete the row in one edit. **The asymmetry is the whole point — false positives are cheap, false negatives are invisible. Bias every judgement call toward inclusion.**
+
+Concrete enumeration discipline (do NOT short-circuit this list — under-population happens precisely when an agent skips the fresh-pass discipline and works from memory of writing the spec):
+
+- After writing the spec body, do a **separate fresh pass front-to-back** with the explicit goal of enumerating terms. Do not rely on memory from the writing pass; open the file again and read every section.
+- Scan **every section**, not just `Key glossary references` at the top — glossary terms hide in `Decision` bodies, `Risks and open questions`, `Edge cases and constraints`, `Doc updates`, `Out of scope`, even `Definition of done` as often as they appear in the obvious top-of-spec lookup section.
+- Every backticked symbol that names a package surface gets a row (`DjangoType`, `DjangoListField`, `DjangoConnectionField`, `OptimizerHint`, `BigInt`, `finalize_django_types`, `auto`, `ConfigurationError`, …).
+- Every `Meta.*` key the spec mentions gets its own row, one per key (`Meta.model`, `Meta.fields`, `Meta.exclude`, `Meta.name`, `Meta.description`, `Meta.interfaces`, `Meta.primary`, `Meta.optimizer_hints`, `Meta.filterset_class`, `Meta.orderset_class`, `Meta.aggregate_class`, `Meta.fields_class`, `Meta.search_fields`, `Meta.choice_enum_names`, …) — even when the spec only mentions one of them in passing.
+- Every named subsystem or capability gets a row (Relay Node integration, FK-id elision, Plan cache, Strictness mode, Choice enum generation, Relation handling, Specialized scalar conversions, Definition-order independence, Schema audit, Queryset diffing, `only()` projection, Multi-database cooperation, Connection-aware optimizer planning, …).
+- Every helper symbol cited in body or decision rationales gets a row (`apply_cascade_permissions`, `get_queryset` visibility hook, `RelatedFilter`, `RelatedOrder`, `RelatedAggregate`, `get_child_queryset`, Per-field permission hooks, `FieldError` envelope, `Upload` scalar, `DjangoFileType`, `DjangoImageType`, …).
+- Every shipped-status or planned-status callout that names a term — if the spec writes "planned for `0.0.9`" against a symbol name, that symbol gets a row even if the spec only references it as an Out-of-scope pointer.
+- Every cross-referenced spec section, GLOSSARY entry name, or external symbol cited via markdown link gets evaluated for a row — when in doubt, include.
+- Backtick-wrapped, non-backticked, qualified (`relay.Node`), and unqualified (`Node`) forms of the same symbol all map to the same anchor — pick the most common surface form for the `term` column and let one row cover every mention.
+
+The instinct to "trim CSV rows that don't have GLOSSARY headings" happens AFTER the over-zealous first pass, driven by the checker's output. Do NOT pre-emptively skip a term because you are unsure it has a glossary entry. Do NOT skip a term because you "already linked it inline" — the CSV is the audit ledger, not a duplicate of the spec body. Let the script tell you which rows to drop; do not pre-decide.
+
+Then run the checker:
+
+```
+uv run python scripts/check_spec_glossary.py --spec docs/spec-<NNN>-<topic>-<0_0_X>.md
+```
+
+(`--terms` and `--glossary` default sensibly when the CSV lives next to the spec and the glossary stays at `docs/GLOSSARY.md`.)
+
+Pass condition: the script exits 0 with `OK: N terms — all have glossary entries and at least one spec link.` That output is the proof that **everything is accounted for** — every term in the CSV resolves to a real GLOSSARY heading, and every term has at least one inline `](GLOSSARY.md#<anchor>)` reference somewhere in the spec body.
+
+Two failure modes and their resolutions:
+
+- **Missing glossary entries** (the term's anchor has no matching `## <heading>` in `docs/GLOSSARY.md`). Either the term is mis-spelled in the CSV (fix the row), the GLOSSARY needs a new entry (out of scope for this flow — leave the term in the CSV and call out the missing entry as an `Open questions` item in the spec), or the term shouldn't be in the CSV at all (delete the row).
+- **Missing spec links** (the spec mentions the term in prose but doesn't link it to the glossary). Add a `](GLOSSARY.md#<anchor>)` reference manually, OR re-run the checker with `--auto-link` to rewrite the spec in place — it wraps the first non-code, non-link occurrence of each term as `[term](GLOSSARY.md#<anchor>)` (and prefers the backtick-wrapped form when the spec already says e.g. `Meta.fields` in inline code). The auto-link pass is idempotent.
+
+Repeat the CSV edit / checker run cycle until the script exits 0. The CSV is the source of truth: trim it when a term does not warrant a glossary entry, extend it when a new term needs one. The CSV is committed alongside the spec so future maintainers can re-run the check whenever the GLOSSARY or the spec changes.
+
+---
+
 ## Boundaries
 
-- Do **not** modify `KANBAN.md`, `CHANGELOG.md`, `TODAY.md`, or any file other than the new spec file.
+- Do **not** modify `KANBAN.md`, `CHANGELOG.md`, `TODAY.md`, or any file other than the new spec file and its companion `*-terms.csv`.
 - Do **not** commit.
-- Do **not** run pytest, ruff, or any other tooling unless answering a question you need to settle inside the spec.
-- The new spec file is the only artifact this flow produces.
+- Do **not** run pytest, ruff, or any other tooling unless Step 7 prescribes it (the `scripts/check_spec_glossary.py` run, including its `--auto-link` rewrite mode, is part of the flow) or you need to settle a question inside the spec.
+- The new spec file and its companion `*-terms.csv` are the only artifacts this flow produces.
+- The flow is not complete until `scripts/check_spec_glossary.py` exits 0 against the new spec and its CSV.
 - If the WIP card's body conflicts with something you read in Step 1, prefer the card and call out the conflict as an entry in the spec's `Risks and open questions` section — do not silently reconcile.
 - Reading source files, existing specs, or test files during Step 6 is allowed and expected. The boundary is on **writes**, not reads.

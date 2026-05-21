@@ -1,7 +1,7 @@
 ````text
 # Build: Cross-slice integration pass
 
-Spec reference: `docs/spec-017-apps-0_0_7.md` (build-017 — all three slice artifacts `final-accepted` per `docs/builder/build-017-apps-0_0_7.md:20-22`)
+Spec reference: `docs/SPECS/spec-017-apps-0_0_7.md` (build-017 — all three slice artifacts `final-accepted` per `docs/builder/build-017-apps-0_0_7.md:20-22`)
 Status: final-accepted
 
 This artifact is the Worker 1-owned cross-slice integration pass that runs after every spec slice is `final-accepted` and before the final test-run gate. Per BUILD.md "Cross-slice integration pass" lines 509-531, the pass either records DRY-consolidation findings (and triggers a Worker 2 / Worker 3 loop) or accepts the cohesive shape that shipped. No separate review step gates this artifact; if no consolidation is needed, Worker 1 sets `Status: final-accepted` directly.
@@ -18,7 +18,7 @@ All three artifacts' `Status:` lines are `final-accepted`; all three slice check
 
 ## Spec status/header re-verification (Worker 1 per-spawn rule)
 
-Per `docs/builder/worker-1.md` lines 40-48, re-read `docs/spec-017-apps-0_0_7.md:1-6` on this spawn:
+Per `docs/builder/worker-1.md` lines 40-48, re-read `docs/SPECS/spec-017-apps-0_0_7.md:1-6` on this spawn:
 
 ```text
 # Spec: `apps.py` and Django `AppConfig`

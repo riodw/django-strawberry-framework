@@ -2,7 +2,7 @@
 
 You have been invoked to author a new spec file under `docs/` for the next-up Work-In-Progress card in this repository.
 
-Spec files live at the root of `docs/` (e.g. `docs/spec-017-apps-0_0_7.md`), NOT under `docs/SPECS/`. The older `docs/SPECS/spec-*.md` files are legacy / archived locations — read them from there for structural reference (Step 5), but new specs you create land in `docs/`.
+Spec files live at the root of `docs/` (e.g. `docs/spec-018-export_schema-0_0_7.md`), NOT under `docs/SPECS/`. The older `docs/SPECS/spec-*.md` files are legacy / archived locations — read them from there for structural reference (Step 5), but new specs you create land in `docs/`.
 
 Execute the steps below **in strict order**. Do not skip ahead. Do not read files outside the batch named in the current step. Do not start writing the spec before Step 6.
 

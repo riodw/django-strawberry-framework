@@ -82,13 +82,15 @@ Severity: minor (parity-required; small surface)
 
 Status: ready for design
 
-Predecessors: `DONE-017-0.0.7` (the `AppConfig` that shipped under [`docs/spec-017-apps-0_0_7.md`](docs/spec-017-apps-0_0_7.md) is what makes `management/commands/export_schema.py` discoverable through Django's `INSTALLED_APPS`-based command resolution); [`docs/README.md`](docs/README.md) `Coming in 0.1.0` line which still carries `- schema export management command` for this card to remove (DONE-017-0.0.7 surgically removed only the `Django AppConfig` half).
+Predecessors: `DONE-017-0.0.7` (the `AppConfig` that shipped under [`docs/SPECS/spec-017-apps-0_0_7.md`](docs/SPECS/spec-017-apps-0_0_7.md) is what makes `management/commands/export_schema.py` discoverable through Django's `INSTALLED_APPS`-based command resolution); [`docs/README.md`](docs/README.md) `Coming in 0.1.0` line which still carries `- schema export management command` for this card to remove (DONE-017-0.0.7 surgically removed only the `Django AppConfig` half).
+
+Active spec: [`docs/spec-018-export_schema-0_0_7.md`](docs/spec-018-export_schema-0_0_7.md).
 
 Why it matters:
 
 - Schema export is a common dev / CI workflow: emit the GraphQL SDL for client codegen (e.g., `graphql-codegen`), schema-diffing in CI, SDL-as-artifact in releases, and human-readable schema review. Without the command, consumers hand-roll a script that imports their schema and calls `strawberry.printer.print_schema`.
 - Both upstreams ship the command, and consumers migrating from either expect the surface. Migrants from `strawberry-graphql-django` know it as `manage.py export_schema`; migrants from `graphene-django` know it as `manage.py graphql_schema`. We borrow strawberry-django's name + shape (SDL output, positional schema dotted-path).
-- DONE-017-0.0.7's [Decision 4](docs/spec-017-apps-0_0_7.md) deliberately deferred any `AppConfig.ready()` body — Django's management-command discovery is directory-convention-based (`management/commands/`), NOT AppConfig-method-based, so this card needs no follow-up to 017's AppConfig. The two cards compose cleanly.
+- DONE-017-0.0.7's [Decision 4](docs/SPECS/spec-017-apps-0_0_7.md) deliberately deferred any `AppConfig.ready()` body — Django's management-command discovery is directory-convention-based (`management/commands/`), NOT AppConfig-method-based, so this card needs no follow-up to 017's AppConfig. The two cards compose cleanly.
 
 Verified in upstream:
 
@@ -1816,7 +1818,7 @@ The version bump from `0.0.6` stays deferred to the last `0.0.7` card to ship pe
 
 Files touched: `django_strawberry_framework/apps.py` (new), `tests/test_apps.py` (new), plus the Slice 3 doc sweep across `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `KANBAN.md`, `CHANGELOG.md`.
 
-Spec: `docs/spec-017-apps-0_0_7.md`. Build plan: `docs/builder/build-017-apps-0_0_7.md`.
+Spec: `docs/SPECS/spec-017-apps-0_0_7.md`. Build plan: `docs/builder/build-017-apps-0_0_7.md`.
 
 ## Release readiness checklist
 

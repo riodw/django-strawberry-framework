@@ -1,6 +1,6 @@
 # Package build plan: apps / 0.0.7 (017)
 
-Spec source: `docs/spec-017-apps-0_0_7.md`
+Spec source: `docs/SPECS/spec-017-apps-0_0_7.md`
 Target release: `0.0.7`
 Date created: 2026-05-21
 Pre-flight: passed on 2026-05-21; baseline: clean; cleanup: old build-016 artifacts removed, memory/shadow/temp-tests cleared.

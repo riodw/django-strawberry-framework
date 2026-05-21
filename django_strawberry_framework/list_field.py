@@ -44,6 +44,25 @@ async def _post_process_consumer_async(target_type: type, result: Any, info: Inf
     return result
 
 
+def _is_async_callable(fn: Any) -> bool:
+    """True if calling ``fn`` returns a coroutine.
+
+    ``inspect.iscoroutinefunction`` catches ``async def`` functions but not
+    callable instances whose ``__call__`` is ``async def``. Without checking
+    ``__call__``, an async-callable-object resolver lands in the sync wrapper,
+    its coroutine return bypasses ``_post_process_consumer_sync`` (which sees
+    neither a ``Manager`` nor a ``QuerySet`` in the coroutine), and the awaited
+    QuerySet would silently skip ``target_type.get_queryset(...)``.
+
+    ``functools.partial``-wrapped async functions remain undetected by design
+    (rev5 H1 YAGNI posture); consumers wrap in ``async def`` instead.
+    """
+    if inspect.iscoroutinefunction(fn):
+        return True
+    call = getattr(fn, "__call__", None)
+    return call is not None and inspect.iscoroutinefunction(call)
+
+
 def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — consumer usage is `DjangoListField(BranchType)`
     target_type: type,
     *,
@@ -72,11 +91,19 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
         raise ConfigurationError(
             f"DjangoListField requires a DjangoType subclass; got {target_type.__name__}.",
         )
-    if not hasattr(target_type, "__django_strawberry_definition__"):
+    # Own-class registration check: ``__django_strawberry_definition__`` is
+    # assigned by ``DjangoType.__init_subclass__`` (``types/base.py:251``) only
+    # for concrete subclasses carrying their own ``Meta`` with a ``model``. The
+    # attribute is inherited via MRO, so ``hasattr`` would accept a subclass
+    # that omits its own ``Meta`` — binding the field to a target whose
+    # definition, ``Meta.primary`` state, and model belong to the parent.
+    # ``definition.origin is target_type`` is the strict own-class invariant.
+    definition = getattr(target_type, "__django_strawberry_definition__", None)
+    if definition is None or getattr(definition, "origin", None) is not target_type:
         raise ConfigurationError(
-            f"DjangoListField target {target_type.__name__} is not a registered DjangoType "
-            f"(no __django_strawberry_definition__). This usually means {target_type.__name__}'s "
-            "`Meta` is missing a `model` declaration.",
+            f"DjangoListField target {target_type.__name__} is not a registered DjangoType. "
+            f"This usually means {target_type.__name__}'s `Meta` is missing a `model` "
+            "declaration, or it inherits a definition from a parent without declaring its own `Meta`.",
         )
     if resolver is not None and not callable(resolver):
         raise ConfigurationError("DjangoListField resolver must be callable.")
@@ -103,7 +130,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
         wrapped = _default
     else:
         user_resolver = resolver
-        if inspect.iscoroutinefunction(user_resolver):
+        if _is_async_callable(user_resolver):
 
             async def _wrap(root: Any, info: Info) -> Any:
                 # rev4 H2: ``await`` the consumer coroutine BEFORE handing

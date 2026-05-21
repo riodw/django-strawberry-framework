@@ -7,9 +7,15 @@ Package tests; system-under-test is ``django_strawberry_framework``
 (spec rev5 L3 — framing matches ``AGENTS.md`` line 5). The file is the flat
 single-file Layer-3 module's mirror per ``docs/TREE.md:453``.
 
-Holds the Slice-2 validation cluster (4 tests) and the Slice-3 behavior
-cluster (15 tests) — 19 total, pinned against the spec's Test plan
-section. The spec's Slice-3 inventory at line 129 calls out
+Holds the Slice-2 validation cluster (5 tests) and the Slice-3 behavior
+cluster (16 tests) — 21 total. Two of the tests are post-016 review
+regressions from ``docs/feedback.md``: the own-class-registration guard
+(High #1 — rejects ``DjangoType`` subclass that omits its own ``Meta``)
+and the async-callable-object detection (High #2 — detects ``async def
+__call__`` at construction time so the coroutine return doesn't bypass
+``_post_process_consumer_async``).
+
+The spec's Slice-3 inventory at line 129 calls out
 "``Manager``/``QuerySet``" together for the consumer-resolver returns;
 both arms are load-bearing per rev4 M1 (the field wrapper owns the
 ``Manager → QuerySet`` coercion; the optimizer's downstream coercion is
@@ -115,6 +121,34 @@ def test_djangolistfield_rejects_djangotype_without_definition() -> None:
         match=r"DjangoListField target AbstractBase is not a registered DjangoType",
     ):
         DjangoListField(AbstractBase)
+
+
+def test_djangolistfield_rejects_djangotype_subclass_without_own_meta() -> None:
+    """Subclass of a concrete ``DjangoType`` without its own ``Meta`` is rejected.
+
+    Pins the own-class registration invariant at ``list_field.py``'s
+    ``definition.origin is target_type`` guard.
+    ``__django_strawberry_definition__`` is assigned in
+    ``DjangoType.__init_subclass__`` (``types/base.py:251``) and inherited via
+    MRO; a subclass that omits ``Meta`` would otherwise pass the guard via the
+    parent's definition and bind the field to a target whose model, selected
+    fields, and ``Meta.primary`` state belong to the parent class (docs/feedback.md
+    High #1).
+    """
+
+    class ParentCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ChildCategoryType(ParentCategoryType):
+        pass
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"DjangoListField target ChildCategoryType is not a registered DjangoType",
+    ):
+        DjangoListField(ChildCategoryType)
 
 
 def test_djangolistfield_rejects_non_callable_resolver() -> None:
@@ -503,6 +537,52 @@ async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_q
     @strawberry.type
     class Query:
         all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied(
+    monkeypatch,
+) -> None:
+    """Callable instance with ``async def __call__`` is detected as async at construction.
+
+    Pins ``_is_async_callable`` detection of callable objects whose
+    ``__call__`` is ``async def`` (``list_field.py``'s helper).
+    ``inspect.iscoroutinefunction(instance)`` is False for such objects, but
+    ``inspect.iscoroutinefunction(instance.__call__)`` is True — the factory
+    must dispatch to the async wrapper either way. Without this, the sync
+    wrapper would call the instance, receive a coroutine, find no
+    ``Manager``/``QuerySet`` to coerce, and pass the coroutine through; under
+    async schema execution Strawberry would still await the coroutine and
+    silently skip ``target_type.get_queryset(...)`` (docs/feedback.md High #2).
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset.exclude(name__startswith="a")
+
+    class _AsyncResolver:
+        async def __call__(self, root: Any, info: Info) -> Any:  # noqa: ARG002
+            return await sync_to_async(lambda: Category.objects.all())()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_AsyncResolver())
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)

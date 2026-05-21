@@ -86,7 +86,7 @@ For the current capability snapshot — what the package can actually do in the 
 
 A quick summary:
 
-**Shipped today** (`0.0.6`):
+**Shipped today** (`0.0.7`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
 - scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, file/image, choice enums)
 - specialized scalar conversions (`BigIntegerField` / `PositiveBigIntegerField` → `BigInt`, `JSONField` → `JSON`, PostgreSQL `ArrayField` → `list[T]`, PostgreSQL `HStoreField` → `JSON`)
@@ -101,6 +101,7 @@ A quick summary:
 - model / type registry and `auto` re-export from Strawberry
 - `Meta.primary` — multiple `DjangoType` subclasses per Django model with explicit primary-flag opt-in
 - annotation-only and `strawberry.field` consumer overrides for scalar fields, symmetric with the shipped relation-override contract (consumer overrides bypass `convert_scalar` validations; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time)
+- `Django AppConfig` — `django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` so consumers can list `"django_strawberry_framework"` in `INSTALLED_APPS` and Django's check / signal hooks resolve through it (new in `0.0.7`).
 
 **Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
 - `DjangoConnectionField` (Relay connection)
@@ -109,7 +110,7 @@ A quick summary:
 - `Upload` scalar and file-field mapping
 - auth mutations (`login` / `logout` / `register`) and `current_user` query
 - Channels ASGI router, debug-toolbar middleware, test client helper, response-extensions debug
-- schema export management command, Django `AppConfig`
+- schema export management command
 
 **Coming in `1.0.0`** (stable — `django-graphene-filters` depth + API freeze):
 - `FieldSet` (declarative `fields_class`)

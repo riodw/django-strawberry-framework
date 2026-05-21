@@ -47,7 +47,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; `DONE-016-0.0.7` (`DjangoListField`) shipped first, and the remaining four are still in progress: `WIP-ALPHA-017-0.0.7` (`apps.py` and Django app config), `WIP-ALPHA-018-0.0.7` (schema-export management command), `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract), and `WIP-ALPHA-045-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`). Full card detail lives under the `## In progress` board column below; `DONE-016-0.0.7` is in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
+- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; two have shipped (`DONE-016-0.0.7` `DjangoListField` and `DONE-017-0.0.7` `apps.py` and Django app config) and the remaining three are still in progress: `WIP-ALPHA-018-0.0.7` (schema-export management command), `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract), and `WIP-ALPHA-045-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`). Full card detail lives under the `## In progress` board column below; `DONE-016-0.0.7` and `DONE-017-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`](BACKLOG.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -74,18 +74,6 @@ For install, local development, testing, and the canonical documentation map, st
 ## Board columns
 
 ## In progress
-
-### WIP-ALPHA-017-0.0.7 — `apps.py` and Django app config
-
-Priority: medium
-
-Status: planned
-
-Definition of done:
-
-- Add `django_strawberry_framework/apps.py`.
-- Add `tests/test_apps.py`.
-- Do not add settings placeholders unless a shipped feature consumes them.
 
 ### WIP-ALPHA-018-0.0.7 — Schema export management command
 
@@ -1751,6 +1739,20 @@ Validation tests in `tests/test_list_field.py` cover: non-class targets, non-`Dj
 Files touched: `django_strawberry_framework/list_field.py` (new), `django_strawberry_framework/__init__.py`, `tests/test_list_field.py` (new), `tests/base/test_init.py`, `examples/fakeshop/apps/library/schema.py`, `examples/fakeshop/test_query/test_library_api.py`, plus the Slice 5 doc sweep across `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `GOAL.md`, `TODAY.md`, `KANBAN.md`, `CHANGELOG.md`.
 
 Spec: `docs/SPECS/spec-016-list_field-0_0_7.md`. Build plan: `docs/builder/build-016-list_field-0_0_7.md`.
+
+### DONE-017-0.0.7 — `apps.py` and Django app config
+
+Shipped `django_strawberry_framework/apps.py` containing `DjangoStrawberryFrameworkConfig(AppConfig)` with `name = "django_strawberry_framework"` and `verbose_name = "Django Strawberry Framework"`; no `ready()` body in `0.0.7` (deferred to the card that needs one). Consumers list `"django_strawberry_framework"` in `INSTALLED_APPS`; Django's implicit single-AppConfig discovery resolves the explicit class, and Django's check / signal hooks now resolve through the package's AppConfig.
+
+Borrowed the behavioral shape from `strawberry_django/apps.py` verbatim (two class-level attributes, `name` then `verbose_name`); the module docstring (required by ruff's `D100`) and class docstring (required by ruff's `D101`) are additive, forced by this repo's stricter pydocstyle gate. `DjangoStrawberryFrameworkConfig` is NOT re-exported from `django_strawberry_framework/__init__.py` — Django's app loader resolves it through its dotted module path, and consumers reach it via `INSTALLED_APPS`, not via the package's import surface.
+
+Package-internal tests at `tests/test_apps.py` cover the four positive contracts (importability from `django_strawberry_framework.apps`, `django.apps.AppConfig` subclass, `name` / `verbose_name` attribute values, and Django registry pickup via `django.apps.apps.get_app_config("django_strawberry_framework")`) plus one consolidated negative-shape test (`test_djangostrawberryframeworkconfig_defines_no_extra_appconfig_attributes`) that iterates `{"ready", "label", "default_auto_field", "default"}` and asserts each is absent from `DjangoStrawberryFrameworkConfig.__dict__` — pinning the "no extra behavioral AppConfig attributes" discipline across Decisions 2 / 4 / 5 / 8 of the spec. The existing live `/graphql/` HTTP tests at `examples/fakeshop/test_query/test_library_api.py` continue to pass unmodified — `examples/fakeshop/config/settings.py:48`'s `"django_strawberry_framework"` `INSTALLED_APPS` entry now resolves to the explicit AppConfig without any consumer-side change.
+
+The version bump from `0.0.6` stays deferred to the last `0.0.7` card to ship per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`; this card leaves `pyproject.toml`, `django_strawberry_framework/__init__.py`'s `__version__`, and `tests/base/test_init.py`'s version assertion at `0.0.6`. No new public exports; `__all__` is unchanged.
+
+Files touched: `django_strawberry_framework/apps.py` (new), `tests/test_apps.py` (new), plus the Slice 3 doc sweep across `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `KANBAN.md`, `CHANGELOG.md`.
+
+Spec: `docs/spec-017-apps-0_0_7.md`. Build plan: `docs/builder/build-017-apps-0_0_7.md`.
 
 ## Release readiness checklist
 

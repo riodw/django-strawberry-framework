@@ -49,7 +49,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Connection-aware optimizer planning](#connection-aware-optimizer-planning) | planned for `0.0.9` |
 | [Debug-toolbar middleware](#debug-toolbar-middleware) | planned for `0.0.12` |
 | [Definition-order independence](#definition-order-independence) | shipped (`0.0.4`) |
-| [Django `AppConfig`](#django-appconfig) | planned for `0.0.7` |
+| [Django `AppConfig`](#django-appconfig) | shipped (`0.0.7`) |
 | [`DjangoConnection`](#djangoconnection) | planned for `0.0.9` |
 | [`DjangoConnectionField`](#djangoconnectionfield) | planned for `0.0.9` |
 | [`DjangoFileType`](#djangofiletype) | planned for `0.0.11` |
@@ -245,9 +245,9 @@ Validation that a manual relation annotation matches the Django relation cardina
 
 ## Django `AppConfig`
 
-**Status:** planned for `0.0.7`.
+**Status:** shipped (`0.0.7`).
 
-`django_strawberry_framework/apps.py` ships an `AppConfig` so consumers can add the package to `INSTALLED_APPS` and use Django checks / signal hooks against it.
+`django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` with `name = "django_strawberry_framework"` and `verbose_name = "Django Strawberry Framework"`; no `ready()` body in `0.0.7`. Consumers list `"django_strawberry_framework"` in `INSTALLED_APPS` and Django's implicit single-AppConfig discovery resolves the explicit class.
 
 **See also:** [Schema export management command](#schema-export-management-command).
 

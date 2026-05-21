@@ -194,6 +194,7 @@ The fakeshop example project uses the standard explicit-package layout under `ex
 django_strawberry_framework/
 ├── __init__.py              # public-API re-exports (DjangoType, DjangoOptimizerExtension, OptimizerHint, BigInt, finalize_django_types, auto)
 ├── py.typed
+├── apps.py                  # AppConfig
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
 ├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6: primary_for, types_for, models_with_multiple_types; unregister test-fixture helper)
@@ -233,7 +234,7 @@ Modules are tagged with `[alpha]`, `[beta]`, or `[stable]` to indicate which dev
 django_strawberry_framework/
 ├── __init__.py              # public-API re-exports
 ├── py.typed
-├── apps.py                  # [alpha] Django AppConfig
+├── apps.py                  # Django AppConfig
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
 ├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6)
@@ -329,6 +330,7 @@ Tests live across three roots, each with a focused responsibility. The root `tes
 ```text
 tests/                       # Package-internal tests (current state)
 ├── __init__.py
+├── test_apps.py             # AppConfig (single-file Layer-3 module)
 ├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
 ├── test_registry.py         # model→type registry
 ├── base/                    # FROZEN: only conf and version checks

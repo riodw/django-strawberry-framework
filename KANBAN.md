@@ -74,6 +74,12 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## In progress
 
+<!-- TODO spec-018 Slice 3: when this card ships, MOVE the entire `WIP-ALPHA-018-0.0.7` block
+     (heading through end-of-card body) down into the `## Done` column (line ~1251), renumber
+     to the next available `DONE-NNN-0.0.7` id, and rewrite the body in past tense summarizing
+     the shipped scope. Also update the `### In progress` summary paragraph at line ~50 to
+     remove `WIP-ALPHA-018-0.0.7` from the remaining-cards list. Per Decision 9, this card
+     does NOT bump the version — that's the last 0.0.7 card's job. -->
 ### WIP-ALPHA-018-0.0.7 — Schema export management command
 
 Priority: medium

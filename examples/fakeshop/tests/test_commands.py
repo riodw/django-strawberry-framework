@@ -178,3 +178,27 @@ def test_seed_shards_command_runs_when_shard_alias_present(settings, monkeypatch
     call_command("seed_shards", "--count", "1", stdout=out)
     output = out.getvalue()
     assert "Shards populated." in output
+
+
+# ---------------------------------------------------------------------------
+# export_schema command (TODO spec-018 Slice 2 — see docs/spec-018-export_schema-0_0_7.md)
+# ---------------------------------------------------------------------------
+#
+# TODO spec-018 Slice 2: add one live test that calls the new management command
+# against the real fakeshop schema. Pseudo code:
+#
+#     def test_export_schema_command_against_fakeshop_schema(tmp_path):
+#         out_path = tmp_path / "schema.graphql"
+#         call_command("export_schema", "config.schema", "--path", str(out_path))
+#         assert out_path.exists()
+#         # rev4 M1: assert against `"type BranchType"`, NOT `"type Branch"` —
+#         # the DjangoType class at examples/fakeshop/apps/library/schema.py:81
+#         # is `class BranchType(DjangoType):` and Strawberry emits the GraphQL
+#         # type name from the class name unchanged.
+#         assert "type BranchType" in out_path.read_text(encoding="utf-8")
+#
+# Notes:
+#  - No `@pytest.mark.django_db` — the command reads the schema only, no DB.
+#  - Decision 10 of the spec places this file under `examples/fakeshop/tests/`,
+#    NOT under `examples/fakeshop/test_query/` (the command is not HTTP-shaped).
+#  - The command's `Command` class lands in Slice 1; this test depends on Slice 1.

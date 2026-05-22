@@ -187,6 +187,9 @@ django_graphene_filters/
 
 ## django_strawberry_framework (current on-disk layout)
 
+<!-- TODO spec-018 Slice 3: surgically remove `, and the management command` from the sentence below.
+     After Slice 3, the management command IS on disk, so the trailing fragment becomes self-contradicting.
+     Final sentence should read: "... the test client, and the Channels router — is not on disk yet ..." -->
 The shared infrastructure plus model/type and optimizer subpackages are on disk: `types/`, `optimizer/`, and `utils/`. Every other module shown in the target package layout below — query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the test client, the Channels router, and the management command — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
 The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`). `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
 
@@ -200,6 +203,14 @@ django_strawberry_framework/
 ├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6: primary_for, types_for, models_with_multiple_types; unregister test-fixture helper)
 ├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
 ├── list_field.py            # DjangoListField (non-Relay list[T] factory for root Query fields; shipped in 0.0.7)
+<!-- TODO spec-018 Slice 3: insert the `management/` subtree below this line (alphabetical position
+     between `list_field.py` and `optimizer/`). Pseudo-shape:
+       ├── management/             # Django management commands (shipped in 0.0.7)
+       │   ├── __init__.py
+       │   └── commands/
+       │       ├── __init__.py
+       │       └── export_schema.py  # `manage.py export_schema` — print/write GraphQL SDL -->
+
 ├── types/                   # DjangoType subsystem (Layer 2) — shipped
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
@@ -306,6 +317,9 @@ django_strawberry_framework/
 ├── test/                    # [alpha] Test utilities for consumers
 │   ├── __init__.py
 │   └── client.py            # TestClient, AsyncTestClient, GraphQLTestCase
+<!-- TODO spec-018 Slice 3: remove the `[alpha]` tag from the line below — the management command
+     has now landed, so the tag (meaning "lands before 0.1.0") no longer applies.
+     Final line should read: `├── management/              # Django management commands` -->
 ├── management/              # [alpha] Django management commands
 │   ├── __init__.py
 │   └── commands/
@@ -330,6 +344,11 @@ Tests live across three roots, each with a focused responsibility. The root `tes
 ```text
 tests/                       # Package-internal tests (current state)
 ├── __init__.py
+<!-- TODO spec-018 Slice 3: insert the `management/` test subdirectory BEFORE the `test_apps.py`
+     line below (alphabetical — `management/` sorts before `test_apps.py`). Pseudo-shape:
+       ├── management/             # mirrors django_strawberry_framework/management/
+       │   ├── __init__.py
+       │   └── test_export_schema.py  # ← export_schema Command — happy paths + failure modes -->
 ├── test_apps.py             # AppConfig (single-file Layer-3 module)
 ├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
 ├── test_registry.py         # model→type registry

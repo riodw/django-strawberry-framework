@@ -1,8 +1,8 @@
 term,anchor,notes
 Multi-database cooperation,multi-database-cooperation,The entry this card flips from `planned for 0.0.7` to `shipped (0.0.7)`.
 DjangoOptimizerExtension,djangooptimizerextension,Optimizer extension that participates in the cooperation contract via queryset `_db` preservation.
-get_queryset visibility hook,get_queryset-visibility-hook,Visibility hook whose `Prefetch` downgrade respects queryset routing — cooperation axis 3.
-Strictness mode,strictness-mode,Strictness check fires on the queryset's connection — cooperation axis 4.
+get_queryset visibility hook,get_queryset-visibility-hook,Visibility hook whose `Prefetch` downgrade preserves consumer-provided `Prefetch(queryset=…)` aliases — cooperation axis 3 (rev2 H2; generated child querysets are out of scope).
+Strictness mode,strictness-mode,Strictness check is connection-agnostic — cooperation axis 4 (rev2 H6).
 Queryset diffing,queryset-diffing,Cooperation rule that respects consumer-applied work including `.using(alias)`; grounds the contract in shipped behavior.
 FK-id elision,fk-id-elision,Cooperation axis 1 — the elision stub's `_state.db` is set via `router.db_for_read`.
 DjangoType,djangotype,Consumer-facing type used in fixtures; framing only.
@@ -15,4 +15,4 @@ Plan cache,plan-cache,Plan cache key does not include database alias; edge-case 
 only() projection,only-projection,Part of the optimizer's `select_related` / `prefetch_related` / `only()` plan that preserves queryset `_db`.
 Connection-aware optimizer planning,connection-aware-optimizer-planning,Out of scope — `edges { node { ... } }` planning, not database-connection planning despite the overlapping word.
 AggregateSet,aggregateset,Out of scope — multi-shard aggregates deferred to the future `AggregateSet` (planned for `0.1.3`).
-Meta.preferred_database,multi-database-cooperation,Hypothetical future hint; deferred to `BACKLOG.md` item 41 — anchors to the cooperation entry since no glossary heading exists yet.
+OptimizerHint,optimizerhint,Referenced in the narrowed axis-3 contract — consumer-built `OptimizerHint.prefetch(Prefetch(queryset=…))` is the supported route for per-relation alias routing (rev2 H2).

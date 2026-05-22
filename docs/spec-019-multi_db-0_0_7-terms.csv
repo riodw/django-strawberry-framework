@@ -16,3 +16,4 @@ only() projection,only-projection,Part of the optimizer's `select_related` / `pr
 Connection-aware optimizer planning,connection-aware-optimizer-planning,Out of scope — `edges { node { ... } }` planning, not database-connection planning despite the overlapping word.
 AggregateSet,aggregateset,Out of scope — multi-shard aggregates deferred to the future `AggregateSet` (planned for `0.1.3`).
 OptimizerHint,optimizerhint,Referenced in the narrowed axis-3 contract — consumer-built `OptimizerHint.prefetch(Prefetch(queryset=…))` is the supported route for per-relation alias routing (rev2 H2).
+Meta.optimizer_hints,metaoptimizer_hints,Referenced by the consumer-provided Prefetch/OptimizerHint path; records that per-relation optimizer overrides are configured through the type Meta.

@@ -1,6 +1,6 @@
 # Cross-slice integration: export_schema / 0.0.7 (018)
 
-Spec source: `docs/spec-018-export_schema-0_0_7.md`
+Spec source: `docs/SPECS/spec-018-export_schema-0_0_7.md`
 Build plan: `docs/builder/build-018-export_schema-0_0_7.md`
 Status: final-accepted
 
@@ -91,7 +91,7 @@ None. The build is small-surface (one ~45-line source module, one ~95-line test 
 ## Notes for Worker 0
 
 - **No consolidation loop needed.** The integration pass is clean — zero High/Medium/Low findings, zero cross-slice DRY opportunities. Worker 0 should dispatch directly to the final test-run gate (Worker 1, `docs/builder/bld-final.md`); no Worker 2 / Worker 3 second loop is warranted.
-- **Spec status-line flip is still deferred to the joint-cut last-card-to-ship.** Per Worker 3's Slice 3 reconciliation note 3 and Worker 1's Slice 3 final-verification disposition, the spec's `Status: draft (revision 5, ...)` line at `docs/spec-018-export_schema-0_0_7.md:4` stays at `draft` until the joint `0.0.7` cut completes (WIP-ALPHA-019-0.0.7 and WIP-ALPHA-020-0.0.7 are still queued). The final test-run gate (Worker 1 again) is not the right point to flip it either — that gate verifies the test suite passes, not the spec lifecycle. The flip belongs to whichever Worker 1 spawn closes out the joint bundle once 019 and 020 have shipped.
+- **Spec status-line flip is still deferred to the joint-cut last-card-to-ship.** Per Worker 3's Slice 3 reconciliation note 3 and Worker 1's Slice 3 final-verification disposition, the spec's `Status: draft (revision 5, ...)` line at `docs/SPECS/spec-018-export_schema-0_0_7.md:4` stays at `draft` until the joint `0.0.7` cut completes (WIP-ALPHA-019-0.0.7 and WIP-ALPHA-020-0.0.7 are still queued). The final test-run gate (Worker 1 again) is not the right point to flip it either — that gate verifies the test suite passes, not the spec lifecycle. The flip belongs to whichever Worker 1 spawn closes out the joint bundle once 019 and 020 have shipped.
 - **Maintainer concurrent activity recorded in the build plan.** The build plan's two "Mid-build baseline drift" notes at `docs/builder/build-018-export_schema-0_0_7.md:8-15` accurately describe (a) the KANBAN NNN renumbering that landed mid-build, (b) the maintainer commits `d2a10de remove 017 artifacts` and `216e6ba update card names` that landed between Slice 2 final-acceptance and the Slice 3 build pass. The final test-run gate should not be surprised by these; they are out-of-scope build noise per `AGENTS.md` line 31, not build issues.
 - **Out-of-scope modified files at integration time.** `git status --short` at integration time shows the same out-of-scope baseline-maintenance files the build plan recorded: `M django_strawberry_framework/scalars.py`, `M docs/review/rev-django_strawberry_framework.md`, `M docs/review/rev-scalars.md`. None are in 018's scope; the final test-run gate should record them as out-of-scope and not flag them as build issues.
 

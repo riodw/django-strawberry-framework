@@ -1,6 +1,6 @@
 # Package build plan: export_schema / 0.0.7 (018)
 
-Spec source: `docs/spec-018-export_schema-0_0_7.md`
+Spec source: `docs/SPECS/spec-018-export_schema-0_0_7.md`
 Target release: `0.0.7`
 Date created: 2026-05-22
 Build rule: one slice at a time. Plan first, build second, review third, reconcile fourth.

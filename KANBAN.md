@@ -83,6 +83,8 @@ Severity: minor
 
 Status: planned. The cooperation already exists in source; this card pins the contract with a spec, tests, and docs.
 
+Active spec: [`docs/spec-019-multi_db-0_0_7.md`](docs/spec-019-multi_db-0_0_7.md).
+
 Why it matters:
 
 - The fakeshop example already ships a sharded mode (`FAKESHOP_SHARDED=1`, two SQLite shards via `default` → `db_shard_a.sqlite3` and `shard_b` → `db_shard_b.sqlite3`, plus a `seed_shards` management command). The package already cooperates with Django's database router via `state.db = router.db_for_read(field_meta.related_model, instance=instance)` in `django_strawberry_framework/types/resolvers.py`. But none of this is specified, tested, or documented as a package contract.
@@ -1772,7 +1774,7 @@ Spec: `docs/SPECS/spec-017-apps-0_0_7.md`. Build plan: `docs/builder/build-017-a
 
 ### DONE-018-0.0.7 — Schema export management command
 
-Parity: 🍓 required (strawberry-graphql-django ships `manage.py export_schema` verbatim; graphene-django ships a different `graphql_schema` command — parity-adjacent only, deliberately not borrowed per Decision 6 of `docs/spec-018-export_schema-0_0_7.md`).
+Parity: 🍓 required (strawberry-graphql-django ships `manage.py export_schema` verbatim; graphene-django ships a different `graphql_schema` command — parity-adjacent only, deliberately not borrowed per Decision 6 of `docs/SPECS/spec-018-export_schema-0_0_7.md`).
 
 Shipped `django_strawberry_framework/management/commands/export_schema.py` containing `Command(BaseCommand)` with positional `schema` (dotted path, default symbol name `"schema"`) and optional `--path`; SDL output via `strawberry.printer.print_schema`; `CommandError` for unimportable dotted path, non-`strawberry.Schema` resolved symbol, and missing positional argument. Package-internal tests at `tests/management/test_export_schema.py`; live fakeshop coverage in `examples/fakeshop/tests/test_commands.py`.
 
@@ -1780,11 +1782,11 @@ Borrowed the command shape verbatim from `strawberry_django/management/commands/
 
 Package-internal tests at `tests/management/test_export_schema.py` cover seven contracts (rev2 M1) — happy stdout, happy `--path`, `ImportError` half of the import-failure wrapper, `AttributeError` half of the wrapper, non-`Schema` resolved symbol, missing positional argument (via `CommandParser.error()` on `called_from_command_line=False`), and the `default_symbol_name="schema"` fallback. Every test goes through `django.core.management.call_command(...)` (NOT direct `Command().handle(...)`) so the missing-positional branch exercises the argparse layer; per-test `monkeypatch.setitem(sys.modules, "test_module", module)` keeps the seven tests order-independent. Live fakeshop coverage in `examples/fakeshop/tests/test_commands.py::test_export_schema_command_against_fakeshop_schema` runs `call_command("export_schema", "config.schema", "--path", str(tmp_path / "schema.graphql"))` against the real `strawberry.Schema(query=..., extensions=[DjangoOptimizerExtension()])` and asserts the produced SDL contains `"type BranchType"` from the library app.
 
-The version bump from `0.0.6` stays deferred to the last `0.0.7` card to ship per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md` / Decision 9 of `docs/spec-018-export_schema-0_0_7.md`; this card leaves `pyproject.toml`, `django_strawberry_framework/__init__.py`'s `__version__`, and `tests/base/test_init.py`'s version assertion at `0.0.6`. No new public exports; `__all__` is unchanged.
+The version bump from `0.0.6` stays deferred to the last `0.0.7` card to ship per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md` / Decision 9 of `docs/SPECS/spec-018-export_schema-0_0_7.md`; this card leaves `pyproject.toml`, `django_strawberry_framework/__init__.py`'s `__version__`, and `tests/base/test_init.py`'s version assertion at `0.0.6`. No new public exports; `__all__` is unchanged.
 
 Files touched: `django_strawberry_framework/management/__init__.py` (new), `django_strawberry_framework/management/commands/__init__.py` (new), `django_strawberry_framework/management/commands/export_schema.py` (new), `tests/management/__init__.py` (new), `tests/management/test_export_schema.py` (new), `examples/fakeshop/tests/test_commands.py`, plus the Slice 3 doc sweep across `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `KANBAN.md`, `CHANGELOG.md`.
 
-Spec: `docs/spec-018-export_schema-0_0_7.md`. Build plan: `docs/builder/build-018-export_schema-0_0_7.md`.
+Spec: `docs/SPECS/spec-018-export_schema-0_0_7.md`. Build plan: `docs/builder/build-018-export_schema-0_0_7.md`.
 
 ## Release readiness checklist
 

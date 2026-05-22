@@ -525,7 +525,7 @@ Alternatives considered (and rejected):
 
 ### Decision 9 — Joint `0.0.7` cut
 
-`0.0.7` ships under the joint-cut policy from [`docs/SPECS/spec-016-list_field-0_0_7.md`](SPECS/spec-016-list_field-0_0_7.md) [Decision 10](SPECS/spec-016-list_field-0_0_7.md#decision-10--joint-007-cut): the three remaining WIP cards in the bundle — `WIP-ALPHA-018-0.0.7` (this card), `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract), and `WIP-ALPHA-045-0.0.7` (warning-free scalar registration) — accumulate `### Added` entries under the same `[0.0.7]` heading in [`CHANGELOG.md`](../CHANGELOG.md). The version bump in `pyproject.toml`, `django_strawberry_framework/__init__.py`'s `__version__` line, and `tests/base/test_init.py`'s pinned version assertion is owned by whichever card ships last in the bundle, NOT this card.
+`0.0.7` ships under the joint-cut policy from [`docs/SPECS/spec-016-list_field-0_0_7.md`](SPECS/spec-016-list_field-0_0_7.md) [Decision 10](SPECS/spec-016-list_field-0_0_7.md#decision-10--joint-007-cut): the three remaining WIP cards in the bundle — `WIP-ALPHA-018-0.0.7` (this card), `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract), and `WIP-ALPHA-020-0.0.7` (warning-free scalar registration) — accumulate `### Added` entries under the same `[0.0.7]` heading in [`CHANGELOG.md`](../CHANGELOG.md). The version bump in `pyproject.toml`, `django_strawberry_framework/__init__.py`'s `__version__` line, and `tests/base/test_init.py`'s pinned version assertion is owned by whichever card ships last in the bundle, NOT this card.
 
 Justification:
 
@@ -676,7 +676,7 @@ Each item names a preferred answer for `0.0.7` and a fallback if implementation 
 - `--indent` / SDL-formatting option. See [Decision 6](#decision-6--no-watch--indent--json--settings-backed-defaults--alias); SDL is whitespace-agnostic.
 - `dump_schema` / `print_schema` aliases. See [Decision 6](#decision-6--no-watch--indent--json--settings-backed-defaults--alias).
 - [Multi-database cooperation](GLOSSARY.md#multi-database-cooperation) contract: `WIP-ALPHA-019-0.0.7` in [`KANBAN.md`](../KANBAN.md). The cooperation is in `types/resolvers.py`, not in `management/`; the two cards are independent.
-- Warning-free scalar registration via `StrawberryConfig.scalar_map`: `WIP-ALPHA-045-0.0.7` in [`KANBAN.md`](../KANBAN.md). The scalar map is consumer-facing schema-construction shape, not management-command surface.
+- Warning-free scalar registration via `StrawberryConfig.scalar_map`: `WIP-ALPHA-020-0.0.7` in [`KANBAN.md`](../KANBAN.md). The scalar map is consumer-facing schema-construction shape, not management-command surface.
 - Channels ASGI router ([`DjangoGraphQLProtocolRouter`](GLOSSARY.md#djangographqlprotocolrouter)): `TODO-ALPHA-029` for `0.0.12`.
 - [Debug-toolbar middleware](GLOSSARY.md#debug-toolbar-middleware): `TODO-ALPHA-031` for `0.0.12`.
 - [Response-extensions debug middleware](GLOSSARY.md#response-extensions-debug-middleware): `TODO-ALPHA-032` for `0.0.12`.

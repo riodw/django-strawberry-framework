@@ -3,7 +3,7 @@
 Target release: `0.0.6`.
 Status: draft (revision 11, post-build maintainer-feedback pass).
 Owner: package maintainer.
-Predecessors: [`docs/GLOSSARY.md`](../GLOSSARY.md) (entries [`DjangoType`](../GLOSSARY.md#djangotype), [`Scalar field conversion`](../GLOSSARY.md#scalar-field-conversion), [`Scalar field override semantics`](../GLOSSARY.md#scalar-field-override-semantics), [`Definition-order independence`](../GLOSSARY.md#definition-order-independence), [`Relation handling`](../GLOSSARY.md#relation-handling)), [`KANBAN.md`](../../KANBAN.md) card `WIP-ALPHA-015-0.0.6`.
+Predecessors: [`docs/GLOSSARY.md`](../GLOSSARY.md) (entries [`DjangoType`](../GLOSSARY.md#djangotype), [`Scalar field conversion`](../GLOSSARY.md#scalar-field-conversion), [`Scalar field override semantics`](../GLOSSARY.md#scalar-field-override-semantics), [`Definition-order independence`](../GLOSSARY.md#definition-order-independence), [`Relation handling`](../GLOSSARY.md#relation-handling)), [`KANBAN.md`](../../KANBAN.md) card `DONE-015-0.0.6`.
 Card line: ["Consumer override semantics (scalar fields) — extends the `DONE-006-0.0.4` relation-field override contract to scalar fields and closes out the remaining `0.0.6` patch."](../../KANBAN.md)
 
 Revision history (kept inline so the spec is self-contained):
@@ -142,7 +142,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
     - [Index](../GLOSSARY.md#index) → flip the status badge on `Scalar field override semantics` to `shipped (0.0.6)`.
   - [ ] `docs/TREE.md` — no further changes needed. The source-tree section's `types/base.py` and `types/definition.py` per-file annotations don't need updating: the new `consumer_annotated_scalar_fields` field on `DjangoTypeDefinition` is part of the same internal-metadata shape, and the existing `DjangoTypeDefinition` annotation in `definition.py` already reads "canonical per-type metadata with [Meta.primary](../GLOSSARY.md#metaprimary) flag and forward-reserved Layer-3 slots" (post-DONE-014). The test-tree section's `tests/types/test_definition_order.py` description was broadened pre-Slice-1 from "definition-order-independent relation finalization" to "consumer override contract (four-corner matrix) + definition-order-independent relation finalization" to reflect the file's role as the override-contract host (the four-corner matrix has lived there since `0.0.5`); Worker 1 verifies via `grep` that no stale "definition-order-independent relation finalization" string remains as a sole description.
   - [ ] `TODAY.md` — add scalar override semantics to the "shipped today" section. The fakeshop example does not currently exercise scalar annotation overrides; mention under "available but not currently demonstrated in fakeshop" if that subsection exists.
-  - [ ] `KANBAN.md` — move `WIP-ALPHA-015-0.0.6` → `DONE-015-0.0.6`. **Drop in the verbatim body below:**
+  - [ ] `KANBAN.md` — move `DONE-015-0.0.6` → `DONE-015-0.0.6`. **Drop in the verbatim body below:**
 
     ```markdown
     ### DONE-015-0.0.6 — Consumer override semantics (scalar fields)
@@ -799,7 +799,7 @@ Slices 3 / 4 / 5 are documentation-only and have no test deltas. Coverage stays 
 - [ ] `docs/GLOSSARY.md`'s `Scalar field override semantics` entry reads `shipped (0.0.6)` (Slice 5).
 - [ ] `docs/GLOSSARY.md`'s `Scalar field conversion` entry names annotation override as a parallel recourse to `Meta.exclude` for unsupported scalar fields (Slice 5; H2 fix).
 - [ ] `docs/GLOSSARY.md`'s `Scalar field override semantics` body names the rev6 M1 + rev7 M2 metadata-route limitation: field-level GraphQL metadata on the Relay-supplied `id` is not configurable in `0.0.6`; the documented workaround is a **resolver-backed sibling field** (`@strawberry.field(description="…") def display_id(self) -> strawberry.ID: return str(self.pk)`) carrying the metadata AND a value source, with the Relay-supplied `id` left undecorated. A metadata-only sibling without a resolver would build but fail at query time (Strawberry's default resolver looks up `display_id` as a Django model attribute) and is NOT recommended (Slice 5).
-- [ ] `KANBAN.md` shows `DONE-015-0.0.6` with the verbatim body from Slice 5 above; `WIP-ALPHA-015-0.0.6` is no longer present.
+- [ ] `KANBAN.md` shows `DONE-015-0.0.6` with the verbatim body from Slice 5 above; `DONE-015-0.0.6` is no longer present.
 - [ ] `CHANGELOG.md` `[Unreleased]` carries the five entries from Slice 5 (`Added` annotation-only, `Added` introspection field, `Changed` converter-bypass, `Added` Relay annotation-collision guard, `Changed` assigned-id rejection on Relay-Node-shaped types — the last with the rev6 M1 sibling-field workaround acknowledgment).
 - [ ] Slice 4 version-bump quintet is verified by `grep` rather than blind edits — every checkbox is a no-op if `spec-013-deferred_scalars-0_0_6.md` or `spec-014-meta_primary-0_0_6.md` already landed the bump.
 - [ ] No new public top-level symbol; no new `Meta.*` key; `django_strawberry_framework/__init__.py.__all__` is unchanged.

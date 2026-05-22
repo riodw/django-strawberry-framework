@@ -237,7 +237,7 @@ This mirrors how every other Django setting works (project setting overrides pac
 
 #### Design decision 3: routing decoded IDs
 
-The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — `WIP-ALPHA-014-0.0.6`), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
+The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — `DONE-014-0.0.6`), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
 
 This works *better* than the type-name encoding for the multi-`DjangoType`-per-model case: instead of needing a separate GlobalID for every type variant over the same model, all variants share one ID space and the schema author picks the discriminator (primary type, or explicit inline fragments).
 
@@ -1978,7 +1978,7 @@ Nothing in the Django ecosystem does this today. `django-grpc-framework` ships g
 
 **Difficulty**: 8/10 — Cross-shard queryset planning, shard-aware `Prefetch` reconciliation, and cross-shard aggregate composition. The hard cases (FK from shard A pointing into shard B) require schema-aware routing decisions the optimizer doesn't currently make. Concentrating the routing decision behind `Meta.preferred_database` keeps the consumer-facing surface small, but the optimizer-internal work is substantial.
 
-**What this is**: a multi-database story that goes beyond polite cooperation (which the package already does — see [`KANBAN.md`](KANBAN.md) `TODO-ALPHA-019-0.0.7` for the contract that pins today's `router.db_for_read` cooperation, strictness-mode routing, and `.using()` plan correctness). First-class means:
+**What this is**: a multi-database story that goes beyond polite cooperation (which the package already does — see [`KANBAN.md`](KANBAN.md) `WIP-ALPHA-019-0.0.7` for the contract that pins today's `router.db_for_read` cooperation, strictness-mode routing, and `.using()` plan correctness). First-class means:
 
 - the optimizer detects when a planned join would cross shards and falls back to a routed `Prefetch` instead
 - `Meta.preferred_database = "shard_b"` declares a `DjangoType`'s home shard so the optimizer can route automatically without `.using()` boilerplate everywhere
@@ -1988,7 +1988,7 @@ Nothing in the Django ecosystem does this today. `django-grpc-framework` ships g
 
 **Why it matters**: apps that run sharded Django today (Instagram-shape large multi-tenants, fintech with per-region data residency, multi-tenant SaaS with isolated tenant DBs) currently hand-roll their queryset routing. They write `.using(tenant_db)` everywhere and the optimizer doesn't help them — it just gets out of the way. First-class support means GraphQL queries against routed types automatically plan against the right database, cross-shard relations downgrade to a `Prefetch` instead of failing or N+1ing, and the response shape stays consistent with the single-DB case. Nobody else in the Django GraphQL ecosystem is even close.
 
-**Framework integration**: builds on the shipped cooperation contract from `TODO-ALPHA-019-0.0.7`. Composes with `Meta.get_queryset` (the routing decision could live there per-type, in tandem with the explicit `Meta.preferred_database`). Composes with `TODO-ALPHA-024` (Connection-aware optimizer — sharded connection pagination). Composes with item 33 (DoS policy stack — per-shard rate limits and cost budgets). Composes with item 19 (typed error envelope — surfacing cross-shard routing errors with a stable error code). Composes with item 4 (polymorphic / `GenericForeignKey`) when the polymorphic targets live on different shards.
+**Framework integration**: builds on the shipped cooperation contract from `WIP-ALPHA-019-0.0.7`. Composes with `Meta.get_queryset` (the routing decision could live there per-type, in tandem with the explicit `Meta.preferred_database`). Composes with `TODO-ALPHA-024` (Connection-aware optimizer — sharded connection pagination). Composes with item 33 (DoS policy stack — per-shard rate limits and cost budgets). Composes with item 19 (typed error envelope — surfacing cross-shard routing errors with a stable error code). Composes with item 4 (polymorphic / `GenericForeignKey`) when the polymorphic targets live on different shards.
 
 ## How to use this file
 - When scheduling a slice after parity items land, pull a high-`Realistic` `BACKLOG.md` item that isn't already on `KANBAN.md`.

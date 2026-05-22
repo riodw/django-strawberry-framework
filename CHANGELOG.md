@@ -9,9 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 This project follows a milestone-style cadence during pre-`1.0.0`:
 
 - **Alpha (`0.0.x`)** — each patch ships a coherent feature group on the road to `0.1.0`. Public surface is still in flight; breaking changes can land in any patch. Strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) does **not** apply here.
-- **`0.1.0` (beta release)** — feature parity with `graphene-django` (`⚛️`) and `strawberry-graphql-django` (`🍓`) is complete. Alpha → beta cut-over. Tracked by `TODO-BETA-035-0.1.0` in [`KANBAN.md`](KANBAN.md).
+- **`0.1.0` (beta release)** — feature parity with `graphene-django` (`⚛️`) and `strawberry-graphql-django` (`🍓`) is complete. Alpha → beta cut-over. Tracked by `TODO-BETA-036-0.1.0` in [`KANBAN.md`](KANBAN.md).
 - **Beta (`0.1.x`)** — each patch ships a Layer-3 capability (`FieldSet`, `search_fields`, aggregations, choice-enum naming, fakeshop activation, migration guides) on the road to `1.0.0`. Public surface stabilizes; breaking changes are discouraged but not forbidden.
-- **`1.0.0` (stable release)** — full `django-graphene-filters` depth on top of parity. Beta → stable cut-over; **API freeze**. Tracked by `TODO-STABLE-044-1.0.0` in [`KANBAN.md`](KANBAN.md).
+- **`1.0.0` (stable release)** — full `django-graphene-filters` depth on top of parity. Beta → stable cut-over; **API freeze**. Tracked by `TODO-STABLE-045-1.0.0` in [`KANBAN.md`](KANBAN.md).
 - **Stable (`1.x.y`)** — strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) applies from this point forward: breaking changes require a MAJOR bump, additive changes require a MINOR bump, and bug-fix-only releases get a PATCH bump.
 
 See [`KANBAN.md`](KANBAN.md) for the per-card sequencing and the version scope of each patch.

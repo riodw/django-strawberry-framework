@@ -49,10 +49,18 @@ def test_export_schema_writes_sdl_to_stdout_by_default(monkeypatch):
 
 def test_export_schema_writes_sdl_to_path_when_path_set(monkeypatch, tmp_path):
     _make_test_module(monkeypatch, schema=_make_schema())
+    out = StringIO()
     out_path = tmp_path / "schema.graphql"
-    call_command("export_schema", "test_module:schema", "--path", str(out_path))
+    call_command(
+        "export_schema",
+        "test_module:schema",
+        "--path",
+        str(out_path),
+        stdout=out,
+    )
     assert out_path.exists()
     assert "type Query" in out_path.read_text(encoding="utf-8")
+    assert f"Wrote schema to {out_path}" in out.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +88,18 @@ def test_export_schema_raises_command_error_for_non_schema_symbol(monkeypatch):
 def test_export_schema_raises_command_error_for_missing_positional_argument():
     with pytest.raises(CommandError):
         call_command("export_schema")
+
+
+def test_export_schema_raises_command_error_when_path_directory_missing(monkeypatch, tmp_path):
+    _make_test_module(monkeypatch, schema=_make_schema())
+    missing_dir_path = tmp_path / "nonexistent_dir" / "schema.graphql"
+    with pytest.raises(CommandError, match="No such file or directory"):
+        call_command(
+            "export_schema",
+            "test_module:schema",
+            "--path",
+            str(missing_dir_path),
+        )
 
 
 # ---------------------------------------------------------------------------

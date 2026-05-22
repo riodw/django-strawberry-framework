@@ -39,6 +39,10 @@ class Command(BaseCommand):
         schema_output = print_schema(schema_symbol)
         path = options.get("path")
         if path:
-            pathlib.Path(path).write_text(schema_output, encoding="utf-8")
+            try:
+                pathlib.Path(path).write_text(schema_output, encoding="utf-8")
+            except OSError as e:
+                raise CommandError(str(e)) from e
+            self.stdout.write(self.style.SUCCESS(f"Wrote schema to {path}"))
         else:
             self.stdout.write(schema_output)

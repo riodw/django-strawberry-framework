@@ -17,6 +17,11 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 See [`KANBAN.md`](KANBAN.md) for the per-card sequencing and the version scope of each patch.
 
 ## [Unreleased]
+### Changed
+- `manage.py export_schema --path <file>` now emits a `Wrote schema to <file>` success message on `self.stdout` after a successful write (via `self.style.SUCCESS`), matching Django's convention for management commands that produce a side effect. Previously the command wrote the file and exited silently, giving the user no in-terminal signal that the write succeeded.
+
+### Fixed
+- `manage.py export_schema --path <file>` now wraps file-write `OSError` (e.g. missing parent directory, permission denied, target is a directory) in `CommandError`, matching the existing wrapping for `ImportError` / `AttributeError` from `import_module_symbol`. Previously the user got a raw `FileNotFoundError` / `PermissionError` traceback for what is a user-input error, while schema-resolution failures already exited cleanly — the wrap closes the consistency gap inside `handle()`.
 
 ## [0.0.7] - 2026-05-20
 ### Added

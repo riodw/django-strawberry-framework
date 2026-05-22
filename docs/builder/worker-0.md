@@ -135,7 +135,7 @@ Entries are append-only. If the file approaches ~50 lines, consolidate similar e
 
 ## Closeout job
 
-After all build-plan checkboxes are complete:
+After all build-plan checkboxes are complete, the maintainer has committed the build, and the maintainer has supplied (or been asked for) the build-cycle commit range — see `docs/builder/BUILD.md` `## Closeout` for the precondition contract. Worker 0 does NOT enter closeout immediately after the final checkbox; closeout depends on the build commits existing on disk so step 2's diff scan operates on a fixed commit range. If the maintainer has not yet committed when Worker 0 reaches this section, stop and wait for the commit + range before proceeding.
 
 1. Read the completed plan and all build artifacts.
 2. Scan the build-cycle diffs using the maintainer-provided commit range. If no range is provided, ask for it instead of guessing.

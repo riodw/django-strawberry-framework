@@ -1,121 +1,120 @@
-# Review feedback — `docs/spec-018-export_schema-0_0_7.md` (revision 3)
+# Review feedback — `docs/spec-018-export_schema-0_0_7.md` (revision 4)
 
-Reviewer pass against the rev3 spec, run after the rev2-feedback fixes landed. The spec is in good shape — all rev3 propagation cleanups (M1 / L1 / L2 / L3 / L4) verified intact against the repo, and every load-bearing claim about `pyproject.toml`, [`docs/TREE.md`](TREE.md), [`docs/README.md`](README.md), [`CHANGELOG.md`](../CHANGELOG.md), [`AGENTS.md`](../AGENTS.md), [`KANBAN.md`](../KANBAN.md), [`docs/GLOSSARY.md`](GLOSSARY.md), and the Strawberry / Django symbol surfaces was verified TRUE.
+Reviewer pass against the rev4 spec, run after the rev3-feedback fixes landed. The rev4 corrections (M1 type-name, L1 negative-shape header, L2 handle-body comment, L3 `CommandParser.error()` mechanism, L4 DoD coverage-gate clause, I1 `: object` narrow justification) all verified intact against the spec body. The TODO-scaffolding pass through every relevant file in [the codebase](.) also surfaced nothing else that contradicts the spec.
 
-One medium-severity correction, four low-severity corrections, and one informational item below. Severity assigned by whether a worker following the spec top-down would ship a broken artifact (M) versus producing a correct artifact with mildly misleading commentary (L).
+Two findings: one medium-severity propagation gap from rev4 L3, one low-severity inaccuracy in the Risks section. Severity is M when a worker following the spec top-down reads mechanically-incorrect text in a load-bearing section; L when the inaccuracy is in a fallback/risk-tracking section that a worker may consult but does not act on.
 
-## M1 — `"type Branch"` fakeshop assertion names a type that does not exist
+## M1 — rev4 L3 propagation gap: Decision 8 and Risks #3 still carry the stale `SystemExit`-wrapping wording
 
-[Slice checklist](spec-018-export_schema-0_0_7.md#slice-checklist) line 62 and [Test plan](spec-018-export_schema-0_0_7.md#test-plan) → `examples/fakeshop/tests/test_commands.py` (extend) both pin the live-test assertion as `"type Branch"`. Verified against [examples/fakeshop/apps/library/schema.py:81](../examples/fakeshop/apps/library/schema.py:81): the `DjangoType` class is `BranchType`, and Strawberry emits the GraphQL type name from the Python class name unchanged — so the SDL contains `type BranchType {`, NOT `type Branch {`.
+Rev4 L3 corrected [Decision 5 failure mode 3](spec-018-export_schema-0_0_7.md#decision-5--commanderror-for-three-failure-modes) (line 432-442) and the [Test plan](spec-018-export_schema-0_0_7.md#test-plan) test (f) paragraph (line 606) to describe Django's `CommandParser.error()` raising `CommandError` **directly** (no `SystemExit` involved on the `call_command` path). Verified against [`.venv/lib/python3.10/site-packages/django/core/management/base.py`](.venv/lib/python3.10/site-packages/django/core/management/base.py) — that fix is mechanically correct.
 
-The substring assertion `"type Branch" in sdl` would still pass coincidentally (because `"type Branch"` is a prefix of `"type BranchType"`), but:
+But rev4 L3 missed two other sites that carry the same superseded "`SystemExit` → `CommandError` wrap" wording:
 
-1. A reader scanning the spec assumes a GraphQL type literally named `Branch` exists in fakeshop — it does not (the only `Branch` in [examples/fakeshop/apps/library/](../examples/fakeshop/apps/library/) is the Django model at [models.py:32](../examples/fakeshop/apps/library/models.py:32), which Strawberry never exposes by that bare name).
-2. A worker who tightens the assertion to an exact line match (`"type Branch {" in sdl` or a regex word-boundary match) would fail the test.
-3. The substring `"type Branch"` would also match `BranchInput`, `BranchConnection`, etc. if such types ever land — losing the assertion's specificity.
+**Site 1 — [Decision 8](spec-018-export_schema-0_0_7.md#decision-8--tests-go-through-call_command-not-direct-handle) bullet at line 514:**
 
-Fix: change every `"type Branch"` reference in the spec to `"type BranchType"`. Three sites:
+> `call_command` wraps `SystemExit` from argparse into `CommandError` for the missing-positional-argument case; the test plan asserts the `CommandError` shape, which only the wrapper produces.
 
-- [Slice checklist](spec-018-export_schema-0_0_7.md#slice-checklist) line 62 — `(e.g., "type Branch")` → `(e.g., "type BranchType")`.
-- [Test plan](spec-018-export_schema-0_0_7.md#test-plan) `examples/fakeshop/tests/test_commands.py (extend)` paragraph (line 600) — `"type Branch"` → `"type BranchType"`.
-- (No third site found in rev3; the assertion is referenced in exactly two places.)
+This is the load-bearing justification for [Decision 8](spec-018-export_schema-0_0_7.md#decision-8--tests-go-through-call_command-not-direct-handle)'s `call_command`-only test rule. A worker reading Decision 8 to understand *why* `call_command` is required reads a mechanism that doesn't exist (`call_command` does not wrap `SystemExit`), then turns to Decision 5 which correctly describes `CommandParser.error()` raising directly — the two sections now disagree about *which Django code path the test exercises*. The conclusion (only `call_command` exercises the path) is right; the mechanism description is wrong.
 
-Verified type names in fakeshop's library app for picking an alternative if `BranchType` later changes: `BranchType`, `ShelfType` (per [schema.py:57](../examples/fakeshop/apps/library/schema.py:57) docstring and [schema.py:81](../examples/fakeshop/apps/library/schema.py:81)).
+**Site 2 — [Risks and open questions](spec-018-export_schema-0_0_7.md#risks-and-open-questions) #3 at line 662:**
 
-## L1 — "Negative-shape test (one):" header contradicts the body that says "INTENTIONALLY OMITTED"
+> **`call_command` and `CommandError` wrapping for missing positional argument.** Preferred answer: `call_command` wraps argparse's `SystemExit(2)` into `CommandError`, and `pytest.raises(CommandError)` catches it. Fallback: if Django's wrapping changes (unlikely; the behavior has been stable since the `call_command` helper was introduced), the test catches the new exception type and re-asserts; no production code changes.
 
-[Test plan](spec-018-export_schema-0_0_7.md#test-plan) lines 590-592 carry a header reading `Negative-shape test (one):` immediately followed by the single bullet's body which says the test is `INTENTIONALLY OMITTED for 0.0.7`. The header promises one test; the body delivers zero. A worker scanning section headers (or a future reviewer counting test bullets) would either author the omitted test or be confused by the count mismatch.
+Both the bullet title ("`CommandError` wrapping") and the "preferred answer" body claim a wrapping that does not exist. The fallback paragraph compounds the issue — it tells a future maintainer to watch for "wrapping" behavior changes when the actual stability concern is whether `CommandParser.error()` keeps the `called_from_command_line` branch.
 
-The body's rationale is correct and worth preserving (this card has no forbidden-key list to enforce, so a placeholder negative test would be noise). The only issue is the header wording.
+This is the same propagation pattern that prior reviews flagged in rev2 L1 (`docs/TREE.md:190` fragment), rev3 M1 (Doc-updates vs Slice 3 checklist mismatch), and rev3 L2 ([Borrowing posture](spec-018-export_schema-0_0_7.md#borrowing-posture) "two divergences" residue): a wording fix lands at the primary site but skips parallel references in adjacent sections. Per the rev3 M1 framing — "the Doc updates section is the implementer-facing checklist that Worker 0 copies into the build artifact and Worker 2 walks during the implementation pass; if the section is incomplete, a worker following it top-down ships the stale sentence intact even though the Slice 3 checklist and DoD say otherwise" — the rev3 M1 propagation pattern applies again: Worker 2 may read Decision 8 (to understand the load-bearing test invariant) or the Risks section (to plan for fallback breakage) without re-reading Decision 5, and would internalize the wrong mechanism.
 
-Fix options (pick one):
+**Fix.** Apply the rev4 L3 wording shift to both remaining sites.
 
-- Rename the header to `Negative-shape test (none in 0.0.7):` — matches the body's intent and counts to zero.
-- Rename to `Negative-shape test — deferred:` and keep the body explaining why.
-- Move the entire paragraph into [Non-goals](spec-018-export_schema-0_0_7.md#non-goals) as `Forbidden-attributes negative test — no forbidden-key list exists yet; future cards add the test alongside their forbidden keys.`
+Site 1 — replace [Decision 8](spec-018-export_schema-0_0_7.md#decision-8--tests-go-through-call_command-not-direct-handle) line 514:
 
-The first option is the minimal-edit fix; the third is the cleanest structurally.
-
-## L2 — Decision 2 `Method signatures` code block uses `...` as `handle` body alongside the docstring
-
-[Decision 2](spec-018-export_schema-0_0_7.md#decision-2--command-class-shape) `Method signatures` code block (lines 305-323) shows `handle` with both a docstring and a trailing `...`:
-
-```python
-def handle(self, *args: object, **options: object) -> None:
-    """Resolve the dotted-path schema symbol, print SDL to stdout or write it to --path."""
-    ...
+```
+- `call_command` wraps `SystemExit` from argparse into `CommandError` for the
+  missing-positional-argument case; the test plan asserts the `CommandError`
+  shape, which only the wrapper produces.
 ```
 
-Both lines are statements; the `...` is redundant (the docstring alone satisfies the function-body requirement). More importantly, `...` is the stub-file (`.pyi`) idiom for "body intentionally elided" — a reader who only skims the code block could mistake this for the actual shipped body, then ship a `Command` whose `handle` does nothing.
+with:
 
-The spec already names Decision 3, 4, 5 as the source of the real body in the prose around the block, but the code block itself is the most-scanned artifact in the spec, and the `...` line is the only thing under the docstring.
-
-Fix: replace `...` with an explicit comment placeholder, e.g.:
-
-```python
-def handle(self, *args: object, **options: object) -> None:
-    """Resolve the dotted-path schema symbol, print SDL to stdout or write it to --path."""
-    # Body per Decision 3 (symbol resolution) / Decision 4 (SDL output) / Decision 5 (errors).
+```
+- Django's `CommandParser.error()` (a subclass-override of
+  `argparse.ArgumentParser.error`) raises `CommandError` **directly** when
+  `called_from_command_line=False`, which is the default when `call_command`
+  constructs the parser. A direct `Command().handle(...)` call skips
+  argparse entirely (and therefore skips `CommandParser.error()`), so the
+  missing-positional `CommandError` path is unreachable without
+  `call_command`. See [Decision 5](#decision-5--commanderror-for-three-failure-modes)
+  failure mode 3 for the verified-against-Django-source mechanism.
 ```
 
-`add_arguments` is fine as-is — it has a real body in the block.
+Site 2 — replace [Risks](spec-018-export_schema-0_0_7.md#risks-and-open-questions) #3 line 662:
 
-## L3 — Decision 5 mis-describes how Django converts argparse failures to `CommandError`
+```
+- **`call_command` and `CommandError` wrapping for missing positional
+  argument.** Preferred answer: `call_command` wraps argparse's
+  `SystemExit(2)` into `CommandError`, and `pytest.raises(CommandError)`
+  catches it. Fallback: if Django's wrapping changes (unlikely; the
+  behavior has been stable since the `call_command` helper was
+  introduced), the test catches the new exception type and re-asserts; no
+  production code changes.
+```
 
-[Decision 5](spec-018-export_schema-0_0_7.md#decision-5--commanderror-for-three-failure-modes) failure mode 3 (line 423) and the [Test plan](spec-018-export_schema-0_0_7.md#test-plan) test (f) paragraph (line 587) both describe the missing-positional path as: "Django wraps argparse's `SystemExit(2)` into `CommandError` only when invoked via `call_command(...)`."
+with:
 
-The behavior is correct (the test passes with `pytest.raises(CommandError)`), but the mechanism described is wrong. Verified against Django 5.2's [`django.core.management.base.CommandParser.error`](.venv/lib/python3.10/site-packages/django/core/management/base.py): the conversion is NOT a wrapping of `SystemExit(2)` — `CommandParser` is a subclass of `argparse.ArgumentParser` whose `error()` method is overridden to raise `CommandError` **directly** when `called_from_command_line` is False (the default when invoked via `call_command`). The `SystemExit(2)` code path is the `called_from_command_line=True` branch, taken by `manage.py` from the shell.
+```
+- **`CommandParser.error()` raising `CommandError` for missing positional
+  argument.** Preferred answer: `CommandParser.error()` raises
+  `CommandError` directly on the `called_from_command_line=False` branch
+  (the branch `call_command` constructs), so `pytest.raises(CommandError)`
+  catches it without any `SystemExit` involvement. Fallback: if Django
+  changes the override (unlikely; the behavior has been stable since the
+  `CommandParser` subclass was introduced), the test catches the new
+  exception type and re-asserts; no production code changes.
+```
 
-The distinction matters because:
+Both rewrites preserve the load-bearing conclusion (only `call_command` exercises the path; Decision 8 stands) while replacing the mechanically-incorrect description with rev4 L3's verified-against-Django-source mechanism. After the edits, every spec section that mentions the missing-positional path agrees on what Django actually does.
 
-1. A worker who reads the current explanation and wants to verify the behavior by searching Django's source for `SystemExit` → `CommandError` conversion will not find it.
-2. A future maintainer who wants to skip the `call_command` requirement might believe they can intercept `SystemExit` themselves — but the relevant code path never raises `SystemExit` in the first place when going through `call_command`.
+Worth pinning explicitly in a new rev5 revision-history bullet that the rev4 L3 propagation now covers four sites (Decision 5 failure mode 3, Test plan test (f), Decision 8 bullet, Risks #3), so future reviewers can verify the propagation in one pass.
 
-Fix: rephrase failure mode 3's "wraps argparse's `SystemExit(2)` into `CommandError`" to "Django's `CommandParser.error()` (a subclass-override of `argparse.ArgumentParser.error`) raises `CommandError` directly when invoked via `call_command(...)` (the `called_from_command_line=False` branch); the `SystemExit(2)` branch is only taken when `manage.py` runs the command from a shell." Same edit to the [Test plan](spec-018-export_schema-0_0_7.md#test-plan) test (f) paragraph.
+## L1 — Risks #1 mis-describes `import_module_symbol`'s actual signature
 
-The load-bearing reason [Decision 8](spec-018-export_schema-0_0_7.md#decision-8--tests-go-through-call_command-not-direct-handle) requires `call_command` is preserved — a direct `Command().handle(...)` call skips argparse entirely (and therefore skips `CommandParser.error()`), so the missing-positional contract is unexercised.
+[Risks](spec-018-export_schema-0_0_7.md#risks-and-open-questions) #1 at line 660 reads:
 
-## L4 — Definition-of-done items 8 and 13 have slight tension on the 100%-coverage gate
+> **Strawberry's `import_module_symbol` signature stability.** Preferred answer: the symbol's signature `(name: str, *, default_symbol_name: str | None = None) -> Any` has been stable since strawberry-graphql 0.x ...
 
-[Definition of done](spec-018-export_schema-0_0_7.md#definition-of-done) item 8 reads: "Package coverage stays at 100% (`pyproject.toml [tool.coverage.report] fail_under = 100`)." Item 13 reads: "`uv run pytest --no-cov` passes (explicit `--no-cov` opts out of `pytest.ini`'s auto-applied `--cov`; coverage enforcement is CI's job per `pyproject.toml [tool.coverage.report] fail_under = 100`, not this slice's; workers verify the suite passes, not that coverage stays at 100%)."
+Verified against [`.venv/lib/python3.10/site-packages/strawberry/utils/importer.py:4-6`](.venv/lib/python3.10/site-packages/strawberry/utils/importer.py:4) — the actual signature is:
 
-Item 8 names the 100% gate as a condition for "the card is complete." Item 13 disclaims that the worker enforces it. A worker reading top-down may conclude either:
+```python
+def import_module_symbol(
+    selector: str, default_symbol_name: str | None = None
+) -> object:
+```
 
-(a) "Item 8 is a CI-enforced end-state and I don't need to run coverage locally" (matches Item 13); or
-(b) "Item 8 says 100%, so I should run coverage locally to confirm before claiming done" (contradicts Item 13's `--no-cov` pin).
+Three differences from the spec's description:
 
-Both readings are defensible, but the spec should pin one. Recommended reading is (a) — `pytest --no-cov` is what the spec authorizes locally, and the 100% gate is verified by CI after the PR opens.
+1. The first positional parameter is named `selector`, not `name`. Cosmetic.
+2. `default_symbol_name` is **positional-or-keyword** (no `*` separator before it); the spec's `*,` claim says it's keyword-only. The package's actual call site (`Decision 3`'s code block and [Decision 2](spec-018-export_schema-0_0_7.md#decision-2--command-class-shape)'s `Method signatures` block) uses the keyword form anyway, so the functional impact is zero — but a worker reading Risks #1 and then verifying against the source will see the mismatch.
+3. Return type is annotated `-> object`, not `-> Any`. Mostly cosmetic, but `object` and `Any` have different mypy semantics — a future maintainer who depends on the return being `Any` (for unrestricted attribute access on the resolved schema) may be surprised.
 
-Fix: append to item 8 a clarifying clause: "(verified by CI, not by the worker locally; the worker's verification is item 13's `pytest --no-cov` suite-passing check)." OR reframe item 8 as "Package coverage is expected to stay at 100% under CI's `fail_under = 100` gate; if CI reports a coverage regression, the worker adds the missing test before merging."
+This is in the Risks-and-open-questions section, so the inaccuracy doesn't affect Slice 1/2 implementation — but the section's job is to anchor future-maintenance assumptions about Strawberry's contract, and "the documented signature matches the source" is one of those assumptions.
 
-Same posture as the parallel [`docs/SPECS/spec-017-apps-0_0_7.md`](SPECS/spec-017-apps-0_0_7.md) (which the spec cites as the model for the gates section); the rev3 spec inherited the tension intact rather than resolving it.
+Fix: rephrase Risks #1's preferred-answer signature to:
 
-## I1 — Informational: Decision 2's `: object` narrows on `*args` / `**options` are documentation-only
+> Preferred answer: the symbol's signature `(selector: str, default_symbol_name: str | None = None) -> object` has been stable since strawberry-graphql 0.x ...
 
-[Decision 2](spec-018-export_schema-0_0_7.md#decision-2--command-class-shape) (lines 294, 320) pins `handle(self, *args: object, **options: object) -> None`. The spec correctly notes (line 294, line 333) that the `: object` narrows are NOT gate-forced — `ANN002` (missing `*args` annotation) and `ANN003` (missing `**kwargs` annotation) are globally ignored at [pyproject.toml:92-94](../pyproject.toml). So `*args, **options` (un-annotated, matching the upstream verbatim) would also pass `ruff check`.
+— matching the verified source. The body of the Risks bullet (the fallback "if a future strawberry-graphql minor release renames or removes the symbol..." paragraph) stays unchanged; only the signature line needs editing.
 
-This is a defensible stylistic choice — the narrows are nominally documentation-quality and make the type-checker behavior under `mypy --strict` more predictable. But the [Borrowing posture](spec-018-export_schema-0_0_7.md#borrowing-posture) "From strawberry-django — borrow the AppConfig shape verbatim" framing claims behavioral parity with the upstream, and the upstream uses bare `*args, **options`. The spec is internally consistent (the narrows are explicitly called out as additive), but a future maintainer rereading the [Borrowing posture](spec-018-export_schema-0_0_7.md#borrowing-posture) "two forced divergences" wording in isolation might delete the narrows as non-forced.
-
-Two options:
-
-- **Option A (keep the narrows):** Add one sentence to [Decision 2](spec-018-export_schema-0_0_7.md#decision-2--command-class-shape)'s `Method signatures` sub-block: "The `: object` narrows on `*args` / `**options` are documentation-quality (ANN002 / ANN003 are globally ignored at `pyproject.toml:93-94`) but are pinned anyway for `mypy --strict`-friendliness; deleting them is acceptable if the upstream-verbatim shape is preferred."
-- **Option B (drop the narrows):** Change every `*args: object, **options: object` reference to bare `*args, **options` and remove the [Decision 2](spec-018-export_schema-0_0_7.md#decision-2--command-class-shape) discussion of `ANN002` / `ANN003` ignores. The Slice 1 [Slice checklist](spec-018-export_schema-0_0_7.md#slice-checklist) entry, the [Method signatures](spec-018-export_schema-0_0_7.md#decision-2--command-class-shape) code block, and [DoD item 2](spec-018-export_schema-0_0_7.md#definition-of-done) would all simplify.
-
-Option B is closer to the [Borrowing posture](spec-018-export_schema-0_0_7.md#borrowing-posture) "two categories of forced divergence" framing rev3 L2 just established (the narrows are a third, non-forced delta). Option A is the lowest-edit fix. No strong recommendation — flag for the author's call.
+Single site. No other propagation.
 
 ---
 
 ## Summary
 
-Action items for rev4:
+Action items for rev5:
 
-1. **M1** — fix `"type Branch"` → `"type BranchType"` in [Slice checklist](spec-018-export_schema-0_0_7.md#slice-checklist) line 62 and [Test plan](spec-018-export_schema-0_0_7.md#test-plan) line 600 (two sites).
-2. **L1** — rename or restructure the contradictory `Negative-shape test (one):` header (lines 590-592).
-3. **L2** — replace `...` with a comment placeholder in [Decision 2](spec-018-export_schema-0_0_7.md#decision-2--command-class-shape)'s `handle` method signature (line 322).
-4. **L3** — correct the argparse → `CommandError` mechanism wording in [Decision 5](spec-018-export_schema-0_0_7.md#decision-5--commanderror-for-three-failure-modes) failure mode 3 (line 423) and [Test plan](spec-018-export_schema-0_0_7.md#test-plan) test (f) (line 587).
-5. **L4** — reconcile [DoD item 8](spec-018-export_schema-0_0_7.md#definition-of-done) and item 13 on the 100%-coverage gate.
-6. **I1** — author's call: justify or drop the `: object` narrows on `*args` / `**options` in [Decision 2](spec-018-export_schema-0_0_7.md#decision-2--command-class-shape).
+1. **M1** — apply rev4 L3's wording shift to two missed sites: [Decision 8](spec-018-export_schema-0_0_7.md#decision-8--tests-go-through-call_command-not-direct-handle) bullet at line 514 and [Risks](spec-018-export_schema-0_0_7.md#risks-and-open-questions) #3 at line 662. Pin the rev4 L3 propagation as covering four sites in the revision-history entry.
+2. **L1** — fix the `import_module_symbol` signature in [Risks](spec-018-export_schema-0_0_7.md#risks-and-open-questions) #1 at line 660 to `(selector: str, default_symbol_name: str | None = None) -> object`.
 
-None of these block Slice 1 implementation if a worker started today — every behavioral pin in the spec is correct; the issues are wording, header, code-block, and documentation tension. M1 is the only item where a worker following the spec literally would emit an asymmetric artifact (an example name that doesn't match a real GraphQL type), and even there the substring match would coincidentally pass.
+Neither item blocks Slice 1 implementation (the TODO scaffolding I just laid down in `django_strawberry_framework/management/commands/export_schema.py` and the test scaffolds is correct against rev4's Decision 5 mechanism — Decision 8 and Risks #3 are advisory sections the worker reads for context, not pseudo-code sources). M1 is medium because a worker who consults Decision 8 to defend the `call_command`-only rule against a teammate would quote text that contradicts Decision 5; L1 is low because Risks #1 is fallback-planning context that the worker does not act on during Slice 1.
 
-Verified against the repo on 2026-05-22; spec rev3 (commit `051a278`).
+Verified against the repo on 2026-05-22; spec rev4 (working tree after the rev4 edits landed; no commit hash since rev4 has not been committed yet).

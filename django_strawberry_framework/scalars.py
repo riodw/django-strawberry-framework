@@ -80,7 +80,7 @@ def _serialize_bigint(value: Any) -> str:
 # Strawberry emits `DeprecationWarning: Passing a class to strawberry.scalar() is
 # deprecated. Use StrawberryConfig.scalar_map instead...` whenever a class or
 # NewType-backed type is passed directly to strawberry.scalar(...). The
-# warning-free migration is roadmapped as TODO-ALPHA-045-0.0.7 (Warning-free
+# warning-free migration is roadmapped as WIP-ALPHA-020-0.0.7 (Warning-free
 # scalar registration via StrawberryConfig.scalar_map). That card will introduce
 # a package-side `strawberry_config(...)` factory and remove this suppression
 # block entirely. For 0.0.6, the deprecation is suppressed at the definition

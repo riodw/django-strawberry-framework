@@ -194,7 +194,7 @@ Action: **no edit at project pass.** Both observations are sub-Low polish that w
 
 ### L5 — `BigInt` is the only scalar today; the `scalars.py` `warnings.catch_warnings()` block wraps one registration
 
-`django_strawberry_framework/scalars.py:91-102` wraps `strawberry.scalar(NewType("BigInt", int), ...)` in a `warnings.catch_warnings()` block to suppress the "Passing a class to strawberry.scalar() is deprecated" message that Strawberry emits for class-backed scalars. The TODO-ALPHA-045-0.0.7 anchor at `:83` flags this for migration to `StrawberryConfig.scalar_map` in 0.0.7. Today `BigInt` is the only scalar so the suppression block wraps exactly one registration.
+`django_strawberry_framework/scalars.py:91-102` wraps `strawberry.scalar(NewType("BigInt", int), ...)` in a `warnings.catch_warnings()` block to suppress the "Passing a class to strawberry.scalar() is deprecated" message that Strawberry emits for class-backed scalars. The WIP-ALPHA-020-0.0.7 anchor at `:83` flags this for migration to `StrawberryConfig.scalar_map` in 0.0.7. Today `BigInt` is the only scalar so the suppression block wraps exactly one registration.
 
 Project-pass observation: `types/converters.py:33-62` (`SCALAR_MAP`) consumes `BigInt` at two rows (`models.BigIntegerField`, `models.PositiveBigIntegerField`). A second scalar landing in `scalars.py` (e.g., `Upload` per TODO-ALPHA-027) would need to share the same `warnings.catch_warnings()` posture or the deprecation warning would leak. Per the worker-memory carry-forward: "warnings.catch_warnings() at scalars.py:91-102 should wrap both when the second scalar lands."
 

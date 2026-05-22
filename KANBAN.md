@@ -59,7 +59,6 @@ For install, local development, testing, and the canonical documentation map, st
   - `fieldset.py`
   - `connection.py`
   - `permissions.py`
-  - `management/commands/export_schema.py`
   - `utils/queryset.py`
 - Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
 - Several DjangoType contract gaps remain:

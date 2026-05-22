@@ -101,8 +101,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Scalar field conversion](#scalar-field-conversion) | shipped (`0.0.1`+) |
 | [Scalar field override semantics](#scalar-field-override-semantics) | shipped (`0.0.6`) |
 | [Schema audit](#schema-audit) | shipped (`0.0.3`) |
-<!-- TODO spec-018 Slice 3: flip status column below from `planned for 0.0.7` to `shipped (0.0.7)`. -->
-| [Schema export management command](#schema-export-management-command) | planned for `0.0.7` |
+| [Schema export management command](#schema-export-management-command) | shipped (`0.0.7`) |
 | [`SerializerMutation`](#serializermutation) | planned for `0.0.11` |
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
@@ -908,20 +907,11 @@ Opt-out continues via [`Meta.exclude`](#metaexclude); field-level metadata (desc
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Strictness mode](#strictness-mode).
 
-<!-- TODO spec-018 Slice 3: rewrite the entry body below to describe the SHIPPED contract:
-       - module path: django_strawberry_framework/management/commands/export_schema.py
-       - Command(BaseCommand) with positional `schema` (dotted path, default symbol name "schema")
-         and optional `--path`
-       - SDL output via strawberry.printer.print_schema
-       - CommandError for: unimportable dotted path, non-strawberry.Schema resolved symbol,
-         missing positional argument
-       - NOT shipped in 0.0.7: --watch / --indent / --json / settings-backed defaults / aliases
-     Also flip `**Status:** planned for 0.0.7.` → `**Status:** shipped (0.0.7).` -->
 ## Schema export management command
 
-**Status:** planned for `0.0.7`.
+**Status:** shipped (`0.0.7`).
 
-`manage.py export_schema [path]` writes the GraphQL SDL to a file. Mirrors `strawberry-django`'s `export_schema` command.
+`django_strawberry_framework/management/commands/export_schema.py` ships `Command(BaseCommand)` with positional `schema` (dotted path, default symbol name `"schema"`) and optional `--path`; SDL output via `strawberry.printer.print_schema`; `CommandError` for unimportable dotted path, non-`strawberry.Schema` resolved symbol, and missing positional argument; no `--watch` / `--indent` / JSON mode / settings-backed defaults in `0.0.7`.
 
 **See also:** [Django `AppConfig`](#django-appconfig).
 

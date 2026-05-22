@@ -22,14 +22,7 @@ See [`KANBAN.md`](KANBAN.md) for the per-card sequencing and the version scope o
 ### Added
 - `DjangoListField` — non-Relay `list[T]` field for **root Query fields**, with default `model._default_manager.all()` resolver, `cls.get_queryset(...)` cooperation in sync + async contexts and on consumer-resolver `Manager`/`QuerySet` returns (graphene-django parity), optimizer cooperation via root-gating, outer nullability driven by the consumer's class-attribute annotation, and standard field-level metadata pass-through (`description`, `deprecation_reason`, `directives`). Tracked as `DONE-016-0.0.7` in [`KANBAN.md`](KANBAN.md).
 - `Django AppConfig` — `django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` with `name = "django_strawberry_framework"` and `verbose_name = "Django Strawberry Framework"`. Consumers list `"django_strawberry_framework"` in `INSTALLED_APPS`; Django's check / signal hooks resolve through the package's AppConfig. No `ready()` body in `0.0.7`.
-<!-- TODO spec-018 Slice 3: APPEND a third bullet to this existing `[0.0.7] ### Added` section
-     (do NOT open a second `[0.0.7]` heading — joint-cut policy per Decision 9). Pseudo-body:
-     - `Schema export management command` — `django_strawberry_framework/management/commands/export_schema.py`
-       ships `Command(BaseCommand)`; `manage.py export_schema config.schema [--path schema.graphql]`
-       writes SDL via `strawberry.printer.print_schema`. Symbol resolution via
-       `strawberry.utils.importer.import_module_symbol(default_symbol_name="schema")`. `CommandError`
-       for unimportable dotted path, non-`strawberry.Schema` resolved symbol, and missing positional
-       argument. No `--watch` / `--indent` / JSON mode / settings-backed defaults in `0.0.7`. -->
+- `Schema export management command` — `django_strawberry_framework/management/commands/export_schema.py` ships `Command(BaseCommand)`; `manage.py export_schema config.schema [--path schema.graphql]` writes SDL via `strawberry.printer.print_schema`. Symbol resolution via `strawberry.utils.importer.import_module_symbol(default_symbol_name="schema")`. `CommandError` for unimportable dotted path, non-`strawberry.Schema` resolved symbol, and missing positional argument. No `--watch` / `--indent` / JSON mode / settings-backed defaults in `0.0.7` (each deferred to a follow-up card driven by consumer demand).
 
 
 ### Changed

@@ -102,11 +102,7 @@ A quick summary:
 - `Meta.primary` — multiple `DjangoType` subclasses per Django model with explicit primary-flag opt-in
 - annotation-only and `strawberry.field` consumer overrides for scalar fields, symmetric with the shipped relation-override contract (consumer overrides bypass `convert_scalar` validations; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time)
 - `Django AppConfig` — `django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` so consumers can list `"django_strawberry_framework"` in `INSTALLED_APPS` and Django's check / signal hooks resolve through it (new in `0.0.7`).
-<!-- TODO spec-018 Slice 3: append a bullet below this line under the `Shipped today (0.0.7)` section:
-     - `manage.py export_schema` — Django management command that prints or writes the GraphQL SDL
-       for a `strawberry.Schema` symbol (positional dotted path, optional `--path`); migration-parity
-       with `strawberry-django`'s command of the same name. See
-       [`GLOSSARY.md#schema-export-management-command`](GLOSSARY.md#schema-export-management-command). -->
+- `manage.py export_schema` — Django management command that prints or writes the GraphQL SDL for a `strawberry.Schema` symbol (positional dotted path, optional `--path`); migration-parity with `strawberry-django`'s command of the same name. See [`GLOSSARY.md#schema-export-management-command`](GLOSSARY.md#schema-export-management-command).
 
 
 **Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
@@ -116,10 +112,6 @@ A quick summary:
 - `Upload` scalar and file-field mapping
 - auth mutations (`login` / `logout` / `register`) and `current_user` query
 - Channels ASGI router, debug-toolbar middleware, test client helper, response-extensions debug
-<!-- TODO spec-018 Slice 3: surgically remove the entire bullet on the next line (the `- schema export
-     management command` line) from the `Coming in 0.1.0` section. DONE-017-0.0.7 already trimmed the
-     `Django AppConfig` half; this card finishes the job. -->
-- schema export management command
 
 **Coming in `1.0.0`** (stable — `django-graphene-filters` depth + API freeze):
 - `FieldSet` (declarative `fields_class`)

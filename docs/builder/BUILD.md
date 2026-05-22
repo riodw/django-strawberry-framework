@@ -570,7 +570,7 @@ If a spec edit fundamentally changes the slice contract Worker 2 already impleme
 
 ### Slice splitting
 
-Worker 1 may also **split a planned slice into sub-slices** (e.g. `5a` / `5b`) when implementation reveals the slice cannot land as a single coherent commit — typical triggers: the diff is too large for sensible review, two halves have independent risk profiles, or one half is blocked while the other can ship. The split is a spec edit (recorded under `Spec changes made (Worker 1 only)` with cited spec lines and a one-line reason). After the spec is updated, Worker 1 returns control to Worker 0 to regenerate the build plan's checklist and dispatch Worker 2 for each sub-slice in sequence. Splits add an extra artifact and at least one extra maintainer checkpoint, so reserve them for cases where the unsplit slice would harm review quality.
+Worker 1 may also **split a planned slice into sub-slices** (e.g. `5a` / `5b`) when implementation reveals the slice cannot land as a single coherent diff — typical triggers: the diff is too large for sensible review, two halves have independent risk profiles, or one half is blocked while the other can ship. The split is a spec edit (recorded under `Spec changes made (Worker 1 only)` with cited spec lines and a one-line reason). After the spec is updated, Worker 1 returns control to Worker 0 to regenerate the build plan's checklist and dispatch Worker 2 for each sub-slice in sequence. Splits add an extra artifact and an extra full worker cycle (plan → build → review → final-verification), so reserve them for cases where the unsplit slice would harm review quality.
 
 ### Spec stays at its working location
 
@@ -578,17 +578,19 @@ Specs are written at `docs/spec-<NNN>-<topic>-<0_0_X>.md` and stay there after t
 
 If a future spec explicitly declares spec archival or relocation as part of its own slice checklist, that is an opt-in lifecycle step the spec itself authorizes. In that case Worker 1 calls the move out in the plan as a Worker 1-owned final-verification step, Worker 2 implements the durable docs / KANBAN / changelog / release-file edits named by the plan but does not move or edit the active spec, and Worker 1 performs the mechanical active-spec move during final verification (recording old and new paths under `Spec changes made (Worker 1 only)`).
 
-## Maintainer checkpoint
+## Slice handoff (no maintainer pause between slices)
 
-After Worker 0 marks a slice `- [x]`:
+The build runs end-to-end without pausing for maintainer review between slices. After Worker 0 marks a slice `- [x]` (Worker 1's final-verification pass set the artifact to `final-accepted`), Worker 0 IMMEDIATELY dispatches the next slice's planning pass — or, if every spec slice is complete, the cross-slice integration pass. Worker 1's final-verification IS the per-slice safety net; no additional re-read or maintainer-review step runs between slices.
 
-1. Worker 1 re-reads the full diff for the slice plus the artifact to confirm nothing slipped through.
-2. If the re-check finds anything missed, Worker 1 sets the artifact back to `revision-needed` and Worker 0 dispatches a Worker 2 / Worker 3 loop again.
-3. If clean, the **maintainer** commits the source changes together with the corresponding `bld-*.md` artifact, the spec edits (if any), and the updated build-plan checkbox.
+The maintainer's first touch point is after the final test-run gate sets `bld-final.md` to `final-accepted` and Worker 0 marks the final checkbox `- [x]`. At that point Worker 0 stops driving the cycle and hands off — the maintainer reviews the whole build, then commits the source changes + every `bld-*.md` artifact + spec edits (if any) + the completed plan in one or more commits at the maintainer's discretion. The closeout retrospective (per `## Closeout` below) runs after the maintainer's commit, not before.
+
+If anything goes wrong mid-cycle (an unresolvable spec ambiguity, an unsalvageable diff, a stop-condition in `worker-0.md`), Worker 0 stops and escalates to the maintainer immediately rather than waiting for the end of the build. The non-pause rule applies to the happy path, not to genuine blockers.
+
+Maintainer commit posture (unchanged): only the maintainer commits. Workers never commit, even if asked. Workers also never amend, force-push, or otherwise rewrite git history.
 
 ## Closeout
 
-When all checklist items are marked `- [x]`:
+Closeout runs **after** the maintainer has committed the build and supplied (or been asked for) the build-cycle commit range. Workers do not run closeout against an uncommitted working tree; the diff-scan step depends on the commits existing. When all checklist items are marked `- [x]` AND the maintainer has handed back the commit range:
 
 1. Worker 0 scans all build-cycle commit diffs (using the maintainer-provided commit range).
 2. Worker 0 reads all four worker-memory files (one-time read at closeout) to surface patterns the workers themselves noticed.

@@ -15,10 +15,9 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser: CommandParser) -> None:
         """Register the positional schema argument and the optional --path flag."""
-        parser.add_argument("schema", nargs=1, type=str, help="The schema location")
+        parser.add_argument("schema", type=str, help="The schema location")
         parser.add_argument(
             "--path",
-            nargs="?",
             type=str,
             help="Optional path to export",
         )
@@ -27,7 +26,7 @@ class Command(BaseCommand):
         """Resolve the dotted-path schema symbol, print SDL to stdout or write it to --path."""
         try:
             schema_symbol = import_module_symbol(
-                options["schema"][0],
+                options["schema"],
                 default_symbol_name="schema",
             )
         except (ImportError, AttributeError) as e:

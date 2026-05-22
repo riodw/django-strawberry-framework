@@ -102,6 +102,12 @@ def test_export_schema_raises_command_error_when_path_directory_missing(monkeypa
         )
 
 
+def test_export_schema_raises_command_error_when_path_flag_has_no_value(monkeypatch):
+    _make_test_module(monkeypatch, schema=_make_schema())
+    with pytest.raises(CommandError):
+        call_command("export_schema", "test_module:schema", "--path")
+
+
 # ---------------------------------------------------------------------------
 # Default-symbol-name fallback (Decision 3)
 # ---------------------------------------------------------------------------

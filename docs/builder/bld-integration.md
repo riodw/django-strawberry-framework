@@ -1,100 +1,420 @@
-# Cross-slice integration: export_schema / 0.0.7 (018)
+# Build: Cross-slice integration pass
 
-Spec source: `docs/SPECS/spec-018-export_schema-0_0_7.md`
-Build plan: `docs/builder/build-018-export_schema-0_0_7.md`
+Spec reference: `docs/spec-019-multi_db-0_0_7.md`
 Status: final-accepted
 
-## Spec slice checklist (verbatim)
+## Plan (Worker 1)
 
-No spec-level checklist for integration; the build plan's "Cross-slice integration pass" checkbox is the contract. The integration audit below walks the BUILD.md "Cross-slice integration pass" checklist (lines 511-531) end-to-end.
+### DRY analysis across slices
 
-## Audit walkthrough
+The build touched three Python files with review-worthy logic and four
+Markdown files. The integration scan walks each cross-cutting concern in
+turn.
 
-### 1. Slice artifacts read
+**Static-helper refresh.** Per BUILD.md "Cross-slice integration pass"
+step 2, I refreshed shadow overviews for the three Python files touched
+by the build:
 
-Walked all three per-slice artifacts in slice order, as required by `docs/builder/BUILD.md` lines 513-515. No "as needed" — every artifact is required context for the cross-slice DRY scan:
+- `docs/shadow/tests__types__test_resolvers.overview.md`
+- `docs/shadow/tests__optimizer__test_multi_db.overview.md`
+- `docs/shadow/examples__fakeshop__test_query__test_multi_db.overview.md`
 
-- `docs/builder/bld-slice-1-module.md` — Slice 1 (module + `Command` subclass). Status: `final-accepted`. Shipped `django_strawberry_framework/management/{__init__.py, commands/__init__.py, commands/export_schema.py}`. Worker 3 ran the static helper on `export_schema.py`; reported 0 repeated string literals, 0 control-flow hotspots, 0 Django/ORM markers, 1 call of interest (`isinstance` at line 36).
-- `docs/builder/bld-slice-2-tests.md` — Slice 2 (tests). Status: `final-accepted`. Shipped `tests/management/{__init__.py, test_export_schema.py}` plus one new function in `examples/fakeshop/tests/test_commands.py`. Worker 3 ran the static helper on `test_export_schema.py`; reported 4 repeated string literals, 0 control-flow hotspots, 0 Django/ORM markers, 1 call of interest (`setattr` at line 25 inside `_make_test_module`). All four repeated literals noted by Worker 3 as "spec-pinned and not extractable."
-- `docs/builder/bld-slice-3-promotion_docs.md` — Slice 3 (promotion + docs). Status: `final-accepted`. Shipped doc-only updates across `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `KANBAN.md`, `CHANGELOG.md`. Maintainer commit `216e6ba` landed the KANBAN column move and CHANGELOG bullet ahead of Worker 2's build pass; Worker 2's residual contribution was a single-line `KANBAN.md:62` cleanup of the stale "Still not implemented" entry. Static helper not applicable (no `.py` files in scope).
+Markdown targets (`docs/GLOSSARY.md`, `docs/README.md`, `KANBAN.md`,
+`CHANGELOG.md`) get no helper run — the helper inspects Python.
 
-### 2. Static inspection helper coverage
+#### Duplicated helpers across slices
 
-Per BUILD.md lines 516-517, every `.py` file with review-worthy logic touched by the build was either covered by a helper run or has a recorded skip with reason. Audit:
+Walked every helper / fixture introduced by Slices 1-3 against existing
+sites:
 
-- `django_strawberry_framework/management/__init__.py` — marker module, one-line docstring, no logic. Skipped at review (recorded in Slice 1 artifact's "Static inspection helper disposition" sub-section under Worker 3's review).
-- `django_strawberry_framework/management/commands/__init__.py` — marker module, one-line docstring, no logic. Skipped at review (recorded in Slice 1 artifact).
-- `django_strawberry_framework/management/commands/export_schema.py` — review-worthy logic (`handle` body with try/except, isinstance guard, branching write). Helper run at review (Slice 1). Shadow at `docs/shadow/django_strawberry_framework__management__commands__export_schema.overview.md`.
-- `tests/management/__init__.py` — marker module, one-line docstring, no logic. Skipped at review (recorded in Slice 2 artifact).
-- `tests/management/test_export_schema.py` — review-worthy logic (7 test bodies + 2 module-level helpers). Helper run at review (Slice 2). Shadow at `docs/shadow/tests__management__test_export_schema.overview.md`.
-- `examples/fakeshop/tests/test_commands.py` — existing file extended by one 4-line test function plus a 3-line dash-banner. Under BUILD.md's 50-line outside-package threshold; helper skipped at Slice 2 review with recorded reason.
-- `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `KANBAN.md`, `CHANGELOG.md` — Markdown / changelog surfaces, not `.py` files. Helper does not apply (recorded in Slice 3 artifact's "Static inspection helper disposition" sub-section).
+- **Inlined `_sel(...)` and `_register_type_definition(...)`** at
+  `tests/optimizer/test_multi_db.py:40-76` mirror
+  `tests/optimizer/test_walker.py:46-103`. **Two users in the test tree**
+  (walker + multi_db). The Slice 1 plan listed inline-vs-import as
+  Worker 2 discretion, the inlined copy is intentionally narrower (drops
+  the unused `field_map`/`primary` kwargs from the walker version), and
+  no Slice 2 or Slice 3 site adds a third user. Worker 2's choice of
+  inline preserved isolation between two unrelated test modules and
+  avoided pulling test-module helpers across packages.
+- **Slice 2's harness helpers** (`_seed_book_chain`, `_graphql_view`,
+  `_build_test_schema`, `_MultiDbTestQuery`, `_current`, the temp
+  `urlpatterns`) live entirely in
+  `examples/fakeshop/test_query/test_multi_db.py`. Walked Slice 1 and
+  Slice 3 for any reuse / mirror — none. The harness is scoped to one
+  file by Decision 4 (no fakeshop schema modification) and Decision 7
+  (do not pre-emptively factor); Slice 3 is docs-only and never touches
+  test code.
+- **Autouse `_reload_project_schema_for_acceptance_tests` fixture**
+  copied verbatim from `examples/fakeshop/test_query/test_library_api.py:17-43`
+  into `examples/fakeshop/test_query/test_multi_db.py:66-91`. Decision 7
+  explicitly mandates the verbatim copy and forbids a `conftest.py`
+  factoring until 3+ files need it. **Two users now** (`test_library_api`
+  + `test_multi_db`); the spec's threshold is 3+. Worker 3's Slice 2
+  review and Worker 1's Slice 2 final-verification both deferred the
+  factoring decision to this integration pass. **Decision: do not
+  consolidate.** Two users is below the threshold and the duplication is
+  intentional per Decision 7; pre-emptively factoring would create a
+  `conftest.py` whose entire content is a fixture that only two files
+  use, which would be the wrong reuse abstraction for the current state.
+  When a third `test_query/` file lands that needs the reload contract,
+  that future card owns the factoring.
 
-Coverage audit clean.
+#### Inconsistent naming or error handling between slices
 
-### 3. Repeated string literals comparison
+Walked every naming convention across the three new test files:
 
-Walked the **Repeated string literals** sections across every shadow overview produced by the build (BUILD.md lines 517-518):
+- **Test naming.** All seven new tests use snake_case verb-noun-detail
+  shape and pin a single spec axis or branch each:
+  - Slice 1 resolver-level: `test_fk_id_elision_stub_sets_state_db_via_router_db_for_read`,
+    `..._router_call_passes_parent_row_as_instance`,
+    `..._router_call_passes_none_instance_when_parent_lacks_state`,
+    `..._returns_none_for_null_fk_and_does_not_call_router`,
+    `test_strictness_check_is_connection_agnostic_under_non_default_alias`.
+  - Slice 1 optimizer-plan: `test_optimization_plan_apply_preserves_explicit_using_alias`,
+    `test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias`.
+  - Slice 2 live HTTP: `test_using_shard_b_resolver_returns_rows_seeded_on_shard_b`,
+    `test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver`.
 
-- `docs/shadow/django_strawberry_framework__management__commands__export_schema.overview.md` reports **0 repeated string literals**.
-- `docs/shadow/tests__management__test_export_schema.overview.md` reports **4 repeated string literals**: `"export_schema"` (7x), `"test_module"` (3x), `"type Query"` (3x), `"test_module:schema"` (2x).
+  Each name pins one axis or property. No collisions, no near-twins, no
+  ambiguous abbreviations.
 
-Cross-file analysis: the four literals in the test file all repeat **only within the test file**; none of them appear in `export_schema.py`. The non-`Schema` `CommandError` message `"The \`schema\` must be an instance of strawberry.Schema"` appears once in `export_schema.py` (the raise site at line 37) and once in `test_export_schema.py` (line 76, as the `match=` regex pattern). Confirmed both forms are consistent — the test uses `match=r"must be an instance of strawberry\.Schema"` where `\.` is the regex escape for the literal `.` in `strawberry.Schema`. The regex substring matches the raise-site message exactly; the `\.` escape is correct (without it, `.` would match any character — still functionally pass, but the escaped form is the precise intent and is what the spec pins at line 608).
+- **Docstring style.** Every new test has a one-line docstring naming
+  the spec axis or branch (e.g. `"""Decision 3 axis 1 — stub's
+  _state.db is set via router.db_for_read."""`). Convention-matching
+  per spec rev2 S11; pyproject's `per-file-ignores` waives `D` / `ANN`
+  on `tests/**/*.py` and `examples/**/*.py`.
 
-No cross-slice repeated literal warrants extraction into a shared constant. Each repeated literal is local to a distinct test contract pinned by the spec; promoting any of them to a module-level constant would obscure the pinned-by-spec status at the call site.
+- **Error-handling shape.** Slice 1 test (e) raises `OptimizerError`
+  with the spec-pinned message `"Unplanned N+1: shelf"`. No Slice 2 or
+  Slice 3 test asserts on `OptimizerError` (Slice 2 asserts on
+  GraphQL JSON response shape; Slice 3 has no tests). One error class,
+  one assertion site — no inconsistency.
 
-### 4. Imports comparison
+- **Seeding-pattern naming.** Slice 1's resolver tests use
+  `parent_row = Item(category_id=42)` (no DB write — un-saved Django
+  model instance). Slice 1's optimizer-plan tests use
+  `Item.objects.using("shard_b").all()` and
+  `Category.objects.all()` (queryset shapes, no `.create(...)` calls).
+  Slice 2's `_seed_book_chain(alias, *, title)` uses
+  `.using(alias).create(...)` for the full
+  `Branch → Shelf → Book` chain. Three distinct intent levels (un-saved
+  instance fixture, queryset construction, live DB seed), each fitting
+  its layer. No naming conflict.
 
-Walked the **Imports** sections across every shadow overview (BUILD.md lines 518-519). One-way dependency direction confirmed:
+#### Repeated ORM / queryset patterns
 
-- `export_schema.py` imports: `pathlib` (stdlib), `BaseCommand` / `CommandError` / `CommandParser` from `django.core.management.base` (django), `Schema` from `strawberry` (strawberry), `print_schema` from `strawberry.printer` (strawberry), `import_module_symbol` from `strawberry.utils.importer` (strawberry). **Zero first-party `django_strawberry_framework.*` imports** — the management command is a leaf module that depends only on Django and Strawberry. This is correct: the command resolves consumer schemas through string dotted paths via `import_module_symbol`, not via `from django_strawberry_framework.something import ...`.
-- `test_export_schema.py` imports: `sys` (stdlib), `types` (stdlib), `StringIO` from `io` (stdlib), `pytest` (third-party), `strawberry` (strawberry), `CommandError` / `call_command` from `django.core.management` (django). **Zero first-party `django_strawberry_framework.*` imports** — and crucially **does not import the `Command` class directly**. The test invokes the command via `call_command(...)` exclusively, per Decision 8. Confirmed by Worker 3's review of Slice 2 (artifact line 280: "`Command` is not imported anywhere in `tests/management/test_export_schema.py` or in the fakeshop test extension").
+Walked every `Model.objects.using(alias)` call across the build:
 
-Sibling-import check (BUILD.md line 518): no sibling outside `django_strawberry_framework/` has started importing from `django_strawberry_framework/management/*`. The management commands are not a consumer API; the only "consumer" of the command is Django's `manage.py` machinery, which resolves it through `INSTALLED_APPS` directory walking — not through a Python import statement. `grep` of `tests/`, `examples/`, and `django_strawberry_framework/` for `from django_strawberry_framework.management` or `import django_strawberry_framework.management` returns zero hits outside the build's own tests directory (and even those tests do not import `Command` — they use `call_command`). Layering invariant holds.
+- `tests/optimizer/test_multi_db.py:88` —
+  `Item.objects.using("shard_b").all()`
+- `tests/optimizer/test_multi_db.py:106` —
+  `Item.objects.using("shard_b").all()` inside a `Prefetch`
+- `examples/fakeshop/test_query/test_multi_db.py:136` —
+  `models.Book.objects.using("shard_b").select_related(...)` inside
+  the per-test `_MultiDbTestQuery` resolver
+- `examples/fakeshop/test_query/test_multi_db.py:163-172` —
+  `Branch.objects.using(alias).create(...)`,
+  `Shelf.objects.using(alias).create(...)`,
+  `Book.objects.using(alias).create(...)` inside `_seed_book_chain`
 
-### 5. Deferred follow-up scan
+Four `.using("shard_b")` call sites in test code; one helper call site
+that takes an `alias` parameter. The patterns are layer-appropriate:
+unit tests use literal `"shard_b"` because the test pins the literal
+alias; the live-HTTP seeder takes a parameter because it seeds on
+multiple aliases. No centralization-into-helper opportunity surfaces —
+the literal-vs-parameter split is correct.
 
-Walked every accepted slice artifact's `What looks solid` and `DRY findings` sections, plus `Notes for Worker 1` reconciliation notes, for deferred follow-up (BUILD.md line 519):
+#### Misplaced responsibilities between modules
 
-- **Slice 1 DRY findings**: explicit "No duplicated literals, no repeated key/tuple shapes, no near-copies of existing helpers. ... Nothing to flag for the cross-slice integration pass from this slice's surface." No deferral.
-- **Slice 2 DRY findings**: explicit walkthrough of the four repeated literals (`export_schema`, `test_module`, `type Query`, `test_module:schema`) — each is local to a distinct test contract pinned by the spec; no centralization warranted. The `_make_test_module` / `_make_schema` helper extractions are spec-authorized DRY consolidation (spec lines 600-602) and are module-level plain functions, not `@pytest.fixture`-decorated, so the "use inline per test, not a session fixture" rule is honored literally. No deferral.
-- **Slice 3 DRY findings**: cross-document verbatim wording at five sites (GLOSSARY entry body, README "Shipped today" bullet, CHANGELOG `### Added` bullet, KANBAN Done body lead sentence, GLOSSARY Index row) — Worker 3 confirmed character-for-character match against the spec source at all four prose sites. No paraphrase drift. No deferral.
-- **Slice 3 `Notes for Worker 1 (spec reconciliation)`** (Worker 3): three notes, all intentionally deferred to the build's closeout or accepted as out-of-scope cleanup that does not warrant a rev6:
-  - Note 1 (maintainer commit `216e6ba` landed the column move ahead of Worker 2's build pass): no spec edit needed; build plan's "Mid-build baseline drift addendum" already records this.
-  - Note 2 (spec line citations drifting against live line numbers): pin-at-write-time hints per BUILD.md, not load-bearing contracts. Worker 1 Slice 3 final verification correctly deferred a refresh — touching the spec for non-load-bearing cleanup would force a rev6 and misalign the revision history.
-  - Note 3 (spec status line still reads `draft (revision 5, ...)`): deferred to Worker 0's closeout / the joint-cut last-card-to-ship. WIP-ALPHA-019-0.0.7 and WIP-ALPHA-020-0.0.7 are still queued; the joint cut isn't complete yet.
+Each slice's surface area matches the spec's per-slice file pin:
 
-None of these deferrals require an integration-pass consolidation; all are correctly routed to either Worker 0 closeout (status-line flip) or "no action" (line-citation drift, maintainer commit acknowledgement).
+- Slice 1 lives entirely in `tests/` (package-internal). No leakage
+  into `examples/`. Verified by `git diff` reading.
+- Slice 2 lives entirely in `examples/fakeshop/test_query/`. Decision 4
+  forbids modifying the fakeshop schemas, and Worker 2's diff is empty
+  on `examples/fakeshop/apps/library/schema.py`,
+  `examples/fakeshop/apps/products/schema.py`, and
+  `examples/fakeshop/config/settings.py`. The temp URLConf and the
+  per-test schema live inside the test file by Decision 6 rev3 R4 — the
+  holder-pattern is intentionally local rather than a `conftest.py`.
+- Slice 3 lives entirely in four `.md` files. No `.py` touched.
+- Decision 7 explicitly forbids extracting Slice 2's harness or the
+  autouse reload fixture into `conftest.py` until a second test file
+  needs it — which Slice 2 itself is. The reasoning that *this* build
+  does not factor is the spec's `do not pre-emptively factor` boundary:
+  Slice 2 is the second user, but the spec's threshold is 3+ files.
+  When the third file lands the factoring becomes a follow-up card.
+- Zero production code change in `django_strawberry_framework/` across
+  all three slices (Decision 2). Verified.
 
-## DRY findings
+#### Missing or too-broad exports introduced by the build
 
-### Integration-checklist sub-items walked (BUILD.md lines 521-529)
+- `git diff -- django_strawberry_framework/__init__.py` → empty.
+  `__all__` and the re-export list are unchanged. Spec DoD item 16 and
+  Slice 1/2/3 individual public-surface checks all confirm.
+- No new symbol added by any slice. The build is tests + docs only.
+- `pyproject.toml`, `django_strawberry_framework/__init__.py:__version__`,
+  and `tests/base/test_init.py`'s version assertion are all unchanged
+  per Decision 9 joint-cut policy (the last `0.0.7` card to ship owns
+  the bump; this build is not that card).
 
-- **Duplicated helpers across slices.** None. Slice 1's `Command(BaseCommand)` is a leaf class with no extracted helpers; Slice 2's `_make_test_module` and `_make_schema` are local to the test file (module-level plain functions, not exported); Slice 3 ships zero `.py` code. No helper duplication possible.
-- **Inconsistent naming or error handling between slices.** None. The non-`Schema` `CommandError` message at `export_schema.py:37` (`"The \`schema\` must be an instance of strawberry.Schema"`) is matched by the test at `test_export_schema.py:76` (`match=r"must be an instance of strawberry\.Schema"`); the regex form correctly escapes the literal `.`. The `(ImportError, AttributeError)` catch tuple at `export_schema.py:33` is exercised by two separate tests (c) and (d) — one per arm — per the spec's rev2 M1 split. No naming or error-handling inconsistency.
-- **Repeated ORM/queryset patterns that should be centralized.** Not applicable. The shadow overview for `export_schema.py` reports `executable marker lines: 0` Django/ORM markers; the command does not touch the ORM. The shadow overview for `test_export_schema.py` also reports zero ORM markers. No ORM patterns to centralize.
-- **Misplaced responsibilities between modules touched by different slices.** None. Slice 1 owns the source module; Slice 2 owns the package-internal tests and the one-test fakeshop extension; Slice 3 owns the documentation surface. The boundaries are crisp: Slice 1 has no test imports; Slice 2 has no source imports (uses `call_command` string dispatch); Slice 3 ships no `.py` code.
-- **Missing or too-broad exports introduced by the build.** None. `git diff -- django_strawberry_framework/__init__.py` returns empty (verified at audit time); `__all__` is unchanged at the 8-entry tuple from before the build. The Slice 1 / Slice 2 / Slice 3 spec checklists all explicitly forbade adding `Command` to `__all__`; each slice's Worker 3 review confirmed the public-surface invariant via the same empty-diff check.
-- **Repeated string literals / dictionary keys / tuple shapes across slices.** None across slices (within-file repetitions in Slice 2 are local to distinct test contracts and not extractable — see "Repeated string literals comparison" above). The one literal that spans two files — the non-`Schema` `CommandError` message — is correctly matched (raise site + regex `match=` pattern with proper `\.` escape) and pinned by the spec for regression safety.
-- **Whether comments now tell one coherent story across the new code.** Yes. Slice 1's `export_schema.py` carries one module docstring + one class docstring + two method docstrings (`D100` / `D101` / `D102` root-cause fixes, no `# noqa` suppressions). Slice 2's `test_export_schema.py` carries one module docstring plus three dash-banner section comments (`Shared fixture pattern (use inline per test, not a session fixture)`, `Happy paths`, `Failure modes`, `Default-symbol-name fallback`) that visually anchor the spec's (a)-(g) test grouping. Slice 3's documentation edits reproduce the spec's pinned wording verbatim at four prose sites — no paraphrase drift, no contradiction between the GLOSSARY entry body, the README "Shipped today" bullet, the CHANGELOG `### Added` bullet, and the KANBAN DONE-018 lead sentence. The comments and docs are mutually consistent and reference one another correctly (the README bullet links to `GLOSSARY.md#schema-export-management-command`; the GLOSSARY heading anchor still resolves).
+#### Repeated string literals / dictionary keys / tuple shapes across slices
 
-### Cross-slice DRY findings
+Walked the **Repeated string literals** sections of all three shadow
+overviews and cross-referenced:
 
-None. The build is small-surface (one ~45-line source module, one ~95-line test file, one 4-line fakeshop test extension, doc-only Slice 3) and the inter-slice boundaries are crisp by design — Slice 1's source has no first-party imports; Slice 2's tests do not import `Command` directly (Decision 8); Slice 3 ships zero `.py` code. No cross-slice duplication to consolidate.
+- **`tests/types/test_resolvers.overview.md`** repeats are dominated by
+  pre-existing fakeshop conventions: `52x category`, `21x allItems`,
+  `8x dst_optimizer_planned`, `7x category_id`,
+  `7x dst_optimizer_strictness`, `5x allCategories`, `4x
+  dst_optimizer_fk_id_elisions`. The five new Slice 1 tests reuse
+  `category` / `category_id` (FK chain shape) and
+  `dst_optimizer_planned` / `dst_optimizer_strictness` (strictness
+  context dict keys) — all four are pre-existing convention in the file,
+  not new repeats Slice 1 introduced.
+- **`tests/optimizer/test_multi_db.overview.md`** reports
+  `repeated string literals: 0`. The file's two tests use `shard_b` /
+  `items` / `category` once each in load-bearing positions.
+- **`examples/fakeshop/test_query/test_multi_db.overview.md`** reports
+  8 repeats, all 2x: `apps.library.schema`, `config.schema`,
+  the two-test verbatim GraphQL query body
+  (`query { booksOnShardB { title shelf { code branch { name } } } }`),
+  `/graphql/`, `application/json`, `booksOnShardB`, `default-only`,
+  `shard-b-only`. The module-name pair (`apps.library.schema`,
+  `config.schema`) is inside the verbatim-copied autouse reload fixture
+  and matches `test_library_api.py:17-43`'s shape. The GraphQL string
+  literal and the request-shape pair (`/graphql/`,
+  `application/json`) are the two tests doing the same live HTTP shape
+  with different seed data. `booksOnShardB` appears twice because both
+  tests pull the same response field.
 
-## What looks solid
+**Cross-file literal overlap.** Walked every literal in the union of
+all three overviews:
 
-- **Layering is one-way and tight.** `export_schema.py` imports from Django + Strawberry only (zero first-party imports); `test_export_schema.py` invokes via `call_command` only (zero `Command` imports); no sibling outside `django_strawberry_framework/` has started importing from `management/*`. The management commands are correctly modeled as import-time plumbing discovered through `INSTALLED_APPS`, not a consumer API.
-- **The non-`Schema` `CommandError` message is consistently pinned across the source/test boundary.** Raise site at `export_schema.py:37` carries the spec-verbatim `"The \`schema\` must be an instance of strawberry.Schema"` (backticks around `schema` preserved per the upstream wording); the test at `test_export_schema.py:76` uses `match=r"must be an instance of strawberry\.Schema"` with the literal `.` correctly escaped as `\.`. A future paraphrase-drift on either side would fail the regex; the test pin is durable.
-- **Public-surface invariant held across all three slices.** `git diff -- django_strawberry_framework/__init__.py` is empty after Slice 3 final-acceptance; `__all__` is the same 8-entry tuple it was before the build started. No new public exports introduced. Slice 1 / Slice 2 / Slice 3 each explicitly verified this independently; the cross-slice re-check at the integration pass confirms the same. Zero divergence between the spec's "no new public exports" contract (Decision 1, Slice 3 sub-bullet at spec line 81, DoD item 12) and the shipped state.
+| Literal | File 1 | File 2 | File 3 | Status |
+|---|---|---|---|---|
+| `shard_b` | resolvers (1x; not in Repeats) | optimizer (2x; not in Repeats) | fakeshop live (many; not in Repeats) | Load-bearing alias name; pinning it elsewhere would obscure the test's intent. Each test asserts on this exact string. |
+| `default` | resolvers (mock return) | — | live (alias param) | Universal Django default — pinning behind a constant would hide a Django contract. |
+| `category` / `category_id` | resolvers (52x / 7x) | optimizer (1x each) | — | Fakeshop FK chain shape; pre-existing convention in `tests/`. Slice 1 reuses it correctly. |
+| `items` | — | optimizer (3x) | — | Relation name from the optimizer-plan test; one file, three uses (`_sel("items", ...)`, `Prefetch("items", ...)`, hint dict key `"items"`). Acceptable per the helper spec; consolidating into one constant inside the test would obscure the shape (the three uses are intentional shape pins, not accidental coupling). |
+| `booksOnShardB` | — | — | live (2x) | GraphQL field name; both tests query the same field on the schema. Could be a module-level constant in the live HTTP file, but the cost is small (2x) and the spec rev5-post X7 widened test 2's query to match test 1's, so the duplication is a *consequence* of a spec-pinned shape, not an oversight. |
+| `apps.library.schema` / `config.schema` | — | — | live (autouse fixture body) | Inside the verbatim-copied autouse reload fixture per Decision 7. Identical to `test_library_api.py:17-43` shape. |
 
-## Notes for Worker 0
+**No cross-file repeated literals warrant consolidation.** The
+intra-file repeats in the live HTTP file (the duplicated GraphQL query
+body and the `override_settings(...) + clear_url_caches()` try/finally
+block) were flagged by Worker 3 at Slice 2 review and deferred to this
+pass. Walking them now: the query body is duplicated across the two
+tests because spec rev5-post X7 widened test 2's body to match test 1's
+shape; extracting it into a module-level `_BOOKS_QUERY` constant would
+work mechanically but is at most a Low at the two-test scope and adds a
+layer of indirection that does not yet pay for itself. The
+`override_settings`/`clear_url_caches` block (10 lines, twice) is the
+same: extracting a context manager helper would cut ~10 lines but adds a
+new symbol and a layer of indirection for two callers. Both stay
+inline; the cross-slice integration recommendation is to revisit if a
+third live HTTP test enters the tree.
 
-- **No consolidation loop needed.** The integration pass is clean — zero High/Medium/Low findings, zero cross-slice DRY opportunities. Worker 0 should dispatch directly to the final test-run gate (Worker 1, `docs/builder/bld-final.md`); no Worker 2 / Worker 3 second loop is warranted.
-- **Spec status-line flip is still deferred to the joint-cut last-card-to-ship.** Per Worker 3's Slice 3 reconciliation note 3 and Worker 1's Slice 3 final-verification disposition, the spec's `Status: draft (revision 5, ...)` line at `docs/SPECS/spec-018-export_schema-0_0_7.md:4` stays at `draft` until the joint `0.0.7` cut completes (WIP-ALPHA-019-0.0.7 and WIP-ALPHA-020-0.0.7 are still queued). The final test-run gate (Worker 1 again) is not the right point to flip it either — that gate verifies the test suite passes, not the spec lifecycle. The flip belongs to whichever Worker 1 spawn closes out the joint bundle once 019 and 020 have shipped.
-- **Maintainer concurrent activity recorded in the build plan.** The build plan's two "Mid-build baseline drift" notes at `docs/builder/build-018-export_schema-0_0_7.md:8-15` accurately describe (a) the KANBAN NNN renumbering that landed mid-build, (b) the maintainer commits `d2a10de remove 017 artifacts` and `216e6ba update card names` that landed between Slice 2 final-acceptance and the Slice 3 build pass. The final test-run gate should not be surprised by these; they are out-of-scope build noise per `AGENTS.md` line 31, not build issues.
-- **Out-of-scope modified files at integration time.** `git status --short` at integration time shows the same out-of-scope baseline-maintenance files the build plan recorded: `M django_strawberry_framework/scalars.py`, `M docs/review/rev-django_strawberry_framework.md`, `M docs/review/rev-scalars.md`. None are in 018's scope; the final test-run gate should record them as out-of-scope and not flag them as build issues.
+#### Whether comments now tell one coherent story
 
-## Final status
+Walked the three new test files in slice order, reading each as a fresh
+reader:
 
-`final-accepted`. The integration pass surfaces no cross-slice duplication, no naming or error-handling inconsistency, no layering violation, no missing or too-broad exports, no repeated cross-file literals warranting consolidation, and no incoherence between the comments and docs the three slices shipped. The small-surface card landed exactly as the spec described it; no second loop is needed. Worker 0 dispatches the final test-run gate next.
+- `tests/optimizer/test_multi_db.py` opens with a module docstring
+  explicitly cross-referencing the spec and the sibling resolver-test
+  file. Inside the tests, comments cite spec lines for each axis pin
+  (e.g. `# rev2 H2 — generated child querysets do NOT inherit the parent alias`).
+- The five new tests in `tests/types/test_resolvers.py` carry one-line
+  docstrings naming the axis pinned ("Decision 3 axis 1 — ..."), with
+  inline comments citing the line ranges in
+  `django_strawberry_framework/types/resolvers.py` that each branch
+  exercises (e.g. `# types/resolvers.py:74-76 — early return None`).
+- `examples/fakeshop/test_query/test_multi_db.py` opens with a 27-line
+  module docstring explaining the live-HTTP harness, the holder
+  pattern, the autouse reload fixture, the seeding contract, and the
+  spec decisions that pin each piece. Each subsequent block carries
+  matching inline comments.
+
+A reader following the spec from Decision 3 axis 1 to axis 4 lands
+correctly at the right test in the right file every time. Cross-file
+breadcrumb is consistent.
+
+### Cross-slice import / dependency review
+
+Compared the **Imports** sections of the three shadow overviews against
+the documented dependency boundary:
+
+- `tests/types/test_resolvers.py`: imports from
+  `apps.products.models` (fakeshop fixture models),
+  `django_strawberry_framework` and submodules
+  (`optimizer.field_meta`, `optimizer.plans`, `optimizer._context`,
+  `types.resolvers`, `types.definition`, `exceptions`, `registry`),
+  and standard-lib `types.SimpleNamespace` / `unittest.mock.Mock`. All
+  consistent with the package-internal test scope.
+- `tests/optimizer/test_multi_db.py`: imports from
+  `apps.products.models`, `django.db.models.Prefetch`,
+  `django_strawberry_framework` and submodules
+  (`OptimizerHint`, `optimizer.field_meta`, `optimizer.walker`,
+  `registry`, `types.definition`, `utils.strings`), and standard-lib
+  `types.SimpleNamespace`. All first-party imports go through the
+  package's public submodules (which are stable enough for tests); no
+  reach-through into private members beyond what the spec authorizes
+  (`_build_fk_id_stub`, `_check_n1` in the resolver-tests file are
+  spec-named directly-tested private symbols).
+- `examples/fakeshop/test_query/test_multi_db.py`: imports from
+  `importlib`, `os`, `sys`, `pytest`, `strawberry`,
+  `apps.library`, `django.test`, `django.urls`,
+  `strawberry.django.views`, `strawberry.types`,
+  `django_strawberry_framework` (only `DjangoOptimizerExtension` and
+  `registry`), and an inside-fixture `apps.library.schema.BookType`
+  import at line 130. The top-level `# noqa: E402` markers on the
+  post-skip imports are load-bearing per Decision 6 and not the kind
+  of suppression the slice checklist forbids.
+
+**One-way dependency direction.** All imports flow upward — tests
+import from `django_strawberry_framework`; package source imports
+nothing from tests or fakeshop. Verified by the empty
+`git diff -- django_strawberry_framework/`.
+
+**Cross-test-tree imports.** None. No test file imports another test
+file's symbols. Slice 1's `_sel` and `_register_type_definition` are
+inlined rather than imported from `tests/optimizer/test_walker.py`
+(Worker 2 chose the conservative posture); this preserves test-tree
+isolation.
+
+**Examples-to-package boundary.** The live HTTP test imports the
+package's `DjangoOptimizerExtension` and `registry`, plus
+`BookType` from the fakeshop `apps.library.schema` (inside the
+fixture, after the registry reload). No package code reaches into
+`examples/`; verified by `git diff -- django_strawberry_framework/`
+being empty.
+
+### Comments / documentation coherence
+
+Walked the cross-doc wording landed by Slice 3 against the three test
+files landed by Slices 1-2:
+
+- **`docs/GLOSSARY.md` entry body** (`Multi-database cooperation` at
+  lines 679-693) lists the four axes per spec Decision 3 in numbered
+  list form. Bullet 1: `router.db_for_read` on FK-id elision stubs —
+  matches Slice 1 tests (a)-(d) in `tests/types/test_resolvers.py`.
+  Bullet 2: explicit `.using(alias)` `_db` preservation through
+  `OptimizationPlan.apply` — matches Slice 1 test (f) in
+  `tests/optimizer/test_multi_db.py`. Bullet 3: consumer-provided
+  `Prefetch(queryset=...)` via `OptimizerHint.prefetch(...)` — matches
+  Slice 1 test (g). Bullet 4: strictness-mode N+1 detection is
+  connection-agnostic — matches Slice 1 test (e). All four bullets
+  have a landed test pin.
+- **`docs/README.md`** `### Sharded mode (multi-DB)` forward-pointer
+  (line 218) enumerates the four narrowed axes in the same order as
+  GLOSSARY, with link text pointing at the GLOSSARY anchor. Consistent.
+- **`KANBAN.md`** `DONE-019-0.0.7` body cites all three test files by
+  path and the four axes in the same order. The body lists test counts
+  (5 resolver-level, 2 optimizer-plan, 2 live HTTP) that match the
+  actual landed tests verbatim.
+- **`CHANGELOG.md`** `[0.0.7]` `### Added` fourth bullet (line 33) is
+  verbatim-pinned by spec line 576 and matches GLOSSARY / KANBAN /
+  README in axis order and test-file references.
+
+**Cross-doc wording consistency.** The four-axis enumeration is
+identical in semantic content across all four documents (GLOSSARY /
+README / KANBAN / CHANGELOG); only the formatting differs (numbered
+list in GLOSSARY, prose with em-dashes in README/CHANGELOG/KANBAN).
+The Worker 3 Slice 3 Low finding ("GLOSSARY bullets are stylistically
+refined from spec line 563's flowing prose") was disposed as licensed
+adaptation by Worker 1; the integration pass confirms that the
+adaptation preserves all substantive content and is consistent with
+the matching `for root querysets` suffix on bullet 2 in spec lines 569
+(KANBAN body) and 576 (CHANGELOG bullet).
+
+**Story coherence.** A reader starting at `docs/README.md`'s
+`### Sharded mode (multi-DB)` section follows the forward-pointer to
+`docs/GLOSSARY.md#multi-database-cooperation`, sees the four axes,
+follows the cross-references to `DjangoOptimizerExtension`,
+`get_queryset visibility hook`, `OptimizerHint`, `FK-id elision`, and
+`Strictness mode`. Each cross-reference resolves to a live anchor.
+The KANBAN Done body and CHANGELOG bullet both link to
+`docs/spec-019-multi_db-0_0_7.md` (active path) and the three test
+files. No broken anchors; no contradictory wording.
+
+### Consolidation recommendations
+
+**None.** The integration scan found three intentional duplication
+sites that the spec already authorizes and one observation that does
+not warrant consolidation at the current scope:
+
+1. **Inlined `_sel` / `_register_type_definition` in
+   `tests/optimizer/test_multi_db.py`** — two users (walker + multi_db).
+   Slice 1 plan listed inline-vs-import as Worker 2 discretion;
+   inlined copy is intentionally narrower; no third user appears in
+   this build. Below the threshold a shared `tests/optimizer/_helpers.py`
+   would justify.
+2. **Autouse `_reload_project_schema_for_acceptance_tests` fixture
+   verbatim from `test_library_api.py:17-43`** — two users now
+   (`test_library_api` + `test_multi_db`). Decision 7 explicitly
+   forbids `conftest.py` extraction until 3+ files need it; this build
+   is the second user.
+3. **Within-file duplicates in
+   `examples/fakeshop/test_query/test_multi_db.py`** — duplicated
+   GraphQL query body (rev5-post X7 spec consequence) and duplicated
+   `override_settings + clear_url_caches` try/finally block. Two
+   callers each, ~10 lines each. Extracting either into a module-level
+   constant or a context manager would add a layer of indirection for
+   two-caller surfaces; the spec-pinned shapes read more clearly
+   inline at the current scope.
+
+The cross-doc wording (GLOSSARY / CHANGELOG / KANBAN / README) is
+intentionally redundant per Slice 3 plan line 10: each surface needs
+its own version of the contract for its readership; the spec pins
+each block separately at lines 563 / 566 / 569 / 576 and Worker 3's
+Slice 3 documentation/release sanity check confirmed the verbatim
+matches (the one Low finding on the GLOSSARY bullet adaptation was
+disposed as licensed by Worker 1).
+
+Carry-forward to the next spec author / next multi_db follow-up card:
+when a **third** consumer of any of the three intentional duplications
+above lands, that future card owns the factoring decision:
+`tests/optimizer/_helpers.py` for the walker-test fixtures, an
+`examples/fakeshop/test_query/conftest.py` for the autouse reload
+fixture, or a module-local context-manager extraction for the live
+HTTP harness. The integration pass records these as deferred-by-design
+rather than oversights.
+
+## Final verification (Worker 1)
+
+### Summary
+
+Cross-slice integration scan walked the three new Python files
+(`tests/types/test_resolvers.py` extension; new
+`tests/optimizer/test_multi_db.py`; new
+`examples/fakeshop/test_query/test_multi_db.py`) and four Slice 3
+Markdown targets (`docs/GLOSSARY.md`, `docs/README.md`, `KANBAN.md`,
+`CHANGELOG.md`) for cross-cutting concerns: duplicated helpers,
+inconsistent naming or error handling, repeated ORM/queryset patterns,
+misplaced responsibilities, public-export drift, cross-file repeated
+literals, and cross-doc story coherence. Refreshed the three shadow
+overviews under `docs/shadow/` and compared their Repeated string
+literals and Imports sections; walked every prior slice artifact's
+`What looks solid` / `DRY findings` / `Notes for Worker 1` sections.
+
+Found three intentional duplication sites (inlined `_sel` /
+`_register_type_definition` from `test_walker.py` into
+`test_multi_db.py`; autouse reload fixture copied verbatim from
+`test_library_api.py` into the live multi-db file per Decision 7;
+within-file GraphQL query and `override_settings` block duplication in
+the live-HTTP test file). Each is below the spec's threshold for
+consolidation (3+ users, second test file in the tree, or two-caller
+shapes that don't pay for an extracted abstraction). The cross-doc
+wording (GLOSSARY / CHANGELOG / KANBAN / README) is consistent — the
+four-axis enumeration matches semantically across all four documents,
+and the verbatim-pinned blocks at spec lines 566 / 569 / 576 landed
+character-for-character per Worker 3's Slice 3 diff checks.
+
+`git diff -- django_strawberry_framework/__init__.py` is empty (no
+public-export drift); `git diff -- django_strawberry_framework/` is
+empty (no production code change, per Decision 2). Setting integration
+status to `final-accepted` directly — no consolidation loop required.
+
+### Spec changes made (Worker 1 only)
+
+None.

@@ -215,6 +215,8 @@ FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards --count
 
 In sharded mode `default` → `db_shard_a.sqlite3` and `shard_b` → `db_shard_b.sqlite3`. The single-DB `db.sqlite3` is invisible while the env var is set.
 
+For the cooperation contract these shards run against — explicit `.using()` `_db` preservation, FK-id elision router hints, consumer-provided `Prefetch(queryset=…)` alias round-trips, and strictness-mode behavior under non-default aliases — see [`GLOSSARY.md#multi-database-cooperation`](GLOSSARY.md#multi-database-cooperation).
+
 ## Using the package in your own project
 
 If you want to develop against a local checkout of this package from another Django project:

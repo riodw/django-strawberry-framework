@@ -680,230 +680,157 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
 
 def test_fk_id_elision_stub_sets_state_db_via_router_db_for_read(monkeypatch):
     """Decision 3 axis 1 — stub's ``_state.db`` is set via ``router.db_for_read``."""
-    # TODO(spec-019 Slice 1 — test (a)): pin the router-call → stub._state.db wiring.
-    #
-    # Pseudocode (per spec Test plan + Decision 3 axis 1):
-    #
-    #     import django_strawberry_framework.types.resolvers as resolvers_module
-    #     from django_strawberry_framework.optimizer.field_meta import FieldMeta
-    #     from django_strawberry_framework.types.resolvers import _build_fk_id_stub
-    #
-    #     # 1. Mock router.db_for_read at the resolvers-module level (per
-    #     #    Decision 5 — patches the imported alias, not django.db.router
-    #     #    globally).
-    #     mock_router = Mock()
-    #     mock_router.db_for_read.return_value = "default"
-    #     monkeypatch.setattr(resolvers_module, "router", mock_router)
-    #
-    #     # 2. Build a fixture parent row with a non-null FK attname and a
-    #     #    _state attribute (so ``hasattr(root, "_state")`` is True).
-    #     parent_row = Category.objects.create(name="P")  # _state.adding=False
-    #     parent_row.child_id = 42  # the FK attname (e.g. ``shelf_id``)
-    #
-    #     # 3. Build a FieldMeta that points at the related model + attname.
-    #     #    Mirror the synthesis pattern from existing tests in this file
-    #     #    (see ``test_o4_*`` for the SimpleNamespace approach if a
-    #     #    real Django field is overkill).
-    #     field_meta = FieldMeta(
-    #         name="child",
-    #         is_relation=True,
-    #         related_model=ChildModel,
-    #         attname="child_id",
-    #         # ... other FieldMeta fields with defaults
-    #     )
-    #
-    #     # 4. Exercise the path and assert stub._state.db comes from the
-    #     #    mocked router. Per types/resolvers.py:78-82::
-    #     #
-    #     #        stub = field_meta.related_model(pk=related_id)
-    #     #        state = getattr(stub, "_state", None)
-    #     #        if state is not None:
-    #     #            state.adding = False
-    #     #            instance = root if hasattr(root, "_state") else None
-    #     #            state.db = router.db_for_read(
-    #     #                field_meta.related_model, instance=instance
-    #     #            )
-    #     stub = _build_fk_id_stub(parent_row, field_meta)
-    #     assert stub is not None
-    #     assert stub._state.db == "default"
-    #     mock_router.db_for_read.assert_called_once()  # called exactly once
-    raise NotImplementedError("TODO(spec-019 Slice 1 — test a)")
+    from unittest.mock import Mock
+
+    import django_strawberry_framework.types.resolvers as resolvers_module
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
+
+    mock_router = Mock()
+    mock_router.db_for_read.return_value = "default"
+    monkeypatch.setattr(resolvers_module, "router", mock_router)
+
+    parent_row = Item(category_id=42)
+    field_meta = FieldMeta(
+        name="category",
+        is_relation=True,
+        related_model=Category,
+        attname="category_id",
+    )
+
+    stub = _build_fk_id_stub(parent_row, field_meta)
+
+    assert stub is not None
+    assert isinstance(stub, Category)
+    assert stub.pk == 42
+    assert stub._state.db == "default"
+    mock_router.db_for_read.assert_called_once()
 
 
 def test_fk_id_elision_router_call_passes_parent_row_as_instance(monkeypatch):
     """Decision 3 axis 1 — router.db_for_read receives ``instance=<parent_row>`` when parent has ``_state``."""
-    # TODO(spec-019 Slice 1 — test (b)): pin the parent-row ``instance=`` forwarding.
-    #
-    # Pseudocode (per spec Test plan):
-    #
-    #     mock_router = Mock()
-    #     mock_router.db_for_read.return_value = "default"
-    #     monkeypatch.setattr(resolvers_module, "router", mock_router)
-    #
-    #     parent_row = Category.objects.create(name="P")  # has _state
-    #     parent_row.child_id = 42
-    #
-    #     field_meta = FieldMeta(
-    #         name="child",
-    #         is_relation=True,
-    #         related_model=ChildModel,
-    #         attname="child_id",
-    #     )
-    #
-    #     _build_fk_id_stub(parent_row, field_meta)
-    #
-    #     # Pins instance=parent_row at types/resolvers.py:81 — a regression
-    #     # where the call switches to instance=None would silently break
-    #     # consumer routers that consult the parent row's _state.db.
-    #     mock_router.db_for_read.assert_called_once_with(
-    #         ChildModel, instance=parent_row,
-    #     )
-    raise NotImplementedError("TODO(spec-019 Slice 1 — test b)")
+    from unittest.mock import Mock
+
+    import django_strawberry_framework.types.resolvers as resolvers_module
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
+
+    mock_router = Mock()
+    mock_router.db_for_read.return_value = "default"
+    monkeypatch.setattr(resolvers_module, "router", mock_router)
+
+    parent_row = Item(category_id=42)
+    assert hasattr(parent_row, "_state")  # invariant: Django model instances always have _state
+    field_meta = FieldMeta(
+        name="category",
+        is_relation=True,
+        related_model=Category,
+        attname="category_id",
+    )
+
+    _build_fk_id_stub(parent_row, field_meta)
+
+    # ``instance=`` is load-bearing — a regression switching it to ``instance=None``
+    # would silently break consumer routers that consult the parent row's ``_state.db``.
+    mock_router.db_for_read.assert_called_once_with(Category, instance=parent_row)
 
 
 def test_fk_id_elision_router_call_passes_none_instance_when_parent_lacks_state(monkeypatch):
     """Decision 3 axis 1 — router.db_for_read receives ``instance=None`` when parent lacks ``_state``."""
-    # TODO(spec-019 Slice 1 — test (c)): pin the ``hasattr`` fallback to ``instance=None``.
-    #
-    # Pseudocode (per spec Test plan):
-    #
-    #     import types as types_module
-    #
-    #     mock_router = Mock()
-    #     mock_router.db_for_read.return_value = "default"
-    #     monkeypatch.setattr(resolvers_module, "router", mock_router)
-    #
-    #     # SimpleNamespace has NO _state attribute — pins the
-    #     # ``hasattr(root, "_state") else None`` branch at
-    #     # types/resolvers.py:81.
-    #     parent_row = types_module.SimpleNamespace(pk=1, child_id=42)
-    #     assert not hasattr(parent_row, "_state")  # invariant check
-    #
-    #     field_meta = FieldMeta(
-    #         name="child",
-    #         is_relation=True,
-    #         related_model=ChildModel,
-    #         attname="child_id",
-    #     )
-    #
-    #     stub = _build_fk_id_stub(parent_row, field_meta)
-    #     assert stub is not None  # the stub IS built; only the instance hint differs
-    #     mock_router.db_for_read.assert_called_once_with(
-    #         ChildModel, instance=None,
-    #     )
-    raise NotImplementedError("TODO(spec-019 Slice 1 — test c)")
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import django_strawberry_framework.types.resolvers as resolvers_module
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
+
+    mock_router = Mock()
+    mock_router.db_for_read.return_value = "default"
+    monkeypatch.setattr(resolvers_module, "router", mock_router)
+
+    # ``SimpleNamespace`` has no ``_state`` attribute, so the
+    # ``hasattr(root, "_state") else None`` branch at types/resolvers.py:81
+    # forwards ``instance=None`` to the router.
+    parent_row = SimpleNamespace(pk=1, category_id=42)
+    assert not hasattr(parent_row, "_state")
+
+    field_meta = FieldMeta(
+        name="category",
+        is_relation=True,
+        related_model=Category,
+        attname="category_id",
+    )
+
+    stub = _build_fk_id_stub(parent_row, field_meta)
+
+    assert stub is not None
+    mock_router.db_for_read.assert_called_once_with(Category, instance=None)
 
 
 def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(monkeypatch):
     """Decision 3 axis 1 — null FK takes the early-return branch BEFORE the router is consulted."""
-    # TODO(spec-019 Slice 1 — test (d), rev2 H5): pin the null-FK early return.
-    #
-    # Pseudocode (per spec Test plan + rev2 H5 split):
-    #
-    #     mock_router = Mock()
-    #     mock_router.db_for_read.return_value = "default"
-    #     monkeypatch.setattr(resolvers_module, "router", mock_router)
-    #
-    #     # Parent row with FK attname set to None (nullable FK case).
-    #     parent_row = Category.objects.create(name="P")
-    #     parent_row.child_id = None
-    #
-    #     field_meta = FieldMeta(
-    #         name="child",
-    #         is_relation=True,
-    #         related_model=ChildModel,
-    #         attname="child_id",
-    #     )
-    #
-    #     # types/resolvers.py:74-76::
-    #     #     related_id = getattr(root, field_meta.attname)
-    #     #     if related_id is None:
-    #     #         return None
-    #     # Early return BEFORE router.db_for_read is reached.
-    #     result = _build_fk_id_stub(parent_row, field_meta)
-    #     assert result is None
-    #
-    #     # The router MUST NOT be called — this is the rev2 H5 split
-    #     # from rev1's conflated case. A regression where the early
-    #     # return is removed would silently call db_for_read on a
-    #     # null FK and that's a different bug class.
-    #     mock_router.db_for_read.assert_not_called()
-    raise NotImplementedError("TODO(spec-019 Slice 1 — test d)")
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import django_strawberry_framework.types.resolvers as resolvers_module
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.types.resolvers import _build_fk_id_stub
+
+    mock_router = Mock()
+    mock_router.db_for_read.return_value = "default"
+    monkeypatch.setattr(resolvers_module, "router", mock_router)
+
+    parent_row = SimpleNamespace(category_id=None)
+    field_meta = FieldMeta(
+        name="category",
+        is_relation=True,
+        related_model=Category,
+        attname="category_id",
+    )
+
+    # types/resolvers.py:74-76 — early ``return None`` before reaching the
+    # router. Rev2 H5: split from the parent-lacks-``_state`` case because
+    # the two branches are distinct and a regression in either is a
+    # different bug class.
+    result = _build_fk_id_stub(parent_row, field_meta)
+
+    assert result is None
+    mock_router.db_for_read.assert_not_called()
 
 
 def test_strictness_check_is_connection_agnostic_under_non_default_alias():
     """Decision 3 axis 4 — strictness mode raises ``OptimizerError`` regardless of ``_state.db``."""
-    # TODO(spec-019 Slice 1 — test (e), rev2 H6 + rev3 R2 + rev4 V2 + rev4 V3):
-    # pin the connection-agnostic shape of _check_n1.
-    #
-    # CRITICAL setup notes (per rev4 V2 + V3):
-    #
-    # - kind MUST be "forward_single", NOT "many_to_one". The valid
-    #   RelationKind values at utils/relations.py:7-12 are exactly:
-    #       "many", "reverse_many_to_one", "reverse_one_to_one",
-    #       "forward_single"
-    #   "many_to_one" is NOT one of them.
-    #
-    # - For kind="forward_single", is_many_side_relation_kind(kind)
-    #   returns False (MANY_SIDE_RELATION_KINDS = {"many",
-    #   "reverse_many_to_one"} per utils/relations.py:14-19), so the
-    #   lazy-load detector branches into ``_will_lazy_load_single``
-    #   at types/resolvers.py:86-101. That helper reads
-    #   ``root.__dict__`` and ``root._state.fields_cache``, NOT
-    #   ``root._prefetched_objects_cache``.
-    #
-    # - Do NOT set ``root._prefetched_objects_cache`` in this test —
-    #   it is irrelevant on the forward-single path (rev4 V3). The
-    #   setup contract is:
-    #     * ``root._state.db = "shard_b"`` — proves connection-agnostic shape.
-    #     * ``field_name not in root.__dict__`` — first lazy-load gate.
-    #     * ``field_name not in root._state.fields_cache`` — second gate.
-    #
-    # - Do NOT mock router.db_for_read in this test — _check_n1 never
-    #   reaches the elision path (per Decision 5 + rev3 R3).
-    #
-    # Pseudocode (per spec Test plan + rev2 H6 / rev4 V2-V3):
-    #
-    #     import types as types_module
-    #
-    #     from django_strawberry_framework.exceptions import OptimizerError
-    #     from django_strawberry_framework.optimizer._context import (
-    #         DST_OPTIMIZER_PLANNED,
-    #         DST_OPTIMIZER_STRICTNESS,
-    #     )
-    #     from django_strawberry_framework.optimizer.plans import resolver_key
-    #     from django_strawberry_framework.types.resolvers import _check_n1
-    #
-    #     # 1. Build a row with _state.db = "shard_b" and no cache entries.
-    #     #    Mirror this file's existing _path() helper + SimpleNamespace
-    #     #    pattern from the earlier tests.
-    #     state = types_module.SimpleNamespace(db="shard_b", fields_cache={})
-    #     root = types_module.SimpleNamespace(_state=state)
-    #     # invariant: field_name "shelf" is NOT in root.__dict__ or
-    #     # state.fields_cache. SimpleNamespace.__dict__ holds only
-    #     # what we set above, so this holds by construction.
-    #     assert "shelf" not in vars(root)
-    #     assert "shelf" not in state.fields_cache
-    #
-    #     # 2. Build a non-empty planned set that does NOT include the
-    #     #    resolver_key the call will probe. _check_n1 short-circuits
-    #     #    when planned is None (types/resolvers.py:139-140) so the set
-    #     #    must be non-empty AND must not contain our key.
-    #     class _ParentType:  # fixture parent type for resolver_key build
-    #         pass
-    #
-    #     info = types_module.SimpleNamespace(
-    #         context={
-    #             DST_OPTIMIZER_PLANNED: {"some.unrelated.key@/"},
-    #             DST_OPTIMIZER_STRICTNESS: "raise",
-    #         },
-    #         path=None,  # runtime_path_from_info handles None
-    #     )
-    #
-    #     # 3. Exercise and assert the connection-agnostic shape — the
-    #     #    error class and message do not vary with _state.db.
-    #     with pytest.raises(OptimizerError, match="Unplanned N\\+1: shelf"):
-    #         _check_n1(
-    #             info, root, "shelf", _ParentType, kind="forward_single",
-    #         )
-    raise NotImplementedError("TODO(spec-019 Slice 1 — test e)")
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.exceptions import OptimizerError
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_PLANNED,
+        DST_OPTIMIZER_STRICTNESS,
+    )
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class _ParentType:
+        pass
+
+    # ``_state.db = "shard_b"`` proves the non-default alias is accepted
+    # without altering the check's shape; ``fields_cache`` is empty so the
+    # second lazy-load gate at ``_will_lazy_load_single`` reports the
+    # relation is unloaded.
+    state = SimpleNamespace(db="shard_b", fields_cache={})
+    root = SimpleNamespace(_state=state)
+    assert "shelf" not in vars(root)
+    assert "shelf" not in state.fields_cache
+
+    # Non-empty planned set that does NOT include this resolver's key so
+    # the lazy-load gate is reached (an empty planned set is also valid;
+    # the unrelated key documents the "planned but not this one" shape).
+    info = SimpleNamespace(
+        context={
+            DST_OPTIMIZER_PLANNED: {"some.unrelated.key@/"},
+            DST_OPTIMIZER_STRICTNESS: "raise",
+        },
+        path=None,
+    )
+
+    with pytest.raises(OptimizerError, match="Unplanned N\\+1: shelf"):
+        _check_n1(info, root, "shelf", _ParentType, kind="forward_single")

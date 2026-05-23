@@ -85,7 +85,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Meta.orderset_class`](#metaorderset_class) | planned for `0.0.8` |
 | [`Meta.primary`](#metaprimary) | shipped (`0.0.6`) |
 | [`Meta.search_fields`](#metasearch_fields) | planned for `0.1.2` |
-| [Multi-database cooperation](#multi-database-cooperation) | planned for `0.0.7` |
+| [Multi-database cooperation](#multi-database-cooperation) | shipped (`0.0.7`) |
 | [`only()` projection](#only-projection) | shipped (`0.0.2`) |
 | [`OptimizerHint`](#optimizerhint) | shipped (`0.0.3`) |
 | [`OrderSet`](#orderset) | planned for `0.0.8` |
@@ -678,9 +678,14 @@ Declarative search across model fields (and relation paths). Single `search: Str
 
 ## Multi-database cooperation
 
-**Status:** planned for `0.0.7`.
+**Status:** shipped (`0.0.7`).
 
-Pins the existing `router.db_for_read` cooperation in `types/resolvers.py` with a spec, tests, and a `GLOSSARY.md` status entry. Multi-db cooperation already exists in source today — this card documents it as a contract: the optimizer plans correctly under `.using()`, `Prefetch` chains respect routing, strictness mode tracks the originating connection, [`get_queryset`](#get_queryset-visibility-hook) downgrades respect routing.
+Documented cooperation surface — what the package guarantees under Django's multi-database machinery. Four axes:
+
+1. `router.db_for_read` on FK-id elision stubs — parent row forwarded as the `instance=` hint when present, `None` otherwise.
+2. Explicit `.using(alias)` `_db` preservation through [`OptimizationPlan.apply`](#djangooptimizerextension) for root querysets.
+3. Consumer-provided `Prefetch(queryset=...)` via [`OptimizerHint.prefetch(...)`](#optimizerhint) round-trips with its `_db` intact — generated `Prefetch` child querysets do NOT inherit the root alias.
+4. Strictness-mode N+1 detection is connection-agnostic and surfaces the same `OptimizerError` shape under non-default aliases.
 
 Companion `BACKLOG.md` item 41 covers first-class sharding-aware planning post-`1.0.0`.
 

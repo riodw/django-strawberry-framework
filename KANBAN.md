@@ -47,7 +47,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; three have shipped (`DONE-016-0.0.7` `DjangoListField`, `DONE-017-0.0.7` `apps.py` and Django app config, and `DONE-018-0.0.7` schema-export management command). The remaining two — `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract) and `WIP-ALPHA-020-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`) — are still queued. Full card detail lives under the `## In progress` board column below; `DONE-016-0.0.7`, `DONE-017-0.0.7`, and `DONE-018-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
+- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; four have shipped (`DONE-016-0.0.7` `DjangoListField`, `DONE-017-0.0.7` `apps.py` and Django app config, `DONE-018-0.0.7` schema-export management command, and `DONE-019-0.0.7` multi-database cooperation contract). The remaining card — `WIP-ALPHA-020-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`) — is still queued. Full card detail lives under the `## In progress` board column below; `DONE-016-0.0.7`, `DONE-017-0.0.7`, `DONE-018-0.0.7`, and `DONE-019-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`](BACKLOG.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -72,55 +72,6 @@ For install, local development, testing, and the canonical documentation map, st
 ## Board columns
 
 ## In progress
-
-### WIP-ALPHA-019-0.0.7 — Multi-database cooperation contract
-
-Priority: medium (small polish; pins existing shipped cooperation)
-
-Parity: ⚛️&🍓 parity-adjacent (multi-database is a Django capability neither upstream specifies a contract around; pinning ours smooths the migrant story from both, but is not a primitive either upstream ships).
-
-Severity: minor
-
-Status: planned. The cooperation already exists in source; this card pins the contract with a spec, tests, and docs.
-
-Active spec: [`docs/spec-019-multi_db-0_0_7.md`](docs/spec-019-multi_db-0_0_7.md).
-
-Why it matters:
-
-- The fakeshop example already ships a sharded mode (`FAKESHOP_SHARDED=1`, two SQLite shards via `default` → `db_shard_a.sqlite3` and `shard_b` → `db_shard_b.sqlite3`, plus a `seed_shards` management command). The package already cooperates with Django's database router via `state.db = router.db_for_read(field_meta.related_model, instance=instance)` in `django_strawberry_framework/types/resolvers.py`. But none of this is specified, tested, or documented as a package contract.
-- `docs/README.md` advertises "Sharded mode (multi-DB)" without pointing at any package commitment — a consumer reading that section has no contract to rely on. This card closes the gap between what we advertise in the example onboarding and what we test in source.
-- Multi-database is one of Django's older, less-glamorous capabilities, and most GraphQL packages don't say anything about it at all. Pinning down what we cooperate with today gives migrants from `graphene-django` and `strawberry-graphql-django` a concrete reason to expect things to "just work" — and gives the optimizer a defined behavior surface under `.using()`.
-
-Scope:
-
-- Spec the cooperation contract in `docs/spec-multi_db.md`: which Django multi-db facilities the package respects (database routers, explicit `.using()`, `_state.db` propagation), and what behavior the consumer can rely on.
-- Confirm the optimizer plans correctly under `.using()` querysets — `select_related` / `prefetch_related` / `Prefetch` chains stay on the same connection; `Prefetch(queryset=...)` honors the inner queryset's `_db`.
-- Confirm strictness mode tracks the originating connection so an N+1 warning isn't muddled by cross-shard router hops.
-- Confirm `get_queryset` downgrade respects routing — a `Prefetch` downgraded from a join keeps the target type's preferred database when a router-aware queryset is in play.
-
-Definition of done:
-
-- `docs/spec-multi_db.md` exists and documents the cooperation contract.
-- `tests/optimizer/test_multi_db.py` covers: optimizer plan under `.using()`, `Prefetch` routing inheritance, strictness mode under multi-db, `get_queryset` downgrade routing.
-- `examples/fakeshop/test_query/test_library_api.py` (or a sibling under `examples/fakeshop/test_query/`) exercises the same selection shapes against a `FAKESHOP_SHARDED=1` configuration.
-- `docs/GLOSSARY.md` gains a "Multi-database cooperation" subsection (status: shipped, since the in-source cooperation is what the card is documenting).
-- `docs/README.md`'s `### Sharded mode (multi-DB)` subsection gets a one-line forward-pointer to the new `GLOSSARY.md` subsection so the example-project mode is grounded in a package commitment.
-
-Files likely touched:
-
-- `docs/spec-multi_db.md` (new)
-- `tests/optimizer/test_multi_db.py` (new)
-- `examples/fakeshop/test_query/test_library_api.py` (or new sibling)
-- `docs/GLOSSARY.md`
-- `docs/README.md`
-
-Dependencies:
-
-- None. The cooperation already exists in source; this card is purely spec + tests + docs.
-
-Out of scope:
-
-- First-class sharding-aware planning — cross-shard joins, automatic shard selection based on FK, multi-shard aggregates, `Meta.preferred_database`. That's post-stable differentiation territory and lives in [`BACKLOG.md`](BACKLOG.md) under "First-class multi-database / sharding-aware optimizer".
 
 ### WIP-ALPHA-020-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
 
@@ -1787,6 +1738,14 @@ The version bump from `0.0.6` stays deferred to the last `0.0.7` card to ship pe
 Files touched: `django_strawberry_framework/management/__init__.py` (new), `django_strawberry_framework/management/commands/__init__.py` (new), `django_strawberry_framework/management/commands/export_schema.py` (new), `tests/management/__init__.py` (new), `tests/management/test_export_schema.py` (new), `examples/fakeshop/tests/test_commands.py`, plus the Slice 3 doc sweep across `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `KANBAN.md`, `CHANGELOG.md`.
 
 Spec: `docs/SPECS/spec-018-export_schema-0_0_7.md`. Build plan: `docs/builder/build-018-export_schema-0_0_7.md`.
+
+### DONE-019-0.0.7 — Multi-database cooperation contract
+
+Parity: ⚛️&🍓 parity-adjacent (multi-database is a Django capability neither upstream specifies a contract around; pinning ours smooths the migrant story from both, but is not a primitive either upstream ships).
+
+Pinned the package's multi-database cooperation contract — `router.db_for_read` on FK-id elision stubs (parent row forwarded as the `instance=` hint when present), explicit `.using(alias)` `_db` preservation through [`OptimizationPlan.apply`](django_strawberry_framework/optimizer/plans.py), consumer-provided [`OptimizerHint.prefetch(Prefetch(queryset=…))`](docs/GLOSSARY.md#optimizerhint) round-trip with `_db` intact, and strictness-mode's connection-agnostic shape under non-default aliases. Tests in [`tests/types/test_resolvers.py`](tests/types/test_resolvers.py) (five resolver-level tests against `_build_fk_id_stub` and `_check_n1` — four FK-id elision branches plus the strictness connection-agnostic shape; FK-id tests hermetic via mocked router) and [`tests/optimizer/test_multi_db.py`](tests/optimizer/test_multi_db.py) (two optimizer-plan-level tests against `OptimizationPlan.apply` and `OptimizerHint.prefetch` round-trip) and [`examples/fakeshop/test_query/test_multi_db.py`](examples/fakeshop/test_query/test_multi_db.py) (live `/graphql/` HTTP under `FAKESHOP_SHARDED=1` with `@pytest.mark.django_db(databases=...)` and full `Branch → Shelf → Book` seeding). [`docs/GLOSSARY.md#multi-database-cooperation`](docs/GLOSSARY.md#multi-database-cooperation) flipped from `planned for 0.0.7` to `shipped (0.0.7)` with a four-axis entry body; [`docs/README.md`](docs/README.md) `### Sharded mode (multi-DB)` carries a one-line forward-pointer. Spec: [`docs/spec-019-multi_db-0_0_7.md`](docs/spec-019-multi_db-0_0_7.md). Zero production code change; the cooperation already existed in [`django_strawberry_framework/types/resolvers.py:82`](django_strawberry_framework/types/resolvers.py). [`BACKLOG.md`](BACKLOG.md) item 41 owns first-class sharding-aware planning post-`1.0.0` (including threading the parent queryset's `_db` into generated child `Prefetch` querysets, which this card explicitly leaves to that future card).
+
+Build plan: [`docs/builder/build-019-multi_db-0_0_7.md`](docs/builder/build-019-multi_db-0_0_7.md).
 
 ## Release readiness checklist
 

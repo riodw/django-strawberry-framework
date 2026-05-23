@@ -1,125 +1,60 @@
-# Final test-run gate: export_schema / 0.0.7 (018)
+# Build: Final test-run gate
 
-Spec source: `docs/SPECS/spec-018-export_schema-0_0_7.md`
-Build plan: `docs/builder/build-018-export_schema-0_0_7.md`
-Integration artifact: `docs/builder/bld-integration.md`
+Spec reference: `docs/spec-019-multi_db-0_0_7.md`
 Status: final-accepted
 
-## Spec slice checklist (verbatim)
+## Plan (Worker 1)
 
-No spec-level checklist for the final gate; the build plan's "Final test-run gate" checkbox is the contract.
+The final test-run gate runs the six commands pinned in `docs/builder/BUILD.md` "Final test-run gate" against the working tree after Slice 1, Slice 2, Slice 3, and the cross-slice integration pass have all set `final-accepted`. Coverage flags are forbidden (`--no-cov` is the only permitted coverage-shaped flag); ruff invocations are read-only (no `--fix`). The gate closes the build cycle when every command passes; any failure routes back through the owning slice loop via Worker 0.
 
-## Gate runs
+The gate also surfaces the build's deferred-work catalog by walking every per-slice and integration artifact's `### Notes for Worker 1 (spec reconciliation)`, `### What looks solid`, and `### DRY findings` sections. Each explicit deferral becomes one bullet in `### Deferred work catalog` below.
 
-### `uv run pytest --no-cov`
+## Validation run
 
-Command (exact): `uv run pytest --no-cov`
+Recorded in the order pinned by BUILD.md "Final test-run gate" and the worker-1 role file. Every command run from the repository root against the post-integration working tree.
 
-Outcome: **pass**. `772 passed, 2 skipped, 5 warnings in 29.10s` (774 tests collected; 2 are `FAKESHOP_SHARDED=1`-guarded sharded tests that skip under the default invocation per `AGENTS.md` line 28). The explicit `--no-cov` opts out of `pytest.ini`'s auto-applied `--cov` per `docs/builder/BUILD.md` lines 537-549 — coverage is the maintainer's gate, not a worker's tool.
+- `uv run pytest --no-cov` — **pass**. `781 passed, 3 skipped, 5 warnings in 47.95s`. The 3 skips are the two Slice 2 multi-db live tests (`test_using_shard_b_resolver_returns_rows_seeded_on_shard_b`, `test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver`) gated on `FAKESHOP_SHARDED=1` per Decision 6 (the module-level `pytest.skip(..., allow_module_level=True)` fires cleanly when the env var is unset), plus one pre-existing `examples/fakeshop/tests/test_commands.py::test_seed_shards_*` shard-marker test (out of scope for this build). All seven new Slice 1 tests + the rest of the tests/ + examples/fakeshop/tests/ + examples/fakeshop/test_query/ trees pass. Explicit `--no-cov` opts out of `pytest.ini`'s auto-applied `--cov` per the per-pass-gates contract.
+- `uv run python examples/fakeshop/manage.py check` — **pass**. `System check identified no issues (0 silenced).` Django consistency check against the example project finds no model/admin/url-config drift.
+- `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` — **pass**. `No changes detected`. Model state is migration-consistent without producing new migration files.
+- `uv run ruff format --check .` — **pass**. `112 files already formatted` (a single ruff `COM812` advisory warning about formatter conflict prints first; this is a pre-existing pyproject configuration note and not a formatter failure). Read-only check; no `--fix` flag passed.
+- `uv run ruff check .` — **pass**. `All checks passed!` Read-only; no `--fix` flag passed.
+- `git diff --check` — **pass** (exit code 0). No whitespace errors or conflict markers anywhere in the working tree.
 
-Interpretation: every test in all three trees (`tests/`, `examples/fakeshop/tests/`, `examples/fakeshop/test_query/`) passes; the 5 warnings are pre-existing baseline noise (one `DATABASES` override warning in `test_seed_shards_command_runs_when_shard_alias_present` and four `Model already registered` warnings in `tests/types/test_converters.py` for model-reload-pattern tests), unchanged by the export_schema build. The new Slice 2 surface — `tests/management/test_export_schema.py` (7 tests) and `examples/fakeshop/tests/test_commands.py::test_export_schema_command_against_fakeshop_schema` (1 test) — is included in the green.
-
-### `uv run python examples/fakeshop/manage.py check`
-
-Command (exact): `uv run python examples/fakeshop/manage.py check`
-
-Outcome: **pass**. Output: `System check identified no issues (0 silenced).`
-
-Interpretation: Django's `INSTALLED_APPS` resolves cleanly (including the explicit `DjangoStrawberryFrameworkConfig` shipped under `DONE-017-0.0.7` plus the new `django_strawberry_framework.management.commands` discovery the export_schema build enables); no model / admin / url-config drift surfaced by the system check framework.
-
-### `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run`
-
-Command (exact): `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run`
-
-Outcome: **pass**. Output: `No changes detected`.
-
-Interpretation: the example project's model state is migration-consistent — the management command this card ships reads the schema only and does not introduce model state, so confirming zero pending migrations matches the spec's "no DB access" pin (spec lines 587, 624) and Slice 1's body design (no ORM markers — verified by the static-inspection helper output cited in `bld-integration.md`).
-
-### `uv run ruff format --check .`
-
-Command (exact): `uv run ruff format --check .`
-
-Outcome: **pass**. Output: `110 files already formatted` (plus one pre-existing `COM812`-vs-formatter conflict warning that is a repo-config artifact, not a slice introduction — `AGENTS.md` line 17 explicitly keeps `COM812` enabled on purpose; the warning has been present across `DONE-016` / `DONE-017` / now `DONE-018` builds and is the maintainer's documented choice).
-
-Interpretation: no file requires reformatting; the read-only check holds. Slice 1's source module, Slice 2's test file + fakeshop extension, and Slice 3's doc edits all conform to `ruff format`'s expected layout. No `--fix` was passed (per the gate's read-only contract).
-
-### `uv run ruff check .`
-
-Command (exact): `uv run ruff check .`
-
-Outcome: **pass**. Output: `All checks passed!`.
-
-Interpretation: zero lint violations across the working tree. The Slice 1 source module's two forced-divergence categories (pydocstyle `D100` / `D101` / `D102` and flake8-annotations `ANN001` / `ANN201` — see spec rev2 H1 / rev3 L2) are all root-cause-fixed in source per `AGENTS.md` line 4; no `# noqa` suppressions. Slice 2's test file is exempted from `D` / `ANN` by the `tests/**/*.py` per-file ignore at `pyproject.toml:102` and still passes the residual rule set. No `--fix` was passed.
-
-### `git diff --check`
-
-Command (exact): `git diff --check`
-
-Outcome: **pass**. Exit code 0; empty output.
-
-Interpretation: no whitespace errors (trailing whitespace, tab-in-leading-space, end-of-file blank lines) and no leftover conflict markers anywhere in the working tree.
+All six commands pass. The build's existing test suite, Django consistency checks, lint/format gates, and whitespace gates are all green. No failure routes back through any slice loop.
 
 ## Deferred work catalog
 
-Walked every per-slice artifact's `### Notes for Worker 1 (spec reconciliation)` and `### What looks solid` sections plus the integration artifact's `### Notes for Worker 0` and `### Notes for Worker 1 (spec reconciliation)` (where present). Bullets below are the next spec author's reading list per `docs/builder/BUILD.md` line 553.
+Walked every per-slice and integration artifact's `### Notes for Worker 1 (spec reconciliation)`, `### What looks solid`, and `### DRY findings` sections for items explicitly deferred to a future slice, future spec, or maintainer follow-up. One bullet per deferral; each citation names the source artifact section and a one-line description.
 
-- **Spec status-line flip deferred to joint-cut closeout.** Source: `bld-slice-3-promotion_docs.md` `### Spec changes made (Worker 1 only)` (Worker 1 final-verification disposition of Worker 3 note 3) + `bld-integration.md` `### Notes for Worker 0` bullet 2. The spec at `docs/SPECS/spec-018-export_schema-0_0_7.md:4` still reads `Status: draft (revision 5, post-rev4 feedback against docs/feedback.md).`. The flip to `shipped (0.0.7)` belongs to whichever Worker 1 spawn closes out the joint bundle once `WIP-ALPHA-019-0.0.7` and `WIP-ALPHA-020-0.0.7` have shipped; not licensed by a specific spec line (spec Decision 9 lines 526-541 implicitly defers all joint-cut closeout state to the last-card-to-ship).
-- **Spec line-citation drift left as pin-at-write-time hints.** Source: `bld-slice-3-promotion_docs.md` `### Spec changes made (Worker 1 only)` per-note disposition of Worker 3 note 2. The spec cites a number of file-line positions (`docs/README.md` "line 113", `docs/TREE.md` "line 190" / "lines 309-313", `docs/GLOSSARY.md` "line 104") that have drifted against the live files (live positions 122 / 193 / 320-322 / 105 respectively). Worker 1 declined to refresh — `docs/builder/BUILD.md` "Plan template" Implementation steps note explicitly classifies these as pin-at-write-time navigational hints, not load-bearing contracts. Refreshing would force a rev6 for non-load-bearing cleanup and misalign the spec's revision history with the slices already shipped against rev5.
-- **Joint-cut version bump deferred to last-`0.0.7`-card-to-ship.** Source: `bld-slice-3-promotion_docs.md` `### Spec slice checklist (verbatim)` sub-bullet at spec line 80 + Worker 1 final-verification pass; Decision 9 spec lines 526-541. `pyproject.toml [project].version`, `django_strawberry_framework/__init__.py.__version__`, and `tests/base/test_init.py`'s pinned version assertion all stay at `0.0.6`. The bump to `0.0.7` plus the `## [0.0.7] - <date>` date-line finalization in `CHANGELOG.md:21` is owned by whichever card under the joint cut ships last (currently `WIP-ALPHA-019-0.0.7` and `WIP-ALPHA-020-0.0.7` are still queued).
-- **`--watch` follow-up if consumer demand surfaces.** Source: spec Decision 6 spec line 482 + spec Non-goals spec line 123 + `bld-slice-1-module.md` `### What looks solid` (no scope creep). Not shipped in 018; explicitly deferred as "reasonable post-`1.0.0` differentiator if consumer demand surfaces." No spec line authorizing a `0.0.8`-`0.1.0` slot; whichever spec author adds it picks the slot.
-- **`--indent` SDL pretty-printing flag.** Source: spec Decision 6 spec line 469 + spec Non-goals spec line 125. Explicitly NOT on the roadmap — SDL is whitespace-agnostic; consumer-side formatting (`prettier --parser graphql`, `graphql-cli`) is the spec's pinned downstream answer. Not a deferral to a future card so much as a permanent posture; included here so a future spec author searching the catalog for "indent" finds the rationale.
-- **`--json` introspection mode.** Source: spec Decision 6 spec line 470 + spec Decision 4 spec line 420 + spec Non-goals spec line 122. Explicitly deferred to a follow-up card under consumer demand; the spec at Decision 6 alternatives bullet (spec line 491) records the design surface ("emit the introspection-query result, which requires running the schema with its extensions and context dependencies") as non-trivial and unsettled. No spec line authorizes a specific slot.
-- **Settings-backed default schema dotted path.** Source: spec Decision 6 spec line 471 + spec Non-goals spec line 127 + `AGENTS.md` line 20 ("Add settings keys only when the feature that needs them lands"). Permanent posture — consumers wrap the command in a `Makefile` entry per spec Decision 6 alternatives bullet (spec lines 483-490). Catalog-included for the same reason as `--indent`: a future spec author searching for "schema settings key" finds the rationale.
-- **`dump_schema` / `print_schema` alias.** Source: spec Decision 6 spec line 472 + spec Non-goals spec line 126. Explicitly rejected ("one command name, one canonical invocation; aliasing fragments documentation and consumer mental models"). Permanent posture.
-- **Multi-database cooperation contract — `WIP-ALPHA-019-0.0.7`.** Source: spec Decision 9 spec lines 526-541 + spec line 88 (Doc updates → GLOSSARY entries referenced) + `KANBAN.md:50` `### In progress` summary. Still queued for `0.0.7` under the joint cut. Pre-existing in `docs/GLOSSARY.md` Index ("Multi-database cooperation | planned for 0.0.7"); the GLOSSARY entry body already exists. Spec authorship belongs to whichever Worker 1 spawn picks up the card.
-- **Warning-free scalar registration via `StrawberryConfig.scalar_map` — `WIP-ALPHA-020-0.0.7`** (or whatever the maintainer's renumber resolves to). Source: spec Decision 9 spec lines 526-541 + `KANBAN.md:50` `### In progress` summary + `CHANGELOG.md` `[0.0.6]` "Notes" bullet at line 68. Still queued for `0.0.7` under the joint cut. The `[0.0.6]` Notes bullet already records the deprecation-warning suppression at the BigInt definition site as a follow-up — that's the card's seed.
+**Production code deferred to future cards (post-`1.0.0`):**
 
-## Out-of-scope working-tree files at gate time
+- **Generated `Prefetch` child querysets do NOT inherit the root queryset's `_db` at plan-construction time** — `docs/spec-019-multi_db-0_0_7.md` Decision 3 axis 3 (line 275) explicitly defers this to `BACKLOG.md` item 41 ("first-class sharding-aware planning"); the cooperation contract pins the consumer-`Prefetch(queryset=…)` round-trip as the supported route. Slice 1 test (g) (`test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias`) pins the consumer route; the threading-parent-alias-into-child-querysets production-code change is intentionally out of scope for this build.
+- **First-class sharding-aware planning (cross-shard joins, automatic shard selection based on FK, multi-shard aggregates, `Meta.preferred_database`)** — `docs/spec-019-multi_db-0_0_7.md` Non-goals (lines 142-143) defers all four sub-items to `BACKLOG.md` item 41 (post-`1.0.0` differentiation). The cooperation contract this build ships is plumbing the package already honors; first-class sharding remains a future-card concern.
 
-Per the build plan baseline (`docs/builder/build-018-export_schema-0_0_7.md` lines 17-23) and `AGENTS.md` line 31 (presumptively maintainer or another-dev in-progress work; not auto-reverted, not flagged as build issues):
+**Cross-test-tree DRY consolidations deferred to "when a third user appears":**
 
-- `M django_strawberry_framework/scalars.py` — out-of-scope; recorded as maintainer working file in the build plan's pre-flight baseline and mid-build drift addendum.
-- `M docs/review/rev-django_strawberry_framework.md` — out-of-scope; recorded as maintainer working file in the build plan.
-- `M docs/review/rev-scalars.md` — out-of-scope; recorded as maintainer working file in the build plan.
+- **Inlined `_sel` and `_register_type_definition` in `tests/optimizer/test_multi_db.py:40-76`** mirror `tests/optimizer/test_walker.py:46-103`. `docs/builder/bld-slice-1-package_tests.md` `### DRY findings` and `### Notes for Worker 1 (spec reconciliation)` (lines 146 / 183) plus `docs/builder/bld-integration.md` `### Consolidation recommendations` item 1 (lines 346-351) record the deferral: two users in the test tree, Worker 1's plan listed inline-vs-import as Worker 2 discretion (build-plan lines 19 + 59), inlined copy intentionally narrower (drops the unused `field_map`/`primary` kwargs), no third user appears in this build. Spec license: Slice 1 plan's Implementation discretion item line 59 ("Whether to import `_sel` and `_register_type_definition` from `tests.optimizer.test_walker` or inline a local copy ... both are acceptable"). Consolidation into a shared `tests/optimizer/_helpers.py` is the candidate factoring when a third user lands.
+- **Autouse `_reload_project_schema_for_acceptance_tests` fixture copied verbatim from `examples/fakeshop/test_query/test_library_api.py:17-43`** into `examples/fakeshop/test_query/test_multi_db.py:66-91`. `docs/builder/bld-slice-2-fakeshop_live.md` `### DRY findings` (line 217) plus `docs/builder/bld-integration.md` `### Duplicated helpers across slices` (lines 47-60) and `### Consolidation recommendations` item 2 (lines 352-356) record the deferral. Spec license: `docs/spec-019-multi_db-0_0_7.md` Decision 7 (the "do not pre-emptively factor" boundary at lines 421-435; conftest extraction is a follow-up when 3+ files need it). Slice 2 is the second user; Decision 7's 3+-file threshold is not yet reached. An `examples/fakeshop/test_query/conftest.py` is the candidate factoring when a third user lands.
 
-Untracked-but-in-scope artifacts (Worker 0 / Worker 1 build artifacts; the build plan and the four `bld-*.md` files are not committed by workers per `AGENTS.md` line 30 — only the maintainer commits):
+**Within-file DRY consolidations deferred for the live-HTTP tree:**
 
-- `?? docs/builder/build-018-export_schema-0_0_7.md` (build plan; Worker 0)
-- `?? docs/builder/bld-slice-2-tests.md` (slice artifact; Worker 1)
-- `?? docs/builder/bld-slice-3-promotion_docs.md` (slice artifact; Worker 1)
-- `?? docs/builder/bld-integration.md` (integration artifact; Worker 1)
+- **Identical GraphQL query string repeated across both Slice 2 tests** in `examples/fakeshop/test_query/test_multi_db.py` (~lines 187-194 and 226-233). `docs/builder/bld-slice-2-fakeshop_live.md` `### DRY findings` (line 215) plus `docs/builder/bld-integration.md` `### Repeated string literals` (lines 200, 209-216) and `### Consolidation recommendations` item 3 (lines 357-364) record the deferral. Spec license: this is a consequence of `docs/spec-019-multi_db-0_0_7.md:551` (rev5-post X7 widened test 2's query body to match test 1's so the optimizer's `.only(...)` projection composes with the spec-pinned resolver's `.select_related("shelf__branch")`). Extraction into a module-level `_BOOKS_QUERY` constant is the candidate factoring when a third live HTTP test enters the tree.
+- **`override_settings(ROOT_URLCONF=__name__) + clear_url_caches() try/finally` block repeated verbatim across both Slice 2 tests** in `examples/fakeshop/test_query/test_multi_db.py` (~lines 196-206 and 235-245). `docs/builder/bld-slice-2-fakeshop_live.md` `### DRY findings` (line 216) plus `docs/builder/bld-integration.md` `### Consolidation recommendations` item 3 (lines 357-364) record the deferral. Spec license: Slice 2 plan's Implementation discretion item ("Trimming vs keeping the `try / finally`... at Worker 2 discretion"). Extraction into a `_with_temp_urlconf` context manager is the candidate factoring when a third live HTTP test enters the tree.
 
-In-scope working-tree modifications that are this build's deliverables and stay until the maintainer commits:
+**Documentation / wording observations carried forward (no spec edit required):**
 
-- `M CHANGELOG.md` (Slice 3)
-- `M KANBAN.md` (Slice 3; column move landed via maintainer commit `216e6ba` ahead of Worker 2's build pass + Worker 2's single-line cleanup at line 62 per `bld-integration.md` audit walkthrough)
-- `M django_strawberry_framework/management/__init__.py` (Slice 1)
-- `M django_strawberry_framework/management/commands/__init__.py` (Slice 1)
-- `M django_strawberry_framework/management/commands/export_schema.py` (Slice 1)
-- `M docs/GLOSSARY.md` (Slice 3)
-- `M docs/README.md` (Slice 3)
-- `M docs/TREE.md` (Slice 3)
-- `M docs/builder/bld-slice-1-module.md` (Slice 1 artifact; pre-existing untracked-state was promoted to tracked during the maintainer's `216e6ba` commit per the build plan addendum)
-- `M examples/fakeshop/tests/test_commands.py` (Slice 2)
-- `M tests/management/__init__.py` (Slice 2)
-- `M tests/management/test_export_schema.py` (Slice 2)
+- **GLOSSARY entry-body bullet styling adapts spec line 563's flowing prose** into numbered list items with capitalized starts, period terminators, em-dash-joined parenthetical on bullet 1, a `for root querysets` suffix on bullet 2 (consistent with the same suffix in spec lines 569 and 576), and a link-anchor swap on bullet 3. `docs/builder/bld-slice-3-promotion_docs.md` `### Notes for Worker 1 (spec reconciliation)` (line 294) and Worker 1's `### Final verification` step 4 (lines 323-332) disposed of this as licensed adaptation under Decision 1 rev3 R10's principle (the spec already calls them bullets; the substantive four-axis content is faithful; the suffix and anchor adjustments align the GLOSSARY surface with the matching CHANGELOG/KANBAN suffix). No spec edit landed; recorded here as a deferral in the sense that a future spec-author may choose to lift the rendered bullet shapes into spec line 563 verbatim if a future re-review wants character-for-character diff cleanliness across all four surfaces. Not a blocker for this build.
 
-## Notes for Worker 0
+**Spec-write-time observation carried forward to future multi-db specs:**
 
-- **Final test-run gate is clean.** All six commands return green; mark `- [x]` on the build plan's "Final test-run gate" checkbox.
-- **Joint-cut bundle is not yet complete.** `WIP-ALPHA-019-0.0.7` (multi-database cooperation contract) and `WIP-ALPHA-020-0.0.7` (warning-free scalar registration) are still queued per `KANBAN.md:50`'s `### In progress` summary and per Decision 9 (spec lines 526-541). The version bump (`pyproject.toml`, `__version__`, `tests/base/test_init.py`) and the spec status-line flip (`Status: shipped (0.0.7)` on `docs/SPECS/spec-018-export_schema-0_0_7.md:4`) both stay deferred to whichever card under the bundle ships last. Worker 0 should not flip either at this closeout.
-- **Out-of-scope files in the working tree are presumptively maintainer-baseline.** The three `M` entries (`docs/review/rev-django_strawberry_framework.md`, `docs/review/rev-scalars.md`, `django_strawberry_framework/scalars.py`) are recorded in the build plan's baseline (lines 17-23). Per `AGENTS.md` line 31 they are NOT auto-reverted and NOT flagged as build issues.
-- **No consolidation loop needed at this gate.** The integration pass already returned `final-accepted` with zero High/Medium/Low findings; the final gate confirms the test suite still passes against that state. Worker 0 hands off directly to maintainer commit.
+- **When a spec pins both a resolver shape AND a GraphQL query shape, walk the optimizer's `.only(...)` projection against the query's leaf selections before pinning** — `docs/builder/bld-slice-2-fakeshop_live.md` `### Notes for Worker 1 (spec reconciliation)` (line 195) plus the recurring-pattern note (line 253) record the lesson. This build's Slice 2 hit a `FieldError: Field Book.shelf cannot be both deferred and traversed using select_related at the same time` because the spec-pinned `.select_related("shelf__branch")` resolver conflicts with the optimizer's auto-applied `.only(...)` under a narrow `{ title }`-only query selection. Worker 1's Slice 2 final-verification (`docs/builder/bld-slice-2-fakeshop_live.md` lines 283-285) widened spec line 551's test-2 query body via rev5-post X7 to align the documented query shape with the resolver's actual surface. The general lesson — pre-walk the optimizer's projection against leaf selections at spec-write time — is recorded for the next spec author.
 
-## Final status
+## Final verification (Worker 1)
 
-`final-accepted`. Every gate command passes:
+### Summary
 
-- `uv run pytest --no-cov` → 772 passed, 2 skipped, 5 warnings.
-- `uv run python examples/fakeshop/manage.py check` → `System check identified no issues (0 silenced).`
-- `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` → `No changes detected`.
-- `uv run ruff format --check .` → `110 files already formatted`.
-- `uv run ruff check .` → `All checks passed!`.
-- `git diff --check` → exit 0, no whitespace / conflict-marker issues.
+The final test-run gate closes the multi_db / 0.0.7 build cycle. All six pinned commands pass against the post-integration working tree: full pytest sweep (781 passed, 3 expected skips), Django consistency check, makemigrations dry-run, ruff format check (read-only), ruff lint check (read-only), and `git diff --check` whitespace gate. No command requires a re-loop through any slice. The deferred-work catalog walked all four prior artifacts plus the integration artifact and surfaces eight explicit deferrals: two production-code concerns deferred to `BACKLOG.md` item 41 (post-`1.0.0`), three test-tree DRY consolidations deferred to "when a third user appears" (cross-tree and within-file), one documentation-wording observation carried as a no-edit license under Decision 1 rev3 R10, and one spec-write-time observation carried forward for future multi-db spec authors. The build delivered the spec end-to-end against the four narrowed cooperation axes (Decision 3) with zero production code change (Decision 2) and zero public-surface change (DoD item 16); the cooperation contract that already existed in source at `django_strawberry_framework/types/resolvers.py:82` is now pinned by seven package-internal tests, two live `/graphql/` HTTP tests under `FAKESHOP_SHARDED=1`, a `shipped (0.0.7)` GLOSSARY entry, a forward-pointer from `docs/README.md`'s `### Sharded mode (multi-DB)` section, a `DONE-019-0.0.7` KANBAN card, and a fourth bullet under `CHANGELOG.md`'s `[0.0.7]` `### Added` subsection. Status: `final-accepted`.
 
-The export_schema build (018) closes cleanly. Worker 0 marks the final build-plan checkbox `- [x]` and hands off to maintainer for commit. Joint-cut state (spec status-line flip + version bump) stays deferred to the last-`0.0.7`-card closeout per Decision 9.
+### Spec changes made (Worker 1 only)
+
+None at this gate. The spec was edited once during the build cycle (Slice 2's rev5-post X7 widening of the test-2 query body in `docs/spec-019-multi_db-0_0_7.md:551`, already recorded under `docs/builder/bld-slice-2-fakeshop_live.md` `### Spec changes made (Worker 1 only)`). The spec's status / header lines (`docs/spec-019-multi_db-0_0_7.md:1-5`, line 4: `Status: draft (revision 5, post-rev4 feedback against docs/feedback.md)`) remain accurate per the spec-lifecycle rule (Decision 1 rev3 R10 + `BUILD.md` "Spec stays at its working location") — the spec stays at its working location after the build closes, and any future shipped-wording flip is owned by an explicit archival workflow, not this build.

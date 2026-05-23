@@ -61,11 +61,16 @@ crashes during ``tearDownClass`` — at the only two sites each library
 controls.
 
 This package does NOT wrap any connection method itself, so it has
-no wrap-time site at which to add the debug-toolbar-style preventive
-check. A future card may ship a consumer-facing helper
-(``safe_wrap_connection_method``) that lets consumers writing
-monkey-patches in their own ``setUp`` use the same isinstance pattern;
-that is out of scope here.
+no wrap-time site of its OWN at which to add the debug-toolbar-style
+preventive check. Instead the package ships
+:func:`django_strawberry_framework.test.safe_wrap_connection_method`
+as a consumer-facing helper: any consumer code path that wraps a
+connection method (typically in a test ``setUp`` or in middleware)
+calls the helper instead of raw ``setattr``, and the helper applies
+the same wrap-time isinstance check debug-toolbar uses. Consumers who
+use the helper are auto-protected at the wrap site; consumers who
+don't (or who use a third-party library that doesn't) are still
+auto-protected at the unwrap site by the patch in this module.
 
 Surface visibility
 ------------------

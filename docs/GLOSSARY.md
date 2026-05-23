@@ -32,6 +32,10 @@ Symbols re-exported from `django_strawberry_framework`:
 - `auto` — re-export from Strawberry for `auto`-typed field annotations inside this package's import surface.
 - `__version__` — package version string.
 
+Symbols available from the `django_strawberry_framework.test` subpackage (consumer test utilities):
+
+- [`safe_wrap_connection_method`](#safe_wrap_connection_method) — cooperative wrap helper for monkey-patching `connections[alias]` methods without clobbering Django's `_DatabaseFailure` wrapper (the wrap-time half of the [Trac #37064 hardening](#trac-37064-hardening) defense-in-depth).
+
 _Note:_ The import path is now clean — no Strawberry deprecation warning escapes (the deprecation is suppressed at the definition site in `scalars.py`).
 
 ## Index
@@ -98,6 +102,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Relation handling](#relation-handling) | shipped (`0.0.1`+) |
 | [Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
 | [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.12` |
+| [`safe_wrap_connection_method`](#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Scalar field conversion](#scalar-field-conversion) | shipped (`0.0.1`+) |
 | [Scalar field override semantics](#scalar-field-override-semantics) | shipped (`0.0.6`) |
 | [Schema audit](#schema-audit) | shipped (`0.0.3`) |
@@ -106,6 +111,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
 | [`TestClient`](#testclient) | planned for `0.0.12` |
+| [Trac #37064 hardening](#trac-37064-hardening) | shipped (`0.0.7`) |
 | [`Upload` scalar](#upload-scalar) | planned for `0.0.11` |
 
 ## Browse by category
@@ -126,7 +132,7 @@ For readers exploring rather than looking up a specific term:
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
 - **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware).
-- **Testing:** [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase).
+- **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Trac #37064 hardening](#trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase).
 
 ---
 
@@ -860,6 +866,27 @@ Surfaces executed SQL queries and raised exceptions through the GraphQL response
 
 **See also:** [Debug-toolbar middleware](#debug-toolbar-middleware).
 
+## `safe_wrap_connection_method`
+
+**Status:** shipped (`0.0.7`).
+
+Cooperative wrap helper for consumers (or third-party libraries) who need to replace a method on a Django `connections[alias]` between `setUpClass` and `tearDownClass`. Mirrors `django-debug-toolbar`'s wrap-time isinstance check at `debug_toolbar.panels.sql.tracking.wrap_cursor`: refuses to clobber Django's `_DatabaseFailure` wrapper when it's already in place, returning `False` instead. Returns `True` and installs the consumer-provided wrapper otherwise.
+
+```python
+from django.db import connections
+from django_strawberry_framework.test import safe_wrap_connection_method
+
+connection = connections["default"]
+original = connection.cursor
+installed = safe_wrap_connection_method(connection, "cursor", my_wrapper)
+# installed is False if Django's _DatabaseFailure is already in place;
+# the connection method is left untouched in that case.
+```
+
+The wrap-time half of the package's defense-in-depth against Django Trac #37064 (closed upstream as `wontfix`). The unwrap-time half ([Trac #37064 hardening](#trac-37064-hardening)) is applied automatically by `DjangoStrawberryFrameworkConfig.ready` so consumers who use the helper are auto-protected at both ends; consumers who don't are still auto-protected at the unwrap end.
+
+**See also:** [Trac #37064 hardening](#trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase).
+
 ## Scalar field conversion
 
 **Status:** shipped (`0.0.1`+).
@@ -965,6 +992,18 @@ Planned resolver keys and lookup paths are stashed on `info.context` for introsp
 `TestClient` and `AsyncTestClient` helpers for live HTTP-level testing patterns. Mirrors `strawberry-django`'s `test/client.py` shape. Companion: [`GraphQLTestCase`](#graphqltestcase).
 
 **See also:** [`GraphQLTestCase`](#graphqltestcase).
+
+## Trac #37064 hardening
+
+**Status:** shipped (`0.0.7`).
+
+Defensive patch the package applies automatically at `DjangoStrawberryFrameworkConfig.ready` time. Replaces `django.test.testcases.TransactionTestCase._remove_databases_failures` with a variant that adds an `isinstance(method, _DatabaseFailure)` guard before the `setattr(..., method.wrapped)` step. Prevents the unrecoverable `AttributeError: 'function' object has no attribute 'wrapped'` at `tearDownClass` that Django Trac #37064 documents.
+
+Consumers get the hardening for free by having `"django_strawberry_framework"` in `INSTALLED_APPS` — no `conftest.py` workaround, no base test class to inherit, no settings key required.
+
+Pairs with [`safe_wrap_connection_method`](#safe_wrap_connection_method) (the wrap-time half of the same defense-in-depth pattern). Upstream ticket: <https://code.djangoproject.com/ticket/37064> (closed `wontfix`).
+
+**See also:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Multi-database cooperation](#multi-database-cooperation) · [Django `AppConfig`](#django-appconfig).
 
 ## `Upload` scalar
 

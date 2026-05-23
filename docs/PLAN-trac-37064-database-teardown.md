@@ -111,3 +111,21 @@ Removed `"ready"` from the forbidden-attributes assertion (it was inherited from
 - Consumer-facing pytest plugin or `MultiDBTestCase` helper. The whole point of the package-level fix is that consumers don't need any of that.
 - Patches for other Django `wontfix` bugs. Track each in its own card.
 - Upstreaming the patch to Django. Already attempted; closed `wontfix`. We ship the fix unilaterally.
+
+## Update: Consumer-facing helper now in scope (Phase 4)
+
+The 019 spec deliberately shipped zero consumer-facing symbols (the multi-DB cooperation it pinned was already-existing behaviour). Bundling the Trac #37064 hardening with a consumer-facing wrap-time helper turns this branch into a real shippable feature instead of a behind-the-scenes patch.
+
+**Landed**:
+
+- `django_strawberry_framework/test/__init__.py` — new `test/` subpackage (pre-stages where `TestClient` / `GraphQLTestCase` will land at `0.0.12`).
+- `django_strawberry_framework/test/_wrap.py` — `safe_wrap_connection_method(connection, method_name, wrapper) -> bool`. Returns `True` if installed; `False` if Django's `_DatabaseFailure` was in place and the wrap was declined. The wrap-time mirror of the unwrap-time backstop in `_django_patches`.
+- `tests/test/__init__.py` + `tests/test/test_wrap.py` — 4 regression tests (install on free slot; decline on `_DatabaseFailure`; works on arbitrary method names; **end-to-end composition** with the unwrap-time patch).
+- `docs/GLOSSARY.md` — new entries for `safe_wrap_connection_method` and `Trac #37064 hardening`, plus a `Public exports` list addition for the `test/` subpackage.
+- `_django_patches.py` docstring updated to point at the helper (no longer "future card").
+
+**Why a public surface here is correct, despite the package's general posture of zero public-export change**:
+
+The 019 spec had Decision 2 ("no production code change") because the multi-DB cooperation was already in source — pinning it didn't need new symbols. Trac #37064 is different: the bug is in Django and ours is the first defensive layer, so the value-add IS a new behaviour. Shipping ONLY the AppConfig-applied unwrap patch protects every consumer but gives them no API to write defensive `setUp` code against. The helper makes the wrap-time half opt-in for consumers who care, while the unwrap-time half stays auto-applied for everyone.
+
+**Test count after Phase 4**: 10 regression tests for the Trac #37064 area in total (6 unwrap-time in `tests/test_django_patches.py` + 4 wrap-time in `tests/test/test_wrap.py`), all under default single-DB mode (no `FAKESHOP_SHARDED=1` gate).

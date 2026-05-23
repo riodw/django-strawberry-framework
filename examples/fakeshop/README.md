@@ -187,17 +187,20 @@ Via `/admin`:
 # Sharded Mode (Optional)
 
 Fakeshop ships an optional multi-DB layout for exercising the
-package against querysets bound to non-default aliases. When
-`FAKESHOP_SHARDED=1` is set, `db.sqlite3` is hidden and Django sees
-only `db_shard_a.sqlite3` (as `default`) and `db_shard_b.sqlite3`
-(as `shard_b`):
+package against querysets bound to non-default aliases. The layout
+is **additive**: `default` keeps pointing at `db.sqlite3` in both
+single-DB and sharded modes, and `FAKESHOP_SHARDED=1` ADDS
+`shard_b → db_shard_b.sqlite3` on top of the existing layout. The
+committed `db_shard_b.sqlite3` fixture ships with `seed_shards`
+already applied so the sharded mode works out of the box:
 
 ```bash
-# Populate both shards with migrations + canonical test users +
-# at least one Item per Faker provider
+# Populate the secondary shard with migrations + canonical test
+# users + at least one Item per Faker provider
 FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards
 
-# Run the server against the shards
+# Run the server against the shards (default = db.sqlite3, shard_b
+# = db_shard_b.sqlite3)
 FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py runserver
 ```
 

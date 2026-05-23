@@ -17,7 +17,7 @@ Pre-flight: passed on 2026-05-22; baseline: clean (`git status --short` empty at
 
 ## Checklist
 
-- [x] Slice 1: Package-internal tests (extend `tests/types/test_resolvers.py` with five resolver-level tests; new `tests/optimizer/test_multi_db.py` with two optimizer-plan-level tests) -> `docs/builder/bld-slice-1-package_tests.md`
+- [x] Slice 1: Package-internal tests (extend `tests/types/test_resolvers.py` with five resolver-level tests; new `tests/optimizer/test_multi_db.py` with one optimizer-plan-level test — Decision 3 axis 2 verified transitively by the Slice 2 live HTTP test per `AGENTS.md` line 9) -> `docs/builder/bld-slice-1-package_tests.md`
 - [x] Slice 2: Fakeshop live coverage under `FAKESHOP_SHARDED=1` (new `examples/fakeshop/test_query/test_multi_db.py` with two live `/graphql/` HTTP tests, holder-pattern URLConf, `Branch → Shelf → Book` seeding) -> `docs/builder/bld-slice-2-fakeshop_live.md`
 - [x] Slice 3: Promotion + docs (flip `Multi-database cooperation` to `shipped (0.0.7)` in `docs/GLOSSARY.md`; one-line forward-pointer in `docs/README.md`; move `WIP-ALPHA-019-0.0.7` to Done in `KANBAN.md`; append fourth bullet under `[0.0.7]` `### Added` in `CHANGELOG.md`; NO version bump per Decision 9 joint cut; no public-surface change; final ruff/pytest gates) -> `docs/builder/bld-slice-3-promotion_docs.md`
 - [x] Cross-slice integration pass -> `docs/builder/bld-integration.md`

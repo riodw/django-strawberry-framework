@@ -89,21 +89,23 @@ TEMPLATES = [
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Database mode — mutually exclusive
+# Database mode — additive
 # ---------------------------------------------------------------------------
 # Two modes, toggled by the ``FAKESHOP_SHARDED`` env var:
 #
 #   unset       — single-DB.  Only ``default`` (→ ``db.sqlite3``) exists.
-#                 Django cannot see the shard files at all.
 #
-#   "1"         — sharded.    Only ``default`` (→ ``db_shard_a.sqlite3``)
-#                 and ``shard_b`` (→ ``db_shard_b.sqlite3``) exist.
-#                 Django cannot see ``db.sqlite3`` at all.
+#   "1"         — sharded.    ``default`` (→ ``db.sqlite3``, same file as
+#                 single-DB mode) plus ``shard_b`` (→ ``db_shard_b.sqlite3``).
+#                 The two modes share the same ``default`` file, so a single
+#                 dev workflow (``manage.py seed_data``, etc.) populates the
+#                 ``default`` alias in both modes; sharded mode only ADDS the
+#                 secondary shard.
 #
-# Django requires a ``default`` entry, so under sharded mode ``default``
-# is the primary shard (shard A) and ``shard_b`` is the secondary.  All
-# ``Model.objects.create(...)`` calls without ``.using(...)`` land on
-# shard A; explicit ``.using("shard_b")`` targets shard B.
+# Django requires a ``default`` entry; we keep that entry pointed at
+# ``db.sqlite3`` in both modes. All ``Model.objects.create(...)`` calls
+# without ``.using(...)`` land on the default file; explicit
+# ``.using("shard_b")`` targets the secondary shard SQLite file.
 #
 # The library itself is agnostic to this layout — it simply honours
 # whatever alias the caller queryset carries via ``queryset.db``.
@@ -111,24 +113,17 @@ TEMPLATES = [
 # Usage:
 #     uv run pytest                                                 # single-DB
 #     FAKESHOP_SHARDED=1 uv run pytest                              # sharded
-#     FAKESHOP_SHARDED=1 uv run python manage.py seed_shards        # populate shards
+#     FAKESHOP_SHARDED=1 uv run python manage.py seed_shards        # populate shard_b
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
+    },
+}
 if os.environ.get("FAKESHOP_SHARDED") == "1":  # pragma: no cover
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db_shard_a.sqlite3",
-        },
-        "shard_b": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db_shard_b.sqlite3",
-        },
-    }
-else:
-    DATABASES = {
-        "default": {
-            "ENGINE": "django.db.backends.sqlite3",
-            "NAME": BASE_DIR / "db.sqlite3",
-        },
+    DATABASES["shard_b"] = {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db_shard_b.sqlite3",
     }
 
 

@@ -1,5 +1,7 @@
 # Feedback: `docs/spec-019-multi_db-0_0_7.md` (rev4)
 
+> **Post-rev5 note (2026-05-22):** This document is rev4-review notes. After rev5 landed, two further refinements were folded into the design (and propagated through the whole 019 talk): (1) the example-project `DATABASES` layout became additive — `default → db.sqlite3` in both modes, `FAKESHOP_SHARDED=1` ADDS `shard_b → db_shard_b.sqlite3` — with the secondary shard's seed committed at `examples/fakeshop/db_shard_b.sqlite3`; (2) the package-internal `test_optimization_plan_apply_preserves_explicit_using_alias` (rev4's "test (f)" — Decision 3 axis 2) was removed because the Slice 2 live HTTP test transitively verifies the same property per `AGENTS.md` line 9's real-world-coverage rule. The current spec describes the post-refinement design; references in this file to "test (f) for axis 2" and to the old "`db_shard_a.sqlite3`" layout are historical and apply to rev4 only.
+
 Second-pass review against the spec at rev4 (post-rev3 V1–V8 corrections). Surfaced by staging the pre-build TODO scaffolds in `tests/optimizer/test_multi_db.py`, `tests/types/test_resolvers.py` (extension), and `examples/fakeshop/test_query/test_multi_db.py` — pseudo-coding each test against the spec's pinned contract turned up one High-severity cross-reference bug the rev3 reviewer (and the rev4 author's V7 catalog sweep) missed, plus two Medium hazards Worker 2 will hit during implementation if not pre-flagged.
 
 Verified against the live codebase as of 2026-05-22:

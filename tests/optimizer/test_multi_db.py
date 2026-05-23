@@ -1,27 +1,35 @@
 """Multi-database cooperation tests at the optimizer-plan layer.
 
 Scope (per spec ``docs/spec-019-multi_db-0_0_7.md`` Decision 5 + Test plan
-``### tests/optimizer/test_multi_db.py``): this file holds the **two**
-optimizer-plan-level multi-db tests — neither exercises FK-id elision, so
-neither needs a ``router.db_for_read`` mock.
+``### tests/optimizer/test_multi_db.py``): this file holds the
+optimizer-plan-level multi-db test that cannot be earned through a live
+``/graphql/`` query against the example project. It does not exercise
+FK-id elision, so it does not need a ``router.db_for_read`` mock.
 
-- Test (f) — ``OptimizationPlan.apply(qs)`` preserves ``qs._db`` for an
-  explicit ``Model.objects.using("shard_b").all()`` parent. Pins
-  Decision 3 axis 2.
-- Test (g) — consumer-provided ``OptimizerHint.prefetch(Prefetch(queryset=
+- Consumer-provided ``OptimizerHint.prefetch(Prefetch(queryset=
   Child.objects.using("shard_b").all()))`` round-trips through plan
   construction with the inner queryset's ``_db`` intact. Pins Decision 3
   axis 3 — generated child querysets are intentionally NOT in scope per
   Decision 2.
 
-The other five Slice 1 tests (FK-id elision branches + strictness
+Decision 3 axis 2 (explicit ``.using(alias)`` ``_db`` preservation through
+``OptimizationPlan.apply``) is verified transitively by the Slice 2 live
+``/graphql/`` test ``test_using_shard_b_resolver_returns_rows_seeded_on_shard_b``
+in ``examples/fakeshop/test_query/test_multi_db.py``: if a future refactor
+caused ``OptimizationPlan.apply`` to drop ``_db``, the resolver's
+``Book.objects.using("shard_b")`` queryset would route to ``default``,
+return zero rows, and the live test's seeded-titles assertion would fail.
+Per ``AGENTS.md`` line 9, real-world live-HTTP coverage is preferred over
+package-internal mocking when both reach the line.
+
+The five resolver-level Slice 1 tests (FK-id elision branches + strictness
 connection-agnostic shape) live in ``tests/types/test_resolvers.py`` per
 rev2 H4 + rev3 R2 — both ``_build_fk_id_stub`` and ``_check_n1`` live in
 ``django_strawberry_framework/types/resolvers.py``, so the source-mirror
 partner is the resolver-tests module.
 
-Single pytest item per test; NO ``pytest.mark.parametrize`` fan-out so the
-collected-item count matches the spec contract (two items from this file).
+Single pytest item; NO ``pytest.mark.parametrize`` fan-out so the
+collected-item count matches the spec contract (one item from this file).
 """
 
 from types import SimpleNamespace
@@ -74,25 +82,6 @@ def _register_type_definition(model, type_cls, *, optimizer_hints=None):
             has_custom_get_queryset=type_cls.has_custom_get_queryset(),
         ),
     )
-
-
-def test_optimization_plan_apply_preserves_explicit_using_alias():
-    """Decision 3 axis 2 — explicit ``.using()`` ``_db`` survives ``plan.apply``."""
-    # No registration / no source_type — axis 2 does not exercise per-type
-    # hint lookup, and the walker's fallback path
-    # (``{f.name: f for f in model._meta.get_fields()}`` at
-    # ``optimizer/walker.py:113-115``) covers selection introspection for
-    # the fakeshop ``Item.category`` FK without a registered ``DjangoType``.
-    plan = plan_optimizations([_sel("category")], Item)
-
-    qs = Item.objects.using("shard_b").all()
-    result = plan.apply(qs)
-
-    # ``OptimizationPlan.apply`` calls ``only()`` / ``select_related()`` /
-    # ``prefetch_related()`` (plans.py:122-137) — all of which preserve
-    # ``_db`` by Django queryset contract. This pins that we don't
-    # accidentally rebuild the queryset from scratch in a future refactor.
-    assert result._db == "shard_b"
 
 
 def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias():

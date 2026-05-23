@@ -177,7 +177,7 @@ def test_seed_shards_command_runs_when_shard_alias_present(settings, monkeypatch
     out = StringIO()
     call_command("seed_shards", "--count", "1", stdout=out)
     output = out.getvalue()
-    assert "Shards populated." in output
+    assert "Secondary shard populated." in output
 
 
 # ---------------------------------------------------------------------------

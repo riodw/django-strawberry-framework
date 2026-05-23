@@ -203,17 +203,17 @@ uv run python examples/fakeshop/manage.py delete_users 5
 
 ### Sharded mode (multi-DB)
 
-The example ships with a two-DB layout for stress-testing multi-database scenarios. Toggle it via `FAKESHOP_SHARDED=1`:
+The example ships with an additive two-alias layout for exercising multi-database scenarios. Toggle the secondary shard via `FAKESHOP_SHARDED=1`:
 
 ```shell
-# Materialize both shard SQLite files (idempotent)
+# Materialize the secondary shard SQLite file (idempotent)
 FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards
 
 # Larger seed for stress testing
 FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards --count 5000
 ```
 
-In sharded mode `default` → `db_shard_a.sqlite3` and `shard_b` → `db_shard_b.sqlite3`. The single-DB `db.sqlite3` is invisible while the env var is set.
+In sharded mode `default` keeps pointing at `db.sqlite3` (same file as single-DB mode) and `shard_b` adds `db_shard_b.sqlite3`. The two modes share the same `default` file, so a single dev workflow (`manage.py seed_data`, etc.) populates the default alias either way; the sharded mode only ADDS the secondary shard. The committed `db_shard_b.sqlite3` ships with a minimal seed via `seed_shards` so the sharded mode works out of the box.
 
 For the cooperation contract these shards run against — explicit `.using()` `_db` preservation, FK-id elision router hints, consumer-provided `Prefetch(queryset=…)` alias round-trips, and strictness-mode behavior under non-default aliases — see [`GLOSSARY.md#multi-database-cooperation`](GLOSSARY.md#multi-database-cooperation).
 

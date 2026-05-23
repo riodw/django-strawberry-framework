@@ -70,8 +70,7 @@ Walked every naming convention across the three new test files:
     `..._router_call_passes_none_instance_when_parent_lacks_state`,
     `..._returns_none_for_null_fk_and_does_not_call_router`,
     `test_strictness_check_is_connection_agnostic_under_non_default_alias`.
-  - Slice 1 optimizer-plan: `test_optimization_plan_apply_preserves_explicit_using_alias`,
-    `test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias`.
+  - Slice 1 optimizer-plan: `test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias`. Decision 3 axis 2 verified transitively by the Slice 2 live HTTP test per `AGENTS.md` line 9.
   - Slice 2 live HTTP: `test_using_shard_b_resolver_returns_rows_seeded_on_shard_b`,
     `test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver`.
 

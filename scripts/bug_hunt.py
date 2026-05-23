@@ -2,10 +2,10 @@
 
 The script resolves the current branch's HEAD commit hash, refreshes
 ``docs/shadow/`` in-process via
-``review_current_from_commit.main([<head-sha>])``, reads the passed-in
-dicta (default ``docs/bug_hunt/dicta.md``), appends the static
-single-file review boilerplate, and emits one checkbox + prompt block
-per ``*.stripped.py`` file under ``docs/shadow/``.
+``review_historical_package_snapshot_at_commit.main([<head-sha>])``,
+reads the passed-in dicta (default ``docs/bug_hunt/dicta.md``), appends
+the static single-file review boilerplate, and emits one checkbox +
+prompt block per ``*.stripped.py`` file under ``docs/shadow/``.
 
 The output path defaults to ``docs/bug_hunt/bug_hunt.<short-sha>.md``.
 
@@ -23,8 +23,12 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from review_current_from_commit import DEFAULT_PACKAGE_DIR
-from review_current_from_commit import main as review_current_from_commit_main
+from review_historical_package_snapshot_at_commit import (
+    DEFAULT_PACKAGE_DIR,
+)
+from review_historical_package_snapshot_at_commit import (
+    main as review_historical_package_snapshot_at_commit_main,
+)
 
 BUG_HUNT_DIR = Path("docs/bug_hunt")
 SHADOW_DIR = Path("docs/shadow")
@@ -127,13 +131,13 @@ def _stripped_files(current_dir: Path) -> list[Path]:
     return sorted(current_dir.glob("*.stripped.py"))
 
 
-def _refresh_current_snapshot(commit: str, package_dir: str, current_dir: Path) -> None:
+def _refresh_historical_package_snapshot(commit: str, package_dir: str, current_dir: Path) -> None:
     """Rebuild ``docs/shadow/`` from ``commit`` in-process.
 
     Output is silenced here; ``bug_hunt.py`` prints its own status line.
     """
     with contextlib.redirect_stdout(io.StringIO()):
-        exit_code = review_current_from_commit_main(
+        exit_code = review_historical_package_snapshot_at_commit_main(
             [
                 commit,
                 "--package-dir",
@@ -142,7 +146,7 @@ def _refresh_current_snapshot(commit: str, package_dir: str, current_dir: Path) 
         )
     if exit_code != 0:
         raise RuntimeError(
-            "review_current_from_commit.py failed while refreshing "
+            "review_historical_package_snapshot_at_commit.py failed while refreshing "
             f"{current_dir} for {commit} (exit code {exit_code}).",
         )
 
@@ -203,7 +207,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=DEFAULT_PACKAGE_DIR,
         help=(
             "Repo-relative directory passed through to "
-            "review_current_from_commit.py when refreshing docs/shadow/. "
+            "review_historical_package_snapshot_at_commit.py when refreshing docs/shadow/. "
             f"Defaults to {DEFAULT_PACKAGE_DIR!r}."
         ),
     )
@@ -225,7 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         output_path = (repo_root / args.output).resolve()
     try:
-        _refresh_current_snapshot(
+        _refresh_historical_package_snapshot(
             head_sha,
             args.package_dir,
             current_dir,

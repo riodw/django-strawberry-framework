@@ -19,7 +19,7 @@ deleted files get an empty stripped file on the missing side so the per-file
 diff still renders.
 
 Usage:
-    uv run python scripts/review_diff_from_commit.py <commit-hash>
+    uv run python scripts/review_changed_python_diffs_against_head.py <commit-hash>
 
 The ``uv run`` prefix is required so the script sees the project's virtual
 environment (it imports ``review_inspect`` and the inspector depends on the
@@ -28,7 +28,7 @@ repository; the orchestrator resolves ``git rev-parse --show-toplevel`` and
 writes outputs under ``docs/shadow/bug_hunt/{old,new,diff}/`` at the repo root.
 
 Example:
-    uv run python scripts/review_diff_from_commit.py 1e6b5830766545d3cb46e3aff21c6dd58a935da4
+    uv run python scripts/review_changed_python_diffs_against_head.py 1e6b5830766545d3cb46e3aff21c6dd58a935da4
 """
 
 from __future__ import annotations

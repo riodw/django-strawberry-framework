@@ -18,7 +18,7 @@ contain any, but the guard matches the diff helper's contract).
 orchestrator does not pay Python / ``uv`` startup cost per file.
 
 Usage:
-    uv run python scripts/review_current_from_commit.py <commit-hash> [--package-dir DIR]
+    uv run python scripts/review_historical_package_snapshot_at_commit.py <commit-hash> [--package-dir DIR]
 
 The ``uv run`` prefix is required so the script sees the project's virtual
 environment (it imports ``review_inspect`` and the inspector depends on the
@@ -27,8 +27,9 @@ the repository; the orchestrator resolves ``git rev-parse --show-toplevel``
 and writes outputs under ``docs/shadow/`` at the repo root.
 
 Example:
-    uv run python scripts/review_current_from_commit.py 9096519590040fa25484e05b6a104cb5652b9676
-     --package-dir examples/fakeshop/apps/library
+    uv run python scripts/review_historical_package_snapshot_at_commit.py \
+        9096519590040fa25484e05b6a104cb5652b9676 \
+        --package-dir examples/fakeshop/apps/library
 """
 
 from __future__ import annotations

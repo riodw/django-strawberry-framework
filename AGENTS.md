@@ -20,7 +20,7 @@ django_strawberry_framework.conf.settings reads DJANGO_STRAWBERRY_FRAMEWORK from
 Add settings keys only when the feature that needs them lands; do not preemptively populate
 Do not update CHANGELOG.md unless explicitly instructed
 Do not bulk-delete or bulk-overwrite under docs/review/; rev-*.md, REVIEW.md, review-*.md, worker-*.md are committed source of truth; restore via git checkout HEAD -- docs/review/ if anything goes missing
-docs/shadow/ is regenerable; scripts/bug_hunt.py and scripts/review_current_from_commit.py wipe the entire docs/shadow/ tree before refreshing
+docs/shadow/ is regenerable; scripts/bug_hunt.py and scripts/review_historical_package_snapshot_at_commit.py wipe the entire docs/shadow/ tree before refreshing
 Generated docs/bug_hunt/bug_hunt.*.md files are regenerable; docs/bug_hunt/dicta.md is maintainer-edited and stays
 When clearing tool output, target the specific subdirectory; never recursively delete from docs/review/ itself
 Design docs and TODO anchors: new in-flight design docs go in docs/ as spec-<NNN>-<topic>-<0_0_X>.md (NNN matches the KANBAN card number; see docs/builder/BUILD.md for the full pattern), completed design docs stay at their working location with shipped behavior folded into docs/GLOSSARY.md / docs/TREE.md / KANBAN.md (no archival default), and staged-but-not-implemented slices get a source-site TODO comment naming the active design doc and slice (paired with NotImplementedError if the call path must fail loudly), removed in the same change that ships the slice

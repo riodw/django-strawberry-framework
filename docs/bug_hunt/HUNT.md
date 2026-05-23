@@ -29,11 +29,11 @@ the input parameter for Step 2.
 Then run `scripts/bug_hunt.py`. The script:
 - Resolves the current branch's HEAD commit hash first.
 - Wipes `docs/shadow/` and refreshes it in-process by running
-  `scripts/review_current_from_commit.py <head-sha>` (same package-dir
+  `scripts/review_historical_package_snapshot_at_commit.py <head-sha>` (same package-dir
   default, or the `--package-dir` value you passed through). The wipe is
   recursive — any prior review/build helper output and any
   `docs/shadow/bug_hunt/{old,new,diff}/` from a previous
-  `scripts/review_diff_from_commit.py` run is discarded.
+  `scripts/review_changed_python_diffs_against_head.py` run is discarded.
 
 - Reads `docs/bug_hunt/dicta.md` and prepends it as the header.
 - Appends a static "how to review a single file" section baked into

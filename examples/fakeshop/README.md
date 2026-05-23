@@ -155,13 +155,14 @@ Or through `/admin`:
 # Test Users
 
 The `create_users` command creates a set of test users for exercising
-permission branches. Each set creates 5 users:
+permission branches. Each set creates 6 users:
 
 - `staff_N` — `is_staff=True`
 - `regular_N` — no permissions
 - `view_category_N` — has `products.view_category`
 - `view_item_N` — has `products.view_item`
 - `view_property_N` — has `products.view_property`
+- `view_entry_N` — has `products.view_entry`
 
 All share the password printed by the command.
 

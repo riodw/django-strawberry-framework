@@ -47,11 +47,28 @@ Stress testing
 --------------
 Once shard_b is materialized you can point a stress harness directly
 at it under the same env var.  The committed shard file is not touched
-by the test suite (Django creates a separate ``test_db_shard_b.sqlite3``
-file during pytest), so growing it with millions of rows for load
-testing is safe::
+by the **test suite** (Django creates a separate
+``test_db_shard_b.sqlite3`` file during pytest), so growing it with
+millions of rows for load testing is safe from a pytest-isolation
+standpoint::
 
     FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards --count 5000
+
+**VCS warning.** ``examples/fakeshop/db_shard_b.sqlite3`` is a tracked
+binary fixture. Running ``seed_shards --count 5000`` against the
+default path mutates that tracked file in place and will leave a huge
+dirty diff that is easy to commit accidentally. Safer workflow for
+high-volume load testing:
+
+1. Copy the shard DB to a scratch path outside the repo (e.g.
+   ``cp examples/fakeshop/db_shard_b.sqlite3 /tmp/shard_b.sqlite3``)
+   and point Django at the copy via ``FAKESHOP_SHARDED=1`` plus a
+   one-off override of ``DATABASES["shard_b"]["NAME"]``.
+2. Or, after stress testing, discard the dirty fixture with
+   ``git checkout -- examples/fakeshop/db_shard_b.sqlite3`` UNLESS
+   you intend to refresh the committed fixture for the whole team
+   (in which case re-run ``seed_shards`` with the default ``--count
+   1`` and commit deliberately).
 """
 
 from django.conf import settings

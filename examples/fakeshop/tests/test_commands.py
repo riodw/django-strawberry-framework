@@ -153,8 +153,19 @@ def test_delete_users_command_invalid_string():
 # ---------------------------------------------------------------------------
 
 
-def test_seed_shards_command_raises_when_shard_alias_missing():
-    """Without FAKESHOP_SHARDED=1 the ``shard_b`` alias isn't declared — must error."""
+def test_seed_shards_command_raises_when_shard_alias_missing(settings):
+    """When ``shard_b`` isn't declared in DATABASES, the command must raise CommandError.
+
+    Forces ``shard_b`` absence via the ``settings`` fixture so the test is
+    environment-independent — it passes both under default and under
+    ``FAKESHOP_SHARDED=1``. Under the env-var case ``shard_b`` would
+    otherwise be present in ``DATABASES`` and the command would proceed
+    past the alias-missing guard into real ``migrate`` / seeding (which
+    pytest-django's database-access guard would then reject for an
+    undeclared `@pytest.mark.django_db(databases=...)`).
+    """
+    settings.DATABASES = {"default": settings.DATABASES["default"]}
+
     out = StringIO()
     with pytest.raises(CommandError, match="shard_b"):
         call_command("seed_shards", stdout=out)

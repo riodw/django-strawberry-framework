@@ -8,3 +8,22 @@ class DjangoStrawberryFrameworkConfig(AppConfig):
 
     name = "django_strawberry_framework"
     verbose_name = "Django Strawberry Framework"
+
+    def ready(self) -> None:
+        """Apply the package's Django defensive patches at app-load time.
+
+        Currently applies the Trac #37064 hardening for
+        ``TransactionTestCase._remove_databases_failures`` (and the
+        inherited ``TestCase`` variant). See
+        :mod:`django_strawberry_framework._django_patches` for the
+        list of patches and the rationale for each.
+
+        ``ready()`` is the canonical place to perform one-time setup
+        that depends on Django being fully configured. Consumers get
+        the patches automatically by having
+        ``"django_strawberry_framework"`` in ``INSTALLED_APPS`` — no
+        opt-in boilerplate is required.
+        """
+        from django_strawberry_framework._django_patches import apply
+
+        apply()

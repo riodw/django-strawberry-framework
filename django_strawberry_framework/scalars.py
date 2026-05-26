@@ -1,6 +1,6 @@
 """Public scalars defined by django-strawberry-framework.
 
-Today: ``BigInt``. Future scalars (e.g. ``Upload`` per TODO-ALPHA-027) land here.
+Today: ``BigInt``. Future scalars (e.g. ``Upload`` per TODO-ALPHA-028) land here.
 
 ``BigInt`` is a JSON-safe scalar typically used to map Django's 64-bit
 integer fields (``BigIntegerField``, ``PositiveBigIntegerField``). It is
@@ -83,8 +83,9 @@ def _serialize_bigint(value: Any) -> str:
 # warning-free migration is roadmapped as WIP-ALPHA-020-0.0.7 (Warning-free
 # scalar registration via StrawberryConfig.scalar_map). That card will introduce
 # a package-side `strawberry_config(...)` factory and remove this suppression
-# block entirely. For 0.0.6, the deprecation is suppressed at the definition
-# site so consumers importing django_strawberry_framework see no warning. A
+# block entirely. Until WIP-ALPHA-020-0.0.7 lands, the deprecation is
+# suppressed at the definition site so consumers importing
+# django_strawberry_framework see no warning. A
 # regression test (test_package_import_does_not_emit_strawberry_deprecation_warning)
 # pins the no-leak contract; if the suppression is accidentally removed or
 # Strawberry tightens the deprecation, the test catches it.

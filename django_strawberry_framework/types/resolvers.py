@@ -16,8 +16,8 @@ contract used by the optimizer.
 Layered as a sibling of ``types.base`` so the ``DjangoType.__init_subclass__``
 pipeline can import ``_attach_relation_resolvers`` without a circular
 back-reference (``resolvers.py`` imports nothing from ``base.py``; the
-caller pre-computes the field list with ``base._select_fields(meta)`` and
-passes it in).
+caller pre-computes the field list with
+``base._select_fields(model, fields_spec, exclude_spec)`` and passes it in).
 """
 
 from collections.abc import Callable

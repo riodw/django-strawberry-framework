@@ -108,6 +108,12 @@ def test_export_schema_raises_command_error_when_path_flag_has_no_value(monkeypa
         call_command("export_schema", "test_module:schema", "--path")
 
 
+def test_export_schema_raises_command_error_when_path_flag_is_empty_string(monkeypatch):
+    _make_test_module(monkeypatch, schema=_make_schema())
+    with pytest.raises(CommandError, match="--path requires a non-empty value"):
+        call_command("export_schema", "test_module:schema", "--path", "")
+
+
 # ---------------------------------------------------------------------------
 # Default-symbol-name fallback (Decision 3)
 # ---------------------------------------------------------------------------

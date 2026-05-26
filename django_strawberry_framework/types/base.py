@@ -168,7 +168,7 @@ class DjangoType:
                 "after finalization. Call registry.clear() first if this is a test.",
             )
         validated = _validate_meta(meta)
-        fields = _select_fields(meta)
+        fields = _select_fields(meta.model, validated.fields_spec, validated.exclude_spec)
         _validate_optimizer_hints(validated.optimizer_hints, fields, model=meta.model)
 
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
@@ -656,8 +656,12 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], mo
         )
 
 
-def _select_fields(meta: type) -> tuple[Any, ...]:
-    """Filter ``meta.model._meta.get_fields()`` per ``Meta.fields`` / ``Meta.exclude``.
+def _select_fields(
+    model: type[models.Model],
+    fields_spec: tuple[str, ...] | str | None,
+    exclude_spec: tuple[str, ...] | None,
+) -> tuple[Any, ...]:
+    """Filter ``model._meta.get_fields()`` per ``Meta.fields`` / ``Meta.exclude``.
 
     Called once from ``DjangoType.__init_subclass__`` and the resulting
     list is reused by ``_build_annotations`` (in this module) and
@@ -667,12 +671,18 @@ def _select_fields(meta: type) -> tuple[Any, ...]:
     order matches Django's declared order, with reverse-side relations
     appended at the end.
 
+    The caller threads ``fields_spec`` and ``exclude_spec`` from the
+    ``_ValidatedMeta`` snapshot produced by ``_validate_meta`` so the
+    shape gates (``_normalize_fields_spec`` / ``_normalize_sequence_spec``)
+    run exactly once per class definition — matching the invariant the
+    ``_ValidatedMeta`` docstring promises.
+
     Selection rules:
 
-    - ``fields == "__all__"`` (or both ``fields``/``exclude`` unset) ->
-      every concrete + relation field.
-    - ``fields`` as a sequence -> only those names; unknown names raise.
-    - ``exclude`` as a sequence -> every field except those names;
+    - ``fields_spec == "__all__"`` (or both ``fields_spec`` /
+      ``exclude_spec`` ``None``) -> every concrete + relation field.
+    - ``fields_spec`` as a sequence -> only those names; unknown names raise.
+    - ``exclude_spec`` as a sequence -> every field except those names;
       unknown names raise.
 
     Raises:
@@ -681,10 +691,6 @@ def _select_fields(meta: type) -> tuple[Any, ...]:
             the model, the unknown values, and the available field set
             so typos surface loudly instead of silently dropping.
     """
-    model = meta.model
-    fields_spec = _normalize_fields_spec(getattr(meta, "fields", None))
-    exclude_spec = _normalize_sequence_spec(getattr(meta, "exclude", None))
-
     all_fields = list(model._meta.get_fields())
     all_names = [f.name for f in all_fields]
     valid_names = set(all_names)
@@ -741,8 +747,10 @@ def _build_annotations(
     ``field.is_relation`` branch and skips ``convert_scalar`` at the
     scalar branch. See ``_consumer_assigned_fields`` for the four-corner
     override contract that populates ``consumer_authored_fields``. The
-    caller pre-computes the field list with ``_select_fields(meta)`` so
-    this function does not need ``meta``.
+    caller pre-computes the field list with
+    ``_select_fields(model, fields_spec, exclude_spec)`` (threading the
+    validated specs from the ``_ValidatedMeta`` snapshot) so this function
+    does not need ``meta``.
 
     When ``relay.Node`` appears in ``interfaces``, the primary-key field's
     synthesized scalar annotation is dropped from the returned dict so

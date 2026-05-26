@@ -197,7 +197,7 @@ def test_djangolistfield_rejects_non_callable_resolver() -> None:
 def test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_queryset() -> None:
     """Default resolver applies ``cls.get_queryset(qs, info)`` in a sync context.
 
-    Pins the sync branch at ``list_field.py:101`` —
+    Pins the sync branch at ``list_field.py:139`` —
     ``return _apply_get_queryset_sync(target_type, qs, info)`` — by declaring
     a ``DjangoType`` whose ``get_queryset`` excludes the categories whose
     names start with ``"a"`` (e.g. ``address``, ``automotive``) and
@@ -233,7 +233,7 @@ def test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_query
 async def test_djangolistfield_async_get_queryset_is_awaited(monkeypatch) -> None:
     """Default resolver awaits an ``async def get_queryset(...)`` under ``await schema.execute(...)``.
 
-    Pins the async branch at ``list_field.py:94-100`` — the
+    Pins the async branch at ``list_field.py:133-138`` — the
     ``_apply_get_queryset_async(target_type, qs, info)`` call when
     ``in_async_context()`` returns True and ``get_queryset`` is
     ``async def`` (spec Decision 2 async path; Decision 3
@@ -286,7 +286,7 @@ async def test_djangolistfield_default_resolver_works_under_sync_and_async_schem
 ) -> None:
     """A sync ``get_queryset`` resolves correctly under both schema-execution shapes.
 
-    Pins the runtime ``in_async_context()`` branch at ``list_field.py:95``
+    Pins the runtime ``in_async_context()`` branch at ``list_field.py:133``
     — both arms when ``get_queryset`` is SYNC. The ``False`` arm fires
     under ``schema.execute_sync(...)`` (returns ``_apply_get_queryset_sync``
     directly); the ``True`` arm fires under ``await schema.execute(...)``
@@ -379,8 +379,8 @@ def test_djangolistfield_sync_path_rejects_coroutine_from_get_queryset() -> None
 def test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_applied() -> None:
     """Sync consumer resolver returning a ``QuerySet`` receives ``target_type.get_queryset(...)``.
 
-    Pins the sync consumer-resolver wrapper at ``list_field.py:120-125``
-    — specifically that ``_post_process_consumer_sync`` (line 121)
+    Pins the sync consumer-resolver wrapper at ``list_field.py:158-163``
+    — specifically that ``_post_process_consumer_sync`` (line 159)
     applies ``target_type.get_queryset(...)`` to a ``Manager``/``QuerySet``
     return (rev2 H1, graphene-django parity; spec line 743).
     """
@@ -421,7 +421,7 @@ def test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_app
 def test_djangolistfield_consumer_resolver_python_list_return_passes_through() -> None:
     """Sync consumer resolver returning a Python ``list`` bypasses ``target_type.get_queryset(...)``.
 
-    Pins the sync consumer-resolver wrapper at ``list_field.py:120-125``
+    Pins the sync consumer-resolver wrapper at ``list_field.py:158-163``
     — specifically that ``_post_process_consumer_sync`` returns the
     non-``QuerySet`` result unchanged (the ``return result``
     pass-through arm at line 36; spec line 744). The resolver returns a
@@ -470,9 +470,9 @@ async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_
 ) -> None:
     """Async consumer resolver returning a ``QuerySet`` receives ``target_type.get_queryset(...)``.
 
-    Pins the async consumer-resolver wrapper at ``list_field.py:108-117``
+    Pins the async consumer-resolver wrapper at ``list_field.py:146-155``
     — specifically that the awaited consumer return is fed to
-    ``_post_process_consumer_async`` (lines 113-117), and the
+    ``_post_process_consumer_async`` (lines 151-155), and the
     ``_apply_get_queryset_async`` call (line 43) fires on a ``QuerySet``
     result. Pins that the wrapper awaits the consumer coroutine BEFORE
     the isinstance check (rev4 H2, spec line 745). The
@@ -659,7 +659,7 @@ async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_
 async def test_djangolistfield_async_consumer_resolver_python_list_return_passes_through() -> None:
     """Async consumer resolver returning a Python ``list`` bypasses ``target_type.get_queryset(...)``.
 
-    Pins the async consumer-resolver wrapper at ``list_field.py:108-117``
+    Pins the async consumer-resolver wrapper at ``list_field.py:146-155``
     — specifically that ``_post_process_consumer_async`` returns a
     non-``QuerySet`` result unchanged (the ``return result``
     pass-through arm at line 44). Pins that the await-then-isinstance

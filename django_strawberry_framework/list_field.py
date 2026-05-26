@@ -7,7 +7,7 @@ Target release: ``0.0.7``.
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import strawberry
@@ -17,7 +17,7 @@ from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError
 from .types import DjangoType
-from .types.relay import _apply_get_queryset_async, _apply_get_queryset_sync
+from .types.relay import _apply_get_queryset_async, _apply_get_queryset_sync, _initial_queryset
 
 __all__ = ("DjangoListField",)
 
@@ -81,7 +81,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
     resolver: Callable | None = None,
     description: str | None = None,
     deprecation_reason: str | None = None,
-    directives: tuple = (),
+    directives: Sequence[object] = (),
 ) -> Any:
     """Factory for a non-Relay ``list[T]`` root Query field bound to a ``DjangoType``.
 
@@ -129,7 +129,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
     if resolver is None:
 
         def _default(root: Any, info: Info) -> Any:
-            qs = target_type.__django_strawberry_definition__.model._default_manager.all()
+            qs = _initial_queryset(target_type)
             if in_async_context():
                 # rev6 H1: return the coroutine from ``_apply_get_queryset_async``
                 # directly; Strawberry's AwaitableOrValue dispatch awaits it.

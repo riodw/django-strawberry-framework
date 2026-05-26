@@ -39,6 +39,13 @@ class DjangoTypeDefinition:
           ``consumer_authored_fields``, is the short-circuit input
           ``_build_annotations`` reads to skip auto-synthesis for any
           name the consumer authored.
+        - ``primary`` is a write-once introspection mirror of
+          ``registry._primaries[model]``, owned by
+          ``DjangoType.__init_subclass__`` (``types/base.py``) and never
+          mutated post-construction. No package code reads it; the
+          runtime "is this the primary?" predicate is
+          ``registry.primary_for(model)`` (``registry.py``). Consumers
+          may read ``definition.primary`` for introspection only.
     """
 
     origin: type
@@ -57,7 +64,8 @@ class DjangoTypeDefinition:
     consumer_assigned_relation_fields: frozenset[str] = frozenset()
     consumer_assigned_scalar_fields: frozenset[str] = frozenset()
     primary: bool = False
-    # Populated by ``_validate_meta``; consumed by ``finalize_django_types()``
-    # as the finalizer's source of truth for base injection.
     interfaces: tuple[type, ...] = ()
+    # ``interfaces`` is populated by ``_validate_meta``; consumed by
+    # ``finalize_django_types()`` as the finalizer's source of truth for
+    # base injection.
     finalized: bool = False

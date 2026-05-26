@@ -19,11 +19,17 @@ class Command(BaseCommand):
         parser.add_argument(
             "--path",
             type=str,
-            help="Optional path to export",
+            help="Optional file path to write the SDL to; rejects empty values",
         )
 
     def handle(self, *args: object, **options: object) -> None:
-        """Resolve the dotted-path schema symbol, print SDL to stdout or write it to --path."""
+        """Resolve the dotted-path schema symbol and emit SDL.
+
+        Routes through three branches: ``--path`` omitted prints SDL to
+        stdout; ``--path ""`` (empty-string value) raises ``CommandError``
+        per the CHANGELOG-23 "requires a value when the flag is given"
+        contract; ``--path <file>`` writes UTF-8 SDL to the named path.
+        """
         try:
             schema_symbol = import_module_symbol(
                 options["schema"],
@@ -37,11 +43,13 @@ class Command(BaseCommand):
 
         schema_output = print_schema(schema_symbol)
         path = options.get("path")
-        if path:
-            try:
-                pathlib.Path(path).write_text(schema_output, encoding="utf-8")
-            except OSError as e:
-                raise CommandError(str(e)) from e
-            self.stdout.write(self.style.SUCCESS(f"Wrote schema to {path}"))
-        else:
+        if path is None:
             self.stdout.write(schema_output)
+            return
+        if not path:
+            raise CommandError("--path requires a non-empty value")
+        try:
+            pathlib.Path(path).write_text(schema_output, encoding="utf-8")
+        except OSError as e:
+            raise CommandError(str(e)) from e
+        self.stdout.write(self.style.SUCCESS(f"Wrote schema to {path}"))

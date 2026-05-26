@@ -1226,6 +1226,56 @@ def test_unregister_keeps_siblings_intact_in_multi_type_case(fresh_registry):
     assert fresh_registry.model_for_type(ItemTypeC) is Item
 
 
+def test_unregister_of_primary_leaves_state_that_audit_rejects():
+    """``unregister(primary_for_multi)`` leaves a state the finalize audit refuses.
+
+    Pins the contract narrated by ``unregister``'s docstring at
+    ``registry.py:168-170``: when ``type_cls`` is the primary for its
+    model, the model loses its primary even if siblings remain — the
+    caller must re-declare a primary via a fresh registration cycle.
+    Concretely: register three types against the same model with the
+    first as primary, unregister the primary, then call
+    ``finalize_django_types()`` and confirm it raises the canonical
+    ambiguity error. Prevents a future maintainer from "helpfully"
+    auto-promoting the next sibling to primary on unregister, which
+    would silently change the relation-resolution target.
+    """
+
+    class ItemTypeA(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+
+    class ItemTypeB(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class ItemTypeC(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    assert registry.primary_for(Item) is ItemTypeA
+    assert registry.types_for(Item) == (ItemTypeA, ItemTypeB, ItemTypeC)
+
+    registry.unregister(ItemTypeA)
+
+    assert registry.primary_for(Item) is None
+    assert registry.types_for(Item) == (ItemTypeB, ItemTypeC)
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+
+    msg = str(exc_info.value)
+    assert "Models with multiple registered DjangoType subclasses and no primary" in msg
+    assert "Item" in msg
+    assert "ItemTypeB" in msg
+    assert "ItemTypeC" in msg
+    assert "Declare Meta.primary = True on exactly one of the registered DjangoType subclasses." in msg
+
+
 def test_unregister_is_noop_on_unknown_type(fresh_registry):
     """``unregister`` returns silently when ``type_cls`` was never registered."""
 

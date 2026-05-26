@@ -201,7 +201,6 @@ def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance():
         "aggregate_class",
         "fields_class",
         "search_fields",
-        "interfaces",
     ],
 )
 def test_meta_rejects_each_deferred_key(deferred_key):
@@ -210,6 +209,44 @@ def test_meta_rejects_each_deferred_key(deferred_key):
     meta_cls = type("Meta", (), meta_attrs)
     with pytest.raises(ConfigurationError, match=deferred_key):
         type("T", (DjangoType,), {"Meta": meta_cls})
+
+
+def test_interfaces_is_shipped_not_deferred():
+    """``interfaces`` is a shipped Meta key (in ``ALLOWED_META_KEYS``), not deferred.
+
+    Guards against the prior regression where ``test_meta_rejects_each_deferred_key``
+    silently included ``"interfaces"`` and passed for the wrong reason — the
+    ``_validate_interfaces`` shape error happens to contain the substring
+    ``"interfaces"``, so the deferred-key ``match=`` regex was satisfied by a
+    shape-validation message rather than a deferred-key message. The
+    ``_validate_interfaces`` Decision-4 validator is the full shipped contract.
+    """
+    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
+
+    assert "interfaces" in ALLOWED_META_KEYS
+    assert "interfaces" not in DEFERRED_META_KEYS
+
+
+def test_select_fields_signature_accepts_validated_specs():
+    """``_select_fields`` consumes the already-normalized specs from ``_ValidatedMeta``.
+
+    Pins the Medium fix from ``rev-types__base.md``: the function no longer
+    re-runs ``_normalize_fields_spec`` / ``_normalize_sequence_spec`` (those
+    ran inside ``_validate_meta``) — it takes the model plus the two
+    validated specs directly. Calling with both specs ``None`` returns every
+    Django field; passing a fields tuple narrows the result.
+    """
+    from django_strawberry_framework.types.base import _select_fields
+
+    all_selected = _select_fields(Category, None, None)
+    assert {f.name for f in all_selected} >= set(CATEGORY_SCALAR_FIELDS)
+
+    narrowed = _select_fields(Category, ("id", "name"), None)
+    assert tuple(f.name for f in narrowed) == ("id", "name")
+
+    excluded = _select_fields(Category, None, ("description",))
+    assert "description" not in {f.name for f in excluded}
+    assert "name" in {f.name for f in excluded}
 
 
 def test_meta_rejects_filterset_class():

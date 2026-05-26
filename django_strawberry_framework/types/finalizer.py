@@ -25,14 +25,16 @@ decoration touches a consumer-facing class:
 - Phase 3: ``strawberry.type(cls, name=..., description=...)`` decorates
   each type and sets ``definition.finalized = True``.
 
-The function entry-guards on ``registry.is_finalized()`` (line 108) so a
-second call is a no-op. The registry's finalized flag flips only after
-every type's Phase 3 call returns (line 176): a raise inside Phase 2,
-2.5, or 3 leaves the flag False and supports a fine-grained partial
-recovery on rerun. The per-entry ``if definition.finalized: continue``
-guards at the head of each phase loop skip already-decorated types on
-the rerun. ``registry.clear()`` remains the recommended escape hatch
-only when the offending type cannot be fixed in place.
+The function entry-guards on ``registry.is_finalized()`` at the top of
+``finalize_django_types()`` so a second call is a no-op. The registry's
+finalized flag flips only after every type's Phase 3 call returns, via
+``registry.mark_finalized()`` as the last statement of
+``finalize_django_types()``: a raise inside Phase 2, 2.5, or 3 leaves
+the flag False and supports a fine-grained partial recovery on rerun.
+The per-entry ``if definition.finalized: continue`` guards at the head
+of each phase loop skip already-decorated types on the rerun.
+``registry.clear()`` remains the recommended escape hatch only when the
+offending type cannot be fixed in place.
 """
 
 from __future__ import annotations

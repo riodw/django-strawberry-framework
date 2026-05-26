@@ -459,7 +459,7 @@ Safety properties:
 - falls back when a target [`get_queryset`](#get_queryset-visibility-hook) hook must run
 - branch-isolated: aliases and sibling root fields do not leak elision state into each other
 
-FK-id elisions are stashed on `info.context.dst_optimizer_plan` for introspection.
+FK-id elisions are stashed on `info.context.dst_optimizer_plan.fk_id_elisions` (tuple, as part of the plan) and `info.context.dst_optimizer_fk_id_elisions` (standalone set, for resolver-time membership checks).
 
 **See also:** [`only()` projection](#only-projection) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache).
 
@@ -665,7 +665,7 @@ Ambiguity rules:
 
 - One `DjangoType` for a model, `Meta.primary` absent or `False` — allowed (backward compat).
 - Multiple `DjangoType`s, exactly one with `Meta.primary = True` — allowed; relation targets resolve to the primary.
-- Multiple `DjangoType`s, two or more with `Meta.primary = True` — rejected at the second registration: `ConfigurationError("<class> is already declared primary as <existing>")`.
+- Multiple `DjangoType`s, two or more with `Meta.primary = True` — rejected at the second registration: `ConfigurationError("Cannot register <class> as primary for <model>; <existing> is already the primary type")`.
 - Multiple `DjangoType`s, none with `Meta.primary = True` — rejected at [`finalize_django_types()`](#finalize_django_types): `ConfigurationError` listing the model and every registered class, with fix sentence `"Declare Meta.primary = True on exactly one of the registered DjangoType subclasses."`.
 
 Registry surface: `primary_for(model)` returns the declared primary or `None`; `types_for(model)` returns the tuple of every registered type in declaration order; `models_with_multiple_types()` iterates models with two or more registered types (used by the finalize-time ambiguity audit).
@@ -899,9 +899,9 @@ Shipped scalar support:
 - boolean fields → `bool`
 - float fields → `float`
 - decimal fields → `decimal.Decimal`
-- date / datetime / time / duration fields → Python-native time types
+- date / datetime / time fields → Python-native time types (note: ``DurationField`` is intentionally absent from the default map because Strawberry has no first-party scalar for ``datetime.timedelta``; register a custom scalar via ``SCALAR_MAP[DurationField] = MyDurationScalar``)
 - UUID fields → `uuid.UUID`
-- binary fields → `bytes`
+- ``BinaryField`` is intentionally absent from the default map (no first-party Strawberry scalar for ``bytes``); the conventional plug is ``SCALAR_MAP[BinaryField] = strawberry.scalars.Base64``
 - file and image fields → string path / URL values
 - `JSONField` → `strawberry.scalars.JSON`
 - PostgreSQL `ArrayField` → typed `list[T]` (recursive through `field.base_field`; soft-registered, only when `django.contrib.postgres.fields` imports successfully; nested `ArrayField` and outer `choices` rejected with [`ConfigurationError`](#configurationerror))

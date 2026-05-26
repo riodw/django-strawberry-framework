@@ -106,6 +106,12 @@ class Settings:
         Missing or ``None`` top-level configuration is treated the same as an
         empty mapping.  Non-mapping values raise ``ConfigurationError`` so
         malformed configuration fails before attribute lookup.
+
+        Not thread-safe; the lazy-load check-and-set and any concurrent
+        ``reload_settings`` signal must not race.  Django's
+        ``setting_changed`` signal is test-only, so this is satisfied by
+        Django's test conventions (single-threaded ``override_settings``
+        and ``pytest-django`` ``settings`` fixture usage).
         """
         if self._user_settings is None:
             self._user_settings = _normalize_user_settings(
@@ -139,6 +145,10 @@ class Settings:
         if name.startswith("__"):
             raise AttributeError(name)
         try:
+            # ``self.user_settings`` is a descriptor (``@property``), not a
+            # ``__getattr__``-driven lookup; keep it a ``@property`` to avoid
+            # recursive lookup on malformed config raising
+            # ``ConfigurationError`` inside this handler.
             return self.user_settings[name]
         except KeyError:
             raise AttributeError(f"Invalid setting: `{name}`") from None

@@ -326,8 +326,11 @@ class TypeRegistry:
 
         ``discard_pending`` may be called between yields by the finalizer;
         callers that materialize the iterator and then trigger discards
-        will observe a stale view.  Typical consumers (the finalizer
-        itself) drain into a list before mutating.
+        will observe a stale view because ``discard_pending`` rebinds
+        ``self._pending`` to a fresh list, leaving any in-flight
+        ``yield from`` iterating the original list object. Typical
+        consumers (the finalizer itself) drain into a list before
+        mutating.
         """
         yield from self._pending
 
@@ -394,7 +397,9 @@ class TypeRegistry:
 
         Test-only — production code should never need to call this.
         Wire into ``pytest`` autouse fixtures so each registry-using test
-        starts with a clean registry.
+        starts with a clean registry. ``_check_mutable`` is intentionally
+        not called so test teardown can reset a finalized registry; this
+        is the only public mutator that bypasses the guard.
         """
         self._types.clear()
         self._primaries.clear()

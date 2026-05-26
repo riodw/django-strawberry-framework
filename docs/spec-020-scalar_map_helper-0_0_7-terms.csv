@@ -3,6 +3,8 @@ BigInt scalar,bigint-scalar,The scalar this card relocates from the `strawberry.
 Specialized scalar conversions,specialized-scalar-conversions,Pins `BigIntegerField`/`PositiveBigIntegerField` → `BigInt`; the converter table that this card preserves verbatim.
 Scalar field conversion,scalar-field-conversion,Broader scalar-mapping contract; framing only.
 Upload scalar,upload-scalar,Next package-defined scalar (planned for `0.0.11`); reuses this card's helper unchanged.
+DjangoFileType,djangofiletype,Sibling type that will ship alongside `Upload` in `TODO-ALPHA-028-0.0.11`; cited in Non-goals as a future consumer of this card's helper.
+DjangoImageType,djangoimagetype,Sibling type that will ship alongside `Upload` in `TODO-ALPHA-028-0.0.11`; cited in Non-goals as a future consumer of this card's helper.
 DjangoType,djangotype,Framing only; consumer-facing types that exercise `BigInt` through the converter table.
 DjangoOptimizerExtension,djangooptimizerextension,Framing only; cited because the consumer migration pattern (`config=strawberry_config()` and `extensions=[DjangoOptimizerExtension()]`) covers the relationship between schema-level config and schema-level extensions.
 ConfigurationError,configurationerror,Not raised by this card. The conflict-resolution policy uses `ValueError` (helper-call-time consumer-input mistake) rather than `ConfigurationError` (`DjangoType`-creation / finalization-time configuration).

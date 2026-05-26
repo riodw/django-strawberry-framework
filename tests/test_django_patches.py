@@ -125,6 +125,27 @@ def test_patch_is_inherited_by_test_case():
     assert TestCase._remove_databases_failures.__func__ is _django_patches._patched_remove_databases_failures
 
 
+def test_patch_is_installed_returns_false_when_attribute_absent_from_class_dict():
+    """Pin the ``installed is None`` branch of ``_patch_is_installed()``.
+
+    Defensive contract: if a future Django release moves
+    ``_remove_databases_failures`` off ``SimpleTestCase`` (e.g., onto a
+    parent class, or removes it entirely),
+    ``SimpleTestCase.__dict__.get(...)`` returns ``None`` rather than a
+    classmethod descriptor. ``_patch_is_installed()`` must return
+    ``False`` in that case so the next ``apply()`` call falls through
+    to the install path rather than mis-reporting that the patch is
+    already in place.
+    """
+    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
+    try:
+        del SimpleTestCase._remove_databases_failures
+        assert "_remove_databases_failures" not in SimpleTestCase.__dict__
+        assert _django_patches._patch_is_installed() is False
+    finally:
+        SimpleTestCase._remove_databases_failures = saved
+
+
 def test_patched_remove_databases_failures_unwraps_a_real_wrapper():
     """Happy path: when ``connection.<method>`` is a genuine
     ``_DatabaseFailure`` instance, the patched method unwraps it

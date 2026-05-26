@@ -54,7 +54,7 @@ Order: folder-by-folder, one file at a time. After all in-scope files in a folde
 
 ## Required plan structure
 
-Plan header includes release version, source root, date created, the one-file-at-a-time rule, the DRY-first rule, and a full artifact list. Each checklist item names its exact `rev-*.md` artifact.
+Plan header includes release version, source root, the one-file-at-a-time rule, the DRY-first rule, and a full artifact list. Each checklist item names its exact `rev-*.md` artifact.
 
 ```text
 # Package review plan: 0.0.6
@@ -221,40 +221,42 @@ If a severity has no issues, keep the heading and write `None.` Do not include s
 
 ## Artifact `Status:` legend
 
-Ownership:
+| Status | Set by | Next dispatch |
+|---|---|---|
+| `under-review` | Worker 1 | Worker 2 logic pass |
+| `fix-implemented (awaiting comment pass)` | Worker 2 after logic | Worker 3 logic-verify |
+| `logic-accepted` | Worker 3 after accepting logic | Worker 2 comment pass |
+| `fix-implemented (awaiting changelog disposition)` | Worker 2 after comment | Worker 3 comment-verify |
+| `comments-accepted` | Worker 3 after accepting comments | Worker 2 changelog pass |
+| `fix-implemented` (bare) | Worker 2 after changelog, OR consolidated single-spawn, OR shape #5 via Worker 1 | Worker 3 terminal-verify |
+| `revision-needed` | Worker 3 | Worker 2 (or Worker 1 for shape #5) |
+| `verified` | Worker 3 (Worker 1 for `rev-final.md`) | Cycle done — advance |
 
-- `under-review` — Worker 1 sets when creating the artifact. Never starts empty.
-- `fix-implemented` — **Worker 2** sets at the end of every pass (logic, comment, changelog, no-op).
-- `revision-needed` — Worker 3 sets on rejection (or Worker 1 in the cycle-closing re-check).
-- `verified` — Worker 3 sets terminally; Worker 3 marks the checkbox. Exception: `rev-final.md` is set by Worker 1 and the checkbox is marked by Worker 0.
+Worker 0 dispatches on the bare Status (everything before `(`). The parenthetical is a Worker 3 template-selection hint, never a dispatch signal. Worker 3 clears the parenthetical when flipping to any non-`fix-implemented` value.
 
-Worker 0 never writes `Status:`; it reads to drive dispatch.
+Worker 0 never writes `Status:`.
 
 ## Subagent dispatch
 
-Workers 1, 2, and 3 each run as a fresh subagent invocation per cycle item. Worker 0 stays in the main thread as orchestrator. The split is non-waivable — combining Workers 2 and 3 would let the agent that wrote the fix approve it.
+Workers 1, 2, 3 each run as fresh subagents per cycle item. Worker 0 orchestrates. The Worker 2 / Worker 3 split is non-waivable — combining them would let the fix-writer approve their own work.
 
-For each unchecked checklist item, Worker 0 reads `Status:` and dispatches:
+Worker 0 dispatches per the Status legend table above. Each spawn gets the docs marked `yes` for its column in the Required-reading matrix; prompts forbid reading other workers' memory files. The artifact and the diff are the only inter-worker contract.
 
-- no artifact → spawn **Worker 1** → produces artifact with `under-review`
-- `under-review` → spawn **Worker 2** → implements; sets `fix-implemented`
-- `fix-implemented` → spawn **Worker 3** → verifies; sets `verified` / `revision-needed` / interim `awaiting X`
-- `revision-needed` → re-spawn Worker 2
-- interim `awaiting comment pass` / `awaiting changelog disposition` → spawn Worker 2 for the next sub-pass
+**Per-cycle baseline.** Autonomous mode accumulates diffs across cycles, so Worker 0 captures `CYCLE_BASELINE=$(git stash create)` at each cycle start (empty if working tree clean) and passes the SHA to every subagent. Cycle diffs scope to `git diff "$CYCLE_BASELINE" -- …` instead of HEAD. Empty SHA or maintainer-pause mode → use HEAD. Full mechanics in `worker-0.md`.
 
-Each subagent gets the docs marked `yes` for its column in the matrix above. Subagent prompts must forbid reading other workers' memory files. The artifact and the diff are the only inter-worker contract; subagents do not message each other directly.
+**Default mode is autonomous.** Worker 0 continues cycle-to-cycle and notifies the maintainer only at run boundaries (start, end, fatal blockers, or a `revision-needed` loop that fails to converge after two Worker 2 re-passes). The maintainer commits in batches.
 
-After a cycle item reaches `verified`:
+**Maintainer-pause mode (opt-in):** if the dispatch says "review one at a time" / "pause after each cycle" / names a single item, Worker 0 pauses after each `verified` and reports the closure summary.
 
-1. Maintainer is notified.
-2. **Worker 1 re-check** on the diff (skip when the cycle produced no source/test diff; confirm via `git diff --stat -- django_strawberry_framework/ tests/ CHANGELOG.md`).
-3. If clean, maintainer commits source + artifact + checklist update.
+**Cycle-closing re-check** (diffs always scope via `$CYCLE_BASELINE`):
 
-Autonomous-mode override: when the maintainer explicitly authorizes Worker 0 to run multiple cycles without per-cycle pauses, Worker 0 still runs the Worker 1 re-check for source-bearing cycles and appends a one-line note to `worker-memory/worker-0.md` per closure; the maintainer is notified at autonomous-mode boundaries only.
+- Skip when the cycle diff is empty (shape #5, recording-only forwards, all-Lows-forward-looking with no edit).
+- Worker 0 inline re-check when diff is comments/docstrings only (no source-logic lines, `tests/` untouched).
+- Full Worker 1 re-check spawn for logic edits, test changes, or cross-file refactors. No judgment-skipping when those apply.
 
 ## Worker memory
 
-Private scratch under `docs/review/worker-memory/worker-N.md` (gitignored). Persists across cycles within a release. A worker reads only its own file; Worker 0 reads all four once at closeout for the retrospective. Append-only; consolidate when **approaches ~45 lines**. Worker 0 deletes at closeout.
+Private scratch under `docs/review/worker-memory/worker-N.md` (gitignored). Persists across cycles within a release. A worker reads only its own file; Worker 0 reads all four once at closeout. Append-only; consolidate when approaching ~75 lines. Worker 0 deletes at closeout.
 
 ## Severity definitions
 
@@ -374,14 +376,15 @@ After all folder passes, the project pass produces `rev-django_strawberry_framew
 
 ## No-op / skip / consolidated single-spawn cycles
 
-Four shapes collapse to a single Worker 2 spawn + single Worker 3 verification:
+Shapes that collapse the standard three-spawn cycle. Shapes 1-4 collapse to a single Worker 2 spawn + single Worker 3 verification; shape 5 additionally skips Worker 2 entirely.
 
 1. **No-findings file** — all severities `None.`; Worker 2 records a no-op `Fix report` plus the two ruff runs.
-2. **Skip artifact** — pure-class-definition module; `What looks solid` explains the skip.
+2. **Skip artifact** — module contains only (a) class definitions, (b) docstrings, (c) `__all__`, and (d) imports of standard-library or `typing` symbols. No executable code outside class bodies, no first-party imports, no module-level functions. Confirm via the shadow overview's "Symbols" + "Imports" sections. `What looks solid` explains the skip in one sentence.
 3. **No-findings folder/project pass** — same shape as #1.
 4. **All-Lows-forward-looking or DRY-equivalent** — every Low is explicitly forward-looking, OR every edit is a DRY delegation against a canonical helper (semantics preserved). Worker 2 records `Fix report`, `Comment/docstring pass`, AND `Changelog disposition` together; Worker 3 verifies once and writes `cycle accepted; verified`.
+5. **No-source-edit cycle (skip Worker 2)** — qualifies under shapes 1-4 AND produces zero edits to any tracked file (source, tests, `docs/GLOSSARY.md`, `CHANGELOG.md`, anything). Worker 1 fills the Worker 2 sections inline (each section's first line: "Filled by Worker 1 per no-source-edit cycle pattern."), runs both ruff commands, sets bare `Status: fix-implemented`. Worker 0 dispatches Worker 3 directly. Rejection re-spawns Worker 1. **GLOSSARY-only fixes do NOT qualify** — they need a real edit and route through shape #4.
 
-Do NOT collapse when any High or substantive Medium requires real behavior change, or when two dispositions interact. Full detail: `worker-2.md` "Consolidated single-spawn pass".
+Do NOT collapse when any High or substantive Medium requires real behavior change, or when two dispositions interact. Full detail: `worker-2.md` "Consolidated single-spawn pass" and `worker-1.md` "No-source-edit cycle".
 
 ## Temp tests
 

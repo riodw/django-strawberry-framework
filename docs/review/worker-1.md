@@ -19,21 +19,11 @@ If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` 
 Worker 1 may create or replace:
 
 - `docs/review/rev-<folder__file_name>.md` — the current planned review artifact
-- `docs/review/rev-final.md` — the final test-run gate artifact (Worker 1 owns this end-to-end; Worker 3 has no role)
-- `docs/review/worker-memory/worker-1.md` — append-only updates to its own memory file
+- `docs/review/rev-final.md` — final test-run gate (Worker 1 owns end-to-end; Worker 3 has no role)
+- `docs/review/worker-memory/worker-1.md` — append-only
+- the artifact's Worker 2 sections **only in no-source-edit cycles** (see below); Worker 2 is skipped
 
-Worker 1 must not:
-
-- modify source code
-- modify tests
-- update comments or docstrings in source files
-- update `CHANGELOG.md`
-- mark checkboxes complete
-- review more than one checklist item
-- produce a separate narrative response after the artifact is created
-- read or edit `docs/review/worker-memory/worker-2.md` or `worker-3.md`
-- truncate or rewrite history in `worker-memory/worker-1.md` — append only (consolidate via merge when the file **approaches ~45 lines**)
-- commit. Only the maintainer commits; Worker 1 never commits, even if asked
+Worker 1 must not: modify source/tests, update comments/docstrings in source, update `CHANGELOG.md`, mark checkboxes, review more than one item, read other workers' memory, mention Worker 0's task list, or commit. Memory file is append-only; consolidate when approaching ~75 lines.
 
 ## Job
 
@@ -95,17 +85,37 @@ Rules:
 Append a brief block per cycle. Example:
 
 ```
-## 2026-05-06 — types/base.py
+## types/base.py
 - Reviewed `__init_subclass__` pipeline; flagged `optimizer_hints` validation gap.
 - Calibration: when a guard exists for "real Django field" but not "selected field", that's Medium not Low — silent dead code is the bug.
 - Carry forward: check converter/registry layers for the same "validates A but not the intersection of A and B" pattern.
 ```
 
-Keep entries terse. If the file **approaches ~45 lines**, merge similar entries into a single pattern observation before adding more (the earlier threshold keeps each consolidation a real merge instead of a frantic compaction at the limit).
+Keep entries terse. Consolidate when approaching ~75 lines.
 
 ## Review order
 
 Logic first, then comments/docstrings. Full focus checklists live in `REVIEW.md` "Review focus". Do not recommend comment polish before logic is correct.
+
+## GLOSSARY drift quick-check
+
+Before finalising, grep `docs/GLOSSARY.md` for backticked symbols from your target file. Stale prose on a documented public-contract symbol → Medium; non-contract symbol → Low. Preserve the verbatim replacement text in the artifact — Worker 2 lifts it directly.
+
+## No-source-edit cycle (shape #5)
+
+Qualifies when the cycle produces **zero edits to any tracked file** (source, tests, GLOSSARY, CHANGELOG, any path) AND no High / no behaviour-changing Medium AND every Low is forward-looking or forwarded.
+
+**GLOSSARY-only fixes do NOT qualify** — they need a real edit; route through shape #4 (Worker 2 makes the edit).
+
+When qualifying, Worker 1 fills the Worker 2 sections inline and sets bare `Status: fix-implemented`:
+
+- Each of `## Fix report (Worker 2)`, `## Comment/docstring pass`, `## Changelog disposition` starts with: `Filled by Worker 1 per no-source-edit cycle pattern.`
+- `### Files touched` and `### Tests added or updated`: `None — no-source-edit cycle.`
+- `### Validation run`: both ruff command outcomes (run them).
+- `### Notes for Worker 3`: per-Low dispositions; explicit "No GLOSSARY-only fix in scope."
+- `## Changelog disposition`: `Not warranted` with both citations (AGENTS.md + active plan silence).
+
+Rejection re-spawns Worker 1 (Worker 2 was never invoked). When in doubt, use the standard three-spawn shape.
 
 ## Static helper use
 
@@ -113,10 +123,11 @@ The static helper `scripts/review_inspect.py` is **mandatory** for several file 
 
 Quick rules:
 
-- **Run the helper before reviewing** any `.py` file ≥150 lines, any file under `optimizer/` or `types/`, or any file whose folder pass is next on the checklist (folder passes need an overview for every sibling, including the folder's `__init__.py`).
-- **Skip the helper** for pure-class-definition modules like `exceptions.py`. State the skip and the reason in the artifact's `What looks solid` section. (Non-`.py` files and standalone `__init__.py` reviews are out of scope entirely — see `REVIEW.md` "Review scope".)
-- **Use the overview as a checklist.** The Django/ORM markers section enumerates executable-code marker lines and is the audit list for ORM-heavy files; the control-flow hotspots section flags branchy functions for Medium-tier complexity attention; the calls-of-interest section surfaces reflective-access sites; the repeated-literals section drives the folder-pass DRY check.
-- **Cite original source-file line numbers** in the artifact, never shadow-file line numbers — comments and docstring statements are removed from the shadow file, other string literals are replaced, and the line numbers will not match.
+- **Trust the plan-time `--all` sweep.** Overviews already exist under `docs/shadow/`. Re-run only when the source timestamp is newer than the overview, or when Worker 2 regenerated it and named the new path.
+- **Required for** `.py` files ≥150 lines, any file under `optimizer/` or `types/`, or every sibling in a folder pass.
+- **Skip** for pure-class-definition modules (state the reason in `What looks solid`).
+- **Use as a checklist.** Django/ORM markers = audit list; control-flow hotspots = Medium-tier attention; calls-of-interest = reflective-access audit; repeated literals = folder DRY signal.
+- **Cite original source line numbers**, never shadow-file line numbers.
 
 Example:
 

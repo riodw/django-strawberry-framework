@@ -37,25 +37,35 @@ Worker 3 may edit:
 - temp test files under `docs/review/temp-tests/<scope>/` (gitignored; never permanent)
 - `docs/review/worker-memory/worker-3.md` — append-only updates to its own memory file
 
-Worker 3 must not:
+Worker 3 must not: implement source changes, approve unrelated cleanup, mark the checkbox before all sub-passes are accepted, run pytest preemptively (only when a test was introduced or focused confirmation is required), mention Worker 0's task list, read other workers' memory, or commit. Memory is append-only; consolidate when approaching ~75 lines.
 
-- implement Worker 2's source changes
-- approve unrelated cleanup
-- mark the checkbox complete before logic, comments, validation, and changelog handling are complete
-- read or edit `docs/review/worker-memory/worker-0.md`, `worker-1.md`, or `worker-2.md`
-- truncate or rewrite history in `worker-memory/worker-3.md` — append only (consolidate via merge when the file **approaches ~45 lines**)
-- commit. Only the maintainer commits; Worker 3 never commits, even if asked
+## Artifact `Status:` (Worker 3 view)
 
-## Artifact `Status:` legend
+Worker 3 owns interim `logic-accepted` / `comments-accepted` and terminal `verified` / `revision-needed`. Full state machine in `REVIEW.md`.
 
-Every `rev-*.md` artifact carries a `Status:` line. Worker 3 owns the terminal values **`verified`** and **`revision-needed`**.
+### Per-sub-pass dispatch
 
-- `under-review` — Worker 1 set this when creating the artifact. Worker 3 should not see this on a dispatch; if you do, something is wrong.
-- `fix-implemented` — Worker 2 set this at the end of its last pass. This is the value Worker 3 sees on dispatch.
-- `revision-needed` — Worker 3 sets this on rejection of any pass. Worker 2 will be re-spawned.
-- `verified` — Worker 3 sets this only on **terminal acceptance**: logic + comments + validation + changelog disposition all accepted.
+| Incoming | Template | Accept → Status | Reject |
+|---|---|---|---|
+| `fix-implemented (awaiting comment pass)` | logic-verify | `logic-accepted` | `revision-needed` |
+| `fix-implemented (awaiting changelog disposition)` | comment-verify | `comments-accepted` | `revision-needed` |
+| `fix-implemented` (bare) | terminal-verify; mark checkbox | `verified` | `revision-needed` |
 
-Interim sub-pass acceptances (`logic accepted; awaiting comment pass`; `comments accepted; awaiting changelog disposition`) are recorded as prose inside `## Verification (Worker 3)` and do NOT change the top-level `Status:` line. Worker 2 keeps writing `fix-implemented` after each of its passes; only the terminal Worker 3 verification flips `Status:` to `verified`.
+Record acceptances as prose inside `## Verification (Worker 3)` AND flip the top-level Status. Leaving Status at `fix-implemented` after interim acceptance loops Worker 3 on the next dispatch.
+
+Missing parenthetical on a non-bare `fix-implemented` is a Worker 2 protocol error — flag it and proceed with the template implied by the artifact's content.
+
+### Shape #5 (no-source-edit) verification
+
+Terminal-verify with these additional checks (baseline SHA in dispatch prompt):
+
+1. `git diff --stat "$CYCLE_BASELINE" -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` is empty.
+2. Each Worker 2 section starts with `Filled by Worker 1 per no-source-edit cycle pattern.`
+3. Every Low has verbatim trigger phrasing OR is forwarded. GLOSSARY-only fixes are disqualifying — reject if present.
+4. Changelog `Not warranted` with both citations.
+5. Ruff format-check + check pass.
+
+Rejection re-spawns Worker 1.
 
 ## Artifact template — Worker 3 sections
 
@@ -77,13 +87,13 @@ How the DRY analysis items were resolved or carried forward.
 - Disposition: promoted to permanent, deleted, or noted as Medium finding for promotion.
 
 ### Verification outcome
-One of:
-- `logic accepted; awaiting comment pass`
-- `comments accepted; awaiting changelog disposition`
+One of (each line records both the prose and the Status flip):
+- `logic accepted; awaiting comment pass` — sets top-level `Status: logic-accepted`
+- `comments accepted; awaiting changelog disposition` — sets top-level `Status: comments-accepted`
 - `cycle accepted; verified` — sets top-level `Status: verified` AND marks the checklist box
 - `revision-needed` — sets top-level `Status: revision-needed`
 
-Interim sub-pass acceptances are recorded here as prose and do NOT change the top-level `Status:` line.
+The Status flip is mandatory — leaving Status at `fix-implemented` after interim acceptance creates an ambiguity Worker 0 cannot resolve (Worker 0 would dispatch Worker 3 again and loop).
 
 ---
 
@@ -201,13 +211,13 @@ If feedback is needed, record it in the current `docs/review/rev-<folder__file_n
 Append a brief block per accepted cycle item. Example:
 
 ```
-## 2026-05-06 — types/base.py
+## types/base.py
 - Accepted: new `_validate_optimizer_hints_against_selected_fields` helper + test pinning excluded-field rejection.
 - Almost rejected: error message initially listed only the unknown keys; required model name be cited too.
 - Carry forward: when a Medium fix adds a validator, check that error messages name the model — consumers grep stack traces for model names.
 ```
 
-Keep entries terse. If the file **approaches ~45 lines**, merge similar entries into a single pattern observation before adding more — never delete without consolidating first.
+Keep entries terse. Consolidate when approaching ~75 lines; never delete without consolidating first.
 
 ## Stop conditions
 

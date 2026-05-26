@@ -6,6 +6,15 @@ Worker 2 runs as a **fresh subagent invocation per cycle item**, dispatched by W
 
 `worker-2.md` is the **self-contained reference** for the fix implementer. Worker 2 does not read `REVIEW.md` at dispatch time — every rule, template, and lifecycle shape Worker 2 needs is inlined below. `REVIEW.md` remains the canonical workflow spec; this file is kept in sync with it manually.
 
+## Hard rules
+
+- **Never run pytest.** Read the test file and confirm the assertion would pass; don't execute.
+- **Run ruff after every edit pass.** `uv run ruff format .` and `uv run ruff check --fix .`. Record both outcomes.
+- **`uv.lock` discipline.** Any `uv run ...` can refresh a stale lockfile. If `git status` shows `uv.lock` modified and no dependency change is in scope, restore it (`git restore uv.lock`) and note the touch in Notes for Worker 3.
+- **Task list management is Worker 0's domain.** Don't mention or update it.
+- **Cycle scope is fixed.** No unrelated cleanup, no preemptive next-cycle work.
+- **Shape #5 skips you.** If dispatched onto a shape-#5 artifact already at `fix-implemented` with Worker-1-attributed Fix report, return immediately noting the dispatch error.
+
 ## Required reading
 
 Worker 2 must read, in order:
@@ -38,26 +47,20 @@ Worker 2 may edit:
 - the current `docs/review/rev-*.md` artifact: append-only build/fix-report sections, the comment-pass section, the changelog-disposition section, and the `Status:` line (Worker 2 is the sole owner of `fix-implemented`)
 - `docs/review/worker-memory/worker-2.md` — append-only updates to its own memory file (write at the end of the final pass for the cycle item)
 
-Worker 2 must not:
+Worker 2 must not: make unrelated cleanup, expand beyond artifact scope, mark checklist items, create the review artifact, run pytest, mention Worker 0's task list, read other workers' memory, or commit. Memory is append-only; consolidate when approaching ~75 lines.
 
-- make unrelated cleanup
-- expand beyond the artifact scope unless the artifact explicitly requires a cross-file change
-- mark checklist items complete
-- create the original review artifact for Worker 1
-- read or edit `docs/review/worker-memory/worker-1.md` or `worker-3.md`
-- truncate or rewrite history in `worker-memory/worker-2.md` — append only (consolidate via merge when the file **approaches ~45 lines**)
-- commit. Only the maintainer commits; Worker 2 never commits, even if asked
+## Artifact `Status:` (Worker 2 view)
 
-## Artifact `Status:` legend
+Worker 2 owns `fix-implemented`. Full state machine in `REVIEW.md`. Set Status per the end of pass:
 
-Every `rev-*.md` artifact carries a `Status:` line. Worker 2 is the **sole owner of `fix-implemented`** — set this value at the end of every Worker 2 pass (logic, comment, changelog, post-rejection re-pass, no-op, consolidated single spawn), including no-op passes for files with no findings.
+| End of pass | Status |
+|---|---|
+| Logic (standard cycle) | `fix-implemented (awaiting comment pass)` |
+| Comment | `fix-implemented (awaiting changelog disposition)` |
+| Changelog | `fix-implemented` (bare) |
+| Consolidated single-spawn / re-pass | `fix-implemented` matching the sub-pass you just did |
 
-- `under-review` — Worker 1 set this when creating the artifact. Worker 2 sees this on the first dispatch.
-- `fix-implemented` — Worker 2 sets this at the end of every pass to signal Worker 0 to spawn Worker 3 next.
-- `revision-needed` — Worker 3 sets this on rejection. Worker 2 will be re-spawned to address the rejection.
-- `verified` — Worker 3 sets this terminally. Worker 2 should not see this on a dispatch; if you do, something is wrong.
-
-Worker 2 never writes `verified` or `revision-needed`.
+The parenthetical hints which verification template Worker 3 applies; Worker 0 dispatches on the bare Status. Worker 2 never writes `verified` / `revision-needed` / `logic-accepted` / `comments-accepted`.
 
 ## Artifact template — Worker 2 sections
 
@@ -151,9 +154,9 @@ If the static helper produced a `docs/shadow/<stem>.stripped.py` (and optionally
 5. Add or update tests needed to prove the logic changes.
 6. Run focused validation appropriate to the change.
 7. The diff and validation results are visible to Worker 3 through the working tree and the artifact. Do not message Worker 3 directly.
-8. After Worker 3 records `logic accepted; awaiting comment pass`, update comments and docstrings for the reviewed scope.
-9. After Worker 3 records `comments accepted; awaiting changelog disposition`, record the changelog disposition per the three-state guidance below.
-10. After each pass (logic, comment, changelog), set the artifact `Status:` line to `fix-implemented`.
+8. When Worker 0 re-dispatches you with `Status: logic-accepted` (Worker 3 accepted your logic pass), update comments and docstrings for the reviewed scope.
+9. When Worker 0 re-dispatches you with `Status: comments-accepted` (Worker 3 accepted your comment pass), record the changelog disposition per the three-state guidance below.
+10. Set `Status:` per the table in "Per-sub-pass Status target" above. Briefly: `fix-implemented (awaiting comment pass)` after logic, `fix-implemented (awaiting changelog disposition)` after comment, bare `fix-implemented` after changelog (or after a consolidated single-spawn).
 11. On the final pass for this cycle item, append a short entry (3-5 lines) to `docs/review/worker-memory/worker-2.md`.
 
 ### Consolidated single-spawn pass (alternative to three-pass cycle)
@@ -279,20 +282,20 @@ Every source-changing Worker 2 pass records in `## Fix report (Worker 2)`:
 
 No-op passes (no-findings cycles, skip artifacts, all-Lows-forward-looking) still run and record the two ruff commands; both should be pass/no-changes.
 
-Per `START.md` the standing rule is formatting only — do not run `pytest` unless the cycle introduces a test or the fix requires focused-test confirmation. When you do run pytest, scope it to the touched test files.
+Never run pytest. `uv.lock` discipline per "Hard rules" at the top.
 
 ## Memory entry shape
 
 Append a brief block per cycle item. Example:
 
 ```
-## 2026-05-06 — types/base.py
+## types/base.py
 - Added `_validate_optimizer_hints_against_selected_fields` after `_select_fields` in `__init_subclass__`; new test pinning excluded-field rejection.
 - Pattern that worked: split validation into a helper that takes `(meta, fields)` rather than threading both through one larger validator.
 - Worker 3 pushback: required that I cite the model name in the error message, not just the field list.
 ```
 
-Keep entries terse. If the file **approaches ~45 lines**, merge similar entries into a single pattern observation before adding more — never delete without consolidating first.
+Keep entries terse. Consolidate when approaching ~75 lines; never delete without consolidating first.
 
 ## Stop conditions
 

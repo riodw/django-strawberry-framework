@@ -79,19 +79,33 @@ Worker 0 never writes to `Status:`. Worker 0 only reads it to drive dispatch. If
 
 ## Per-cycle dispatch
 
-Worker 0 orchestrates each cycle by spawning the three worker subagents in order. The split exists so the worker that verifies a fix has no in-context memory of the worker that wrote it.
+Default mode is **autonomous** — Worker 0 continues cycle-to-cycle, notifying the maintainer only at run boundaries (start, end, fatal blockers, two consecutive `revision-needed` outcomes). Maintainer-pause mode is opt-in via "review one at a time" / "pause after each cycle" / a single named item in the dispatch prompt.
 
-For each unchecked item in the plan, drive the loop by reading the artifact `Status:` field and dispatching the matching worker. The standing-docs set differs per role (see the Required reading matrix in `REVIEW.md`):
+Read the bare `Status:` (everything before any `(`) and dispatch per the Status legend table in `REVIEW.md`. Standing-docs sets per spawn:
 
-1. Item has no artifact yet → **Spawn Worker 1 subagent.** Pass: `AGENTS.md`, `START.md`, `REVIEW.md`, `worker-1.md`, the active plan, the cycle's source target, and the contents of `docs/review/worker-memory/worker-1.md`. Forbid reading any other worker's memory file. Worker 1 produces the artifact with `Status: under-review`, appends to its memory file, and returns.
-2. `under-review` → **Spawn Worker 2 subagent.** Pass: `AGENTS.md`, `START.md`, `worker-2.md`, the artifact, the source file(s) and relevant tests, and the contents of `docs/review/worker-memory/worker-2.md`. Do NOT pass `REVIEW.md` (Worker 2 is self-contained via `worker-2.md`), the active plan (unless cycle-item ambiguity requires it), or `CHANGELOG.md` (unless the plan or maintainer authorised a changelog edit this cycle). Forbid reading any other worker's memory file. Worker 2 implements fixes; on return the artifact status should be `fix-implemented`.
-3. `fix-implemented` → **Spawn Worker 3 subagent.** Pass: `AGENTS.md`, `worker-3.md`, the artifact, Worker 2's diff (via `git diff` in the working tree), source/tests for spot-checks, and the contents of `docs/review/worker-memory/worker-3.md`. Do NOT pass `START.md`, `REVIEW.md`, or `CHANGELOG.md` content — Worker 3 verifies the changelog disposition via `git diff -- CHANGELOG.md` directly. Forbid reading any other worker's memory file. Worker 3 verifies; on return the artifact status should be `verified` or `revision-needed`.
-4. `revision-needed` → re-spawn Worker 2 with the updated artifact. On return status should be `fix-implemented` again.
-5. `verified` → Worker 3 has already marked the checklist box; append a short progress note to `docs/review/worker-memory/worker-0.md` and advance to the next item.
+| Spawn | Pass | Do NOT pass |
+|---|---|---|
+| Worker 1 | AGENTS.md, START.md, REVIEW.md, worker-1.md, active plan, source target, worker-memory/worker-1.md, `$CYCLE_BASELINE` | other workers' memory |
+| Worker 2 | AGENTS.md, START.md, worker-2.md, artifact, source/tests, worker-memory/worker-2.md, `$CYCLE_BASELINE` | REVIEW.md, active plan (unless ambiguous), CHANGELOG.md (unless authorised), other workers' memory |
+| Worker 3 | AGENTS.md, worker-3.md, artifact, source/tests, worker-memory/worker-3.md, `$CYCLE_BASELINE` | START.md, REVIEW.md, CHANGELOG.md, other workers' memory |
 
-Worker 0 does not act as a courier between subagents beyond passing the artifact and diff. All inter-worker information flows through the tracked artifact, never through prose in the spawn prompt.
+Worker 0 is not a courier — all inter-worker information flows through the tracked artifact, the diff, and `$CYCLE_BASELINE`. At cycle close: run the re-check, append a closure note, discard the baseline, advance.
 
-**Empty-diff Worker 1 re-check.** Per `REVIEW.md` "Maintainer checkpoint", the cycle-closing Worker 1 re-check is **skippable when the cycle item produced no source/test diff** (skip artifact, all-Lows-forward-looking, recording-only project-pass forwards). Confirm via `git diff --stat -- django_strawberry_framework/ tests/ CHANGELOG.md` showing no new changes against the prior cycle's accepted state; record the skip in `worker-memory/worker-0.md`. For any cycle that produced source or test edits, the re-check is required — do not skip on judgment alone.
+### Per-cycle baseline
+
+```shell
+CYCLE_BASELINE=$(git stash create)  # at cycle start; empty SHA if working tree clean
+```
+
+Pass the SHA to every dispatch this cycle. Cycle diffs use `git diff "$CYCLE_BASELINE" -- …`. Empty SHA → use HEAD. Stash-create commits don't appear on the stash stack; Git reflog-GCs them.
+
+### Cycle-closing re-check
+
+Diffs always scope via `$CYCLE_BASELINE`. Tiered:
+
+- **Skip** when the cycle diff is empty (shape #5, recording-only forwards, all-Lows-forward-looking).
+- **Worker 0 inline** when diff is comments/docstrings only — every hunk inside a docstring/comment, no source-logic lines, `tests/` untouched.
+- **Worker 1 spawn** for logic edits, test changes, or cross-file refactors. No judgment-skipping when those apply.
 
 Plan header + checklist follow the template in `REVIEW.md` "Required plan structure". Per-cycle build rules:
 
@@ -130,12 +144,12 @@ The maintainer then commits the updated workflow docs along with the now-complet
 Worker 0 appends a brief block to `docs/review/worker-memory/worker-0.md` after closing each cycle item. Example:
 
 ```
-## 2026-05-13 — rev-types__base.md
+## rev-types__base.md
 - Closed after one Worker 2 logic pass + one Worker 3 verify pass; no re-spawn.
 - Carry forward: items touching `types/base.py` __init_subclass__ tend to ship comment-pass changes; budget extra dispatch time.
 ```
 
-Entries are append-only. If the file **approaches ~45 lines**, consolidate similar entries into one pattern observation before adding more (the earlier threshold keeps the file readable at every append rather than catching it at the limit).
+Entries are append-only. Consolidate similar entries when approaching ~75 lines.
 
 ## Stop conditions
 

@@ -58,7 +58,8 @@ from django_strawberry_framework import DjangoOptimizerExtension  # noqa: E402
 from django_strawberry_framework.registry import registry  # noqa: E402
 
 # ---------------------------------------------------------------------------
-# Autouse reload fixture (copied verbatim from test_library_api.py:17-43)
+# Autouse reload fixture (copied verbatim from
+# ``examples/fakeshop/test_query/test_library_api.py::_reload_project_schema_for_acceptance_tests``)
 # ---------------------------------------------------------------------------
 
 
@@ -124,7 +125,8 @@ def _build_test_schema(_reload_project_schema_for_acceptance_tests):
     # IMPORTANT: import ``BookType`` HERE (inside the fixture body), not at
     # module top — module-level imports of ``apps.library.schema.BookType``
     # would hold stale class objects after each autouse reload cycle
-    # (per the test_library_api.py:24-26 invariant). The fixture's
+    # (per the ``examples/fakeshop/test_query/test_library_api.py::_reload_project_schema_for_acceptance_tests #"tests must not module-level import classes"``
+    # invariant). The fixture's
     # dependency on _reload_project_schema_for_acceptance_tests ensures
     # the import runs AFTER reload.
     from apps.library.schema import BookType  # freshly-reloaded class
@@ -153,7 +155,7 @@ def _build_test_schema(_reload_project_schema_for_acceptance_tests):
 def _seed_book_chain(alias: str, *, title: str) -> "models.Book":
     """Seed a full ``Branch → Shelf → Book`` chain on ``alias``.
 
-    ``Branch.name`` is ``unique=True`` (apps/library/models.py:35), so the
+    ``Branch.name`` is ``unique=True`` (``examples/fakeshop/apps/library/models.py::Branch #"name = models.TextField(unique=True)"``), so the
     branch / shelf field values are varied by ``title`` to keep two calls on
     the same alias from colliding when a test seeds multiple chains.
     """

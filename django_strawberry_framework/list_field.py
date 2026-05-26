@@ -103,8 +103,8 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
             f"DjangoListField requires a DjangoType subclass; got {target_type.__name__}.",
         )
     # Own-class registration check: ``__django_strawberry_definition__`` is
-    # assigned by ``DjangoType.__init_subclass__`` (``types/base.py:251``) only
-    # for concrete subclasses carrying their own ``Meta`` with a ``model``. The
+    # assigned by ``DjangoType.__init_subclass__`` (``types/base.py::DjangoType.__init_subclass__``)
+    # only for concrete subclasses carrying their own ``Meta`` with a ``model``. The
     # attribute is inherited via MRO, so ``hasattr`` would accept a subclass
     # that omits its own ``Meta`` — binding the field to a target whose
     # definition, ``Meta.primary`` state, and model belong to the parent.

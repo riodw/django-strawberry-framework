@@ -10,12 +10,13 @@ from apps.library import models
 from django_strawberry_framework import DjangoListField, DjangoType, OptimizerHint
 
 # Consumer ``resolver=`` helper exercising the ``_post_process_consumer_sync``
-# ``Manager`` coercion line at ``django_strawberry_framework/list_field.py:33``.
-# The README rule at ``examples/fakeshop/test_query/README.md:7`` requires
+# ``Manager`` coercion line at
+# ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"result = result.all()"``.
+# The README rule at ``examples/fakeshop/test_query/README.md #"Coverage rule"`` requires
 # coverage lines reachable from a live ``/graphql/`` query to land here. Returns
 # ``models.Branch.objects`` (a ``Manager``) — NOT ``.all()`` — so the field-
 # wrapper's coercion fires per rev4 M1. The async equivalent
-# (``list_field.py:41``) is genuinely unreachable from the sync ``GraphQLView``
+# (``django_strawberry_framework/list_field.py::_post_process_consumer_async #"result = result.all()"``) is genuinely unreachable from the sync ``GraphQLView``
 # mounted at ``/graphql/`` (Strawberry's sync execution rejects async resolvers
 # with ``RuntimeError: GraphQL execution failed to complete synchronously``),
 # so the async ``Manager`` coercion stays in ``tests/test_list_field.py`` per

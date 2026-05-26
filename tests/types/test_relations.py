@@ -52,7 +52,8 @@ def test_pending_relation_equality_still_works_with_non_hashable_django_field():
 
     # Identity equality (used by ``discard_pending``) and reflexive value
     # equality must both hold; the existing
-    # ``tests/test_registry.py:573`` test relies on value equality across
+    # ``tests/test_registry.py::test_discard_pending_uses_identity_match_with_real_pending_relation #"assert record_a == record_b"``
+    # test relies on value equality across
     # two distinct instances built from the same kwargs.
     assert pending == pending
 

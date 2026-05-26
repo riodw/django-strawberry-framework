@@ -1230,7 +1230,7 @@ def test_unregister_of_primary_leaves_state_that_audit_rejects():
     """``unregister(primary_for_multi)`` leaves a state the finalize audit refuses.
 
     Pins the contract narrated by ``unregister``'s docstring at
-    ``registry.py:168-170``: when ``type_cls`` is the primary for its
+    ``django_strawberry_framework/registry.py::TypeRegistry.unregister #"When ``type_cls`` is the primary for its model"``: when ``type_cls`` is the primary for its
     model, the model loses its primary even if siblings remain — the
     caller must re-declare a primary via a fresh registration cycle.
     Concretely: register three types against the same model with the

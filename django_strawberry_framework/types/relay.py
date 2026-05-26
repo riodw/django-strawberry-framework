@@ -54,7 +54,8 @@ def implements_relay_node(type_cls: type) -> bool:
 def install_is_type_of(type_cls: type) -> None:
     """Borrow strawberry-django's ``is_type_of`` virtual-subclass behavior.
 
-    Direct port of ``strawberry_django/type.py:203-211``. Strawberry's
+    Direct port of ``strawberry_django/type.py::_process_type``
+    (the ``if "is_type_of" not in cls.__dict__`` branch). Strawberry's
     interface dispatch uses ``is_type_of`` to identify the concrete type
     for a returned ORM instance. Without this borrow, an interface field
     that returns a Django model can fail Strawberry's isinstance check
@@ -156,7 +157,7 @@ def _resolve_id_attr_default(cls: type) -> str:
     Calls ``super(cls, cls).resolve_id_attr()`` so a consumer
     ``id: relay.NodeID[...]`` annotation on the class wins; on
     ``NodeIDAnnotationError`` falls back to ``"pk"``. Direct port of
-    ``strawberry_django/relay/utils.py:285-303``.
+    ``strawberry_django/relay/utils.py::resolve_model_id_attr``.
     """
     try:
         return super(cls, cls).resolve_id_attr()  # type: ignore[misc]
@@ -300,7 +301,7 @@ def _order_nodes(
 ) -> list:
     """Re-order ``results`` to match ``coerced_keys`` (port of strawberry-django's map_results).
 
-    Mirrors ``strawberry_django/relay/utils.py:179-189``: build an index
+    Mirrors ``strawberry_django/relay/utils.py::resolve_model_nodes #"def map_results"``: build an index
     keyed on ``str(getattr(obj, id_attr))`` (so the dict lookup matches
     the ``coerced_keys`` shape — both are ``str``) and emit one entry per
     requested key.
@@ -477,7 +478,8 @@ def install_relay_node_resolvers(type_cls: type) -> None:
       via ``setattr(type_cls, attr, classmethod(default))``.
     - When they differ, the consumer's override wins and is preserved.
 
-    Direct port of ``strawberry_django/type.py:213-225``. The ``__func__``
+    Direct port of ``strawberry_django/type.py::_process_type``
+    (the ``if issubclass(cls, relay.Node)`` branch). The ``__func__``
     discriminator is structurally distinct from Slice 2's ``__dict__``
     membership discriminator (``is_type_of`` injection) and Slice 3's
     tuple-membership discriminator (``relay.Node in interfaces``) — the

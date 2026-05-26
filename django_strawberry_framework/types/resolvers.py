@@ -181,7 +181,7 @@ def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
                 return meta
     if not hasattr(field, "is_relation"):
         # Mirror the cardinality-gated nullable rule + target-column reads
-        # from ``FieldMeta.from_django_field`` (optimizer/field_meta.py:135-170)
+        # from ``FieldMeta.from_django_field`` (``optimizer/field_meta.py::FieldMeta.from_django_field``)
         # so the test-double fallback advertises the same shape the canonical
         # builder would. Many-side cardinalities short-circuit to
         # ``nullable=False`` (manager/queryset is never ``None``); reverse

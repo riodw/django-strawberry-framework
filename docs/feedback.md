@@ -24,10 +24,10 @@ Validation spot-checks run during review:
 
 Two docs now advertise running the example suite in sharded mode:
 
-- `examples/fakeshop/README.md:224` — `FAKESHOP_SHARDED=1 uv run pytest examples/fakeshop`
-- `examples/fakeshop/config/settings.py:115` — `FAKESHOP_SHARDED=1 uv run pytest  # sharded`
+- `examples/fakeshop/README.md #"FAKESHOP_SHARDED=1 uv run pytest examples/fakeshop"` — `FAKESHOP_SHARDED=1 uv run pytest examples/fakeshop`
+- `examples/fakeshop/config/settings.py #"FAKESHOP_SHARDED=1 uv run pytest                              # sharded"` — `FAKESHOP_SHARDED=1 uv run pytest  # sharded`
 
-But `examples/fakeshop/tests/test_commands.py:156` defines `test_seed_shards_command_raises_when_shard_alias_missing()` without forcing the alias-missing condition. Under default settings this test passes because `shard_b` is absent and `seed_shards` raises before DB access. Under `FAKESHOP_SHARDED=1`, `shard_b` is present, so the command proceeds to `migrate` / seeding. The test is not marked for DB access, so the advertised sharded pytest invocation fails with pytest-django's database-access guard instead of the intended `CommandError` assertion.
+But `examples/fakeshop/tests/test_commands.py::test_seed_shards_command_raises_when_shard_alias_missing` defines `test_seed_shards_command_raises_when_shard_alias_missing()` without forcing the alias-missing condition. Under default settings this test passes because `shard_b` is absent and `seed_shards` raises before DB access. Under `FAKESHOP_SHARDED=1`, `shard_b` is present, so the command proceeds to `migrate` / seeding. The test is not marked for DB access, so the advertised sharded pytest invocation fails with pytest-django's database-access guard instead of the intended `CommandError` assertion.
 
 Fix options:
 
@@ -41,8 +41,8 @@ The implementation and user-facing docs now correctly describe an additive layou
 
 However the spec still has old statements:
 
-- `docs/spec-019-multi_db-0_0_7.md:122` says the sharded layout is “mutually exclusive with the single-DB `db.sqlite3` mode.” That contradicts the current implementation and the revised Problem statement.
-- `docs/spec-019-multi_db-0_0_7.md:618` says `examples/fakeshop/config/settings.py` is NOT modified. It is now deliberately modified to implement/document the additive layout.
+- `docs/spec-019-multi_db-0_0_7.md #"ships an additive `DATABASES` layout: `default → db.sqlite3` is declared unconditionally in both single-DB and sharded modes"` says the sharded layout is “mutually exclusive with the single-DB `db.sqlite3` mode.” That contradicts the current implementation and the revised Problem statement.
+- `docs/spec-019-multi_db-0_0_7.md #"5. `examples/fakeshop/config/settings.py` ships an additive `DATABASES` layout"` says `examples/fakeshop/config/settings.py` is NOT modified. It is now deliberately modified to implement/document the additive layout.
 
 Fix: update the Current state bullet and Definition of done item 5 so the spec consistently says `settings.py` is modified to keep `default` on `db.sqlite3` and add `shard_b` only under `FAKESHOP_SHARDED=1`. The DoD should no longer require `settings.py` to be untouched.
 
@@ -50,8 +50,8 @@ Fix: update the Current state bullet and Definition of done item 5 so the spec c
 
 Most of the spec now reflects the rev5 decision to drop the package-internal `OptimizationPlan.apply` test and verify axis 2 through the live HTTP test. A few stale references remain:
 
-- `docs/spec-019-multi_db-0_0_7.md:78` says `tests/optimizer/test_multi_db.py` holds `OptimizationPlan.apply` / consumer-`Prefetch` round-trip tests.
-- `docs/spec-019-multi_db-0_0_7.md:310` says `tests/optimizer/test_multi_db.py` contains “the two `OptimizationPlan.apply` / `OptimizerHint.prefetch` round-trip tests.”
+- `docs/spec-019-multi_db-0_0_7.md #"Slice 1: Package-internal tests (split across two files"` says `tests/optimizer/test_multi_db.py` holds `OptimizationPlan.apply` / consumer-`Prefetch` round-trip tests.
+- `docs/spec-019-multi_db-0_0_7.md #"`tests/optimizer/test_multi_db.py` (new; optimizer-plan-level)"` says `tests/optimizer/test_multi_db.py` contains “the two `OptimizationPlan.apply` / `OptimizerHint.prefetch` round-trip tests.”
 
 The actual file contains only `test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias()`, and the Test plan / DoD later say one optimizer-plan-level test.
 
@@ -65,14 +65,14 @@ Fix: update Decision 5 and the Slice checklist intro to say the optimizer file c
 
 The spec front matter still says:
 
-- `docs/spec-019-multi_db-0_0_7.md:4` — `Status: draft`
-- `docs/spec-019-multi_db-0_0_7.md:6` — predecessor references the `WIP-ALPHA-019-0.0.7` card
+- `docs/spec-019-multi_db-0_0_7.md #"Status: shipped"` — `Status: draft`
+- `docs/spec-019-multi_db-0_0_7.md #"Predecessors: [`docs/GLOSSARY.md`]"` — predecessor references the `WIP-ALPHA-019-0.0.7` card
 
 But `KANBAN.md` now records `DONE-019-0.0.7` and the implementation is finished. If this repo intentionally leaves active specs as “draft” forever, add a short note explaining that convention; otherwise update the status and card reference to match the Done state so future readers do not think this is still pre-implementation.
 
 ### M2 — Fakeshop README still documents the old test-user count and omits `view_entry`
 
-`examples/fakeshop/README.md:158` says each `create_users` set creates 5 users, and the following list includes only:
+`examples/fakeshop/README.md #"Each set creates"` says each `create_users` set creates 5 users, and the following list includes only:
 
 - `staff_N`
 - `regular_N`
@@ -86,7 +86,7 @@ Fix: update the fakeshop README to say 6 users per set and include `view_entry_N
 
 ### M3 — `seed_shards` stress-test guidance encourages mutating a tracked SQLite fixture without warning
 
-`examples/fakeshop/apps/products/management/commands/seed_shards.py:49-54` says the committed shard file is not touched by the test suite and therefore growing it with millions of rows for load testing is safe.
+`examples/fakeshop/apps/products/management/commands/seed_shards.py #"The committed shard file is not touched"` says the committed shard file is not touched by the test suite and therefore growing it with millions of rows for load testing is safe.
 
 That is safe from pytest isolation, but `examples/fakeshop/db_shard_b.sqlite3` is a tracked fixture. Running `seed_shards --count 5000` against the default path mutates a tracked binary file and can leave a huge dirty diff that is easy to commit accidentally.
 

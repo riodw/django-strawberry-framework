@@ -86,7 +86,7 @@ If the slice does not modify `CHANGELOG.md`, write `Not applicable; slice did no
 Missing test branches are caught by **reading**, not by running `pytest --cov`. Coverage tooling is the maintainer's CI gate (`pyproject.toml` `[tool.coverage.report] fail_under = 100`); Worker 3 must not duplicate that work inside the build cycle, because:
 
 - It dilutes the role split. Workers write code and tests; CI enforces the gate.
-- It produces low-quality findings. A `--cov-report=term-missing` output says "line 325 is uncovered" without saying which spec contract was missed. A reading-driven finding says "Decision 4 line 323 says strings, sets, generators, AND `other invalid non-sequence values` are rejected. The diff at `base.py:325` rejects a fourth shape — a non-class entry — but no test in `test_relay_interfaces.py` exercises it." The second finding is actionable; the first is a coverage chase.
+- It produces low-quality findings. A `--cov-report=term-missing` output says "line 325 is uncovered" without saying which spec contract was missed. A reading-driven finding says "Decision 4 line 323 says strings, sets, generators, AND `other invalid non-sequence values` are rejected. The diff at `base.py::_consumer_assigned_fields` rejects a fourth shape — a non-class entry — but no test in `test_relay_interfaces.py` exercises it." The second finding is actionable; the first is a coverage chase.
 
 The reading discipline:
 

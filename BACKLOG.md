@@ -489,7 +489,7 @@ class ItemType(DjangoType):
         }
 ```
 
-The optimizer already walks the selection tree (`optimizer/walker.py:91`) — it can inject `annotate()` calls into the plan exactly like it injects `only()` and `Prefetch` today.
+The optimizer already walks the selection tree (`optimizer/walker.py::_walk_selections`) — it can inject `annotate()` calls into the plan exactly like it injects `only()` and `Prefetch` today.
 
 **Why it matters**: annotations are the most common ORM-side computation, and forcing them to always run is a real performance hit for queries that don't select them. Neither competitor does this; the package's optimizer-first foundation makes it almost free architecturally.
 
@@ -1700,7 +1700,7 @@ No competitor ships any of this. Apollo's `@stream` solves the first chunk arriv
 
 **What `strawberry-graphql-django` does**: same — GFK is unsupported; polymorphic is via Strawberry unions plus consumer dispatch.
 
-**What we'd do today**: we raise `ConfigurationError` on GFK (`types/base.py:417-422`), matching the competitors. We could ship:
+**What we'd do today**: we raise `ConfigurationError` on GFK (`types/base.py::_build_annotations #"GenericForeignKey or other"`), matching the competitors. We could ship:
 - `Meta.polymorphic = True` for `django-polymorphic` integration, generating a Strawberry union of all known concrete subclasses with optimizer-aware `select_related("polymorphic_ctype")` and `iterator()` patterns.
 - A GFK resolver that returns a Strawberry union of registered target types, using `ContentType` lookups with prefetched generic relations.
 

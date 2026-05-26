@@ -106,8 +106,9 @@ def _audit_primary_ambiguity() -> None:
     """Reject models with multiple registered DjangoTypes and no declared primary.
 
     Walks ``registry.models_with_multiple_types()`` (the Slice 1 helper at
-    ``registry.py:200-206``); for each model whose ``registry.primary_for(...)``
-    is ``None``, collects the offending registered types via
+    ``registry.py::TypeRegistry.models_with_multiple_types``); for each model
+    whose ``registry.primary_for(...)`` is ``None``, collects the offending
+    registered types via
     ``registry.types_for(model)``. Offenders are sorted by ``model.__name__``
     so the error body is deterministic regardless of consumer import order.
     If the offender list is non-empty, raises ``ConfigurationError`` with the
@@ -115,7 +116,9 @@ def _audit_primary_ambiguity() -> None:
 
     Runs exactly once per build, inside ``finalize_django_types()`` after the
     ``registry.is_finalized()`` short-circuit and before pending-relation
-    resolution (M1 fix per ``docs/spec-014-meta_primary-0_0_6.md:128``).
+    resolution. The pre-resolution placement (M1) is what makes Phase 1
+    failure-atomic — an ambiguity raise leaves every collected class intact
+    and the pending-relation list preserved for a re-call.
     """
     offenders: list[tuple[type[models.Model], tuple[type, ...]]] = []
     for model in registry.models_with_multiple_types():
@@ -178,7 +181,7 @@ def finalize_django_types() -> None:
         # (see types/base.py register_with_definition / add_pending_relation
         # ordering). The ``is not None`` guard is kept as defense-in-depth.
         definition = registry.get_definition(pending.source_type)
-        # Defense-in-depth: ``types/base.py:790-791`` already skips the
+        # Defense-in-depth: ``types/base.py::_build_annotations`` already skips the
         # pending append for consumer-annotated relations, so this branch
         # is a no-op under the documented call graph. Kept so a future
         # change to ``_build_annotations`` (e.g. a lazy/forward-reference

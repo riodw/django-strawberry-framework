@@ -146,7 +146,7 @@ Append 3-5 lines per pass. Example:
 
 ```
 ## 2026-05-13 — Slice 2 (is_type_of injection), planning pass
-- Reused __init_subclass__ extension shape from types/base.py:108-138; no new module needed.
+- Reused __init_subclass__ extension shape from types/base.py::_id_annotation_is_relay_node_id and types/base.py::_is_relay_shaped; no new module needed.
 - Spec edit: spec line 31 clarified "all DjangoTypes" wording so Worker 2 cannot misread the scope.
 - Carry forward: every slice that adds a method to DjangoType should check whether sibling slices already inject one.
 ```

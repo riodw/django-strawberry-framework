@@ -59,7 +59,7 @@ def _sel(name, selections=None):
 def _register_type_definition(model, type_cls, *, optimizer_hints=None):
     """Register a minimal definition for walker-only synthetic type classes.
 
-    Mirrors the helper at ``tests/optimizer/test_walker.py:83-103`` —
+    Mirrors the helper at ``tests/optimizer/test_walker.py::_register_type_definition`` —
     inlined here per Worker 1's plan to keep this file's fixtures local
     and avoid cross-test-module import coupling.
     """
@@ -102,7 +102,8 @@ def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias()
             optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
         )
         # ``source_type=ParentType`` so the walker's
-        # ``_resolve_optimizer_hints(ParentType)`` (walker.py:119-126)
+        # ``_resolve_optimizer_hints(ParentType)``
+        # (``django_strawberry_framework/optimizer/walker.py::_resolve_optimizer_hints``)
         # finds the consumer's hint instead of falling back to the
         # primary type lookup.
         plan = plan_optimizations(
@@ -121,6 +122,6 @@ def test_consumer_provided_prefetch_via_optimizer_hint_round_trips_using_alias()
     # The walker either returns the consumer's ``Prefetch`` unchanged or
     # builds a fresh one with ``queryset=prefetch.queryset`` — same
     # queryset object reference either way, so ``_db`` survives by
-    # reference. Verified at ``optimizer/walker.py:503-532``.
+    # reference. Verified at ``django_strawberry_framework/optimizer/walker.py::_prefetch_hint_for_path``.
     prefetch = next(p for p in result._prefetch_related_lookups if p.prefetch_through == "items")
     assert prefetch.queryset._db == "shard_b"

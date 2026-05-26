@@ -41,8 +41,8 @@ The artifact is the only inter-worker output. Your memory entry is for your own 
 
 The `## DRY analysis` section lists **actionable** DRY consolidation candidates only — each top-level bullet is one opportunity a future DRY cycle could pick up. Two legitimate bullet shapes:
 
-- **Act-now opportunities.** Name the consolidation shape, cite the call sites, recommend the helper signature or shared dataclass. Example: "Extract `_walk_relation_target(sel, related_model, plan, prefix, info, runtime_paths)` from `walker.py:302-309` and `walker.py:369-376`; both branches share six of seven arguments."
-- **Defer-with-trigger opportunities.** Same shape, but explicitly gated. Quote the trigger condition verbatim so the next DRY cycle can grep for it and re-triage when the trigger fires. Example: "Defer until a third walker lands; collapse `walker.py:302-309` and `walker.py:369-376` then."
+- **Act-now opportunities.** Name the consolidation shape, cite the call sites, recommend the helper signature or shared dataclass. Example: "Extract `_walk_relation_target(sel, related_model, plan, prefix, info, runtime_paths)` from `walker.py::_plan_select_relation` and `walker.py::_build_prefetch_child_queryset`; both branches share six of seven arguments."
+- **Defer-with-trigger opportunities.** Same shape, but explicitly gated. Quote the trigger condition verbatim so the next DRY cycle can grep for it and re-triage when the trigger fires. Example: "Defer until a third walker lands; collapse `walker.py::_plan_select_relation` and `walker.py::_build_prefetch_child_queryset` then."
 
 If no real opportunities exist for the file, write a single bullet `- None — <one sentence why the current factoring is correct>`. Silence on DRY is not acceptance.
 

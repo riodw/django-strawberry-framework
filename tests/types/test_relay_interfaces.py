@@ -303,7 +303,7 @@ def test_consumer_declared_is_type_of_is_preserved():
 
     Decision 6 (spec line 351): "If the consumer declares their own
     ``is_type_of``, we do not overwrite it." The discriminator is
-    ``cls.__dict__`` membership, matching ``strawberry_django/type.py:204-211``.
+    ``cls.__dict__`` membership, matching ``strawberry_django/type.py::_process_type #"if "is_type_of" not in cls.__dict__"``.
     The sentinel return value proves the consumer's callable is the one
     that survives — not merely that some callable named ``is_type_of``
     is attached to the class.

@@ -640,7 +640,7 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
 # call shape; four tests) and axis 4 (strictness connection-agnostic shape;
 # one test). The four FK-id tests mock ``router.db_for_read`` per Decision 5;
 # the strictness test does NOT mock the router (it never reaches that path
-# per ``types/resolvers.py:119-154``).
+# per ``django_strawberry_framework/types/resolvers.py::_check_n1``).
 #
 # Mock pattern (per spec Decision 5 + ``Mock contract`` block):
 #
@@ -749,7 +749,8 @@ def test_fk_id_elision_router_call_passes_none_instance_when_parent_lacks_state(
     monkeypatch.setattr(resolvers_module, "router", mock_router)
 
     # ``SimpleNamespace`` has no ``_state`` attribute, so the
-    # ``hasattr(root, "_state") else None`` branch at types/resolvers.py:81
+    # ``hasattr(root, "_state") else None`` branch at
+    # ``django_strawberry_framework/types/resolvers.py::_build_fk_id_stub #"instance = root if hasattr(root, "_state") else None"``
     # forwards ``instance=None`` to the router.
     parent_row = SimpleNamespace(pk=1, category_id=42)
     assert not hasattr(parent_row, "_state")
@@ -788,7 +789,8 @@ def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(monkeyp
         attname="category_id",
     )
 
-    # types/resolvers.py:74-76 — early ``return None`` before reaching the
+    # ``django_strawberry_framework/types/resolvers.py::_build_fk_id_stub #"if related_id is None"``
+    # — early ``return None`` before reaching the
     # router. Rev2 H5: split from the parent-lacks-``_state`` case because
     # the two branches are distinct and a regression in either is a
     # different bug class.

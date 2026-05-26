@@ -564,14 +564,14 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
 def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http():
     """End-to-end ``Manager → QuerySet`` coercion via a sync consumer ``resolver=``.
 
-    Pins ``list_field.py:33`` — the field-wrapper's
+    Pins ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"result = result.all()"`` — the field-wrapper's
     ``_post_process_consumer_sync`` ``Manager.all()`` coercion before
     ``_apply_get_queryset_sync`` runs (rev4 M1). The fakeshop resolver
     ``apps.library.schema._branches_manager_resolver`` returns
     ``Branch.objects`` (a ``Manager``, NOT a ``QuerySet``); rows coming
     back through ``/graphql/`` prove the wrapper coerced and applied the
     default-identity ``get_queryset``. The README rule at
-    ``examples/fakeshop/test_query/README.md:7`` requires this coverage
+    ``examples/fakeshop/test_query/README.md #"Coverage rule"`` requires this coverage
     to land here, not in the package-internal ``tests/test_list_field.py``.
     """
     _seed_branch_with_two_shelves("ManagerResolver West")

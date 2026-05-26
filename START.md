@@ -22,8 +22,18 @@ Rio is direct and decisive. They iterate fast, they reverse course without cerem
 These are the rules I most often forgot in past sessions and they had to remind me. Encode them now.
 
 - **Do not run `pytest` after every change.** Run formatting only. They will explicitly say "run tests" or "run the full pipeline" when they want it. Coverage gating means tests will fail loud the moment they run.
-- They commit themselves most of the time. Don't auto-commit unless they explicitly ask. When they do ask, include the `Co-Authored-By: Oz <oz-agent@warp.dev>` line.
+- They commit themselves most of the time. Don't auto-commit unless they explicitly ask. **NEVER add a `Co-Authored-By` line (or any other author-attribution footer) to commit messages, regardless of who or what you are.** The commit message is the change description, nothing else.
 - When you make changes, run `uv run ruff format .` (and `ruff check --fix .` if there were edits) and stop there. No `pytest`. No `manage.py check`. No `uv build`.
+
+## Temp artifact conventions
+
+Per-cycle scratchpads — they close when their cycle does:
+
+- `docs/review/review-<X>.md`, `docs/review/rev-*.md` — REVIEW cycle.
+- `docs/dry/dry-<X>.md` — DRY cycle.
+- `docs/builder/bld-*.md` — BUILDER cycle.
+
+These are exempt from AGENTS.md's symbol-qualified path rule (raw `path:NN` line refs are fine inside) and don't need stylistic cleanup — the next cycle regenerates them. Still worth *including* in repo-wide sanity checks (grep, audits) so you can flag obvious drift, but don't edit unless the cycle is in flight.
 
 ## Style they care about
 

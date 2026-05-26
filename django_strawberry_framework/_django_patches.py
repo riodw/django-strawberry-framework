@@ -13,7 +13,10 @@ Currently implemented
 ---------------------
 
 - :func:`_patched_remove_databases_failures` — defensive replacement
-  for :meth:`django.test.testcases.TransactionTestCase._remove_databases_failures`.
+  for :meth:`django.test.testcases.SimpleTestCase._remove_databases_failures`.
+  Django defines the method on ``SimpleTestCase`` so a single patch
+  covers every test-case class in Django's hierarchy
+  (``SimpleTestCase`` → ``TransactionTestCase`` → ``TestCase``).
   Adds an ``isinstance(method, _DatabaseFailure)`` guard before the
   unwrap step, so any code path that replaced a connection method
   between ``setUpClass`` and ``tearDownClass`` no longer crashes the
@@ -26,11 +29,14 @@ Currently implemented
 Ecosystem precedent
 -------------------
 
-The ``isinstance(_, _DatabaseFailure)`` guard pattern is not unique to
-this package. ``django-debug-toolbar`` ships the same pattern at the
-*wrap-time* site:
+Two ``django-debug-toolbar`` fixes point at the same underlying
+monkey-patch fragility from opposite directions.
+
+First, the ``isinstance(_, _DatabaseFailure)`` guard pattern is not
+unique to this package. ``django-debug-toolbar`` ships the same pattern
+at the SQL panel's *wrap-time* site:
 :func:`debug_toolbar.panels.sql.tracking.wrap_cursor` checks
-``isinstance(connection.cursor, _DatabaseFailure)`` BEFORE installing
+``isinstance(connection.cursor, _DatabaseFailure)`` before installing
 its own cursor wrapper and refuses to wrap on top of Django's
 ``_DatabaseFailure``:
 
@@ -40,25 +46,37 @@ This package installs the matching check at the *unwrap-time* site so
 the same Django fragility cannot crash teardown regardless of which
 third-party library (debug-toolbar, Sentry's Django integration, a
 consumer's own ``setUp``, or anything else) replaced the wrapper.
-Together the two pattern-mates form a defense-in-depth against the
-"multi-party wrap on one connection-method attribute" architectural
-limitation Django's setup/teardown pair has:
 
-* **Wrap-time prevention** (debug-toolbar's flavor) — each well-behaved
+Second, ``django-debug-toolbar``'s cache-panel fix for Sentry
+interoperability reached the broader teardown conclusion: once multiple
+parties can monkey-patch the same method, undoing the patch stack
+perfectly can be impossible without a shared ordering protocol. That
+fix kept the debug-toolbar wrapper installed and toggled an owner
+sentinel instead of trying to uninstall/reinstall around every request.
+That exact strategy is available to libraries that own their wrapper,
+and it is the right pattern for any future package-owned connection
+instrumentation here.
+
+This package does not own Django's ``_DatabaseFailure`` wrapper, so it
+cannot adopt the cache-panel sentinel approach for
+``_remove_databases_failures`` itself. The best root-cause mitigation
+available at this layer is the combined guard strategy:
+
+* **Wrap-time prevention** (debug-toolbar SQL panel's flavor, and this
+  package's ``safe_wrap_connection_method`` helper) — each well-behaved
   wrap-party declines to clobber Django's wrapper when it sees one
-  already installed. Sufficient if everyone participates.
+  already installed. This is the cheapest path because it avoids
+  installing another wrapper at all.
 
-* **Unwrap-time recovery** (this package's flavor) — Django's teardown
-  becomes robust to wrappers having been replaced anyway. Sufficient
-  regardless of whether anyone participates.
+* **Unwrap-time recovery** (this package's automatic patch) — Django's
+  teardown becomes robust to wrappers having been replaced anyway. This
+  is necessary because this package cannot force every third-party
+  wrapper to participate in the wrap-time protocol.
 
-As the upstream ticket discussion notes, correct teardown when N parties
-wrap one attribute is *theoretically* impossible to do without an
-ordering protocol Python doesn't provide and Django doesn't enforce.
-The two pragmatic mitigations above don't fix the underlying design
-fragility, but they protect against the worst observable symptom —
-crashes during ``tearDownClass`` — at the only two sites each library
-controls.
+The two guards don't fix the underlying multi-party mutation design,
+but together they protect against the worst observable symptom —
+crashes during ``tearDownClass`` — at the two lifecycle sites this
+package can influence.
 
 This package does NOT wrap any connection method itself, so it has
 no wrap-time site of its OWN at which to add the debug-toolbar-style
@@ -84,13 +102,28 @@ AppConfig.
 """
 
 from django.db import connections
-from django.test.testcases import TransactionTestCase, _DatabaseFailure
+from django.test.testcases import SimpleTestCase
 
-_PATCH_APPLIED = False
+from . import logger
+
+try:
+    from django.test.testcases import _DatabaseFailure
+except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
+    # Django renamed, relocated, or removed the private ``_DatabaseFailure``
+    # symbol. The package's defensive patch only makes sense when that
+    # symbol exists, so ``apply()`` will no-op instead of crashing the
+    # whole app loader. See ``apply()`` for the runtime branch and the
+    # accompanying test ``test_apply_no_ops_when_database_failure_symbol_missing``.
+    _DatabaseFailure = None  # type: ignore[assignment,misc]
+
+
+def _is_database_failure(method: object) -> bool:
+    """Return whether ``method`` is Django's disallowed-database wrapper."""
+    return _DatabaseFailure is not None and isinstance(method, _DatabaseFailure)
 
 
 def _patched_remove_databases_failures(cls: type) -> None:
-    """Defensive replacement for ``TransactionTestCase._remove_databases_failures``.
+    """Defensive replacement for ``SimpleTestCase._remove_databases_failures``.
 
     Identical to Django's upstream classmethod except for the
     ``isinstance(method, _DatabaseFailure)`` guard before the
@@ -128,23 +161,55 @@ def _patched_remove_databases_failures(cls: type) -> None:
         connection = connections[alias]
         for name, _ in cls._disallowed_connection_methods:
             method = getattr(connection, name)
-            if isinstance(method, _DatabaseFailure):
+            if _is_database_failure(method):
                 setattr(connection, name, method.wrapped)
+
+
+def _patch_is_installed() -> bool:
+    """Return ``True`` iff ``SimpleTestCase._remove_databases_failures`` currently points at our patch.
+
+    Encapsulates the ``__func__`` unwrap so ``apply()`` does not need to
+    know that Django stores the method as a ``classmethod`` descriptor
+    on the class. Used by ``apply()`` to enforce the "ensure current
+    state" contract — if a third party reverted the class attribute
+    after a prior ``apply()`` call, the next ``apply()`` re-installs.
+    """
+    installed = SimpleTestCase.__dict__.get("_remove_databases_failures")
+    if installed is None:
+        return False
+    return getattr(installed, "__func__", None) is _patched_remove_databases_failures
 
 
 def apply() -> None:
     """Apply every Django defensive patch shipped by the package.
 
-    Idempotent: re-entrant calls are no-ops. Called once from
+    Idempotent and self-healing: re-entrant calls are no-ops when the
+    patch is still installed, and re-install the patch if a third
+    party reverted the class attribute since the prior call. Called
+    from
     :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`
-    at Django startup; exposed at the module level so the regression
-    tests can drive the apply-and-revert cycle without spinning up a
-    second AppConfig.
+    at Django startup (which may itself fire more than once under some
+    Django test runners — the ``_patch_is_installed()`` check below
+    handles both the re-entrant case and a third-party revert);
+    exposed at the module level so the regression tests can drive the
+    apply-and-revert cycle without spinning up a second AppConfig.
+
+    When Django renamed, relocated, or removed the private
+    ``_DatabaseFailure`` symbol the patch depends on (``ImportError``
+    at module load time), this function logs a single ``INFO``-level
+    notice and returns without touching ``SimpleTestCase``. That keeps
+    the rest of the package loadable on future Django versions that
+    break the private symbol.
     """
-    global _PATCH_APPLIED
-    if _PATCH_APPLIED:
+    if _DatabaseFailure is None:
+        logger.info(
+            "django-strawberry-framework: skipping _remove_databases_failures patch — "
+            "Django's private _DatabaseFailure symbol is unavailable at this Django "
+            "version. The Trac #37064 backstop will not be installed.",
+        )
         return
-    TransactionTestCase._remove_databases_failures = classmethod(
+    if _patch_is_installed():
+        return
+    SimpleTestCase._remove_databases_failures = classmethod(
         _patched_remove_databases_failures,
     )
-    _PATCH_APPLIED = True

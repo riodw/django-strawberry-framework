@@ -13,8 +13,9 @@ class DjangoStrawberryFrameworkConfig(AppConfig):
         """Apply the package's Django defensive patches at app-load time.
 
         Currently applies the Trac #37064 hardening for
-        ``TransactionTestCase._remove_databases_failures`` (and the
-        inherited ``TestCase`` variant). See
+        ``SimpleTestCase._remove_databases_failures``, which every
+        ``SimpleTestCase`` subclass (including ``TransactionTestCase``
+        and ``TestCase``) inherits. See
         :mod:`django_strawberry_framework._django_patches` for the
         list of patches and the rationale for each.
 

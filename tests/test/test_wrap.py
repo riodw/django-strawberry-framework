@@ -12,10 +12,17 @@ on any Django connection, and the `default` alias is always present.
 
 from unittest import mock
 
+import pytest
 from django.db import connections
-from django.test.testcases import _DatabaseFailure
 
+from django_strawberry_framework import _django_patches
 from django_strawberry_framework.test import safe_wrap_connection_method
+
+
+def _database_failure(wrapped):
+    if _django_patches._DatabaseFailure is None:
+        pytest.skip("Django private _DatabaseFailure symbol is unavailable.")
+    return _django_patches._DatabaseFailure(wrapped, "test message")
 
 
 def test_safe_wrap_connection_method_installs_wrapper_when_no_database_failure():
@@ -25,13 +32,13 @@ def test_safe_wrap_connection_method_installs_wrapper_when_no_database_failure()
     connection = connections["default"]
     original_cursor = connection.cursor
 
-    sentinel_wrapper = mock.sentinel.consumer_wrapper
+    consumer_wrapper = mock.Mock(name="consumer_wrapper")
 
     try:
-        installed = safe_wrap_connection_method(connection, "cursor", sentinel_wrapper)
+        installed = safe_wrap_connection_method(connection, "cursor", consumer_wrapper)
 
         assert installed is True
-        assert connection.cursor is sentinel_wrapper
+        assert connection.cursor is consumer_wrapper
     finally:
         connection.cursor = original_cursor
 
@@ -44,17 +51,40 @@ def test_safe_wrap_connection_method_declines_when_database_failure_in_place():
     connection = connections["default"]
     original_cursor = connection.cursor
 
-    django_wrapper = _DatabaseFailure(original_cursor, "test message")
+    django_wrapper = _database_failure(original_cursor)
     connection.cursor = django_wrapper
 
-    sentinel_wrapper = mock.sentinel.consumer_wrapper
+    consumer_wrapper = mock.Mock(name="consumer_wrapper")
 
     try:
-        installed = safe_wrap_connection_method(connection, "cursor", sentinel_wrapper)
+        installed = safe_wrap_connection_method(connection, "cursor", consumer_wrapper)
 
         assert installed is False
         # Django's wrapper was NOT replaced.
         assert connection.cursor is django_wrapper
+    finally:
+        connection.cursor = original_cursor
+
+
+def test_safe_wrap_connection_method_installs_when_database_failure_symbol_missing():
+    """Future-Django private-symbol drift must not break the public test helper.
+
+    ``_DatabaseFailure`` is a private Django symbol. If Django renames
+    or removes it, ``safe_wrap_connection_method`` should still be
+    importable and should behave like the normal "no Django wrapper is
+    visible" path.
+    """
+    connection = connections["default"]
+    original_cursor = connection.cursor
+
+    consumer_wrapper = mock.Mock(name="consumer_wrapper")
+
+    try:
+        with mock.patch.object(_django_patches, "_DatabaseFailure", None):
+            installed = safe_wrap_connection_method(connection, "cursor", consumer_wrapper)
+
+        assert installed is True
+        assert connection.cursor is consumer_wrapper
     finally:
         connection.cursor = original_cursor
 
@@ -67,17 +97,17 @@ def test_safe_wrap_connection_method_works_on_arbitrary_method_names():
     connection = connections["default"]
     original = connection.chunked_cursor
 
-    sentinel_wrapper = mock.sentinel.chunked_wrapper
+    chunked_wrapper = mock.Mock(name="chunked_wrapper")
 
     try:
         installed = safe_wrap_connection_method(
             connection,
             "chunked_cursor",
-            sentinel_wrapper,
+            chunked_wrapper,
         )
 
         assert installed is True
-        assert connection.chunked_cursor is sentinel_wrapper
+        assert connection.chunked_cursor is chunked_wrapper
     finally:
         connection.chunked_cursor = original
 
@@ -104,7 +134,7 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
     sentinel_original = mock.sentinel.untouched_original
 
     # Simulate Django's setUpClass installing the ``_DatabaseFailure``.
-    django_wrapper = _DatabaseFailure(sentinel_original, "test message")
+    django_wrapper = _database_failure(sentinel_original)
     connection.cursor = django_wrapper
 
     # The consumer attempts to wrap and is correctly declined — Django
@@ -112,7 +142,7 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
     installed = safe_wrap_connection_method(
         connection,
         "cursor",
-        mock.sentinel.consumer_wrapper,
+        mock.Mock(name="consumer_wrapper"),
     )
     assert installed is False
     assert connection.cursor is django_wrapper  # Django's wrapper intact
@@ -127,5 +157,30 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
         _NarrowTest._remove_databases_failures()
         # Wrapper unwrapped to the sentinel original.
         assert connection.cursor is sentinel_original
+    finally:
+        connection.cursor = original_cursor
+
+
+def test_safe_wrap_connection_method_raises_on_non_callable_wrapper():
+    """Wrap-time guard: a non-callable ``wrapper`` raises ``TypeError``
+    at the wrap site instead of installing silently and failing at the
+    next ``connection.<method>()`` invocation.
+
+    Pins the wrap-time-vs-call-time silent-failure mode closed: the
+    type annotation ``Callable[..., Any]`` is now enforced at runtime,
+    so a typo (e.g. ``connection.cursor`` accidentally passed instead
+    of ``lambda: connection.cursor()``) surfaces at the wrap site with
+    a traceback pointing at the consumer's call.
+    """
+    connection = connections["default"]
+    original_cursor = connection.cursor
+
+    try:
+        with pytest.raises(TypeError, match="non-callable wrapper"):
+            safe_wrap_connection_method(connection, "cursor", 42)
+
+        # Connection method untouched — the early-validate raise must
+        # not mutate connection state before raising.
+        assert connection.cursor is original_cursor
     finally:
         connection.cursor = original_cursor

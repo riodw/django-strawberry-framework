@@ -13,14 +13,18 @@ See :mod:`django_strawberry_framework._django_patches` for the full
 defense-in-depth framing, the upstream Trac ticket reference, and the
 unwrap-time backstop the package's ``AppConfig.ready`` installs
 unconditionally. This module is the consumer-facing wrap-time half;
-the patch module is the package-internal unwrap-time half.
+the patch module is the package-internal unwrap-time half. Both halves
+share the same private ``_DatabaseFailure`` predicate so a future
+Django private-symbol move degrades the helper instead of making the
+public ``django_strawberry_framework.test`` import crash.
 """
 
 from collections.abc import Callable
 from typing import Any
 
 from django.db.backends.base.base import BaseDatabaseWrapper
-from django.test.testcases import _DatabaseFailure
+
+from django_strawberry_framework._django_patches import _is_database_failure
 
 
 def safe_wrap_connection_method(
@@ -45,7 +49,7 @@ def safe_wrap_connection_method(
     installed and the helper returns ``True``.
 
     The reason this matters: Django's
-    :meth:`django.test.testcases.TransactionTestCase._add_databases_failures`
+    :meth:`django.test.testcases.SimpleTestCase._add_databases_failures`
     installs a ``_DatabaseFailure`` wrapper on every "disallowed"
     connection method at ``setUpClass``, and the symmetric
     ``_remove_databases_failures`` unwraps them at ``tearDownClass``
@@ -125,9 +129,20 @@ def safe_wrap_connection_method(
         ``True`` if ``wrapper`` was installed; ``False`` if Django's
         ``_DatabaseFailure`` was in place and the wrap was declined
         (the connection method is left untouched).
+
+    Raises:
+        TypeError: If ``wrapper`` is not callable. Validated at the
+            wrap site so a typo (e.g. passing ``connection.cursor``
+            instead of ``lambda: connection.cursor()``) surfaces here
+            rather than as a delayed ``TypeError`` deep inside Django's
+            ORM machinery at the next ``connection.<method>()`` call.
     """
+    if not callable(wrapper):
+        raise TypeError(
+            f"safe_wrap_connection_method() received a non-callable wrapper: {wrapper!r}",
+        )
     current = getattr(connection, method_name)
-    if isinstance(current, _DatabaseFailure):
+    if _is_database_failure(current):
         return False
     setattr(connection, method_name, wrapper)
     return True

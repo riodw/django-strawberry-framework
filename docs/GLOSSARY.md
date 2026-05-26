@@ -997,7 +997,7 @@ Planned resolver keys and lookup paths are stashed on `info.context` for introsp
 
 **Status:** shipped (`0.0.7`).
 
-Defensive patch the package applies automatically at `DjangoStrawberryFrameworkConfig.ready` time. Replaces `django.test.testcases.TransactionTestCase._remove_databases_failures` with a variant that adds an `isinstance(method, _DatabaseFailure)` guard before the `setattr(..., method.wrapped)` step. Prevents the unrecoverable `AttributeError: 'function' object has no attribute 'wrapped'` at `tearDownClass` that Django Trac #37064 documents.
+Defensive patch the package applies automatically at `DjangoStrawberryFrameworkConfig.ready` time. Replaces `django.test.testcases.SimpleTestCase._remove_databases_failures` (the class where Django defines the method; `TransactionTestCase` and `TestCase` inherit it) with a variant that adds an `isinstance(method, _DatabaseFailure)` guard before the `setattr(..., method.wrapped)` step. Prevents the unrecoverable `AttributeError: 'function' object has no attribute 'wrapped'` at `tearDownClass` that Django Trac #37064 documents.
 
 Consumers get the hardening for free by having `"django_strawberry_framework"` in `INSTALLED_APPS` — no `conftest.py` workaround, no base test class to inherit, no settings key required.
 

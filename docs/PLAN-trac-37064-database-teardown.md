@@ -112,7 +112,7 @@ Removed `"ready"` from the forbidden-attributes assertion (it was inherited from
 9. **Outstanding (maintainer decisions):**
    - `KANBAN.md` — add a `DONE-NNN-0.0.X` card describing the patch and linking to the Trac ticket.
    - `CHANGELOG.md` — append a bullet under `### Fixed` for the version this ships in. Wording TBD.
-   - **Version target** — `0.0.7` joint cut (Decision 9 of `spec-019-multi_db-0_0_7.md`) or `0.0.8`? Maintainer's call.
+   - **Version target** — `0.0.7` joint cut (Decision 9 of `SPECS/spec-019-multi_db-0_0_7.md`) or `0.0.8`? Maintainer's call.
 
 ## Out of scope for this plan
 

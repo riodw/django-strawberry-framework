@@ -1,0 +1,15 @@
+term,anchor,notes
+BigInt scalar,bigint-scalar,The scalar this card relocates from the `strawberry.scalar(NewType, ...)` definition path to the `StrawberryConfig.scalar_map` registration path.
+Specialized scalar conversions,specialized-scalar-conversions,Pins `BigIntegerField`/`PositiveBigIntegerField` → `BigInt`; the converter table that this card preserves verbatim.
+Scalar field conversion,scalar-field-conversion,Broader scalar-mapping contract; framing only.
+Upload scalar,upload-scalar,Next package-defined scalar (planned for `0.0.11`); reuses this card's helper unchanged.
+DjangoType,djangotype,Framing only; consumer-facing types that exercise `BigInt` through the converter table.
+DjangoOptimizerExtension,djangooptimizerextension,Framing only; cited because the consumer migration pattern (`config=strawberry_config()` and `extensions=[DjangoOptimizerExtension()]`) covers the relationship between schema-level config and schema-level extensions.
+ConfigurationError,configurationerror,Not raised by this card. The conflict-resolution policy uses `ValueError` (helper-call-time consumer-input mistake) rather than `ConfigurationError` (`DjangoType`-creation / finalization-time configuration).
+finalize_django_types,finalize_django_types,Cited because the consumer-facing migration sequence (`Schema(config=strawberry_config())` after `finalize_django_types()`) leaves the existing finalization-then-Schema order intact.
+Strictness mode,strictness-mode,Framing only; the new GLOSSARY entry `strawberry_config` ought to be ordered between `Specialized scalar conversions` and `Strictness mode` alphabetically.
+Connection-aware optimizer planning,connection-aware-optimizer-planning,Out of scope — `edges { node { ... } }` planning, not database-connection planning despite the overlapping word.
+FilterSet,filterset,Out of scope — Layer-3 sidecar subsystem.
+OrderSet,orderset,Out of scope — Layer-3 sidecar subsystem.
+AggregateSet,aggregateset,Out of scope — Layer-3 sidecar subsystem.
+FieldSet,fieldset,Out of scope — Layer-3 sidecar subsystem.

@@ -64,7 +64,7 @@ Read the finding's `- [ ]` text in the plan. Pre-triage as `- [x]` ONLY IF the b
 If pre-triaged:
 
 ```
-  - **Pre-triage (Worker 0, YYYY-MM-DD):** Skipped — <one line: quoted reason from the bullet>.
+  - **Pre-triage (Worker 0):** Skipped — <one line: quoted reason from the bullet>.
 ```
 
 Tick `- [x]`. Advance.
@@ -74,31 +74,33 @@ If the bullet asserts a concrete extraction or behavior change in current source
 ### B. Worker-1 Investigation dispatch
 
 1. Re-read `dry-<0_0_X>.md` and compute the active finding's line range: from the `- [ ]` line to the line before the next bullet at the same indent or the next `##`/`###` heading.
-2. Spawn a fresh Worker 1 subagent. The prompt must include:
+2. Capture `FINDING_BASELINE=$(git stash create)` (per `docs/dry/DRY.md` "Per-finding baseline"). Empty SHA → later diffs use `HEAD`.
+3. Spawn a fresh Worker 1 subagent. The prompt must include:
    - standing docs (`AGENTS.md`, `START.md`, `docs/dry/DRY.md`, `docs/dry/worker-1.md`)
    - the active plan path and the **line range** to read (e.g., `read lines 42-78 of docs/dry/dry-0_0_7.md`)
    - the role for this pass: **Investigation**
    - the source-artifact path the finding came from
-3. Worker 1 appends an Investigation sub-bullet under the finding and returns `real`, `already-addressed`, or `not-real`.
+   - the finding baseline SHA (`$FINDING_BASELINE`) for diff scoping in later passes
+4. Worker 1 appends an Investigation sub-bullet under the finding and returns `real`, `already-addressed`, or `not-real`.
 
 If `already-addressed` or `not-real`: tick `- [x]`. Advance.
 
 ### C. Worker-2 TODO scaffold dispatch
 
 1. Re-read the plan, recompute the line range (the Investigation sub-bullet added lines).
-2. Spawn a fresh Worker 2 subagent. Prompt mirrors B with the line range + role: **TODO scaffold**.
+2. Spawn a fresh Worker 2 subagent. Prompt mirrors B (line range + baseline SHA) with role: **TODO scaffold**.
 3. Worker 2 appends a TODO scaffold sub-bullet, adds `# TODO(dry-<0_0_X>):` comments in source, and returns when done.
 
 ### D. Worker-1 Implementation dispatch
 
 1. Re-read the plan, recompute the line range.
-2. Spawn a fresh Worker 1 subagent. Prompt mirrors B with the line range + role: **Implementation**.
+2. Spawn a fresh Worker 1 subagent. Prompt mirrors B (line range + baseline SHA) with role: **Implementation**.
 3. Worker 1 appends an Implementation sub-bullet (or `Implementation (pass N)` on a re-dispatch), replaces TODOs with real code, and returns when done.
 
 ### E. Worker-2 Verification + test dispatch
 
 1. Re-read the plan, recompute the line range.
-2. Spawn a fresh Worker 2 subagent. Prompt mirrors B with the line range + role: **Verification + test**.
+2. Spawn a fresh Worker 2 subagent. Prompt mirrors B (line range + baseline SHA) with role: **Verification + test**.
 3. Worker 2 appends a Verification sub-bullet and returns `verified` or `revision-needed`.
 
 ### F. Branch on verification
@@ -108,7 +110,7 @@ If `already-addressed` or `not-real`: tick `- [x]`. Advance.
 
 ### Recovery from a failed subagent
 
-If a subagent fails mid-pass (transient error, time-out), dispatch a fresh subagent of the same role with explicit "pick up where the prior pass left off" context. The new subagent's prompt names the partial sub-bullet (if any), the line range (recomputed), and the working-tree diff. The recovery finishes the original sub-bullet — do NOT open a `pass N+1` sub-bullet for a recovery.
+If a subagent fails mid-pass (transient error, time-out), dispatch a fresh subagent of the same role with explicit "pick up where the prior pass left off" context. The new subagent's prompt names the partial sub-bullet (if any), the line range (recomputed), and the finding-scoped diff (`git diff "$FINDING_BASELINE" -- …`). The recovery finishes the original sub-bullet — do NOT open a `pass N+1` sub-bullet for a recovery.
 
 If the on-disk diff is unsalvageable, escalate to the maintainer.
 
@@ -131,6 +133,6 @@ Stop and report to the maintainer if:
 - the export script fails or produces an empty plan when artifacts exist
 - the source-directory invocation is ambiguous (neither `docs/builder/` nor `docs/review/`)
 - a Worker 1 Investigation pass cannot cleanly decide `real` / `already-addressed` / `not-real`
-- a Worker 2 Verification returns `revision-needed` three times on the same finding
+- a Worker 2 Verification returns `revision-needed` twice on the same finding
 - the final test-run gate fails on something no finding owns
 - the source artifact referenced by a finding has been deleted or renamed

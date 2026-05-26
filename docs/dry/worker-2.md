@@ -18,7 +18,7 @@ Read the docs marked `yes` in the **Worker 2** column of the Required reading pe
 For all passes, read ONLY the line range Worker 0 named in the dispatch prompt — not the whole plan. Use `Read(offset=<start>, limit=<end - start + 1>)`.
 
 - **TODO scaffold pass:** also read the source artifact named in the `_Source:_` line and the cited source / tests.
-- **Verification + test pass:** also read Worker 1's Implementation diff and the cited source / tests.
+- **Verification + test pass:** also read the finding-scoped diff (`git diff "$FINDING_BASELINE" -- …`, which contains Worker 1's Implementation output) and the cited source / tests.
 - **Final test-run gate:** no extra reads required — the gate commands are mechanical.
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
@@ -53,19 +53,19 @@ Given a finding with an Investigation sub-bullet (disposition: `real`):
 6. Append:
 
    ```
-     - **TODO scaffold (Worker 2, YYYY-MM-DD):** TODOs added at path1:NN, path2:NN, path3:NN. <corrections to Worker 1's pseudo-code or call-site list, if any>.
+     - **TODO scaffold (Worker 2):** TODOs added at path1:NN, path2:NN, path3:NN. <corrections to Worker 1's pseudo-code or call-site list, if any>.
    ```
 
 7. Do NOT run ruff, do NOT run tests. TODOs are scaffolding; the Implementation pass owns formatting and lint.
-8. `git status --short` should show only added `# TODO(dry-<0_0_X>):` lines in the cited source. Anything else is unrelated drift — revert before returning.
+8. `git diff --name-only "$FINDING_BASELINE"` should list only `docs/dry/dry-<0_0_X>.md` (the Investigation sub-bullet from the prior pass) and the source files where TODOs were added. Anything else is unrelated drift — revert with `git checkout "$FINDING_BASELINE" -- <path>`.
 
 ### Editing Worker 1's pseudo-code
 
 If close inspection at scaffold time surfaces a concrete error in Worker 1's pseudo-code (e.g., wrong signature, missing parameter), Worker 2 may minimally edit the Investigation sub-bullet's pseudo-code block. Mark the edit:
 
 ````
-  - **Investigation (Worker 1, YYYY-MM-DD):** Real. <...>
-    Pseudo-code (corrected by Worker 2, YYYY-MM-DD):
+  - **Investigation (Worker 1):** Real. <...>
+    Pseudo-code (corrected by Worker 2):
     ```python
     # corrected shape
     ```
@@ -78,7 +78,7 @@ Larger drift (the whole approach is wrong) goes in the TODO scaffold sub-bullet 
 Given a finding with Investigation, TODO scaffold, AND Implementation sub-bullets:
 
 1. Read the named line range.
-2. Read Worker 1's Implementation diff.
+2. Read the finding-scoped diff `git diff "$FINDING_BASELINE" -- …` (Worker 1's Implementation output).
 3. Read the cited source / tests.
 4. Confirm:
    - the helper / consolidation lives where the Investigation prescribed
@@ -92,7 +92,7 @@ Given a finding with Investigation, TODO scaffold, AND Implementation sub-bullet
    - **Verified.** Append:
 
      ```
-       - **Verification (Worker 2, YYYY-MM-DD):** Verified. <one line: helper landed at path:NN, called from N sites, tests at tests/.../test_<name>.py pin the contract>.
+       - **Verification (Worker 2):** Verified. <one line: helper landed at path:NN, called from N sites, tests at tests/.../test_<name>.py pin the contract>.
      ```
 
      Return `verified`.
@@ -100,7 +100,7 @@ Given a finding with Investigation, TODO scaffold, AND Implementation sub-bullet
    - **Revision needed.** Something is missing, partial, or regressed. Append:
 
      ```
-       - **Verification (Worker 2, YYYY-MM-DD):** Revision needed. <specific: which call site was missed, which TODO was left in source, which assertion is unpinned, what regressed>.
+       - **Verification (Worker 2):** Revision needed. <specific: which call site was missed, which TODO was left in source, which assertion is unpinned, what regressed>.
      ```
 
      Return `revision-needed`. Worker 0 re-dispatches Worker 1 Implementation.

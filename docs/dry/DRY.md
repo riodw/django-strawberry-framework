@@ -37,7 +37,7 @@ Every worker reads the standing project docs and its own role file before acting
 | active `docs/dry/dry-<0_0_X>.md` | yes (whole file: state inspection + line-range computation) | yes (only the line range W0 names) | yes (only the line range W0 names) |
 | source artifacts (`bld-*.md` / `rev-*.md`) | — | yes (read-only) | yes (read-only) |
 | relevant source / tests | — | yes (writes during Implementation) | yes (writes during TODO scaffold + Verification) |
-| working-tree diff | — | yes (Implementation re-pass) | yes (Verification pass) |
+| finding-scoped diff (`git diff $FINDING_BASELINE -- …`) | — | yes (Implementation re-pass) | yes (Verification pass) |
 
 **Worker 0 does NOT read source code, tests, or source artifacts during the cycle.** Worker 0's window into the work is `dry-<0_0_X>.md`. The plan artifact is the inter-worker contract.
 
@@ -52,7 +52,7 @@ Before Worker 0 generates the plan:
 3. **`docs/dry/export_dry_review.py` runs.** Smoke invocation: `uv run python docs/dry/export_dry_review.py --help`. If broken, escalate.
 4. **Planned plan path is free.** `docs/dry/dry-<0_0_X>.md` must not already exist.
 
-Record the outcome in the plan file's preamble (`Pre-flight: passed on YYYY-MM-DD; baseline: clean` or `Pre-flight: <issue>, resolved by <action>`).
+Record the outcome in the plan file's preamble (`Pre-flight: passed; baseline: clean` or `Pre-flight: <issue>, resolved by <action>`).
 
 ## Generating the plan
 
@@ -79,6 +79,18 @@ Each `- [ ]` is a **finding**. As the cycle progresses, workers append sub-bulle
 
 Worker 1 may minimally correct a finding's `- [ ]` text in place if it cited stale line numbers or wrong symbol names. Worker 0 may correct an obvious typo. Otherwise the script-generated structure stays as-is.
 
+## Dispatch mode and baseline
+
+Default mode is **autonomous** — Worker 0 continues finding-to-finding, notifying the maintainer only at run boundaries (start, end, fatal blockers, two consecutive `revision-needed` outcomes on the same finding). Maintainer-pause mode is opt-in via "one finding at a time" / "pause after each finding" / a single named finding in the dispatch prompt.
+
+### Per-finding baseline
+
+```shell
+FINDING_BASELINE=$(git stash create)  # at start of each finding; empty SHA if working tree clean
+```
+
+Worker 0 captures the baseline before dispatching Worker 1 Investigation (step B) and passes the SHA to every subagent dispatch for that finding. Finding-scoped diffs use `git diff "$FINDING_BASELINE" -- …` (empty SHA → use `HEAD`). The baseline isolates each finding's diff from prior findings' accumulated changes — the maintainer commits once at cycle close, so the working tree accumulates across findings. Stash-create commits don't appear on the stash stack; Git reflog-GCs them.
+
 ## Finding lifecycle
 
 Findings are processed one at a time, in declared order. The per-finding loop has up to six passes:
@@ -103,7 +115,7 @@ Worker 0 reads the finding's `- [ ]` text in `dry-<0_0_X>.md` (no source code). 
 If pre-triaged, Worker 0 appends:
 
 ```
-  - **Pre-triage (Worker 0, YYYY-MM-DD):** Skipped — <one line: quoted reason from the bullet>.
+  - **Pre-triage (Worker 0):** Skipped — <one line: quoted reason from the bullet>.
 ```
 
 …and ticks `- [x]`. Advance.
@@ -112,7 +124,7 @@ Otherwise, dispatch Worker 1 (step B). **Any finding whose bullet asserts a conc
 
 ### B. Worker-1 Investigation
 
-Worker 0 re-reads the plan and computes the active finding's line range. Dispatch a fresh Worker 1 subagent with the line range + role.
+Worker 0 re-reads the plan, computes the active finding's line range, and captures `FINDING_BASELINE=$(git stash create)`. Dispatch a fresh Worker 1 subagent with the line range, baseline SHA, and role.
 
 Worker 1:
 
@@ -133,7 +145,7 @@ Worker 2:
 - Reads the named line range + source artifact + cited source / tests.
 - Adds `# TODO(dry-<0_0_X>): <one-line>` comments in source at every site that will change in the Implementation pass. The TODO text names the helper / consolidation shape from Worker 1's pseudo-code.
 - Appends a TODO scaffold sub-bullet listing every TODO added, plus any corrections to Worker 1's pseudo-code or call-site list.
-- May minimally edit Worker 1's pseudo-code block in the Investigation sub-bullet if scaffold-time inspection finds a concrete error in it (e.g., wrong signature). The edit is marked `Pseudo-code (corrected by Worker 2, YYYY-MM-DD)`. Larger drift goes in the TODO scaffold sub-bullet as a deviation note.
+- May minimally edit Worker 1's pseudo-code block in the Investigation sub-bullet if scaffold-time inspection finds a concrete error in it (e.g., wrong signature). The edit is marked `Pseudo-code (corrected by Worker 2)`. Larger drift goes in the TODO scaffold sub-bullet as a deviation note.
 - Does NOT run ruff, does NOT run tests. The TODOs are scaffolding; the Implementation pass owns formatting and lint.
 
 ### D. Worker-1 Implementation
@@ -162,7 +174,7 @@ Worker 2:
 ### F. Worker-0 closes the finding
 
 - On `verified`: tick `- [x]`. Advance.
-- On `revision-needed`: re-dispatch Worker 1 Implementation (step D) — the new Worker 1 spawn writes `Implementation (Worker 1, pass N, YYYY-MM-DD):` rather than editing the prior one. After re-implementation, re-dispatch Worker 2 Verification (step E).
+- On `revision-needed`: re-dispatch Worker 1 Implementation (step D) — the new Worker 1 spawn writes `Implementation (Worker 1, pass N):` rather than editing the prior one. After re-implementation, re-dispatch Worker 2 Verification (step E).
 
 Only Worker 0 ticks `- [x]`. Workers 1 and 2 NEVER mark a finding closed.
 
@@ -188,11 +200,11 @@ A single agent role-playing every worker can convince itself a consolidation is 
 
 Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.md`, `DRY.md`, the worker's own role file), the active plan path, the **line range** of the active finding, the worker's role for this pass (Investigation / TODO scaffold / Implementation / Verification / final gate), and any pass-specific source-artifact citation.
 
-No cross-worker chatter. All inter-worker information flows through the plan artifact and the working-tree diff.
+No cross-worker chatter. All inter-worker information flows through the plan artifact and the finding-scoped diff.
 
 ### Recovery from interrupted subagent runs
 
-If a subagent fails mid-pass (transient API errors, network failures, time-outs), Worker 0 dispatches a fresh subagent of the same role with explicit "pick up where the prior pass left off" context. The new subagent's prompt names the partial sub-bullet (if any), the current working-tree diff, and the active line range.
+If a subagent fails mid-pass (transient API errors, network failures, time-outs), Worker 0 dispatches a fresh subagent of the same role with explicit "pick up where the prior pass left off" context. The new subagent's prompt names the partial sub-bullet (if any), the finding-scoped diff (`git diff "$FINDING_BASELINE" -- …`), and the active line range.
 
 The recovery finishes the original pass's sub-bullet; it does NOT start a "pass N+1" sub-bullet.
 

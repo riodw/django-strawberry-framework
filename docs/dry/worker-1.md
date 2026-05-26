@@ -16,7 +16,7 @@ Read the docs marked `yes` in the **Worker 1** column of the Required reading pe
 For both passes, read ONLY the line range Worker 0 named in the dispatch prompt — not the whole plan. Use `Read(offset=<start>, limit=<end - start + 1>)`.
 
 - **Investigation pass:** also read the source artifact named in the `_Source:_` line, the cited source files, and any related tests.
-- **Implementation pass:** also read the cited source / tests (now containing Worker 2's TODO comments) plus the working-tree diff.
+- **Implementation pass:** also read the cited source / tests (now containing Worker 2's TODO comments) plus the finding-scoped diff (`git diff "$FINDING_BASELINE" -- …`).
 
 If any instruction conflicts with `AGENTS.md` or `START.md`, follow `AGENTS.md` and `START.md`.
 
@@ -49,7 +49,7 @@ Given the line range of a `- [ ]` finding in the active plan:
    - **Real opportunity.** The opportunity is still present in current source and worth consolidating. Append the sub-bullet directly under the `- [ ]`:
 
      ````
-       - **Investigation (Worker 1, YYYY-MM-DD):** Real. <one paragraph: which call sites repeat, the recommended consolidation shape, any constraints Worker 2 / future Worker 1 should respect (e.g. preserve a public signature, do not change error-message wording)>.
+       - **Investigation (Worker 1):** Real. <one paragraph: which call sites repeat, the recommended consolidation shape, any constraints Worker 2 / future Worker 1 should respect (e.g. preserve a public signature, do not change error-message wording)>.
          Pseudo-code:
          ```python
          # the shape Worker 1 will implement at the Implementation pass
@@ -65,7 +65,7 @@ Given the line range of a `- [ ]` finding in the active plan:
    - **Already addressed.** A subsequent commit or follow-up consolidated this. Append:
 
      ```
-       - **Investigation (Worker 1, YYYY-MM-DD):** Already addressed. <one line: helper / commit / location that resolved it>.
+       - **Investigation (Worker 1):** Already addressed. <one line: helper / commit / location that resolved it>.
      ```
 
      Return `already-addressed`.
@@ -79,7 +79,7 @@ Given the line range of a `- [ ]` finding in the active plan:
      Append:
 
      ```
-       - **Investigation (Worker 1, YYYY-MM-DD):** Not real. <one-line reason>.
+       - **Investigation (Worker 1):** Not real. <one-line reason>.
      ```
 
      Return `not-real`.
@@ -94,7 +94,7 @@ Given a finding with both an Investigation sub-bullet AND a TODO scaffold sub-bu
 
 1. Read the named line range.
 2. Read the cited source (now containing `# TODO(dry-<0_0_X>):` comments at every site that needs to change).
-3. Read the working-tree diff (the TODO scaffold pass's output).
+3. Read the finding-scoped diff `git diff "$FINDING_BASELINE" -- …` (the TODO scaffold pass's output).
 4. Replace each TODO with the actual consolidation:
    - Add the helper / extend the existing helper as the Investigation prescribed.
    - Update each call site listed in the Investigation.
@@ -102,26 +102,26 @@ Given a finding with both an Investigation sub-bullet AND a TODO scaffold sub-bu
 5. Add or update permanent tests that pin the consolidated behavior, per `AGENTS.md` test-placement rules. (Worker 2's Verification pass may add tests too; you do whichever is the natural fit at this point.)
 6. Run `uv run ruff format .`.
 7. Run `uv run ruff check --fix .`.
-8. Run `git status --short`. For each modified file, classify:
+8. Run `git diff --name-only "$FINDING_BASELINE"`. For each modified file, classify:
    - **Slice-intended** — in the finding's scope (named in the Investigation or a direct consequence). Stays in the diff.
-   - **Unrelated tool churn** — outside the finding's scope, only changed because ruff touched it. Revert with `git checkout -- <path>`.
+   - **Unrelated tool churn** — outside the finding's scope, only changed because ruff touched it. Revert with `git checkout "$FINDING_BASELINE" -- <path>` (restores file to baseline state, preserving any prior finding's contribution).
 
    Tool-induced drift is Worker 1's responsibility at this boundary. Never pass it through to Worker 2 as "out of scope."
 
 9. Append:
 
    ```
-     - **Implementation (Worker 1, YYYY-MM-DD):** <one paragraph: helper added at path:NN with signature `name(...)`, call sites updated at paths X/Y/Z, all TODOs removed, ruff format pass, ruff check pass, no unrelated drift>.
+     - **Implementation (Worker 1):** <one paragraph: helper added at path:NN with signature `name(...)`, call sites updated at paths X/Y/Z, all TODOs removed, ruff format pass, ruff check pass, no unrelated drift>.
    ```
 
-   On a re-pass (Worker 2 Verification returned `revision-needed`), use `Implementation (Worker 1, pass N, YYYY-MM-DD):` and address the specific feedback in the Verification sub-bullet. Do NOT edit prior Implementation sub-bullets.
+   On a re-pass (Worker 2 Verification returned `revision-needed`), use `Implementation (Worker 1, pass N):` and address the specific feedback in the Verification sub-bullet. Do NOT edit prior Implementation sub-bullets.
 
 ## TODO-scaffold drift
 
 If Worker 2's TODO scaffold prescribes a shape that turns out wrong on close inspection (e.g., a TODO at a call site that doesn't actually need to change), record the deviation prominently in the Implementation sub-bullet:
 
 ```
-  - **Implementation (Worker 1, YYYY-MM-DD):** Scaffold drift. The TODO at <path:NN> prescribed <X>; on inspection <Y> is correct because <reason>. Implemented <Y>; the TODO at <path:NN> was removed without edit.
+  - **Implementation (Worker 1):** Scaffold drift. The TODO at <path:NN> prescribed <X>; on inspection <Y> is correct because <reason>. Implemented <Y>; the TODO at <path:NN> was removed without edit.
 ```
 
 Worker 2's Verification pass either accepts the deviation or rejects with a specific reason. Do not silently deviate without recording it.

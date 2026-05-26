@@ -168,9 +168,10 @@ def test_safe_wrap_connection_method_raises_on_non_callable_wrapper():
 
     Pins the wrap-time-vs-call-time silent-failure mode closed: the
     type annotation ``Callable[..., Any]`` is now enforced at runtime,
-    so a typo (e.g. ``connection.cursor`` accidentally passed instead
-    of ``lambda: connection.cursor()``) surfaces at the wrap site with
-    a traceback pointing at the consumer's call.
+    so a typo (e.g. ``connection.cursor()`` — a cursor object, not
+    callable — accidentally passed instead of
+    ``lambda: connection.cursor()``) surfaces at the wrap site with a
+    traceback pointing at the consumer's call.
     """
     connection = connections["default"]
     original_cursor = connection.cursor

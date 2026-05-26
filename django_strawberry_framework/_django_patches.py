@@ -117,6 +117,15 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     _DatabaseFailure = None  # type: ignore[assignment,misc]
 
 
+# Module-level sentinel: ``apply()`` may run more than once because
+# ``AppConfig.ready()`` can fire repeatedly under some Django test
+# runners. The missing-``_DatabaseFailure`` notice should log only on
+# the first such call per process so the framework logger isn't spammed
+# during repeated app initialization. Patched to ``False`` in the
+# regression tests for hermetic per-test state.
+_missing_symbol_logged = False
+
+
 def _is_database_failure(method: object) -> bool:
     """Return whether ``method`` is Django's disallowed-database wrapper."""
     return _DatabaseFailure is not None and isinstance(method, _DatabaseFailure)
@@ -197,16 +206,21 @@ def apply() -> None:
     When Django renamed, relocated, or removed the private
     ``_DatabaseFailure`` symbol the patch depends on (``ImportError``
     at module load time), this function logs a single ``INFO``-level
-    notice and returns without touching ``SimpleTestCase``. That keeps
+    notice (once per process, gated by the ``_missing_symbol_logged``
+    module sentinel so repeat ``ready()`` invocations don't spam the
+    logger) and returns without touching ``SimpleTestCase``. That keeps
     the rest of the package loadable on future Django versions that
     break the private symbol.
     """
+    global _missing_symbol_logged
     if _DatabaseFailure is None:
-        logger.info(
-            "django-strawberry-framework: skipping _remove_databases_failures patch — "
-            "Django's private _DatabaseFailure symbol is unavailable at this Django "
-            "version. The Trac #37064 backstop will not be installed.",
-        )
+        if not _missing_symbol_logged:
+            logger.info(
+                "django-strawberry-framework: skipping _remove_databases_failures patch — "
+                "Django's private _DatabaseFailure symbol is unavailable at this Django "
+                "version. The Trac #37064 backstop will not be installed.",
+            )
+            _missing_symbol_logged = True
         return
     if _patch_is_installed():
         return

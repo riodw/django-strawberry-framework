@@ -132,10 +132,11 @@ def safe_wrap_connection_method(
 
     Raises:
         TypeError: If ``wrapper`` is not callable. Validated at the
-            wrap site so a typo (e.g. passing ``connection.cursor``
-            instead of ``lambda: connection.cursor()``) surfaces here
-            rather than as a delayed ``TypeError`` deep inside Django's
-            ORM machinery at the next ``connection.<method>()`` call.
+            wrap site so a typo (e.g. passing ``connection.cursor()``
+            — the cursor object, not a callable — instead of
+            ``lambda: connection.cursor()``) surfaces here rather than
+            as a delayed ``TypeError`` deep inside Django's ORM
+            machinery at the next ``connection.<method>()`` call.
     """
     if not callable(wrapper):
         raise TypeError(

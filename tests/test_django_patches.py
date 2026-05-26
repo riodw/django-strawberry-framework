@@ -284,7 +284,10 @@ def test_apply_no_ops_when_database_failure_symbol_missing(caplog):
     # bound-method object on each access).
     saved = SimpleTestCase.__dict__["_remove_databases_failures"]
 
-    with mock.patch.object(_django_patches, "_DatabaseFailure", None):
+    with (
+        mock.patch.object(_django_patches, "_DatabaseFailure", None),
+        mock.patch.object(_django_patches, "_missing_symbol_logged", False),
+    ):
         with caplog.at_level("INFO", logger="django_strawberry_framework"):
             _django_patches.apply()
 
@@ -298,3 +301,32 @@ def test_apply_no_ops_when_database_failure_symbol_missing(caplog):
         ]
         assert len(skip_records) == 1
         assert skip_records[0].levelname == "INFO"
+
+
+def test_apply_logs_missing_symbol_notice_only_once(caplog):
+    """Pin the once-per-process sentinel.
+
+    ``apply()`` is invoked from ``AppConfig.ready()``, which can fire
+    more than once under some Django test runners. The missing-symbol
+    INFO notice must log only on the first such call per process so
+    the framework logger is not spammed during repeated app
+    initialization. The ``_missing_symbol_logged`` module sentinel
+    gates the log; this test pins the sentinel's behavior by calling
+    ``apply()`` three times with ``_DatabaseFailure`` patched to
+    ``None`` and asserting exactly one INFO record was emitted.
+    """
+    with (
+        mock.patch.object(_django_patches, "_DatabaseFailure", None),
+        mock.patch.object(_django_patches, "_missing_symbol_logged", False),
+    ):
+        with caplog.at_level("INFO", logger="django_strawberry_framework"):
+            _django_patches.apply()
+            _django_patches.apply()
+            _django_patches.apply()
+
+        skip_records = [
+            r
+            for r in caplog.records
+            if r.name == "django_strawberry_framework" and "_DatabaseFailure" in r.message
+        ]
+        assert len(skip_records) == 1

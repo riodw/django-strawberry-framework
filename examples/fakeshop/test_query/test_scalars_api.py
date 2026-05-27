@@ -440,6 +440,79 @@ def test_scalar_specimen_nullable_partners_reverse_relation_over_http():
 
 
 @pytest.mark.django_db
+def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
+    """Deleting the partner target detaches the source row via ``on_delete=SET_NULL``.
+
+    Pins the only ``SET_NULL`` ondelete in the example tree (the
+    ``NullableScalarSpecimen.partner`` FK) end-to-end. The
+    setup-trigger-observe shape uses live ``/graphql/`` requests for the
+    consumer-visible halves (BEFORE the delete and AFTER) and a plain
+    ORM ``target.delete()`` call for the trigger — same pattern every
+    seed call uses, just on the other end of the row lifecycle.
+
+    Asserts three things the post-delete query must prove:
+    1. ``partner`` resolves to ``None`` after the cascade (the optimizer's
+       prefetched row reflects post-delete state — no stale cache, no
+       orphaned FK-id stub).
+    2. The source ``NullableScalarSpecimen`` row itself survives (cascade
+       is ``SET_NULL``, not ``CASCADE``).
+    3. ``partner_id`` is cleared at the column level (``SET_NULL``
+       actually nulled the FK column, not just hid the relation from
+       GraphQL).
+    """
+    target = _seed_specimen(label="target")
+    nullable = _seed_nullable_specimen(label="linked", partner=target)
+
+    # BEFORE — the link is live.
+    response = _post_graphql(
+        """
+        query {
+          allNullableScalarSpecimens {
+            label
+            partner { label }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    assert body["data"]["allNullableScalarSpecimens"] == [
+        {"label": "linked", "partner": {"label": "target"}},
+    ]
+
+    # TRIGGER — delete the partner target via ORM (mutations aren't in the
+    # example schema yet; deletion goes through the same path every seed
+    # uses, just in reverse).
+    target.delete()
+
+    # AFTER — SET_NULL fired, the link is gone, but the source row survives.
+    response = _post_graphql(
+        """
+        query {
+          allNullableScalarSpecimens {
+            label
+            partner { label }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    assert body["data"]["allNullableScalarSpecimens"] == [
+        {"label": "linked", "partner": None},
+    ]
+
+    # Sanity — the source row survived and the FK column was cleared
+    # (not the relation hidden from GraphQL — actually nulled at the DB
+    # level).
+    nullable.refresh_from_db()
+    assert nullable.pk is not None
+    assert nullable.partner_id is None
+
+
+@pytest.mark.django_db
 def test_scalar_specimen_bigint_input_decimal_string_argument_over_http():
     """A ``BigInt!`` argument provided as a decimal-string literal parses correctly.
 

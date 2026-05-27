@@ -460,7 +460,7 @@ Two files land under `docs/shadow/<stable-stem>`:
 
 ### Shadow-file line numbers are NOT canonical
 
-The shadow file strips `#` comments and replaces every string-literal token (including docstrings) with `...`; with `--strip-docstrings`, docstring statements are removed entirely instead. Either way, its line numbers do not match the original source. Build artifacts, code-review feedback, and source edits must cite **original source-file line numbers**, never shadow-file line numbers. The shadow file is read-only; never edit or commit it.
+The shadow file strips `#` comments and replaces every string-literal token (including docstrings) with `...`; with `--strip-docstrings`, docstring statements are removed entirely instead. Either way, its line numbers do not match the original source. Build artifacts, code-review feedback, and source edits must cite the original source via the symbol-qualified path convention from `AGENTS.md` #"Source references in docs and code comments" — `path::QualifiedName`, `path::QualifiedName #"unique substring"`, or `path #"unique substring"` — never via shadow-file or original-file line numbers. Raw `path:NN` line refs are allowed only in per-cycle scratchpads (the per-file `bld-<stem>.md` plan and the worker artifacts under `docs/builder/`), where the shadow file's own line numbers may be cited inline alongside the original-source symbol identifiers for review convenience. The shadow file is read-only; never edit or commit it.
 
 ## Subagent dispatch and worker memory
 

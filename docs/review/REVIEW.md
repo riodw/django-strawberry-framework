@@ -366,7 +366,7 @@ When writing a folder artifact:
 
 ### Shadow line numbers are NOT canonical
 
-The shadow file's line numbers do not match the original source. Cite **original source-file line numbers** in artifacts, Worker 3 feedback, and source edits. Never edit or commit the shadow file.
+The shadow file's line numbers do not match the original source. Cite the original source via the symbol-qualified path convention from `AGENTS.md` #"Source references in docs and code comments" — `path::QualifiedName`, `path::QualifiedName #"unique substring"`, or `path #"unique substring"` — in artifacts, Worker 3 feedback, and source edits. Raw `path:NN` line refs are allowed only in per-cycle scratchpads (`docs/review/rev-*.md`, the per-folder + project artifacts, the Worker 3 feedback files), where the shadow file's own line numbers may be cited inline alongside the original-source symbol identifiers for review convenience. Never edit or commit the shadow file.
 
 ## Folder and project passes
 

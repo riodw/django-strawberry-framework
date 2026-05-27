@@ -34,7 +34,7 @@ Every worker reads the standing project docs and its own role file before acting
 | `django_strawberry_framework/__init__.py` | yes (plan + closeout) | — | — |
 | `GOAL.md` | yes | yes | — |
 | `docs/GLOSSARY.md` | yes | yes | — |
-| active `docs/dry/dry-<0_0_X>.md` | yes (whole file: state inspection + line-range computation) | yes (only the line range W0 names) | yes (only the line range W0 names) |
+| active `docs/dry/dry-<0_0_X>.md` | yes (whole file: state inspection + finding-section computation) | yes (only the finding section W0 names) | yes (only the finding section W0 names) |
 | source artifacts (`bld-*.md` / `rev-*.md`) | — | yes (read-only) | yes (read-only) |
 | relevant source / tests | — | yes (writes during Implementation) | yes (writes during TODO scaffold + Verification) |
 | finding-scoped diff (`git diff $FINDING_BASELINE -- …`) | — | yes (Implementation re-pass) | yes (Verification pass) |
@@ -77,7 +77,7 @@ The generated `dry-<0_0_X>.md` file begins with target release, source directory
 
 Each `- [ ]` is a **finding**. As the cycle progresses, workers append sub-bullets under the finding with their work product. When the finding is complete or skipped, Worker 0 ticks `- [x]`. **The bullet text stays visible whether the finding was completed, skipped, or judged not real** — `- [x]` is the universal closed marker and the sub-bullets explain why.
 
-Worker 1 may minimally correct a finding's `- [ ]` text in place if it cited stale line numbers or wrong symbol names. Worker 0 may correct an obvious typo. Otherwise the script-generated structure stays as-is.
+Worker 1 may minimally correct a finding's `- [ ]` text in place if it cited stale symbol names or out-of-date substring anchors. Worker 0 may correct an obvious typo. Otherwise the script-generated structure stays as-is.
 
 ## Dispatch mode and baseline
 
@@ -124,11 +124,11 @@ Otherwise, dispatch Worker 1 (step B). **Any finding whose bullet asserts a conc
 
 ### B. Worker-1 Investigation
 
-Worker 0 re-reads the plan, computes the active finding's line range, and captures `FINDING_BASELINE=$(git stash create)`. Dispatch a fresh Worker 1 subagent with the line range, baseline SHA, and role.
+Worker 0 re-reads the plan, locates the active finding's section, and captures `FINDING_BASELINE=$(git stash create)`. Dispatch a fresh Worker 1 subagent with the finding-section locator, baseline SHA, and role.
 
 Worker 1:
 
-- Reads the named line range of the plan, the source artifact named in the `_Source:_` line, and the cited source / tests.
+- Reads the named finding section of the plan, the source artifact named in the `_Source:_` line, and the cited source / tests.
 - Decides disposition:
   - **Real opportunity** — appends an Investigation sub-bullet with a one-paragraph summary AND a pseudo-code block showing the intended shape; may minimally correct the `- [ ]` text if stale. Returns `real`.
   - **Already addressed** — appends an Investigation sub-bullet citing the resolution. Returns `already-addressed`.
@@ -138,11 +138,11 @@ Worker 1:
 
 Only runs when B returns `real`. If B returned `already-addressed` or `not-real`, Worker 0 ticks `- [x]` and advances.
 
-Worker 0 re-reads the plan, recomputes the line range, dispatches a fresh Worker 2 subagent.
+Worker 0 re-reads the plan, relocates the finding section, dispatches a fresh Worker 2 subagent.
 
 Worker 2:
 
-- Reads the named line range + source artifact + cited source / tests.
+- Reads the named finding section + source artifact + cited source / tests.
 - Adds `# TODO(dry-<0_0_X>): <one-line>` comments in source at every site that will change in the Implementation pass. The TODO text names the helper / consolidation shape from Worker 1's pseudo-code.
 - Appends a TODO scaffold sub-bullet listing every TODO added, plus any corrections to Worker 1's pseudo-code or call-site list.
 - May minimally edit Worker 1's pseudo-code block in the Investigation sub-bullet if scaffold-time inspection finds a concrete error in it (e.g., wrong signature). The edit is marked `Pseudo-code (corrected by Worker 2)`. Larger drift goes in the TODO scaffold sub-bullet as a deviation note.
@@ -150,22 +150,22 @@ Worker 2:
 
 ### D. Worker-1 Implementation
 
-Worker 0 re-reads the plan, recomputes the line range, dispatches a fresh Worker 1 subagent.
+Worker 0 re-reads the plan, relocates the finding section, dispatches a fresh Worker 1 subagent.
 
 Worker 1:
 
-- Reads the named line range (now containing Investigation + TODO scaffold) + cited source (now containing `# TODO(dry-<0_0_X>):` comments).
+- Reads the named finding section (now containing Investigation + TODO scaffold) + cited source (now containing `# TODO(dry-<0_0_X>):` comments).
 - Replaces each TODO with the actual consolidation. Adds / extends the helper. Updates each call site. **Removes every `# TODO(dry-<0_0_X>):` comment as the corresponding edit lands.**
 - Runs `uv run ruff format .` then `uv run ruff check --fix .`. Reverts any tool-induced drift in files outside the finding's scope via `git checkout -- <path>`.
 - Appends an Implementation sub-bullet listing files touched, the helper signature, every call site updated, and ruff results.
 
 ### E. Worker-2 Verification + test
 
-Worker 0 re-reads the plan, recomputes the line range, dispatches a fresh Worker 2 subagent.
+Worker 0 re-reads the plan, relocates the finding section, dispatches a fresh Worker 2 subagent.
 
 Worker 2:
 
-- Reads the named line range + Worker 1's diff + cited source / tests.
+- Reads the named finding section + Worker 1's diff + cited source / tests.
 - Confirms the helper lives where the Investigation prescribed, every cited call site routes through it, **no `# TODO(dry-<0_0_X>):` comments remain**, and tests pin the consolidated behavior.
 - Runs focused tests with `--no-cov` (per the coverage gate rule below).
 - Adds a permanent test pinning the consolidation if one is missing.
@@ -178,17 +178,17 @@ Worker 2:
 
 Only Worker 0 ticks `- [x]`. Workers 1 and 2 NEVER mark a finding closed.
 
-## Line-range delegation
+## Finding-section delegation
 
-Each subagent dispatch from Worker 0 names the active finding's line range in `dry-<0_0_X>.md` (e.g., `read lines 42-78`). The subagent uses `Read(offset=42, limit=37)` to load only that slice of the plan, plus the standing required reading and the source / artifact references for its pass. This keeps subagent context narrow as the plan grows with sub-bullets.
+Each subagent dispatch from Worker 0 names the active finding's section in `dry-<0_0_X>.md` by a substring anchor unique to that finding's `- [ ]` bullet (e.g., `the bullet under «source artifact» starting with «first 8-15 words of the finding text»`). The subagent uses `Grep` to locate the bullet, then `Read` to load only that section of the plan plus its sub-bullets — alongside the standing required reading and the source / artifact references for its pass. This keeps subagent context narrow as the plan grows with sub-bullets. Per the per-cycle scratchpad exemption in `AGENTS.md` #"Source references in docs and code comments", Worker 0 *may* additionally pass a line offset / limit it computed locally as an optimization, but the substring anchor is the authoritative locator — if the offset has drifted, the substring still finds the right bullet.
 
-**Worker 0 re-reads the plan to recompute the active range before EVERY dispatch** because edits from prior passes shift lines. The range starts at the `- [ ]` (or `- [x]`) bullet line and runs to the line before the next bullet at the same indent OR the next `##`/`###` heading.
+**Worker 0 re-reads the plan to relocate the active finding section before EVERY dispatch** because edits from prior passes shift offsets. The section starts at the `- [ ]` (or `- [x]`) bullet line and runs to the line before the next bullet at the same indent OR the next `##`/`###` heading.
 
-If a subagent's prompt names a stale range (the plan changed mid-pass for reasons outside Worker 0's control), the subagent must stop and report rather than guess.
+If a subagent's prompt names a stale locator (the plan changed mid-pass for reasons outside Worker 0's control), the subagent must stop and report rather than guess.
 
 ## Roles, in one sentence
 
-- **Worker 0** (main thread): dispatcher and state manager. Owns the `- [x]` checkboxes. Owns line-range computation. Does not read source code.
+- **Worker 0** (main thread): dispatcher and state manager. Owns the `- [x]` checkboxes. Owns finding-section computation. Does not read source code.
 - **Worker 1** (subagent): investigator and implementer. Decides whether a finding is real, writes the summary + pseudo-code, later replaces TODOs with actual code.
 - **Worker 2** (subagent): scaffolder, verifier, and tester. Adds TODO comments at the call sites, later reviews the diff and runs / adds tests.
 
@@ -198,13 +198,13 @@ Workers 1 and 2 each run as **separate subagent invocations per pass**. The work
 
 A single agent role-playing every worker can convince itself a consolidation is sufficient because it remembers _why_ it implemented it that way. Subagent isolation removes that path: the verifying Worker 2 sees only the sub-bullet trail and the diff.
 
-Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.md`, `DRY.md`, the worker's own role file), the active plan path, the **line range** of the active finding, the worker's role for this pass (Investigation / TODO scaffold / Implementation / Verification / final gate), and any pass-specific source-artifact citation.
+Each subagent's prompt must include: standing project docs (`AGENTS.md`, `START.md`, `DRY.md`, the worker's own role file), the active plan path, the **finding section** of the active finding, the worker's role for this pass (Investigation / TODO scaffold / Implementation / Verification / final gate), and any pass-specific source-artifact citation.
 
 No cross-worker chatter. All inter-worker information flows through the plan artifact and the finding-scoped diff.
 
 ### Recovery from interrupted subagent runs
 
-If a subagent fails mid-pass (transient API errors, network failures, time-outs), Worker 0 dispatches a fresh subagent of the same role with explicit "pick up where the prior pass left off" context. The new subagent's prompt names the partial sub-bullet (if any), the finding-scoped diff (`git diff "$FINDING_BASELINE" -- …`), and the active line range.
+If a subagent fails mid-pass (transient API errors, network failures, time-outs), Worker 0 dispatches a fresh subagent of the same role with explicit "pick up where the prior pass left off" context. The new subagent's prompt names the partial sub-bullet (if any), the finding-scoped diff (`git diff "$FINDING_BASELINE" -- …`), and the active finding section.
 
 The recovery finishes the original pass's sub-bullet; it does NOT start a "pass N+1" sub-bullet.
 

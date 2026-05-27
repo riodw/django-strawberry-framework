@@ -468,14 +468,28 @@ def test_convert_scalar_binary_field_raises_unsupported():
 
 
 # ---------------------------------------------------------------------------
-# BigInt scalar — schema-execution field-mapping tests (Slice 1)
+# BigInt scalar — package-internal contract tests
+#
+# The field-mapping introspection tests and the basic outbound/inbound
+# round-trip tests were migrated to live ``/graphql/`` coverage on the
+# scalars app (``examples/fakeshop/test_query/test_scalars_api.py``). What
+# remains here is unreachable from a real HTTP path:
+#
+# - ``test_big_auto_field_still_maps_to_int`` — sibling case asserting
+#   ``BigAutoField -> Int`` (NOT BigInt). The scalars app's id columns
+#   are also ``BigAutoField`` but the example schema doesn't introspect
+#   into the synthetic ``managed=False`` shape this test needs.
+# - Four BigInt rejection / edge tests (``null`` input, bool / float
+#   argument rejection, bool return-value rejection). The strict parser
+#   / serializer error contracts surface as ``GraphQLError`` from
+#   Strawberry — reachable via HTTP in principle but the package test is
+#   the contract source; HTTP coverage would only re-verify what the
+#   library round-trip tests already prove for non-error inputs.
 #
 # Synthetic models live under ``app_label = "test_bigint"`` so they do not
 # collide with the choice-enum fixture's ``app_label = "test_choice_enums"``.
-# Models declared inside test functions per Decision 7's in-function pattern
-# (spec lines 641-646) — keeps each test's model declaration adjacent to
-# the ``DjangoType`` it powers. ``managed = False`` per spec line 633: no
-# migration implication; test rows are instantiated directly when needed.
+# ``managed = False`` per Decision 7 spec line 633: no migration
+# implication; test rows are instantiated directly when needed.
 # ---------------------------------------------------------------------------
 
 
@@ -640,27 +654,23 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
 
 
 # ---------------------------------------------------------------------------
-# JSONField -> ``strawberry.scalars.JSON`` schema-execution tests (Slice 2)
-#
-# Synthetic models live under ``app_label = "test_jsonfield"`` so they do not
-# collide with the BigInt synthetic app (``"test_bigint"``) or the
-# choice-enum fixture (``"test_choice_enums"``). Models declared inside test
-# functions per Decision 7's in-function pattern; ``managed = False`` keeps
-# Django from caring about migrations. The introspection helpers
-# (``_introspect_field_type`` / ``_walk_introspected_type``) are reused
-# verbatim from the BigInt section above.
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # ArrayField -> list[T] sentinel-guarded recursion (Slice 3)
 #
 # Synthetic models live under ``app_label = "test_arrayfield"`` so they do
-# not collide with the prior synthetic apps (``test_bigint``, ``test_jsonfield``,
+# not collide with the prior synthetic apps (``test_bigint``,
 # ``test_choice_enums``). Sentinel-branch tests monkey-patch
 # ``converters._ARRAY_FIELD_CLS = _FakeArrayField`` BEFORE declaring the
 # ``DjangoType`` (Decision 7 spec line 635). Helper-resolver tests use
-# ``sys.modules`` manipulation per Decision 7 spec lines 661-676.
+# ``sys.modules`` manipulation per Decision 7 spec lines 661-676. The
+# introspection helpers (``_introspect_field_type`` /
+# ``_walk_introspected_type``) defined in the BigInt section above are
+# reused verbatim by every owner-introspection test below.
+#
+# Why this section can never migrate to live HTTP: ``ArrayField`` is a
+# PostgreSQL-only field type and the fakeshop runs on SQLite. The
+# converter-table row is exercised here against synthetic models and the
+# sentinel-monkeypatch pattern; consumer-facing coverage stays package-
+# internal until the example project gains a postgres test matrix.
 # ---------------------------------------------------------------------------
 
 
@@ -1031,11 +1041,15 @@ def test_real_array_field_compatible_with_strawberry():
 #
 # Synthetic models live under ``app_label = "test_hstorefield"`` so they do
 # not collide with the prior synthetic apps (``test_bigint``,
-# ``test_jsonfield``, ``test_arrayfield``, ``test_choice_enums``). Sentinel-
-# branch tests monkey-patch
-# ``converters._HSTORE_FIELD_CLS = _FakeHStoreField`` BEFORE declaring the
-# ``DjangoType`` (Decision 7 spec line 635). Helper-resolver tests use
-# ``sys.modules`` manipulation per Decision 7 spec lines 661-676.
+# ``test_arrayfield``, ``test_choice_enums``). Sentinel-branch tests
+# monkey-patch ``converters._HSTORE_FIELD_CLS = _FakeHStoreField`` BEFORE
+# declaring the ``DjangoType`` (Decision 7 spec line 635). Helper-resolver
+# tests use ``sys.modules`` manipulation per Decision 7 spec lines 661-676.
+#
+# Same postgres-only constraint as the ArrayField section: ``HStoreField``
+# can never run on the SQLite-backed fakeshop, so the converter-table row
+# stays covered here against synthetic models. Migration to live HTTP is
+# gated on the example project gaining a postgres test matrix.
 # ---------------------------------------------------------------------------
 
 

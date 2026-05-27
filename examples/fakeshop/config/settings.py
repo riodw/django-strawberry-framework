@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     # Local
     "apps.library.apps.LibraryConfig",
     "apps.products.apps.ProductsConfig",
+    "apps.scalars.apps.ScalarsConfig",
 ]
 
 MIDDLEWARE = [

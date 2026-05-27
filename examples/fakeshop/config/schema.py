@@ -12,12 +12,13 @@ and is left out for now.
 import strawberry
 from apps.library.schema import Query as LibraryQuery
 from apps.products.schema import Query as ProductsQuery
+from apps.scalars.schema import Query as ScalarsQuery
 
 from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types, strawberry_config
 
 
 @strawberry.type
-class Query(LibraryQuery, ProductsQuery):
+class Query(LibraryQuery, ProductsQuery, ScalarsQuery):
     """Top-level Query — extends each app's Query."""
 
 

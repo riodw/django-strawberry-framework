@@ -87,37 +87,6 @@ def _force_unregister_after_finalize(type_cls):
 
 
 @pytest.mark.django_db
-def test_optimizer_applies_select_related_for_forward_fk(django_assert_num_queries):
-    """A forward FK selection collapses to one SQL query via ``select_related``."""
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-
-    # 1 SQL query: SELECT items + JOIN categories via select_related.
-    with django_assert_num_queries(1):
-        result = schema.execute_sync("{ allItems { name category { name } } }")
-        assert result.errors is None
-        assert len(result.data["allItems"]) == 25
-
-
-@pytest.mark.django_db
 def test_optimize_coerces_manager_through_all(django_assert_num_queries):
     """A root resolver returning a Manager (not ``.all()``) is still optimized.
 
@@ -207,42 +176,6 @@ def test_optimizer_plans_merged_duplicate_root_field_nodes(django_assert_num_que
 
 
 @pytest.mark.django_db
-def test_optimizer_applies_prefetch_related_for_reverse_fk(django_assert_num_queries):
-    """A reverse FK selection collapses to two SQL queries via ``prefetch_related``."""
-    services.seed_data(1)
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-
-    class PropertyType(DjangoType):
-        class Meta:
-            model = Property
-            fields = ("id", "name")
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-
-    # 2 queries: SELECT categories + prefetched items.
-    with django_assert_num_queries(2):
-        result = schema.execute_sync("{ allCategories { name items { name } } }")
-        assert result.errors is None
-        assert len(result.data["allCategories"]) == 25
-
-
-@pytest.mark.django_db
 def test_optimizer_combines_select_related_and_prefetch_related(django_assert_num_queries):
     """A query selecting both a forward FK and a reverse rel issues 2 queries total."""
     services.seed_data(1)
@@ -285,8 +218,18 @@ def test_optimizer_combines_select_related_and_prefetch_related(django_assert_nu
 
 
 @pytest.mark.django_db
-def test_optimizer_elides_forward_fk_id_only_selection(django_assert_num_queries):
-    """B2: ``category { id }`` is served from ``Item.category_id`` with no JOIN."""
+def test_optimizer_elides_forward_fk_id_only_selection_plan_shape():
+    """B2 plan-state inspection: ``category { id }`` produces an elision plan.
+
+    The behavioral half (1 SQL query, no JOIN, id round-trips) is pinned by
+    ``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query``.
+    This test keeps the package-internal plan-state assertions that are
+    unreachable from a live ``/graphql/`` request: ``plan.select_related``
+    must be empty, ``plan.only_fields`` must include the source FK column,
+    ``plan.fk_id_elisions`` must record the resolver key, and
+    ``ctx.dst_optimizer_fk_id_elisions`` must mirror it (the set the
+    forward-FK resolver consults at resolve time).
+    """
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -309,14 +252,11 @@ def test_optimizer_elides_forward_fk_id_only_selection(django_assert_num_queries
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
 
-    with django_assert_num_queries(1):
-        result = schema.execute_sync(
-            "{ allItems { name category { id } } }",
-            context_value=ctx,
-        )
+    result = schema.execute_sync(
+        "{ allItems { name category { id } } }",
+        context_value=ctx,
+    )
     assert result.errors is None
-    assert len(result.data["allItems"]) == 25
-    assert all(item["category"]["id"] for item in result.data["allItems"])
     plan = ctx.dst_optimizer_plan
     assert plan.select_related == ()
     assert plan.prefetch_related == ()
@@ -326,8 +266,17 @@ def test_optimizer_elides_forward_fk_id_only_selection(django_assert_num_queries
 
 
 @pytest.mark.django_db
-def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias(django_assert_num_queries):
-    """B2/O4: duplicate aliases are both served from the source FK column."""
+def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias_plan_shape():
+    """B2/O4 plan-state inspection: duplicate aliases each register their own elision key.
+
+    The behavioral half (1 SQL query, no JOIN, both aliases return the same
+    FK id) is pinned by
+    ``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_fk_id_elision_for_each_alias_in_http_query``.
+    This test keeps the package-internal plan-state assertions: the plan
+    records BOTH alias resolver keys, ``only_fields`` projects exactly the
+    source FK column (deduped), and the context-side elision set carries
+    both keys for the per-alias forward-FK resolver to consult.
+    """
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -350,13 +299,11 @@ def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias(django_ass
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
 
-    with django_assert_num_queries(1):
-        result = schema.execute_sync(
-            "{ allItems { first: category { id } second: category { id } } }",
-            context_value=ctx,
-        )
+    result = schema.execute_sync(
+        "{ allItems { first: category { id } second: category { id } } }",
+        context_value=ctx,
+    )
     assert result.errors is None
-    assert all(item["first"]["id"] == item["second"]["id"] for item in result.data["allItems"])
     plan = ctx.dst_optimizer_plan
     assert plan.select_related == ()
     assert plan.prefetch_related == ()
@@ -372,8 +319,16 @@ def test_optimizer_elides_forward_fk_id_only_selection_for_each_alias(django_ass
 
 
 @pytest.mark.django_db
-def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected(django_assert_num_queries):
-    """B2: selecting any target scalar beyond ``id`` keeps the normal JOIN path."""
+def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_shape():
+    """B2 plan-state inspection: extra target scalar forces ``select_related`` over elision.
+
+    The behavioral half (1 SQL query via JOIN, extra scalar populates from
+    the joined row) is pinned by
+    ``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_query``.
+    This test keeps the package-internal plan-state assertions: the
+    optimizer plans ``select_related("category",)``, records NO elisions,
+    and projects the full ``category__*`` chain in ``only_fields``.
+    """
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -396,11 +351,10 @@ def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected(django_a
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
 
-    with django_assert_num_queries(1):
-        result = schema.execute_sync(
-            "{ allItems { name category { id name } } }",
-            context_value=ctx,
-        )
+    result = schema.execute_sync(
+        "{ allItems { name category { id name } } }",
+        context_value=ctx,
+    )
     assert result.errors is None
     plan = ctx.dst_optimizer_plan
     assert plan.select_related == ("category",)

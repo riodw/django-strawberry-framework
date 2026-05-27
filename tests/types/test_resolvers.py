@@ -23,15 +23,6 @@ from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer.plans import resolver_key
 from django_strawberry_framework.registry import registry
 
-CATEGORY_SCALAR_FIELDS = (
-    "id",
-    "name",
-    "description",
-    "is_private",
-    "created_date",
-    "updated_date",
-)
-
 
 def _path(*keys):
     """Build a graphql-core-style linked response path."""
@@ -52,85 +43,6 @@ def _isolate_registry():
 # ---------------------------------------------------------------------------
 # Custom relation resolvers
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_o1_forward_fk_resolves_to_related_instance():
-    """O1: forward FK resolver returns the Django instance, not the descriptor.
-
-    Without O1, Strawberry's default resolver works for forward FK because
-    ``getattr(item, "category")`` returns a Category instance directly.
-    The test pins the behaviour stays correct after O1's resolver injection
-    so a regression does not silently break forward-FK access.
-    """
-    from apps.products import services
-
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = CATEGORY_SCALAR_FIELDS
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return list(Item.objects.all())
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    result = schema.execute_sync("{ allItems { name category { name } } }")
-
-    assert result.errors is None
-    assert len(result.data["allItems"]) == 25
-    # Every item has a non-null category (FK is non-nullable in fakeshop).
-    assert all(item["category"]["name"] for item in result.data["allItems"])
-
-
-@pytest.mark.django_db
-def test_o1_reverse_fk_resolves_without_iterability_error():
-    """O1: reverse FK resolver returns a list, fixing 'Expected Iterable'.
-
-    Strawberry's default resolver returns a ``RelatedManager`` and raises
-    ``Expected Iterable, but did not find one for field 'CategoryType.items'``.
-    The custom resolver returns ``list(manager.all())`` so iteration works.
-    """
-    from apps.products import services
-
-    services.seed_data(1)
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            return list(Category.objects.all())
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    result = schema.execute_sync("{ allCategories { name items { name } } }")
-
-    assert result.errors is None
-    assert len(result.data["allCategories"]) == 25
-    # Every category exposes its items as a list (each fakeshop category
-    # has at least one item under seed_data(1)).
-    assert all(isinstance(c["items"], list) for c in result.data["allCategories"])
-    assert all(len(c["items"]) >= 1 for c in result.data["allCategories"])
 
 
 def test_o1_make_relation_resolver_many_side():

@@ -17,7 +17,9 @@ from uuid import UUID
 
 import pytest
 from apps.scalars import models
+from django.db import connection
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches
 
 from django_strawberry_framework.registry import registry
@@ -430,3 +432,232 @@ def test_scalar_specimen_nullable_partners_reverse_relation_over_http():
     rows = {row["label"]: row for row in body["data"]["allScalarSpecimens"]}
     spoke_labels = sorted(p["label"] for p in rows["hub"]["nullablePartners"])
     assert spoke_labels == ["spoke_a", "spoke_b"]
+
+
+@pytest.mark.django_db
+def test_scalars_optimizer_select_related_on_self_fk_in_http_query():
+    """Forward self-FK selection collapses to one SQL query under the optimizer.
+
+    Pins ``DjangoOptimizerExtension``'s ``select_related`` plan against a
+    self-referential FK (``ScalarSpecimen.parent`` -> ``ScalarSpecimen``) —
+    a distinct shape from the cross-model FK select_related already covered
+    by ``test_library_api.py::test_library_optimizer_selects_book_shelf_in_http_query``
+    (book -> shelf). Proves the walker's planner does not loop or
+    double-resolve when the relation target is the source model itself.
+    Migrated from
+    ``tests/optimizer/test_extension.py::test_optimizer_applies_select_related_for_forward_fk``
+    (whose synthetic ``schema.execute_sync`` against ``Item -> Category`` is
+    redundant with the library HTTP test plus this self-FK shape).
+    """
+    parent = _seed_specimen(label="root")
+    _seed_specimen(label="child_a", parent=parent)
+    _seed_specimen(label="child_b", parent=parent)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allScalarSpecimens {
+                label
+                parent { label }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    # 1 query: SELECT scalars_scalarspecimen ... LEFT OUTER JOIN
+    # scalars_scalarspecimen T2 ON parent_id. Without the optimizer the
+    # ``parent { label }`` branch would issue 1 + 3 = 4 queries.
+    assert len(captured) == 1, [q["sql"] for q in captured]
+    sql = captured[0]["sql"]
+    assert "scalars_scalarspecimen" in sql
+    assert "JOIN" in sql.upper()
+
+
+@pytest.mark.django_db
+def test_scalars_optimizer_prefetch_related_on_reverse_self_fk_in_http_query():
+    """Reverse self-FK selection collapses to two SQL queries via ``prefetch_related``.
+
+    Pins the ``DjangoOptimizerExtension`` ``prefetch_related`` plan against
+    ``ScalarSpecimen.children`` — the reverse side of a self-referential FK.
+    Distinct from the cross-model reverse-FK ``prefetch_related`` already
+    covered by
+    ``test_library_api.py::test_library_reverse_fk_and_m2m_prefetch_sql_shape_over_http``
+    (shelf -> books). Proves the prefetch planner does not loop or
+    double-prefetch when the source and target model coincide.
+    Migrated from
+    ``tests/optimizer/test_extension.py::test_optimizer_applies_prefetch_related_for_reverse_fk``.
+    """
+    root = _seed_specimen(label="root")
+    _seed_specimen(label="leaf_a", parent=root)
+    _seed_specimen(label="leaf_b", parent=root)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allScalarSpecimens {
+                label
+                children { label }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    # 2 queries: SELECT scalars_scalarspecimen ... + a single prefetched
+    # SELECT for the ``children`` reverse relation. Without the optimizer
+    # the ``children`` branch would issue 1 + 3 = 4 queries.
+    assert len(captured) == 2, [q["sql"] for q in captured]
+
+
+@pytest.mark.django_db
+def test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query():
+    """``parent { id }`` is served from ``ScalarSpecimen.parent_id`` with no JOIN.
+
+    Pins the ``B2`` FK-id elision behavior end-to-end against a self-
+    referential FK. An id-only forward-FK selection should NOT issue a
+    JOIN — Django already has the FK column (``parent_id``) on the source
+    row, so the optimizer plans the query with ``only(..., "parent_id")``
+    and synthesizes the stub at resolver time. Distinct from the
+    cross-model FK case; previously unreachable from any HTTP test.
+    Behavioral half of the migration from
+    ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection``;
+    the plan-state assertions (``plan.fk_id_elisions``, ``plan.only_fields``,
+    ``ctx.dst_optimizer_fk_id_elisions``) stay package-internal in the same
+    test, slimmed of the now-redundant query-count and data-correctness
+    assertions.
+    """
+    root = _seed_specimen(label="root")
+    child = _seed_specimen(label="child", parent=root)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allScalarSpecimens {
+                label
+                parent { id }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    rows = {row["label"]: row for row in body["data"]["allScalarSpecimens"]}
+    assert rows["root"]["parent"] is None
+    # Child's ``parent { id }`` should equal the root row's id without a JOIN.
+    # ``id`` resolves to ``Int`` (via ``BigAutoField -> int``), so JSON
+    # serializes it as a number.
+    assert rows["child"]["parent"] == {"id": root.id}
+    # 1 query: SELECT scalars_scalarspecimen ... (no JOIN). Without the
+    # elision the ``parent { id }`` selection would either JOIN or issue
+    # a follow-up SELECT per non-null child row.
+    assert len(captured) == 1, [q["sql"] for q in captured]
+    sql = captured[0]["sql"]
+    assert "JOIN" not in sql.upper(), sql
+    # And ``parent_id`` must be in the projection (Django needs it to
+    # synthesize the stub the resolver returns).
+    assert "parent_id" in sql, sql
+    # Sanity: the row we asserted on is the one we created.
+    assert child.parent_id == root.id
+
+
+@pytest.mark.django_db
+def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_query():
+    """Selecting any target scalar beyond ``id`` forces the normal JOIN path.
+
+    Pins B2's "elision opt-out" rule end-to-end: as soon as the consumer
+    selects ANY target scalar besides ``id``, the optimizer must NOT elide
+    the relation — it must plan ``select_related("parent")`` and issue a
+    JOIN. Otherwise the resolver-time FK-id stub would carry only the id
+    and the extra scalar would resolve to ``None``. Exercised against the
+    self-FK ``ScalarSpecimen.parent``. Behavioral half of the migration from
+    ``tests/optimizer/test_extension.py::test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected``;
+    the plan-state half (``select_related == ("parent",)``,
+    ``fk_id_elisions == ()``, full ``only_fields``) stays package-internal
+    in the slimmed sibling test.
+    """
+    root = _seed_specimen(label="root")
+    child = _seed_specimen(label="child", parent=root)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allScalarSpecimens {
+                label
+                parent { id label }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    rows = {row["label"]: row for row in body["data"]["allScalarSpecimens"]}
+    assert rows["root"]["parent"] is None
+    # Both ``id`` AND ``label`` must populate from the JOINed row — proving
+    # the optimizer did NOT elide and that the ``parent`` stub is the real
+    # joined row, not the fk-id-only stub.
+    assert rows["child"]["parent"] == {"id": root.id, "label": "root"}
+    # Still 1 query — but via JOIN, not via the elision shortcut.
+    assert len(captured) == 1, [q["sql"] for q in captured]
+    sql = captured[0]["sql"]
+    assert "JOIN" in sql.upper(), sql
+
+
+@pytest.mark.django_db
+def test_scalars_optimizer_fk_id_elision_for_each_alias_in_http_query():
+    """Duplicate aliases on an id-only forward FK both resolve from the source FK column.
+
+    Pins B2/O4 behavior end-to-end: selecting the same FK twice under two
+    GraphQL field aliases must still elide to a single FK-column SELECT
+    with no JOIN, and both aliases must surface the same id value at
+    resolve time. Exercised against the self-FK
+    (``ScalarSpecimen.parent``) — distinct from the cross-model case. The
+    plan-state assertions (``plan.fk_id_elisions`` covering BOTH alias
+    keys, ``plan.only_fields == ("parent_id",)``) remain pinned by
+    ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection_for_each_alias_plan_shape``.
+    """
+    root = _seed_specimen(label="root")
+    child = _seed_specimen(label="child", parent=root)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allScalarSpecimens {
+                label
+                first: parent { id }
+                second: parent { id }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    rows = {row["label"]: row for row in body["data"]["allScalarSpecimens"]}
+    # Root has no parent; both aliases must collapse to ``None``.
+    assert rows["root"]["first"] is None
+    assert rows["root"]["second"] is None
+    # Child's two aliases must report the same id (==> the source FK column).
+    assert rows["child"]["first"] == {"id": root.id}
+    assert rows["child"]["second"] == {"id": root.id}
+    # 1 query, no JOIN.
+    assert len(captured) == 1, [q["sql"] for q in captured]
+    sql = captured[0]["sql"]
+    assert "JOIN" not in sql.upper(), sql
+    assert "parent_id" in sql, sql
+    # Sanity: the row we asserted on is the one we created.
+    assert child.parent_id == root.id

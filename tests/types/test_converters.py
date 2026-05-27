@@ -571,35 +571,6 @@ def test_big_auto_field_still_maps_to_int():
     assert terminal["name"] == "Int"
 
 
-def test_bigint_serializes_query_result_as_string_via_schema_execution():
-    """A resolver returning ``2**62`` round-trips as the decimal string ``"4611686018427387904"``."""
-
-    class BigIntQueryOwner(models.Model):
-        big = models.BigIntegerField()
-
-        class Meta:
-            managed = False
-            app_label = "test_bigint"
-
-    class BigIntQueryOwnerType(DjangoType):
-        class Meta:
-            model = BigIntQueryOwner
-            fields = ("big",)
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def owner(self) -> BigIntQueryOwnerType:
-            return BigIntQueryOwner(big=2**62)
-
-    schema = strawberry.Schema(query=Query, config=strawberry_config())
-    result = schema.execute_sync("{ owner { big } }")
-    assert result.errors is None
-    assert result.data == {"owner": {"big": "4611686018427387904"}}
-
-
 def test_bigint_parses_string_argument_via_schema_execution():
     """Inbound: a ``BigInt!`` argument provided as a decimal string round-trips through the resolver."""
 

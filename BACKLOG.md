@@ -117,6 +117,33 @@ A second mutation with the same `request_id` within the TTL returns the cached f
 
 **Framework integration**: ships **as a standalone primitive first** — a `DjangoPersistedQueryExtension` that hashes incoming operations, looks them up in `django.core.cache`, and rejects unknown hashes in production. This item owns the hash-lookup-and-cache logic, the management-command rotation flow, and the public API for declaring persisted-query allowlists. Once **item 33** (Pluggable per-model DoS policy stack) generalizes — see the sequencing note on item 33 — this primitive folds into the stack as `PersistedQueryGate()` in the pre-parse phase, exposing the same logic through the uniform stacked-class surface. Building this item standalone produces a useful feature today; folding it into item 33's framework later produces a coherent layered defense.
 
+### 42. Query-time optimizer disable
+
+**Realistic**: 10/10 — The extension already has the `on_execute` hook that builds the plan; an early-return check is one branch. The context-key plumbing pattern is already established (`info.context.dst_optimizer_plan`, `dst_optimizer_fk_id_elisions`).
+
+**Impact**: 5/10 — Real win for debugging and CI baselines but a smaller audience than item 7 ("explain mode"); useful primarily to package maintainers, test authors, and developers chasing the question *"is this slow because of MY code or the optimizer?"*.
+
+**Difficulty**: 2/10 — ~20 lines of code: one context-key constant, one early-return guard in the extension's `on_execute` hook, optional settings default, plus tests. The doc effort is larger than the code — consumers need to know exactly what behavior changes when disabled (FK-id stubs aren't built, `select_related` / `prefetch_related` aren't applied, `only()` projections aren't added) so they can reason about the trade.
+
+**What `graphene-django` does**: N/A — no optimizer to disable.
+
+**What `strawberry-graphql-django` does**: nothing — consumers either include the optimizer extension in `extensions=[...]` at schema construction or they omit it. No per-request toggle.
+
+**What we'd do**: a per-request escape hatch for `DjangoOptimizerExtension`. When set, the extension's `on_execute` hook short-circuits before computing the plan. The query still produces correct results — just at N+1 cost. Three complementary shapes (probably ship all three):
+
+```python path=null start=null
+# 1. Context flag — programmatic, the test/CI surface
+context_value = {"dst_disable_optimizer": True}
+
+# 2. Header — production debugging surface
+# X-DST-Disable-Optimizer: 1
+
+# 3. Settings default — global "opt-in per query" mode
+DJANGO_STRAWBERRY_FRAMEWORK = {"OPTIMIZER_DEFAULT": "off"}
+```
+
+**Why it matters**: today the optimizer is binary — either include the extension or omit it at schema construction time. There's no way to compare optimized vs unoptimized execution on the same schema in a single test session, and no way to debug *"is this slowness from the optimizer or my resolver?"* without rebuilding the schema. Companion to **item 7** ("explain mode"): together they form the optimizer's debugging pair — *"see the plan"* and *"see what happens without the plan."* Distinct from the existing **B3 strictness mode** (already shipped) which detects unintended lazy loads *when the optimizer is on*; this feature is the orthogonal *"turn the optimizer off entirely for this request"* surface. Pairs cleanly with **item 22** (Anti-N+1 CI mode): the CI gate can run the same suite both with and without the optimizer and assert that query counts diverge — direct proof the optimizer is doing meaningful work.
+
 ### 37. Public surface promotion discipline
 
 **Realistic**: 10/10 — It's a process rule, not code.

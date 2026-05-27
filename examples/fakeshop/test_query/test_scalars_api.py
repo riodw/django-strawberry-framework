@@ -109,6 +109,11 @@ def _seed_nullable_specimen(**overrides):
     return models.NullableScalarSpecimen.objects.create(**overrides)
 
 
+def _seed_tag(label: str, *, active: bool = True):
+    """Seed a ``ScalarSpecimenTag`` with the given label and active flag."""
+    return models.ScalarSpecimenTag.objects.create(label=label, active=active)
+
+
 def _post_graphql(query: str):
     client = Client()
     return client.post(
@@ -435,6 +440,78 @@ def test_scalar_specimen_nullable_partners_reverse_relation_over_http():
 
 
 @pytest.mark.django_db
+def test_scalar_specimen_bigint_input_decimal_string_argument_over_http():
+    """A ``BigInt!`` argument provided as a decimal-string literal parses correctly.
+
+    Pins ``BigInt.parse_value``'s decimal-string acceptance end-to-end:
+    the consumer passes ``signedBig: "9223372036854775000"`` (string form,
+    safe for values past the JS safe-integer boundary) and the resolver
+    must receive ``9223372036854775000`` as an int so the ORM lookup finds
+    the seeded row. Migrated from
+    ``tests/types/test_converters.py::test_bigint_parses_string_argument_via_schema_execution``.
+    """
+    target = _seed_specimen(label="target", signed_big=_SIGNED_BIG)
+    _seed_specimen(label="other", signed_big=42)
+
+    response = _post_graphql(
+        """
+        query {
+          scalarSpecimenBySignedBig(signedBig: "9223372036854775000") {
+            label
+            signedBig
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    assert body["data"]["scalarSpecimenBySignedBig"] == {
+        "label": "target",
+        "signedBig": "9223372036854775000",
+    }
+    # Sanity: the value we asserted on resolved through the ORM lookup,
+    # not an accidental fixture coincidence.
+    assert target.signed_big == _SIGNED_BIG
+
+
+@pytest.mark.django_db
+def test_scalar_specimen_bigint_input_int_literal_argument_over_http():
+    """A ``BigInt!`` argument provided as a JSON-int literal parses correctly.
+
+    Pins ``BigInt.parse_value``'s int acceptance end-to-end: when the
+    requested value fits in JSON's safe-integer range the consumer can
+    pass it as a bare int literal (``signedBig: 42``) and the resolver
+    must receive ``42`` as an int. Migrated from
+    ``tests/types/test_converters.py::test_bigint_parses_int_argument_via_schema_execution``.
+    """
+    _seed_specimen(label="target", signed_big=42)
+    _seed_specimen(label="other", signed_big=_SIGNED_BIG)
+
+    response = _post_graphql(
+        """
+        query {
+          scalarSpecimenBySignedBig(signedBig: 42) {
+            label
+            signedBig
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    # The outbound wire format is still the decimal string — even for
+    # small values that JSON could represent as a bare number. That's
+    # the BigInt scalar's contract: consumers must always parse the
+    # response as a string. Anything else would be a wire-format leak.
+    assert body["data"]["scalarSpecimenBySignedBig"] == {
+        "label": "target",
+        "signedBig": "42",
+    }
+
+
+@pytest.mark.django_db
 def test_scalars_optimizer_select_related_on_self_fk_in_http_query():
     """Forward self-FK selection collapses to one SQL query under the optimizer.
 
@@ -661,3 +738,180 @@ def test_scalars_optimizer_fk_id_elision_for_each_alias_in_http_query():
     assert "parent_id" in sql, sql
     # Sanity: the row we asserted on is the one we created.
     assert child.parent_id == root.id
+
+
+@pytest.mark.django_db
+def test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_http_query():
+    """O6 / B2: forward FK to a target with custom ``get_queryset`` downgrades to ``Prefetch``.
+
+    When the target type declares ``get_queryset(cls, queryset, info)``, the
+    optimizer must NOT use ``select_related`` (which would JOIN raw without
+    consulting the classmethod) and must NOT elide the relation even for an
+    id-only selection. It must plan a ``Prefetch(queryset=cls.get_queryset(...))``
+    so the consumer's filter survives end-to-end. Observable as 2 SQL
+    queries (root SELECT + prefetched tag SELECT) rather than 1 SQL query
+    via JOIN or elision. Behavioral half of the migration from
+    ``tests/optimizer/test_extension.py::test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset``;
+    the plan-state half (``plan.select_related``, ``plan.fk_id_elisions``,
+    ``plan.only_fields``, ``plan.prefetch_related``) stays package-internal
+    in the slimmed sibling test.
+    """
+    active = _seed_tag(label="active-tag", active=True)
+    _seed_specimen(label="tagged", tag=active)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allScalarSpecimens {
+                label
+                tag { id }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    # 2 queries: SELECT scalars_scalarspecimen + a prefetched SELECT for
+    # scalars_scalarspecimentag (filtered to ``active=True`` by the custom
+    # get_queryset). Without the O6 downgrade this would either JOIN
+    # (1 query) or elide entirely — both incorrect because the consumer's
+    # filter would be silently bypassed.
+    assert len(captured) == 2, [q["sql"] for q in captured]
+    main_sql = captured[0]["sql"]
+    # Main query must NOT JOIN — that would be the un-downgraded path.
+    assert "scalarspecimentag" not in main_sql.lower(), main_sql
+    # Prefetch SELECT must hit the tag table and carry the ``active`` filter.
+    tag_sql = captured[1]["sql"]
+    assert "scalarspecimentag" in tag_sql.lower(), tag_sql
+    assert "active" in tag_sql.lower(), tag_sql
+
+
+@pytest.mark.django_db
+def test_scalars_custom_get_queryset_filters_inactive_tag_to_null_in_http_query():
+    """A specimen pointing at an inactive tag resolves ``tag`` to ``null``.
+
+    Pins the consumer-visible effect of ``ScalarSpecimenTagType.get_queryset``
+    end-to-end: tags with ``active=False`` are excluded from the prefetched
+    queryset, so the source specimen's ``tag`` field collapses to ``None``
+    even though the row's FK column is non-null in the database. Proves
+    the optimizer planned ``Prefetch(queryset=cls.get_queryset(...))`` and
+    that the filter survived plan execution.
+    """
+    inactive = _seed_tag(label="inactive-tag", active=False)
+    active = _seed_tag(label="active-tag", active=True)
+    _seed_specimen(label="with-active", tag=active)
+    _seed_specimen(label="with-inactive", tag=inactive)
+    _seed_specimen(label="untagged")
+
+    response = _post_graphql(
+        """
+        query {
+          allScalarSpecimens {
+            label
+            tag { label active }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    rows = {row["label"]: row for row in body["data"]["allScalarSpecimens"]}
+
+    assert rows["with-active"]["tag"] == {"label": "active-tag", "active": True}
+    # The inactive tag isn't in the Prefetch result, so the source-side
+    # ``tag`` resolves to None even though the FK column is set.
+    assert rows["with-inactive"]["tag"] is None
+    # And the untagged specimen also resolves None (FK column is NULL).
+    assert rows["untagged"]["tag"] is None
+
+
+@pytest.mark.django_db
+def test_scalars_tagged_specimens_reverse_fk_in_http_query():
+    """The reverse-FK ``ScalarSpecimenTag.tagged_specimens`` lists every linked specimen.
+
+    Distinct from the existing reverse-FK shapes on ``ScalarSpecimenType``
+    (self-FK ``children`` and cross-model ``nullable_partners``):
+    ``tagged_specimens`` is reverse-FK from a model OUTSIDE the
+    ``ScalarSpecimen`` family back into it. Confirms reverse-FK exposure
+    works even when the source side has a custom ``get_queryset``.
+    """
+    tag_a = _seed_tag(label="tag-a")
+    tag_b = _seed_tag(label="tag-b")
+    _seed_specimen(label="a1", tag=tag_a)
+    _seed_specimen(label="a2", tag=tag_a)
+    _seed_specimen(label="b1", tag=tag_b)
+    _seed_specimen(label="orphan")
+
+    response = _post_graphql(
+        """
+        query {
+          allScalarSpecimenTags {
+            label
+            taggedSpecimens { label }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    rows = {row["label"]: row for row in body["data"]["allScalarSpecimenTags"]}
+    assert sorted(s["label"] for s in rows["tag-a"]["taggedSpecimens"]) == ["a1", "a2"]
+    assert sorted(s["label"] for s in rows["tag-b"]["taggedSpecimens"]) == ["b1"]
+
+
+@pytest.mark.django_db
+def test_scalars_optimizer_coerces_manager_to_queryset_in_http_query():
+    """A plain ``@strawberry.field`` resolver returning a bare ``Manager`` is still optimized.
+
+    Pins the optimizer's defensive ``Manager``-coercion code path:
+    consumers commonly write ``return Model.objects`` rather than
+    ``return Model.objects.all()``; both shapes resolve identical data
+    via Strawberry's default resolver, but without the optimizer's
+    coercion the ``isinstance(QuerySet)`` gate would let the Manager
+    pass through unoptimized and the consumer would pay N+1 on any
+    forward-FK selection. ``apps.scalars.schema.Query.all_scalar_specimens_via_manager``
+    deliberately returns the bare Manager so the live HTTP query
+    exercises this path end-to-end. Behavioral half of the migration
+    from ``tests/optimizer/test_extension.py::test_optimize_coerces_manager_through_all``;
+    the cache-state half (``ext.cache_info().misses == 1`` — proof the
+    plan was actually built) stays package-internal in the slimmed
+    sibling test.
+
+    Distinct from ``DjangoListField``'s own Manager coercion path
+    exercised by ``apps.library.schema._branches_manager_resolver``:
+    that goes through the listfield wrapper, this goes through a plain
+    ``@strawberry.field`` resolver and hits the optimizer-extension
+    coercion code instead.
+    """
+    root = _seed_specimen(label="root")
+    _seed_specimen(label="child_a", parent=root)
+    _seed_specimen(label="child_b", parent=root)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allScalarSpecimensViaManager {
+                label
+                parent { label }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    # 1 query: SELECT scalarspecimen ... LEFT OUTER JOIN scalarspecimen
+    # via select_related("parent"). Without the optimizer's Manager
+    # coercion this would be 1 + 3 = 4 queries — one per child's parent
+    # lookup — proving the gate would have let the Manager pass through
+    # unoptimized.
+    assert len(captured) == 1, [q["sql"] for q in captured]
+    sql = captured[0]["sql"]
+    assert "JOIN" in sql.upper(), sql

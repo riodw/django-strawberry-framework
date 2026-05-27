@@ -87,17 +87,17 @@ def _force_unregister_after_finalize(type_cls):
 
 
 @pytest.mark.django_db
-def test_optimize_coerces_manager_through_all(django_assert_num_queries):
-    """A root resolver returning a Manager (not ``.all()``) is still optimized.
+def test_optimize_coerces_manager_through_all_records_cache_miss():
+    """The optimizer's plan cache records a miss when coercing ``Manager`` -> ``.all()``.
 
-    Django consumers commonly write ``return Model.objects`` rather
-    than ``return Model.objects.all()``; both shapes resolve the same
-    data in Strawberry's default resolver path. Without the defensive
-    ``Manager`` coercion the ``isinstance(QuerySet)`` gate would let
-    the manager pass through unoptimized, producing N+1 on a forward
-    FK selection. ``.all()`` on a manager is a no-op that returns a
-    fresh unevaluated QuerySet — the optimizer can then apply its
-    plan.
+    The behavioral half (1 SQL query, JOIN applied, data round-trips) is
+    pinned end-to-end by
+    ``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_coerces_manager_to_queryset_in_http_query``.
+    This test keeps the package-internal cache-state assertion that proves
+    the plan was actually BUILT (cache miss recorded) rather than the
+    Manager being short-circuited by the ``isinstance(QuerySet)`` gate —
+    a guarantee unreachable from the live HTTP path because the project
+    schema doesn't expose its extension instance for inspection.
     """
     services.seed_data(1)
 
@@ -122,14 +122,8 @@ def test_optimize_coerces_manager_through_all(django_assert_num_queries):
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[ext])
-
-    # 1 SQL query: SELECT items + JOIN categories via select_related.
-    # If the Manager had been silently passed through unoptimized this
-    # would issue 1 + 25 = 26 queries (one per item's ``category``).
-    with django_assert_num_queries(1):
-        result = schema.execute_sync("{ allItems { name category { name } } }")
+    result = schema.execute_sync("{ allItems { name category { name } } }")
     assert result.errors is None
-    assert len(result.data["allItems"]) == 25
     # The plan was built (miss recorded), proving the Manager was NOT
     # short-circuited by the QuerySet-only gate.
     assert ext.cache_info().misses == 1
@@ -173,48 +167,6 @@ def test_optimizer_plans_merged_duplicate_root_field_nodes(django_assert_num_que
     assert result.data["allItems"][0]["category"]["name"]
     assert ctx.dst_optimizer_plan.select_related == ("category",)
     assert "ItemType.category@allItems.category" in ctx.dst_optimizer_planned
-
-
-@pytest.mark.django_db
-def test_optimizer_combines_select_related_and_prefetch_related(django_assert_num_queries):
-    """A query selecting both a forward FK and a reverse rel issues 2 queries total."""
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class PropertyType(DjangoType):
-        class Meta:
-            model = Property
-            fields = ("id", "name")
-
-    class EntryType(DjangoType):
-        class Meta:
-            model = Entry
-            fields = ("id", "value")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category", "entries")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-
-    # 2 queries: SELECT items+categories (JOIN) + prefetched entries.
-    with django_assert_num_queries(2):
-        result = schema.execute_sync(
-            "{ allItems { name category { name } entries { value } } }",
-        )
-        assert result.errors is None
 
 
 @pytest.mark.django_db
@@ -363,10 +315,20 @@ def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_sha
 
 
 @pytest.mark.django_db
-def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset(
-    django_assert_num_queries,
-):
-    """B2: a custom target ``get_queryset`` uses O6 Prefetch even for ``id`` only."""
+def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset_plan_shape():
+    """B2/O6 plan-state inspection: custom ``get_queryset`` forces ``Prefetch`` even on id-only.
+
+    The behavioral half (2 SQL queries, no JOIN on the root, prefetched
+    SELECT with the consumer filter applied, inactive rows resolve to
+    ``null`` on the source) is pinned by these HTTP tests in
+    ``examples/fakeshop/test_query/test_scalars_api.py``:
+    ``test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_http_query``
+    and ``test_scalars_custom_get_queryset_filters_inactive_tag_to_null_in_http_query``.
+    This test keeps the package-internal plan-state assertions: even though
+    only ``id`` is selected on the FK target, the optimizer must NOT elide
+    (``fk_id_elisions == ()``) and must NOT use ``select_related`` —
+    instead it records exactly one ``Prefetch`` entry.
+    """
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -393,11 +355,10 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
     schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
     ctx = SimpleNamespace()
 
-    with django_assert_num_queries(2):
-        result = schema.execute_sync(
-            "{ allItems { name category { id } } }",
-            context_value=ctx,
-        )
+    result = schema.execute_sync(
+        "{ allItems { name category { id } } }",
+        context_value=ctx,
+    )
     assert result.errors is None
     plan = ctx.dst_optimizer_plan
     assert plan.select_related == ()

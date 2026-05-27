@@ -571,38 +571,6 @@ def test_big_auto_field_still_maps_to_int():
     assert terminal["name"] == "Int"
 
 
-def test_bigint_parses_string_argument_via_schema_execution():
-    """Inbound: a ``BigInt!`` argument provided as a decimal string round-trips through the resolver."""
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def echo(self, val: BigInt) -> BigInt:
-            return val
-
-    schema = strawberry.Schema(query=Query, config=strawberry_config())
-    result = schema.execute_sync(
-        'query { echo(val: "4611686018427387904") }',
-    )
-    assert result.errors is None
-    assert result.data == {"echo": "4611686018427387904"}
-
-
-def test_bigint_parses_int_argument_via_schema_execution():
-    """Inbound: a ``BigInt!`` argument provided as an int literal round-trips through the resolver."""
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def echo(self, val: BigInt) -> BigInt:
-            return val
-
-    schema = strawberry.Schema(query=Query, config=strawberry_config())
-    result = schema.execute_sync("query { echo(val: 42) }")
-    assert result.errors is None
-    assert result.data == {"echo": "42"}
-
-
 def test_bigint_in_input_position_with_null_via_schema_execution():
     """A nullable ``BigInt`` argument accepts ``null`` — Strawberry strips it before
     the parser runs, so the resolver receives ``None``.

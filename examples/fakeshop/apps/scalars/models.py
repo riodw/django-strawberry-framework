@@ -17,6 +17,17 @@ model ``parent`` / ``children`` self-FK on ``ScalarSpecimen``. The two
 models also let consumers compose richer example queries that span both
 all-required and all-nullable shapes in one round-trip.
 
+``ScalarSpecimenTag`` is the substrate for the O6 ``Prefetch``-downgrade
+behavior: its companion ``ScalarSpecimenTagType`` declares a custom
+``get_queryset()`` classmethod that filters to ``active=True``. A nullable
+forward FK from ``ScalarSpecimen.tag`` points at it. Selecting
+``tag { ... }`` from a query against ``allScalarSpecimens`` exercises the
+optimizer's downgrade rule: a target type with custom ``get_queryset``
+must be planned as ``Prefetch(qs)`` rather than ``select_related`` so the
+consumer's filter survives — the resulting query shape is two SQL
+statements (root SELECT + filtered tag SELECT), with the inactive-tag
+rows resolving to ``null`` on the source-side specimen.
+
 ``ArrayField`` and ``HStoreField`` are deliberately absent — both are
 PostgreSQL-only and the fakeshop runs on SQLite. Their converter entries stay
 covered by ``tests/`` against package-internal fixtures.
@@ -25,6 +36,25 @@ covered by ``tests/`` against package-internal fixtures.
 from decimal import Decimal
 
 from django.db import models
+
+
+class ScalarSpecimenTag(models.Model):
+    """Tag referenced by ``ScalarSpecimen.tag``; substrate for the O6 downgrade rule.
+
+    The companion ``ScalarSpecimenTagType`` declares a custom
+    ``get_queryset()`` classmethod that filters to ``active=True``. The
+    optimizer's O6 rule requires that any forward FK whose target type
+    declares ``get_queryset`` be planned as ``Prefetch(qs)`` rather than
+    ``select_related`` so the consumer's filter survives end-to-end —
+    visible in the live test by an inactive tag resolving to ``null`` on
+    the source specimen.
+    """
+
+    label = models.TextField(unique=True)
+    active = models.BooleanField(default=True)
+
+    def __str__(self):
+        return self.label
 
 
 class ScalarSpecimen(models.Model):
@@ -71,6 +101,20 @@ class ScalarSpecimen(models.Model):
         blank=True,
         related_name="children",
         on_delete=models.CASCADE,
+    )
+    # Forward FK to a target whose ``DjangoType`` declares a custom
+    # ``get_queryset()``. Triggers the optimizer's O6 ``Prefetch``-
+    # downgrade rule: forward-FK selection through ``tag`` must NOT use
+    # ``select_related`` (which would JOIN raw, bypassing the consumer's
+    # ``active=True`` filter), and the planner must record a
+    # ``Prefetch(queryset=...)`` instead. ``on_delete=SET_NULL`` so
+    # detaching a tag survives the cascade.
+    tag = models.ForeignKey(
+        ScalarSpecimenTag,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="tagged_specimens",
     )
 
     def __str__(self):

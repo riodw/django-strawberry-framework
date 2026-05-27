@@ -74,7 +74,7 @@ What to internalize:
 - **Filename convention**: `spec-<NNN>-<topic>-<0_0_X>.md`, where `<NNN>` matches the KANBAN card's NNN, `<topic>` is a short snake_case slug naming the card's subject, and `<0_0_X>` is the target milestone version with dots replaced by underscores. Worked example: card `DONE-016-0.0.7 — DjangoListField (non-Relay list)` → file `spec-016-list_field-0_0_7.md`.
 - **Section layout**: the recent specs all carry roughly the same skeleton, in this order — frontmatter with revision history, **Key glossary references**, **Slice checklist**, **Problem statement**, **Current state**, **Goals**, **Non-goals**, **Borrowing posture** (when upstreams ship a comparable primitive), **User-facing API** (when the spec adds a consumer-visible symbol), **Architectural decisions** (numbered), **Implementation plan** (with a per-slice delta table), **Edge cases and constraints**, **Test plan**, **Doc updates**, **Risks and open questions**, **Out of scope (explicitly tracked elsewhere)**, **Definition of done**. Follow the most-recent spec when in doubt.
 - **Voice and depth**: these specs are detailed and decision-heavy. Every choice is pinned with rationale; every alternative considered is named and rejected with a reason.
-- **Cross-references**: source files are cited as repository-relative paths using symbol-qualified `path::QualifiedName` form (e.g. `types/base.py::DjangoType.resolve_fields`), with `#"unique substring"` pinpoints for in-body lines and `path #"unique substring"` for module-level lines (per [`AGENTS.md`](../AGENTS.md) line 27); KANBAN cards by their full ID; prior specs by markdown link; upstream packages by absolute local path from `docs/TREE.md`.
+- **Cross-references**: source files are cited as repository-relative paths using symbol-qualified `path::QualifiedName` form (e.g. `types/base.py::DjangoType.resolve_fields`), with `#"unique substring"` pinpoints for in-body lines and `path #"unique substring"` for module-level lines (per [`AGENTS.md`][agents] line 27); KANBAN cards by their full ID; prior specs by markdown link; upstream packages by absolute local path from `docs/TREE.md`.
 - **Permission caveat**: the recent specs explicitly note that `AGENTS.md` prohibits `CHANGELOG.md` edits without permission and that the spec's Slice 5 grants that permission. Mirror this in your spec.
 
 ---
@@ -234,3 +234,11 @@ The flow is complete when Step 8 finishes: only the active spec and its CSV live
 - The flow is not complete until (a) `scripts/check_spec_glossary.py` exits 0 against the new spec and its CSV, (b) Step 8 has run and no `spec-*.md` other than the active one remains at `docs/` top-level, AND (c) the active WIP card in `KANBAN.md` carries a link to `docs/spec-<NNN>-<topic>-<0_0_X>.md`.
 - If the WIP card's body conflicts with something you read in Step 1, prefer the card and call out the conflict as an entry in the spec's `Risks and open questions` section — do not silently reconcile.
 - Reading source files, existing specs, or test files during Step 6 is allowed and expected. The boundary is on **writes**, not reads.
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Repo-root files -->
+[agents]: ../../AGENTS.md
+

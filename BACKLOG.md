@@ -3,7 +3,7 @@
 
 This file tracks the strategic-differentiation design surface where `django-strawberry-framework` can be **strictly better** than both `graphene-django` and `strawberry-graphql-django` — not just on-par.
 
-Roadmap parity with the inspirations (filters / orders / aggregates / fieldsets / cascade permissions / connection fields, all reproducing the `django-graphene-filters` feature surface) is tracked in [`KANBAN.md`](KANBAN.md). **`BACKLOG.md` is for strategic differentiation** — ideas neither inspiration ships cleanly that we should consider pulling onto the roadmap once parity items have landed.
+Roadmap parity with the inspirations (filters / orders / aggregates / fieldsets / cascade permissions / connection fields, all reproducing the `django-graphene-filters` feature surface) is tracked in [`KANBAN.md`][kanban]. **`BACKLOG.md` is for strategic differentiation** — ideas neither inspiration ships cleanly that we should consider pulling onto the roadmap once parity items have landed.
 
 Each item below is **an idea, not a commitment**. No item carries a target version. Items here graduate into `KANBAN.md` cards when scheduled.
 
@@ -1978,7 +1978,7 @@ Nothing in the Django ecosystem does this today. `django-grpc-framework` ships g
 
 **Difficulty**: 8/10 — Cross-shard queryset planning, shard-aware `Prefetch` reconciliation, and cross-shard aggregate composition. The hard cases (FK from shard A pointing into shard B) require schema-aware routing decisions the optimizer doesn't currently make. Concentrating the routing decision behind `Meta.preferred_database` keeps the consumer-facing surface small, but the optimizer-internal work is substantial.
 
-**What this is**: a multi-database story that goes beyond polite cooperation (which the package already does — see [`KANBAN.md`](KANBAN.md) `WIP-ALPHA-019-0.0.7` for the contract that pins today's `router.db_for_read` cooperation, strictness-mode routing, and `.using()` plan correctness). First-class means:
+**What this is**: a multi-database story that goes beyond polite cooperation (which the package already does — see [`KANBAN.md`][kanban] `WIP-ALPHA-019-0.0.7` for the contract that pins today's `router.db_for_read` cooperation, strictness-mode routing, and `.using()` plan correctness). First-class means:
 
 - the optimizer detects when a planned join would cross shards and falls back to a routed `Prefetch` instead
 - `Meta.preferred_database = "shard_b"` declares a `DjangoType`'s home shard so the optimizer can route automatically without `.using()` boilerplate everywhere
@@ -1997,3 +1997,10 @@ Nothing in the Django ecosystem does this today. `django-grpc-framework` ships g
 - When the slice ships, cross-reference the `BACKLOG.md` item from the new `KANBAN.md` `DONE-*` card so the differentiation story stays traceable.
 
 If a `BACKLOG.md` item turns out to be wrong (the upstream packages ship it, real-world adopters don't want it, or the architectural cost is too high), strike it through with a one-line note explaining why; do not delete it. The history of rejected differentiators is itself useful design context.
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Repo-root files -->
+[kanban]: KANBAN.md

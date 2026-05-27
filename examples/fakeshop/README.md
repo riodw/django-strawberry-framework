@@ -225,6 +225,13 @@ uv run pytest examples/fakeshop
 FAKESHOP_SHARDED=1 uv run pytest examples/fakeshop
 ```
 
-See [`test_query/README.md`](test_query/README.md) for the live-API
+See [`test_query/README.md`][readme] for the live-API
 test conventions and the schema-reload fixture pattern used to keep
 package-level and example-level registries isolated.
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Source / test / example files -->
+[readme]: test_query/README.md

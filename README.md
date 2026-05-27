@@ -44,22 +44,22 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 
 **`0.0.7`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening. Newest shipped surface: `DjangoListField` — the non-Relay `list[T]` factory for root Query fields, new in `0.0.7` (default resolver pulls `model._default_manager.all()` and applies `cls.get_queryset(...)` in sync + async contexts).
 
-For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`](TODAY.md). The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/GLOSSARY.md`](docs/GLOSSARY.md). Per-card sequencing for both releases lives in [`KANBAN.md`](KANBAN.md).
+For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`][today]. The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/GLOSSARY.md`][glossary]. Per-card sequencing for both releases lives in [`KANBAN.md`][kanban].
 
-## Get started → [`docs/README.md`](docs/README.md)
+## Get started → [`docs/README.md`][readme]
 
-Installation, quick start, schema-setup walkthrough, running the example project, and seeding test data live in [`docs/README.md`](docs/README.md). That's the next stop if this looks like your shape.
+Installation, quick start, schema-setup walkthrough, running the example project, and seeding test data live in [`docs/README.md`][readme]. That's the next stop if this looks like your shape.
 
 ## Project documentation
 
-- [`docs/README.md`](docs/README.md) — install, quick start, walkthrough, status
-- [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — shipped/planned/deferred capability catalog + migration notes
-- [`GOAL.md`](GOAL.md) — long-term destination and rich-schema north star
-- [`TODAY.md`](TODAY.md) — current package capability snapshot for examples and early adopters
-- [`docs/TREE.md`](docs/TREE.md) — package and test layout reference
-- [`KANBAN.md`](KANBAN.md) — contributor/maintainer board for shipped, planned, and blocked work
-- [`BACKLOG.md`](BACKLOG.md) — strategic differentiators beyond parity (post-`1.0.0`)
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup, format, test, build, publish
+- [`docs/README.md`][readme] — install, quick start, walkthrough, status
+- [`docs/GLOSSARY.md`][glossary] — shipped/planned/deferred capability catalog + migration notes
+- [`GOAL.md`][goal] — long-term destination and rich-schema north star
+- [`TODAY.md`][today] — current package capability snapshot for examples and early adopters
+- [`docs/TREE.md`][tree] — package and test layout reference
+- [`KANBAN.md`][kanban] — contributor/maintainer board for shipped, planned, and blocked work
+- [`BACKLOG.md`][backlog] — strategic differentiators beyond parity (post-`1.0.0`)
+- [`CONTRIBUTING.md`][contributing] — dev setup, format, test, build, publish
 
 ## Inspired by
 
@@ -69,6 +69,24 @@ Installation, quick start, schema-setup walkthrough, running the example project
 
 ## Contributing & Security
 
-- Contribution workflow: [`CONTRIBUTING.md`](CONTRIBUTING.md)
-- Vulnerability reporting: [`SECURITY.md`](SECURITY.md)
-- Release notes: [`CHANGELOG.md`](CHANGELOG.md)
+- Contribution workflow: [`CONTRIBUTING.md`][contributing]
+- Vulnerability reporting: [`SECURITY.md`][security]
+- Release notes: [`CHANGELOG.md`][changelog]
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Repo-root files -->
+[backlog]: BACKLOG.md
+[changelog]: CHANGELOG.md
+[contributing]: CONTRIBUTING.md
+[goal]: GOAL.md
+[kanban]: KANBAN.md
+[security]: SECURITY.md
+[today]: TODAY.md
+
+<!-- docs/ files -->
+[glossary]: docs/GLOSSARY.md
+[readme]: docs/README.md
+[tree]: docs/TREE.md

@@ -4,13 +4,13 @@
 
 `django-strawberry-framework` should be **the DRF-shaped, `class Meta`-driven Django integration for Strawberry GraphQL**. The destination is the developer experience proven by `django-graphene-filters` — declarative `Meta` classes, automatic input-type generation, rich filter / order / aggregate / fieldset sidecars, layered permissions including cascade visibility — on a modern Strawberry foundation, without Graphene runtime baggage.
 
-For the shipped surface today, see [`docs/GLOSSARY.md`](docs/GLOSSARY.md). For the per-card sequencing toward this north star, see [`KANBAN.md`](KANBAN.md).
+For the shipped surface today, see [`docs/GLOSSARY.md`][glossary]. For the per-card sequencing toward this north star, see [`KANBAN.md`][kanban].
 
 ## What success looks like in your code
 
 When the package is feature-complete at `1.0.0`, a single Django app — call it `astronomy`, with one parent model (`Galaxy`) and one child model (`CelestialBody`) — is laid out across six files. Every file is short. Nothing is hand-rolled that the package can generate.
 
-> **Reading this as a glossary lookup**: every symbol you see below (`DjangoType`, `FilterSet`, `RelatedFilter`, `apply_cascade_permissions`, `Meta.filterset_class`, `Meta.orderset_class`, `Meta.aggregate_class`, `Meta.fields_class`, `Meta.search_fields`, `DjangoConnectionField`, `DjangoNodeField`, `OrderSet`, `RelatedOrder`, `AggregateSet`, `RelatedAggregate`, `FieldSet`, …) has a per-feature entry in [`docs/GLOSSARY.md`](docs/GLOSSARY.md). Use that file when a symbol is unfamiliar — it answers *"is this shipped today, and what exactly does it do?"* for every symbol shown below. The [alphabetical Index](docs/GLOSSARY.md#index) at the top of `GLOSSARY.md` is the fastest entry point — every entry is deep-linked, so you can also URL-jump straight to e.g. [`#filterset`](docs/GLOSSARY.md#filterset) or [`#metafilterset_class`](docs/GLOSSARY.md#metafilterset_class).
+> **Reading this as a glossary lookup**: every symbol you see below (`DjangoType`, `FilterSet`, `RelatedFilter`, `apply_cascade_permissions`, `Meta.filterset_class`, `Meta.orderset_class`, `Meta.aggregate_class`, `Meta.fields_class`, `Meta.search_fields`, `DjangoConnectionField`, `DjangoNodeField`, `OrderSet`, `RelatedOrder`, `AggregateSet`, `RelatedAggregate`, `FieldSet`, …) has a per-feature entry in [`docs/GLOSSARY.md`][glossary]. Use that file when a symbol is unfamiliar — it answers *"is this shipped today, and what exactly does it do?"* for every symbol shown below. The [alphabetical Index][glossary-index] at the top of `GLOSSARY.md` is the fastest entry point — every entry is deep-linked, so you can also URL-jump straight to e.g. [`#filterset`][glossary-filterset] or [`#metafilterset_class`][glossary-metafilterset-class].
 
 ```text
 apps/astronomy/
@@ -396,7 +396,7 @@ class CelestialBodyFieldSet(FieldSet):
         return _resolve_date(root.updated_date, info, "astronomy.view_celestialbody")
 ```
 
-That is the entire `astronomy` app. **Six files, ~270 lines of consumer code total**, and it ships a richly-shaped Relay-node GraphQL API with: filtering across all fields and the FK relation; ordering across all fields and the FK relation; per-field aggregates with a custom stat; per-field redaction, denial, and tiered visibility; cascade row-level permissions; full-text-like search across two fields plus the relation; choice-enum generation for `body_type`; FK-id elision for `{ celestialBody { galaxy { id } } }`; N+1-safe queryset planning across every nested selection. The shipped `0.0.5` foundation already does the `DjangoType` half of this; the Layer-3 cards in [`KANBAN.md`](KANBAN.md) bring the four sidecar files online between now and `1.0.0`.
+That is the entire `astronomy` app. **Six files, ~270 lines of consumer code total**, and it ships a richly-shaped Relay-node GraphQL API with: filtering across all fields and the FK relation; ordering across all fields and the FK relation; per-field aggregates with a custom stat; per-field redaction, denial, and tiered visibility; cascade row-level permissions; full-text-like search across two fields plus the relation; choice-enum generation for `body_type`; FK-id elision for `{ celestialBody { galaxy { id } } }`; N+1-safe queryset planning across every nested selection. The shipped `0.0.5` foundation already does the `DjangoType` half of this; the Layer-3 cards in [`KANBAN.md`][kanban] bring the four sidecar files online between now and `1.0.0`.
 
 ## Migration shape
 
@@ -443,7 +443,7 @@ The decorator becomes a nested `Meta` class — same Strawberry engine, Django-s
 + finalize_django_types()
 ```
 
-The optimizer, scalar conversions, and relation resolution machinery are richer than the upstream's — plan caching, FK-id elision, queryset diffing, strictness mode for accidental N+1 detection. See [`docs/GLOSSARY.md`](docs/GLOSSARY.md) for the enhancement catalog.
+The optimizer, scalar conversions, and relation resolution machinery are richer than the upstream's — plan caching, FK-id elision, queryset diffing, strictness mode for accidental N+1 detection. See [`docs/GLOSSARY.md`][glossary] for the enhancement catalog.
 
 ### Coming from DRF + `django-filter`
 
@@ -479,7 +479,7 @@ GraphQL becomes another transport for the same business logic — no parallel fi
 
 ## Working reference
 
-`django-graphene-filters` is the working feature-complete reference. The goal is not to copy its Graphene internals — it's to recreate **what the package enables for the schema author**: declarative filter / order / aggregate / fieldset sidecars, lazy related class references, generated input / output types with stable class-derived names, layered permissions including cascade visibility, async aggregate paths, and Relay-node-shaped output. The `Galaxy` / `CelestialBody` example above is a structural twin of the `django-graphene-filters` `recipes` cookbook (`ObjectType` / `Object` / `Attribute` / `Value`), reduced to two models so the shape stays legible. The per-feature shipped / planned breakdown lives in [`docs/GLOSSARY.md`](docs/GLOSSARY.md).
+`django-graphene-filters` is the working feature-complete reference. The goal is not to copy its Graphene internals — it's to recreate **what the package enables for the schema author**: declarative filter / order / aggregate / fieldset sidecars, lazy related class references, generated input / output types with stable class-derived names, layered permissions including cascade visibility, async aggregate paths, and Relay-node-shaped output. The `Galaxy` / `CelestialBody` example above is a structural twin of the `django-graphene-filters` `recipes` cookbook (`ObjectType` / `Object` / `Attribute` / `Value`), reduced to two models so the shape stays legible. The per-feature shipped / planned breakdown lives in [`docs/GLOSSARY.md`][glossary].
 
 ## Success criteria
 
@@ -515,4 +515,17 @@ Two example projects prove the goal:
 - **Fakeshop** (`examples/fakeshop/`) grows from today's bidirectional list-based products demo + the rich library demo into the full Relay-shaped showcase: per-model connection fields with filter / order / aggregate / fieldset / search / cascade-permission sidecars; create / update / delete mutations driven by both Django `ModelForm`s and DRF `ModelSerializer`s; file / image upload mutations; auth mutations exercised by the existing test users; sharded multi-database stress mode.
 - **Cookbook parity**: a Strawberry version of `django-graphene-filters`'s `recipes/schema.py` should be a clean port — same node graph (object types, attributes, values), same sidecar shape, equivalent capabilities. The astronomy example above is the structural reduction of that port; the full cookbook is the proof.
 
-For the per-card sequencing of each capability, see [`KANBAN.md`](KANBAN.md).
+For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Repo-root files -->
+[kanban]: KANBAN.md
+
+<!-- docs/ files -->
+[glossary]: docs/GLOSSARY.md
+[glossary-filterset]: docs/GLOSSARY.md#filterset
+[glossary-index]: docs/GLOSSARY.md#index
+[glossary-metafilterset-class]: docs/GLOSSARY.md#metafilterset_class

@@ -4,18 +4,18 @@ Glossary of every public symbol, `Meta` key, configuration argument, and named b
 
 Companion files:
 
-- [`../GOAL.md`](../GOAL.md) — the pitch / vision and a complete `1.0.0`-shape walkthrough (the astronomy showcase).
-- [`../TODAY.md`](../TODAY.md) — the current example-app usage snapshot.
-- [`../KANBAN.md`](../KANBAN.md) — per-card ship sequencing.
-- [`../BACKLOG.md`](../BACKLOG.md) — strategic post-`1.0.0` differentiators.
+- [`../GOAL.md`][goal] — the pitch / vision and a complete `1.0.0`-shape walkthrough (the astronomy showcase).
+- [`../TODAY.md`][today] — the current example-app usage snapshot.
+- [`../KANBAN.md`][kanban] — per-card ship sequencing.
+- [`../BACKLOG.md`][backlog] — strategic post-`1.0.0` differentiators.
 
 ## Status legend
 
 - `shipped` — implemented, tested, available in the current package surface.
-- `planned for X.Y.Z` — committed package direction, not implemented yet; tracked in [`../KANBAN.md`](../KANBAN.md) against a target patch version.
+- `planned for X.Y.Z` — committed package direction, not implemented yet; tracked in [`../KANBAN.md`][kanban] against a target patch version.
 - `deferred` — reserved for later design or blocked on another feature.
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
-- `post-1.0.0` — strategic differentiation tracked in [`../BACKLOG.md`](../BACKLOG.md), not on the roadmap to `1.0.0`.
+- `post-1.0.0` — strategic differentiation tracked in [`../BACKLOG.md`][backlog], not on the roadmap to `1.0.0`.
 
 Current package version: `0.0.7`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
@@ -335,7 +335,7 @@ Base class for mutations with `Meta`-driven configuration; auto-generates [`Inpu
 
 **Status:** planned for `0.0.9`.
 
-Root-level single-node lookup field — the `category: GalaxyNode = DjangoNodeField(GalaxyNode)` shape in [`../GOAL.md`'s astronomy showcase](../GOAL.md#what-success-looks-like-in-your-code). Resolves a single `DjangoType` instance by Relay `GlobalID`, running the target type's [`get_queryset`](#get_queryset-visibility-hook) hook.
+Root-level single-node lookup field — the `category: GalaxyNode = DjangoNodeField(GalaxyNode)` shape in [`../GOAL.md`'s astronomy showcase][goal-what-success-looks-like-in-your-code]. Resolves a single `DjangoType` instance by Relay `GlobalID`, running the target type's [`get_queryset`](#get_queryset-visibility-hook) hook.
 
 **See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [Relay Node integration](#relay-node-integration).
 
@@ -1069,7 +1069,7 @@ Goals that the Layer-3 cards collectively satisfy by `1.0.0`:
 
 ## Beyond `1.0.0`
 
-Strategic differentiators that go past `1.0.0` parity live in [`../BACKLOG.md`](../BACKLOG.md). Roadmap-adjacent items already tracked there:
+Strategic differentiators that go past `1.0.0` parity live in [`../BACKLOG.md`][backlog]. Roadmap-adjacent items already tracked there:
 
 - Apollo Federation support — `BETTER` item 34
 - Model-property / cached-property optimizer hints — folded into `BETTER` item 14 (`Meta.computed_fields`)
@@ -1078,4 +1078,16 @@ Strategic differentiators that go past `1.0.0` parity live in [`../BACKLOG.md`](
 - Layered manual relation-override test policy — `BETTER` item 38
 - First-class multi-db / sharding-aware optimizer — `BETTER` item 41
 
-Dedicated migration guides (graphene-django, strawberry-graphql-django, DRF / django-filter) are tracked in [`../KANBAN.md`](../KANBAN.md) so this file can stay focused on capability lookup. For the migration code diffs, see [`../GOAL.md`'s Migration shape section](../GOAL.md#migration-shape).
+Dedicated migration guides (graphene-django, strawberry-graphql-django, DRF / django-filter) are tracked in [`../KANBAN.md`][kanban] so this file can stay focused on capability lookup. For the migration code diffs, see [`../GOAL.md`'s Migration shape section][goal-migration-shape].
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Repo-root files -->
+[backlog]: ../BACKLOG.md
+[goal]: ../GOAL.md
+[goal-migration-shape]: ../GOAL.md#migration-shape
+[goal-what-success-looks-like-in-your-code]: ../GOAL.md#what-success-looks-like-in-your-code
+[kanban]: ../KANBAN.md
+[today]: ../TODAY.md

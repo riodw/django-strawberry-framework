@@ -1,8 +1,8 @@
 # Reference Trees
 
-This file is the detailed layout reference. It exists to preserve the package/test tree rationale, upstream layout comparisons, and per-file responsibilities without turning [`../README.md`](../README.md) into a second architecture document.
+This file is the detailed layout reference. It exists to preserve the package/test tree rationale, upstream layout comparisons, and per-file responsibilities without turning [`../README.md`][readme] into a second architecture document.
 
-For install, local development, testing, and the canonical documentation map, start from [`../README.md`](../README.md).
+For install, local development, testing, and the canonical documentation map, start from [`../README.md`][readme].
 
 The upstream trees are captured for reference while shaping `django-strawberry-framework`'s own subpackage layout. Filters applied: `__pycache__/` directories, package-internal `tests/` directories, `conftest.py`, and `*.pyc` files are excluded so both trees show only the library logic surface (the strawberry-django source checkout already keeps tests outside the package directory; graphene-django ships its tests inside the installed package, so they're filtered here for comparability).
 
@@ -231,9 +231,9 @@ django_strawberry_framework/
 
 ## django_strawberry_framework (target package layout)
 
-This package target layout is separate from the fakeshop example-project layout above. It adds query-surface modules on top of the current `django_strawberry_framework/` package. It is derived from the three reference trees above and the package direction captured in [`GLOSSARY.md`](GLOSSARY.md).
+This package target layout is separate from the fakeshop example-project layout above. It adds query-surface modules on top of the current `django_strawberry_framework/` package. It is derived from the three reference trees above and the package direction captured in [`GLOSSARY.md`][glossary].
 
-Modules are tagged with `[alpha]`, `[beta]`, or `[stable]` to indicate which development phase they land in (matching the `MILESTONE` convention in [`../KANBAN.md`](../KANBAN.md)). `[alpha]` modules land before `0.1.0` and `[beta]` modules land before `1.0.0` — both are tracked in [`../KANBAN.md`](../KANBAN.md). `[stable]` modules are post-`1.0.0` and tracked in [`../BACKLOG.md`](../BACKLOG.md); they appear here only so the tree is comprehensive, not because they are committed.
+Modules are tagged with `[alpha]`, `[beta]`, or `[stable]` to indicate which development phase they land in (matching the `MILESTONE` convention in [`../KANBAN.md`][kanban]). `[alpha]` modules land before `0.1.0` and `[beta]` modules land before `1.0.0` — both are tracked in [`../KANBAN.md`][kanban]. `[stable]` modules are post-`1.0.0` and tracked in [`../BACKLOG.md`][backlog]; they appear here only so the tree is comprehensive, not because they are committed.
 
 ```text
 django_strawberry_framework/
@@ -326,7 +326,7 @@ django_strawberry_framework/
 
 ## Test layout going forward
 
-Tests live across three roots, each with a focused responsibility. The root `tests/` tree mirrors the package source one-to-one and grows alongside the package; the two `examples/fakeshop/` test trees hold tests whose system-under-test is the example project, split by whether they exercise the GraphQL HTTP endpoint. The placement rules themselves are pinned in [`AGENTS.md`](../AGENTS.md) "Test placement"; this section is the visual map of the trees and a per-folder reference for what kind of test goes where.
+Tests live across three roots, each with a focused responsibility. The root `tests/` tree mirrors the package source one-to-one and grows alongside the package; the two `examples/fakeshop/` test trees hold tests whose system-under-test is the example project, split by whether they exercise the GraphQL HTTP endpoint. The placement rules themselves are pinned in [`AGENTS.md`][agents] "Test placement"; this section is the visual map of the trees and a per-folder reference for what kind of test goes where.
 
 **Coverage priority.** Any package coverage line in `django_strawberry_framework/` that can be earned by a real-world GraphQL query against fakeshop MUST be earned in `examples/fakeshop/test_query/` (live `/graphql/` HTTP via `django.test.Client`). Fall back to `examples/fakeshop/tests/` (in-process schema execution, services, admin, management commands, URLs) or the package-internal `tests/` tree only when the code path is genuinely unreachable from a live query. Mock only when the real path is impossible. The package coverage gate (`fail_under = 100`) is reached *because* the live HTTP tests exercise the package end-to-end — that is the point of the example project's existence in the test suite.
 
@@ -474,3 +474,16 @@ HTTP tests that import the project schema must preserve the reload pattern from 
 `examples/<project>/...` — **Future example projects** mirror the same two-folder split: every additional example app under `examples/` ships its own `tests/` and `test_query/` directories with the same in-process / HTTP separation. `pytest.ini`'s `testpaths` will be extended one entry per pair when a second example lands; nothing about the package or the existing fakeshop test trees changes.
 
 `examples/fakeshop/apps/products/tests/` — **Per-Django-app convention placeholder.** Empty by design — the per-app `tests/` folder is where Django expects an app's own tests to live by convention, but the fakeshop example consolidates all example tests at the project level (`examples/fakeshop/tests/` and `examples/fakeshop/test_query/`) rather than per-app. The empty directory stays committed as documentation of the convention; do not add files there.
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Repo-root files -->
+[agents]: ../AGENTS.md
+[backlog]: ../BACKLOG.md
+[kanban]: ../KANBAN.md
+[readme]: ../README.md
+
+<!-- docs/ files -->
+[glossary]: GLOSSARY.md

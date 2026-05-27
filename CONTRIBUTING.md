@@ -4,13 +4,13 @@ Thanks for your interest in contributing to `django-strawberry-framework`. The p
 
 ## Where things live
 
-- **Package layout & test placement** — [`docs/TREE.md`](docs/TREE.md) is the canonical layout reference: upstream tree comparisons, the current on-disk shape, the target shape with `[alpha]` / `[beta]` / `[stable]` milestone tags, and the test-placement rules across the package and example-project test trees.
-- **Capability catalog** — [`docs/GLOSSARY.md`](docs/GLOSSARY.md) is the source of truth for what's shipped / planned / deferred plus the `0.1.0` / `1.0.0` milestone framing.
-- **Per-card sequencing** — [`KANBAN.md`](KANBAN.md) tracks all planned work as `TODO-ALPHA-*`, `TODO-BETA-*`, `BLOCKED-*`, and `DONE-*` cards with version pins.
-- **Strategic differentiation roadmap** — [`BACKLOG.md`](BACKLOG.md) holds post-`1.0.0` items that aren't on the milestone roadmap. Items graduate to `KANBAN.md` cards when scheduled.
+- **Package layout & test placement** — [`docs/TREE.md`][tree] is the canonical layout reference: upstream tree comparisons, the current on-disk shape, the target shape with `[alpha]` / `[beta]` / `[stable]` milestone tags, and the test-placement rules across the package and example-project test trees.
+- **Capability catalog** — [`docs/GLOSSARY.md`][glossary] is the source of truth for what's shipped / planned / deferred plus the `0.1.0` / `1.0.0` milestone framing.
+- **Per-card sequencing** — [`KANBAN.md`][kanban] tracks all planned work as `TODO-ALPHA-*`, `TODO-BETA-*`, `BLOCKED-*`, and `DONE-*` cards with version pins.
+- **Strategic differentiation roadmap** — [`BACKLOG.md`][backlog] holds post-`1.0.0` items that aren't on the milestone roadmap. Items graduate to `KANBAN.md` cards when scheduled.
 - **In-flight design work** — new features use the `docs/spec-<NNN>-<topic>-<0_0_X>.md` convention (NNN is the 3-digit KANBAN card number; see `docs/builder/BUILD.md` "Spec filename pattern"). Once a slice ships, its behavior is folded into `docs/GLOSSARY.md` or `docs/TREE.md` and the spec defaults to staying at its working location as the historical record; opt-in archival moves it to `docs/SPECS/` (e.g. `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`, `docs/SPECS/spec-011-relay_interfaces-0_0_5.md`).
-- **Current example-project capability snapshot** — [`TODAY.md`](TODAY.md) shows what the package can do in the fakeshop example right now.
-- **Long-term destination** — [`GOAL.md`](GOAL.md) describes the rich-schema north star the milestone roadmap is heading toward.
+- **Current example-project capability snapshot** — [`TODAY.md`][today] shows what the package can do in the fakeshop example right now.
+- **Long-term destination** — [`GOAL.md`][goal] describes the rich-schema north star the milestone roadmap is heading toward.
 
 ## Getting started
 
@@ -99,3 +99,17 @@ Please open issues at <https://github.com/riodw/django-strawberry-framework/issu
 ## Code of conduct
 
 Be respectful, assume good intent, and focus discussion on the work. Harassment or hostile behavior will not be tolerated.
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Repo-root files -->
+[backlog]: BACKLOG.md
+[goal]: GOAL.md
+[kanban]: KANBAN.md
+[today]: TODAY.md
+
+<!-- docs/ files -->
+[glossary]: docs/GLOSSARY.md
+[tree]: docs/TREE.md

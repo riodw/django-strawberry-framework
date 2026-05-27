@@ -2,7 +2,7 @@
 
 This document is the current-state playbook for the local fakeshop example. It is intentionally hyper-specific to `examples/fakeshop/apps/products/schema.py` and answers: “what can this package do in the example project right now?”
 
-For the package-wide capability catalog, shipped/planned feature status, optimizer hints, strictness modes, and future work, see [`docs/GLOSSARY.md`](docs/GLOSSARY.md).
+For the package-wide capability catalog, shipped/planned feature status, optimizer hints, strictness modes, and future work, see [`docs/GLOSSARY.md`][glossary].
 
 ## Current fakeshop state
 
@@ -263,5 +263,14 @@ Do not turn the commented rich fakeshop design into active code until the featur
 
 ## Shipped capabilities available but not currently demonstrated in fakeshop
 
-- `Meta.primary` (shipped in `0.0.6`) — multiple `DjangoType` subclasses per Django model with one explicit primary. Fakeshop's `apps/products/schema.py` and `apps/library/schema.py` each declare one `DjangoType` per model, so the multi-type contract is not exercised in the example today; the feature is fully covered by the package test suite. See [`docs/GLOSSARY.md#metaprimary`](docs/GLOSSARY.md#metaprimary).
-- Consumer override semantics for scalar fields (shipped in `0.0.6`) — annotation-only and `strawberry.field` scalar overrides bypass `convert_scalar` validations, and `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time. Fakeshop's `apps/products/schema.py` and `apps/library/schema.py` exercise the relation-override path (`Branch.shelves` in library) but no scalar override; the four-corner override matrix is fully covered by the package test suite. See [`docs/GLOSSARY.md#scalar-field-override-semantics`](docs/GLOSSARY.md#scalar-field-override-semantics).
+- `Meta.primary` (shipped in `0.0.6`) — multiple `DjangoType` subclasses per Django model with one explicit primary. Fakeshop's `apps/products/schema.py` and `apps/library/schema.py` each declare one `DjangoType` per model, so the multi-type contract is not exercised in the example today; the feature is fully covered by the package test suite. See [`docs/GLOSSARY.md#metaprimary`][glossary-metaprimary].
+- Consumer override semantics for scalar fields (shipped in `0.0.6`) — annotation-only and `strawberry.field` scalar overrides bypass `convert_scalar` validations, and `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time. Fakeshop's `apps/products/schema.py` and `apps/library/schema.py` exercise the relation-override path (`Branch.shelves` in library) but no scalar override; the four-corner override matrix is fully covered by the package test suite. See [`docs/GLOSSARY.md#scalar-field-override-semantics`][glossary-scalar-field-override-semantics].
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- docs/ files -->
+[glossary]: docs/GLOSSARY.md
+[glossary-metaprimary]: docs/GLOSSARY.md#metaprimary
+[glossary-scalar-field-override-semantics]: docs/GLOSSARY.md#scalar-field-override-semantics

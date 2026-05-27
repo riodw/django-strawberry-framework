@@ -11,9 +11,9 @@ Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 - `<STATUS>` — the column the card lives in: `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), `BLOCKED` (waiting on a dependency), or `DONE` (shipped). Updated when the card moves between columns.
 - `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `TODO`, `WIP`, and `BLOCKED` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-036-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-045-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is planned to be completed (every other card, ordered by planned ship version, ties broken by intra-version dependency order). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
-- `X.Y.Z` — the package version the card shipped in (Done cards) or is planned to ship in (everything else). Alpha cards span `0.0.6` through `0.0.12` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Anything beyond `1.0.0` lives in [`BACKLOG.md`](BACKLOG.md), not here.
+- `X.Y.Z` — the package version the card shipped in (Done cards) or is planned to ship in (everything else). Alpha cards span `0.0.6` through `0.0.12` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Anything beyond `1.0.0` lives in [`BACKLOG.md`][backlog], not here.
 
-For install, local development, testing, and the canonical documentation map, start from [`README.md`](README.md).
+For install, local development, testing, and the canonical documentation map, start from [`README.md`][readme].
 
 ## Snapshot
 
@@ -48,7 +48,7 @@ For install, local development, testing, and the canonical documentation map, st
 ### In progress
 
 - `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; all five have shipped (`DONE-016-0.0.7` `DjangoListField`, `DONE-017-0.0.7` `apps.py` and Django app config, `DONE-018-0.0.7` schema-export management command, `DONE-019-0.0.7` multi-database cooperation contract, and `DONE-047-0.0.7` warning-free scalar registration via `StrawberryConfig.scalar_map`). A sixth card landed mid-cycle outside the original bundle — `DONE-046-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper) — shipped the package's two-half defense-in-depth for an upstream Django bug. Full card detail lives under the `## Done` board column below; `DONE-016-0.0.7`, `DONE-017-0.0.7`, `DONE-018-0.0.7`, `DONE-019-0.0.7`, `DONE-046-0.0.7`, and `DONE-047-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
-- Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`](BACKLOG.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
+- Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
 
@@ -66,7 +66,7 @@ For install, local development, testing, and the canonical documentation map, st
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
   - connection-aware planning for Relay-style nested connection selections (new card `TODO-ALPHA-025-0.0.9`)
-- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract ([`BACKLOG.md`](BACKLOG.md) item 38).
+- Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract ([`BACKLOG.md`][backlog] item 38).
 - The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
 
 ## Board columns
@@ -476,7 +476,7 @@ Status: needs spec — no on-board predecessor
 Why it matters:
 
 - `graphene-django` ships `SerializerMutation`, which builds a mutation from a DRF `Serializer` / `ModelSerializer`. This is the highest-leverage write-side feature for DRF migrants — they already have serializers defined and want to reuse them in GraphQL.
-- [`GOAL.md`](GOAL.md) explicitly names DRF as a target migration source ("keep the public API familiar to Django, DRF, and django-filter users"). Shipping `SerializerMutation` is on-mission, not just a parity item.
+- [`GOAL.md`][goal] explicitly names DRF as a target migration source ("keep the public API familiar to Django, DRF, and django-filter users"). Shipping `SerializerMutation` is on-mission, not just a parity item.
 
 Verified in upstream:
 
@@ -545,7 +545,7 @@ Verified in upstream:
 
 Architectural posture:
 
-- The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`](GOAL.md) non-goal "a thin wrapper around `strawberry-graphql-django`".
+- The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
 - Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-044-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
 
 Definition of done:
@@ -733,7 +733,7 @@ Why first:
 Foundation-slice seam:
 
 - `DjangoTypeDefinition.fields_class` is the forward-reserved slot the collection phase will populate.
-- `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also [`BACKLOG.md`](BACKLOG.md) item 38 for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
+- `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
 
 Definition of done:
 
@@ -753,7 +753,7 @@ Status: planned; gated on `TODO-ALPHA-021-0.0.8` (Filtering) and `TODO-ALPHA-023
 
 Why it matters:
 
-- `Meta.search_fields` is one of the five django-graphene-filters Layer-3 Meta keys explicitly listed in [`GOAL.md`](GOAL.md) alongside `filterset_class`, `orderset_class`, `aggregate_class`, and `fields_class`. Without it the package cannot claim full DGF parity at 1.0.0.
+- `Meta.search_fields` is one of the five django-graphene-filters Layer-3 Meta keys explicitly listed in [`GOAL.md`][goal] alongside `filterset_class`, `orderset_class`, `aggregate_class`, and `fields_class`. Without it the package cannot claim full DGF parity at 1.0.0.
 - Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-042-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap.
 
 Verified reference shape:
@@ -946,14 +946,14 @@ Parity: ⚛️&🍓 required (both upstreams ship full Relay Node + Connection +
 
 Severity: **major** — Relay is the canonical GraphQL identity + pagination spec; the foundation shipped in `DONE-011-0.0.5` only becomes useful end-to-end when paired with this card's Connection + Root + validation surface.
 
-Status: blocked on `TODO-ALPHA-023-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`](BACKLOG.md) item 39 — they extend this story rather than block it.
+Status: blocked on `TODO-ALPHA-023-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it.
 
 This is the umbrella spec for the **complete Relay surface at `0.0.9`** — Node foundation + Connection + Root entry points + schema validation + test helpers. The Node half shipped in `DONE-011-0.0.5`; the Connection half is its own implementation slice (`TODO-ALPHA-023-0.0.9`); this card carries the connective tissue that ties them together into one end-to-end Relay story.
 
 Resolved blockers (shipped in `DONE-011-0.0.5`):
 
 - ~~`Meta.interfaces` design~~ — `Meta.interfaces` accepted end-to-end for any Strawberry interface; `(relay.Node,)` activates the Node foundation.
-- ~~`GlobalID` mapping decision~~ — Strawberry-supplied `id: GlobalID!` from the Relay interface replaces the synthesized `id: int!`; Django primary key remains projected as a connector column for the optimizer (Decision 2 of [`docs/SPECS/spec-011-relay_interfaces-0_0_5.md`](docs/SPECS/spec-011-relay_interfaces-0_0_5.md)).
+- ~~`GlobalID` mapping decision~~ — Strawberry-supplied `id: GlobalID!` from the Relay interface replaces the synthesized `id: int!`; Django primary key remains projected as a connector column for the optimizer (Decision 2 of [`docs/SPECS/spec-011-relay_interfaces-0_0_5.md`][spec-011]).
 - ~~Default `resolve_*` injection~~ — `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` defaults injected when `relay.Node` is in `Meta.interfaces`; consumer overrides preserved via Strawberry's `__func__` identity test.
 - ~~`is_type_of` injection~~ — Unconditional on every `DjangoType`; consumer-declared `is_type_of` preserved.
 - ~~`CompositePrimaryKey` rejection~~ — Django 5.2+ composite-pk models raise `ConfigurationError` at finalization with the documented escape hatch (`id: relay.NodeID[...]` annotation).
@@ -1704,7 +1704,7 @@ Parity: ⚛️ required (graphene-django ships `DjangoListField`; strawberry-gra
 
 Shipped the `DjangoListField` factory function in `django_strawberry_framework/list_field.py` as a one-line `field: list[T] = DjangoListField(TargetType)` shape for root Query fields. The default resolver pulls `target_type.__django_strawberry_definition__.model._default_manager.all()` and applies `cls.get_queryset(...)` in both sync and async contexts; a consumer-supplied `resolver=` overrides the default body and any `Manager`/`QuerySet` return value receives `target_type.get_queryset(qs, info)` (graphene-django parity per rev2 H1 of `docs/SPECS/spec-016-list_field-0_0_7.md`), with `Manager → QuerySet` coercion handled by the field wrapper before `get_queryset` runs. Async consumer resolvers are detected at construction time via `inspect.iscoroutinefunction` and routed through an `async def` wrapper. Outer-list nullability is driven by the consumer's class-attribute annotation (`list[T]` → `[T!]!`, `list[T] | None` → `[T!]`). Optimizer cooperation rides the existing root-gated `info.path.prev is None` planning hook (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.resolve`).
 
-Added a new `all_library_branches_via_list_field` root field via `DjangoListField` to the library example schema. This is an intentional **card-text departure** from the original "Live HTTP coverage replacing one of the hand-rolled `all_library_*` resolvers" wording, per [Decision 9](docs/SPECS/spec-016-list_field-0_0_7.md) "Card-text departure" (rev4 H3): the add-only posture keeps `all_library_branches`'s `order_by("id")` intact so the existing live HTTP determinism tests stay green; no existing `all_library_*` resolver was replaced. A new live HTTP test `test_library_branches_via_djangolistfield_optimized_nested_selection` in `examples/fakeshop/test_query/test_library_api.py` pins the response shape and the optimizer's `prefetch_related("shelves")` plan via `CaptureQueriesContext`.
+Added a new `all_library_branches_via_list_field` root field via `DjangoListField` to the library example schema. This is an intentional **card-text departure** from the original "Live HTTP coverage replacing one of the hand-rolled `all_library_*` resolvers" wording, per [Decision 9][spec-016] "Card-text departure" (rev4 H3): the add-only posture keeps `all_library_branches`'s `order_by("id")` intact so the existing live HTTP determinism tests stay green; no existing `all_library_*` resolver was replaced. A new live HTTP test `test_library_branches_via_djangolistfield_optimized_nested_selection` in `examples/fakeshop/test_query/test_library_api.py` pins the response shape and the optimizer's `prefetch_related("shelves")` plan via `CaptureQueriesContext`.
 
 Validation tests in `tests/test_list_field.py` cover: non-class targets, non-`DjangoType` subclasses, unregistered types, non-callable `resolver=`, default-resolver shape, sync coroutine rejection in `get_queryset`, sync + async `get_queryset` paths, sync + async consumer-resolver `QuerySet` returns receiving `get_queryset`, sync + async Python `list` pass-through, nullable-outer / non-nullable-outer rendering, root-position optimizer planning, FK-id elision, and `Meta.primary` interaction (explicit primary + explicit secondary). The version bump from `0.0.6` is deferred to the last `0.0.7` card to ship per Decision 10 of the spec; this card leaves `pyproject.toml`, `__version__`, and `tests/base/test_init.py`'s version assertion at `0.0.6`.
 
@@ -1748,9 +1748,8 @@ Spec: `docs/SPECS/spec-018-export_schema-0_0_7.md`. Build plan: `docs/builder/bu
 
 Parity: ⚛️&🍓 parity-adjacent (multi-database is a Django capability neither upstream specifies a contract around; pinning ours smooths the migrant story from both, but is not a primitive either upstream ships).
 
-Pinned the package's multi-database cooperation contract — `router.db_for_read` on FK-id elision stubs (parent row forwarded as the `instance=` hint when present), explicit `.using(alias)` `_db` preservation through [`OptimizationPlan.apply`](django_strawberry_framework/optimizer/plans.py), consumer-provided [`OptimizerHint.prefetch(Prefetch(queryset=…))`](docs/GLOSSARY.md#optimizerhint) round-trip with `_db` intact, and strictness-mode's connection-agnostic shape under non-default aliases. Tests in [`tests/types/test_resolvers.py`](tests/types/test_resolvers.py) (five resolver-level tests against `_build_fk_id_stub` and `_check_n1` — four FK-id elision branches plus the strictness connection-agnostic shape; FK-id tests hermetic via mocked router), [`tests/optimizer/test_multi_db.py`](tests/optimizer/test_multi_db.py) (one optimizer-plan-level test against `OptimizerHint.prefetch` round-trip; `OptimizationPlan.apply` `_db` preservation is verified transitively by the live HTTP test per `AGENTS.md` line 9), and [`examples/fakeshop/test_query/test_multi_db.py`](examples/fakeshop/test_query/test_multi_db.py) (live `/graphql/` HTTP under `FAKESHOP_SHARDED=1` with `@pytest.mark.django_db(databases=...)` and full `Branch → Shelf → Book` seeding). [`examples/fakeshop/config/settings.py`](examples/fakeshop/config/settings.py) ships an additive `DATABASES` layout — `default → db.sqlite3` in both modes; `FAKESHOP_SHARDED=1` ADDS `shard_b → db_shard_b.sqlite3` — and the secondary shard's seed is committed at [`examples/fakeshop/db_shard_b.sqlite3`](examples/fakeshop/db_shard_b.sqlite3) so sharded mode works out of the box. [`docs/GLOSSARY.md#multi-database-cooperation`](docs/GLOSSARY.md#multi-database-cooperation) flipped from `planned for 0.0.7` to `shipped (0.0.7)` with a four-axis entry body; [`docs/README.md`](docs/README.md) `### Sharded mode (multi-DB)` describes the additive layout. Spec: [`docs/SPECS/spec-019-multi_db-0_0_7.md`](docs/SPECS/spec-019-multi_db-0_0_7.md). Zero production code change; the cooperation already existed in [`django_strawberry_framework/types/resolvers.py::_build_fk_id_stub`](django_strawberry_framework/types/resolvers.py). [`BACKLOG.md`](BACKLOG.md) item 41 owns first-class sharding-aware planning post-`1.0.0` (including threading the parent queryset's `_db` into generated child `Prefetch` querysets, which this card explicitly leaves to that future card).
+Pinned the package's multi-database cooperation contract — `router.db_for_read` on FK-id elision stubs (parent row forwarded as the `instance=` hint when present), explicit `.using(alias)` `_db` preservation through [`OptimizationPlan.apply`][plans], consumer-provided [`OptimizerHint.prefetch(Prefetch(queryset=…))`][glossary-optimizerhint] round-trip with `_db` intact, and strictness-mode's connection-agnostic shape under non-default aliases. Tests in [`tests/types/test_resolvers.py`][test-resolvers] (five resolver-level tests against `_build_fk_id_stub` and `_check_n1` — four FK-id elision branches plus the strictness connection-agnostic shape; FK-id tests hermetic via mocked router), [`tests/optimizer/test_multi_db.py`][test-multi-db] (one optimizer-plan-level test against `OptimizerHint.prefetch` round-trip; `OptimizationPlan.apply` `_db` preservation is verified transitively by the live HTTP test per `AGENTS.md` line 9), and [`examples/fakeshop/test_query/test_multi_db.py`][fakeshop-test-multi-db] (live `/graphql/` HTTP under `FAKESHOP_SHARDED=1` with `@pytest.mark.django_db(databases=...)` and full `Branch → Shelf → Book` seeding). [`examples/fakeshop/config/settings.py`][settings] ships an additive `DATABASES` layout — `default → db.sqlite3` in both modes; `FAKESHOP_SHARDED=1` ADDS `shard_b → db_shard_b.sqlite3` — and the secondary shard's seed is committed at [`examples/fakeshop/db_shard_b.sqlite3`][db-shard-b.sqlite3] so sharded mode works out of the box. [`docs/GLOSSARY.md#multi-database-cooperation`][glossary-multi-database-cooperation] flipped from `planned for 0.0.7` to `shipped (0.0.7)` with a four-axis entry body; [`docs/README.md`][docs-readme] `### Sharded mode (multi-DB)` describes the additive layout. Spec: [`docs/SPECS/spec-019-multi_db-0_0_7.md`][spec-019]. Zero production code change; the cooperation already existed in [`django_strawberry_framework/types/resolvers.py::_build_fk_id_stub`][resolvers]. [`BACKLOG.md`][backlog] item 41 owns first-class sharding-aware planning post-`1.0.0` (including threading the parent queryset's `_db` into generated child `Prefetch` querysets, which this card explicitly leaves to that future card).
 
-Build plan: [`docs/builder/build-019-multi_db-0_0_7.md`](docs/builder/build-019-multi_db-0_0_7.md).
 
 ### DONE-046-0.0.7 — Django Trac #37064 hardening + `safe_wrap_connection_method`
 
@@ -1758,19 +1757,19 @@ Parity: 🚧 defensive — neither upstream ships a patch for Django Trac #37064
 
 Shipped a two-half defense-in-depth for [Django Trac #37064](https://code.djangoproject.com/ticket/37064) (closed upstream as `wontfix`), which clobbers wrapped `connections[alias]` methods at `tearDownClass`:
 
-**Half 1 (unwrap-time): package-level patch.** [`django_strawberry_framework/_django_patches.py`](django_strawberry_framework/_django_patches.py) adds `_patched_remove_databases_failures` and an idempotent `apply()` entry point. [`django_strawberry_framework/apps.py::DjangoStrawberryFrameworkConfig.ready`](django_strawberry_framework/apps.py) invokes `apply()` at Django app-load time, so consumers get the fix automatically by having `"django_strawberry_framework"` in `INSTALLED_APPS` — no `conftest.py` workaround, no test-case base class to inherit. The patched `_remove_databases_failures` adds an `isinstance(method, _DatabaseFailure)` guard before the `setattr(..., method.wrapped)` step, leaving any consumer wrapper intact. Log-once sentinel guards against double-application across re-imports.
+**Half 1 (unwrap-time): package-level patch.** [`django_strawberry_framework/_django_patches.py`][django-patches] adds `_patched_remove_databases_failures` and an idempotent `apply()` entry point. [`django_strawberry_framework/apps.py::DjangoStrawberryFrameworkConfig.ready`][apps] invokes `apply()` at Django app-load time, so consumers get the fix automatically by having `"django_strawberry_framework"` in `INSTALLED_APPS` — no `conftest.py` workaround, no test-case base class to inherit. The patched `_remove_databases_failures` adds an `isinstance(method, _DatabaseFailure)` guard before the `setattr(..., method.wrapped)` step, leaving any consumer wrapper intact. Log-once sentinel guards against double-application across re-imports.
 
-**Half 2 (wrap-time): consumer helper.** [`django_strawberry_framework/test/_wrap.py::safe_wrap_connection_method`](django_strawberry_framework/test/_wrap.py) is the cooperative wrap-time mirror, modeled on `django-debug-toolbar`'s `wrap_cursor` `isinstance` check. When a consumer wants to monkey-patch a method on `connections[alias]` for testing, calling this helper installs the wrapper without clobbering an outer Django `_DatabaseFailure` wrapper that may already be in place. Public export from [`django_strawberry_framework.test`](django_strawberry_framework/test/__init__.py).
+**Half 2 (wrap-time): consumer helper.** [`django_strawberry_framework/test/_wrap.py::safe_wrap_connection_method`][wrap] is the cooperative wrap-time mirror, modeled on `django-debug-toolbar`'s `wrap_cursor` `isinstance` check. When a consumer wants to monkey-patch a method on `connections[alias]` for testing, calling this helper installs the wrapper without clobbering an outer Django `_DatabaseFailure` wrapper that may already be in place. Public export from [`django_strawberry_framework.test`][test-init].
 
-[`docs/GLOSSARY.md#django-trac-37064-hardening`](docs/GLOSSARY.md#django-trac-37064-hardening) and [`docs/GLOSSARY.md#safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) flipped to `shipped (0.0.7)`. Tests cover the patch's idempotency, log-once sentinel, callable guard, defensive imports, the `installed=None` regression branch, and the consumer-side wrap helper's `_DatabaseFailure`-already-present refusal.
+[`docs/GLOSSARY.md#django-trac-37064-hardening`][glossary-django-trac-37064-hardening] and [`docs/GLOSSARY.md#safe_wrap_connection_method`][glossary-safe-wrap-connection-method] flipped to `shipped (0.0.7)`. Tests cover the patch's idempotency, log-once sentinel, callable guard, defensive imports, the `installed=None` regression branch, and the consumer-side wrap helper's `_DatabaseFailure`-already-present refusal.
 
 NNN note: `046` was assigned ahead of the prior max (`TODO-STABLE-045-1.0.0`) to avoid a multi-file rename of `WIP-ALPHA-020-0.0.7` across 5+ specs. Per the KANBAN card-ID convention, NNN is not stable and grouping is by version, not NNN.
 
 ### DONE-047-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
 
-Pinned the package-defined scalar registration path: [`BigInt`](docs/GLOSSARY.md#bigint-scalar) is redefined as a bare `NewType("BigInt", int)` and registered via [`StrawberryConfig.scalar_map`](https://strawberry.rocks) through a new public [`strawberry_config(*, extra_scalar_map=None, **config_kwargs) -> StrawberryConfig`](docs/GLOSSARY.md#strawberry_config) factory exported from `django_strawberry_framework`. The factory is keyword-only on `extra_scalar_map=` and forwards every other kwarg to upstream `StrawberryConfig(...)`, so consumers compose package scalars and custom `StrawberryConfig` options (`auto_camel_case=False`, `relay_max_results=200`, etc.) in one call; passing `scalar_map=` directly raises `ValueError`. Consumers add `config=strawberry_config()` to their `strawberry.Schema(...)` call once; direct `BigInt` annotations work unchanged. The `warnings.catch_warnings()` suppression block in `django_strawberry_framework/scalars.py` is removed because the no-warning `strawberry.scalar(name=..., serialize=..., parse_value=...)` overload at `.venv/lib/python3.10/site-packages/strawberry/types/scalar.py` returns a `ScalarDefinition` without triggering the `DeprecationWarning`. Tests in `tests/test_scalars.py` cover the factory contract (thirteen tests — eight scalar-map + five `**config_kwargs` passthrough) and the round-trip wire format through a `strawberry.Schema(config=strawberry_config())` (two integration tests); `tests/base/test_init.py`'s `__all__` assertion adds `strawberry_config`; `tests/types/test_converters.py`'s BigInt-section schemas migrate to `config=strawberry_config()`. `examples/fakeshop/config/schema.py` migrates to the new pattern; `docs/README.md`, `docs/GLOSSARY.md`, `GOAL.md`, and `TODAY.md` schema-construction examples migrate too. Breaking change in alpha (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` Decision 6 and the `PositiveBigIntegerField` precedent in `0.0.6`): any schema that resolves to `BigInt` — direct annotations OR converter-backed `BigIntegerField` / `PositiveBigIntegerField` `DjangoType` fields — that doesn't add `config=strawberry_config()` sees Strawberry schema-construction fail with `Unexpected type ...BigInt`. Spec: `docs/SPECS/spec-020-scalar_map_helper-0_0_7.md`. The version bump from `0.0.7 → 0.0.8` is NOT in this card per Decision 8.
+Pinned the package-defined scalar registration path: [`BigInt`][glossary-bigint-scalar] is redefined as a bare `NewType("BigInt", int)` and registered via [`StrawberryConfig.scalar_map`](https://strawberry.rocks) through a new public [`strawberry_config(*, extra_scalar_map=None, **config_kwargs) -> StrawberryConfig`][glossary-strawberry-config] factory exported from `django_strawberry_framework`. The factory is keyword-only on `extra_scalar_map=` and forwards every other kwarg to upstream `StrawberryConfig(...)`, so consumers compose package scalars and custom `StrawberryConfig` options (`auto_camel_case=False`, `relay_max_results=200`, etc.) in one call; passing `scalar_map=` directly raises `ValueError`. Consumers add `config=strawberry_config()` to their `strawberry.Schema(...)` call once; direct `BigInt` annotations work unchanged. The `warnings.catch_warnings()` suppression block in `django_strawberry_framework/scalars.py` is removed because the no-warning `strawberry.scalar(name=..., serialize=..., parse_value=...)` overload at `.venv/lib/python3.10/site-packages/strawberry/types/scalar.py` returns a `ScalarDefinition` without triggering the `DeprecationWarning`. Tests in `tests/test_scalars.py` cover the factory contract (thirteen tests — eight scalar-map + five `**config_kwargs` passthrough) and the round-trip wire format through a `strawberry.Schema(config=strawberry_config())` (two integration tests); `tests/base/test_init.py`'s `__all__` assertion adds `strawberry_config`; `tests/types/test_converters.py`'s BigInt-section schemas migrate to `config=strawberry_config()`. `examples/fakeshop/config/schema.py` migrates to the new pattern; `docs/README.md`, `docs/GLOSSARY.md`, `GOAL.md`, and `TODAY.md` schema-construction examples migrate too. Breaking change in alpha (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` Decision 6 and the `PositiveBigIntegerField` precedent in `0.0.6`): any schema that resolves to `BigInt` — direct annotations OR converter-backed `BigIntegerField` / `PositiveBigIntegerField` `DjangoType` fields — that doesn't add `config=strawberry_config()` sees Strawberry schema-construction fail with `Unexpected type ...BigInt`. Spec: `docs/SPECS/spec-020-scalar_map_helper-0_0_7.md`. The version bump from `0.0.7 → 0.0.8` is NOT in this card per Decision 8.
 
-Build plan: [`docs/builder/build-020-scalar_map_helper-0_0_7.md`](docs/builder/build-020-scalar_map_helper-0_0_7.md).
+Build plan: [`docs/builder/build-020-scalar_map_helper-0_0_7.md`][build-020-scalar-map-helper-0-0-7].
 
 ## Release readiness checklist
 
@@ -1791,4 +1790,43 @@ Before a release:
 - When a card moves to Done, update the evidence and remove stale blocker language.
 - When a future spec creates a new subsystem, add it here as a card with a definition of done.
 - Keep `CHANGELOG.md` out of routine updates unless explicitly requested.
-- Strategic differentiation candidates (features neither `graphene-django` nor `strawberry-graphql-django` ship cleanly) live in [`BACKLOG.md`](BACKLOG.md). When a `BACKLOG.md` item is scheduled, promote it to a `TODO-NNN-X.Y.Z` or `TODO-NNN-X.Y.Z` card here and cross-reference back.
+- Strategic differentiation candidates (features neither `graphene-django` nor `strawberry-graphql-django` ship cleanly) live in [`BACKLOG.md`][backlog]. When a `BACKLOG.md` item is scheduled, promote it to a `TODO-NNN-X.Y.Z` or `TODO-NNN-X.Y.Z` card here and cross-reference back.
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Repo-root files -->
+[backlog]: BACKLOG.md
+[goal]: GOAL.md
+[readme]: README.md
+
+<!-- docs/ files -->
+[docs-readme]: docs/README.md
+[glossary-bigint-scalar]: docs/GLOSSARY.md#bigint-scalar
+[glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
+[glossary-multi-database-cooperation]: docs/GLOSSARY.md#multi-database-cooperation
+[glossary-optimizerhint]: docs/GLOSSARY.md#optimizerhint
+[glossary-safe-wrap-connection-method]: docs/GLOSSARY.md#safe_wrap_connection_method
+[glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config
+
+<!-- Spec files (docs/SPECS/) -->
+[spec-011]: docs/SPECS/spec-011-relay_interfaces-0_0_5.md
+[spec-016]: docs/SPECS/spec-016-list_field-0_0_7.md
+[spec-019]: docs/SPECS/spec-019-multi_db-0_0_7.md
+
+<!-- Source / test / example files -->
+[apps]: django_strawberry_framework/apps.py
+[db-shard-b.sqlite3]: examples/fakeshop/db_shard_b.sqlite3
+[django-patches]: django_strawberry_framework/_django_patches.py
+[plans]: django_strawberry_framework/optimizer/plans.py
+[resolvers]: django_strawberry_framework/types/resolvers.py
+[settings]: examples/fakeshop/config/settings.py
+[test-init]: django_strawberry_framework/test/__init__.py
+[test-multi-db]: tests/optimizer/test_multi_db.py
+[fakeshop-test-multi-db]: examples/fakeshop/test_query/test_multi_db.py
+[test-resolvers]: tests/types/test_resolvers.py
+[wrap]: django_strawberry_framework/test/_wrap.py
+
+<!-- Build plans (docs/builder/) -->
+[build-020-scalar-map-helper-0-0-7]: docs/builder/build-020-scalar_map_helper-0_0_7.md

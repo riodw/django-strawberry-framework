@@ -2,7 +2,7 @@
 
 `django-strawberry-framework` is a DRF-shaped Django integration for Strawberry GraphQL. It lets Django teams build GraphQL APIs from Django models using the familiar `class Meta` style instead of a decorator-heavy surface.
 
-For the project pitch, migration context, and the canonical documentation map, start from [`../README.md`](../README.md). For the long-term destination, see [`../GOAL.md`](../GOAL.md). For the current capability snapshot, see [`../TODAY.md`](../TODAY.md). For contributor / maintainer workflow (dev setup, format, test, build, publish), see [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+For the project pitch, migration context, and the canonical documentation map, start from [`../README.md`][readme]. For the long-term destination, see [`../GOAL.md`][goal]. For the current capability snapshot, see [`../TODAY.md`][today]. For contributor / maintainer workflow (dev setup, format, test, build, publish), see [`../CONTRIBUTING.md`][contributing].
 
 ## Installation
 
@@ -72,7 +72,7 @@ class CategoryNode(DjangoType):
 finalize_django_types()
 ```
 
-See [`GLOSSARY.md`'s Relay Node integration subsection](GLOSSARY.md#relay-node-integration) for the resolver list, composite-pk constraint, and the `is_type_of` injection contract.
+See [`GLOSSARY.md`'s Relay Node integration subsection][glossary-relay-node-integration] for the resolver list, composite-pk constraint, and the `is_type_of` injection contract.
 
 ## What just happened?
 
@@ -83,7 +83,7 @@ See [`GLOSSARY.md`'s Relay Node integration subsection](GLOSSARY.md#relay-node-i
 
 ## Today and coming next
 
-For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`](../TODAY.md). For the per-feature glossary covering every shipped / planned / deferred capability (deep-linkable by anchor — `GLOSSARY.md#filterset`, `GLOSSARY.md#fk-id-elision`, …), see [`GLOSSARY.md`](GLOSSARY.md). For the long-term destination and the migration-shape diffs against `graphene-django` and `strawberry-graphql-django`, see [`../GOAL.md`](../GOAL.md).
+For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`][today]. For the per-feature glossary covering every shipped / planned / deferred capability (deep-linkable by anchor — `GLOSSARY.md#filterset`, `GLOSSARY.md#fk-id-elision`, …), see [`GLOSSARY.md`][glossary]. For the long-term destination and the migration-shape diffs against `graphene-django` and `strawberry-graphql-django`, see [`../GOAL.md`][goal].
 
 A quick summary:
 
@@ -96,14 +96,14 @@ A quick summary:
 - generated relation resolvers, with annotation-only and `strawberry.field` consumer overrides preserved
 - definition-order-independent relation finalization via `finalize_django_types()`
 - `get_queryset` visibility hook (cooperates with the optimizer via `Prefetch` downgrade)
-- `DjangoOptimizerExtension` — automatic ORM optimization: one selection-tree walk produces a `select_related` / `prefetch_related` / `only()` plan that cooperates with querysets you've already shaped (consumer entries are respected, not clobbered). Plan caching, FK-id elision for `{ relation { id } }`, `get_queryset` → `Prefetch` downgrade so visibility filters survive joins, and strictness mode (`off` / `warn` / `raise`) for accidental-N+1 detection are all in the box. See [`GLOSSARY.md`](GLOSSARY.md) for the full optimizer surface.
-- `DjangoListField` — non-Relay `list[T]` factory for root Query fields (new in `0.0.7`); default resolver pulls `model._default_manager.all()` and applies the type's `get_queryset` in sync + async contexts. See [`GLOSSARY.md#djangolistfield`](GLOSSARY.md#djangolistfield).
+- `DjangoOptimizerExtension` — automatic ORM optimization: one selection-tree walk produces a `select_related` / `prefetch_related` / `only()` plan that cooperates with querysets you've already shaped (consumer entries are respected, not clobbered). Plan caching, FK-id elision for `{ relation { id } }`, `get_queryset` → `Prefetch` downgrade so visibility filters survive joins, and strictness mode (`off` / `warn` / `raise`) for accidental-N+1 detection are all in the box. See [`GLOSSARY.md`][glossary] for the full optimizer surface.
+- `DjangoListField` — non-Relay `list[T]` factory for root Query fields (new in `0.0.7`); default resolver pulls `model._default_manager.all()` and applies the type's `get_queryset` in sync + async contexts. See [`GLOSSARY.md#djangolistfield`][glossary-djangolistfield].
 - `OptimizerHint` — per-relation overrides (`SKIP`, `select_related`, `prefetch_related`, custom `Prefetch`)
 - model / type registry and `auto` re-export from Strawberry
 - `Meta.primary` — multiple `DjangoType` subclasses per Django model with explicit primary-flag opt-in
 - annotation-only and `strawberry.field` consumer overrides for scalar fields, symmetric with the shipped relation-override contract (consumer overrides bypass `convert_scalar` validations; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time)
 - `Django AppConfig` — `django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` so consumers can list `"django_strawberry_framework"` in `INSTALLED_APPS` and Django's check / signal hooks resolve through it (new in `0.0.7`).
-- `manage.py export_schema` — Django management command that prints or writes the GraphQL SDL for a `strawberry.Schema` symbol (positional dotted path, optional `--path`); migration-parity with `strawberry-django`'s command of the same name. See [`GLOSSARY.md#schema-export-management-command`](GLOSSARY.md#schema-export-management-command).
+- `manage.py export_schema` — Django management command that prints or writes the GraphQL SDL for a `strawberry.Schema` symbol (positional dotted path, optional `--path`); migration-parity with `strawberry-django`'s command of the same name. See [`GLOSSARY.md#schema-export-management-command`][glossary-schema-export-management-command].
 
 
 **Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
@@ -159,7 +159,7 @@ uv run python examples/fakeshop/manage.py migrate
 uv run python examples/fakeshop/manage.py runserver
 ```
 
-The dev landing page at `/` links to GraphiQL, the admin, and the seed/delete query-param triggers. For the full example walkthrough see [`../examples/fakeshop/README.md`](../examples/fakeshop/README.md).
+The dev landing page at `/` links to GraphiQL, the admin, and the seed/delete query-param triggers. For the full example walkthrough see [`../examples/fakeshop/README.md`][fakeshop-readme].
 
 ### Seeding the example database
 
@@ -216,7 +216,7 @@ FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards --count
 
 In sharded mode `default` keeps pointing at `db.sqlite3` (same file as single-DB mode) and `shard_b` adds `db_shard_b.sqlite3`. The two modes share the same `default` file, so a single dev workflow (`manage.py seed_data`, etc.) populates the default alias either way; the sharded mode only ADDS the secondary shard. The committed `db_shard_b.sqlite3` ships with a minimal seed via `seed_shards` so the sharded mode works out of the box.
 
-For the cooperation contract these shards run against — explicit `.using()` `_db` preservation, FK-id elision router hints, consumer-provided `Prefetch(queryset=…)` alias round-trips, and strictness-mode behavior under non-default aliases — see [`GLOSSARY.md#multi-database-cooperation`](GLOSSARY.md#multi-database-cooperation).
+For the cooperation contract these shards run against — explicit `.using()` `_db` preservation, FK-id elision router hints, consumer-provided `Prefetch(queryset=…)` alias round-trips, and strictness-mode behavior under non-default aliases — see [`GLOSSARY.md#multi-database-cooperation`][glossary-multi-database-cooperation].
 
 ## Using the package in your own project
 
@@ -238,4 +238,25 @@ Then run:
 uv sync
 ```
 
-For status, the milestone roadmap, and contributor signposts, see [`../README.md`'s status section](../README.md#status) and [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+For status, the milestone roadmap, and contributor signposts, see [`../README.md`'s status section][readme-status] and [`../CONTRIBUTING.md`][contributing].
+
+<!-- Link definitions — when this file moves, these are the only paths
+     that need updating. Inline uses of `[text][ref-id]` are
+     location-independent and survive the move untouched. -->
+
+<!-- Repo-root files -->
+[contributing]: ../CONTRIBUTING.md
+[goal]: ../GOAL.md
+[readme]: ../README.md
+[readme-status]: ../README.md#status
+[today]: ../TODAY.md
+
+<!-- docs/ files -->
+[glossary]: GLOSSARY.md
+[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
+[glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
+[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
+[glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command
+
+<!-- Source / test / example files -->
+[fakeshop-readme]: ../examples/fakeshop/README.md

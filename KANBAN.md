@@ -99,14 +99,33 @@ Scope:
 Verified upstream filter primitives (graphene-django parity floor):
 
 - `array_filter.py` — `ArrayFilter(TypedFilter)`, `ArrayFilterMethod(FilterMethod)`
-- `range_filter.py` — `RangeFilter(TypedFilter)`, `RangeField(Field)`
+- `range_filter.py` — `RangeFilter(TypedFilter)`, `RangeField(Field)`, `validate_range`
 - `list_filter.py` — `ListFilter(TypedFilter)`, `ListFilterMethod(FilterMethod)`
 - `typed_filter.py` — `TypedFilter(Filter)` (base class for the four above)
 - `global_id_filter.py` — `GlobalIDFilter(Filter)`, `GlobalIDMultipleChoiceFilter(MultipleChoiceFilter)`
 
 All sourced from `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/filters/`. Our implementation should ship equivalents for each (DRF-style class declarations on the filterset rather than graphene-style filter-class subclassing where it matters); the global-ID filter in particular is required for Relay-aware filtering against `relay.Node` types shipped in `DONE-011-0.0.5`.
 
-`strawberry-graphql-django` covers the same surface through `filters.py` (single-file decorator-driven implementation) — verified at `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/filters.py`.
+Verified upstream factory machinery (graphene-django, sibling files under the same `filter/` package):
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/__init__.py` — soft-dependency on `django-filter`: imports issue an `ImportWarning` when `DJANGO_FILTER_INSTALLED` is false. Our equivalent faces the same soft-dep question (pin the answer in the spec).
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/utils.py::get_filtering_args_from_filterset` — the upstream function that converts a FilterSet class into GraphQL filter arguments. This is graphene-django's parity equivalent of the cookbook's `FilterArgumentsFactory`; our package needs the same end-to-end function (under whatever name we settle on).
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/utils.py::get_filterset_class` — get-or-create helper that returns an explicit `Meta.filterset_class` if declared, else builds one via `custom_filterset_factory`. Note: name collision with the cookbook's `filterset_factories.py::get_filterset_class` — both files ship a function of the same name with different shapes; be explicit in the spec about which one we mirror.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/utils.py::replace_csv_filters` — already listed under "Dropped" below.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/filterset.py::GrapheneFilterSetMixin` — subclasses `django_filters.BaseFilterSet`; defines `FILTER_DEFAULTS` overriding FK/PK → `GlobalIDFilter` (cited again under "Strawberry-adapted bits" below).
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/filterset.py::setup_filterset` / `::custom_filterset_factory` — upstream wrapper-avoidance / dynamic-factory pair; `setup_filterset` is dropped (see below); `custom_filterset_factory` is graphene's ancestor of the cookbook's `_dynamic_filterset_cache`.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField` — graphene-django's filter-integrated connection field; the consumer-facing surface that composes FilterSet machinery onto a Relay connection. Cited here so the `TODO-ALPHA-023-0.0.9` (`DjangoConnectionField`) cross-card integration is clean — our equivalent must accept a `filterset_class` argument and thread filter args through the connection-field resolver.
+
+`strawberry-graphql-django` covers the same surface through `filters.py` (single-file decorator-driven implementation) — verified at `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/filters.py`:
+
+- `filters.py::FilterLookup` — generic `FilterLookup[T]` typed lookup descriptor (`exact`, `i_exact`, `contains`, `i_contains`, `starts_with`, etc.).
+- `filters.py::process_filters` — compiles a filter input value into queryset filter arguments (the runtime side of the filter pipeline).
+- `filters.py::StrawberryDjangoFieldFilters` — field-base subclass that injects the `filters: <T>FilterInput` argument and threads through to `process_filters`.
+- `filters.py::filter_type` — current consumer-facing `@strawberry_django.filter_type(Model, lookups=True)` decorator (public API).
+- `filters.py #"def __getattr__"` — module-level `__getattr__` exposes a legacy `filter` alias that emits a `DeprecationWarning` and forwards to `filter_type`. Do not claim parity with the deprecated symbol.
+- `filters.py::FILTERS_ARG` (`= "filters"`) — module-level constant for the GraphQL argument name.
+
+Our equivalent ships DRF-style class declarations (`Meta.filterset_class = ItemFilterSet`) rather than decorator-on-input-type, but the runtime pipeline (a `process_filters` analog) is conceptually parallel.
 
 Foundation-slice seam:
 
@@ -148,7 +167,7 @@ Strawberry-adapted bits:
 - `_build_logic_fields` (`and` / `or` / `not`) uses self-referential `strawberry.lazy(...)` instead of `graphene.List(lambda: ...)`
 - `_build_input_fields` lambda ref to target filterset's root type → `strawberry.lazy("...module.path...")`
 - `GrapheneFilterSetMixin.FILTER_DEFAULTS` (FK/PK → `GlobalIDFilter`) → our own `FILTER_DEFAULTS` mapping FK/PK to a `strawberry.relay.GlobalID`-aware primitive (the global-ID filter in the upstream-primitives list above)
-- `graphene_django.forms.converter.convert_form_field` → our own form-field → Strawberry-input converter; pairs with `TODO-ALPHA-028` (Form-based mutations), which builds the same converter for the mutation surface
+- `graphene_django.forms.converter.convert_form_field` → our own form-field → Strawberry-input converter; pairs with `TODO-ALPHA-029-0.0.11` (Form-based mutations), which builds the same converter for the mutation surface
 
 Dropped (Graphene-specific, no Strawberry equivalent needed):
 
@@ -178,7 +197,7 @@ Dependencies:
 
 Priority: high after filters
 
-Parity: 🍓 required (strawberry-graphql-django ships `strawberry_django.order`; graphene-django via `django-filter`-style ordering — sister card to TODO-ALPHA-021 Filtering).
+Parity: 🍓 required (strawberry-graphql-django ships `strawberry_django.order_type`; graphene-django has no native ordering primitive — it composes `django_filters.OrderingFilter` into its FilterSet and exposes an `order_by` argument on `DjangoFilterConnectionField`, so ⚛️ parity is met via `TODO-ALPHA-021-0.0.8`'s filter subsystem rather than a separate surface here).
 
 Status: planned
 
@@ -194,11 +213,37 @@ Foundation-slice seam:
 - `DjangoTypeDefinition.orderset_class` is the populated slot.
 - Lazy related-order class references reuse the same record-now-resolve-at-finalization pattern as model relations (`PendingRelation` → analogous `PendingRelatedClass` shape).
 
+Verified in strawberry-graphql-django (`/Users/riordenweber/projects/strawberry-django-main/strawberry_django/ordering.py`):
+
+- `ordering.py::Ordering` — public `Ordering` enum: `ASC`, `DESC`, `ASC_NULLS_FIRST`, `ASC_NULLS_LAST`, `DESC_NULLS_FIRST`, `DESC_NULLS_LAST`.
+- `ordering.py::OrderSequence` — per-field sequence descriptor used to order ties when multiple fields participate.
+- `ordering.py::process_order` / `::process_ordering` / `::process_ordering_default` / `::apply_ordering` — the runtime pipeline that compiles an order-input value into queryset `order_by()` arguments and applies them.
+- `ordering.py::StrawberryDjangoFieldOrdering` — field-base subclass that injects the `order: <T>OrderInput` and `ordering: list[<T>OrderInput]` arguments on a Django-backed field.
+- `ordering.py::order_type` — current consumer-facing `@strawberry_django.order_type(Model)` decorator (public API).
+- `ordering.py::order` — legacy decorator alias marked `@deprecated("strawberry_django.order is deprecated in favor of strawberry_django.order_type.")`; do not claim parity with this symbol.
+- `ordering.py::ORDER_ARG` (`= "order"`) and `ordering.py::ORDERING_ARG` (`= "ordering"`) — module-level constants for the singular one-of and list GraphQL argument names.
+
+Verified in graphene-django (no native ordering primitive):
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField #"order_by"` — connection field accepts an `order_by` argument that composes through `django_filters.OrderingFilter` declared on the FilterSet. Graphene has no separate ordering primitive; ⚛️ parity is met by the filter subsystem (`TODO-ALPHA-021-0.0.8`) rather than this card.
+
 Lazy-resolution pipeline:
 
-Reuses the six-layer lazy-resolution architecture spec'd in detail under `TODO-ALPHA-021-0.0.8` (Filtering subsystem). The same `LazyRelatedClassMixin`, metaclass-discovery + deferred-expansion pattern, cycle-safe `get_orders()` cache + recursion guard, BFS schema build, and `_dynamic_orderset_cache` memoization all port verbatim, with `RelatedOrder` substituted for `RelatedFilter` and `OrderSet` for `FilterSet`. The Strawberry adaptation is identical: Graphene's `lambda tn=...: input_object_types[tn]` forward references become `strawberry.lazy("django_strawberry_framework.orders._registry.{TargetOrderSet}InputType")` (or `Annotated[..., strawberry.lazy(...)]`). Synchronization runs inside `finalize_django_types()` phase 2.5 alongside filter resolution; the two subsystems share the same finalizer pass.
+Reuses the lazy-resolution architecture spec'd in detail under `TODO-ALPHA-021-0.0.8` (Filtering subsystem), but only **five of the six layers** carry over from the cookbook with substitutions — the cookbook's ordering surface is leaner than its filter surface:
 
-Reference symbols in the Graphene checkout: `django_graphene_filters/orders.py`, `orderset.py`, `order_arguments_factory.py` — mirror images of the filter trio with the same lazy-resolution shape.
+- **Layers 1-2** (lazy class refs + module-fallback resolution): port from `mixins.py::LazyRelatedClassMixin` and `orders.py::BaseRelatedOrder`. Same shape as the filter side; `RelatedOrder` substituted for `RelatedFilter`.
+- **Layer 3** (metaclass discovery, deferred expansion): port from `orderset.py::OrderSetMetaclass`. Leaner than the filter side's `FilterSetMetaclass`; the discover-and-bind pattern is the same.
+- **Layer 4** (cycle-safe expansion + cache): the cookbook's orderset uses `orderset.py::AdvancedOrderSet.get_fields` (and `::get_flat_orders` for the prefix-walked output) — **not** `get_filters()` or `get_orders()`. Earlier card revisions referenced a `get_orders()` method that does not exist in the cookbook. The cycle-safe expansion pattern carries over but the method names and cache-key shape are spelled differently from the filter side.
+- **Layer 5** (BFS schema build with deferred references — Strawberry-adapted): port from `order_arguments_factory.py::OrderArgumentsFactory._ensure_built`. Graphene's `lambda tn=...: input_object_types[tn]` forward references become `strawberry.lazy("django_strawberry_framework.orders._registry.{TargetOrderSet}InputType")` (or `Annotated[..., strawberry.lazy(...)]`).
+- **Layer 6** (memoized dynamic OrderSet generation): **no cookbook counterpart**. The cookbook ships no `orderset_factories.py` and no `_dynamic_orderset_cache` — only the filter side has the dynamic-factory mechanism. Our ordering subsystem must either design Layer 6 fresh (mirroring the filter side's `filterset_factories.py::_dynamic_filterset_cache`) or skip the dynamic-ordering-for-connection-field case and require explicit `orderset_class` declarations on every consumer. **Pin this decision in the spec.**
+
+Synchronization runs inside `finalize_django_types()` phase 2.5 alongside filter resolution; the two subsystems share the same finalizer pass.
+
+Reference symbols in the cookbook (`/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/`):
+
+- `orders.py::BaseRelatedOrder`, `orders.py::RelatedOrder`
+- `orderset.py::OrderSetMetaclass`, `orderset.py::AdvancedOrderSet` (with `::get_fields`, `::get_flat_orders`, `::apply_distinct`, `::check_permissions`, `::_apply_distinct_postgres`, `::_apply_distinct_emulated`)
+- `order_arguments_factory.py::OrderArgumentsFactory`, `order_arguments_factory.py::OrderDirection`
 
 Definition of done:
 
@@ -212,7 +257,7 @@ Definition of done:
 
 ### TODO-ALPHA-023-0.0.9 — `DjangoConnectionField`
 
-Priority: high once filters/orders/fieldset are stable
+Priority: high once filters/orders are stable (FieldSet integration is deferred to `TODO-BETA-037-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands).
 
 Parity: ⚛️&🍓 required (both upstreams ship Relay-shaped connection fields).
 
@@ -239,10 +284,10 @@ Definition of done:
 
 Dependencies:
 
-- `FieldSet`
-- `FilterSet`
-- `OrderSet`
+- `FilterSet` (`TODO-ALPHA-021-0.0.8`)
+- `OrderSet` (`TODO-ALPHA-022-0.0.8`)
 - Relay/interface decisions
+- `FieldSet` — **deferred to `TODO-BETA-037-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker.
 
 ### TODO-ALPHA-025-0.0.9 — Connection-aware optimizer planning
 
@@ -1723,7 +1768,7 @@ NNN note: `046` was assigned ahead of the prior max (`TODO-STABLE-045-1.0.0`) to
 
 ### DONE-047-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
 
-Pinned the package-defined scalar registration path: [`BigInt`](docs/GLOSSARY.md#bigint-scalar) is redefined as a bare `NewType("BigInt", int)` and registered via [`StrawberryConfig.scalar_map`](https://strawberry.rocks) through a new public [`strawberry_config(*, extra_scalar_map=None, **config_kwargs) -> StrawberryConfig`](docs/GLOSSARY.md#strawberry_config) factory exported from `django_strawberry_framework`. The factory is keyword-only on `extra_scalar_map=` and forwards every other kwarg to upstream `StrawberryConfig(...)`, so consumers compose package scalars and custom `StrawberryConfig` options (`auto_camel_case=False`, `relay_max_results=200`, etc.) in one call; passing `scalar_map=` directly raises `ValueError`. Consumers add `config=strawberry_config()` to their `strawberry.Schema(...)` call once; direct `BigInt` annotations work unchanged. The `warnings.catch_warnings()` suppression block in `django_strawberry_framework/scalars.py` is removed because the no-warning `strawberry.scalar(name=..., serialize=..., parse_value=...)` overload at `.venv/lib/python3.10/site-packages/strawberry/types/scalar.py` returns a `ScalarDefinition` without triggering the `DeprecationWarning`. Tests in `tests/test_scalars.py` cover the factory contract (thirteen tests — eight scalar-map + five `**config_kwargs` passthrough) and the round-trip wire format through a `strawberry.Schema(config=strawberry_config())` (two integration tests); `tests/base/test_init.py`'s `__all__` assertion adds `strawberry_config`; `tests/types/test_converters.py`'s BigInt-section schemas migrate to `config=strawberry_config()`. `examples/fakeshop/config/schema.py` migrates to the new pattern; `docs/README.md`, `docs/GLOSSARY.md`, `GOAL.md`, and `TODAY.md` schema-construction examples migrate too. Breaking change in alpha (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` Decision 6 and the `PositiveBigIntegerField` precedent in `0.0.6`): any schema that resolves to `BigInt` — direct annotations OR converter-backed `BigIntegerField` / `PositiveBigIntegerField` `DjangoType` fields — that doesn't add `config=strawberry_config()` sees Strawberry schema-construction fail with `Unexpected type ...BigInt`. Spec: `docs/spec-020-scalar_map_helper-0_0_7.md`. The version bump from `0.0.7 → 0.0.8` is NOT in this card per Decision 8.
+Pinned the package-defined scalar registration path: [`BigInt`](docs/GLOSSARY.md#bigint-scalar) is redefined as a bare `NewType("BigInt", int)` and registered via [`StrawberryConfig.scalar_map`](https://strawberry.rocks) through a new public [`strawberry_config(*, extra_scalar_map=None, **config_kwargs) -> StrawberryConfig`](docs/GLOSSARY.md#strawberry_config) factory exported from `django_strawberry_framework`. The factory is keyword-only on `extra_scalar_map=` and forwards every other kwarg to upstream `StrawberryConfig(...)`, so consumers compose package scalars and custom `StrawberryConfig` options (`auto_camel_case=False`, `relay_max_results=200`, etc.) in one call; passing `scalar_map=` directly raises `ValueError`. Consumers add `config=strawberry_config()` to their `strawberry.Schema(...)` call once; direct `BigInt` annotations work unchanged. The `warnings.catch_warnings()` suppression block in `django_strawberry_framework/scalars.py` is removed because the no-warning `strawberry.scalar(name=..., serialize=..., parse_value=...)` overload at `.venv/lib/python3.10/site-packages/strawberry/types/scalar.py` returns a `ScalarDefinition` without triggering the `DeprecationWarning`. Tests in `tests/test_scalars.py` cover the factory contract (thirteen tests — eight scalar-map + five `**config_kwargs` passthrough) and the round-trip wire format through a `strawberry.Schema(config=strawberry_config())` (two integration tests); `tests/base/test_init.py`'s `__all__` assertion adds `strawberry_config`; `tests/types/test_converters.py`'s BigInt-section schemas migrate to `config=strawberry_config()`. `examples/fakeshop/config/schema.py` migrates to the new pattern; `docs/README.md`, `docs/GLOSSARY.md`, `GOAL.md`, and `TODAY.md` schema-construction examples migrate too. Breaking change in alpha (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` Decision 6 and the `PositiveBigIntegerField` precedent in `0.0.6`): any schema that resolves to `BigInt` — direct annotations OR converter-backed `BigIntegerField` / `PositiveBigIntegerField` `DjangoType` fields — that doesn't add `config=strawberry_config()` sees Strawberry schema-construction fail with `Unexpected type ...BigInt`. Spec: `docs/SPECS/spec-020-scalar_map_helper-0_0_7.md`. The version bump from `0.0.7 → 0.0.8` is NOT in this card per Decision 8.
 
 Build plan: [`docs/builder/build-020-scalar_map_helper-0_0_7.md`](docs/builder/build-020-scalar_map_helper-0_0_7.md).
 

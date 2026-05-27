@@ -54,7 +54,7 @@ from django.urls import clear_url_caches, path  # noqa: E402
 from strawberry.django.views import GraphQLView  # noqa: E402
 from strawberry.types import Info  # noqa: E402
 
-from django_strawberry_framework import DjangoOptimizerExtension  # noqa: E402
+from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config  # noqa: E402
 from django_strawberry_framework.registry import registry  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -141,6 +141,7 @@ def _build_test_schema(_reload_project_schema_for_acceptance_tests):
 
     _current["schema"] = strawberry.Schema(
         query=_MultiDbTestQuery,
+        config=strawberry_config(),
         extensions=[DjangoOptimizerExtension()],
     )
     yield

@@ -188,7 +188,7 @@ django_graphene_filters/
 ## django_strawberry_framework (current on-disk layout)
 
 The shared infrastructure plus model/type and optimizer subpackages are on disk: `types/`, `optimizer/`, and `utils/`. Every other module shown in the target package layout below — query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
-The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`). `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
+The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`, `apps.scalars`). `apps.products` is the catalog example (Category / Item / Property / Entry); `apps.library` is the deeper relation example (Branch / Shelf / Book / Patron / Loan, with `Patron.lifetime_fines_cents` as a real-domain `BigIntegerField → BigInt` proof); `apps.scalars` is a test substrate carrying the paired `ScalarSpecimen` (every scalar non-null + self-FK) / `NullableScalarSpecimen` (every scalar nullable + cross-model FK to `ScalarSpecimen` with `on_delete=SET_NULL`) layout that pins every non-trivial converter row in both shapes via live `/graphql/` tests. `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
 
 ```text
 django_strawberry_framework/
@@ -379,7 +379,9 @@ examples/fakeshop/tests/     # Example-project tests, NO /graphql HTTP
 
 examples/fakeshop/test_query/   # Example-project tests, LIVE /graphql HTTP
 ├── README.md                # HTTP-test placement notes
-└── test_library_api.py       # live GraphQL acceptance tests for the library app
+├── test_library_api.py      # live GraphQL acceptance tests for the library app
+├── test_multi_db.py         # live tests under FAKESHOP_SHARDED=1 (skipped otherwise)
+└── test_scalars_api.py      # live wire-format / introspection tests for the scalars app
 ```
 
 The example project code itself is organized as:
@@ -395,8 +397,9 @@ examples/fakeshop/
 │   └── wsgi.py
 └── apps/                    # domain apps; import as apps.<app_name>
     ├── __init__.py
-    ├── library/
-    └── products/
+    ├── library/             # Branch/Shelf/Book/Patron/Loan + Patron.lifetime_fines_cents BigInt
+    ├── products/            # Category/Item/Property/Entry catalog example
+    └── scalars/             # ScalarSpecimen + NullableScalarSpecimen converter substrate
 ```
 
 ### Target shape (as Layer-3 subsystems land)
@@ -468,7 +471,7 @@ examples/fakeshop/test_query/   # unchanged shape; HTTP-level GraphQL tests land
 
 `examples/fakeshop/tests/` — **Example-project tests, no HTTP `/graphql/`.** The system-under-test is the fakeshop example project, exercised through real Django flows but in-process: management commands via `django.core.management.call_command`, admin actions via `django.test.Client.get("/admin/...")`, URL views via `django.test.Client.get("/")`, schema execution via `strawberry.Schema.execute_sync(...)` directly. Slow enough that they live in their own tree but fast enough not to need an HTTP server. Outside the package coverage gate (the example is example code, not shipping code) but still runs under `uv run pytest` because `pytest.ini` lists it in `testpaths`.
 
-`examples/fakeshop/test_query/` — **Example-project tests, live `/graphql/` HTTP. First place to add a test.** The system-under-test is the same fakeshop project, but exercised end-to-end through the Django + Strawberry HTTP stack via `django.test.Client.post("/graphql/", ...)`. Verifies the full request pipeline: URL routing, view, schema execution, JSON response serialization. **Any new package code whose coverage can be earned by a real GraphQL query lands a test here first** — only fall back to the sibling `tests/` tree or the package-internal `tests/` tree when the code path cannot be reached from a live `/graphql/` request. `test_library_api.py` is the current live acceptance suite for the `library` app and covers relation traversal, nullable scalars, choice enums, optimizer SQL shape, optimizer hints, consumer-shaped querysets, and a consumer relation override. Same coverage and discovery rules as the sibling `examples/fakeshop/tests/` tree.
+`examples/fakeshop/test_query/` — **Example-project tests, live `/graphql/` HTTP. First place to add a test.** The system-under-test is the same fakeshop project, but exercised end-to-end through the Django + Strawberry HTTP stack via `django.test.Client.post("/graphql/", ...)`. Verifies the full request pipeline: URL routing, view, schema execution, JSON response serialization. **Any new package code whose coverage can be earned by a real GraphQL query lands a test here first** — only fall back to the sibling `tests/` tree or the package-internal `tests/` tree when the code path cannot be reached from a live `/graphql/` request. `test_library_api.py` is the live acceptance suite for the `library` app (relation traversal, nullable scalars, choice enums, optimizer SQL shape, optimizer hints, consumer-shaped querysets, consumer relation override, `Patron.lifetime_fines_cents` BigInt round-trip past JS safe-integer range). `test_scalars_api.py` is the live converter-coverage suite for the `scalars` app — pins every non-trivial `SCALAR_MAP` entry in both nullable and non-null shapes, plus self-FK (`parent`/`children`) and cross-model FK (`partner`/`nullable_partners`) traversal. `test_multi_db.py` runs only under `FAKESHOP_SHARDED=1`. Same coverage and discovery rules as the sibling `examples/fakeshop/tests/` tree.
 HTTP tests that import the project schema must preserve the reload pattern from `test_library_api.py`: clear the global registry, reload app schema modules, then reload the project schema and URLconf. That keeps package tests that clear the registry from leaving cached example `DjangoType` classes detached from the active registry.
 
 `examples/<project>/...` — **Future example projects** mirror the same two-folder split: every additional example app under `examples/` ships its own `tests/` and `test_query/` directories with the same in-process / HTTP separation. `pytest.ini`'s `testpaths` will be extended one entry per pair when a second example lands; nothing about the package or the existing fakeshop test trees changes.

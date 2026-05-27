@@ -47,7 +47,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; all five have shipped (`DONE-016-0.0.7` `DjangoListField`, `DONE-017-0.0.7` `apps.py` and Django app config, `DONE-018-0.0.7` schema-export management command, `DONE-019-0.0.7` multi-database cooperation contract, and `DONE-047-0.0.7` warning-free scalar registration via `StrawberryConfig.scalar_map`). A sixth card landed mid-cycle outside the original bundle — `DONE-046-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper) — shipped the package's two-half defense-in-depth for an upstream Django bug. Full card detail lives under the `## Done` board column below; `DONE-016-0.0.7`, `DONE-017-0.0.7`, `DONE-018-0.0.7`, `DONE-019-0.0.7`, `DONE-046-0.0.7`, and `DONE-047-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
+- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; all five have shipped (`DONE-016-0.0.7` `DjangoListField`, `DONE-017-0.0.7` `apps.py` and Django app config, `DONE-018-0.0.7` schema-export management command, `DONE-019-0.0.7` multi-database cooperation contract, and `DONE-047-0.0.7` warning-free scalar registration via `StrawberryConfig.scalar_map`). Two further cards landed mid-cycle outside the original bundle — `DONE-046-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper) shipped the package's two-half defense-in-depth for an upstream Django bug, and `DONE-048-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example) moved every non-trivial converter row from package-internal-only coverage to live `/graphql/` HTTP coverage via a new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`. Full card detail lives under the `## Done` board column below; `DONE-016-0.0.7`, `DONE-017-0.0.7`, `DONE-018-0.0.7`, `DONE-019-0.0.7`, `DONE-046-0.0.7`, `DONE-047-0.0.7`, and `DONE-048-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -1771,6 +1771,40 @@ Pinned the package-defined scalar registration path: [`BigInt`][glossary-bigint-
 
 Build plan: [`docs/builder/build-020-scalar_map_helper-0_0_7.md`][build-020-scalar-map-helper-0-0-7].
 
+### DONE-048-0.0.7 — Scalar conversion end-to-end coverage in the fakeshop example
+
+Parity: ⚛️&🍓 required (both upstreams ship scalar conversion for `BooleanField`, `FloatField`, `DecimalField`, `DateField`, `DateTimeField`, `TimeField`, `JSONField`, `UUIDField`, `BigIntegerField`, `PositiveBigIntegerField`); this card moves those converter rows from package-internal-only coverage to live `/graphql/` HTTP coverage on the fakeshop example in **both** nullable and non-null shapes.
+
+Closed the gap between the package's converter table ([`django_strawberry_framework/types/converters.py::SCALAR_MAP`][converters]) and the example's live HTTP test surface. Before this card, the converter table was exercised end-to-end only for `int`/`str` collapses (covered transitively by every `id`/`name`/`title` selection) and `BigInt` via package-internal unit tests; every other row's wire format was unverified against a real `GraphQLView` round-trip on the example app.
+
+**Surfaces shipped:**
+
+1. **New `apps.scalars` app** — `examples/fakeshop/apps/scalars/` carries a **paired model layout**:
+   - `ScalarSpecimen` — every scalar field non-null, exposed via `ScalarSpecimenType`. Adds an intra-model self-FK `parent` (`related_name="children"`) so the example exercises self-referential FK planning under the optimizer.
+   - `NullableScalarSpecimen` — every scalar field nullable (`null=True, blank=True`), exposed via `NullableScalarSpecimenType`. Adds a cross-model FK `partner: ForeignKey(ScalarSpecimen, on_delete=SET_NULL, related_name="nullable_partners")` — the only `SET_NULL` ondelete in the example tree, and the only cross-model FK in the scalars app.
+   - The pairing is deliberate (not a single model with paired fields). It exercises **upstream code paths no other example app reaches**: Django's two-`CreateModel` initial migration path, the registry / `finalize_django_types()` resolving sibling `DjangoType` classes in one app, Strawberry type registration across sibling types in one schema build, the optimizer planning across two managed models in one query, and `SET_NULL` ondelete behavior.
+   - `apps.scalars.schema` composes two root resolvers (`all_scalar_specimens`, `all_nullable_scalar_specimens`) into the project root `Query` at [`examples/fakeshop/config/schema.py`][example-schema]; `ScalarsConfig` lands in `INSTALLED_APPS` at [`examples/fakeshop/config/settings.py`][settings].
+
+2. **Reverse-FK exposure** — `ScalarSpecimenType.nullable_partners` is added to `Meta.fields` so a single GraphQL query can traverse the cross-model link in both directions.
+
+3. **`Patron.lifetime_fines_cents`** — `BigIntegerField(default=0)` added to `apps.library.models.Patron` (migration `0003_patron_lifetime_fines_cents.py`); exposed via `PatronType.Meta.fields`. Pins the `BigIntegerField → BigInt` converter row on a real-domain library model in addition to the dedicated coverage row, so the BigInt path is proven on more than one model surface.
+
+**Tests:** [`examples/fakeshop/test_query/test_scalars_api.py`][test-scalars-api] (eight tests):
+- Full non-null wire-format sweep covering every field on `ScalarSpecimen`
+- Signed-negative `BigInt` round-trip
+- `BigInt`-at-zero edge case
+- Schema introspection asserting `BigInt` converter resolves correctly in both shapes (`NON_NULL` on `ScalarSpecimenType`; bare `SCALAR` on `NullableScalarSpecimenType`)
+- All-NULL nullable wire format covering every nullable converter branch
+- Cross-model `partner` FK linkage round-trip
+- Reverse-FK `nullablePartners` exposure
+- Self-FK `parent` / `children` traversal
+
+Plus one new test in [`examples/fakeshop/test_query/test_library_api.py`][test-library-api] selecting `lifetimeFinesCents` at `2**53 + 12345` so the decimal-string serialization is genuinely verified (a JS-number round-trip would lose precision).
+
+**Migrated tests:** three tests in [`tests/types/test_converters.py`][test-converters] (`test_big_integer_field_maps_to_bigint_in_schema`, `test_big_integer_field_nullable_in_schema`, `test_positive_big_integer_field_maps_to_bigint_in_schema`) are removed because their assertions are now earned via the real-query path on the new scalars app — per the repository's real-query coverage rule. Further test migrations (JSONField, FK-id elision under the optimizer, etc.) are tracked separately as follow-ups under the audit identified during this card.
+
+**Deferred:** `ArrayField` and `HStoreField` are PostgreSQL-only; the fakeshop runs on SQLite, so their converter rows stay covered by `tests/` against package-internal fixtures. The `apps.scalars.models` module docstring records the rationale.
+
 ## Release readiness checklist
 
 Before a release:
@@ -1818,6 +1852,7 @@ Before a release:
 
 <!-- django_strawberry_framework/ -->
 [apps]: django_strawberry_framework/apps.py
+[converters]: django_strawberry_framework/types/converters.py
 [django-patches]: django_strawberry_framework/_django_patches.py
 [plans]: django_strawberry_framework/optimizer/plans.py
 [resolvers]: django_strawberry_framework/types/resolvers.py
@@ -1825,13 +1860,17 @@ Before a release:
 [wrap]: django_strawberry_framework/test/_wrap.py
 
 <!-- tests/ -->
+[test-converters]: tests/types/test_converters.py
 [test-multi-db]: tests/optimizer/test_multi_db.py
 [test-resolvers]: tests/types/test_resolvers.py
 
 <!-- examples/ -->
 [db-shard-b.sqlite3]: examples/fakeshop/db_shard_b.sqlite3
+[example-schema]: examples/fakeshop/config/schema.py
 [fakeshop-test-multi-db]: examples/fakeshop/test_query/test_multi_db.py
 [settings]: examples/fakeshop/config/settings.py
+[test-library-api]: examples/fakeshop/test_query/test_library_api.py
+[test-scalars-api]: examples/fakeshop/test_query/test_scalars_api.py
 
 <!-- scripts/ -->
 

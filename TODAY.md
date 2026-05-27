@@ -6,10 +6,11 @@ For the package-wide capability catalog, shipped/planned feature status, optimiz
 
 ## Current fakeshop state
 
-Both example apps are wired today:
+Three example apps are wired today:
 
-- `examples/fakeshop/apps/library/schema.py` — the **rich live demonstration** of the shipped surface. Seven `DjangoType` classes exercise, in one place: forward FK, reverse FK, forward OneToOne, reverse OneToOne, forward M2M, reverse M2M, choice-enum generation (`Book.circulation_status`), `Meta.interfaces = (relay.Node,)` on `GenreType`, `Meta.optimizer_hints` on `LoanType` (`OptimizerHint.prefetch_related()` + `OptimizerHint.SKIP`), a consumer-authored relation override on `Branch.shelves`, a consumer-shaped queryset cooperating with the optimizer (`all_library_prefetched_books` uses `select_related("shelf").prefetch_related("genres")`), and definition-order-independent finalization (the type declaration order is intentionally awkward — `LoanType` before `BookType` and `PatronType`, etc.). The live `/graphql/` HTTP tests in `examples/fakeshop/test_query/test_library_api.py` exercise all of these end-to-end, including the Relay GlobalID round trip via `test_library_relay_node_global_id_round_trips`. The new `all_library_branches_via_list_field` root field added in `0.0.7` exercises `DjangoListField`'s default-resolver path — added as a sibling, no existing resolver was replaced.
+- `examples/fakeshop/apps/library/schema.py` — the **rich live demonstration** of the shipped surface. Seven `DjangoType` classes exercise, in one place: forward FK, reverse FK, forward OneToOne, reverse OneToOne, forward M2M, reverse M2M, choice-enum generation (`Book.circulation_status`), `Meta.interfaces = (relay.Node,)` on `GenreType`, `Meta.optimizer_hints` on `LoanType` (`OptimizerHint.prefetch_related()` + `OptimizerHint.SKIP`), a consumer-authored relation override on `Branch.shelves`, a consumer-shaped queryset cooperating with the optimizer (`all_library_prefetched_books` uses `select_related("shelf").prefetch_related("genres")`), and definition-order-independent finalization (the type declaration order is intentionally awkward — `LoanType` before `BookType` and `PatronType`, etc.). The live `/graphql/` HTTP tests in `examples/fakeshop/test_query/test_library_api.py` exercise all of these end-to-end, including the Relay GlobalID round trip via `test_library_relay_node_global_id_round_trips`. The `all_library_branches_via_list_field` root field added in `0.0.7` exercises `DjangoListField`'s default-resolver path — added as a sibling, no existing resolver was replaced. `Patron.lifetime_fines_cents` (`BigIntegerField`) added in `0.0.7` exercises the `BigIntegerField → BigInt` converter on a real-domain model, with a live HTTP test pinning the decimal-string wire format past `2**53 - 1`.
 - `examples/fakeshop/apps/products/schema.py` — the **minimal "wire up a model app today" demonstration**. A bidirectional list-based graph over `Category` / `Item` / `Property` / `Entry`: four `DjangoType` classes with FK + reverse-FK traversal and four root list resolvers (`all_categories`, `all_items`, `all_properties`, `all_entries`). Non-Relay; intentionally narrower than `library` to show the absolute minimum a consumer needs to type to get a model app queryable through GraphQL today.
+- `examples/fakeshop/apps/scalars/schema.py` — the **converter-table coverage substrate** added in `0.0.7`. Two paired `DjangoType` classes: `ScalarSpecimenType` (all scalar fields non-null, plus a self-FK `parent` / reverse `children`) and `NullableScalarSpecimenType` (all scalar fields nullable, plus a cross-model FK `partner` to `ScalarSpecimen` with `on_delete=SET_NULL`, reverse-exposed on `ScalarSpecimenType.nullable_partners`). The pairing exercises Django's two-`CreateModel` initial migration path, package finalization across sibling `DjangoType` classes in one app, Strawberry type registration across sibling types, optimizer planning across two managed models in one query, and the only `SET_NULL` ondelete in the example tree. The live `/graphql/` HTTP tests in `examples/fakeshop/test_query/test_scalars_api.py` pin every non-trivial `SCALAR_MAP` entry in both nullable and non-null shapes — `BooleanField`, `FloatField`, `DecimalField`, `DateField`, `DateTimeField`, `TimeField`, `JSONField`, `UUIDField`, `BigIntegerField`, `PositiveBigIntegerField` — plus the self-FK and cross-model FK traversals. `ArrayField` and `HStoreField` are absent because the fakeshop runs on SQLite; their converter rows stay covered by `tests/`.
 
 The eventual `1.0.0` shape for products — Relay `DjangoConnectionField`s with `filterset_class` / `orderset_class` / `aggregate_class` / `fields_class` / `search_fields` / `apply_cascade_permissions` — is tracked in `KANBAN.md` under the Layer-3 cards (`TODO-ALPHA-021-0.0.8` filters, `TODO-ALPHA-022-0.0.8` orders, `TODO-BETA-039-0.1.3` aggregates, `TODO-ALPHA-026-0.0.10` permissions, etc.). The list-based schema below is what's there today; the Relay shape grows in as those cards land.
 
@@ -120,8 +121,9 @@ __all__ = ("Query",)
 Enable the optimizer at the project schema boundary and finalize all imported `DjangoType`s before constructing the Strawberry schema:
 ```python
 import strawberry
-from apps.products.schema import Query as ProductsQuery
 from apps.library.schema import Query as LibraryQuery
+from apps.products.schema import Query as ProductsQuery
+from apps.scalars.schema import Query as ScalarsQuery
 
 from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types, strawberry_config
 
@@ -130,7 +132,7 @@ finalize_django_types()
 
 
 @strawberry.type
-class Query(LibraryQuery, ProductsQuery):
+class Query(LibraryQuery, ProductsQuery, ScalarsQuery):
     """Top-level Query — extends each app's Query."""
 
 
@@ -143,7 +145,7 @@ schema = strawberry.Schema(
 
 ## What fakeshop model fields work today
 
-Across the products and library example apps, `DjangoType` currently generates:
+Across the products, library, and scalars example apps, `DjangoType` currently generates:
 
 Scalar conversions:
 - `BigAutoField` / `AutoField` / `IntegerField` → `int`

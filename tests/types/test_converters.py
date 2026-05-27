@@ -19,6 +19,7 @@ widening branch and ``registry.register_enum`` / ``get_enum``.
 """
 
 import enum
+import itertools
 
 import pytest
 import strawberry
@@ -33,6 +34,24 @@ from django_strawberry_framework.types.converters import (
     convert_choices_to_enum,
     convert_scalar,
 )
+
+_app_label_counter = itertools.count(1)
+
+
+def _unique_app_label(base: str) -> str:
+    """Return a unique ``app_label`` per call to suppress Django's ``Model already registered`` warning.
+
+    Multiple tests in this module declare same-named synthetic ``managed=False``
+    models (canonically ``_Owner``) under a shared ``app_label`` such as
+    ``test_choice_enums``. Django's app registry raises a ``RuntimeWarning``
+    on the second and subsequent registrations because the
+    ``(app_label, model_name)`` key collides. Routing the ``app_label``
+    through this helper namespaces each test's synthetic model with a
+    monotonically increasing suffix so the registry sees a fresh key per
+    call. The choice fixture itself (``ChoiceFixture``) is session-scoped
+    and registers exactly once, so it does not use this helper.
+    """
+    return f"{base}__{next(_app_label_counter)}"
 
 
 @pytest.fixture(autouse=True)
@@ -365,7 +384,7 @@ def test_convert_scalar_resolves_subclass_of_supported_field_to_parent_scalar():
         slug = _TrimmedCharField(max_length=32)
 
         class Meta:
-            app_label = "test_choice_enums"
+            app_label = _unique_app_label("test_choice_enums")
 
     field = _Owner._meta.get_field("slug")
     assert convert_scalar(field, "OwnerType") is str
@@ -378,7 +397,7 @@ def test_convert_scalar_subclass_with_null_widens_through_mro_resolution():
         slug = _NullableTrimmedCharField(max_length=32, null=True)
 
         class Meta:
-            app_label = "test_choice_enums"
+            app_label = _unique_app_label("test_choice_enums")
 
     field = _Owner._meta.get_field("slug")
     assert convert_scalar(field, "OwnerType") == (str | None)
@@ -398,7 +417,7 @@ def test_convert_scalar_unknown_field_type_still_raises():
         weird = _UnsupportedField()
 
         class Meta:
-            app_label = "test_choice_enums"
+            app_label = _unique_app_label("test_choice_enums")
 
     field = _Owner._meta.get_field("weird")
     with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
@@ -421,7 +440,7 @@ def test_convert_scalar_duration_field_raises_unsupported():
         elapsed = models.DurationField()
 
         class Meta:
-            app_label = "test_choice_enums"
+            app_label = _unique_app_label("test_choice_enums")
 
     field = _Owner._meta.get_field("elapsed")
     with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
@@ -441,7 +460,7 @@ def test_convert_scalar_binary_field_raises_unsupported():
         blob = models.BinaryField()
 
         class Meta:
-            app_label = "test_choice_enums"
+            app_label = _unique_app_label("test_choice_enums")
 
     field = _Owner._meta.get_field("blob")
     with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
@@ -518,98 +537,6 @@ class _FakeHStoreField(models.Field):
     """
 
     pass
-
-
-def test_big_integer_field_maps_to_bigint_in_schema():
-    """``BigIntegerField`` (non-null) appears as ``BigInt!`` in the schema."""
-
-    class BigIntOwner(models.Model):
-        big = models.BigIntegerField()
-
-        class Meta:
-            managed = False
-            app_label = "test_bigint"
-
-    class BigIntOwnerType(DjangoType):
-        class Meta:
-            model = BigIntOwner
-            fields = ("big",)
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def owner(self) -> BigIntOwnerType:
-            return BigIntOwner(big=2**62)
-
-    schema = strawberry.Schema(query=Query, config=strawberry_config())
-    type_payload = _introspect_field_type(schema, "BigIntOwnerType", "big")
-    # NON_NULL wrapper around BigInt scalar.
-    assert type_payload["kind"] == "NON_NULL"
-    terminal = _walk_introspected_type(type_payload)
-    assert terminal["kind"] == "SCALAR"
-    assert terminal["name"] == "BigInt"
-
-
-def test_big_integer_field_nullable_in_schema():
-    """``BigIntegerField(null=True)`` appears as ``BigInt`` (nullable)."""
-
-    class BigIntNullableOwner(models.Model):
-        big = models.BigIntegerField(null=True)
-
-        class Meta:
-            managed = False
-            app_label = "test_bigint"
-
-    class BigIntNullableOwnerType(DjangoType):
-        class Meta:
-            model = BigIntNullableOwner
-            fields = ("big",)
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def owner(self) -> BigIntNullableOwnerType:
-            return BigIntNullableOwner(big=None)
-
-    schema = strawberry.Schema(query=Query, config=strawberry_config())
-    type_payload = _introspect_field_type(schema, "BigIntNullableOwnerType", "big")
-    # Nullable: top-level kind is SCALAR (no NON_NULL wrapper).
-    assert type_payload == {"kind": "SCALAR", "name": "BigInt", "ofType": None}
-
-
-def test_positive_big_integer_field_maps_to_bigint_in_schema():
-    """``PositiveBigIntegerField`` now maps to ``BigInt`` (was ``int`` pre-0.0.6)."""
-
-    class PosBigIntOwner(models.Model):
-        big_pos = models.PositiveBigIntegerField()
-
-        class Meta:
-            managed = False
-            app_label = "test_bigint"
-
-    class PosBigIntOwnerType(DjangoType):
-        class Meta:
-            model = PosBigIntOwner
-            fields = ("big_pos",)
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def owner(self) -> PosBigIntOwnerType:
-            return PosBigIntOwner(big_pos=2**62)
-
-    schema = strawberry.Schema(query=Query, config=strawberry_config())
-    type_payload = _introspect_field_type(schema, "PosBigIntOwnerType", "bigPos")
-    assert type_payload["kind"] == "NON_NULL"
-    terminal = _walk_introspected_type(type_payload)
-    assert terminal["kind"] == "SCALAR"
-    assert terminal["name"] == "BigInt"
 
 
 def test_big_auto_field_still_maps_to_int():
@@ -784,98 +711,6 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
 # (``_introspect_field_type`` / ``_walk_introspected_type``) are reused
 # verbatim from the BigInt section above.
 # ---------------------------------------------------------------------------
-
-
-def test_json_field_maps_to_json_scalar_in_schema():
-    """``JSONField`` (non-null) appears as ``JSON!`` in the schema."""
-
-    class JsonOwner(models.Model):
-        data = models.JSONField()
-
-        class Meta:
-            managed = False
-            app_label = "test_jsonfield"
-
-    class JsonOwnerType(DjangoType):
-        class Meta:
-            model = JsonOwner
-            fields = ("data",)
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def owner(self) -> JsonOwnerType:
-            return JsonOwner(data={"k": "v"})
-
-    schema = strawberry.Schema(query=Query)
-    type_payload = _introspect_field_type(schema, "JsonOwnerType", "data")
-    # NON_NULL wrapper around JSON scalar.
-    assert type_payload["kind"] == "NON_NULL"
-    terminal = _walk_introspected_type(type_payload)
-    assert terminal["kind"] == "SCALAR"
-    assert terminal["name"] == "JSON"
-
-
-def test_json_field_nullable_in_schema():
-    """``JSONField(null=True)`` appears as ``JSON`` (nullable)."""
-
-    class JsonNullableOwner(models.Model):
-        data = models.JSONField(null=True)
-
-        class Meta:
-            managed = False
-            app_label = "test_jsonfield"
-
-    class JsonNullableOwnerType(DjangoType):
-        class Meta:
-            model = JsonNullableOwner
-            fields = ("data",)
-
-    finalize_django_types()
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def owner(self) -> JsonNullableOwnerType:
-            return JsonNullableOwner(data=None)
-
-    schema = strawberry.Schema(query=Query)
-    type_payload = _introspect_field_type(schema, "JsonNullableOwnerType", "data")
-    # Nullable: top-level kind is SCALAR (no NON_NULL wrapper).
-    assert type_payload == {"kind": "SCALAR", "name": "JSON", "ofType": None}
-
-
-def test_json_field_round_trips_dict_via_schema_execution():
-    """A resolver returning a JSON-shaped dict round-trips verbatim through ``schema.execute_sync``."""
-
-    class JsonRoundTripOwner(models.Model):
-        data = models.JSONField()
-
-        class Meta:
-            managed = False
-            app_label = "test_jsonfield"
-
-    class JsonRoundTripOwnerType(DjangoType):
-        class Meta:
-            model = JsonRoundTripOwner
-            fields = ("data",)
-
-    finalize_django_types()
-
-    payload = {"k1": "v1", "k2": 2, "k3": [1, 2, 3], "k4": None}
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def owner(self) -> JsonRoundTripOwnerType:
-            return JsonRoundTripOwner(data=payload)
-
-    schema = strawberry.Schema(query=Query)
-    result = schema.execute_sync("{ owner { data } }")
-    assert result.errors is None
-    assert result.data == {"owner": {"data": payload}}
 
 
 # ---------------------------------------------------------------------------

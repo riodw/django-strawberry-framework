@@ -44,9 +44,9 @@ class ItemFilter(filters.AdvancedFilterSet):
             "category__name": ["exact"],
         }
 
-    # TODO(TODO-ALPHA-026-0.0.10 permissions; see KANBAN.md):
+    # TODO(TODO-ALPHA-027-0.0.10 permissions; see KANBAN.md):
     #   Per-field ``check_<field>_permission`` hooks are owned by the
-    #   permissions slice (``TODO-ALPHA-026-0.0.10``) and compose with the
+    #   permissions slice (``TODO-ALPHA-027-0.0.10``) and compose with the
     #   filter subsystem (``TODO-ALPHA-021-0.0.8``). The commented method
     #   below is the target shape: scope ``queryset`` based on the request
     #   user so non-staff callers cannot filter by ``Item.entries``.

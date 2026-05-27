@@ -226,7 +226,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
 
     - The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `WIP-ALPHA-020-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor.
     ```
-  - [ ] `KANBAN.md` — also **add the new card** `WIP-ALPHA-020-0.0.7` to the "To Do - Alpha (0.1.0)" column, in the 0.0.7 cluster (after `WIP-ALPHA-019-0.0.7 — Multi-database cooperation contract`). **Append at NNN 045** (the next available identifier; current max is `TODO-STABLE-045-1.0.0`). NNN sequence does not need to be contiguous within a version cluster — KANBAN's grouping is by version, not by NNN, so appending at NNN 045 with target `0.0.7` is the correct shape. (A previous draft of this spec offered a "renumber 020-044 → 021-045" option for NNN cluster-adjacency; that path is a multi-file cascading rename across 5+ files and 50+ string sites with stale-link risk for any external doc/PR/CHANGELOG citing a card NNN. Don't do it.) **Drop in the verbatim body below** (four-backtick outer fence so the inner Python code block renders correctly):
+  - [ ] `KANBAN.md` — also **add the new card** `WIP-ALPHA-020-0.0.7` to the "To Do - Alpha (0.1.0)" column, in the 0.0.7 cluster (after `WIP-ALPHA-019-0.0.7 — Multi-database cooperation contract`). **Append at NNN 045** (the next available identifier; current max is `TODO-STABLE-046-1.0.0`). NNN sequence does not need to be contiguous within a version cluster — KANBAN's grouping is by version, not by NNN, so appending at NNN 045 with target `0.0.7` is the correct shape. (A previous draft of this spec offered a "renumber 020-044 → 021-045" option for NNN cluster-adjacency; that path is a multi-file cascading rename across 5+ files and 50+ string sites with stale-link risk for any external doc/PR/CHANGELOG citing a card NNN. Don't do it.) **Drop in the verbatim body below** (four-backtick outer fence so the inner Python code block renders correctly):
 
     > "See `KANBAN.md` for the current `WIP-ALPHA-020-0.0.7` card body — the verbatim drop-in below was used for the initial card creation in this commit and may be out of date once the follow-up spec evolves the card."
 
@@ -738,7 +738,7 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 ## Out of scope (explicitly tracked elsewhere)
 
 - Filter input shapes — [`FilterSet`][glossary-filterset], TODO-ALPHA-021-0.0.8.
-- Mutation input types for `BigInt` — [Mutations subsystem][glossary-djangomutation], TODO-ALPHA-027-0.0.11.
+- Mutation input types for `BigInt` — [Mutations subsystem][glossary-djangomutation], TODO-ALPHA-028-0.0.11.
 - Multi-database routing — [Multi-database cooperation][glossary-multi-database-cooperation], WIP-ALPHA-019-0.0.7.
 - Multi-dimensional `ArrayField`.
 - Dedicated `HStore` scalar.

@@ -1,89 +1,61 @@
 # Review feedback - `docs/spec-020-scalar_map_helper-0_0_7.md`
 
-Scope: reviewed `docs/spec-020-scalar_map_helper-0_0_7.md` and its companion terms CSV against the current package code, current KANBAN/CHANGELOG state, and Strawberry's installed `StrawberryConfig.scalar_map` behavior.
+Scope: full re-review of the updated scalar-map helper spec and companion terms CSV. H1 is treated as an accepted maintainer hold. H2's production API direction is now sound: `strawberry_config(*, extra_scalar_map=None, **config_kwargs)` with `scalar_map=` rejection gives custom-config consumers a real supported migration path without exposing `_PACKAGE_SCALAR_MAP`.
 
-Sanity checks that passed:
+Validation checks run during review:
 
-- The proposed bare `NewType("BigInt", int)` plus `StrawberryConfig(scalar_map={BigInt: scalar_def})` path works in the installed Strawberry version: a minimal schema parsed and serialized `"9223372036854775807"` successfully.
-- `strawberry.scalar(name="BigInt", serialize=..., parse_value=...)` returns a `ScalarDefinition` without emitting the current `Passing a class to strawberry.scalar()` deprecation warning.
-- `scripts/check_spec_glossary.py --spec docs/spec-020-scalar_map_helper-0_0_7.md` exits successfully for the current CSV, but see M1 below: the CSV is still under-populated relative to the spec-builder rule.
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-020-scalar_map_helper-0_0_7.md` -> `OK: 16 terms`.
+- Probe against installed Strawberry confirmed `StrawberryConfig(auto_camel_case=False)` stores the observable value on `name_converter.auto_camel_case`, while `cfg.auto_camel_case` remains `None`.
+- No pytest was run.
 
 ## Blockers
 
-### B1. Existing converter-backed `BigInt` schema tests are not migrated
+### B1. The `auto_camel_case` passthrough test asserts the wrong field
 
-Files: `docs/spec-020-scalar_map_helper-0_0_7.md` sections "Slice 2: Tests", "Decision 7", and "Test plan"; existing impacted tests in `tests/types/test_converters.py` under the "BigInt scalar - schema-execution field-mapping tests" section.
+File: `docs/spec-020-scalar_map_helper-0_0_7.md` Test plan, `test_strawberry_config_forwards_auto_camel_case_kwarg`.
 
-The spec treats the break as mostly "consumers using `BigInt` directly", then adds two new `tests/test_scalars.py` integration tests with `config=strawberry_config()`. That misses the current converter-backed surface: `BigIntegerField` and `PositiveBigIntegerField` already map to `BigInt` through `SCALAR_MAP`, and `tests/types/test_converters.py` currently has multiple `strawberry.Schema(query=Query)` calls for those model-field paths.
+The spec says to call `strawberry_config(auto_camel_case=False)` and assert `result.auto_camel_case is False`, then call `strawberry_config()` and assert `result.auto_camel_case is True`. That will fail with the installed Strawberry version. `auto_camel_case` is a dataclass `InitVar`, so it is not stored as normal instance state; `StrawberryConfig.__post_init__` applies it to `result.name_converter.auto_camel_case`.
 
-Once `BigInt` becomes a bare `NewType`, those existing tests will need `config=strawberry_config()` too. More importantly, real consumers with `DjangoType` fields backed by `BigIntegerField` / `PositiveBigIntegerField` need the migration even if they never import or annotate `BigInt` directly.
-
-Root fix: broaden the migration language from "direct `BigInt` users" to "any schema that can contain package-defined scalars, including converter-generated `BigInt` fields", and add a Slice 2 task to update the existing BigInt schema-construction sites in `tests/types/test_converters.py` to use `strawberry_config()`. The CHANGELOG and GLOSSARY migration snippets should say the same thing.
-
-### B2. The Definition of Done tells workers to run pytest, contradicting AGENTS.md
-
-File: `docs/spec-020-scalar_map_helper-0_0_7.md` Definition of done item containing `uv run pytest --no-cov`.
-
-The repo instruction says "Do not run pytest after edits; run only when explicitly asked." The spec repeats that convention near the top, but the final DoD still requires `uv run pytest --no-cov`. A builder following the spec would violate the repo workflow.
-
-Root fix: remove pytest from the worker-local DoD and say local validation is `uv run ruff format .` plus `uv run ruff check --fix .`; pytest is run only if the maintainer explicitly asks or by CI. If you want the intended command documented for maintainers, phrase it as optional/maintainer-invoked, not as a worker completion gate.
-
-## High-severity issues
-
-### H1. Release bookkeeping says both "post-0.0.7 Unreleased" and `DONE-...-0.0.7`
-
-Files: `docs/spec-020-scalar_map_helper-0_0_7.md` Decision 8, Slice 5, Risks, and Definition of done.
-
-The spec correctly observes that `0.0.7` is already cut and that this card's changelog entries belong under `[Unreleased]`. But it still instructs the KANBAN move to `DONE-NNN-0.0.7` and keeps the active filename/version posture as `0_0_7`.
-
-That makes the release ledger internally inconsistent: the card would be recorded as shipped in `0.0.7` while the actual user-facing release entry is waiting for the next patch. KANBAN's own convention says the card version tag encodes the shipment it belongs to.
-
-Root fix: choose one posture before implementation. The cleanest one is to retag this card/spec to `0.0.8` now (`WIP-ALPHA-020-0.0.8`, `spec-020-scalar_map_helper-0_0_8.md`, future `DONE-020-0.0.8`) while still leaving the actual version bump to the future cut. If you intentionally keep the historical `0.0.7` filename, then the spec should not instruct a `DONE-...-0.0.7` card for a post-cut change.
-
-### H2. `strawberry_config()` does not compose with existing `StrawberryConfig` options
-
-File: `docs/spec-020-scalar_map_helper-0_0_7.md` Decision 2, especially the `extra_scalar_map=` discussion.
-
-The spec says consumers who want `auto_camel_case=False` or `relay_max_results=200` can "construct their own `StrawberryConfig(...)` and merge the package's `scalar_map` via `extra_scalar_map=`". That is not a usable API as written. `extra_scalar_map` is an input to `strawberry_config()`; it does not expose the package scalar map for a separately constructed config, and `_PACKAGE_SCALAR_MAP` is intentionally private.
-
-This matters because existing consumers may already pass a custom `config=StrawberryConfig(...)`. Their migration is not the advertised one-line `config=strawberry_config()` change; they must either mutate the returned config object after construction or reach into private state.
-
-Root fix: either expand the helper to accept pass-through `StrawberryConfig` kwargs while still owning `scalar_map`, or explicitly document and test a supported composition pattern. The higher-quality API is a keyword-only helper such as `strawberry_config(*, extra_scalar_map=None, **config_kwargs)` that rejects a raw `scalar_map=` kwarg and forwards the rest to `StrawberryConfig(...)`.
+Root fix: change the test contract to assert `result.name_converter.auto_camel_case is False` for the override and `strawberry_config().name_converter.auto_camel_case is True` for the default. The production helper shape does not need to change.
 
 ## Medium-severity issues
 
-### M1. The terms CSV passes the checker but is under-populated
+### M1. Decision 7 still has the old test-count summary
 
-Files: `docs/spec-020-scalar_map_helper-0_0_7-terms.csv`; `docs/spec-020-scalar_map_helper-0_0_7.md` throughout.
+File: `docs/spec-020-scalar_map_helper-0_0_7.md` Decision 7.
 
-The checker reports `OK: 14 terms`, but the CSV omits several project-specific or newly introduced terms the spec relies on: `strawberry_config`, `StrawberryConfig`, `DjangoFileType`, `DjangoImageType`, and the Upload-card references are the obvious examples. The builder flow explicitly says the CSV should be over-zealous because under-population is invisible to the checker.
+The Slice checklist, Implementation plan, Test plan, and DoD now correctly say thirteen factory tests plus two integration tests. Decision 7 still says "eight new factory tests + two integration tests = ten new pytest items". That stale summary is easy for a worker to copy as the source of truth.
 
-Root fix: add rows for the omitted terms. For the brand-new `strawberry_config` glossary entry, either add the glossary entry before re-running the checker or call out the temporary missing-entry state explicitly in the spec until the docs slice lands.
+Root fix: update Decision 7 to "thirteen factory tests (eight scalar-map + five `**config_kwargs` passthrough) + two integration tests = fifteen new pytest items."
 
-### M2. `Upload` is repeatedly tied to the wrong KANBAN card
+### M2. The `scalar_map=` rejection test references an unimported private definition
 
-Files: `docs/spec-020-scalar_map_helper-0_0_7.md` sections "Problem statement", "Goals", "Non-goals", "Decision 2", "Risks", and "Out of scope".
+File: `docs/spec-020-scalar_map_helper-0_0_7.md` Test plan, `test_strawberry_config_rejects_scalar_map_kwarg`.
 
-The spec says `Upload` is `TODO-ALPHA-027`, but current `KANBAN.md` has `TODO-ALPHA-027-0.0.11` as "Mutations + auto-generated Input types" and `TODO-ALPHA-028-0.0.11` as "Upload scalar and file / image field mapping". The existing `django_strawberry_framework/scalars.py` docstring also points Upload at `TODO-ALPHA-028`.
+The test sketch calls `strawberry_config(scalar_map={BigInt: _BIGINT_SCALAR_DEFINITION})`, but the pinned import block does not import `_BIGINT_SCALAR_DEFINITION`. More importantly, the test does not need that private object; the branch being tested is structural ownership of the `scalar_map` kwarg, independent of the value.
 
-Root fix: update the spec's Upload references to `TODO-ALPHA-028-0.0.11`. If the WIP card body is stale, call that out once rather than copying the stale ID through the spec.
+Root fix: use only public/local values in the sketch, e.g. `strawberry_config(scalar_map={})`, `strawberry_config(scalar_map=None)`, and optionally `strawberry_config(scalar_map={BigInt: alt_def})` where `alt_def = strawberry.scalar(name="AltBigInt", serialize=str, parse_value=int)` is declared locally.
+
+### M3. `strawberry_config` is intentionally absent from the terms CSV, but the spec never schedules adding it
+
+Files: `docs/spec-020-scalar_map_helper-0_0_7.md`; `docs/spec-020-scalar_map_helper-0_0_7-terms.csv`.
+
+The note explaining why `strawberry_config` is absent before Slice 4 is reasonable: the glossary entry does not exist yet, so the checker would fail today. But Slice 4 creates the glossary entry, and the spec does not include a matching instruction to add `strawberry_config,strawberry_config,...` to the terms CSV afterward. DoD item 1 says the CSV anchors every project-specific term; that will not be true at completion unless the CSV is updated in the docs slice.
+
+Root fix: add a Slice 4 / DoD bullet saying that once `docs/GLOSSARY.md#strawberry_config` exists, the terms CSV gains a `strawberry_config` row and the glossary checker is re-run. Keep `StrawberryConfig` out of the CSV because it is upstream, not a package glossary term.
 
 ## Low-severity issues
 
-### L1. The proposed test import block includes an unused `Mapping`
+### L1. `[Unreleased]` Added wording assumes a subsection that does not exist today
 
-File: `docs/spec-020-scalar_map_helper-0_0_7.md` "Test plan" imports block.
+File: `docs/spec-020-scalar_map_helper-0_0_7.md` Slice 5 / Doc updates for `CHANGELOG.md`.
 
-The described tests do not use `Mapping`, so `uv run ruff check --fix .` will remove it. Drop it from the pinned import snippet or add an assertion that actually uses it.
+The current `[Unreleased]` block has `### Changed` and `### Fixed`, but no `### Added`. The spec says to append to the existing `[Unreleased] ### Added` subsection, while it correctly says to add `### Removed` if absent.
 
-### L2. `tests/test_scalars.py` module docstring will become stale
+Root fix: use the same wording for Added: "add the subsection if absent." This prevents a worker from searching for a heading that is not there.
 
-File: `docs/spec-020-scalar_map_helper-0_0_7.md` "Test plan"; existing docstring in `tests/test_scalars.py`.
+### L2. H1 remains a deliberate process exception
 
-`tests/test_scalars.py` currently says schema-execution behavior lives in `tests/types/test_converters.py`. The spec moves two schema-execution tests into `tests/test_scalars.py` but does not instruct updating that docstring. Add a small test-slice bullet to update the docstring so the test layout remains self-describing.
+File: `docs/spec-020-scalar_map_helper-0_0_7.md` Decision 8 / Slice 5.
 
-### L3. The spec uses many standing-doc line-number references
-
-File: `docs/spec-020-scalar_map_helper-0_0_7.md` throughout.
-
-The spec repeatedly uses prose references like "line 26", "lines 18-49", and "line 21" in a standing design doc. The repo convention asks standing docs to prefer symbol-qualified paths or unique-substring anchors instead of raw line numbers. Convert these to section/symbol references or `path #"unique substring"` style references so they survive ordinary doc edits.
+Keeping the `0.0.7` card/spec suffix while writing release notes under `[Unreleased]` is still a bookkeeping exception. Since this is intentional, no further change is required for this review. The least ambiguous future wording would label the frontmatter as "card tag/provenance" rather than "target release," but that is optional if you want H1 held as-is.

@@ -40,6 +40,30 @@ These are exempt from AGENTS.md's symbol-qualified path rule (raw `path:NN` line
 - **Meta classes everywhere on consumer surfaces.** If you find yourself writing stacked Strawberry decorators on a consumer-facing class, stop. That is the strawberry-graphql-django API and the explicit reason this package exists. Strawberry is the engine; DRF is the shape.
 - They prefer keeping all model text fields as `TextField`, not `CharField`, even for short strings. Personal preference; codified in the example models.
 
+## Markdown link convention
+
+Every .md file with any cross-file links uses **reference-style** markdown — inline uses in the body read `[text][ref-id]`; all defs live in a unified block at the bottom. AGENTS.md is the only file exempt (no cross-file links and its own dense single-line style).
+
+The block opens with the single-line delimiter `<!-- LINK DEFINITIONS -->` and carries all 10 canonical path-based group headers, always present in this exact order even when a group is empty:
+
+`<!-- Root -->`, `<!-- docs/ -->`, `<!-- docs/SPECS/ -->`, `<!-- docs/builder/ -->`, `<!-- django_strawberry_framework/ -->`, `<!-- tests/ -->`, `<!-- examples/ -->`, `<!-- scripts/ -->`, `<!-- .venv/ -->`, `<!-- External -->`.
+
+Defs are alphabetical within each group: `[ref-id]: path/from/this/file/to/target`.
+
+Why this matters: when a file moves — archiving a spec from `docs/` to `docs/SPECS/`, restructuring `examples/`, any future relocation — every inline `[text][ref-id]` use in the body survives the move untouched. Only the paths on the right side of each def at the bottom need re-relativizing. Move cost drops ~75% vs. scattered inline `](path)` links.
+
+Group is determined by where the **target** lives in the repo, NOT where the source file lives. A README at `examples/fakeshop/` linking to `docs/GLOSSARY.md` puts the def under `<!-- docs/ -->`. Empty groups stay present so a reader can confirm "this file does not link to anything in `tests/`" in one scan instead of grepping.
+
+What stays inline (NOT converted to ref-style):
+
+- URLs (`https://...`, `http://...`).
+- In-page anchors (`](#decision-N)`, `](#some-heading)`).
+- Anything inside fenced code blocks — renders verbatim as example content.
+
+When adding a new cross-file link: write `[text][ref-id]` inline; add `[ref-id]: path` to the correct group at the bottom (alphabetical within the group, path resolved from the source file's directory). Don't drift back to inline `](path)` for cross-file refs — the convention is in force across every .md file except AGENTS.md.
+
+When moving a .md file: only the bottom block's paths need updating. The inline `[text][ref-id]` uses stay as-is. Run a disk-exists check on each rewritten path before considering the move done; the convention makes link rot visible but doesn't prevent it.
+
 ## AGENTS.md
 
 If updating this file Keep this document as dense as possible, don't even use blank lines or periods. No code blocks.

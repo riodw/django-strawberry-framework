@@ -229,9 +229,25 @@ See [`test_query/README.md`][readme] for the live-API
 test conventions and the schema-reload fixture pattern used to keep
 package-level and example-level registries isolated.
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Source / test / example files -->
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
 [readme]: test_query/README.md
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

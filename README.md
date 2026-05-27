@@ -73,11 +73,9 @@ Installation, quick start, schema-setup walkthrough, running the example project
 - Vulnerability reporting: [`SECURITY.md`][security]
 - Release notes: [`CHANGELOG.md`][changelog]
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [backlog]: BACKLOG.md
 [changelog]: CHANGELOG.md
 [contributing]: CONTRIBUTING.md
@@ -86,7 +84,23 @@ Installation, quick start, schema-setup walkthrough, running the example project
 [security]: SECURITY.md
 [today]: TODAY.md
 
-<!-- docs/ files -->
+<!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
 [readme]: docs/README.md
 [tree]: docs/TREE.md
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

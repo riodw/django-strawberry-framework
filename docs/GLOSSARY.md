@@ -1080,14 +1080,30 @@ Strategic differentiators that go past `1.0.0` parity live in [`../BACKLOG.md`][
 
 Dedicated migration guides (graphene-django, strawberry-graphql-django, DRF / django-filter) are tracked in [`../KANBAN.md`][kanban] so this file can stay focused on capability lookup. For the migration code diffs, see [`../GOAL.md`'s Migration shape section][goal-migration-shape].
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [backlog]: ../BACKLOG.md
 [goal]: ../GOAL.md
 [goal-migration-shape]: ../GOAL.md#migration-shape
 [goal-what-success-looks-like-in-your-code]: ../GOAL.md#what-success-looks-like-in-your-code
 [kanban]: ../KANBAN.md
 [today]: ../TODAY.md
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

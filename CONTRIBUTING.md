@@ -100,16 +100,30 @@ Please open issues at <https://github.com/riodw/django-strawberry-framework/issu
 
 Be respectful, assume good intent, and focus discussion on the work. Harassment or hostile behavior will not be tolerated.
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [backlog]: BACKLOG.md
 [goal]: GOAL.md
 [kanban]: KANBAN.md
 [today]: TODAY.md
 
-<!-- docs/ files -->
+<!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
 [tree]: docs/TREE.md
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

@@ -517,15 +517,29 @@ Two example projects prove the goal:
 
 For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [kanban]: KANBAN.md
 
-<!-- docs/ files -->
+<!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
 [glossary-filterset]: docs/GLOSSARY.md#filterset
 [glossary-index]: docs/GLOSSARY.md#index
 [glossary-metafilterset-class]: docs/GLOSSARY.md#metafilterset_class
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

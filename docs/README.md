@@ -240,23 +240,35 @@ uv sync
 
 For status, the milestone roadmap, and contributor signposts, see [`../README.md`'s status section][readme-status] and [`../CONTRIBUTING.md`][contributing].
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [contributing]: ../CONTRIBUTING.md
 [goal]: ../GOAL.md
 [readme]: ../README.md
 [readme-status]: ../README.md#status
 [today]: ../TODAY.md
 
-<!-- docs/ files -->
+<!-- docs/ -->
 [glossary]: GLOSSARY.md
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
 [glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command
 
-<!-- Source / test / example files -->
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
 [fakeshop-readme]: ../examples/fakeshop/README.md
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

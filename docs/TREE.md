@@ -475,15 +475,29 @@ HTTP tests that import the project schema must preserve the reload pattern from 
 
 `examples/fakeshop/apps/products/tests/` — **Per-Django-app convention placeholder.** Empty by design — the per-app `tests/` folder is where Django expects an app's own tests to live by convention, but the fakeshop example consolidates all example tests at the project level (`examples/fakeshop/tests/` and `examples/fakeshop/test_query/`) rather than per-app. The empty directory stays committed as documentation of the convention; do not add files there.
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [agents]: ../AGENTS.md
 [backlog]: ../BACKLOG.md
 [kanban]: ../KANBAN.md
 [readme]: ../README.md
 
-<!-- docs/ files -->
+<!-- docs/ -->
 [glossary]: GLOSSARY.md
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

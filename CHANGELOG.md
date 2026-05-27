@@ -151,15 +151,13 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 
 See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] for per-release sequencing. The Versioning section at the top of this file describes the alpha → beta → stable milestone cadence.
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [backlog]: BACKLOG.md
 [kanban]: KANBAN.md
 
-<!-- docs/ files -->
+<!-- docs/ -->
 [glossary-bigint-scalar]: docs/GLOSSARY.md#bigint-scalar
 [glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
 [glossary-djangotype]: docs/GLOSSARY.md#djangotype
@@ -170,13 +168,27 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config
 [readme]: docs/README.md
 
-<!-- Source / test / example files -->
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
 [apps]: django_strawberry_framework/apps.py
-[db-shard-b]: examples/fakeshop/db_shard_b.sqlite3
 [django-patches]: django_strawberry_framework/_django_patches.py
 [resolvers]: django_strawberry_framework/types/resolvers.py
-[settings]: examples/fakeshop/config/settings.py
 [test-init]: django_strawberry_framework/test/__init__.py
+
+<!-- tests/ -->
 [optimizer-multi-db]: tests/optimizer/test_multi_db.py
-[fakeshop-multi-db]: examples/fakeshop/test_query/test_multi_db.py
 [test-resolvers]: tests/types/test_resolvers.py
+
+<!-- examples/ -->
+[db-shard-b]: examples/fakeshop/db_shard_b.sqlite3
+[fakeshop-multi-db]: examples/fakeshop/test_query/test_multi_db.py
+[settings]: examples/fakeshop/config/settings.py
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

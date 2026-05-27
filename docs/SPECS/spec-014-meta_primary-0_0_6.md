@@ -3,15 +3,15 @@
 Target release: `0.0.6`.
 Status: draft (revision 6, post-TODO-anchor review).
 Owner: package maintainer.
-Predecessors: [`docs/GLOSSARY.md`](GLOSSARY.md) (entries [`DjangoType`](GLOSSARY.md#djangotype), [`Meta.primary`](GLOSSARY.md#metaprimary), [`Relation handling`](GLOSSARY.md#relation-handling), [`finalize_django_types`](GLOSSARY.md#finalize_django_types)), [`KANBAN.md`](../KANBAN.md) card `DONE-014-0.0.6`.
-Card line: ["Multiple DjangoTypes per model with `Meta.primary` — registry-multiplicity + primary-type-resolution work for the remaining `0.0.6` patch."](../KANBAN.md)
+Predecessors: [`docs/GLOSSARY.md`][glossary] (entries [`DjangoType`][glossary-djangotype], [`Meta.primary`][glossary-metaprimary], [`Relation handling`][glossary-relation-handling], [`finalize_django_types`][glossary-finalize-django-types]), [`KANBAN.md`][kanban] card `DONE-014-0.0.6`.
+Card line: ["Multiple DjangoTypes per model with `Meta.primary` — registry-multiplicity + primary-type-resolution work for the remaining `0.0.6` patch."][kanban]
 
 Revision history (kept inline so the spec is self-contained):
 
 - **Revision 1** — initial draft.
 - **Revision 2** (post-feedback review) — three high-severity corrections plus two medium and one low:
   1. **H1**: relation binding in `_build_annotations` (`django_strawberry_framework/types/base.py::_build_annotations`) was specified as "no code change required; deferral happens when `registry.get()` returns `None`". That misses the import-order trap where a *single* secondary type registers first (so `registry.get()` returns it eagerly), the relation source binds against it, then the explicit primary registers later. The audit passes but the relation is frozen to the wrong type, breaking the headline contract and definition-order independence. Fix: **defer all relation annotations to finalization** regardless of registry state. Drops the eager-bind shortcut. Net post-finalize result is identical for single-type usage; multi-type usage now resolves correctly. New regression test pins secondary-before-source-before-primary.
-  2. **H2**: optimizer planning was specified as "no code change; `model_for_type` already works for secondary types". That misses the **root** planning path: `django_strawberry_framework/optimizer/extension.py` resolves a resolver's return type to a model, then `django_strawberry_framework/optimizer/walker.py::_resolve_field_map` calls `registry.get(model)` to get back a type — which under multi-type semantics returns the *primary*, not the resolver's actual return type. A root resolver returning `AdminItemType` would plan against `ItemType.field_map` / `optimizer_hints`. The plan cache also keys on the model alone, so primary/secondary resolvers on the same model would share the wrong cached plan. Fix: thread the resolved origin type (the resolver's actual Strawberry return type) through `plan_optimizations` to the walker's root `_resolve_field_map` call; only the **nested** relation lookup uses `registry.get(related_model)` (which correctly returns the primary). [Plan cache](GLOSSARY.md#plan-cache) key includes the origin type. New Decision 9 captures the contract; Slice 4 expands accordingly.
+  2. **H2**: optimizer planning was specified as "no code change; `model_for_type` already works for secondary types". That misses the **root** planning path: `django_strawberry_framework/optimizer/extension.py` resolves a resolver's return type to a model, then `django_strawberry_framework/optimizer/walker.py::_resolve_field_map` calls `registry.get(model)` to get back a type — which under multi-type semantics returns the *primary*, not the resolver's actual return type. A root resolver returning `AdminItemType` would plan against `ItemType.field_map` / `optimizer_hints`. The plan cache also keys on the model alone, so primary/secondary resolvers on the same model would share the wrong cached plan. Fix: thread the resolved origin type (the resolver's actual Strawberry return type) through `plan_optimizations` to the walker's root `_resolve_field_map` call; only the **nested** relation lookup uses `registry.get(related_model)` (which correctly returns the primary). [Plan cache][glossary-plan-cache] key includes the origin type. New Decision 9 captures the contract; Slice 4 expands accordingly.
   3. **H3**: schema audit was specified to switch from `registry.iter_types()` to `primary_or_single_per_model()` to avoid double-warning. That correctly avoids duplicate warnings but **skips reachable secondary types entirely** — if a secondary type exposes a relation field that the primary does not (e.g., `AdminItemType.category` where `ItemType` has only scalars), the audit silently misses it. Fix: keep iterating every reachable registered type but dedupe the warning collection (a `set` over the warning strings, or a `(source_model, field_name)`-keyed `set`). Drops the unused `primary_or_single_per_model()` helper from Decision 4; the schema audit no longer needs it. Adds a regression test where a secondary type exposes a unique relation field and the audit warns when its target is unregistered.
   4. **M1**: `register_with_definition` rollback was specified to unconditionally pop from `_types[model]`, `_models`, and `_primaries`. Under the new idempotent `register()` behavior, a re-registration of an already-stored type is a no-op for `register()`, so a subsequent `register_definition` failure would naively roll back *pre-existing* state. Fix: `register()` returns `bool` indicating whether state was added; `register_with_definition` snapshots `_primaries[model]` and only rolls back what its own call added. New regression test covers the pre-registered-type-then-fail-on-different-definition path.
   5. **M2**: the verbatim `DONE-014-0.0.6` KANBAN body referenced `docs/SPECS/spec-014-meta_primary-0_0_6.md`, but Slice 6 explicitly says the spec stays at `docs/spec-014-meta_primary-0_0_6.md` and archival is opt-in. Fix: rewrite the body to reference the working location. Archival decision stays with the maintainer post-merge.
@@ -31,7 +31,7 @@ Revision history (kept inline so the spec is self-contained):
   5. **L3**: rev3 said the `consumer_authored_fields` short-circuit lives "at the top of `_build_annotations`", implying a function preamble that aborts the whole call. The actual short-circuit is in the per-field loop body — the relations branch and the scalars branch each have their own `continue` — and skips only the current iteration. Functional intent unchanged; description was imprecise. Fix: rewrite the H1 prose to say "the existing `if field.name in consumer_authored_fields: continue` short-circuit in the per-field loop body of `django_strawberry_framework/types/base.py::_build_annotations` (relations branch and scalars branch)".
   6. **L4 / L5**: rev3 referenced `django_strawberry_framework/types/finalizer.py::finalize_django_types` #"target_type = registry.get" for the `target_type = registry.get(...)` assignment; the assignment and the `if target_type is None:` check live inside that function. Fix: pin the symbol-qualified path for every reference rather than chasing a moving line number. Additionally, rev3 named `tests/types/test_finalizer.py` and `tests/types/test_relations.py` as test hosts with a "new or existing" framing, but neither file existed in the tree at spec-authoring time — finalize tests are split across `tests/test_registry.py` (idempotency) and `tests/types/test_definition_order.py` (post-finalize relation resolution); relation tests live in `tests/types/test_converters.py`. Fix: rewrite the test-host bullets to affirmatively name the existing hosts as the default, with "create a new file only if the cluster pushes the existing file past a comfortable size" as the escape hatch.
 - **Revision 5** (post-feedback-4 review) — one high-severity correction plus two medium and three low-severity precision fixes:
-  1. **H1**: rev4's `Non-goals` and `Out of scope` sections still listed "consumer-side override of relation resolution per field" as deferred to `WIP-ALPHA-015`. That contradicts the live package contract — annotation-only relation overrides (`category: AdminCategoryType`) and assigned-`strawberry.field` relation resolvers already ship today (pinned by `tests/types/test_definition_order.py::test_annotation_only_relation_override_keeps_generated_resolver`, `tests/types/test_definition_order.py::test_assigned_relation_field_override_keeps_consumer_resolver`, `tests/types/test_definition_order.py::test_assigned_scalar_field_override_keeps_consumer_resolver`, and surfaced in [`docs/GLOSSARY.md` #"Definition-order independence"](../GLOSSARY.md#definition-order-independence)). Worse, this card's own Slice 4 H1 regression tests *rely* on consumer overrides surviving and targeting a secondary `DjangoType`. A worker reading the contradictory Non-goal could plausibly weaken the H1 preservation path that the spec elsewhere demands. Fix: rewrite both entries to "no **new override API** ships in this card (no `Meta.field_types = {...}` style key)" and explicitly state the already-shipped direct-annotation / assigned-`strawberry.field` relation override contract remains in scope and may target a secondary type.
+  1. **H1**: rev4's `Non-goals` and `Out of scope` sections still listed "consumer-side override of relation resolution per field" as deferred to `WIP-ALPHA-015`. That contradicts the live package contract — annotation-only relation overrides (`category: AdminCategoryType`) and assigned-`strawberry.field` relation resolvers already ship today (pinned by `tests/types/test_definition_order.py::test_annotation_only_relation_override_keeps_generated_resolver`, `tests/types/test_definition_order.py::test_assigned_relation_field_override_keeps_consumer_resolver`, `tests/types/test_definition_order.py::test_assigned_scalar_field_override_keeps_consumer_resolver`, and surfaced in [`docs/GLOSSARY.md` #"Definition-order independence"][glossary-definition-order-independence]). Worse, this card's own Slice 4 H1 regression tests *rely* on consumer overrides surviving and targeting a secondary `DjangoType`. A worker reading the contradictory Non-goal could plausibly weaken the H1 preservation path that the spec elsewhere demands. Fix: rewrite both entries to "no **new override API** ships in this card (no `Meta.field_types = {...}` style key)" and explicitly state the already-shipped direct-annotation / assigned-`strawberry.field` relation override contract remains in scope and may target a secondary type.
   2. **M1**: the verbatim `DONE-014-0.0.6` KANBAN body in Slice 6 still says relation conversion "defers ALL relation annotations to `finalize_django_types()`" — the exact rev2 over-broad wording that rev3 fixed everywhere else. Since the verbatim body becomes the closeout source of truth in `KANBAN.md`, the stale wording would re-surface a contradicted contract. Fix: rewrite the bullet to "defers all auto-synthesized relation annotations" and add the consumer-authored-fields exception clause.
   3. **M2**: rev4 said to "thread the resolved origin Strawberry type" through `optimizer/extension.py` but did not name `_resolve_model_from_return_type()` at `django_strawberry_framework/optimizer/extension.py::_resolve_model_from_return_type` as the helper that currently throws away the origin (it returns `registry.model_for_type(origin)`). Worker 2 can update the walker / cache-key surface and still have no clean way to obtain `origin` at the extension call site. Fix: add an explicit Slice 4 checklist item to change `_resolve_model_from_return_type` to a helper that returns BOTH values — e.g. `(origin, model)` or a small named tuple — and to update the existing tests `tests/optimizer/test_extension.py::test_resolve_model_from_return_type_unwraps_nested_wrappers`, `tests/optimizer/test_extension.py::test_resolve_model_returns_none_for_non_object_leaf`, `tests/optimizer/test_extension.py::test_resolve_model_returns_none_when_no_strawberry_schema`, and `tests/optimizer/test_extension.py::test_resolve_model_returns_none_when_type_not_in_schema` that pin the helper's current `model`-only return shape.
   4. **L1**: rev4's mass-replace flipped every `finalizer.py:69` reference to `:68`. The rev3 reviewer claimed `:68` was correct; verification against the current tree shows the `target_type = registry.get(pending.related_model)` assignment IS at line 69 (line 68 is the `continue` in the consumer-authored branch). Fix: revert every `:68` reference to `:69`. (Subsequently superseded: per the post-TODO-anchor work all references in this spec are now symbol-qualified — `django_strawberry_framework/types/finalizer.py::finalize_django_types` #"target_type = registry.get" — so this historical line-vs-line debate no longer appears anywhere except this revision-history bullet.)
@@ -45,22 +45,22 @@ Revision history (kept inline so the spec is self-contained):
 
 ## Key glossary references
 
-Skim these [`docs/GLOSSARY.md`](GLOSSARY.md) entries first — they anchor the vocabulary used throughout the spec:
+Skim these [`docs/GLOSSARY.md`][glossary] entries first — they anchor the vocabulary used throughout the spec:
 
-- [`DjangoType`](GLOSSARY.md#djangotype) — the base class whose one-type-per-model alpha constraint this card lifts.
-- [`Meta.primary`](GLOSSARY.md#metaprimary) — the new `Meta` key this card ships. Currently `planned for 0.0.6`; flipped to `shipped (0.0.6)` in [Slice 6](#slice-6--docs-kanban-changelog-archive).
-- [`finalize_django_types`](GLOSSARY.md#finalize_django_types) — runs the cross-type ambiguity audit after every subclass has registered.
-- [`Relation handling`](GLOSSARY.md#relation-handling) — the resolution path that today binds a relation target to whichever single `DjangoType` happens to be registered for the related model. After this card, the resolution picks the **primary** type.
-- [`DjangoOptimizerExtension`](GLOSSARY.md#djangooptimizerextension) — its reverse-lookup (`model_for_type`) and schema-audit pass must keep working when a model has multiple registered types.
-- [`ConfigurationError`](GLOSSARY.md#configurationerror) — raised at registration time for duplicate-primary collisions and at finalization for unresolved-primary models.
-- [Choice enum generation](GLOSSARY.md#choice-enum-generation) — enums are cached by `(model, field_name)`; multiple types reading the same choice column **continue to share one enum** (unchanged from today).
+- [`DjangoType`][glossary-djangotype] — the base class whose one-type-per-model alpha constraint this card lifts.
+- [`Meta.primary`][glossary-metaprimary] — the new `Meta` key this card ships. Currently `planned for 0.0.6`; flipped to `shipped (0.0.6)` in [Slice 6](#slice-6--docs-kanban-changelog-archive).
+- [`finalize_django_types`][glossary-finalize-django-types] — runs the cross-type ambiguity audit after every subclass has registered.
+- [`Relation handling`][glossary-relation-handling] — the resolution path that today binds a relation target to whichever single `DjangoType` happens to be registered for the related model. After this card, the resolution picks the **primary** type.
+- [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] — its reverse-lookup (`model_for_type`) and schema-audit pass must keep working when a model has multiple registered types.
+- [`ConfigurationError`][glossary-configurationerror] — raised at registration time for duplicate-primary collisions and at finalization for unresolved-primary models.
+- [Choice enum generation][glossary-choice-enum-generation] — enums are cached by `(model, field_name)`; multiple types reading the same choice column **continue to share one enum** (unchanged from today).
 
 Project conventions to follow:
 
-- [`AGENTS.md`](../AGENTS.md) — schema testing via `schema.execute_sync`. **Note:** `AGENTS.md` prohibits `CHANGELOG.md` edits without explicit permission; [Slice 6](#slice-6--docs-kanban-changelog-archive) grants that permission.
-- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — 100% coverage target; release-bump checklist.
-- [`KANBAN.md`](../KANBAN.md) — card-ID format; column movement at Slice 6.
-- [`docs/TREE.md`](TREE.md) — package layout; tests mirror source one-to-one.
+- [`AGENTS.md`][agents] — schema testing via `schema.execute_sync`. **Note:** `AGENTS.md` prohibits `CHANGELOG.md` edits without explicit permission; [Slice 6](#slice-6--docs-kanban-changelog-archive) grants that permission.
+- [`CONTRIBUTING.md`][contributing] — 100% coverage target; release-bump checklist.
+- [`KANBAN.md`][kanban] — card-ID format; column movement at Slice 6.
+- [`docs/TREE.md`][tree] — package layout; tests mirror source one-to-one.
 
 ## Slice checklist
 
@@ -84,7 +84,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
   - [ ] Add `primary_for(model) -> type | None` — returns `_primaries.get(model)` directly. Distinct from `get()` so callers can tell the difference between "single registered type with no primary flag" and "explicitly declared primary".
   - [ ] Add `types_for(model) -> tuple[type, ...]` — returns the immutable tuple of every type registered against `model` in registration order. Used by [`audit_primary_ambiguity`](#decision-5--ambiguity-rules) and by future tests / introspection.
   - [ ] Add `models_with_multiple_types() -> Iterator[type[models.Model]]` — yields each model with `>=2` registered types. Used by `audit_primary_ambiguity` (Slice 3) to enumerate the ambiguity-candidate set without exposing `_types` to the finalizer.
-  - [ ] Add `iter_types()` shape note: now yields `(model, type_cls)` pairs **once per registered type**, so the same `model` can appear in the iterator multiple times. [Schema audit](GLOSSARY.md#schema-audit) (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.check_schema`) continues to use this iterator (with warning-collection dedupe — see Slice 4 H3 fix).
+  - [ ] Add `iter_types()` shape note: now yields `(model, type_cls)` pairs **once per registered type**, so the same `model` can appear in the iterator multiple times. [Schema audit][glossary-schema-audit] (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.check_schema`) continues to use this iterator (with warning-collection dedupe — see Slice 4 H3 fix).
   - [ ] Update `clear()` to also clear `_primaries`.
   - [ ] Tests in `tests/test_registry.py`:
     - [ ] **Rewrite stale test** (M2): `tests/test_registry.py` #"test_register_collision_raises" — the legacy `test_register_collision_raises` test (now superseded by `test_register_same_class_against_two_models_raises`) expected a second `register(Model, T2)` call to raise `ConfigurationError(match="already registered")`. Under this card the second call must *not* raise (no-primary multi-type case). Rewrite the test in the same commit as the registry change: either rename to `test_register_two_primaries_raises` and switch both calls to `primary=True`, or delete and let `test_register_two_types_same_model_without_primary_allows_both_in_types_for` cover the inverse contract. Worker 1 picks during planning.
@@ -177,9 +177,9 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
   - [ ] Root `README.md` — confirm the package-version line reads `0.0.6` (no-op if any prior `0.0.6` card already bumped it).
   - [ ] `docs/README.md` — confirm the "shipped today is `0.0.6`" line (no-op if any prior `0.0.6` card already bumped it). Add a one-line mention of `Meta.primary` to the shipped-capability summary.
   - [ ] `docs/GLOSSARY.md` entries updated:
-    - [`Meta.primary`](GLOSSARY.md#metaprimary) → `shipped (0.0.6)`. Rewrite the body to describe the actual delivered contract (ambiguity rules; `primary_for` / `types_for` registry surface; relation-target resolution semantics). Drop the "planned for `0.0.6`" framing.
-    - [`DjangoType`](GLOSSARY.md#djangotype) → remove the "one `DjangoType` per Django model" alpha constraint bullet (currently inside [`docs/GLOSSARY.md` #"DjangoType"](../GLOSSARY.md#djangotype) under "Current alpha constraints"). Replace with a one-line "multiple `DjangoType`s per model supported via [`Meta.primary`](#metaprimary)" entry under the shipped-capability list.
-    - [Index](GLOSSARY.md#index) → flip the status badge on `Meta.primary` to `shipped (0.0.6)`.
+    - [`Meta.primary`][glossary-metaprimary] → `shipped (0.0.6)`. Rewrite the body to describe the actual delivered contract (ambiguity rules; `primary_for` / `types_for` registry surface; relation-target resolution semantics). Drop the "planned for `0.0.6`" framing.
+    - [`DjangoType`][glossary-djangotype] → remove the "one `DjangoType` per Django model" alpha constraint bullet (currently inside [`docs/GLOSSARY.md` #"DjangoType"][glossary-djangotype] under "Current alpha constraints"). Replace with a one-line "multiple `DjangoType`s per model supported via [`Meta.primary`](#metaprimary)" entry under the shipped-capability list.
+    - [Index][glossary-index] → flip the status badge on `Meta.primary` to `shipped (0.0.6)`.
   - [ ] `docs/TREE.md` — no source-tree changes (no new files); add `Meta.primary` to the `[alpha]` milestone tag for `DjangoType` if relevant; otherwise no-op.
   - [ ] `TODAY.md` — add `Meta.primary` to the "what fakeshop demonstrates today" section if the example project exercises it; otherwise mention it under "available but not currently demonstrated in fakeshop".
   - [ ] `KANBAN.md` — move `DONE-014-0.0.6` → `DONE-014-0.0.6`. **Drop in the verbatim body below:**
@@ -251,17 +251,17 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
       `DONE-015-0.0.6 — Consumer override semantics` design space and
       is out of scope here.
     ```
-  - [ ] `CHANGELOG.md` — `[Unreleased]` entries (**permission granted by this spec**, overriding [`AGENTS.md`](../AGENTS.md)'s default prohibition):
+  - [ ] `CHANGELOG.md` — `[Unreleased]` entries (**permission granted by this spec**, overriding [`AGENTS.md`][agents]'s default prohibition):
     - `Added`: `Meta.primary` boolean flag. Multiple `DjangoType` subclasses per Django model. Registry surface: `primary_for`, `types_for`, `models_with_multiple_types`.
     - `Changed`: `registry.register` now returns `bool` (whether state was added; was `None`). `registry.register` and `registry.register_with_definition` gained a keyword-only `primary: bool = False` parameter. `registry.get(model)` semantics: returns the primary if declared; the single type if only one is registered; `None` if multiple types are registered with no primary.
     - `Changed`: `registry.iter_types()` now yields once per registered type — a model with multiple types appears multiple times. Consumers iterating to drive a per-model action should explicitly dedupe by model, or use `models_with_multiple_types()` + `types_for(model)` for an explicit grouping.
     - `Changed`: `_build_annotations` (`types/base.py`) always defers **auto-synthesized** relation annotations to `PendingRelationAnnotation` + the registry's pending list; the eager-bind shortcut is removed. Consumer-authored relation fields (annotation overrides and assigned `strawberry.field`) continue to skip synthesis entirely — the existing `if field.name in consumer_authored_fields: continue` short-circuit is preserved.
     - `Changed`: optimizer plan cache key includes the resolver's origin Strawberry type alongside the model. Primary-return and secondary-return resolvers on the same model produce distinct cache entries.
-  - [ ] **Before archiving**, the spec stays at its working location per [`docs/builder/BUILD.md`](builder/BUILD.md) "Specs stay at their working location after closeout". Opt-in archival to `docs/SPECS/` is the maintainer's call; the [Definition of done](#definition-of-done) does not gate on it.
+  - [ ] **Before archiving**, the spec stays at its working location per [`docs/builder/BUILD.md`][build] "Specs stay at their working location after closeout". Opt-in archival to `docs/SPECS/` is the maintainer's call; the [Definition of done](#definition-of-done) does not gate on it.
 
 ## Problem statement
 
-[`docs/GLOSSARY.md`'s `DjangoType` entry](GLOSSARY.md#djangotype) calls out an alpha constraint: "one `DjangoType` per Django model". The registry enforces it at `register()` time in `django_strawberry_framework/registry.py::TypeRegistry.register` #"already_registered" by raising `ConfigurationError` whenever a second type registers against an already-mapped model.
+[`docs/GLOSSARY.md`'s `DjangoType` entry][glossary-djangotype] calls out an alpha constraint: "one `DjangoType` per Django model". The registry enforces it at `register()` time in `django_strawberry_framework/registry.py::TypeRegistry.register` #"already_registered" by raising `ConfigurationError` whenever a second type registers against an already-mapped model.
 
 DRF-style usage (the package's stated target audience) commonly defines public, admin, list, and detail variants of the same model. Today, declaring `class AdminItemType(DjangoType): class Meta: model = Item` after `ItemType` already exists for `Item` raises at import time. There is no current escape hatch — consumers either fork the model into a proxy or restructure the schema around the limitation, neither of which composes with the rest of the type-conversion machinery.
 
@@ -536,7 +536,7 @@ Secondary types are still **discoverable** for any `(type → model)` reverse-lo
 
 ### Decision 7 — Test strategy
 
-**Test file layout.** Per [`docs/TREE.md`](TREE.md)'s mirror rule, tests live alongside the source they cover:
+**Test file layout.** Per [`docs/TREE.md`][tree]'s mirror rule, tests live alongside the source they cover:
 
 - `tests/test_registry.py` (extended) — registration behavior, primary tracking, helpers, idempotence, rollback. The largest test addition.
 - `tests/types/test_base.py` (extended) or a new `tests/types/test_meta_primary.py` if the additions push `test_base.py` past a comfortable size. Worker 1's planning pass picks based on the file's current line count and the natural grouping with existing Meta-validation tests.
@@ -548,7 +548,7 @@ Secondary types are still **discoverable** for any `(type → model)` reverse-lo
 
 **Registry-isolation fixture.** Every test file that touches the registry declares its own `@pytest.fixture(autouse=True) def _isolate_registry()` that calls `registry.clear()` on entry and exit. The existing fixture `tests/test_registry.py::_isolate_global_registry` is the model.
 
-**Schema-execution coverage.** Per [`AGENTS.md`](../AGENTS.md), every new public-facing behavior change has at least one `schema.execute_sync` test. For this card:
+**Schema-execution coverage.** Per [`AGENTS.md`][agents], every new public-facing behavior change has at least one `schema.execute_sync` test. For this card:
 
 - Relation resolution picks the primary type → introspect the schema and assert the relation field's type name.
 - A multi-type model with both types reachable from `Query` produces a schema with both Strawberry types defined → introspect for both type names.
@@ -684,24 +684,24 @@ Single commit; five files: `pyproject.toml`, `django_strawberry_framework/__init
 
 ### Slice 6 — Docs, KANBAN, CHANGELOG, archive
 
-Separate commit. Files: root `README.md`, `docs/README.md`, `docs/GLOSSARY.md` (entries beyond the version line), `docs/TREE.md`, `TODAY.md`, `KANBAN.md` (move + verbatim body), `CHANGELOG.md` (`Added` / `Changed`). The spec stays at `docs/spec-014-meta_primary-0_0_6.md` per [`docs/builder/BUILD.md`](builder/BUILD.md) "Specs stay at their working location after closeout"; opt-in archive to `docs/SPECS/` is the maintainer's call post-merge.
+Separate commit. Files: root `README.md`, `docs/README.md`, `docs/GLOSSARY.md` (entries beyond the version line), `docs/TREE.md`, `TODAY.md`, `KANBAN.md` (move + verbatim body), `CHANGELOG.md` (`Added` / `Changed`). The spec stays at `docs/spec-014-meta_primary-0_0_6.md` per [`docs/builder/BUILD.md`][build] "Specs stay at their working location after closeout"; opt-in archive to `docs/SPECS/` is the maintainer's call post-merge.
 
 ## Edge cases and constraints
 
 - **Idempotent re-import.** `register(Model, T)` called twice (e.g., a test rerun without `registry.clear()`, or a module re-import) is a no-op for the first call's primary state. If the second call sets `primary=True` while the first set `primary=False` (or omitted it), raise — primary status is a declaration, not a mutable property.
 - **Same class, different model.** Unchanged from today — `_models[T]` reverse-collision guard raises.
-- **`Meta.primary` with no [`Meta.model`](GLOSSARY.md#metamodel).** Falls through to the existing `Meta.model is required` check before `primary` is inspected. No new error needed.
+- **`Meta.primary` with no [`Meta.model`][glossary-metamodel].** Falls through to the existing `Meta.model is required` check before `primary` is inspected. No new error needed.
 - **`Meta.primary` on an abstract / intermediate `DjangoType` base** (one without `Meta` or with no `Meta.model`). `__init_subclass__` returns early when `meta is None` (`django_strawberry_framework/types/base.py::DjangoType.__init_subclass__` #"if meta is None"), so `primary` is never read. Intermediate bases that *do* declare a `Meta.model` are registered like any other — if a consumer declares an intermediate base with `Meta.primary = True` and then a concrete subclass with `Meta.primary = True` on the same model, the duplicate-primary error fires.
-- **Two types on the same model with the same [`Meta.name`](GLOSSARY.md#metaname).** Out of scope (not a registry concern — Strawberry catches type-name collisions at schema construction). Mentioned for completeness.
+- **Two types on the same model with the same [`Meta.name`][glossary-metaname].** Out of scope (not a registry concern — Strawberry catches type-name collisions at schema construction). Mentioned for completeness.
 - **Choice enum sharing.** Two types on the same model both selecting `Item.status` (a choice field) continue to share one cached enum keyed by `(Item, "status")`. No new behavior; existing `register_enum` collision guard already enforces "same enum or raise".
 - **Optimizer plan cache.** Per [Decision 9](#decision-9--optimizer-origin-type-propagation-h2-fix), the plan cache key includes the resolver's origin Strawberry type **alongside** the model (and the selection-set fingerprint already in use today). Multiple types on the same model produce distinct plan-cache entries — that's intentional. (L1 fix: revision 2 phrased this as "return type, not the model", which contradicted Decision 9; the correct contract is *both*.)
-- **[Relay Node integration](GLOSSARY.md#relay-node-integration).** A `DjangoType` with `relay.Node` in [`Meta.interfaces`](GLOSSARY.md#metainterfaces) declares an `id` resolver. Two types on the same model can both be Relay nodes; their global IDs differ by type name (Strawberry's default Relay global-ID encoding). No new error needed.
+- **[Relay Node integration][glossary-relay-node-integration].** A `DjangoType` with `relay.Node` in [`Meta.interfaces`][glossary-metainterfaces] declares an `id` resolver. Two types on the same model can both be Relay nodes; their global IDs differ by type name (Strawberry's default Relay global-ID encoding). No new error needed.
 - **`finalize_django_types` idempotency.** The existing `if registry.is_finalized(): return` short-circuit at the top of `finalize_django_types()` is preserved. The audit runs exactly **once**, on the first successful call, as the new first step before pending-relation resolution. A second `finalize_django_types()` call after a successful finalize is the existing no-op (returns immediately via the `is_finalized()` guard) — the audit does **not** re-run. Defensible because the registry rejects all post-finalize mutators, so the state the first audit saw is the same state any later audit would see. (L3 fix: revision 2 said "the audit re-runs and is a deterministic no-op"; that's inaccurate against the current `is_finalized()` guard, which returns before the audit could re-run.)
 - **`registry.clear()` between tests.** Already wipes `_types`, `_models`, `_enums`, `_definitions`, `_pending`, `_finalized`. Must also wipe `_primaries`.
 
 ## Test plan
 
-Per [`AGENTS.md`](../AGENTS.md), every new public mapping has at least one `schema.execute_sync` test. Per [`CONTRIBUTING.md`](../CONTRIBUTING.md), coverage must remain at 100%.
+Per [`AGENTS.md`][agents], every new public mapping has at least one `schema.execute_sync` test. Per [`CONTRIBUTING.md`][contributing], coverage must remain at 100%.
 
 Test categories (numbered for traceability against the slice checklist):
 
@@ -769,5 +769,48 @@ Per [Slice 6](#slice-6--docs-kanban-changelog-archive). The `Meta.primary` entry
 - `optimizer/extension.py` schema audit iterates every reachable registered type via `registry.iter_types()` and dedupes warning collection; secondary types whose relation fields the primary does not expose are still audited.
 - Atomic version-bump quintet aligned at `0.0.6` (no-op if any prior `0.0.6` card already bumped — the tree is at `0.0.6` from `spec-013-deferred_scalars-0_0_6.md` at spec-authoring time).
 - Root `README.md`, `docs/README.md`, `docs/GLOSSARY.md` (entries beyond the version line), `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`, `KANBAN.md` (verbatim `DONE-014-0.0.6` body) all reflect shipped state.
-- `docs/GLOSSARY.md` entries flipped: [`Meta.primary`](GLOSSARY.md#metaprimary) → `shipped (0.0.6)`; [`DjangoType`](GLOSSARY.md#djangotype) alpha-constraint bullet replaced.
+- `docs/GLOSSARY.md` entries flipped: [`Meta.primary`][glossary-metaprimary] → `shipped (0.0.6)`; [`DjangoType`][glossary-djangotype] alpha-constraint bullet replaced.
 - **PyPI publish gate** — do not `uv publish` the `0.0.6` distribution until Slice 6 closes, mirroring `spec-013-deferred_scalars-0_0_6.md`'s gate. The two cards share the `0.0.6` distribution; whichever finishes Slice 6 last unblocks the publish.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+[agents]: ../../AGENTS.md
+[contributing]: ../../CONTRIBUTING.md
+[kanban]: ../../KANBAN.md
+
+<!-- docs/ -->
+[glossary]: ../GLOSSARY.md
+[glossary-choice-enum-generation]: ../GLOSSARY.md#choice-enum-generation
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
+[glossary-index]: ../GLOSSARY.md#index
+[glossary-metainterfaces]: ../GLOSSARY.md#metainterfaces
+[glossary-metamodel]: ../GLOSSARY.md#metamodel
+[glossary-metaname]: ../GLOSSARY.md#metaname
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-schema-audit]: ../GLOSSARY.md#schema-audit
+[tree]: ../TREE.md
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+[build]: ../builder/BUILD.md
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

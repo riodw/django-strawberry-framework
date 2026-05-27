@@ -75,6 +75,7 @@ What to internalize:
 - **Section layout**: the recent specs all carry roughly the same skeleton, in this order — frontmatter with revision history, **Key glossary references**, **Slice checklist**, **Problem statement**, **Current state**, **Goals**, **Non-goals**, **Borrowing posture** (when upstreams ship a comparable primitive), **User-facing API** (when the spec adds a consumer-visible symbol), **Architectural decisions** (numbered), **Implementation plan** (with a per-slice delta table), **Edge cases and constraints**, **Test plan**, **Doc updates**, **Risks and open questions**, **Out of scope (explicitly tracked elsewhere)**, **Definition of done**. Follow the most-recent spec when in doubt.
 - **Voice and depth**: these specs are detailed and decision-heavy. Every choice is pinned with rationale; every alternative considered is named and rejected with a reason.
 - **Cross-references**: source files are cited as repository-relative paths using symbol-qualified `path::QualifiedName` form (e.g. `types/base.py::DjangoType.resolve_fields`), with `#"unique substring"` pinpoints for in-body lines and `path #"unique substring"` for module-level lines (per [`AGENTS.md`][agents] line 27); KANBAN cards by their full ID; prior specs by markdown link; upstream packages by absolute local path from `docs/TREE.md`.
+- **Markdown link style**: cross-file links are reference-style — inline body uses are `[text][ref-id]`; all defs live in a unified bottom block opened by `<!-- LINK DEFINITIONS -->` with the 10 canonical path-based group headers (`<!-- Root -->`, `<!-- docs/ -->`, `<!-- docs/SPECS/ -->`, `<!-- docs/builder/ -->`, `<!-- django_strawberry_framework/ -->`, `<!-- tests/ -->`, `<!-- examples/ -->`, `<!-- scripts/ -->`, `<!-- .venv/ -->`, `<!-- External -->`) always present even when empty. URLs, in-page anchors, and fenced-code-block content stay inline. Group is determined by where the target lives, not where the source file lives. Don't drift back to inline `](path)` for cross-file refs. See [`START.md`][start] "Markdown link convention" for the why and the move-cost argument.
 - **Permission caveat**: the recent specs explicitly note that `AGENTS.md` prohibits `CHANGELOG.md` edits without permission and that the spec's Slice 5 grants that permission. Mirror this in your spec.
 
 ---
@@ -235,10 +236,26 @@ The flow is complete when Step 8 finishes: only the active spec and its CSV live
 - If the WIP card's body conflicts with something you read in Step 1, prefer the card and call out the conflict as an entry in the spec's `Risks and open questions` section — do not silently reconcile.
 - Reading source files, existing specs, or test files during Step 6 is allowed and expected. The boundary is on **writes**, not reads.
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [agents]: ../../AGENTS.md
+[start]: ../../START.md
 
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

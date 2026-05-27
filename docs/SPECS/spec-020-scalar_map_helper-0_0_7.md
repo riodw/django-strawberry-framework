@@ -657,11 +657,9 @@ The card is complete when all of the following are true:
 19. Package coverage stays at 100% (`pyproject.toml [tool.coverage.report] fail_under = 100`) — verified by CI's `fail_under = 100` gate, not by the worker locally (mirroring [`docs/SPECS/spec-019-multi_db-0_0_7.md`][spec-019] DoD item 9 / [`docs/SPECS/spec-018-export_schema-0_0_7.md`][spec-018] rev4 L4 clarifying clause). The worker does NOT run pytest locally; coverage and suite-passing assertion is CI's job after the PR opens.
 20. Worker-local validation: `uv run ruff format .` passes and `uv run ruff check --fix .` passes. Per the no-pytest-after-edits rule at [`AGENTS.md #"Do not run pytest after edits"`][agents] ("Do not run pytest after edits; run only when explicitly asked"), the worker does NOT run pytest as part of completing this card. Pytest is invoked only by CI or by an explicit maintainer ask; the maintainer-invoked suite-passing command is `uv run pytest --no-cov` (with `--no-cov` opting out of `pytest.ini`'s auto-applied `--cov` so the worker doesn't see CI's `fail_under` gate locally).
 
-<!-- Link definitions — when this spec moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [agents]: ../../AGENTS.md
 [changelog]: ../../CHANGELOG.md
 [contributing]: ../../CONTRIBUTING.md
@@ -675,7 +673,7 @@ The card is complete when all of the following are true:
 [today-what-to-put-in-examplesfakeshopconfigschemapy-today]: ../../TODAY.md#what-to-put-in-examplesfakeshopconfigschemapy-today
 [today-whats-in-examplesfakeshopappsproductsschemapy-today]: ../../TODAY.md#whats-in-examplesfakeshopappsproductsschemapy-today
 
-<!-- docs/ siblings -->
+<!-- docs/ -->
 [feedback]: ../feedback.md
 [glossary]: ../GLOSSARY.md
 [glossary-aggregateset]: ../GLOSSARY.md#aggregateset
@@ -703,7 +701,7 @@ The card is complete when all of the following are true:
 [readme-schema-setup-boundary]: ../README.md#schema-setup-boundary
 [tree]: ../TREE.md
 
-<!-- Spec files (docs/SPECS/) -->
+<!-- docs/SPECS/ -->
 [next]: NEXT.md
 [next-step-8]: NEXT.md#step-8--archive-prior-specs-and-update-cross-references
 [spec-013]: spec-013-deferred_scalars-0_0_6.md
@@ -714,22 +712,32 @@ The card is complete when all of the following are true:
 [spec-018]: spec-018-export_schema-0_0_7.md
 [spec-019]: spec-019-multi_db-0_0_7.md
 [spec-019-decision-9]: spec-019-multi_db-0_0_7.md#decision-9--joint-0_0_7-cut
+[spec-020]: spec-020-scalar_map_helper-0_0_7.md
+[spec-020-terms]: spec-020-scalar_map_helper-0_0_7-terms.csv
 
-<!-- Source / test / example files (repo root) -->
-[check-spec-glossary]: ../../scripts/check_spec_glossary.py
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
 [conf]: ../../django_strawberry_framework/conf.py
-[config]: ../../.venv/lib/python3.10/site-packages/strawberry/schema/config.py
 [converters]: ../../django_strawberry_framework/types/converters.py
 [django-strawberry-framework-init]: ../../django_strawberry_framework/__init__.py
-[scalar]: ../../.venv/lib/python3.10/site-packages/strawberry/types/scalar.py
 [scalars]: ../../django_strawberry_framework/scalars.py
-[schema]: ../../examples/fakeshop/config/schema.py
-[schema-library]: ../../examples/fakeshop/apps/library/schema.py
-[schema-products]: ../../examples/fakeshop/apps/products/schema.py
+
+<!-- tests/ -->
 [test-converters]: ../../tests/types/test_converters.py
 [test-init]: ../../tests/base/test_init.py
 [test-scalars]: ../../tests/test_scalars.py
 
-<!-- Self / companion CSV -->
-[spec-020]: spec-020-scalar_map_helper-0_0_7.md
-[spec-020-terms]: spec-020-scalar_map_helper-0_0_7-terms.csv
+<!-- examples/ -->
+[schema]: ../../examples/fakeshop/config/schema.py
+[schema-library]: ../../examples/fakeshop/apps/library/schema.py
+[schema-products]: ../../examples/fakeshop/apps/products/schema.py
+
+<!-- scripts/ -->
+[check-spec-glossary]: ../../scripts/check_spec_glossary.py
+
+<!-- .venv/ -->
+[config]: ../../.venv/lib/python3.10/site-packages/strawberry/schema/config.py
+[scalar]: ../../.venv/lib/python3.10/site-packages/strawberry/types/scalar.py
+
+<!-- External -->

@@ -1998,9 +1998,25 @@ Nothing in the Django ecosystem does this today. `django-grpc-framework` ships g
 
 If a `BACKLOG.md` item turns out to be wrong (the upstream packages ship it, real-world adopters don't want it, or the architectural cost is too high), strike it through with a one-line note explaining why; do not delete it. The history of rejected differentiators is itself useful design context.
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [kanban]: KANBAN.md
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

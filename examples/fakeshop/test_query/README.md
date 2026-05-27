@@ -20,9 +20,25 @@ Cross-reference:
 - `../tests/` keeps example-project tests that execute in process without hitting `/graphql/`.
 - This directory is for consumer-visible GraphQL behavior that benefits from the real Django + Strawberry HTTP stack.
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Source / test / example files -->
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
 [tests-dir]: ../tests/
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

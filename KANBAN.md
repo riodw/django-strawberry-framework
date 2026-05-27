@@ -557,7 +557,7 @@ Definition of done:
 
 ### TODO-ALPHA-033-0.0.12 — Debug-toolbar middleware
 
-Priority: low (🍓 parity-adjacent; developer experience)
+Priority: low (🍓 parity-required; developer experience)
 
 Severity: **low**
 
@@ -592,7 +592,7 @@ Definition of done:
 
 ### TODO-ALPHA-034-0.0.12 — Test client helper
 
-Priority: low (⚛️&🍓 parity-adjacent; developer experience)
+Priority: low (⚛️&🍓 parity-required; developer experience)
 
 Severity: **low**
 
@@ -634,7 +634,7 @@ Dependencies:
 
 ### TODO-ALPHA-035-0.0.12 — Response-extensions debug middleware
 
-Priority: low (⚛️ parity-adjacent; developer experience)
+Priority: low (⚛️ parity-required; developer experience)
 
 Severity: **low**
 
@@ -1792,16 +1792,14 @@ Before a release:
 - Keep `CHANGELOG.md` out of routine updates unless explicitly requested.
 - Strategic differentiation candidates (features neither `graphene-django` nor `strawberry-graphql-django` ship cleanly) live in [`BACKLOG.md`][backlog]. When a `BACKLOG.md` item is scheduled, promote it to a `TODO-NNN-X.Y.Z` or `TODO-NNN-X.Y.Z` card here and cross-reference back.
 
-<!-- Link definitions — when this file moves, these are the only paths
-     that need updating. Inline uses of `[text][ref-id]` are
-     location-independent and survive the move untouched. -->
+<!-- LINK DEFINITIONS -->
 
-<!-- Repo-root files -->
+<!-- Root -->
 [backlog]: BACKLOG.md
 [goal]: GOAL.md
 [readme]: README.md
 
-<!-- docs/ files -->
+<!-- docs/ -->
 [docs-readme]: docs/README.md
 [glossary-bigint-scalar]: docs/GLOSSARY.md#bigint-scalar
 [glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
@@ -1810,23 +1808,33 @@ Before a release:
 [glossary-safe-wrap-connection-method]: docs/GLOSSARY.md#safe_wrap_connection_method
 [glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config
 
-<!-- Spec files (docs/SPECS/) -->
+<!-- docs/SPECS/ -->
 [spec-011]: docs/SPECS/spec-011-relay_interfaces-0_0_5.md
 [spec-016]: docs/SPECS/spec-016-list_field-0_0_7.md
 [spec-019]: docs/SPECS/spec-019-multi_db-0_0_7.md
 
-<!-- Source / test / example files -->
+<!-- docs/builder/ -->
+[build-020-scalar-map-helper-0-0-7]: docs/builder/build-020-scalar_map_helper-0_0_7.md
+
+<!-- django_strawberry_framework/ -->
 [apps]: django_strawberry_framework/apps.py
-[db-shard-b.sqlite3]: examples/fakeshop/db_shard_b.sqlite3
 [django-patches]: django_strawberry_framework/_django_patches.py
 [plans]: django_strawberry_framework/optimizer/plans.py
 [resolvers]: django_strawberry_framework/types/resolvers.py
-[settings]: examples/fakeshop/config/settings.py
 [test-init]: django_strawberry_framework/test/__init__.py
-[test-multi-db]: tests/optimizer/test_multi_db.py
-[fakeshop-test-multi-db]: examples/fakeshop/test_query/test_multi_db.py
-[test-resolvers]: tests/types/test_resolvers.py
 [wrap]: django_strawberry_framework/test/_wrap.py
 
-<!-- Build plans (docs/builder/) -->
-[build-020-scalar-map-helper-0-0-7]: docs/builder/build-020-scalar_map_helper-0_0_7.md
+<!-- tests/ -->
+[test-multi-db]: tests/optimizer/test_multi_db.py
+[test-resolvers]: tests/types/test_resolvers.py
+
+<!-- examples/ -->
+[db-shard-b.sqlite3]: examples/fakeshop/db_shard_b.sqlite3
+[fakeshop-test-multi-db]: examples/fakeshop/test_query/test_multi_db.py
+[settings]: examples/fakeshop/config/settings.py
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

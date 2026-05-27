@@ -156,6 +156,14 @@ After Step 7 exits 0, archive every OTHER spec file that lives in `docs/` so the
 
 The "active" spec is the one you just authored in Step 6. Every other `spec-*.md` (and its companion `*-terms.csv` if present) is a prior in-flight spec from an earlier card cycle that should now live under `docs/SPECS/` alongside the older legacy specs.
 
+> **The most important part of this step is the cross-reference sweep — TO and FROM every moved spec.** A spec move is mechanically cheap (`git mv`) but link-fragile: when `docs/spec-XXX-…` becomes `docs/SPECS/spec-XXX-…`, three classes of link rot the instant the move lands and only one of them is obvious. **All three MUST be fixed in the same pass:**
+>
+> 1. **FROM other files → the moved spec** (links elsewhere that point AT the spec you just moved). The path target changes; every `](spec-XXX-…)` / `](docs/spec-XXX-…)` / `](../spec-XXX-…)` reference in every doc, in `KANBAN.md`, and in the new active spec gets rewritten so it still resolves.
+> 2. **FROM the moved spec → everywhere else** (links INSIDE the moved spec body pointing at repo files). Every relative path inside the spec body just shifted one directory deeper — `](../KANBAN.md)` from `docs/spec-XXX-…` is correct, but from `docs/SPECS/spec-XXX-…` it must become `](../../KANBAN.md)`. The file's contents did not change but the file's location did, and every relative path inside it is now wrong by one `../` level. **This is the failure mode that gets missed** because the visible diff is just a rename — the broken links live inside the moved file's unchanged body.
+> 3. **Between specs that BOTH moved in the same sweep** (links inside one archived spec that point at another archived spec). The two specs are now siblings under `docs/SPECS/`, so a link that was `](SPECS/spec-YYY-…)` becomes `](spec-YYY-…)`, and a link that was `](spec-YYY-…)` (sibling under `docs/`) is now also `](spec-YYY-…)` (sibling under `docs/SPECS/`) — same surface, different meaning. Verify every one.
+>
+> Bias toward over-grepping. Missing references rot silently and only surface when a future reader follows the link. False positives are cheap to dismiss; false negatives are invisible until they bite.
+
 Concrete sequence:
 
 1. **List candidates.** Enumerate every `spec-*.md` file at the top level of `docs/` (do NOT recurse into `docs/SPECS/`, which is the destination):
@@ -173,23 +181,34 @@ Concrete sequence:
    ```
 
    Use `git mv` rather than `mv` so the rename is tracked. If the file is not yet tracked by git, fall back to `mv`.
-3. **Rewrite cross-references in the new spec.** Search the spec you just authored for markdown links that point at any moved spec — match patterns like `](spec-<old_NNN>-…)`, `](./spec-<old_NNN>-…)`, and `](docs/spec-<old_NNN>-…)`. Each match becomes the new path under `docs/SPECS/` (relative-path discipline: from a spec in `docs/`, the moved sibling is now at `SPECS/spec-<old_NNN>-…`).
-4. **Rewrite cross-references in every other doc, INCLUDING `KANBAN.md`.** Enumerate every doc that references the moved spec(s):
+3. **Rewrite cross-references INSIDE each moved spec** (the "FROM the moved spec → everywhere else" direction — the failure mode most likely to be missed). When a spec at `docs/spec-<old_NNN>-…` becomes `docs/SPECS/spec-<old_NNN>-…`, every relative `](…)` target inside its body must be re-relativized one directory deeper. Enumerate every link with `grep -nE '\]\([^)]+\)' docs/SPECS/spec-<old_NNN>-…` and classify each match into one of these buckets:
+
+   - **Repo-root files** (`KANBAN.md`, `README.md`, `GOAL.md`, `TODAY.md`, `AGENTS.md`, `CHANGELOG.md`, `pyproject.toml`, `BACKLOG.md`, …): `](../KANBAN.md)` → `](../../KANBAN.md)`, `](../README.md)` → `](../../README.md)`, etc.
+   - **`docs/` siblings** (`GLOSSARY.md`, `TREE.md`, `README.md`, `feedback.md`, the new active spec, `NEXT.md` if linked): `](GLOSSARY.md)` → `](../GLOSSARY.md)`, `](README.md)` → `](../README.md)`, `](NEXT.md)` → `](../SPECS/NEXT.md)` *only if NEXT.md remains under `docs/SPECS/`* — verify location before rewriting.
+   - **Specs that ALSO moved in the same sweep** — these are now `docs/SPECS/` siblings of the file being rewritten, so paths simplify: `](SPECS/spec-YYY-…)` → `](spec-YYY-…)`, and a former `](spec-YYY-…)` sibling-under-`docs/` reference stays `](spec-YYY-…)` (now a sibling under `docs/SPECS/`).
+   - **Source / test / example files under repo root** (`django_strawberry_framework/...`, `tests/...`, `examples/...`, `scripts/...`, `.venv/...`): `](../django_strawberry_framework/foo.py)` → `](../../django_strawberry_framework/foo.py)`, etc.
+   - **In-spec anchors** (`](#decision-N)`, `](#some-heading)`) and **absolute URLs** (`](https://…)`) — unchanged.
+   - **Companion CSV** (the moved spec's own `*-terms.csv` — also moved): if the spec body links to it (`](spec-<old_NNN>-…-terms.csv)`), the link stays as-is (still a sibling).
+
+   This is best done as a single deterministic transformation pass over the file (a short script that classifies every `](target)` against the rules above and rewrites accordingly) rather than ad-hoc edits, so no link is missed and no replacement-ordering hazard arises.
+4. **Rewrite cross-references in the new spec** (the "FROM the active spec → moved spec" direction). Search the spec you just authored for markdown links that point at any moved spec — match patterns like `](spec-<old_NNN>-…)`, `](./spec-<old_NNN>-…)`, and `](docs/spec-<old_NNN>-…)`. Each match becomes the new path under `docs/SPECS/` (relative-path discipline: from a spec in `docs/`, the moved sibling is now at `SPECS/spec-<old_NNN>-…`).
+5. **Rewrite cross-references in every other doc, INCLUDING `KANBAN.md`** (the "FROM the rest of the repo → moved spec" direction). Enumerate every doc that references the moved spec(s):
 
    ```
    grep -rln "spec-<old_NNN>-<old_topic>-<old_version>" docs/ README.md GOAL.md TODAY.md AGENTS.md KANBAN.md
    ```
 
    For each hit, rewrite the path so the link still resolves after the move. Relative-path discipline: from `docs/GLOSSARY.md` the moved file is `SPECS/spec-…`; from repo-root `README.md` / `KANBAN.md` / `GOAL.md` / `TODAY.md` / `AGENTS.md` it is `docs/SPECS/spec-…`; from another spec under `docs/` it is `SPECS/spec-…`. Apply every rewrite in place — `KANBAN.md` is part of this sweep, not exempt from it.
-5. **Add or update the active WIP card's reference to the new spec.** The card you targeted in Step 3 should point at the spec file you just authored. Open `KANBAN.md` at the active WIP card body and verify it contains a link to `docs/spec-<NNN>-<topic>-<0_0_X>.md`. Three cases:
+6. **Add or update the active WIP card's reference to the new spec.** The card you targeted in Step 3 should point at the spec file you just authored. Open `KANBAN.md` at the active WIP card body and verify it contains a link to `docs/spec-<NNN>-<topic>-<0_0_X>.md`. Three cases:
 
    - **No reference present** — add one. Typical placement: a `Spec:` or `Active spec:` line at the top of the card body (or under the card's existing "Files likely touched" section if the card uses that convention), with a markdown link to the new spec at its `docs/spec-<NNN>-…` path.
    - **Reference present but pointing at a different path** (e.g., a stale `docs/SPECS/spec-…` from a prior archive cycle, or a now-renamed slug) — rewrite to point at the active path.
    - **Reference present at the correct path** — no action.
 
    When the active card lives in a column other than `## In progress` by the time you reach this step (e.g., the maintainer moved it to `## Done` between Step 3 and Step 8), follow the reference to the new column and update in place there. The reference belongs with the card, not with the column.
-6. **`CHANGELOG.md` stays reserved.** `CHANGELOG.md` has its own maintainer-edited protocol and is NOT rewritten by this step even when it references a moved spec. If `grep` finds matches in `CHANGELOG.md`, surface them as a one-line report at the end of the flow ("`CHANGELOG.md` references moved spec(s) at lines …; maintainer must update") and STOP — do not silently edit.
-7. **Re-run the checker** against the new spec one more time:
+7. **`CHANGELOG.md` stays reserved.** `CHANGELOG.md` has its own maintainer-edited protocol and is NOT rewritten by this step even when it references a moved spec. If `grep` finds matches in `CHANGELOG.md`, surface them as a one-line report at the end of the flow ("`CHANGELOG.md` references moved spec(s) at lines …; maintainer must update") and STOP — do not silently edit.
+8. **Verify every rewritten link resolves.** Before closing the step, spot-check a representative sample of the rewrites — pick 5–10 paths across the categories above (one repo-root link, one `docs/` sibling, one inter-archived-spec link, one source-file link) and confirm each target file exists at the path the rewritten link now claims. Broken links land silently; this is the only check that catches a category miss in the transformation pass.
+9. **Re-run the checker** against the new spec one more time:
 
    ```
    uv run python scripts/check_spec_glossary.py --spec docs/spec-<NNN>-<topic>-<0_0_X>.md

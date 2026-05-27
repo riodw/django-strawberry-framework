@@ -243,7 +243,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
 
 ## Problem statement
 
-[`docs/GLOSSARY.md`'s Scalar field conversion entry][glossary-scalar-field-conversion] advertises broad Django scalar coverage but explicitly defers four: plain `BigIntegerField`, `JSONField`, PostgreSQL `ArrayField`, and PostgreSQL `HStoreField`. The deferral has lived in `types/converters.py` as three TODO comments (lines 32-47). This card converts those TODOs into shipped behavior.
+[`docs/GLOSSARY.md`'s Scalar field conversion entry][glossary-scalar-field-conversion] advertises broad Django scalar coverage but explicitly defers four: plain `BigIntegerField`, `JSONField`, PostgreSQL `ArrayField`, and PostgreSQL `HStoreField`. The deferral has lived in `types/converters.py` as three TODO comments (in the `types/converters.py::SCALAR_MAP` neighborhood). This card converts those TODOs into shipped behavior.
 
 Five constraints shape the design:
 
@@ -257,7 +257,7 @@ Five constraints shape the design:
 
 `SCALAR_MAP` (`django_strawberry_framework/types/converters.py::SCALAR_MAP`) is a flat `dict[type[models.Field], type]` covering Django's standard scalar field classes. `convert_scalar` walks `type(field).__mro__` and returns the matched type, optionally widening to `T | None` and replacing with a generated `Enum` when `field.choices` is present.
 
-Three TODO blocks at lines 32-47 mark the deferred work. The current `SCALAR_MAP` entry for `PositiveBigIntegerField: int` is **technically incorrect** — `PositiveBigIntegerField` is a 64-bit field whose values can exceed GraphQL's 32-bit `Int` range.
+Three TODO blocks near `types/converters.py::SCALAR_MAP` mark the deferred work. The current `SCALAR_MAP` entry for `PositiveBigIntegerField: int` is **technically incorrect** — `PositiveBigIntegerField` is a 64-bit field whose values can exceed GraphQL's 32-bit `Int` range.
 
 No `BigInt` symbol exists yet. No public scalars module exists. No `tests/test_scalars.py` file exists.
 

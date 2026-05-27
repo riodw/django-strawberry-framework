@@ -56,7 +56,7 @@ def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None
     Relay ``GlobalID`` handling is intentionally kept out of this path —
     Relay id resolution lives in ``types/relay.py`` (``_resolve_id_default``
     and friends). Forward-relation FK-id elision continues to see only the
-    Django primary-key column it always saw (spec Decision 7, line 357).
+    Django primary-key column it always saw (spec-011 Decision 7 #"FK-id elision scoping").
     """
     elisions = _get_context_value(
         getattr(info, "context", None),

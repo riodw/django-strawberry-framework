@@ -19,7 +19,7 @@ in ``examples/fakeshop/test_query/test_multi_db.py``: if a future refactor
 caused ``OptimizationPlan.apply`` to drop ``_db``, the resolver's
 ``Book.objects.using("shard_b")`` queryset would route to ``default``,
 return zero rows, and the live test's seeded-titles assertion would fail.
-Per ``AGENTS.md`` line 9, real-world live-HTTP coverage is preferred over
+Per ``AGENTS.md #"Test through real usage and prefer the example project"``, real-world live-HTTP coverage is preferred over
 package-internal mocking when both reach the line.
 
 The five resolver-level Slice 1 tests (FK-id elision branches + strictness

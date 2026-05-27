@@ -429,9 +429,10 @@ def _validate_interfaces(meta: type) -> tuple[type, ...]:
 
     Returns a normalized ``tuple[type, ...]`` ready to pass through to
     ``DjangoTypeDefinition.interfaces``. Returns ``()`` when the key is
-    absent or set to an empty tuple/list (Decision 4 line 324).
+    absent or set to an empty tuple/list (Decision 4,
+    spec-011 #"An empty tuple is the same as not declaring").
 
-    Validation rules (spec lines 322-330):
+    Validation rules (spec-011 #"may be a tuple/list of interface classes"):
 
     - Accepts a tuple/list of interface classes, or a single real
       Strawberry interface class (e.g. ``interfaces = relay.Node``).
@@ -757,7 +758,7 @@ def _build_annotations(
     Strawberry's interface-supplied ``id: GlobalID!`` is not shadowed by a
     Django ``int`` field. The pk field stays in ``fields`` so the
     optimizer's ``DjangoTypeDefinition.field_map`` continues to see it as a
-    connector column (spec Decision 7, line 361).
+    connector column (spec-011 Decision 7 #"keeps every selected Django field including the primary key").
 
     Args:
         cls: The consumer-facing ``DjangoType`` subclass (its ``__name__``
@@ -860,7 +861,7 @@ def _build_annotations(
                 # dropping the synthesized scalar annotation here keeps the
                 # Strawberry surface clean. The pk field stays in ``fields``
                 # so the optimizer's field map still sees it as a connector
-                # column (spec Decision 7, line 361).
+                # column (spec-011 Decision 7 #"keeps every selected Django field including the primary key").
                 continue
             annotations[field.name] = convert_scalar(field, cls.__name__)
     return annotations, pending

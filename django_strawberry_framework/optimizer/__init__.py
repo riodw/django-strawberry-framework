@@ -2,10 +2,10 @@
 
 Re-exports the consumer-facing ``DjangoOptimizerExtension`` and the
 framework-wide ``logger``. Both are load-bearing: sibling production
-modules ``extension.py`` (``from . import logger`` at line 46) and
-``walker.py`` (``from . import logger`` at line 16) consume ``logger``
-through this re-export as the canonical intra-subpackage logger
-handle, and the optimizer pass-through tests reach it via
+modules ``extension.py`` and ``walker.py`` consume ``logger`` via
+``from . import logger`` through this re-export as the canonical
+intra-subpackage logger handle, and the optimizer pass-through tests
+reach it via
 ``from django_strawberry_framework.optimizer import logger`` to pin
 the re-export contract after the flat ``optimizer.py`` module was
 promoted to a subpackage. Removing the re-export would silently break

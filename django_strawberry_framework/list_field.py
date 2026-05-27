@@ -88,8 +88,9 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
     See ``docs/spec-016-list_field-0_0_7.md`` Decision 1 (mechanism) and
     Decision 2 (default-resolver shape) for the design contract.
     """
-    # Decision 5 validation guards (spec lines 542-549): four constructor-site
-    # checks that fail at the line that wrote ``DjangoListField(...)`` rather
+    # Decision 5 validation guards
+    # (spec-016 #"DjangoListField requires a DjangoType class"): four
+    # constructor-site checks that fail at the line that wrote ``DjangoListField(...)`` rather
     # than at finalize-time. Order is load-bearing: each target-type check
     # assumes the previous one passed. The own-class registration check
     # (third guard, below) is the strict invariant — see its comment block for

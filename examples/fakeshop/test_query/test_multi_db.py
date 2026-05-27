@@ -225,7 +225,9 @@ def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver(_bu
     # optimizer's `.only(...)` projection is compatible with the resolver's
     # pinned select_related shape (Django raises FieldError when a field is
     # both deferred and traversed via select_related). Pinning only `title`
-    # would conflict with the spec-pinned resolver shape at line 393 / 545.
+    # would conflict with the spec-pinned resolver shape at
+    # spec-019 #"return models.Book.objects.using(\"shard_b\").select_related(\"shelf__branch\")"
+    # / spec-019 #"A `_build_test_schema` per-test fixture".
     query = """
       query {
         booksOnShardB {

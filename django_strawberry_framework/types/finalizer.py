@@ -90,7 +90,8 @@ def _format_ambiguity_error(
     at the top of this module so the finalize-time error strings stay
     grep-stable for tests and consumer error matching. The fix sentence
     (``Declare Meta.primary = True...``) is the actionable guidance the
-    audit's tests pin against (spec lines 127, 133).
+    audit's tests pin against (spec-014 #"with the fix sentence",
+    spec-014 #"test_finalize_ambiguity_error_message_contains_actionable_fix").
     """
     parts = [f"  {model.__name__}: {', '.join(t.__name__ for t in types)}" for model, types in offenders]
     body = "\n".join(parts)

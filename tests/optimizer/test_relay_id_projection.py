@@ -1,6 +1,6 @@
 """Optimizer invariants for Relay-declared ``DjangoType`` classes.
 
-Pins Decision 7 (spec lines 352-361): when a Relay-declared type selects
+Pins Decision 7 (spec #"Decision 7: optimizer and projection invariants"): when a Relay-declared type selects
 ``id`` the optimizer's ``only()`` projection must still include the
 concrete pk attname; ``_resolve_id_default`` must read from the loaded
 ``__dict__`` cache without triggering a lazy load; and relation traversal

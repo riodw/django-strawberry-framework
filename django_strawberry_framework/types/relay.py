@@ -60,7 +60,7 @@ def install_is_type_of(type_cls: type) -> None:
     for a returned ORM instance. Without this borrow, an interface field
     that returns a Django model can fail Strawberry's isinstance check
     and surface as "Cannot determine type for object of model X" at
-    runtime (spec Decision 6, line 351).
+    runtime (spec-011 Decision 6 #"injection (Decision-1 borrow) is added unconditionally").
 
     Preserves a consumer-declared ``is_type_of`` via the ``cls.__dict__``
     membership check (the same discriminator strawberry-django uses); a
@@ -90,14 +90,17 @@ def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
     Skips interfaces already in ``type_cls.__mro__`` so a class that
     already inherits a listed interface directly (e.g. consumer wrote
     ``class Foo(DjangoType, relay.Node): class Meta: interfaces =
-    (relay.Node,)``) sees no double-injection (spec lines 329, 339,
-    458).
+    (relay.Node,)``) sees no double-injection
+    (spec-011 #"A class that already inherits from one of the listed",
+    spec-011 #"only those not already present in",
+    spec-011 #"Inherited interfaces via parent").
 
     Raises:
         ConfigurationError: a ``TypeError`` from ``cls.__bases__``
             assignment is wrapped with the offending interface named in
             the message so consumers see "cannot add interface X" rather
-            than a raw layout TypeError (spec Risk note, lines 540-541).
+            than a raw layout TypeError
+            (spec-011 Risk note #"surface any `TypeError` as a `ConfigurationError`").
     """
     additions = tuple(iface for iface in definition.interfaces if iface not in type_cls.__mro__)
     if not additions:
@@ -117,8 +120,8 @@ def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
 def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     """Raise ``ConfigurationError`` when a Relay-declared type has a composite pk.
 
-    Decision 2 (spec lines 287, 455, 555): combining ``relay.Node`` with
-    a composite-primary-key model is explicitly out of scope for
+    Decision 2 (spec-011 #"Composite primary keys (Django 5.2+) are explicitly out of scope"):
+    combining ``relay.Node`` with a composite-primary-key model is explicitly out of scope for
     ``0.0.5``. Detection uses ``isinstance(model._meta.pk,
     CompositePrimaryKey)`` so the gate aligns with Django 5.2+'s
     native composite-pk type.
@@ -180,8 +183,8 @@ def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:
     so the dict-cache lookup keys on the real column, then reads from
     ``root.__dict__`` first (avoids an extra ORM hit when the optimizer
     already loaded the row) and falls back to ``getattr(root, id_attr)``
-    (spec line 313 / Decision 7's "no avoidable lazy loads on
-    ``resolve_id``").
+    (spec-011 #"id_attr = cls.resolve_id_attr" / Decision 7's "no
+    avoidable lazy loads on ``resolve_id``").
 
     Keying on ``root.__class__._meta.pk.attname`` is deliberate: the
     alternative ``cls.__django_strawberry_definition__.model._meta.pk.attname``

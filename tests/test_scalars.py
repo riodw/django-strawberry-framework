@@ -305,7 +305,7 @@ def test_strawberry_config_merges_extra_scalar_map():
 
 
 def test_strawberry_config_extra_scalar_map_does_not_mutate_caller_dict():
-    """The factory copies ``extra_scalar_map`` rather than mutating the caller's dict (spec line 441)."""
+    """The factory copies ``extra_scalar_map`` rather than mutating the caller's dict (spec #"`extra_scalar_map` mutation post-call")."""
     CustomScalar = NewType("CustomScalar", str)
     custom_def = strawberry.scalar(name="CustomScalar", serialize=str, parse_value=str)
     caller_dict = {CustomScalar: custom_def}
@@ -325,7 +325,7 @@ def test_strawberry_config_collision_with_package_scalar_raises_value_error():
 
 
 def test_strawberry_config_independent_call_returns_independent_instance():
-    """Each call returns a fresh ``StrawberryConfig`` with a fresh ``scalar_map`` dict (spec line 439)."""
+    """Each call returns a fresh ``StrawberryConfig`` with a fresh ``scalar_map`` dict (spec #"Independent return value semantics")."""
     CustomScalar = NewType("CustomScalar", str)
     custom_def = strawberry.scalar(name="CustomScalar", serialize=str, parse_value=str)
     c1 = strawberry_config()
@@ -344,7 +344,7 @@ def test_strawberry_config_independent_call_returns_independent_instance():
 def test_strawberry_config_forwards_auto_camel_case_kwarg():
     """``auto_camel_case`` is forwarded; assert on ``name_converter.auto_camel_case``
     because ``auto_camel_case`` is a dataclass ``InitVar`` on ``StrawberryConfig``
-    (spec line 490 — verified against upstream ``StrawberryConfig.__post_init__``).
+    (spec #"`auto_camel_case` is declared as a dataclass `InitVar`" — verified against upstream ``StrawberryConfig.__post_init__``).
     """
     overridden = strawberry_config(auto_camel_case=False)
     assert overridden.name_converter.auto_camel_case is False

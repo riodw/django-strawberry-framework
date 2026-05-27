@@ -4,7 +4,7 @@ Spec: ``docs/spec-016-list_field-0_0_7.md`` (Test plan section, the
 ``tests/test_list_field.py (new)`` subsection).
 
 Package tests; system-under-test is ``django_strawberry_framework``
-(spec rev5 L3 — framing matches ``AGENTS.md`` line 5). The file is the flat
+(spec rev5 L3 — framing matches ``AGENTS.md #"Package source lives in django_strawberry_framework"``). The file is the flat
 single-file Layer-3 module's mirror per ``docs/TREE.md #"test_list_field.py       # DjangoListField (single-file Layer-3 module)"``.
 
 Holds the Slice-2 validation cluster (5 tests) and the Slice-3 behavior
@@ -21,7 +21,7 @@ through ``functools.partial`` natively (3.8+), so the case is correctly
 handled by the first branch of ``_is_async_callable``; the test pins
 the end-to-end behavior and guards against a future Python regression.
 
-The spec's Slice-3 inventory at line 129 calls out
+The spec's Slice-3 inventory at ``docs/SPECS/spec-016-list_field-0_0_7.md #"Optional ``resolver=`` constructor argument that overrides the default body"`` calls out
 "``Manager``/``QuerySet``" together for the consumer-resolver returns;
 both arms are load-bearing per rev4 M1 (the field wrapper owns the
 ``Manager → QuerySet`` coercion; the optimizer's downstream coercion is
@@ -89,7 +89,7 @@ def _isolate_global_registry() -> None:
     ],
 )
 def test_djangolistfield_rejects_non_class_argument(non_class: object) -> None:
-    """Non-class arguments trip the first guard (spec line 546)."""
+    """Non-class arguments trip the first guard (spec #"DjangoListField requires a DjangoType class; got <repr>")."""
     with pytest.raises(
         ConfigurationError,
         match=r"DjangoListField requires a DjangoType class; got",
@@ -98,7 +98,7 @@ def test_djangolistfield_rejects_non_class_argument(non_class: object) -> None:
 
 
 def test_djangolistfield_rejects_non_djangotype_class() -> None:
-    """A plain class that doesn't subclass ``DjangoType`` is rejected (spec line 547)."""
+    """A plain class that doesn't subclass ``DjangoType`` is rejected (spec #"DjangoListField requires a DjangoType subclass; got <name>")."""
 
     class NotADjangoType:
         pass
@@ -111,7 +111,7 @@ def test_djangolistfield_rejects_non_djangotype_class() -> None:
 
 
 def test_djangolistfield_rejects_djangotype_without_definition() -> None:
-    """An abstract ``DjangoType`` base without ``Meta`` is rejected (spec line 548).
+    """An abstract ``DjangoType`` base without ``Meta`` is rejected (spec #"is not a registered DjangoType (no __django_strawberry_definition__)").
 
     Per ``django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"if meta is None:"``, the absence of a ``Meta`` makes
     ``__init_subclass__`` return early WITHOUT setting
@@ -159,7 +159,7 @@ def test_djangolistfield_rejects_djangotype_subclass_without_own_meta() -> None:
 
 
 def test_djangolistfield_rejects_non_callable_resolver() -> None:
-    """A non-callable ``resolver=`` is rejected after target-type guards pass (spec line 549)."""
+    """A non-callable ``resolver=`` is rejected after target-type guards pass (spec #"DjangoListField resolver must be callable")."""
 
     class _T(DjangoType):
         class Meta:
@@ -202,7 +202,7 @@ def test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_query
     a ``DjangoType`` whose ``get_queryset`` excludes the categories whose
     names start with ``"a"`` (e.g. ``address``, ``automotive``) and
     asserting those names are absent from the resolved field output
-    (spec Decision 2, line 482; spec line 739).
+    (spec Decision 2 #"load-bearing visibility hook"; spec #"test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_queryset").
     """
     services.seed_data(1)
 
@@ -237,7 +237,7 @@ async def test_djangolistfield_async_get_queryset_is_awaited(monkeypatch) -> Non
     ``_apply_get_queryset_async(target_type, qs, info)`` call when
     ``in_async_context()`` returns True and ``get_queryset`` is
     ``async def`` (spec Decision 2 async path; Decision 3
-    ``_apply_get_queryset_async``; spec line 740).
+    ``_apply_get_queryset_async``; spec #"test_djangolistfield_async_get_queryset_is_awaited").
 
     ``DJANGO_ALLOW_ASYNC_UNSAFE`` is set for the duration of the test so
     Strawberry's GraphQL list-completion can iterate the returned
@@ -292,8 +292,8 @@ async def test_djangolistfield_default_resolver_works_under_sync_and_async_schem
     directly); the ``True`` arm fires under ``await schema.execute(...)``
     (returns the coroutine from ``_apply_get_queryset_async`` for
     Strawberry's ``AwaitableOrValue`` dispatch). The Edge cases section
-    (spec line 697) promises both call shapes work; without this test the
-    promise is unverified (rev5 M3, spec line 49).
+    (spec #"`schema.execute_sync` testing") promises both call shapes work; without this test the
+    promise is unverified (rev5 M3, spec #"add a 14th behavior test, `test_djangolistfield_default_resolver_works_under_sync_and_async_schema_execution`").
 
     ``DJANGO_ALLOW_ASYNC_UNSAFE`` is set so the async-branch QuerySet
     iteration in Strawberry's list-completion can proceed without
@@ -341,10 +341,10 @@ def test_djangolistfield_sync_path_rejects_coroutine_from_get_queryset() -> None
     """Sync resolver path raises ``ConfigurationError`` when ``get_queryset`` is async.
 
     Pins the coroutine-rejection guard at ``django_strawberry_framework/types/relay.py::_apply_get_queryset_sync #"returned a coroutine in a sync"``. The
-    field reuses the production helper per Decision 3 Option A (spec
-    lines 510-513); this test asserts the production message prefix
-    rather than re-implementing the rejection in a test mock
-    (spec line 742).
+    field reuses the production helper per Decision 3 Option A
+    (spec #"This spec picks **Option A** for `0.0.7`"); this test asserts the production
+    message prefix rather than re-implementing the rejection in a test mock
+    (spec #"test_djangolistfield_sync_path_rejects_coroutine_from_get_queryset").
     """
     services.seed_data(1)
 
@@ -382,7 +382,7 @@ def test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_app
     Pins the sync consumer-resolver wrapper at ``django_strawberry_framework/list_field.py::DjangoListField #"return _post_process_consumer_sync("``
     — specifically that ``_post_process_consumer_sync`` (the inner call
     site) applies ``target_type.get_queryset(...)`` to a ``Manager``/``QuerySet``
-    return (rev2 H1, graphene-django parity; spec line 743).
+    return (rev2 H1, graphene-django parity; spec #"test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_applied").
     """
     services.seed_data(1)
 
@@ -424,7 +424,7 @@ def test_djangolistfield_consumer_resolver_python_list_return_passes_through() -
     Pins the sync consumer-resolver wrapper at ``django_strawberry_framework/list_field.py::DjangoListField #"return _post_process_consumer_sync("``
     — specifically that ``_post_process_consumer_sync`` returns the
     non-``QuerySet`` result unchanged (the ``return result``
-    pass-through arm at ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"return result  # Python list"``; spec line 744). The resolver returns a
+    pass-through arm at ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"return result  # Python list"``; spec #"test_djangolistfield_consumer_resolver_python_list_return_passes_through"). The resolver returns a
     Python ``list`` that contains a row matching the ``get_queryset``
     exclusion filter; the row's presence in the output proves
     ``get_queryset`` was NOT applied to the list return.
@@ -476,7 +476,7 @@ async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_
     inside the async ``_wrap``), and the
     ``_apply_get_queryset_async`` call (``django_strawberry_framework/list_field.py::_post_process_consumer_async #"return await _apply_get_queryset_async"``) fires on a ``QuerySet``
     result. Pins that the wrapper awaits the consumer coroutine BEFORE
-    the isinstance check (rev4 H2, spec line 745). The
+    the isinstance check (rev4 H2, spec #"test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_queryset_applied"). The
     ``DJANGO_ALLOW_ASYNC_UNSAFE`` env override unblocks Strawberry's
     list-completion iteration of the returned QuerySet under
     ``await schema.execute(...)``.
@@ -520,7 +520,7 @@ async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_q
     ``django_strawberry_framework/list_field.py::_post_process_consumer_async #"result = result.all()"`` — ``_post_process_consumer_async`` calls
     ``result.all()`` on a ``Manager`` return BEFORE the isinstance check
     so the subsequent ``await _apply_get_queryset_async(...)`` runs on a
-    real ``QuerySet`` (rev4 M1 symmetry with the sync path; spec line 40).
+    real ``QuerySet`` (rev4 M1 symmetry with the sync path; spec #"the **field wrapper** owns the `Manager → QuerySet` coercion").
     The ``DJANGO_ALLOW_ASYNC_UNSAFE`` env override unblocks Strawberry's
     list-completion iteration of the returned QuerySet under
     ``await schema.execute(...)``.
@@ -664,7 +664,7 @@ async def test_djangolistfield_async_consumer_resolver_python_list_return_passes
     — specifically that ``_post_process_consumer_async`` returns a
     non-``QuerySet`` result unchanged (the ``return result``
     pass-through arm at ``django_strawberry_framework/list_field.py::_post_process_consumer_async #"return result"``). Pins that the await-then-isinstance
-    ordering is symmetric across return shapes (rev4 H2, spec line 746).
+    ordering is symmetric across return shapes (rev4 H2, spec #"test_djangolistfield_async_consumer_resolver_python_list_return_passes_through").
     """
     await sync_to_async(services.seed_data)(1)
 
@@ -699,8 +699,10 @@ async def test_djangolistfield_async_consumer_resolver_python_list_return_passes
 # -----------------------------------------------------------------------------
 # Group G — Root-position optimizer cooperation (rev2 M3).
 # (Listed BEFORE the outer-nullability pair to preserve the spec Test plan's
-# stated order; the spec lists the root-optimization test at line 747, then
-# the nullable-outer pair at 748-749.)
+# stated order; the spec lists the root-optimization test
+# (``spec #"test_djangolistfield_at_root_position_is_optimized"``) before the
+# nullable-outer pair (``spec #"test_djangolistfield_nullable_outer_via_consumer_annotation"``
+# and ``spec #"test_djangolistfield_non_nullable_outer_default_via_consumer_annotation"``).)
 # -----------------------------------------------------------------------------
 
 
@@ -708,14 +710,14 @@ async def test_djangolistfield_async_consumer_resolver_python_list_return_passes
 def test_djangolistfield_at_root_position_is_optimized(django_assert_num_queries) -> None:
     """Root-position ``DjangoListField`` triggers ``DjangoOptimizerExtension.resolve``.
 
-    Pins the rev2 M3 root-only contract (Decision 4, spec line 532). The
+    Pins the rev2 M3 root-only contract (Decision 4, spec #"Scope narrowing — root only in `0.0.7`"). The
     root-gated ``DjangoOptimizerExtension.resolve`` hook
     (``django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.resolve #"if info.path.prev is not None:"`` — the ``info.path.prev is not None``
     early-return) fires on a ``DjangoListField``-served root query, and
     the planning hook produces ``prefetch_related`` for the nested
     ``items`` selection.
 
-    Query-count derivation (rev6 M6, spec line 63): ``N`` = 1 base SELECT
+    Query-count derivation (rev6 M6, spec #"pin the assertion to exact query count via `assertNumQueries(N)`"): ``N`` = 1 base SELECT
     + 1 SELECT per ``prefetch_related`` relation in the nested selection.
     For ``{ allCategories { id name items { id name } } }`` against
     ``Category`` with ``items`` as a reverse-FK, ``N = 2`` — one Category
@@ -770,10 +772,11 @@ def test_djangolistfield_nullable_outer_via_consumer_annotation() -> None:
     """``list[CategoryType] | None`` renders as ``[CategoryType!]`` (nullable outer).
 
     Pins that the consumer's class-attribute annotation drives the
-    rendered GraphQL type, NOT a constructor argument (rev2 H2, spec
-    line 14). Verification uses an introspection query against
-    ``__type(name: "Query")`` (rev6 M2, spec line 59 — robust against
-    SDL formatting drift); spec line 748.
+    rendered GraphQL type, NOT a constructor argument (rev2 H2,
+    spec #"`strawberry.field` in the installed Strawberry version is a function, not a class").
+    Verification uses an introspection query against
+    ``__type(name: "Query")`` (rev6 M2, spec #"pin the introspection-query mechanism" —
+    robust against SDL formatting drift); spec #"test_djangolistfield_nullable_outer_via_consumer_annotation".
     """
 
     class CategoryType(DjangoType):
@@ -807,8 +810,10 @@ def test_djangolistfield_non_nullable_outer_default_via_consumer_annotation() ->
 
     Pins that the default annotation (``list[T]`` without ``| None``)
     renders as ``[T!]!`` — four levels of unwrap match Slice 0's pinned
-    introspection shape (spec line 109; rev2 H2, spec line 14; rev6 M2,
-    spec line 59); spec line 749.
+    introspection shape (spec #"locate `fields[name == \"allBranches\"]`"; rev2 H2,
+    spec #"`strawberry.field` in the installed Strawberry version is a function, not a class";
+    rev6 M2, spec #"pin the introspection-query mechanism");
+    spec #"test_djangolistfield_non_nullable_outer_default_via_consumer_annotation".
     """
 
     class CategoryType(DjangoType):
@@ -851,7 +856,7 @@ def test_djangolistfield_fk_id_elision_survives(django_assert_num_queries) -> No
     ``category { id }`` selection: no JOIN, no prefetch, ``only_fields``
     includes ``category_id``, and the plan's ``fk_id_elisions`` tuple
     carries the resolver key. Mirrors the existing integration pattern at
-    ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection`` (spec line 750).
+    ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection`` (spec #"test_djangolistfield_fk_id_elision_survives").
     """
     services.seed_data(1)
 
@@ -902,7 +907,7 @@ def test_djangolistfield_with_meta_primary_true_returns_primary_queryset() -> No
     returns rows queried via the primary's ``get_queryset``. The test
     discriminates by giving the two types' ``get_queryset``s different
     filtering behavior; pointing the field at the primary picks the
-    primary's behavior (Decision 6 multi-type-per-model; spec line 583).
+    primary's behavior (Decision 6 multi-type-per-model; spec #"test_djangolistfield_with_meta_primary_true_returns_primary_queryset").
     """
     services.seed_data(1)
 
@@ -952,7 +957,7 @@ def test_djangolistfield_with_secondary_target_uses_secondary_get_queryset() -> 
     Pins that the registry's ``Meta.primary`` discriminator does NOT
     override the explicit-target argument: pointing the field at the
     secondary returns the secondary's ``get_queryset`` filter, NOT the
-    primary's (Decision 6; spec line 584).
+    primary's (Decision 6; spec #"test_djangolistfield_with_secondary_target_uses_secondary_get_queryset").
     """
     services.seed_data(1)
 

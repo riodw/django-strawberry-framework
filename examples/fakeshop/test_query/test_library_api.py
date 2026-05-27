@@ -534,14 +534,15 @@ def test_library_relation_override_shapes_http_response_data():
 def test_library_branches_via_djangolistfield_optimized_nested_selection():
     """End-to-end pipeline coverage for ``DjangoListField`` via ``/graphql/``.
 
-    Pins the Slice 4 end-to-end contract (spec Decision 4 + rev3 M6, spec line
-    534): URL routing + view + schema execution + JSON serialization + optimizer
+    Pins the Slice 4 end-to-end contract (spec-016 Decision 4 + rev3 M6,
+    spec-016 #"live HTTP test in `examples/fakeshop/test_query/test_library_api.py` covers"):
+    URL routing + view + schema execution + JSON serialization + optimizer
     cooperation through the real Django + Strawberry HTTP stack. The package-
     internal return-shape contract is pinned separately by
     ``tests/test_list_field.py::test_djangolistfield_at_root_position_is_optimized``
-    (rev2 M3, spec line 532).
+    (rev2 M3, spec-016 #"Pinned by `test_djangolistfield_at_root_position_is_optimized`").
 
-    Query count derivation (rev6 M6, spec line 63 — exact ``assertNumQueries(N)``):
+    Query count derivation (rev6 M6, spec-016 #"pin the assertion to exact query count" — exact ``assertNumQueries(N)``):
       * 1 SELECT for the ``Branch`` root queryset (the ``DjangoListField``
         default resolver returns ``Branch._default_manager.all()``; the
         root-gated ``DjangoOptimizerExtension`` plans

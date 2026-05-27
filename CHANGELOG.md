@@ -17,13 +17,28 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 See [`KANBAN.md`](KANBAN.md) for the per-card sequencing and the version scope of each patch.
 
 ## [Unreleased]
+### Added
+- `strawberry_config` — factory function (`django_strawberry_framework/scalars.py`) returning a `strawberry.schema.config.StrawberryConfig` pre-populated with the package's `scalar_map`. Consumers compose package-defined scalars into their schema via `strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])`. Signature is `strawberry_config(*, extra_scalar_map=None, **config_kwargs)`: keyword-only `extra_scalar_map=` merges consumer-defined scalars (collisions with package defaults raise `ValueError`); every other kwarg is forwarded verbatim to upstream `StrawberryConfig(...)`, so consumers tune `auto_camel_case`, `relay_max_results`, etc. in the same call. Passing `scalar_map=` directly raises `ValueError`. New public export from `django_strawberry_framework`; `__all__` widened. See [`strawberry_config`](docs/GLOSSARY.md#strawberry_config).
+
 ### Changed
 - `manage.py export_schema --path <file>` now emits a `Wrote schema to <file>` success message on `self.stdout` after a successful write (via `self.style.SUCCESS`), matching Django's convention for management commands that produce a side effect. Previously the command wrote the file and exited silently, giving the user no in-terminal signal that the write succeeded.
 - `manage.py export_schema` positional `schema` argument is now a single scalar value rather than a one-element list. Internally the `nargs=1` declaration on `parser.add_argument("schema", ...)` was dropped and the `options["schema"][0]` indexing was replaced with a direct `options["schema"]` read. No consumer-visible behavior change at the shell — the command is still invoked as `manage.py export_schema config.schema [--path schema.graphql]` — and Django's `call_command(...)` accepts the positional as a separate argument either way. Removes the magic-number-indexing pattern post-ship.
 - `manage.py export_schema --path` now requires a value when the flag is given. Previously the `nargs="?"` declaration on `parser.add_argument("--path", ...)` silently accepted a bare `--path` (with no following value) and set `options["path"]` to `None`, indistinguishable from omitting the flag entirely. Dropping `nargs="?"` makes argparse raise `CommandError` at parse time when the user gives `--path` without a value, catching the obvious typo. Omitting `--path` entirely still routes to stdout as before; passing `--path schema.graphql` still writes to the named file.
+- **Breaking change**: `BigInt` registration moved from `strawberry.scalar(NewType("BigInt", int), name="BigInt", ...)` to the `StrawberryConfig.scalar_map` path. Any schema that resolves to `BigInt` — whether through a direct `BigInt` annotation (`category: BigInt`, `@strawberry.field def x(self) -> BigInt: ...`) OR through a [`DjangoType`](docs/GLOSSARY.md#djangotype) field backed by `BigIntegerField` / `PositiveBigIntegerField` (resolved by the [`Specialized scalar conversions`](docs/GLOSSARY.md#specialized-scalar-conversions) converter table) — must add `config=strawberry_config()` to its `strawberry.Schema(...)` call; Strawberry schema construction will fail with `Unexpected type ...BigInt` without it. The migration applies even to consumers who never import or annotate `BigInt` directly, because the converter table resolves the field type to `BigInt` for them. Matches the `PositiveBigIntegerField → BigInt` precedent in `0.0.6`. Single-line migration:
+
+  ```diff
+  - schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+  + from django_strawberry_framework import strawberry_config
+  + schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])
+  ```
+
+  The wire format, parser, serializer, and direct-annotation usage of `BigInt` are unchanged.
 
 ### Fixed
 - `manage.py export_schema --path <file>` now wraps file-write `OSError` (e.g. missing parent directory, permission denied, target is a directory) in `CommandError`, matching the existing wrapping for `ImportError` / `AttributeError` from `import_module_symbol`. Previously the user got a raw `FileNotFoundError` / `PermissionError` traceback for what is a user-input error, while schema-resolution failures already exited cleanly — the wrap closes the consistency gap inside `handle()`.
+
+### Removed
+- Internal `warnings.catch_warnings()` suppression block in `django_strawberry_framework/scalars.py` that silenced Strawberry's `Passing a class to strawberry.scalar() is deprecated` `DeprecationWarning`. No longer needed — the migrated registration path uses Strawberry's no-warning `strawberry.scalar(name=..., serialize=..., parse_value=...)` overload.
 
 ## [0.0.7] - 2026-05-23
 ### Added
@@ -73,9 +88,6 @@ See [`KANBAN.md`](KANBAN.md) for the per-card sequencing and the version scope o
 - optimizer plan cache key includes the resolver's origin Strawberry type alongside the model. Primary-return and secondary-return resolvers on the same model produce distinct cache entries.
 - Annotation-only and assigned scalar field overrides bypass `convert_scalar` validations and side effects for the overridden field — unsupported-field-type rejection, grouped-choices rejection, `ArrayField` shape rejection, `null=True` widening, and choice-enum registration are skipped. The consumer's annotation is authoritative. `Meta.exclude` and annotation override are now parallel consumer recourses for unsupported scalar fields.
 - `id = <StrawberryField>` assignment on a `Meta.interfaces = (relay.Node,)`-shaped `DjangoType` now raises `ConfigurationError` at `__init_subclass__` time. Previously consumers could write `@strawberry.field def id(self) -> relay.GlobalID: ...` (or `id = strawberry.field(description="…")`) and the resulting schema would build because the assigned-field type matched `Node.id: ID!`; this card uniformly rejects assigned `id` overrides on Relay-Node-shaped types for consistency with the annotation-side guard. The supported alternatives are `@classmethod resolve_id` (custom id resolver), `id: relay.NodeID[<pk_type>]` (custom id annotation), and a **resolver-backed sibling field** for the field-level GraphQL metadata use case (declare a separate field with a resolver — e.g., `@strawberry.field(description="…") def display_id(self) -> strawberry.ID: return str(self.pk)` — carrying the metadata AND a value source; the Relay-supplied `id` stays undecorated). Field-level metadata on the Relay-supplied `id` field is not configurable in `0.0.6`; the resolver-backed sibling-field is the documented alternative. **Note**: a metadata-only sibling like `display_id: ID = strawberry.field(description="…")` without a resolver would build but fail at query time because Strawberry's default resolver looks up `display_id` as an attribute on the returned Django model instance and does not find it.
-
-### Notes
-- The internal `BigInt` scalar definition uses `strawberry.scalar(NewType, ...)`, which Strawberry deprecates in favor of `StrawberryConfig.scalar_map`. The deprecation warning is suppressed at the definition site so the package import remains clean. Migration to a `scalar_map`-based design is tracked as a follow-up and will be a real public-API change for consumers using `BigInt` directly.
 
 ## [0.0.5] - 2026-05-15
 ### Added

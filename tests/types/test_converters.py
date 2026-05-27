@@ -24,7 +24,7 @@ import pytest
 import strawberry
 from django.db import models
 
-from django_strawberry_framework import BigInt, DjangoType, finalize_django_types
+from django_strawberry_framework import BigInt, DjangoType, finalize_django_types, strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
@@ -543,7 +543,7 @@ def test_big_integer_field_maps_to_bigint_in_schema():
         def owner(self) -> BigIntOwnerType:
             return BigIntOwner(big=2**62)
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     type_payload = _introspect_field_type(schema, "BigIntOwnerType", "big")
     # NON_NULL wrapper around BigInt scalar.
     assert type_payload["kind"] == "NON_NULL"
@@ -575,7 +575,7 @@ def test_big_integer_field_nullable_in_schema():
         def owner(self) -> BigIntNullableOwnerType:
             return BigIntNullableOwner(big=None)
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     type_payload = _introspect_field_type(schema, "BigIntNullableOwnerType", "big")
     # Nullable: top-level kind is SCALAR (no NON_NULL wrapper).
     assert type_payload == {"kind": "SCALAR", "name": "BigInt", "ofType": None}
@@ -604,7 +604,7 @@ def test_positive_big_integer_field_maps_to_bigint_in_schema():
         def owner(self) -> PosBigIntOwnerType:
             return PosBigIntOwner(big_pos=2**62)
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     type_payload = _introspect_field_type(schema, "PosBigIntOwnerType", "bigPos")
     assert type_payload["kind"] == "NON_NULL"
     terminal = _walk_introspected_type(type_payload)
@@ -667,7 +667,7 @@ def test_bigint_serializes_query_result_as_string_via_schema_execution():
         def owner(self) -> BigIntQueryOwnerType:
             return BigIntQueryOwner(big=2**62)
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     result = schema.execute_sync("{ owner { big } }")
     assert result.errors is None
     assert result.data == {"owner": {"big": "4611686018427387904"}}
@@ -682,7 +682,7 @@ def test_bigint_parses_string_argument_via_schema_execution():
         def echo(self, val: BigInt) -> BigInt:
             return val
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     result = schema.execute_sync(
         'query { echo(val: "4611686018427387904") }',
     )
@@ -699,7 +699,7 @@ def test_bigint_parses_int_argument_via_schema_execution():
         def echo(self, val: BigInt) -> BigInt:
             return val
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     result = schema.execute_sync("query { echo(val: 42) }")
     assert result.errors is None
     assert result.data == {"echo": "42"}
@@ -716,7 +716,7 @@ def test_bigint_in_input_position_with_null_via_schema_execution():
         def echo(self, val: BigInt | None = None) -> str:
             return "null" if val is None else str(val)
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     result = schema.execute_sync("query { echo(val: null) }")
     assert result.errors is None
     assert result.data == {"echo": "null"}
@@ -731,7 +731,7 @@ def test_bigint_rejects_bool_argument_via_schema_execution():
         def echo(self, val: BigInt) -> BigInt:
             return val
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     result = schema.execute_sync("query { echo(val: true) }")
     assert result.errors is not None
     assert len(result.errors) > 0
@@ -746,7 +746,7 @@ def test_bigint_rejects_float_argument_via_schema_execution():
         def echo(self, val: BigInt) -> BigInt:
             return val
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     result = schema.execute_sync("query { echo(val: 1.9) }")
     assert result.errors is not None
     assert len(result.errors) > 0
@@ -763,7 +763,7 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
         def bool_as_bigint(self) -> BigInt:
             return True  # type: ignore[return-value]
 
-    schema = strawberry.Schema(query=Query)
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
     result = schema.execute_sync("{ boolAsBigint }")
     assert result.errors is not None
     assert len(result.errors) > 0

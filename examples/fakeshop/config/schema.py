@@ -13,7 +13,7 @@ import strawberry
 from apps.library.schema import Query as LibraryQuery
 from apps.products.schema import Query as ProductsQuery
 
-from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types
+from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types, strawberry_config
 
 
 @strawberry.type
@@ -25,5 +25,6 @@ finalize_django_types()
 
 schema = strawberry.Schema(
     query=Query,
+    config=strawberry_config(),
     extensions=[DjangoOptimizerExtension()],
 )

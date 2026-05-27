@@ -91,6 +91,7 @@ from django_strawberry_framework import (
     DjangoConnectionField,
     apply_cascade_permissions,
     finalize_django_types,
+    strawberry_config,
 )
 
 from . import aggregates, filters, models, orders
@@ -151,7 +152,7 @@ class Query:
 
 
 finalize_django_types()
-schema = strawberry.Schema(query=Query)
+schema = strawberry.Schema(query=Query, config=strawberry_config())
 ```
 
 ### `filters.py` — declarative filters (`filterset_class`)

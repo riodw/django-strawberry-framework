@@ -15,3 +15,4 @@ FilterSet,filterset,Out of scope — Layer-3 sidecar subsystem.
 OrderSet,orderset,Out of scope — Layer-3 sidecar subsystem.
 AggregateSet,aggregateset,Out of scope — Layer-3 sidecar subsystem.
 FieldSet,fieldset,Out of scope — Layer-3 sidecar subsystem.
+strawberry_config,strawberry_config,The factory function this card introduces; entry created in Slice 4.

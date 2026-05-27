@@ -47,7 +47,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; four have shipped (`DONE-016-0.0.7` `DjangoListField`, `DONE-017-0.0.7` `apps.py` and Django app config, `DONE-018-0.0.7` schema-export management command, and `DONE-019-0.0.7` multi-database cooperation contract). A sixth card landed mid-cycle outside the original bundle — `DONE-046-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper) — shipped the package's two-half defense-in-depth for an upstream Django bug. The remaining card — `WIP-ALPHA-020-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`) — is still queued. Full card detail lives under the `## In progress` board column below; `DONE-016-0.0.7`, `DONE-017-0.0.7`, `DONE-018-0.0.7`, `DONE-019-0.0.7`, and `DONE-046-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
+- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; all five have shipped (`DONE-016-0.0.7` `DjangoListField`, `DONE-017-0.0.7` `apps.py` and Django app config, `DONE-018-0.0.7` schema-export management command, `DONE-019-0.0.7` multi-database cooperation contract, and `DONE-047-0.0.7` warning-free scalar registration via `StrawberryConfig.scalar_map`). A sixth card landed mid-cycle outside the original bundle — `DONE-046-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper) — shipped the package's two-half defense-in-depth for an upstream Django bug. Full card detail lives under the `## Done` board column below; `DONE-016-0.0.7`, `DONE-017-0.0.7`, `DONE-018-0.0.7`, `DONE-019-0.0.7`, `DONE-046-0.0.7`, and `DONE-047-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`](BACKLOG.md): items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -73,98 +73,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## In progress
 
-### WIP-ALPHA-020-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
-
-Priority: medium
-
-Severity: low (the suppressed warning in `0.0.6` is a workaround, not a runtime bug)
-
-Status: ready for design
-
-Predecessors: `DONE-013-0.0.6` (introduced the suppression debt); `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` revision 7 (Decision 1, Decision 6, Risks).
-
-Active spec: [`docs/spec-020-scalar_map_helper-0_0_7.md`](docs/spec-020-scalar_map_helper-0_0_7.md).
-
-Why it matters:
-
-- `0.0.6` ships `BigInt` defined via `strawberry.scalar(NewType("BigInt", int), ...)`, which Strawberry deprecates in favor of `StrawberryConfig.scalar_map`. The deprecation warning is suppressed at the definition site in `django_strawberry_framework/scalars.py` so it doesn't escape to consumers — but the suppression is a workaround, not a fix.
-- The right design defines `BigInt` (and any future package-defined scalars) on Strawberry's recommended path and has consumers merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`. This card pays down the debt, removes the suppression filter, and establishes the public-API pattern for any future package-defined scalar (planned: `Upload` for file / image fields in `TODO-ALPHA-027`; possibly more).
-- Removes the `0.0.6` `Notes` line from `CHANGELOG.md` about suppressed deprecation; closes the architectural debt explicitly.
-
-Recommended architectural direction (pinned here so the spec doesn't re-litigate the helper shape):
-
-- **Helper API shape: factory function.** Expose `strawberry_config(extra_scalar_map=None) -> StrawberryConfig` returning a composed `StrawberryConfig` pre-populated with the package's scalar map. Note: `extra_extensions=` deliberately omitted — Strawberry extensions go to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig`. If the follow-up reveals a need to compose extensions too, that's a separate helper (returning a schema-construction bundle, not a `StrawberryConfig`). Consumer usage:
-
-  ```python
-  from django_strawberry_framework import strawberry_config, DjangoOptimizerExtension
-  import strawberry
-
-  schema = strawberry.Schema(
-      query=Query,
-      config=strawberry_config(),
-      extensions=[DjangoOptimizerExtension()],
-  )
-  ```
-
-  Rationale: explicit (consumer sees what they're getting); composable (factory accepts `extra_scalar_map=...` for consumer additions, merges instead of overwriting); forward-extensible (new package scalars / future config needs slot into the factory without API breaks); doesn't shadow Strawberry's `Schema` symbol.
-
-  Alternatives considered (and recommended against): a static `SCALAR_MAP` constant (pushes `StrawberryConfig(...)` boilerplate onto every consumer); a `dst.Schema(...)` wrapper (shadows upstream symbol; hides composition).
-
-- **`BigInt` symbol stays usable as a direct annotation.** `category: BigInt` in `DjangoType` and `@strawberry.field` annotations works as today. Internally, `BigInt` is a bare `NewType("BigInt", int)`; the `strawberry_config(...)` factory registers `BigInt → ScalarDefinition(...)` in its `scalar_map`. The wire format, parser, and serializer logic are preserved verbatim from `0.0.6`.
-
-- **Single-line consumer migration.** Consumers upgrading from `0.0.6` add `config=strawberry_config()` to their existing `strawberry.Schema(...)` call. No annotation changes. No re-import.
-
-- **Recommended posture: hard break in alpha.** Suggested default — no deprecation window — consumers using `BigInt` directly in `0.0.6` who don't add `config=strawberry_config()` will see Strawberry schema-construction fail with `Unexpected type '...BigInt'`. Matches the `PositiveBigIntegerField` precedent in `0.0.6`'s Changed entry. Long deprecation windows are appropriate at `1.0.0`, not during alpha — but the follow-up spec author can revisit after surveying real `0.0.6` consumer adoption of `BigInt`.
-
-- **Composition story.** Factory accepts `extra_scalar_map` to merge with consumer-defined scalars without losing the package's defaults. Conflict resolution: explicit error if a key collides between package defaults and consumer extras, instructing the consumer to override the package default via a separate API (TBD in the spec).
-
-- **Forward compatibility for future package scalars.** When `Upload` (TODO-ALPHA-027) and any future package scalars ship, they slot into the factory's internal scalar map without API changes. Consumers' existing `strawberry_config()` calls continue to work; new scalars become usable immediately.
-
-Definition of done:
-
-- New spec: `docs/spec-scalar_map_helper.md` settling the helper API shape, composition story (including conflict resolution between package defaults and consumer extras), and the migration guide.
-- `django_strawberry_framework/scalars.py` — `BigInt` redefined as a bare `NewType` (or per the spec's final decision); strict parser and serializer preserved; suppression filter removed.
-- New `django_strawberry_framework/config.py` (or wherever the helper lives — TBD by spec; follows `docs/TREE.md` mirror rule) exposing the factory.
-- `django_strawberry_framework/__init__.py` updated: re-export the helper (`strawberry_config`); `BigInt` stays in `__all__` (consistent with the recommended "BigInt as a direct annotation" usage pattern above).
-- `tests/base/test_init.py` — pinned `__all__` assertion updated.
-- New test file mirroring the helper's source location (e.g., `tests/test_config.py`).
-- `tests/test_scalars.py` updated: the `test_package_import_does_not_emit_strawberry_deprecation_warning` test continues to pass (no suppression needed because the deprecation is no longer triggered at all).
-- `docs/README.md` quickstart updated to show the new schema-construction pattern; replaces every `strawberry.Schema(query=Query, ...)` example with `strawberry.Schema(query=Query, config=strawberry_config(), ...)`.
-- `GOAL.md` schema-setup section updated.
-- `examples/fakeshop/config/schema.py` updated to use the helper.
-- `examples/fakeshop/apps/library/schema.py` (and any other example schemas) audited for direct `BigInt` usage — no change should be needed if they only use it indirectly via Django field-to-scalar mapping.
-- `docs/GLOSSARY.md` updated: `BigInt scalar` entry covers the new construction pattern; new entry for the helper symbol; `Public exports` updated; `Quick start` and `Schema setup` walk-throughs (if present) updated.
-- `CHANGELOG.md`:
-  - `Changed`: "Public-API migration — `BigInt` now requires `config=strawberry_config()` in `strawberry.Schema(...)`. Single-line change for consumers using `BigInt` directly."
-  - `Removed`: "Internal `warnings.catch_warnings()` suppression in `scalars.py` (no longer needed)."
-  - Remove the `0.0.6` `Notes` line about suppressed deprecation.
-- Migration note in `CHANGELOG.md` and the spec: explicit before/after code blocks.
-- Archive the spec to `docs/SPECS/spec-scalar_map_helper.md`.
-
-Files likely touched (subject to the follow-up spec settling final locations):
-
-- `docs/spec-scalar_map_helper.md` (new)
-- `django_strawberry_framework/scalars.py`
-- `django_strawberry_framework/config.py` (new — or wherever the spec decides)
-- `django_strawberry_framework/__init__.py`
-- `tests/base/test_init.py`
-- `tests/test_config.py` (new)
-- `tests/test_scalars.py`
-- `docs/README.md`
-- `docs/GLOSSARY.md`
-- `docs/TREE.md` (if the new module location requires it)
-- `GOAL.md`
-- `examples/fakeshop/config/schema.py`
-- `KANBAN.md` (move to Done; rewrite body)
-- `CHANGELOG.md`
-
-Open design questions for the spec (not blocking; spec author decides):
-
-- Helper module name: `config.py`, `schema.py`, or kept as a top-level export in `__init__.py`?
-- Conflict resolution when consumer's `extra_scalar_map` collides with package defaults: hard error, override with warning, or silent override?
-- Deprecation-window details: should the recommended hard-break (matching `PositiveBigIntegerField` in `0.0.6`) be revisited after surveying real `0.0.6` consumer adoption? If softened to a one-release `DeprecationWarning` from the package, what does the warning shape look like?
-- Helper module location: top-level export in `__init__.py`, or `django_strawberry_framework/config.py` (new module)?
-- Helper signature beyond `extra_scalar_map=`: nothing more, or a small set of curated optional parameters? (Note: `extra_extensions=` does not fit here — extensions are passed to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig`. If extension composition becomes a need, it requires a separate helper returning a schema-construction bundle, not a `StrawberryConfig`.)
+_No cards in progress. The `0.0.7` queue is empty; the `0.1.0` cohort begins with `TODO-ALPHA-021-0.0.8`._
 
 ## To Do - Alpha (0.1.0)
 
@@ -1762,6 +1671,12 @@ Shipped a two-half defense-in-depth for [Django Trac #37064](https://code.django
 [`docs/GLOSSARY.md#django-trac-37064-hardening`](docs/GLOSSARY.md#django-trac-37064-hardening) and [`docs/GLOSSARY.md#safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) flipped to `shipped (0.0.7)`. Tests cover the patch's idempotency, log-once sentinel, callable guard, defensive imports, the `installed=None` regression branch, and the consumer-side wrap helper's `_DatabaseFailure`-already-present refusal.
 
 NNN note: `046` was assigned ahead of the prior max (`TODO-STABLE-045-1.0.0`) to avoid a multi-file rename of `WIP-ALPHA-020-0.0.7` across 5+ specs. Per the KANBAN card-ID convention, NNN is not stable and grouping is by version, not NNN.
+
+### DONE-047-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
+
+Pinned the package-defined scalar registration path: [`BigInt`](docs/GLOSSARY.md#bigint-scalar) is redefined as a bare `NewType("BigInt", int)` and registered via [`StrawberryConfig.scalar_map`](https://strawberry.rocks) through a new public [`strawberry_config(*, extra_scalar_map=None, **config_kwargs) -> StrawberryConfig`](docs/GLOSSARY.md#strawberry_config) factory exported from `django_strawberry_framework`. The factory is keyword-only on `extra_scalar_map=` and forwards every other kwarg to upstream `StrawberryConfig(...)`, so consumers compose package scalars and custom `StrawberryConfig` options (`auto_camel_case=False`, `relay_max_results=200`, etc.) in one call; passing `scalar_map=` directly raises `ValueError`. Consumers add `config=strawberry_config()` to their `strawberry.Schema(...)` call once; direct `BigInt` annotations work unchanged. The `warnings.catch_warnings()` suppression block in `django_strawberry_framework/scalars.py` is removed because the no-warning `strawberry.scalar(name=..., serialize=..., parse_value=...)` overload at `.venv/lib/python3.10/site-packages/strawberry/types/scalar.py` returns a `ScalarDefinition` without triggering the `DeprecationWarning`. Tests in `tests/test_scalars.py` cover the factory contract (thirteen tests — eight scalar-map + five `**config_kwargs` passthrough) and the round-trip wire format through a `strawberry.Schema(config=strawberry_config())` (two integration tests); `tests/base/test_init.py`'s `__all__` assertion adds `strawberry_config`; `tests/types/test_converters.py`'s BigInt-section schemas migrate to `config=strawberry_config()`. `examples/fakeshop/config/schema.py` migrates to the new pattern; `docs/README.md`, `docs/GLOSSARY.md`, `GOAL.md`, and `TODAY.md` schema-construction examples migrate too. Breaking change in alpha (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` Decision 6 and the `PositiveBigIntegerField` precedent in `0.0.6`): any schema that resolves to `BigInt` — direct annotations OR converter-backed `BigIntegerField` / `PositiveBigIntegerField` `DjangoType` fields — that doesn't add `config=strawberry_config()` sees Strawberry schema-construction fail with `Unexpected type ...BigInt`. Spec: `docs/spec-020-scalar_map_helper-0_0_7.md`. The version bump from `0.0.7 → 0.0.8` is NOT in this card per Decision 8.
+
+Build plan: [`docs/builder/build-020-scalar_map_helper-0_0_7.md`](docs/builder/build-020-scalar_map_helper-0_0_7.md).
 
 ## Release readiness checklist
 

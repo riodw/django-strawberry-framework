@@ -17,7 +17,7 @@ uv add django-strawberry-framework
 
 ```python
 import strawberry
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types, strawberry_config
 from myapp.models import Category, Item
 
 
@@ -44,6 +44,7 @@ finalize_django_types()
 
 schema = strawberry.Schema(
     query=Query,
+    config=strawberry_config(),
     extensions=[DjangoOptimizerExtension()],
 )
 ```
@@ -129,18 +130,18 @@ A quick summary:
 Recommended:
 
 ```python
-from django_strawberry_framework import finalize_django_types
+from django_strawberry_framework import finalize_django_types, strawberry_config
 
 from myapp import types as _types  # noqa: F401
 
 finalize_django_types()
-schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])
 ```
 
 Wrong order:
 
 ```python
-schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])
 finalize_django_types()
 ```
 

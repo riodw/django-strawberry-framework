@@ -20,7 +20,7 @@ from strawberry import auto  # noqa: E402  # logger must exist before subpackage
 from .list_field import DjangoListField  # noqa: E402
 from .optimizer import DjangoOptimizerExtension  # noqa: E402
 from .optimizer.hints import OptimizerHint  # noqa: E402
-from .scalars import BigInt  # noqa: E402
+from .scalars import BigInt, strawberry_config  # noqa: E402
 from .types import DjangoType, finalize_django_types  # noqa: E402
 
 __version__ = "0.0.7"
@@ -34,4 +34,5 @@ __all__ = (
     "__version__",
     "auto",
     "finalize_django_types",
+    "strawberry_config",
 )

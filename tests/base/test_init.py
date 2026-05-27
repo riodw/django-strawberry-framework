@@ -41,4 +41,5 @@ def test_public_api_surface_is_pinned():
         "__version__",
         "auto",
         "finalize_django_types",
+        "strawberry_config",
     )

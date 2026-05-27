@@ -11,10 +11,12 @@ input and output sides symmetric.
 """
 
 import re
-import warnings
+from collections.abc import Mapping
 from typing import Any, NewType
 
 import strawberry
+from strawberry.schema.config import StrawberryConfig
+from strawberry.types.scalar import ScalarDefinition
 
 # Plain ASCII decimal, optional ASCII minus for non-zero values, no leading
 # zeroes except "0" itself. Rejects underscores (PEP 515), plus signs, Unicode
@@ -77,27 +79,52 @@ def _serialize_bigint(value: Any) -> str:
     raise TypeError(f"BigInt cannot serialize {type(value).__name__}")
 
 
-# Strawberry emits `DeprecationWarning: Passing a class to strawberry.scalar() is
-# deprecated. Use StrawberryConfig.scalar_map instead...` whenever a class or
-# NewType-backed type is passed directly to strawberry.scalar(...). The
-# warning-free migration is roadmapped as WIP-ALPHA-020-0.0.7 (Warning-free
-# scalar registration via StrawberryConfig.scalar_map). That card will introduce
-# a package-side `strawberry_config(...)` factory and remove this suppression
-# block entirely. Until WIP-ALPHA-020-0.0.7 lands, the deprecation is
-# suppressed at the definition site so consumers importing
-# django_strawberry_framework see no warning. A
-# regression test (test_package_import_does_not_emit_strawberry_deprecation_warning)
-# pins the no-leak contract; if the suppression is accidentally removed or
-# Strawberry tightens the deprecation, the test catches it.
-with warnings.catch_warnings():
-    warnings.filterwarnings(
-        "ignore",
-        message="Passing a class to strawberry.scalar",
-        category=DeprecationWarning,
-    )
-    BigInt = strawberry.scalar(
-        NewType("BigInt", int),
-        name="BigInt",
-        serialize=_serialize_bigint,
-        parse_value=_parse_bigint,
-    )
+BigInt = NewType("BigInt", int)
+
+_BIGINT_SCALAR_DEFINITION: ScalarDefinition = strawberry.scalar(
+    name="BigInt",
+    serialize=_serialize_bigint,
+    parse_value=_parse_bigint,
+)
+
+_PACKAGE_SCALAR_MAP: dict[object, ScalarDefinition] = {
+    BigInt: _BIGINT_SCALAR_DEFINITION,
+}
+
+
+def strawberry_config(
+    *,
+    extra_scalar_map: Mapping[object, ScalarDefinition] | None = None,
+    **config_kwargs: Any,
+) -> StrawberryConfig:
+    """Build a fresh ``StrawberryConfig`` registering django-strawberry-framework scalars.
+
+    The returned config carries ``_PACKAGE_SCALAR_MAP`` merged with the
+    caller's ``extra_scalar_map``; pass it as ``strawberry.Schema(query=...,
+    config=strawberry_config(), extensions=[...])``.
+
+    The keyword-only ``extra_scalar_map`` lets consumers register their own
+    scalars alongside the package defaults; collisions with package-defined
+    keys raise ``ValueError`` (per spec-020 Decision 4). Every other keyword
+    argument in ``**config_kwargs`` is forwarded verbatim to
+    ``StrawberryConfig(...)`` (e.g. ``auto_camel_case``, ``relay_max_results``).
+    Passing ``scalar_map=`` directly is rejected with ``ValueError`` because
+    the helper owns that field; route consumer scalars through
+    ``extra_scalar_map=`` instead.
+    """
+    if "scalar_map" in config_kwargs:
+        raise ValueError(
+            "strawberry_config() owns scalar_map; pass consumer scalars with extra_scalar_map=...",
+        )
+    extra = dict(extra_scalar_map) if extra_scalar_map else {}
+    collisions = _PACKAGE_SCALAR_MAP.keys() & extra.keys()
+    if collisions:
+        raise ValueError(
+            "strawberry_config(extra_scalar_map=...) cannot redeclare package-defined scalars: "
+            f"{', '.join(sorted(getattr(k, '__name__', repr(k)) for k in collisions))}. "
+            "Define a Strawberry custom scalar of a different NewType / class "
+            "to register under a separate key.",
+        )
+    merged: dict[object, ScalarDefinition] = dict(_PACKAGE_SCALAR_MAP)
+    merged.update(extra)
+    return StrawberryConfig(scalar_map=merged, **config_kwargs)

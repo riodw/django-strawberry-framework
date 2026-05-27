@@ -5,14 +5,23 @@ top-level import surface, and the import-time deprecation-suppression
 contract. Wire-level / schema-execution behavior lives in
 ``tests/types/test_converters.py`` per the [`docs/TREE.md`](../docs/TREE.md)
 mirror rule (scalar internals here; converter dispatch there).
+Additionally, two ``strawberry.Schema(query=..., config=strawberry_config())``
+integration tests pin the post-migration ``BigInt`` round trip end-to-end
+(``test_bigint_serializes_int_via_strawberry_config_schema``,
+``test_bigint_parses_decimal_string_via_strawberry_config_schema``).
 """
 
 import subprocess
 import sys
 from decimal import Decimal
+from typing import NewType
 
 import pytest
+import strawberry
+from strawberry.schema.config import StrawberryConfig
+from strawberry.types.scalar import ScalarDefinition
 
+from django_strawberry_framework import BigInt, strawberry_config
 from django_strawberry_framework.scalars import _parse_bigint, _serialize_bigint
 
 # ---------------------------------------------------------------------------
@@ -250,3 +259,172 @@ def test_package_import_does_not_emit_strawberry_deprecation_warning():
     assert result.returncode == 0, (
         f"Importing the package under -W error::DeprecationWarning failed:\nstderr: {result.stderr}"
     )
+
+
+# ---------------------------------------------------------------------------
+# strawberry_config() factory — scalar-map tests
+# ---------------------------------------------------------------------------
+
+
+def test_strawberry_config_returns_strawberry_config_instance():
+    """The no-arg call returns a ``StrawberryConfig`` instance (Decision 2)."""
+    assert isinstance(strawberry_config(), StrawberryConfig)
+
+
+def test_strawberry_config_default_scalar_map_includes_bigint():
+    """The default ``scalar_map`` carries the package-defined ``BigInt`` ScalarDefinition (Decision 3)."""
+    cfg = strawberry_config()
+    assert BigInt in cfg.scalar_map
+    assert isinstance(cfg.scalar_map[BigInt], ScalarDefinition)
+    assert cfg.scalar_map[BigInt].name == "BigInt"
+
+
+def test_strawberry_config_accepts_none_extra_scalar_map():
+    """Explicit ``extra_scalar_map=None`` matches the no-arg default."""
+    cfg = strawberry_config(extra_scalar_map=None)
+    assert len(cfg.scalar_map) == 1
+    assert BigInt in cfg.scalar_map
+
+
+def test_strawberry_config_accepts_empty_extra_scalar_map():
+    """``extra_scalar_map={}`` matches ``extra_scalar_map=None`` (edge case)."""
+    cfg = strawberry_config(extra_scalar_map={})
+    assert len(cfg.scalar_map) == 1
+    assert BigInt in cfg.scalar_map
+
+
+def test_strawberry_config_merges_extra_scalar_map():
+    """Consumer-supplied ``extra_scalar_map`` entries merge over the package defaults."""
+    CustomScalar = NewType("CustomScalar", str)
+    custom_def = strawberry.scalar(name="CustomScalar", serialize=str, parse_value=str)
+    cfg = strawberry_config(extra_scalar_map={CustomScalar: custom_def})
+    assert len(cfg.scalar_map) == 2
+    assert BigInt in cfg.scalar_map
+    assert CustomScalar in cfg.scalar_map
+    assert cfg.scalar_map[CustomScalar] is custom_def
+
+
+def test_strawberry_config_extra_scalar_map_does_not_mutate_caller_dict():
+    """The factory copies ``extra_scalar_map`` rather than mutating the caller's dict (spec line 441)."""
+    CustomScalar = NewType("CustomScalar", str)
+    custom_def = strawberry.scalar(name="CustomScalar", serialize=str, parse_value=str)
+    caller_dict = {CustomScalar: custom_def}
+    before = dict(caller_dict)
+    strawberry_config(extra_scalar_map=caller_dict)
+    assert caller_dict == before
+
+
+def test_strawberry_config_collision_with_package_scalar_raises_value_error():
+    """Collision with a package-defined scalar key raises ``ValueError`` (Decision 4)."""
+    alt_def = strawberry.scalar(name="AltBigInt", serialize=str, parse_value=int)
+    with pytest.raises(ValueError) as excinfo:
+        strawberry_config(extra_scalar_map={BigInt: alt_def})
+    message = str(excinfo.value)
+    assert "BigInt" in message
+    assert "cannot redeclare" in message
+
+
+def test_strawberry_config_independent_call_returns_independent_instance():
+    """Each call returns a fresh ``StrawberryConfig`` with a fresh ``scalar_map`` dict (spec line 439)."""
+    CustomScalar = NewType("CustomScalar", str)
+    custom_def = strawberry.scalar(name="CustomScalar", serialize=str, parse_value=str)
+    c1 = strawberry_config()
+    c2 = strawberry_config()
+    assert c1 is not c2
+    assert c1.scalar_map is not c2.scalar_map
+    c1.scalar_map[CustomScalar] = custom_def
+    assert CustomScalar not in c2.scalar_map
+
+
+# ---------------------------------------------------------------------------
+# strawberry_config() factory — **config_kwargs passthrough tests
+# ---------------------------------------------------------------------------
+
+
+def test_strawberry_config_forwards_auto_camel_case_kwarg():
+    """``auto_camel_case`` is forwarded; assert on ``name_converter.auto_camel_case``
+    because ``auto_camel_case`` is a dataclass ``InitVar`` on ``StrawberryConfig``
+    (spec line 490 — verified against upstream ``StrawberryConfig.__post_init__``).
+    """
+    overridden = strawberry_config(auto_camel_case=False)
+    assert overridden.name_converter.auto_camel_case is False
+    default = strawberry_config()
+    assert default.name_converter.auto_camel_case is True
+
+
+def test_strawberry_config_forwards_relay_max_results_kwarg():
+    """``relay_max_results`` (an integer field, structurally distinct from a bool flag)
+    is forwarded verbatim to ``StrawberryConfig(...)``.
+    """
+    cfg = strawberry_config(relay_max_results=200)
+    assert cfg.relay_max_results == 200
+
+
+def test_strawberry_config_combines_extra_scalar_map_and_config_kwargs():
+    """Both composition paths cooperate on a single call."""
+    CustomScalar = NewType("CustomScalar", str)
+    custom_def = strawberry.scalar(name="CustomScalar", serialize=str, parse_value=str)
+    cfg = strawberry_config(
+        extra_scalar_map={CustomScalar: custom_def},
+        relay_max_results=200,
+    )
+    assert cfg.relay_max_results == 200
+    assert BigInt in cfg.scalar_map
+    assert CustomScalar in cfg.scalar_map
+
+
+def test_strawberry_config_rejects_scalar_map_kwarg():
+    """``scalar_map=`` is structurally rejected regardless of payload (Error shapes)."""
+    with pytest.raises(ValueError) as excinfo_empty:
+        strawberry_config(scalar_map={})
+    message_empty = str(excinfo_empty.value)
+    assert "scalar_map" in message_empty
+    assert "extra_scalar_map" in message_empty
+
+    with pytest.raises(ValueError):
+        strawberry_config(scalar_map=None)
+
+    alt_def = strawberry.scalar(name="AltBigInt", serialize=str, parse_value=int)
+    with pytest.raises(ValueError):
+        strawberry_config(scalar_map={BigInt: alt_def})
+
+
+def test_strawberry_config_unknown_kwarg_raises_typeerror_from_upstream():
+    """An unknown kwarg surfaces upstream's ``TypeError``; the helper does not swallow it."""
+    with pytest.raises(TypeError):
+        strawberry_config(this_kwarg_does_not_exist_in_strawberry=True)
+
+
+# ---------------------------------------------------------------------------
+# strawberry_config() factory — integration tests (schema round-trip)
+# ---------------------------------------------------------------------------
+
+
+def test_bigint_serializes_int_via_strawberry_config_schema():
+    """An ``int`` returned from a ``BigInt``-typed resolver round-trips as the decimal string."""
+
+    @strawberry.type
+    class Q:
+        @strawberry.field
+        def big(self) -> BigInt:
+            return 9_223_372_036_854_775_807  # int64_max
+
+    schema = strawberry.Schema(query=Q, config=strawberry_config())
+    result = schema.execute_sync("{ big }")
+    assert result.errors is None
+    assert result.data == {"big": "9223372036854775807"}
+
+
+def test_bigint_parses_decimal_string_via_strawberry_config_schema():
+    """A decimal-string argument typed ``BigInt`` is parsed and echoed back as the decimal string."""
+
+    @strawberry.type
+    class Q:
+        @strawberry.field
+        def echo(self, value: BigInt) -> BigInt:
+            return value
+
+    schema = strawberry.Schema(query=Q, config=strawberry_config())
+    result = schema.execute_sync('{ echo(value: "9223372036854775807") }')
+    assert result.errors is None
+    assert result.data == {"echo": "9223372036854775807"}

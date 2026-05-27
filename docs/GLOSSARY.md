@@ -29,6 +29,7 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
 - [`finalize_django_types`](#finalize_django_types) — synchronization point that resolves pending relations and applies `strawberry.type` decoration.
+- [`strawberry_config`](#strawberry_config) — factory returning a `StrawberryConfig` pre-populated with the package's `scalar_map`.
 - `auto` — re-export from Strawberry for `auto`-typed field annotations inside this package's import surface.
 - `__version__` — package version string.
 
@@ -36,7 +37,7 @@ Symbols available from the `django_strawberry_framework.test` subpackage (consum
 
 - [`safe_wrap_connection_method`](#safe_wrap_connection_method) — cooperative wrap helper for monkey-patching `connections[alias]` methods without clobbering Django's `_DatabaseFailure` wrapper (the wrap-time half of the [Django Trac #37064 hardening](#django-trac-37064-hardening) defense-in-depth).
 
-_Note:_ The import path is now clean — no Strawberry deprecation warning escapes (the deprecation is suppressed at the definition site in `scalars.py`).
+_Note:_ The import path is clean by construction — the registration path uses Strawberry's no-warning `strawberry.scalar(name=..., serialize=..., parse_value=...)` overload via the [`strawberry_config`](#strawberry_config) factory, so no `DeprecationWarning` is emitted.
 
 ## Index
 
@@ -109,6 +110,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Schema export management command](#schema-export-management-command) | shipped (`0.0.7`) |
 | [`SerializerMutation`](#serializermutation) | planned for `0.0.11` |
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
+| [strawberry_config](#strawberry_config) | shipped ([Unreleased]) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
 | [`TestClient`](#testclient) | planned for `0.0.12` |
 | [Django Trac #37064 hardening](#django-trac-37064-hardening) | shipped (`0.0.7`) |
@@ -173,6 +175,8 @@ Composes with filter / order / aggregate permission gates and with the post-writ
 **Status:** shipped (`0.0.6`).
 
 JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntegerField` and `PositiveBigIntegerField` (not `BigAutoField`). Technically arbitrary-precision: serialized via Python `str(int_value)`, which handles any `int`. Wire format is a decimal string to survive GraphQL's signed 32-bit `Int` boundary (executing a query returning an `int`-annotated value past `2**31 - 1` raises a `GraphQLError` with message containing `Int cannot represent non 32-bit signed integer value`). Strict parser accepts Python `int` (excluding `bool`) and strings matching `^(0|-?[1-9][0-9]*)$` — plain ASCII decimal, optional leading minus for non-zero, no leading zeroes (except `"0"` itself), no underscores, no plus sign, no Unicode digits. Strict serializer rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. Part of [Specialized scalar conversions](#specialized-scalar-conversions).
+
+Consumers register `BigInt` via the [`strawberry_config`](#strawberry_config) factory on their `strawberry.Schema(...)` call: `strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])`. Direct `BigInt` annotations (`category: BigInt`, `@strawberry.field def big_id(self) -> BigInt: ...`) continue to work unchanged at the schema-declaration site; the registration path changes, not the symbol. The migration applies to any schema that resolves to `BigInt` — including [`DjangoType`](#djangotype) schemas whose fields are backed by `BigIntegerField` or `PositiveBigIntegerField` (resolved to `BigInt` by the [`Specialized scalar conversions`](#specialized-scalar-conversions) converter table) even when the consumer never imports or annotates `BigInt` directly.
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [Specialized scalar conversions](#specialized-scalar-conversions).
 
@@ -968,6 +972,45 @@ Adds these mappings to [Scalar field conversion](#scalar-field-conversion):
 - PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered, only when `django.contrib.postgres.fields` imports successfully)
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [`BigInt` scalar](#bigint-scalar).
+
+## strawberry_config
+
+**Status:** shipped ([Unreleased]).
+
+Factory returning a [`StrawberryConfig`](https://strawberry.rocks) pre-populated with the package's `scalar_map` — the registration path consumers use to bind package-defined scalars (today: [`BigInt`](#bigint-scalar); next: [`Upload`](#upload-scalar) in `0.0.11`) into their `strawberry.Schema(...)` call.
+
+```python
+from django_strawberry_framework import strawberry_config
+
+schema = strawberry.Schema(
+    query=Query,
+    config=strawberry_config(),
+    extensions=[DjangoOptimizerExtension()],
+)
+```
+
+Consumers composing custom scalars on top pass them via `extra_scalar_map=`:
+
+```python
+MyULID = NewType("MyULID", str)
+schema = strawberry.Schema(
+    query=Query,
+    config=strawberry_config(extra_scalar_map={MyULID: my_ulid_definition}),
+)
+```
+
+Consumers tuning non-scalar `StrawberryConfig` fields (`auto_camel_case`, `relay_max_results`, `name_converter`, etc.) pass those keyword arguments directly — the helper forwards every kwarg other than `extra_scalar_map=` to upstream `StrawberryConfig(...)`:
+
+```python
+schema = strawberry.Schema(
+    query=Query,
+    config=strawberry_config(auto_camel_case=False, relay_max_results=200),
+)
+```
+
+The keyword-only `extra_scalar_map=` and the `**config_kwargs` passthrough compose: `strawberry_config(extra_scalar_map={MyULID: my_ulid_definition}, relay_max_results=200)` is supported. The single field the helper refuses to forward is `scalar_map=` (ownership goes through `extra_scalar_map=`); passing `scalar_map=` raises `ValueError`. Collision with a package-defined scalar in `extra_scalar_map` also raises `ValueError`; register the consumer scalar under a different `NewType` / class to keep both. Each call returns a fresh `StrawberryConfig` instance with a fresh `scalar_map` dict; mutations on the returned object do not leak across calls.
+
+**See also:** [`BigInt scalar`](#bigint-scalar) · [`Upload scalar`](#upload-scalar) · [`Specialized scalar conversions`](#specialized-scalar-conversions).
 
 ## Strictness mode
 

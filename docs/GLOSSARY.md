@@ -110,7 +110,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Schema export management command](#schema-export-management-command) | shipped (`0.0.7`) |
 | [`SerializerMutation`](#serializermutation) | planned for `0.0.11` |
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
-| [strawberry_config](#strawberry_config) | shipped ([Unreleased]) |
+| [strawberry_config](#strawberry_config) | shipped (`0.0.7`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
 | [`TestClient`](#testclient) | planned for `0.0.12` |
 | [Django Trac #37064 hardening](#django-trac-37064-hardening) | shipped (`0.0.7`) |
@@ -975,7 +975,7 @@ Adds these mappings to [Scalar field conversion](#scalar-field-conversion):
 
 ## strawberry_config
 
-**Status:** shipped ([Unreleased]).
+**Status:** shipped (`0.0.7`).
 
 Factory returning a [`StrawberryConfig`](https://strawberry.rocks) pre-populated with the package's `scalar_map` — the registration path consumers use to bind package-defined scalars (today: [`BigInt`](#bigint-scalar); next: [`Upload`](#upload-scalar) in `0.0.11`) into their `strawberry.Schema(...)` call.
 

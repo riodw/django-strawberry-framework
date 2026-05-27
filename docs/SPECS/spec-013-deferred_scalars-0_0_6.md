@@ -737,7 +737,7 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- Filter input shapes — [`FilterSet`][glossary-filterset], TODO-ALPHA-021-0.0.8.
+- Filter input shapes — [`FilterSet`][glossary-filterset], WIP-ALPHA-021-0.0.8.
 - Mutation input types for `BigInt` — [Mutations subsystem][glossary-djangomutation], TODO-ALPHA-028-0.0.11.
 - Multi-database routing — [Multi-database cooperation][glossary-multi-database-cooperation], WIP-ALPHA-019-0.0.7.
 - Multi-dimensional `ArrayField`.

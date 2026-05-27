@@ -47,7 +47,8 @@ For install, local development, testing, and the canonical documentation map, st
 
 ### In progress
 
-- `0.0.7` is the active patch. Five WIP cards were opened together so the small parity-driven slices land in one release; all five have shipped (`DONE-016-0.0.7` `DjangoListField`, `DONE-017-0.0.7` `apps.py` and Django app config, `DONE-018-0.0.7` schema-export management command, `DONE-019-0.0.7` multi-database cooperation contract, and `DONE-047-0.0.7` warning-free scalar registration via `StrawberryConfig.scalar_map`). Two further cards landed mid-cycle outside the original bundle — `DONE-046-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper) shipped the package's two-half defense-in-depth for an upstream Django bug, and `DONE-048-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example) moved every non-trivial converter row from package-internal-only coverage to live `/graphql/` HTTP coverage via a new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`. Full card detail lives under the `## Done` board column below; `DONE-016-0.0.7`, `DONE-017-0.0.7`, `DONE-018-0.0.7`, `DONE-019-0.0.7`, `DONE-046-0.0.7`, `DONE-047-0.0.7`, and `DONE-048-0.0.7` are in the `## Done` column. The last `0.0.7` card to ship owns the version bump from `0.0.6` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
+- `0.0.7` shipped 2026-05-27 with seven cards: `DONE-016-0.0.7` (`DjangoListField`), `DONE-017-0.0.7` (`apps.py` and Django app config), `DONE-018-0.0.7` (schema-export management command), `DONE-019-0.0.7` (multi-database cooperation contract), `DONE-046-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-047-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-048-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
+- `0.0.8` is the active patch. Three WIP cards opened together so the Layer-3 read-side parity (`⚛️&🍓`) and the consumer-DX cleanup pass land as one coherent cut: `WIP-ALPHA-021-0.0.8` (Filtering subsystem) is being actively worked; `WIP-ALPHA-022-0.0.8` (Ordering subsystem) and `WIP-ALPHA-023-0.0.8` (`DjangoType` consumer-DX cleanup pass) are queued under the same column so the patch-level scope stays visible at a glance and the cards stay grouped for the joint cut. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -73,13 +74,9 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## In progress
 
-_No cards in progress. The `0.0.7` queue is empty; the `0.1.0` cohort begins with `TODO-ALPHA-021-0.0.8`._
+Three WIP cards opened together so the `0.0.8` cohort lands as a coherent patch (`⚛️&🍓` parity for the Layer-3 read-side plus the consumer-DX cleanup pass). Currently **only `WIP-ALPHA-021-0.0.8 — Filtering subsystem` is being actively worked**; `WIP-ALPHA-022-0.0.8 — Ordering subsystem` and `WIP-ALPHA-023-0.0.8 — `DjangoType` consumer-DX cleanup pass` are queued under the same column so the patch-level scope is visible at a glance and the cards stay grouped for the joint cut. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
-
-### TODO-ALPHA-021-0.0.8 — Filtering subsystem
+### WIP-ALPHA-021-0.0.8 — Filtering subsystem
 
 Priority: high for package positioning (⚛️&🍓 parity-required)
 
@@ -193,11 +190,11 @@ Dependencies:
 - Field selection semantics may affect filter argument generation.
 - `utils/queryset.py` may become useful here.
 
-### TODO-ALPHA-022-0.0.8 — Ordering subsystem
+### WIP-ALPHA-022-0.0.8 — Ordering subsystem
 
 Priority: high after filters
 
-Parity: 🍓 required (strawberry-graphql-django ships `strawberry_django.order_type`; graphene-django has no native ordering primitive — it composes `django_filters.OrderingFilter` into its FilterSet and exposes an `order_by` argument on `DjangoFilterConnectionField`, so ⚛️ parity is met via `TODO-ALPHA-021-0.0.8`'s filter subsystem rather than a separate surface here).
+Parity: 🍓 required (strawberry-graphql-django ships `strawberry_django.order_type`; graphene-django has no native ordering primitive — it composes `django_filters.OrderingFilter` into its FilterSet and exposes an `order_by` argument on `DjangoFilterConnectionField`, so ⚛️ parity is met via `WIP-ALPHA-021-0.0.8`'s filter subsystem rather than a separate surface here).
 
 Status: planned
 
@@ -225,11 +222,11 @@ Verified in strawberry-graphql-django (`/Users/riordenweber/projects/strawberry-
 
 Verified in graphene-django (no native ordering primitive):
 
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField #"order_by"` — connection field accepts an `order_by` argument that composes through `django_filters.OrderingFilter` declared on the FilterSet. Graphene has no separate ordering primitive; ⚛️ parity is met by the filter subsystem (`TODO-ALPHA-021-0.0.8`) rather than this card.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField #"order_by"` — connection field accepts an `order_by` argument that composes through `django_filters.OrderingFilter` declared on the FilterSet. Graphene has no separate ordering primitive; ⚛️ parity is met by the filter subsystem (`WIP-ALPHA-021-0.0.8`) rather than this card.
 
 Lazy-resolution pipeline:
 
-Reuses the lazy-resolution architecture spec'd in detail under `TODO-ALPHA-021-0.0.8` (Filtering subsystem), but only **five of the six layers** carry over from the cookbook with substitutions — the cookbook's ordering surface is leaner than its filter surface:
+Reuses the lazy-resolution architecture spec'd in detail under `WIP-ALPHA-021-0.0.8` (Filtering subsystem), but only **five of the six layers** carry over from the cookbook with substitutions — the cookbook's ordering surface is leaner than its filter surface:
 
 - **Layers 1-2** (lazy class refs + module-fallback resolution): port from `mixins.py::LazyRelatedClassMixin` and `orders.py::BaseRelatedOrder`. Same shape as the filter side; `RelatedOrder` substituted for `RelatedFilter`.
 - **Layer 3** (metaclass discovery, deferred expansion): port from `orderset.py::OrderSetMetaclass`. Leaner than the filter side's `FilterSetMetaclass`; the discover-and-bind pattern is the same.
@@ -255,9 +252,9 @@ Definition of done:
 - Define interaction with filters and connection field.
 - Keep ordering declarations introspectable from the owning type/query surface.
 
-### TODO-ALPHA-023-0.0.8 — `DjangoType` consumer-DX cleanup pass
+### WIP-ALPHA-023-0.0.8 — `DjangoType` consumer-DX cleanup pass
 
-Priority: medium (lands after `TODO-ALPHA-021-0.0.8` and `TODO-ALPHA-022-0.0.8`; Slice 3 is the schedule risk and can be carved off to `0.0.9` if 0.0.8 pressure mounts)
+Priority: medium (lands after `WIP-ALPHA-021-0.0.8` and `WIP-ALPHA-022-0.0.8`; Slice 3 is the schedule risk and can be carved off to `0.0.9` if 0.0.8 pressure mounts)
 
 Parity: mixed per slice — Slice 1 defensive, Slice 2 differentiating, Slice 3 ⚛️&🍓 required.
 
@@ -291,6 +288,10 @@ Dependencies:
 
 - None blocking. Slice 1 should land before any new schema-construction surfaces ship in `TODO-ALPHA-024-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one.
 
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
+
 ### TODO-ALPHA-024-0.0.9 — `DjangoConnectionField`
 
 Priority: high once filters/orders are stable (FieldSet integration is deferred to `TODO-BETA-038-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands).
@@ -320,8 +321,8 @@ Definition of done:
 
 Dependencies:
 
-- `FilterSet` (`TODO-ALPHA-021-0.0.8`)
-- `OrderSet` (`TODO-ALPHA-022-0.0.8`)
+- `FilterSet` (`WIP-ALPHA-021-0.0.8`)
+- `OrderSet` (`WIP-ALPHA-022-0.0.8`)
 - Relay/interface decisions
 - `FieldSet` — **deferred to `TODO-BETA-038-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker.
 
@@ -785,7 +786,7 @@ Priority: high for django-graphene-filters parity
 
 Severity: **medium**
 
-Status: planned; gated on `TODO-ALPHA-021-0.0.8` (Filtering) and `TODO-ALPHA-024-0.0.9` (DjangoConnectionField)
+Status: planned; gated on `WIP-ALPHA-021-0.0.8` (Filtering) and `TODO-ALPHA-024-0.0.9` (DjangoConnectionField)
 
 Why it matters:
 
@@ -807,7 +808,7 @@ Definition of done:
 
 Dependencies:
 
-- `TODO-ALPHA-021-0.0.8` (Filtering subsystem) — the argument factory is shared.
+- `WIP-ALPHA-021-0.0.8` (Filtering subsystem) — the argument factory is shared.
 - `TODO-ALPHA-024-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields.
 
 Files likely touched:
@@ -838,7 +839,7 @@ Foundation-slice seam:
 
 Lazy-resolution pipeline:
 
-Reuses the six-layer lazy-resolution architecture spec'd in detail under `TODO-ALPHA-021-0.0.8` (Filtering subsystem). Same `LazyRelatedClassMixin`, metaclass-discovery + deferred-expansion pattern, cycle-safe `get_aggregates()` cache + recursion guard, BFS schema build, and `_dynamic_aggregateset_cache` memoization — with `RelatedAggregate` substituted for `RelatedFilter` and `AggregateSet` for `FilterSet`.
+Reuses the six-layer lazy-resolution architecture spec'd in detail under `WIP-ALPHA-021-0.0.8` (Filtering subsystem). Same `LazyRelatedClassMixin`, metaclass-discovery + deferred-expansion pattern, cycle-safe `get_aggregates()` cache + recursion guard, BFS schema build, and `_dynamic_aggregateset_cache` memoization — with `RelatedAggregate` substituted for `RelatedFilter` and `AggregateSet` for `FilterSet`.
 
 One key difference from Filtering / Ordering: aggregates emit **output types** (`strawberry.type`-decorated), not input types. The Strawberry adaptation in Layer 5 (the BFS schema build) accordingly uses `strawberry.lazy("django_strawberry_framework.aggregates._registry.{TargetAggregateSet}OutputType")` for forward references between aggregate output types. The `compute` / `acompute` split from `AdvancedAggregateSet` runs *after* the type graph is built — the sync/async dispatch happens at resolver-invocation time, not at finalize time.
 
@@ -1021,7 +1022,7 @@ The shipped foundation exposes reverse-FK and M2M relations as `list[T]`. For Re
 - **Implicit upgrade** (default): every `DjangoType` whose `Meta.interfaces` includes `relay.Node` automatically exposes its reverse-FK and M2M relations as Connections in addition to the existing `list[T]` shape. Field names follow a stable convention (`itemsConnection: ItemConnection` alongside `items: list[Item]`).
 - **Explicit-only**: consumers who want only Connections (or only lists) on a relation declare `Meta.relation_shapes = {"items": "connection"}` (or `"list"`, or `"both"` — `"both"` is the default for Relay types).
 
-The Connection counterpart inherits the parent's `get_queryset` (so a reverse-FK Connection over `category.items` filters the items by the parent category AND by the type's `get_queryset` policy) and integrates with filters (`TODO-ALPHA-021-0.0.8`) and orders (`TODO-ALPHA-022-0.0.8`) when declared on the related `DjangoType`.
+The Connection counterpart inherits the parent's `get_queryset` (so a reverse-FK Connection over `category.items` filters the items by the parent category AND by the type's `get_queryset` policy) and integrates with filters (`WIP-ALPHA-021-0.0.8`) and orders (`WIP-ALPHA-022-0.0.8`) when declared on the related `DjangoType`.
 
 #### Goal 3: Cursor pagination math
 
@@ -1037,8 +1038,8 @@ The `DjangoConnectionField` implementation (`TODO-ALPHA-024-0.0.9`) carries the 
 
 A Connection without filters is half a feature. The connection field accepts:
 
-- `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `TODO-ALPHA-021-0.0.8`)
-- `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `TODO-ALPHA-022-0.0.8`)
+- `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `WIP-ALPHA-021-0.0.8`)
+- `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `WIP-ALPHA-022-0.0.8`)
 - `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-039-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent)
 
 The cursor algorithm runs *after* filter + order are applied, so cursors are stable across the filtered+ordered queryset. Changing `orderBy` between paginated requests is **documented as invalidating cursors** (consumers should treat order change as a fresh pagination cycle, not a continuation).
@@ -1104,8 +1105,8 @@ These all build on `BLOCKED-ALPHA-023`'s mechanics. Shipping `BLOCKED-ALPHA-023`
 #### Dependencies
 
 - `TODO-ALPHA-024-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 023 lands.
-- `TODO-ALPHA-021-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
-- `TODO-ALPHA-022-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
+- `WIP-ALPHA-021-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
+- `WIP-ALPHA-022-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
 - `TODO-ALPHA-026-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
 - `TODO-ALPHA-027-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 023 lands.
 

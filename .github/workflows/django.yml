@@ -43,8 +43,8 @@ jobs:
         # single-DB only (covers both ends without doubling CI wall-clock).
         include: >-
           ${{ github.event_name == 'workflow_dispatch' && fromJSON('[
-            {"django": "5.2.*", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0"},
-            {"django": "5.2.*", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "5.2.0", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1"},
             {"django": "5.2.*", "python": "3.11", "database": "single DB", "fakeshop_sharded": "0"},
             {"django": "5.2.*", "python": "3.11", "database": "multi DB", "fakeshop_sharded": "1"},
             {"django": "5.2.*", "python": "3.12", "database": "single DB", "fakeshop_sharded": "0"},
@@ -60,7 +60,7 @@ jobs:
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0"},
             {"django": "latest", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"}
           ]') || fromJSON('[
-            {"django": "5.2.*", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0"},
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0"}
           ]') }}
 

@@ -121,6 +121,12 @@ class Patron(models.Model):
     """A library patron who can borrow books."""
 
     name = models.TextField(unique=True)
+    # Signed 64-bit counter exercising the package's ``BigIntegerField -> BigInt``
+    # converter entry end-to-end. Cents so values past 2^31-1 are realistic
+    # for a long-running patron (>$21M in lifetime fines is plausible only as
+    # a stress value, which is exactly the point — proves the wire format
+    # survives values outside JSON's safe-integer range).
+    lifetime_fines_cents = models.BigIntegerField(default=0)
 
     def __str__(self):
         return self.name

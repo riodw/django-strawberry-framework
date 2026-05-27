@@ -97,7 +97,7 @@ class PatronType(DjangoType):
 
     class Meta:
         model = models.Patron
-        fields = ("id", "name", "card", "loans")
+        fields = ("id", "name", "lifetime_fines_cents", "card", "loans")
 
 
 @strawberry.type

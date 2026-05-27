@@ -212,6 +212,40 @@ def test_library_patron_card_and_genre_reverse_paths_over_http():
 
 
 @pytest.mark.django_db
+def test_library_patron_bigint_lifetime_fines_over_http():
+    """``Patron.lifetime_fines_cents`` survives a value past JS safe-integer range.
+
+    Pins the ``BigIntegerField -> BigInt`` converter row end-to-end at a value
+    that JSON would lose precision on if serialized as a number. Companion to
+    ``apps.scalars`` which exercises the full converter table; this test
+    proves the converter row keeps working on a real-domain model and not
+    just the dedicated coverage app.
+    """
+    # 2**53 + 12345 — past JS safe-integer (``2**53 - 1``) so a numeric
+    # round-trip would lose precision; the only correct wire format is the
+    # decimal string.
+    large_value = 9007199254752336
+    models.Patron.objects.create(name="Mae", lifetime_fines_cents=large_value)
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryPatrons {
+            name
+            lifetimeFinesCents
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    rows = body["data"]["allLibraryPatrons"]
+    mae = next(row for row in rows if row["name"] == "Mae")
+    assert mae["lifetimeFinesCents"] == str(large_value)
+
+
+@pytest.mark.django_db
 def test_library_optimizer_selects_book_shelf_in_http_query():
     _seed_library_graph()
 

@@ -27,7 +27,7 @@ jobs:
         run: uv run ruff format --check .
 
   test:
-    name: Python ${{ matrix.python }} - Django ${{ matrix.django }}
+    name: Python ${{ matrix.python }} - Django ${{ matrix.django }} - ${{ matrix.database }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -35,21 +35,33 @@ jobs:
       # If one version fails, don't stop the others
       fail-fast: false
       matrix:
-        # Manual dispatch runs the full matrix; push/PR runs only the
-        # minimum-support combo and the latest combo (covers both ends).
+        # Manual dispatch (workflow_dispatch) runs the full matrix AND exercises
+        # both the default single-DB settings and the sharded fakeshop DATABASES
+        # layout (FAKESHOP_SHARDED=1) on every Python/Django node — the multi-DB
+        # contract is gated only at the dispatch tier so push/PR feedback stays
+        # fast. Push/PR runs only the minimum-support combo and the latest combo,
+        # single-DB only (covers both ends without doubling CI wall-clock).
         include: >-
           ${{ github.event_name == 'workflow_dispatch' && fromJSON('[
-            {"django": "5.2.*", "python": "3.10"},
-            {"django": "5.2.*", "python": "3.11"},
-            {"django": "5.2.*", "python": "3.12"},
-            {"django": "5.2.*", "python": "3.13"},
-            {"django": "6.0.*", "python": "3.12"},
-            {"django": "6.0.*", "python": "3.13"},
-            {"django": "6.0.*", "python": "3.14"},
-            {"django": "latest", "python": "3.14"}
+            {"django": "5.2.*", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "5.2.*", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "5.2.*", "python": "3.11", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "5.2.*", "python": "3.11", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "5.2.*", "python": "3.12", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "5.2.*", "python": "3.12", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "5.2.*", "python": "3.13", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "5.2.*", "python": "3.13", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "6.0.*", "python": "3.12", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "6.0.*", "python": "3.12", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "6.0.*", "python": "3.13", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "6.0.*", "python": "3.13", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "6.0.*", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "6.0.*", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "latest", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"}
           ]') || fromJSON('[
-            {"django": "5.2.*", "python": "3.10"},
-            {"django": "latest", "python": "3.14"}
+            {"django": "5.2.*", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0"}
           ]') }}
 
     steps:
@@ -75,14 +87,20 @@ jobs:
           fi
           uv run django-admin --version
 
-      - name: Run Tests
+      - name: Run Tests (${{ matrix.database }})
         # pytest.ini wires `--cov`, and pyproject.toml enforces fail_under=100,
         # so this step both tests and gates coverage.
+        env:
+          FAKESHOP_SHARDED: ${{ matrix.fakeshop_sharded }}
         run: uv run pytest
 
       - name: Upload Coverage to Coveralls
         # Only upload from the primary matrix node to avoid duplicate builds.
-        if: github.ref == 'refs/heads/main' && matrix.python == '3.14' && matrix.django == 'latest'
+        if: >-
+          github.ref == 'refs/heads/main' &&
+          matrix.python == '3.14' &&
+          matrix.django == 'latest' &&
+          matrix.database == 'single DB'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

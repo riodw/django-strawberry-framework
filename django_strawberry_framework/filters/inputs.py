@@ -567,9 +567,9 @@ def _build_input_fields(
         # still group them under ``galaxy_name`` flattened.
         if "__" in filter_name:
             head, _, lookup_token = filter_name.rpartition("__")
-            # Lookup keys live in ``LOOKUP_NAME_MAP``; if the trailing
-            # token is not a recognized lookup it belongs to the path.
-            if lookup_token not in LOOKUP_NAME_MAP and lookup_token != filter_instance.lookup_expr:
+            # If the trailing token is not the filter's actual lookup expression,
+            # it belongs to the path.
+            if lookup_token != filter_instance.lookup_expr:
                 head, lookup_token = filter_name, filter_instance.lookup_expr
         else:
             head, lookup_token = filter_name, filter_instance.lookup_expr

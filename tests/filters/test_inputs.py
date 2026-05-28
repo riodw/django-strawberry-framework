@@ -239,6 +239,28 @@ def test_build_input_fields_emits_lookup_name_override_only_when_python_attr_dif
     assert id_fields["in_"] == "in"
 
 
+@pytest.mark.django_db
+def test_build_input_fields_handles_field_name_in_lookup_name_map():
+    """Verify that when a traversed relation field has a name that matches a key in LOOKUP_NAME_MAP,
+    e.g. `branch__year`, but the filter lookup expression is different, e.g. `exact`,
+    we don't incorrectly group it as field `branch` with lookup `year`.
+    """
+
+    class YearFilter(FilterSet):
+        branch__year = GlobalIDFilter(field_name="branch__name", lookup_expr="exact")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = []
+
+    triples = _build_input_fields(YearFilter)
+    by_attr = {python_attr: (annotation, kwargs) for python_attr, annotation, kwargs in triples}
+
+    # Under correct behavior, the top-level field is `branch_year`, NOT `branch`!
+    assert "branch_year" in by_attr
+    assert "branch" not in by_attr
+
+
 # ---------------------------------------------------------------------------
 # convert_filter_to_input_annotation
 # ---------------------------------------------------------------------------

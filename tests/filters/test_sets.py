@@ -431,6 +431,23 @@ def test_normalize_input_maps_logic_keys_to_short_form():
     assert data["not"] == {"name": "baz"}
 
 
+def test_normalize_input_signature_takes_only_input_value():
+    """``_normalize_input`` accepts only ``input_value``; no dead owner parameter.
+
+    GlobalID type-name validation happens at queryset-evaluation time
+    inside the filter's ``filter()`` method, reading the owner via
+    ``filter_instance.parent._owner_definition``. The normalize step
+    therefore does not need an owner parameter — passing one is dead
+    plumbing that suggests an unfinished wiring path.
+    """
+    import inspect
+
+    sig = inspect.signature(FilterSet._normalize_input)
+    # `cls` is bound on a classmethod's underlying function, so the public
+    # signature carries `input_value` only.
+    assert list(sig.parameters) == ["input_value"]
+
+
 def test_normalize_input_walks_strawberry_dataclass():
     """A dataclass-shaped input (Strawberry input) is walked via `__dataclass_fields__`."""
 
@@ -448,6 +465,28 @@ def test_normalize_input_walks_strawberry_dataclass():
 
     data = CategoryFilter._normalize_input(value)
     assert data.get("name") == "hello"
+
+
+def test_normalize_input_skips_strawberry_unset_attrs():
+    """``strawberry.UNSET`` attrs are skipped the same as ``None``.
+
+    Strawberry input dataclasses default unsupplied fields to ``UNSET``
+    rather than ``None``. Leaving them in ``data`` would route them
+    through the parent form and surface as a spurious "missing /
+    invalid" form error for fields the consumer never sent.
+    """
+
+    @strawberry.input
+    class _Input:
+        name: str | None = strawberry.UNSET
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    data = CategoryFilter._normalize_input(_Input())
+    assert "name" not in data
 
 
 # ---------------------------------------------------------------------------
@@ -502,6 +541,41 @@ def test_run_permission_checks_fires_only_for_active_input_fields():
 
     CategoryFilter._run_permission_checks({"name": "anything"}, request=HttpRequest())
     assert fired == ["name"]
+
+
+def test_run_permission_checks_skips_unset_related_branch():
+    """``strawberry.UNSET`` on a related branch is treated as "not supplied".
+
+    Strawberry input dataclasses default unsupplied fields to ``UNSET``
+    rather than ``None``. The active-branch detection in
+    ``_iter_active_related_branches`` must collapse UNSET so the parent
+    per-branch permission gate does not fire for fields the consumer
+    never sent.
+    """
+    fired: list[str] = []
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    @strawberry.input
+    class BranchInput:
+        name: str | None = strawberry.UNSET
+        shelves: Any = strawberry.UNSET
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+        def check_shelves_permission(self, request):
+            fired.append("shelves")
+
+    BranchFilter._run_permission_checks(BranchInput(), request=HttpRequest())
+    assert fired == []
 
 
 def test_run_permission_checks_recurses_into_active_related_branch():
@@ -805,6 +879,33 @@ def test_filter_queryset_unions_or_branch():
     )
     # Order is not guaranteed by OR; assert the set.
     assert set(qs.values_list("name", flat=True)) == {"x-row", "ignored"}
+
+
+@pytest.mark.django_db
+def test_q_for_branch_validates_child_form_and_raises_on_malformed_subbranch():
+    """A malformed nested ``and`` / ``or`` / ``not`` branch raises ``GraphQLError``.
+
+    Without per-branch form validation, ``BaseFilterSet.qs`` silently
+    falls through to ``filter_queryset`` on an invalid child form,
+    producing an empty ``pk__in`` set instead of surfacing the input
+    error. ``_q_for_branch`` must call ``_validate_form_or_raise`` on
+    every nested instance so a typo or wrong-typed scalar in a deeper
+    branch is rejected the same way a top-level malformed input is.
+    """
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"id": ["exact"]}
+
+    with pytest.raises(GraphQLError) as excinfo:
+        CategoryFilter.apply_sync(
+            {"and_": [{"id": "not-an-integer"}]},
+            Category.objects.all(),
+            _make_info(),
+        )
+    assert excinfo.value.extensions["code"] == "FILTER_INVALID"
+    assert "id" in excinfo.value.extensions["errors"]
 
 
 @pytest.mark.django_db

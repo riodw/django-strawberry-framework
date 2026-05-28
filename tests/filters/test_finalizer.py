@@ -653,6 +653,56 @@ def test_phase_2_5_unresolved_related_filter_raises_at_finalize():
     assert isinstance(exc_info.value.__cause__, ImportError)
 
 
+def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error():
+    """Non-ImportError raised during ``get_filters()`` surfaces as ``ConfigurationError``.
+
+    Subpass 2 only special-cased ``ImportError`` previously; any other
+    exception (e.g. a ``RelatedFilter`` callable factory that raises
+    ``ValueError`` when evaluated) used to bubble unwrapped, breaking
+    the package's "finalize-time errors are ``ConfigurationError``"
+    convention. The non-import branch now rewraps with the original on
+    ``__cause__`` so consumer error-matching stays uniform.
+    """
+
+    def _broken_factory():
+        raise ValueError("intentional factory failure")
+
+    class BookFilter(FilterSet):
+        # `LazyRelatedClassMixin.resolve_lazy_class` invokes the callable
+        # when `.filterset` is read; this only happens at expansion time
+        # (subpass 2), not at class creation, so the class itself builds
+        # cleanly.
+        broken = RelatedFilter(_broken_factory, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name")
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf", "genres")
+            filterset_class = BookFilter
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert "BookFilter" in msg
+    assert "ValueError" in msg
+    assert "intentional factory failure" in msg
+    assert isinstance(exc_info.value.__cause__, ValueError)
+
+
 # ---------------------------------------------------------------------------
 # Relay-shaped owner accepted under phase 2.5.
 # ---------------------------------------------------------------------------

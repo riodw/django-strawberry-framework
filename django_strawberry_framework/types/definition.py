@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from django.db import models
 
@@ -85,6 +85,16 @@ class DjangoTypeDefinition:
     # base injection.
     filterset_class: type | None = None
     finalized: bool = False
+    # Per-instance memoization of ``related_target_for(field_name)``
+    # results. Sentinel key ``"__missing__"`` is unused; we cache the
+    # full ``(target_definition, model_field) | None`` tuple keyed by
+    # field name. Populated lazily on first call. Definitions are
+    # created fresh by ``DjangoType.__init_subclass__`` after every
+    # ``registry.clear()`` so stale-cache contamination is bounded to
+    # consumer code holding references to discarded definitions —
+    # which would surface the same staleness on any direct attribute
+    # read.
+    _related_target_cache: dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
     def graphql_type_name(self) -> str:
@@ -130,19 +140,39 @@ class DjangoTypeDefinition:
 
         from ..registry import registry
 
+        # Memoize the lookup per field name. ``_meta.get_field`` is
+        # cheap but not free, and the registry lookup involves two
+        # dict probes (``primary_for`` + ``get``) plus a third
+        # (``get_definition``); on the filter-evaluation hot path this
+        # adds up. Cache only valid post-finalize: pre-finalize the
+        # registry can still mutate (consumer declares more
+        # DjangoTypes), so populating the cache with a transient
+        # ``None`` would lock in a wrong answer. ``finalized`` flips
+        # exactly once and is the package's "registry is stable now"
+        # signal.
+        cache_ok = registry.is_finalized()
+        if cache_ok and field_name in self._related_target_cache:
+            return self._related_target_cache[field_name]
+
         try:
-            field = self.model._meta.get_field(field_name)
+            model_field = self.model._meta.get_field(field_name)
         except FieldDoesNotExist:
-            return None
-        if not getattr(field, "is_relation", False):
-            return None
-        target_model = getattr(field, "related_model", None)
-        if target_model is None:
-            return None
-        target_type = registry.primary_for(target_model) or registry.get(target_model)
-        if target_type is None:
-            return None
-        target_definition = registry.get_definition(target_type)
-        if target_definition is None:
-            return None
-        return (target_definition, field)
+            result = None
+        else:
+            if not getattr(model_field, "is_relation", False):
+                result = None
+            else:
+                target_model = getattr(model_field, "related_model", None)
+                if target_model is None:
+                    result = None
+                else:
+                    target_type = registry.primary_for(target_model) or registry.get(target_model)
+                    if target_type is None:
+                        result = None
+                    else:
+                        target_definition = registry.get_definition(target_type)
+                        result = (target_definition, model_field) if target_definition is not None else None
+
+        if cache_ok:
+            self._related_target_cache[field_name] = result
+        return result

@@ -55,7 +55,7 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.types.relay import _SYNC_MISUSE_SENTINEL
+from django_strawberry_framework.types.relay import SyncMisuseError
 
 
 @pytest.fixture(autouse=True)
@@ -368,7 +368,11 @@ def test_djangolistfield_sync_path_rejects_coroutine_from_get_queryset() -> None
     result = schema.execute_sync("{ allCategories { id name } }")
     assert result.errors is not None
     assert len(result.errors) == 1
-    assert _SYNC_MISUSE_SENTINEL in str(result.errors[0])
+    # The typed ``SyncMisuseError`` raised by ``_apply_get_queryset_sync``
+    # surfaces as the GraphQL error's ``original_error`` so consumers
+    # can match it directly without substring inspection.
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "returned a coroutine in a sync resolver context" in str(result.errors[0])
 
 
 # -----------------------------------------------------------------------------

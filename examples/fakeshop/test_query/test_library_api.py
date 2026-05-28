@@ -68,9 +68,9 @@ def _seed_branch_with_two_shelves(name: str = "Override"):
     models.Shelf.objects.create(code="B-2", topic="Second floor", branch=branch)
 
 
-def _post_graphql(query: str):
-    client = Client()
-    return client.post(
+def _post_graphql(query: str, *, client: Client | None = None):
+    graphql_client = client or Client()
+    return graphql_client.post(
         "/graphql/",
         data={"query": query},
         content_type="application/json",
@@ -687,11 +687,7 @@ def _post_graphql_as_staff(query: str):
     )
     client = Client()
     client.force_login(staff)
-    return client.post(
-        "/graphql/",
-        data={"query": query},
-        content_type="application/json",
-    )
+    return _post_graphql(query, client=client)
 
 
 @pytest.mark.django_db

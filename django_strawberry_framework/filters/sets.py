@@ -27,6 +27,7 @@ from graphql import GraphQLError
 from ..exceptions import ConfigurationError
 from ..registry import registry
 from ..types.relay import (
+    _SYNC_MISUSE_SENTINEL,
     _apply_get_queryset_async,
     _apply_get_queryset_sync,
     implements_relay_node,
@@ -36,14 +37,6 @@ from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
-
-
-# Substring matched in `apply`'s catch-and-rethrow against the
-# `ConfigurationError` raised by `_apply_get_queryset_sync` (see
-# `django_strawberry_framework/types/relay.py::_apply_get_queryset_sync`).
-# Pinning one constant keeps the raise site and the catch site from
-# drifting per M5 of rev6 feedback.
-_SYNC_MISUSE_SENTINEL: str = "get_queryset returned a coroutine in a sync resolver context"
 
 
 class FilterSetMetaclass(filterset.FilterSetMetaclass):

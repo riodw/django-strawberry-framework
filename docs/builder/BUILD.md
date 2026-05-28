@@ -70,6 +70,7 @@ Before Worker 0 creates `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`:
 3. **Build artifacts are reset.** Delete any old `docs/builder/build-*.md` and `docs/builder/bld-*.md` files left from a prior cycle. Verify the new plan path and every `bld-*.md` path Worker 0 intends to create do not already exist.
 4. **`.gitignore` lists the untracked scratch paths.** Confirm `docs/builder/worker-memory/`, `docs/shadow/`, and `docs/builder/temp-tests/` are gitignored.
 5. **Scratch directories are cleared.** Delete every file under `docs/builder/worker-memory/`, `docs/shadow/`, and `docs/builder/temp-tests/`.
+6. **Spec-doc consistency check.** `uv run python scripts/check_spec_glossary.py --spec docs/spec-<NNN>-<topic>-<0_0_X>.md` exits 0. Glossary anchors named by the spec body must resolve.
 
 Record the outcome in the build plan's preamble (`Pre-flight: passed on YYYY-MM-DD; baseline: clean; cleanup: old artifacts removed, memory/shadow/temp-tests cleared` or `Pre-flight: <issue>, resolved by <action>; baseline: <summary>; cleanup: <summary>`). If any check fails and cannot be resolved without maintainer input, escalate before creating the build plan.
 
@@ -95,6 +96,10 @@ Rules:
 - After all in-spec slices are built, run a cross-slice **integration pass** (Worker 1; may trigger a second-loop refactor through Worker 2 and Worker 3 if DRY opportunities are found).
 - The build closes with one final test-run gate handled by Worker 1.
 
+### Procedural-closure slices
+
+When a slice's spec contract is to ship nothing in this card (e.g. "carried by sibling" because a dependent card ships first, or a slice the spec explicitly defers from this build), close it via a single Worker 1 pass that sets `Status: final-accepted` directly. No Worker 2 build, no Worker 3 review. The artifact carries one combined Plan + Final-verification block citing the spec clause that authorizes the closure. Worker 0 dispatches Worker 1 once with explicit procedural-closure framing.
+
 ## Coverage is the maintainer's gate, not a worker's tool
 
 Workers do not run `pytest` with coverage flags. `--cov=...`, `--cov-report=...`, `--cov-config=...`, and equivalent invocations are forbidden in every worker pass — planning, build, apply-changes, review, re-review, final verification, integration, and the final test-run gate. `--no-cov` is permitted (and is the only permitted coverage-shaped flag) when `pytest.ini`'s `addopts` auto-applies `--cov` — `--no-cov` opts OUT of coverage entirely rather than configuring it.
@@ -118,6 +123,8 @@ If gap-discovery feels intractable, escalate to the maintainer rather than runni
 - target release version
 - date created
 - pre-flight outcome and working-tree baseline summary
+- baseline-dirty out-of-scope files (workers do not edit, do not revert)
+- build-wide context flags (e.g. joint-cut path: safe-default vs contingency; version-bump-owner card)
 - a short copy of the one-slice-at-a-time rule
 - a short copy of the DRY-first rule
 - a list of every build artifact that will be created
@@ -184,7 +191,7 @@ The artifact's `Status:` line is set by exactly one worker per transition:
 - `planned` — Worker 1 sets this when the artifact is first created. New artifacts always start with `Status: planned`.
 - `built` — Worker 2 sets this at the end of every build pass (including re-passes after a Worker 3 rejection).
 - `revision-needed` — set by Worker 3 (review surfaces unresolved findings) or Worker 1 (final verification rejects). Either triggers Worker 0 to spawn Worker 2 again.
-- `review-accepted` — set by Worker 3 when accepting the diff; signals Worker 0 to spawn Worker 1 for final verification.
+- `review-accepted` — set by Worker 3 when accepting the diff; signals Worker 0 to spawn Worker 1 for final verification. May be set with Medium-or-higher findings transparently escalated to Worker 1 (recorded under `### Notes for Worker 1 (spec reconciliation)` with an `Escalated:` prefix and the resolution paths) when resolution needs spec context Worker 2 cannot provide. Worker 1's final verification owns the decision.
 - `final-accepted` — set by Worker 1 at the end of final verification; signals Worker 0 to mark the checklist box.
 
 Worker 0 never writes to `Status:`. Worker 0 reads it to drive dispatch.

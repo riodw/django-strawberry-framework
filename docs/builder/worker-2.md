@@ -71,6 +71,14 @@ When implementation reveals that the plan's approach is not quite right (a plann
 
 The artifact-as-contract model only works if architectural decisions stay with Worker 1. A unilateral structural call by Worker 2 forces Worker 1 to reverse-engineer the decision during final verification, which is not what final verification is for.
 
+## Pre-existing claim verification
+
+Any claim that a failing test, broken behavior, or unexpected diff entry is "pre-existing at HEAD" must cite the verification commands and outputs in the build report (`git stash push -u`, `git checkout HEAD`, the reproducing command, the stash restore). An unverified pre-existing claim is a Medium finding for Worker 3.
+
+## Apply-changes verification scope
+
+On a re-pass after `revision-needed`, run focused tests for both the file you fixed AND every test file that imports the changed surface — including sibling apps and the example projects. Module-local tests catch your targeted fix; sibling tests catch over-corrections that break unrelated callers.
+
 ## DRY implementation rules
 
 Before adding logic, check:
@@ -93,7 +101,7 @@ If you used a shadow file or overview to implement the fix, record that in the a
 
 Every report must include:
 
-- files touched and why
+- files touched and why — grounded in `git status --short`, not memory
 - tests added or updated
 - formatting/lint commands run and pass/fail result
 - focused tests run only if explicitly requested (and without `--cov*` flags)

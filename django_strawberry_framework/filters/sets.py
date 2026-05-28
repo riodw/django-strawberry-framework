@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.db import models
 from django.http import HttpRequest
@@ -38,15 +38,6 @@ from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
-
-
-# Recursion-depth cap for logical-branch (``and`` / ``or`` / ``not``)
-# composition. A pathologically-deep input (``{and: [{and: [{and:
-# ...}]}]}``) would otherwise eat the Python stack inside
-# ``_run_permission_checks`` / ``_evaluate_logic_tree`` / ``_q_for_branch``.
-# Eight levels covers every realistic consumer-driven graph; beyond that
-# a typed ``ConfigurationError`` surfaces the misuse at the source.
-_MAX_LOGIC_DEPTH: int = 8
 
 
 class FilterSetMetaclass(filterset.FilterSetMetaclass):
@@ -141,6 +132,23 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
     # Recursion guard around `get_filters` so a self-referential
     # `RelatedFilter` does not blow the stack.
     _is_expanding_filters = False
+
+    # Logical-branch (`and` / `or` / `not`) recursion-depth cap. Declared
+    # as a `ClassVar` so a consumer with a legitimate deeper-nesting case
+    # (machine-generated queries, faceted search) can subclass and raise
+    # the cap without monkey-patching a module constant. Eight levels
+    # covers every realistic consumer-driven graph; beyond it a typed
+    # `ConfigurationError` surfaces the misuse at the source instead of a
+    # Python `RecursionError`.
+    _MAX_LOGIC_DEPTH: ClassVar[int] = 8
+
+    # Depth hand-off channel for the tree-form logic recursion. Set on a
+    # sibling instance by `_q_for_branch` so `filter_queryset` can read
+    # the counter back across django-filter's `.qs` boundary (which we do
+    # not own and cannot thread kwargs through). Declared here so the
+    # attribute is discoverable to static analysis / `__slots__` / typing
+    # and the default is explicit on every instance.
+    _logic_depth: int = 0
 
     # ------------------------------------------------------------------
     # Layer 4 — cycle-safe filter expansion (cookbook port).
@@ -689,7 +697,8 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         input_value: Any,
         request: Any,
         *,
-        _fired: set[str] | None = None,
+        _fired: dict[type, set[str]] | None = None,
+        _bare: Any = None,
         _depth: int = 0,
     ) -> None:
         """Fire `check_<field>_permission(request)` for fields in the input.
@@ -705,82 +714,91 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         ``object.__new__(cls)``; this matches the cookbook contract
         (per-field gates are written as regular ``def
         check_X_permission(self, request)`` methods on the filterset)
-        without requiring a fully-constructed `FilterSet` instance.
+        without requiring a fully-constructed `FilterSet` instance. The
+        bare instance is threaded through the same-class logical-branch
+        recursion via ``_bare`` so it is allocated once per class per
+        top-level call; a child ``RelatedFilter`` filterset (a different
+        class) allocates its own.
 
         Dedup contract:
-            ``_fired`` collects ``check_*_permission`` method names that
-            have already fired in this top-level call against ``cls``.
-            A field appearing under multiple logical branches (e.g.
-            ``or: [{title: ...}, {title: ...}]``) fires its gate ONCE.
-            Recursion into a child ``RelatedFilter`` filterset starts a
-            fresh dedup set because gates on a different class have a
-            different identity.
+            ``_fired`` maps each ``FilterSet`` class to the set of
+            ``check_*_permission`` method names that have already fired
+            against THAT class in this top-level call. The map is shared
+            across BOTH the logical-branch recursion (same class) AND
+            the child-filterset recursion (different class), so a gate
+            fires at most once per class regardless of how many sibling
+            ``and`` / ``or`` / ``not`` arms reference it. Concretely,
+            ``or: [{shelves: {published: true}}, {shelves: {published:
+            false}}]`` fires the parent's ``check_shelves_permission``
+            once AND the child ``ShelfFilter.check_published_permission``
+            once — the per-class set keyed on the child dedups the
+            re-entry from the second arm.
 
-        Double-dispatch contract (audit-log warning):
+        Double-dispatch contract:
             For an active ``RelatedFilter`` branch named ``shelves``
-            both gates fire — first the parent's
-            ``check_shelves_permission`` (the per-branch gate on the
-            owning filterset) and then the child filterset's own
-            ``_run_permission_checks`` which fires every active
-            ``check_*_permission`` declared on the child class. If the
-            consumer logs from each gate, the active branch produces
-            TWO audit log entries by design. Consumers who want a
-            single audit-log entry per branch should choose ONE side
-            (parent per-branch OR child class-level) to host the log
-            call. The dedup above only fires the SAME method-name once;
-            the parent-vs-child split is intentional.
+            both gates fire — the parent's ``check_shelves_permission``
+            (the per-branch gate on the owning filterset) AND the child
+            filterset's own ``check_*_permission`` gates. They live in
+            different per-class dedup sets, so both fire once. That
+            parent-vs-child split is intentional; a consumer who logs
+            from each gate sees one entry per (class, field) pair, not
+            one per logical-branch occurrence.
 
         Recursion-depth guard:
             ``_depth`` caps the logical-branch nesting at
-            ``_MAX_LOGIC_DEPTH``; a pathologically-deep input raises
+            ``cls._MAX_LOGIC_DEPTH``; a pathologically-deep input raises
             ``ConfigurationError`` instead of blowing the stack.
         """
         if input_value is None or input_value is UNSET:
             return
-        if _depth > _MAX_LOGIC_DEPTH:
+        if _depth > cls._MAX_LOGIC_DEPTH:
             raise ConfigurationError(
                 f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
-                f"_MAX_LOGIC_DEPTH={_MAX_LOGIC_DEPTH}. Flatten the filter input "
+                f"_MAX_LOGIC_DEPTH={cls._MAX_LOGIC_DEPTH}. Flatten the filter input "
                 "or split into multiple queries.",
             )
 
         if _fired is None:
-            _fired = set()
+            _fired = {}
+        class_fired = _fired.setdefault(cls, set())
+        bare = _bare if _bare is not None else object.__new__(cls)
 
-        bare = object.__new__(cls)
         normalized = cls._normalize_input(input_value)
         for form_key in normalized:
             if form_key in {"and", "or", "not"}:
                 continue
-            cls._invoke_permission_method(bare, form_key, request, fired=_fired)
+            cls._invoke_permission_method(bare, form_key, request, fired=class_fired)
 
         for field_name, related_filter, child_input in cls._iter_active_related_branches(input_value):
             child_filterset = related_filter.filterset
             if child_filterset is not None and hasattr(child_filterset, "_run_permission_checks"):
-                # Child filterset gets its own fired set — different
-                # class identity means different gate identity.
-                child_filterset._run_permission_checks(child_input, request)
+                # Child filterset is a different class; it keys its own
+                # per-class set inside the shared ``_fired`` map (so a
+                # same-class child re-entered from sibling branches still
+                # dedups) and allocates its own bare instance.
+                child_filterset._run_permission_checks(child_input, request, _fired=_fired)
             # Per-branch permission gate on the parent — fires e.g.
             # `check_shelves_permission` when the `shelves` branch is
             # active. Child filterset's own field gates fire via the
-            # recursive call above. Deduped against ``_fired`` so an
-            # ``or: [{shelves: ...}, {shelves: ...}]`` shape fires the
-            # parent's per-branch gate once.
-            cls._invoke_permission_method(bare, field_name, request, fired=_fired)
+            # recursive call above. Deduped against the parent's
+            # per-class set so an ``or: [{shelves: ...}, {shelves: ...}]``
+            # shape fires the parent's per-branch gate once.
+            cls._invoke_permission_method(bare, field_name, request, fired=class_fired)
 
         # Recurse into logical branches (and, or, not) to check permissions
-        # of any nested field/lookup clauses. Same cls, same dedup set.
+        # of any nested field/lookup clauses. Same cls → reuse ``bare`` and
+        # the shared ``_fired`` map.
         and_branches = normalized.get("and") or []
         for child_input in and_branches:
-            cls._run_permission_checks(child_input, request, _fired=_fired, _depth=_depth + 1)
+            cls._run_permission_checks(child_input, request, _fired=_fired, _bare=bare, _depth=_depth + 1)
 
         or_branches = normalized.get("or") or []
         for child_input in or_branches:
-            cls._run_permission_checks(child_input, request, _fired=_fired, _depth=_depth + 1)
+            cls._run_permission_checks(child_input, request, _fired=_fired, _bare=bare, _depth=_depth + 1)
 
         not_branch = normalized.get("not")
         if not_branch is not None:
-            cls._run_permission_checks(not_branch, request, _fired=_fired, _depth=_depth + 1)
+            cls._run_permission_checks(not_branch, request, _fired=_fired, _bare=bare, _depth=_depth + 1)
 
     @staticmethod
     def _invoke_permission_method(
@@ -795,8 +813,8 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         When ``fired`` is supplied, the method-name is recorded after a
         successful fire and subsequent calls with the same name skip the
         attribute lookup entirely. The dedup is scoped to the supplied
-        set; pass a fresh set per top-level ``_run_permission_checks``
-        call.
+        set — ``_run_permission_checks`` passes the per-class set keyed
+        out of its shared ``_fired`` map.
         """
         method_name = f"check_{field_path.replace('__', '_')}_permission"
         if fired is not None and method_name in fired:
@@ -898,15 +916,15 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         logical keys -- an empty ``Q()`` is the identity element for
         ``qs.filter(...)`` and the no-op for an empty sub-branch list.
         ``_depth`` is the recursion-cap counter shared with
-        ``_q_for_branch``; both helpers cap at ``_MAX_LOGIC_DEPTH``.
+        ``_q_for_branch``; both helpers cap at ``cls._MAX_LOGIC_DEPTH``.
         """
         q = models.Q()
         if not isinstance(tree_data, dict) or not tree_data:
             return q
-        if _depth > _MAX_LOGIC_DEPTH:
+        if _depth > cls._MAX_LOGIC_DEPTH:
             raise ConfigurationError(
                 f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
-                f"_MAX_LOGIC_DEPTH={_MAX_LOGIC_DEPTH}. Flatten the filter input "
+                f"_MAX_LOGIC_DEPTH={cls._MAX_LOGIC_DEPTH}. Flatten the filter input "
                 "or split into multiple queries.",
             )
 

@@ -23,6 +23,7 @@ from django.db import models
 from django.http import HttpRequest
 from django_filters import filterset
 from graphql import GraphQLError
+from strawberry import UNSET
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
@@ -376,11 +377,7 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
     # ------------------------------------------------------------------
 
     @classmethod
-    def _normalize_input(
-        cls,
-        input_value: Any,
-        owner_definition: DjangoTypeDefinition | None = None,
-    ) -> dict[str, Any]:
+    def _normalize_input(cls, input_value: Any) -> dict[str, Any]:
         """Translate a Strawberry input dataclass into `django-filter` form data.
 
         Slice 2 completes the per-primitive value normalization: each
@@ -395,6 +392,12 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         dict in those positions would fail validation. ``_apply_related_constraints``
         handles those branches separately via the ``<rel>__in=<intersected>``
         clause earlier in the apply pipeline.
+
+        GlobalID type-name validation happens at queryset-evaluation
+        time inside ``GlobalIDFilter.filter`` /
+        ``GlobalIDMultipleChoiceFilter.filter``, which read the owner
+        via ``filter_instance.parent._owner_definition``. The owner is
+        therefore not threaded as a parameter here.
         """
         if input_value is None:
             return {}
@@ -419,7 +422,10 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         data: dict[str, Any] = {}
         logic_lookup = dict(_LOGIC_KEYS)
         for python_attr, raw_value in items:
-            if raw_value is None:
+            # Strawberry input dataclasses default unsupplied fields to
+            # ``strawberry.UNSET``; treat it the same as ``None`` so the
+            # form sees only consumer-supplied keys.
+            if raw_value is None or raw_value is UNSET:
                 continue
             if python_attr in logic_lookup:
                 data[logic_lookup[python_attr]] = raw_value
@@ -561,12 +567,22 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
 
     @staticmethod
     def _extract_branch_value(input_value: Any, field_name: str) -> Any:
-        """Return the value at `field_name` on a dataclass-or-dict input."""
+        """Return the value at `field_name` on a dataclass-or-dict input.
+
+        Strawberry input dataclasses default unsupplied fields to
+        ``strawberry.UNSET`` rather than ``None``; collapse that sentinel
+        to ``None`` so the active-branch caller treats UNSET the same as
+        a missing key (no permission gate, no constraint application).
+        """
         if input_value is None:
             return None
         if isinstance(input_value, dict):
-            return input_value.get(field_name)
-        return getattr(input_value, field_name, None)
+            value = input_value.get(field_name)
+        else:
+            value = getattr(input_value, field_name, None)
+        if value is UNSET:
+            return None
+        return value
 
     @classmethod
     def _derive_related_visibility_querysets_sync(
@@ -788,6 +804,7 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         """
         child_data = cls._normalize_input(child_input)
         child_set = cls(data=child_data, queryset=queryset, request=None)
+        cls._validate_form_or_raise(child_set)
         return models.Q(pk__in=child_set.qs.values("pk"))
 
     @classmethod
@@ -833,7 +850,7 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         `self.queryset` and propagate through to `.qs`), then permission
         check, form validate, and return the materialized queryset.
         """
-        data = cls._normalize_input(input_value, cls._owner_definition)
+        data = cls._normalize_input(input_value)
         child_qs_by_branch = cls._derive_related_visibility_querysets_sync(input_value, info)
         request = cls._request_from_info(info)
         constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
@@ -850,7 +867,7 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         info: Any,
     ) -> models.QuerySet:
         """Async sibling of `apply_sync` awaiting the visibility step."""
-        data = cls._normalize_input(input_value, cls._owner_definition)
+        data = cls._normalize_input(input_value)
         child_qs_by_branch = await cls._derive_related_visibility_querysets_async(input_value, info)
         request = cls._request_from_info(info)
         constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)

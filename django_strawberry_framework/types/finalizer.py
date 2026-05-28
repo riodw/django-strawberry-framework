@@ -460,6 +460,19 @@ def _bind_filtersets() -> None:
                 f"{filterset_cls.__qualname__} references an unresolved "
                 f"related-filter target. {exc}",
             ) from exc
+        except ConfigurationError:
+            raise
+        except Exception as exc:
+            # Uniform finalize-time error shape: any failure surfacing from
+            # ``get_filters()`` rebinds as ``ConfigurationError`` so the
+            # consumer sees one error class for every finalize failure
+            # instead of having to guard for the underlying exception
+            # type.
+            raise ConfigurationError(
+                f"Cannot finalize Django types: filterset "
+                f"{filterset_cls.__qualname__} raised during expansion. "
+                f"{exc.__class__.__name__}: {exc}",
+            ) from exc
 
     # Subpass 3: materialize every built input class as a module global.
     for filterset_cls in wired:

@@ -413,26 +413,23 @@ class TypeRegistry:
         # spec-021 Decision 9, M5 of rev3 + M4 of rev8). Two independent
         # try/except blocks — one per cleared cache — so a partial-
         # rollback build state where one cache is reachable and the
-        # other is not still clears whatever IS reachable. The first
-        # block clears module globals + the ``_field_specs`` /
-        # ``_materialized_names`` ledgers via the public helper.
+        # other is not still clears whatever IS reachable. Both blocks
+        # follow the same "best-effort, skip and continue" shape so the
+        # cleanup contract is uniform: an unreachable filter subsystem
+        # never prevents the reachable cache from being cleared.
         try:
             from .filters.inputs import clear_filter_input_namespace
         except ImportError:
-            # Filter subsystem not loaded; nothing to clear here.
             pass
         else:
             clear_filter_input_namespace()
 
-        # Second block clears the ``filter_input_type(...)`` helper-
-        # tracked FilterSets so a clean re-finalize sees an empty
-        # orphan-validation set. Early-return on ImportError because the
-        # first block has already done what it can.
         try:
             from .filters import _helper_referenced_filtersets
         except ImportError:
-            return
-        _helper_referenced_filtersets.clear()
+            pass
+        else:
+            _helper_referenced_filtersets.clear()
 
 
 registry = TypeRegistry()

@@ -375,6 +375,59 @@ def test_orphan_filter_input_type_reference_raises_at_finalize():
     assert "filterset_class = StandaloneFilter" in msg
 
 
+def test_phase_2_5_orphan_check_runs_before_materialization():
+    """Orphan failure leaves no partial state in the materialization ledgers.
+
+    Subpass 3 (orphan validation) now runs BEFORE subpass 4
+    (materialization), so a failed finalize does not leave wired
+    filtersets' input classes registered in ``_materialized_names`` /
+    ``FilterArgumentsFactory.input_object_types``. The previous
+    ordering meant a re-run of ``finalize_django_types()`` after
+    fixing the orphan would see stale ledger entries from the prior
+    failed attempt.
+    """
+
+    class WiredFilter(FilterSet):
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    class StandaloneFilter(FilterSet):
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    # The wired filterset would normally be materialized; the
+    # standalone filterset is an orphan that must trigger the failure.
+    filter_input_type(StandaloneFilter)
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name")
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf", "genres")
+            filterset_class = WiredFilter
+
+    with pytest.raises(ConfigurationError):
+        finalize_django_types()
+
+    # No input class registered for either filterset; the wired one's
+    # would-be input type stayed un-materialized because the orphan
+    # check halted the pass before subpass 4 ran.
+    wired_input_name = f"{WiredFilter.__name__}InputType"
+    assert wired_input_name not in FilterArgumentsFactory.input_object_types
+    assert wired_input_name not in _materialized_names
+
+
 def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
     """Two orphan FilterSets surface in one ``ConfigurationError`` with the multi-orphan lead-in.
 

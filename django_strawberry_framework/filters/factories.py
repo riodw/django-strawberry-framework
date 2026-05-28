@@ -57,6 +57,13 @@ class FilterArgumentsFactory:
     that is Slice 3's finalizer-phase-2.5 contract. The factory's
     ``arguments`` property returns the built input class for the root
     filterset (per Implementation discretion item 5).
+
+    Subclassing is not supported. The class-level caches above are
+    mutable dicts; a subclass would inherit the SAME dict instances
+    rather than getting its own, so a subclass cache would silently
+    cross-contaminate with the base. The factory is a leaf class by
+    contract — extend the cookbook's flow by composition (wrap an
+    instance), not by subclassing.
     """
 
     # Cache for storing input object types, keyed by class-derived name.

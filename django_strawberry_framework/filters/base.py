@@ -67,6 +67,24 @@ class ArrayFilter(TypedFilter):
     consumer-supplied `method=` callable does not short-circuit on
     empty-list input — the empty list is a valid filter value here, unlike
     the default `FilterMethod` contract.
+
+    Empty-list contract:
+        `[]` is intentionally treated as a real value (not an
+        `EMPTY_VALUES` short-circuit). The downstream meaning depends
+        entirely on the bound `lookup_expr`:
+
+        - `__contains=[]` matches every row on Postgres `ArrayField`
+          (every list contains the empty list as a subset).
+        - `__overlap=[]` matches no rows (empty overlap is vacuously
+          false).
+        - `__contained_by=[]` matches only rows whose array is empty.
+
+        Consumers who want "any-of these values" semantics should bind
+        `lookup_expr="overlap"` and pass `[value, ...]`; passing `[]`
+        to `overlap` is a deliberate "match nothing" request. Consumers
+        who want "no constraint" semantics should not send the filter
+        at all (or send `None`, which short-circuits to the unfiltered
+        queryset).
     """
 
     @TypedFilter.method.setter
@@ -176,12 +194,12 @@ def _expected_global_id_type_name(filter_instance: Filter) -> str | None:
     head, _sep, _tail = field_name.partition("__")
     pk_name = getattr(owner.model._meta.pk, "name", None)
     if head == pk_name or field_name == pk_name:
-        return owner.name if owner.name is not None else owner.origin.__name__
+        return owner.graphql_type_name
     target = owner.related_target_for(head)
     if target is None:
         return None
     target_definition, _model_field = target
-    return target_definition.name if target_definition.name is not None else target_definition.origin.__name__
+    return target_definition.graphql_type_name
 
 
 def _decode_and_validate_global_id(
@@ -246,6 +264,8 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
 
     def filter(self, qs: Any, value: Any) -> Any:
         """Decode + validate every GlobalID; delegate to the parent filter."""
+        if value is None:
+            return super().filter(qs, None)
         node_ids = [_decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)]
         return super().filter(qs, node_ids)
 
@@ -322,6 +342,17 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
         Idempotent so the metaclass `__new__` can re-bind every related
         filter on subclass creation without clobbering a deliberate
         override.
+
+        Silent-no-op contract:
+            A second call with a DIFFERENT ``filterset`` (the rare case
+            of a module-level ``RelatedFilter`` instance shared across
+            two ``FilterSet`` subclasses) is also silenced here. The
+            strict cross-owner mismatch detection runs later at
+            finalize time in
+            ``types/finalizer.py::_bind_filterset_owner`` (H2-rev8
+            check), so a real divergent-owner reuse still surfaces a
+            ``ConfigurationError`` with both owners named — just not at
+            class-creation time.
         """
         if not hasattr(self, "bound_filterset"):
             self.bound_filterset = filterset

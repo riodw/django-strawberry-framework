@@ -45,12 +45,23 @@ Then run `scripts/bug_hunt.py`. The script:
   `<short-sha>` is the short hash of the same HEAD commit it refreshed
   from.
 
+Once `docs/bug_hunt/bug_hunt.<short-sha>.md` exists for an in-progress
+hunt, keep using that same file as the canonical record unless the
+maintainer explicitly asks to regenerate or restart the hunt. Do not
+regenerate it just because later commits or working-tree changes appear
+while the hunt is in progress.
+
 ## Step 3: run the next hunter
 Open `docs/bug_hunt/bug_hunt.<short-sha>.md` and find the first
 unchecked `- [ ]` source-file item. That item is the next unit of work.
 Do not batch several file prompts together unless the maintainer
 explicitly changes the hunt mode; the default hunt is one fresh hunter
 for one file.
+
+Git is off limits to agents in this workflow. Worker 0 and hunters do
+not run `git` commands of any kind while executing Steps 3 and 4. The
+only allowed git interaction is whatever `scripts/bug_hunt.py` performs
+internally during Step 2.
 
 Worker 0 owns the generated checklist. The hunter owns only the source
 file named by the current prompt:
@@ -60,7 +71,10 @@ file named by the current prompt:
   to work from the repo root.
 - Worker 0 tells the hunter not to edit
   `docs/bug_hunt/bug_hunt.<short-sha>.md`, not to edit
-  `docs/bug_hunt/dicta.md`, and not to commit.
+  `docs/bug_hunt/dicta.md`, and not to run any git commands whatsoever.
+  `git status`, `git diff`, `git log`, branch creation, branch
+  switching, checkout, commit, push, stash, merge, rebase, and similar
+  VCS commands are all off limits.
 - The hunter may edit only the source file named by the prompt. For a
   confirmed High-severity defect, the hunter may also add or update the
   permanent test that pins the corrected behavior.
@@ -79,23 +93,30 @@ The hunter's completion report must include:
 - Confirmed defect summary and severity, if any.
 - Files changed.
 - Validation commands and outcomes.
+- Confirmation that no git commands were run, and that no branch
+  switch, branch creation, commit, or push occurred.
 - Any scratch files created and removed.
 
 ## Step 4: record the result, then advance
 After the hunter reports done, Worker 0 reviews the report and the
-working-tree diff for scope. Then Worker 0 updates only the matching
+contents of any touched source/test files for scope. Worker 0 does not
+run git commands while reviewing; if unrelated workspace movement or
+other VCS activity is suspected, Worker 0 stops and asks the maintainer
+instead of investigating with git. Then Worker 0 updates only the matching
 checklist item in `docs/bug_hunt/bug_hunt.<short-sha>.md`:
 - If the hunter completed the file, change the checkbox to `- [x]`.
 - Add a concise nested `Result:` line under the item. `No issues` is a
   valid result and must still be recorded explicitly.
+- Use a stable format: `Result: <outcome>. Files changed: <...>;
+  validation: <...>.`
 - For a fix, include severity, changed files, and validation in the
   `Result:` line.
 - For a blocker, leave the checkbox unchecked, add a nested `Blocked:`
   line, and stop or ask the maintainer before retrying that item.
 
 Example result lines:
-- `Result: No issues.`
-- `Result: Fixed Medium in django_strawberry_framework/filters/sets.py;
+- `Result: No issues. Files changed: none; validation: <commands/results>.`
+- `Result: Fixed Medium. Files changed: django_strawberry_framework/filters/sets.py;
   validation: uv run ruff format ... pass, uv run ruff check ... pass.`
 - `Blocked: Fix requires sibling changes outside the prompted file.`
 

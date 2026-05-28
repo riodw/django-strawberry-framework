@@ -83,6 +83,8 @@ def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
     """
     if filterset_class is None:
         return None
+    # In-function import: dodges the `types -> filters -> types` module-load
+    # cycle. Do NOT hoist to module top.
     from ..filters.sets import FilterSet
 
     if not (isinstance(filterset_class, type) and issubclass(filterset_class, FilterSet)):

@@ -41,6 +41,29 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import (Slice 4 quote
 _SYNC_MISUSE_SENTINEL: str = "get_queryset returned a coroutine in a sync resolver context"
 
 
+class SyncMisuseError(ConfigurationError, RuntimeError):
+    """Raised when a sync resolver context encounters an async ``get_queryset``.
+
+    Structural marker for the "async ``get_queryset`` hook invoked from a
+    sync resolver" misuse. Multiple-inherits ``ConfigurationError`` AND
+    ``RuntimeError`` so it remains catchable by every existing handler
+    shape:
+
+    - ``except ConfigurationError`` (existing consumer + test pattern,
+      and the raise-site contract since the package's
+      "finalize-/configuration-time errors are
+      ``ConfigurationError``" convention) still catches it.
+    - ``except RuntimeError`` (the dispatcher branch in
+      ``filters/sets.py::FilterSet.apply``) also still catches it.
+
+    The sentinel-string substring check at the catch site keeps working
+    for now — the message still embeds ``_SYNC_MISUSE_SENTINEL``. A
+    future pass that touches ``filters/sets.py`` can switch the catch
+    to ``except SyncMisuseError`` and drop the substring matcher
+    entirely.
+    """
+
+
 def implements_relay_node(type_cls: type) -> bool:
     """Return whether ``type_cls`` is a subclass of ``strawberry.relay.Node``.
 
@@ -219,7 +242,7 @@ def _apply_get_queryset_sync(cls: type, qs: models.QuerySet, info: Any) -> model
     result = cls.get_queryset(qs, info)
     if inspect.iscoroutine(result):
         result.close()
-        raise ConfigurationError(
+        raise SyncMisuseError(
             f"{cls.__name__}.{_SYNC_MISUSE_SENTINEL}. "
             "The Relay node defaults only await async "
             "get_queryset hooks on the async branch; either invoke the "

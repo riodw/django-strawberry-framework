@@ -265,17 +265,6 @@ def finalize_django_types() -> None:
     registry.mark_finalized()
 
 
-def _graphql_type_name(definition: DjangoTypeDefinition) -> str:
-    """Return the GraphQL type name Strawberry would emit for ``definition``.
-
-    Strawberry derives the surface name as ``definition.name`` when set,
-    falling back to ``definition.origin.__name__``. Centralizing the
-    fallback ensures the H2-rev8 strict-equality check compares names
-    against the same derivation rule the schema actually uses.
-    """
-    return definition.name if definition.name is not None else definition.origin.__name__
-
-
 def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition) -> None:
     """Bind ``filterset_cls._owner_definition`` with strict multi-owner validation.
 
@@ -322,9 +311,10 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
             )
         prev_definition, _ = prev_target
         new_definition, _ = new_target
-        if prev_definition is not new_definition or _graphql_type_name(
-            prev_definition,
-        ) != _graphql_type_name(new_definition):
+        if (
+            prev_definition is not new_definition
+            or prev_definition.graphql_type_name != new_definition.graphql_type_name
+        ):
             raise ConfigurationError(
                 _format_owner_mismatch_error(
                     filterset_cls,
@@ -406,7 +396,18 @@ def _bind_filtersets() -> None:
     ``filter_for_field`` / ``filter_for_lookup`` overrides regardless
     of which type-cls is iterated first.
 
-    Subpass 3 — materialize input classes. Reads the
+    Subpass 3 — orphan validation. Compares the FilterSets passed to
+    ``filter_input_type(...)`` (per Decision 11) against the set of
+    FilterSets wired via ``Meta.filterset_class``. Orphans raise
+    ``ConfigurationError`` per spec-021 line 673 with the actionable
+    suggestion to add the missing ``filterset_class = <Name>``. Runs
+    BEFORE materialization so an orphan failure leaves no partial
+    state in ``_materialized_names`` /
+    ``FilterArgumentsFactory.input_object_types``; otherwise a re-run
+    of ``finalize_django_types()`` after fixing the orphan would see
+    stale ledger entries from the prior failed attempt.
+
+    Subpass 4 — materialize input classes. Reads the
     ``FilterArgumentsFactory(filterset_cls).arguments`` property
     (triggers BFS build, idempotent through the factory's class-level
     cache) and materializes EVERY built class from the factory's
@@ -414,12 +415,6 @@ def _bind_filtersets() -> None:
     ``filters.inputs`` via ``materialize_input_class(name, cls)``. A
     second factory instance for a sibling root sees the cached build
     via the class-level dict.
-
-    Subpass 4 — orphan validation. Compares the FilterSets passed to
-    ``filter_input_type(...)`` (per Decision 11) against the set of
-    FilterSets wired via ``Meta.filterset_class``. Orphans raise
-    ``ConfigurationError`` per spec-021 line 673 with the actionable
-    suggestion to add the missing ``filterset_class = <Name>``.
     """
     # Local imports: keep ``types/finalizer.py`` independent of the
     # filters package's module-load order. The phase-2.5 binding only
@@ -474,7 +469,18 @@ def _bind_filtersets() -> None:
                 f"{exc.__class__.__name__}: {exc}",
             ) from exc
 
-    # Subpass 3: materialize every built input class as a module global.
+    # Subpass 3: orphan validation against the helper-tracked set. Runs
+    # BEFORE materialization so a failure here doesn't leave half-
+    # materialized input classes in the inputs-module namespace.
+    wired_set = set(wired)
+    orphans = sorted(
+        _helper_referenced_filtersets - wired_set,
+        key=lambda cls: f"{cls.__module__}.{cls.__qualname__}",
+    )
+    if orphans:
+        raise ConfigurationError(_format_orphan_filtersets_error(orphans))
+
+    # Subpass 4: materialize every built input class as a module global.
     for filterset_cls in wired:
         factory = FilterArgumentsFactory(filterset_cls)
         # Touch ``.arguments`` to drive ``_ensure_built`` (idempotent
@@ -484,12 +490,3 @@ def _bind_filtersets() -> None:
         factory.arguments
         for name, input_cls in factory.input_object_types.items():
             materialize_input_class(name, input_cls)
-
-    # Subpass 4: orphan validation against the helper-tracked set.
-    wired_set = set(wired)
-    orphans = sorted(
-        _helper_referenced_filtersets - wired_set,
-        key=lambda cls: f"{cls.__module__}.{cls.__qualname__}",
-    )
-    if orphans:
-        raise ConfigurationError(_format_orphan_filtersets_error(orphans))

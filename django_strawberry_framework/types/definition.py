@@ -86,6 +86,19 @@ class DjangoTypeDefinition:
     filterset_class: type | None = None
     finalized: bool = False
 
+    @property
+    def graphql_type_name(self) -> str:
+        """Return the GraphQL type name Strawberry emits for this definition.
+
+        Strawberry derives the surface name as ``self.name`` when set,
+        falling back to ``self.origin.__name__``. Centralized here so
+        every call site that needs the same derivation rule reads from
+        one source — the alternative was three inline copies in
+        ``finalizer.py``, ``filters/base.py``, and ``filters/inputs.py``
+        which would silently diverge across renames.
+        """
+        return self.name if self.name is not None else self.origin.__name__
+
     def related_target_for(
         self,
         field_name: str,
@@ -110,6 +123,9 @@ class DjangoTypeDefinition:
         ``registry`` (which imports ``DjangoTypeDefinition`` lazily
         under ``TYPE_CHECKING``).
         """
+        # In-function imports: dodge the `definition -> registry -> definition`
+        # module-load cycle (registry imports DjangoTypeDefinition lazily under
+        # TYPE_CHECKING). Do NOT hoist to module top.
         from django.core.exceptions import FieldDoesNotExist
 
         from ..registry import registry

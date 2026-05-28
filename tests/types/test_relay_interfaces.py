@@ -879,6 +879,38 @@ def test_resolve_node_sync_with_async_get_queryset_raises():
         CategoryNode.resolve_node(1, info=None)
 
 
+def test_sync_misuse_raises_sync_misuse_error_subclass():
+    """The sync-misuse raise is a ``SyncMisuseError`` (structural marker).
+
+    ``SyncMisuseError`` is the package's typed marker for the
+    "async ``get_queryset`` invoked from a sync resolver" misuse. It
+    multiple-inherits ``ConfigurationError`` AND ``RuntimeError`` so
+    existing handlers (``except ConfigurationError`` in consumer code
+    and tests; ``except RuntimeError`` inside the ``FilterSet.apply``
+    dispatcher) all keep catching it. Future consumers can match the
+    subclass directly (``except SyncMisuseError``) without depending
+    on the substring-of-message check.
+    """
+    from django_strawberry_framework.types.relay import SyncMisuseError
+
+    assert issubclass(SyncMisuseError, ConfigurationError)
+    assert issubclass(SyncMisuseError, RuntimeError)
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            return queryset
+
+    finalize_django_types()
+    with pytest.raises(SyncMisuseError, match="returned a coroutine"):
+        CategoryNode.resolve_node(1, info=None)
+
+
 def test_resolve_nodes_sync_with_async_get_queryset_raises():
     """Sync ``resolve_nodes`` + ``async def get_queryset`` raises ``ConfigurationError``.
 

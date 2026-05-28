@@ -117,170 +117,198 @@ obvious.
 
 ## Per-file prompts
 
-- [ ] django_strawberry_framework/_django_patches.py
+- [x] django_strawberry_framework/_django_patches.py
     - docs/shadow/django_strawberry_framework___django_patches.stripped.py
     - docs/shadow/django_strawberry_framework___django_patches.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework___django_patches.stripped.py and docs/shadow/django_strawberry_framework___django_patches.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/_django_patches.py
+    - Result: No issues. Files changed: none; validation: no ruff run because no edits. Hunter ran `uv run pytest tests/test_django_patches.py --no-cov` (12 passed) and `uv run pytest tests/test/test_wrap.py --no-cov` (6 passed) before scope correction.
 
-- [ ] django_strawberry_framework/apps.py
+- [x] django_strawberry_framework/apps.py
     - docs/shadow/django_strawberry_framework__apps.stripped.py
     - docs/shadow/django_strawberry_framework__apps.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__apps.stripped.py and docs/shadow/django_strawberry_framework__apps.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/apps.py
+    - Result: No issues. Files changed: none; validation: no ruff run because no edits.
 
-- [ ] django_strawberry_framework/conf.py
+- [x] django_strawberry_framework/conf.py
     - docs/shadow/django_strawberry_framework__conf.stripped.py
     - docs/shadow/django_strawberry_framework__conf.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__conf.stripped.py and docs/shadow/django_strawberry_framework__conf.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/conf.py
+    - Result: Fixed High recursion guard in `Settings.__getattr__`; changed `django_strawberry_framework/conf.py` and `tests/base/test_conf.py`; validation: `uv run pytest tests/base/test_conf.py --no-cov` passed (17 passed), ruff format/check on both touched files passed.
 
-- [ ] django_strawberry_framework/exceptions.py
+- [x] django_strawberry_framework/exceptions.py
     - docs/shadow/django_strawberry_framework__exceptions.stripped.py
     - docs/shadow/django_strawberry_framework__exceptions.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__exceptions.stripped.py and docs/shadow/django_strawberry_framework__exceptions.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/exceptions.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest --no-cov` passed (975 passed).
 
-- [ ] django_strawberry_framework/filters/base.py
+- [x] django_strawberry_framework/filters/base.py
     - docs/shadow/django_strawberry_framework__filters__base.stripped.py
     - docs/shadow/django_strawberry_framework__filters__base.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__filters__base.stripped.py and docs/shadow/django_strawberry_framework__filters__base.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/filters/base.py
+    - Result: Fixed High `GlobalIDMultipleChoiceFilter.filter` crash on `None`; changed `django_strawberry_framework/filters/base.py` and `tests/filters/test_base.py`; validation: `uv run pytest tests/filters/test_base.py --no-cov` passed (31 passed), `uv run pytest --no-cov` passed (976 passed), ruff format/check on both touched files passed.
 
-- [ ] django_strawberry_framework/filters/factories.py
+- [x] django_strawberry_framework/filters/factories.py
     - docs/shadow/django_strawberry_framework__filters__factories.stripped.py
     - docs/shadow/django_strawberry_framework__filters__factories.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__filters__factories.stripped.py and docs/shadow/django_strawberry_framework__filters__factories.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/filters/factories.py
+    - Result: Fixed High dynamic FilterSet cache crash on unhashable Meta values; changed `django_strawberry_framework/filters/factories.py` and `tests/filters/test_factories.py`; validation: `uv run pytest tests/filters/test_factories.py` passed (17 passed), `uv run pytest --no-cov` passed (982 passed), ruff format/check on both touched files passed.
 
-- [ ] django_strawberry_framework/filters/inputs.py
+- [x] django_strawberry_framework/filters/inputs.py
     - docs/shadow/django_strawberry_framework__filters__inputs.stripped.py
     - docs/shadow/django_strawberry_framework__filters__inputs.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__filters__inputs.stripped.py and docs/shadow/django_strawberry_framework__filters__inputs.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/filters/inputs.py
+    - Result: Fixed High traversed relation field grouping when the field name is also in `LOOKUP_NAME_MAP`; changed `django_strawberry_framework/filters/inputs.py` and `tests/filters/test_inputs.py`; validation: `uv run pytest --no-cov` passed (981 passed), ruff format/check on both touched files passed. Note: hunter committed/pushed this fix on branch `bugfix/inputs-lookup-token-grouping` despite the no-commit instruction.
 
-- [ ] django_strawberry_framework/filters/sets.py
+- [x] django_strawberry_framework/filters/sets.py
     - docs/shadow/django_strawberry_framework__filters__sets.stripped.py
     - docs/shadow/django_strawberry_framework__filters__sets.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__filters__sets.stripped.py and docs/shadow/django_strawberry_framework__filters__sets.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/filters/sets.py
+    - Result: Fixed High logical-branch permission bypass and Medium request context loss in logical branches; changed `django_strawberry_framework/filters/sets.py` and `tests/filters/test_sets.py`; validation: `uv run pytest tests/filters/test_sets.py --no-cov` passed (44 passed), `uv run pytest --no-cov` passed (983 passed), ruff format/check on both touched files passed.
 
-- [ ] django_strawberry_framework/list_field.py
+- [x] django_strawberry_framework/list_field.py
     - docs/shadow/django_strawberry_framework__list_field.stripped.py
     - docs/shadow/django_strawberry_framework__list_field.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__list_field.stripped.py and docs/shadow/django_strawberry_framework__list_field.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/list_field.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest tests/test_list_field.py --no-cov` passed (25 passed), `uv run pytest examples/fakeshop/test_query/test_library_api.py --no-cov` passed (26 passed), `uv run pytest --no-cov` passed (986 passed, 1 skipped).
 
-- [ ] django_strawberry_framework/management/commands/export_schema.py
+- [x] django_strawberry_framework/management/commands/export_schema.py
     - docs/shadow/django_strawberry_framework__management__commands__export_schema.stripped.py
     - docs/shadow/django_strawberry_framework__management__commands__export_schema.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__management__commands__export_schema.stripped.py and docs/shadow/django_strawberry_framework__management__commands__export_schema.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/management/commands/export_schema.py
+    - Result: No issues. Files changed: none; validation: `uv run ruff check django_strawberry_framework/management/commands/export_schema.py` passed, `uv run ruff format --check django_strawberry_framework/management/commands/export_schema.py` passed, `uv run pytest tests/management/test_export_schema.py --no-cov` passed (10 passed), `uv run pytest examples/fakeshop/tests/test_commands.py --no-cov` passed (18 passed), `uv run pytest --no-cov` passed (985 passed, 3 skipped).
 
-- [ ] django_strawberry_framework/optimizer/_context.py
+- [x] django_strawberry_framework/optimizer/_context.py
     - docs/shadow/django_strawberry_framework__optimizer___context.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer___context.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer___context.stripped.py and docs/shadow/django_strawberry_framework__optimizer___context.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/_context.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest tests/optimizer/` passed (286 passed), `uv run ruff check django_strawberry_framework/optimizer/_context.py` passed, `uv run ruff format --check django_strawberry_framework/optimizer/_context.py` passed.
 
-- [ ] django_strawberry_framework/optimizer/extension.py
+- [x] django_strawberry_framework/optimizer/extension.py
     - docs/shadow/django_strawberry_framework__optimizer__extension.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__extension.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__extension.stripped.py and docs/shadow/django_strawberry_framework__optimizer__extension.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/extension.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest --no-cov` passed (987 passed).
 
-- [ ] django_strawberry_framework/optimizer/field_meta.py
+- [x] django_strawberry_framework/optimizer/field_meta.py
     - docs/shadow/django_strawberry_framework__optimizer__field_meta.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__field_meta.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__field_meta.stripped.py and docs/shadow/django_strawberry_framework__optimizer__field_meta.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/field_meta.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest tests/optimizer/ --no-cov` passed (286 passed), `uv run ruff check django_strawberry_framework/optimizer/field_meta.py` passed.
 
-- [ ] django_strawberry_framework/optimizer/hints.py
+- [x] django_strawberry_framework/optimizer/hints.py
     - docs/shadow/django_strawberry_framework__optimizer__hints.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__hints.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__hints.stripped.py and docs/shadow/django_strawberry_framework__optimizer__hints.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/hints.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest tests/optimizer/test_hints.py --no-cov` passed (23 passed), `uv run pytest --no-cov` passed (985 passed, 3 skipped), `uv run ruff check django_strawberry_framework/optimizer/hints.py` passed, `uv run ruff format --check django_strawberry_framework/optimizer/hints.py` passed.
 
-- [ ] django_strawberry_framework/optimizer/plans.py
+- [x] django_strawberry_framework/optimizer/plans.py
     - docs/shadow/django_strawberry_framework__optimizer__plans.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__plans.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__plans.stripped.py and docs/shadow/django_strawberry_framework__optimizer__plans.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/plans.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest --no-cov tests/optimizer/test_plans.py` passed (52 passed), `uv run pytest --no-cov tests/` passed (874 passed, 2 skipped), `uv run pytest --no-cov examples/fakeshop/` passed (111 passed, 1 skipped), `uv run ruff format --check django_strawberry_framework/optimizer/plans.py` passed, `uv run ruff check django_strawberry_framework/optimizer/plans.py` passed.
 
-- [ ] django_strawberry_framework/optimizer/walker.py
+- [x] django_strawberry_framework/optimizer/walker.py
     - docs/shadow/django_strawberry_framework__optimizer__walker.stripped.py
     - docs/shadow/django_strawberry_framework__optimizer__walker.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__optimizer__walker.stripped.py and docs/shadow/django_strawberry_framework__optimizer__walker.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/optimizer/walker.py
+    - Result: No issues. Files changed: none; validation: `uv run ruff format django_strawberry_framework/optimizer/walker.py` passed, `uv run ruff check django_strawberry_framework/optimizer/walker.py` passed, `uv run pytest tests/optimizer/test_walker.py --no-cov` passed (77 passed), `uv run pytest --no-cov` passed (985 passed, 3 skipped).
 
-- [ ] django_strawberry_framework/registry.py
+- [x] django_strawberry_framework/registry.py
     - docs/shadow/django_strawberry_framework__registry.stripped.py
     - docs/shadow/django_strawberry_framework__registry.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__registry.stripped.py and docs/shadow/django_strawberry_framework__registry.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/registry.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest tests/test_registry.py --no-cov` passed (60 passed), `uv run pytest --no-cov` passed (991 passed), `uv run ruff check django_strawberry_framework/registry.py` passed, `uv run ruff format --check django_strawberry_framework/registry.py` passed.
 
-- [ ] django_strawberry_framework/scalars.py
+- [x] django_strawberry_framework/scalars.py
     - docs/shadow/django_strawberry_framework__scalars.stripped.py
     - docs/shadow/django_strawberry_framework__scalars.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__scalars.stripped.py and docs/shadow/django_strawberry_framework__scalars.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/scalars.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest tests/test_scalars.py --no-cov` passed (43 passed), `uv run ruff check django_strawberry_framework/scalars.py` passed, `uv run ruff format --check django_strawberry_framework/scalars.py` passed.
 
-- [ ] django_strawberry_framework/types/base.py
+- [x] django_strawberry_framework/types/base.py
     - docs/shadow/django_strawberry_framework__types__base.stripped.py
     - docs/shadow/django_strawberry_framework__types__base.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__base.stripped.py and docs/shadow/django_strawberry_framework__types__base.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/base.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest tests/types/test_base.py tests/types/test_relay_interfaces.py tests/types/test_definition_order.py --no-cov` passed (160 passed), `uv run ruff check django_strawberry_framework/types/base.py` passed, `uv run ruff format --check django_strawberry_framework/types/base.py` passed.
 
-- [ ] django_strawberry_framework/types/converters.py
+- [x] django_strawberry_framework/types/converters.py
     - docs/shadow/django_strawberry_framework__types__converters.stripped.py
     - docs/shadow/django_strawberry_framework__types__converters.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__converters.stripped.py and docs/shadow/django_strawberry_framework__types__converters.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/converters.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest tests/types/ -v --no-cov` passed (247 passed), `uv run coverage report -m django_strawberry_framework/types/converters.py` passed.
 
-- [ ] django_strawberry_framework/types/definition.py
+- [x] django_strawberry_framework/types/definition.py
     - docs/shadow/django_strawberry_framework__types__definition.stripped.py
     - docs/shadow/django_strawberry_framework__types__definition.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__definition.stripped.py and docs/shadow/django_strawberry_framework__types__definition.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/definition.py
+    - Result: No issues. Files changed: none; validation: `uv run pytest tests/types/test_definition_relations.py --no-cov` passed (3 passed), `uv run ruff check django_strawberry_framework/types/definition.py` passed, `uv run ruff format --check django_strawberry_framework/types/definition.py` passed.
 
-- [ ] django_strawberry_framework/types/finalizer.py
+- [x] django_strawberry_framework/types/finalizer.py
     - docs/shadow/django_strawberry_framework__types__finalizer.stripped.py
     - docs/shadow/django_strawberry_framework__types__finalizer.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__finalizer.stripped.py and docs/shadow/django_strawberry_framework__types__finalizer.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/finalizer.py
+    - Result: No issues. Files changed: none; validation: `pytest --no-cov` passed (992 passed, 3 skipped), `ruff check django_strawberry_framework/types/finalizer.py` passed, `ruff format --check django_strawberry_framework/types/finalizer.py` passed.
 
-- [ ] django_strawberry_framework/types/relations.py
+- [x] django_strawberry_framework/types/relations.py
     - docs/shadow/django_strawberry_framework__types__relations.stripped.py
     - docs/shadow/django_strawberry_framework__types__relations.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__relations.stripped.py and docs/shadow/django_strawberry_framework__types__relations.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/relations.py
+    - Result: No issues. Files changed: none; validation: `ruff check django_strawberry_framework/types/relations.py` passed, `ruff format --check django_strawberry_framework/types/relations.py` passed, `pytest tests/types/test_relations.py --no-cov` passed (3 passed).
 
-- [ ] django_strawberry_framework/types/relay.py
+- [x] django_strawberry_framework/types/relay.py
     - docs/shadow/django_strawberry_framework__types__relay.stripped.py
     - docs/shadow/django_strawberry_framework__types__relay.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__relay.stripped.py and docs/shadow/django_strawberry_framework__types__relay.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/relay.py
+    - Result: No issues. Files changed: none; validation: `tests/types/test_relay_interfaces.py` tests passed, full pytest suite passed (996 passed), Ruff lint/format passed.
 
-- [ ] django_strawberry_framework/types/resolvers.py
+- [x] django_strawberry_framework/types/resolvers.py
     - docs/shadow/django_strawberry_framework__types__resolvers.stripped.py
     - docs/shadow/django_strawberry_framework__types__resolvers.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__types__resolvers.stripped.py and docs/shadow/django_strawberry_framework__types__resolvers.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/types/resolvers.py
+    - Result: No issues. Files changed: none; validation: `pytest tests/types/test_resolvers.py --no-cov` passed (26 passed), `pytest --no-cov` passed (994 passed, 3 skipped), `ruff check django_strawberry_framework/types/resolvers.py` passed, `ruff format --check django_strawberry_framework/types/resolvers.py` passed.
 
-- [ ] django_strawberry_framework/utils/relations.py
+- [x] django_strawberry_framework/utils/relations.py
     - docs/shadow/django_strawberry_framework__utils__relations.stripped.py
     - docs/shadow/django_strawberry_framework__utils__relations.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__utils__relations.stripped.py and docs/shadow/django_strawberry_framework__utils__relations.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/utils/relations.py
+    - Result: No issues. Files changed: none; validation: Ruff checks passed and full pytest suite passed (997 passed).
 
-- [ ] django_strawberry_framework/utils/strings.py
+- [x] django_strawberry_framework/utils/strings.py
     - docs/shadow/django_strawberry_framework__utils__strings.stripped.py
     - docs/shadow/django_strawberry_framework__utils__strings.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__utils__strings.stripped.py and docs/shadow/django_strawberry_framework__utils__strings.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/utils/strings.py
+    - Result: No issues. Files changed: none; validation: `ruff check django_strawberry_framework/utils/strings.py` passed, `ruff format --check django_strawberry_framework/utils/strings.py` passed, `tests/utils/test_strings.py` passed.
 
-- [ ] django_strawberry_framework/utils/typing.py
+- [x] django_strawberry_framework/utils/typing.py
     - docs/shadow/django_strawberry_framework__utils__typing.stripped.py
     - docs/shadow/django_strawberry_framework__utils__typing.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__utils__typing.stripped.py and docs/shadow/django_strawberry_framework__utils__typing.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/utils/typing.py
+    - Result: No issues. Files changed: none; validation: `ruff check django_strawberry_framework/utils/typing.py` passed, `ruff format --check django_strawberry_framework/utils/typing.py` passed, `pytest --no-cov tests/utils/test_typing.py` passed (8 passed), `pytest --no-cov` passed (994 passed).

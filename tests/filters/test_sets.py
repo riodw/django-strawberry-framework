@@ -28,9 +28,8 @@ from django_strawberry_framework.filters import (
     GlobalIDMultipleChoiceFilter,
     RelatedFilter,
 )
-from django_strawberry_framework.filters.sets import _SYNC_MISUSE_SENTINEL
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.types.relay import apply_interfaces
+from django_strawberry_framework.types.relay import _SYNC_MISUSE_SENTINEL, apply_interfaces
 
 
 @pytest.fixture(autouse=True)

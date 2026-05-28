@@ -28,7 +28,7 @@ import strawberry
 from django.db import models
 from django_filters import ChoiceFilter, Filter, TypedChoiceFilter
 from django_filters import RangeFilter as _DjangoRangeFilter
-from strawberry import relay
+from strawberry import UNSET, relay
 
 from ..exceptions import ConfigurationError
 from .base import (
@@ -156,8 +156,24 @@ _materialized_names: dict[str, type] = {}
 # ``stringcase.pascalcase``; the package has no ``stringcase`` dependency
 # so a local one-liner suffices: ``galaxy__name`` -> ``GalaxyName``.
 def _pascal_case(name: str) -> str:
-    """Return ``name`` converted to ``PascalCase`` (treats ``_`` as a separator)."""
-    return "".join(part.capitalize() for part in name.replace("__", "_").split("_") if part)
+    """Return ``name`` converted to ``PascalCase`` (treats ``_`` as a separator).
+
+    Raises ``ConfigurationError`` for inputs that contain no
+    word-character tokens (e.g. ``"_"``, ``""``, ``"__"``); the result
+    would otherwise be an empty string and silently collide on the
+    downstream ``f"{bag_name}{...}FilterInputType"`` naming, producing
+    a generic ``"FilterInputType"`` that the BFS factory's collision
+    check would then flag indirectly. Raising here surfaces the real
+    cause at the call site.
+    """
+    parts = [part.capitalize() for part in name.replace("__", "_").split("_") if part]
+    if not parts:
+        raise ConfigurationError(
+            f"_pascal_case received {name!r} which contains no word "
+            "characters; rename the filter / field so its name has at "
+            "least one alphanumeric token.",
+        )
+    return "".join(parts)
 
 
 def _input_type_name_for(filterset_class: type[FilterSet]) -> str:
@@ -205,6 +221,11 @@ def _scalar_from_form_field(form_field: Any) -> type:
         return datetime.time
     if isinstance(form_field, forms.UUIDField):
         return uuid.UUID
+    # Both ``CharField`` and the catch-all map to ``str``. The explicit
+    # ``CharField`` branch is kept for documentation: the conversion
+    # table at spec-021 Decision 4 M1 lists CharField as a recognized
+    # shape, and a future reader who inspects this function should see
+    # that the mapping is intentional, not an accidental fallthrough.
     if isinstance(form_field, forms.CharField):
         return str
     return str
@@ -255,7 +276,11 @@ def _scalar_from_model_field(model_field: Any) -> type:
     return str
 
 
-def _choice_enum_from_filter(filter_instance: ChoiceFilter, type_name: str) -> Any:
+def _choice_enum_from_filter(
+    filter_instance: ChoiceFilter,
+    type_name: str,
+    model_field: Any,
+) -> Any:
     """Derive a Strawberry enum from a ``ChoiceFilter``'s underlying choice source.
 
     Per spec-021 Decision 4 M5 (line 591), a ``ChoiceFilter`` whose source
@@ -265,11 +290,14 @@ def _choice_enum_from_filter(filter_instance: ChoiceFilter, type_name: str) -> A
     the pipeline at ``types.converters.convert_choices_to_enum`` is
     consulted so the GraphQL enum is shared with any sibling
     ``DjangoType`` reading the same column.
+
+    ``model_field`` is threaded as a parameter rather than stashed on
+    the filter instance — keeps the filter stateless and avoids the
+    "side-effect on a filter during input-class construction" trap.
     """
     # Local import to avoid a top-level cycle through ``types.converters``.
     from ..types.converters import convert_choices_to_enum
 
-    model_field = getattr(filter_instance, "_model_field", None)
     if model_field is None or not getattr(model_field, "choices", None):
         raise ConfigurationError(
             f"ChoiceFilter on {filter_instance!r} is not backed by a Django "
@@ -300,13 +328,6 @@ def convert_filter_to_input_annotation(
     ``ChoiceFilter``, then the scalar catch-all. ``method=...`` filters
     that do not match any branch raise ``ConfigurationError``.
     """
-    # Stash the bound model field on the filter instance so the
-    # ``ChoiceFilter`` branch can reach back to ``field.choices`` without
-    # re-introspecting the model. The attribute is private to this
-    # module; the converter pair is the only writer.
-    if model_field is not None:
-        filter_instance._model_field = model_field  # type: ignore[attr-defined]
-
     required = bool(filter_instance.extra.get("required", False))
 
     if isinstance(filter_instance, GlobalIDMultipleChoiceFilter):
@@ -322,7 +343,7 @@ def convert_filter_to_input_annotation(
         annotation = _scalar_from_model_field(model_field)
     elif isinstance(filter_instance, (ChoiceFilter, TypedChoiceFilter)):
         type_name = _owner_type_name(owner_definition) or "Filter"
-        annotation = _choice_enum_from_filter(filter_instance, type_name)
+        annotation = _choice_enum_from_filter(filter_instance, type_name, model_field)
     else:
         # Catch-all scalar branch. ``Filter(method=...)`` filters land
         # here when their ``field_class`` is a recognized form field; an
@@ -369,7 +390,14 @@ def normalize_input_value(
     multi-key return shape lets the ``_normalize_input`` caller merge
     the patch without inventing a sentinel-pair object.
     """
-    if raw_value is None:
+    # Defensive short-circuit against ``strawberry.UNSET`` reaching the
+    # branches below: every branch indexes / iterates / coerces
+    # ``raw_value`` and would either raise ``TypeError`` (UNSET is not
+    # iterable) or silently pass the UNSET sentinel into ``data``. Every
+    # caller MUST treat UNSET as "not supplied" — same as ``None`` — so
+    # this entry point is the single defensive line every future caller
+    # benefits from.
+    if raw_value is None or raw_value is UNSET:
         return None
 
     if isinstance(filter_instance, GlobalIDMultipleChoiceFilter):
@@ -453,14 +481,14 @@ def _normalize_range_value(
 
 
 def _owner_type_name(owner_definition: DjangoTypeDefinition | None) -> str | None:
-    """Return a stable type name for ``owner_definition`` (or ``None``)."""
-    if owner_definition is None:
-        return None
-    name = getattr(owner_definition, "name", None)
-    if name:
-        return str(name)
-    origin = getattr(owner_definition, "origin", None)
-    return getattr(origin, "__name__", None) if origin is not None else None
+    """Return the GraphQL type name for ``owner_definition`` (or ``None``).
+
+    Delegates to ``DjangoTypeDefinition.graphql_type_name`` so the three
+    callers (this helper, ``filters/base.py::_expected_global_id_type_name``,
+    ``types/finalizer.py::_bind_filterset_owner``) share one derivation
+    rule and cannot drift across renames.
+    """
+    return owner_definition.graphql_type_name if owner_definition is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -798,7 +826,19 @@ def clear_filter_input_namespace() -> None:
 
 
 def _iter_filterset_subclasses(root: type) -> list[type]:
-    """Return every concrete subclass of ``root`` (depth-first, dedup by identity)."""
+    """Return every concrete subclass of ``root`` (depth-first, dedup by identity).
+
+    Uses ``type.__subclasses__()`` which only yields LIVE subclasses;
+    garbage-collected definitions silently drop. That is the correct
+    contract for a test-isolation clear — a definition that has
+    already been collected has no state to reset. However: long-running
+    test runners that keep filterset references through fixture
+    lifetimes accumulate filtersets across tests; each carries
+    ``_expanded_filters`` / ``base_filters`` on ``__dict__``. If
+    integration suites ever run thousands of fixture-based filtersets,
+    profile this walk and consider weak-referencing the helper-tracked
+    set instead of relying on ``__subclasses__()`` traversal.
+    """
     seen: set[type] = set()
     result: list[type] = []
     stack: list[type] = list(root.__subclasses__())

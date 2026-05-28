@@ -28,7 +28,7 @@ from strawberry import UNSET
 from ..exceptions import ConfigurationError
 from ..registry import registry
 from ..types.relay import (
-    _SYNC_MISUSE_SENTINEL,
+    SyncMisuseError,
     _apply_get_queryset_async,
     _apply_get_queryset_sync,
     implements_relay_node,
@@ -77,31 +77,32 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
 
         return new_class
 
-    @classmethod
-    def expand_related_filter(
-        cls,
-        new_class: FilterSetMetaclass,
-        filter_name: str,
-        f: RelatedFilter,
-    ) -> dict[str, Any]:
-        """Expand `f` against its target filterset's resolved filters.
 
-        Verbatim port of the cookbook's `expand_related_filter`. The
-        per-field deep-copy avoids mutating the target filterset's
-        instances when the parent rebinds `field_name` to the relation
-        path.
-        """
-        expanded = OrderedDict()
-        target_filterset = f.filterset
-        if not target_filterset:
-            return expanded
-        target_filters = target_filterset.get_filters()
-        for child_name, field in target_filters.items():
-            new_name = f"{filter_name}__{child_name}"
-            field_copy = copy.deepcopy(field)
-            field_copy.field_name = f"{f.field_name}__{field.field_name}"
-            expanded[new_name] = field_copy
+def _expand_related_filter(
+    filter_name: str,
+    f: RelatedFilter,
+) -> OrderedDict[str, Any]:
+    """Expand `f` against its target filterset's resolved filters.
+
+    Verbatim port of the cookbook's `expand_related_filter`. The
+    per-field deep-copy avoids mutating the target filterset's
+    instances when the parent rebinds `field_name` to the relation
+    path. Module-level helper because the expansion has no metaclass
+    state — moving it off the metaclass keeps the call site
+    (``get_filters``) free of ``cls.__class__.expand_related_filter
+    (cls, ...)`` indirection that obscured the function's purpose.
+    """
+    expanded: OrderedDict = OrderedDict()
+    target_filterset = f.filterset
+    if not target_filterset:
         return expanded
+    target_filters = target_filterset.get_filters()
+    for child_name, field in target_filters.items():
+        new_name = f"{filter_name}__{child_name}"
+        field_copy = copy.deepcopy(field)
+        field_copy.field_name = f"{f.field_name}__{field.field_name}"
+        expanded[new_name] = field_copy
+    return expanded
 
 
 class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
@@ -112,8 +113,8 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
     are folded in via `FilterSetMetaclass` and `get_filters`. The
     Decision-8 / M1-of-rev5 named helpers decompose `apply_sync` and
     `apply_async` so each step can be exercised in isolation; `apply`
-    stays as a thin dispatcher that translates the sync-misuse
-    `ConfigurationError` from `_apply_get_queryset_sync` into a
+    stays as a thin dispatcher that translates the typed
+    `SyncMisuseError` from `_apply_get_queryset_sync` into a
     `RuntimeError` consumers can match on.
 
     `_owner_definition` is the seam Slice 3 binds at finalizer phase 2.5
@@ -150,6 +151,21 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
           `super().__new__()` call triggers `get_filters()`; the
           `__dict__`-based guard prevents the in-flight class from
           caching a half-built result.
+
+        Single-threaded contract:
+            ``_is_expanding_filters`` is a class-level reentrancy
+            flag, not a thread-local one. Expansion runs during
+            ``finalize_django_types()`` (single-threaded by design)
+            and once per class for the lifetime of the registry, so
+            the flag's read/write is never contended at runtime.
+            Parallel test runs that exercise the same FilterSet class
+            from different threads can race on the flag — the second
+            thread sees ``_is_expanding_filters=True`` and short-
+            circuits to ``super().get_filters()``, yielding the
+            unexpanded set. Tests that need to call ``get_filters()``
+            from multiple threads must serialize the call themselves;
+            do not introduce a ``threading.local`` here without first
+            confirming a real consumer call path requires it.
         """
         if cls.__dict__.get("_expanded_filters") is not None:
             return cls.__dict__["_expanded_filters"]
@@ -163,7 +179,7 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
             if cls._meta.model is not None:
                 related_filters_val = getattr(cls, "related_filters", OrderedDict())
                 for filter_name, f in related_filters_val.items():
-                    expanded = cls.__class__.expand_related_filter(cls, filter_name, f)
+                    expanded = _expand_related_filter(filter_name, f)
                     all_filters.update(expanded)
             # TODO(spec-021-filters-0_0_8 Meta.search_fields card 0.1.2):
             # wire `construct_search(all_filters)` from
@@ -399,7 +415,7 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         via ``filter_instance.parent._owner_definition``. The owner is
         therefore not threaded as a parameter here.
         """
-        if input_value is None:
+        if input_value is None or input_value is UNSET:
             return {}
         if isinstance(input_value, dict):
             items = list(input_value.items())
@@ -445,7 +461,16 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
             if bag_items is not None:
                 base_path = django_source_path or cls._form_key_for_python_attr(python_attr)
                 for lookup_attr, lookup_value in bag_items:
-                    if lookup_value is None:
+                    # Mirror the outer loop's UNSET guard so a partially-
+                    # supplied operator bag (e.g.
+                    # ``title: { exact: UNSET, icontains: "foo" }``) does
+                    # not leak the UNSET sentinel through to
+                    # ``normalize_input_value``; a Strawberry input
+                    # dataclass defaults every unsupplied lookup to
+                    # ``UNSET`` rather than ``None``, so this is the
+                    # common case for any consumer who fills some but
+                    # not all lookups.
+                    if lookup_value is None or lookup_value is UNSET:
                         continue
                     django_lookup = cls._form_key_for_python_attr(lookup_attr)
                     form_key = base_path if django_lookup == "exact" else f"{base_path}__{django_lookup}"
@@ -594,9 +619,10 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
 
         Reuses ``django_strawberry_framework/types/relay.py::_apply_get_queryset_sync``
         — the existing helper handles the sync-misuse detection and
-        raises ``ConfigurationError`` with ``_SYNC_MISUSE_SENTINEL`` in its
-        message; ``apply``'s catch-and-rethrow translates that into a
-        ``RuntimeError`` consumers can match on.
+        raises ``SyncMisuseError`` (a ``ConfigurationError`` and
+        ``RuntimeError`` subclass); ``apply``'s catch-and-rethrow
+        translates that into a ``RuntimeError`` consumers can match
+        on via the actionable "use apply_async instead" message.
 
         After the visibility hook runs, the child filterset's
         ``apply_sync`` is invoked against the visibility-scoped queryset
@@ -662,8 +688,21 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         (per-field gates are written as regular ``def
         check_X_permission(self, request)`` methods on the filterset)
         without requiring a fully-constructed `FilterSet` instance.
+
+        Double-dispatch contract (audit-log warning):
+            For an active ``RelatedFilter`` branch named ``shelves``
+            both gates fire — first the parent's
+            ``check_shelves_permission`` (the per-branch gate on the
+            owning filterset) and then the child filterset's own
+            ``_run_permission_checks`` which fires every active
+            ``check_*_permission`` declared on the child class. If the
+            consumer logs from each gate, the active branch produces
+            TWO audit log entries by design. Consumers who want a
+            single audit-log entry per branch should choose ONE side
+            (parent per-branch OR child class-level) to host the log
+            call.
         """
-        if input_value is None:
+        if input_value is None or input_value is UNSET:
             return
 
         bare = object.__new__(cls)
@@ -682,6 +721,20 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
             # active. Child filterset's own field gates fire via the
             # recursive call above.
             cls._invoke_permission_method(bare, field_name, request)
+
+        # Recurse into logical branches (and, or, not) to check permissions
+        # of any nested field/lookup clauses.
+        and_branches = normalized.get("and") or []
+        for child_input in and_branches:
+            cls._run_permission_checks(child_input, request)
+
+        or_branches = normalized.get("or") or []
+        for child_input in or_branches:
+            cls._run_permission_checks(child_input, request)
+
+        not_branch = normalized.get("not")
+        if not_branch is not None:
+            cls._run_permission_checks(not_branch, request)
 
     @staticmethod
     def _invoke_permission_method(bare_instance: Any, field_path: str, request: Any) -> None:
@@ -759,11 +812,16 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         carries through to every recursive level by construction.
         """
         qs = super().filter_queryset(queryset)
-        q = type(self)._evaluate_logic_tree(qs, self.data or {})
+        q = type(self)._evaluate_logic_tree(qs, self.data or {}, request=self.request)
         return qs.filter(q)
 
     @classmethod
-    def _evaluate_logic_tree(cls, queryset: models.QuerySet, tree_data: Any) -> models.Q:
+    def _evaluate_logic_tree(
+        cls,
+        queryset: models.QuerySet,
+        tree_data: Any,
+        request: Any = None,
+    ) -> models.Q:
         """Build the ``Q`` expression for the ``and`` / ``or`` / ``not`` branches.
 
         Recursion terminates naturally when ``tree_data`` carries no
@@ -776,23 +834,28 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
 
         and_branches = tree_data.get("and") or []
         for child_input in and_branches:
-            q &= cls._q_for_branch(queryset, child_input)
+            q &= cls._q_for_branch(queryset, child_input, request=request)
 
         or_branches = tree_data.get("or") or []
         if or_branches:
             or_q = models.Q()
             for child_input in or_branches:
-                or_q |= cls._q_for_branch(queryset, child_input)
+                or_q |= cls._q_for_branch(queryset, child_input, request=request)
             q &= or_q
 
         not_branch = tree_data.get("not")
         if not_branch is not None:
-            q &= ~cls._q_for_branch(queryset, not_branch)
+            q &= ~cls._q_for_branch(queryset, not_branch, request=request)
 
         return q
 
     @classmethod
-    def _q_for_branch(cls, queryset: models.QuerySet, child_input: Any) -> models.Q:
+    def _q_for_branch(
+        cls,
+        queryset: models.QuerySet,
+        child_input: Any,
+        request: Any = None,
+    ) -> models.Q:
         """Materialize one nested-branch input into a ``pk__in`` ``Q``.
 
         Normalizes the Strawberry input via the existing
@@ -803,7 +866,7 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         deeper ``and`` / ``or`` / ``not`` keys the branch carries.
         """
         child_data = cls._normalize_input(child_input)
-        child_set = cls(data=child_data, queryset=queryset, request=None)
+        child_set = cls(data=child_data, queryset=queryset, request=request)
         cls._validate_form_or_raise(child_set)
         return models.Q(pk__in=child_set.qs.values("pk"))
 
@@ -829,6 +892,24 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
             if child_qs is None and explicit is None:
                 continue
             if child_qs is not None and explicit is not None:
+                # Django raises an opaque ``AssertionError: Cannot combine
+                # queries on two different base models`` if the consumer-
+                # supplied ``RelatedFilter(queryset=...)`` is keyed on a
+                # different model than the target filterset's
+                # ``_meta.model``. Surface a typed ``ConfigurationError``
+                # naming the filter and both models so a GraphQL consumer
+                # gets an actionable message instead of the raw Django
+                # assertion.
+                if explicit.model is not child_qs.model:
+                    raise ConfigurationError(
+                        f"RelatedFilter {cls.__qualname__}.{field_name}: "
+                        f"the explicit ``queryset=`` is keyed on "
+                        f"{explicit.model.__qualname__} but the target "
+                        f"filterset is keyed on "
+                        f"{child_qs.model.__qualname__}. Pass a queryset "
+                        f"of {child_qs.model.__qualname__} instances to "
+                        "``RelatedFilter(queryset=...)``.",
+                    )
                 intersected = explicit & child_qs
             else:
                 intersected = child_qs if child_qs is not None else explicit
@@ -885,19 +966,15 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
     ) -> models.QuerySet:
         """Thin dispatcher — picks `apply_sync` and translates sync-misuse.
 
-        Decision 8 / M5 of rev6 — catches both `RuntimeError` (in case a
-        future raise site uses the canonical class) and
-        `ConfigurationError` (the existing class
-        `_apply_get_queryset_sync` raises today). When the exception's
-        message carries `_SYNC_MISUSE_SENTINEL`, the dispatcher rethrows
-        as `RuntimeError` with the clearer-message shape consumers can
-        match on. Any other exception propagates unchanged.
+        Decision 8 / M5 of rev6 — catches the typed ``SyncMisuseError``
+        raised by ``_apply_get_queryset_sync`` and rethrows as
+        ``RuntimeError`` with the actionable "use apply_async instead"
+        message consumers can match on. Class-based dispatch closes the
+        round-3 loop: no substring-matching against a constant string.
         """
         try:
             return cls.apply_sync(input_value, queryset, info)
-        except (RuntimeError, ConfigurationError) as exc:
-            if _SYNC_MISUSE_SENTINEL in str(exc):
-                raise RuntimeError(
-                    f"FilterSet.apply called against async get_queryset; use apply_async instead. ({exc})",
-                ) from exc
-            raise
+        except SyncMisuseError as exc:
+            raise RuntimeError(
+                f"FilterSet.apply called against async get_queryset; use apply_async instead. ({exc})",
+            ) from exc

@@ -29,7 +29,7 @@ from django_strawberry_framework.filters import (
     RelatedFilter,
 )
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.types.relay import _SYNC_MISUSE_SENTINEL, apply_interfaces
+from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 
 
 @pytest.fixture(autouse=True)
@@ -467,6 +467,43 @@ def test_normalize_input_walks_strawberry_dataclass():
     assert data.get("name") == "hello"
 
 
+def test_normalize_input_inner_bag_loop_skips_unset_lookups():
+    """Partial operator bags don't leak ``UNSET`` into form data.
+
+    Strawberry input dataclasses default every operator-bag lookup
+    (``exact``, ``i_contains``, ``in_``, ...) to ``UNSET`` rather than
+    ``None``. The inner loop in ``_normalize_input`` must skip UNSET
+    the same way the outer loop does; otherwise the UNSET sentinel
+    reaches ``normalize_input_value`` and either raises
+    ``TypeError: argument of type 'UNSET' is not iterable`` (list-like
+    filters) or lands in ``data[form_key]`` as a bogus value (scalar
+    filters). The common case is a consumer who supplies one lookup
+    but not the others — partially-supplied bags must not break.
+    """
+
+    @strawberry.input
+    class _Bag:
+        exact: str | None = strawberry.UNSET
+        i_contains: str | None = strawberry.UNSET
+
+    @strawberry.input
+    class _Input:
+        name: _Bag | None = strawberry.UNSET
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact", "icontains"]}
+
+    # Bag with only ``i_contains`` supplied; ``exact`` defaults to UNSET.
+    bag = _Bag(i_contains="foo")
+    data = CategoryFilter._normalize_input(_Input(name=bag))
+    # The UNSET ``exact`` does NOT pollute form-data as ``name=UNSET``.
+    assert "name" not in data
+    # The supplied ``i_contains`` lands at its django-filter form key.
+    assert data.get("name__icontains") == "foo"
+
+
 def test_normalize_input_skips_strawberry_unset_attrs():
     """``strawberry.UNSET`` attrs are skipped the same as ``None``.
 
@@ -606,6 +643,69 @@ def test_run_permission_checks_recurses_into_active_related_branch():
     assert "shelf.code" in fired
 
 
+def test_run_permission_checks_recurses_into_logical_branches():
+    fired: list[str] = []
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+        def check_name_permission(self, request):
+            fired.append("name")
+
+    # test recursion in "and" logical branch
+    CategoryFilter._run_permission_checks(
+        {"and_": [{"name": "foo"}, {"name": "bar"}]},
+        request=HttpRequest(),
+    )
+    assert fired == ["name", "name"]
+    fired.clear()
+
+    # test recursion in "or" logical branch
+    CategoryFilter._run_permission_checks(
+        {"or_": [{"name": "foo"}]},
+        request=HttpRequest(),
+    )
+    assert fired == ["name"]
+    fired.clear()
+
+    # test recursion in "not" logical branch
+    CategoryFilter._run_permission_checks(
+        {"not_": {"name": "baz"}},
+        request=HttpRequest(),
+    )
+    assert fired == ["name"]
+
+
+@pytest.mark.django_db
+def test_evaluate_logic_tree_preserves_request_context():
+    captured_requests: list[Any] = []
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+        def filter_queryset(self, queryset):
+            captured_requests.append(self.request)
+            return super().filter_queryset(queryset)
+
+    request = HttpRequest()
+    info = _make_info(request)
+    CategoryFilter.apply_sync(
+        {"and_": [{"name": "alpha"}]},
+        Category.objects.all(),
+        info,
+    )
+    assert len(captured_requests) > 0
+    # First entry in captured_requests is from the parent category filter,
+    # and subsequent are from the nested logic branch evaluation.
+    # All of them must preserve the same HttpRequest object.
+    for req in captured_requests:
+        assert req is request
+
+
 # ---------------------------------------------------------------------------
 # Apply pipeline — full apply_sync path
 # ---------------------------------------------------------------------------
@@ -659,7 +759,12 @@ def test_apply_sync_raises_graphql_error_on_invalid_input():
 
 
 def test_apply_dispatcher_rethrows_sync_misuse_with_clearer_message():
-    """A `ConfigurationError` carrying `_SYNC_MISUSE_SENTINEL` becomes `RuntimeError`."""
+    """A ``SyncMisuseError`` from ``apply_sync`` becomes ``RuntimeError``.
+
+    Class-based dispatch: the dispatcher catches the typed subclass
+    directly (no substring match) and rethrows with the actionable
+    "use apply_async instead" message.
+    """
 
     class CategoryFilter(FilterSet):
         class Meta:
@@ -668,9 +773,7 @@ def test_apply_dispatcher_rethrows_sync_misuse_with_clearer_message():
 
         @classmethod
         def apply_sync(cls, *args, **kwargs):
-            raise ConfigurationError(
-                f"FakeType.{_SYNC_MISUSE_SENTINEL}. some extra detail.",
-            )
+            raise SyncMisuseError("FakeType.get_queryset returned a coroutine.")
 
     with pytest.raises(RuntimeError) as excinfo:
         CategoryFilter.apply(None, Category.objects.all(), _make_info())
@@ -751,6 +854,50 @@ def test_apply_related_constraints_runs_active_branch_only():
     assert "active" in sql
     # And materializing the queryset returns only the branch with an active shelf.
     assert list(constrained_active.values_list("name", flat=True)) == ["alpha"]
+
+
+@pytest.mark.django_db
+def test_apply_related_constraints_model_mismatch_raises_configuration_error():
+    """A divergent-model ``RelatedFilter(queryset=...)`` surfaces ``ConfigurationError``.
+
+    Django raises ``AssertionError: Cannot combine queries on two
+    different base models`` when ``explicit & child_qs`` is called
+    against mismatched base models. The opaque assertion is replaced
+    with a typed ``ConfigurationError`` naming the offending filter
+    and both models, so a GraphQL consumer sees an actionable message
+    instead of a raw Django assertion.
+    """
+    # Branch has shelves; the consumer accidentally passes a Book qs as
+    # the explicit constraint for the ``shelves`` branch.
+    library_models.Branch.objects.create(name="alpha")
+    wrong_model_qs = library_models.Book.objects.all()
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves", queryset=wrong_model_qs)
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    # The child_qs_by_branch dict carries the correctly-modeled child qs
+    # (Shelf); the explicit constraint is the wrong model (Book). The
+    # precheck must surface ConfigurationError.
+    child_shelf_qs = library_models.Shelf.objects.all()
+    with pytest.raises(ConfigurationError) as excinfo:
+        BranchFilter._apply_related_constraints(
+            {"shelves": {"code": "active"}},
+            library_models.Branch.objects.all(),
+            {"shelves": child_shelf_qs},
+        )
+    msg = str(excinfo.value)
+    assert "Book" in msg
+    assert "Shelf" in msg
+    assert "shelves" in msg
 
 
 @pytest.mark.django_db

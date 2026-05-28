@@ -38,6 +38,7 @@ def test_public_api_surface_is_pinned():
         "DjangoOptimizerExtension",
         "DjangoType",
         "OptimizerHint",
+        "SyncMisuseError",
         "__version__",
         "auto",
         "finalize_django_types",

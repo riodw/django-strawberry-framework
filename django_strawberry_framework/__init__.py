@@ -21,7 +21,7 @@ from .list_field import DjangoListField  # noqa: E402
 from .optimizer import DjangoOptimizerExtension  # noqa: E402
 from .optimizer.hints import OptimizerHint  # noqa: E402
 from .scalars import BigInt, strawberry_config  # noqa: E402
-from .types import DjangoType, finalize_django_types  # noqa: E402
+from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 
 __version__ = "0.0.7"
 
@@ -31,6 +31,7 @@ __all__ = (
     "DjangoOptimizerExtension",
     "DjangoType",
     "OptimizerHint",
+    "SyncMisuseError",
     "__version__",
     "auto",
     "finalize_django_types",

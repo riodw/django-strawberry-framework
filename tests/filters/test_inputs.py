@@ -419,6 +419,26 @@ def test_normalize_input_value_none_returns_none():
     assert normalize_input_value(f, None) is None
 
 
+def test_normalize_input_value_unset_returns_none():
+    """``strawberry.UNSET`` is treated as "not supplied", same as ``None``.
+
+    Defensive short-circuit at the entry to ``normalize_input_value``:
+    every branch below either iterates / indexes / coerces ``raw_value``
+    and would either raise ``TypeError`` (list-shaped branches) or
+    silently pass the UNSET sentinel into the form-data dict
+    (scalar branches). UNSET must be skipped here so every call site
+    benefits, including the operator-bag inner loop and the
+    ``_q_for_branch`` recursion.
+    """
+    import strawberry
+
+    for f in (
+        GlobalIDFilter(),
+        GlobalIDMultipleChoiceFilter(),
+    ):
+        assert normalize_input_value(f, strawberry.UNSET) is None
+
+
 # ---------------------------------------------------------------------------
 # construct_search
 # ---------------------------------------------------------------------------

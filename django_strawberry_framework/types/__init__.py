@@ -24,5 +24,6 @@ is forbidden by the same rule.
 
 from .base import DjangoType
 from .finalizer import finalize_django_types
+from .relay import SyncMisuseError
 
-__all__ = ("DjangoType", "finalize_django_types")
+__all__ = ("DjangoType", "SyncMisuseError", "finalize_django_types")

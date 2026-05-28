@@ -164,14 +164,14 @@ obvious.
     - docs/shadow/django_strawberry_framework__filters__inputs.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__filters__inputs.stripped.py and docs/shadow/django_strawberry_framework__filters__inputs.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/filters/inputs.py
-    - Result: Fixed High traversed relation field grouping when the field name is also in `LOOKUP_NAME_MAP`; changed `django_strawberry_framework/filters/inputs.py` and `tests/filters/test_inputs.py`; validation: `uv run pytest --no-cov` passed (981 passed), ruff format/check on both touched files passed. Note: hunter committed/pushed this fix on branch `bugfix/inputs-lookup-token-grouping` despite the no-commit instruction.
+    - Result: Fixed High traversed relation field grouping when the field name is also in `LOOKUP_NAME_MAP`; changed `django_strawberry_framework/filters/inputs.py` and `tests/filters/test_inputs.py`; validation: `uv run pytest --no-cov` passed (981 passed), ruff format/check on both touched files passed. Note: hunter committed/pushed this fix on branch `bugfix/inputs-lookup-token-grouping` despite the no-commit instruction; the fix (commit `a70f98b`) is now part of `build-021-filters-0_0_8`.
 
 - [x] django_strawberry_framework/filters/sets.py
     - docs/shadow/django_strawberry_framework__filters__sets.stripped.py
     - docs/shadow/django_strawberry_framework__filters__sets.overview.md
     - Prompt:
         - Read docs/shadow/django_strawberry_framework__filters__sets.stripped.py and docs/shadow/django_strawberry_framework__filters__sets.overview.md and check for bugs, if any are found make edits to django_strawberry_framework/filters/sets.py
-    - Result: Fixed High logical-branch permission bypass and Medium request context loss in logical branches; changed `django_strawberry_framework/filters/sets.py` and `tests/filters/test_sets.py`; validation: `uv run pytest tests/filters/test_sets.py --no-cov` passed (44 passed), `uv run pytest --no-cov` passed (983 passed), ruff format/check on both touched files passed.
+    - Result: Fixed High logical-branch permission bypass and Medium request context loss in logical branches; changed `django_strawberry_framework/filters/sets.py` and `tests/filters/test_sets.py`; validation: `uv run pytest tests/filters/test_sets.py --no-cov` passed (44 passed), `uv run pytest --no-cov` passed (983 passed), ruff format/check on both touched files passed. Note: this Result records the round-1/2 fix only; review rounds 3–5 later added further `sets.py` hardening in the same areas — UNSET-in-operator-bag guards, cross-branch permission dedup via `_fired: dict[type, set[str]]`, the overridable `_MAX_LOGIC_DEPTH` recursion cap, and the proxy/MTI model-match carve-out — none of which are captured in the one-line summary above.
 
 - [x] django_strawberry_framework/list_field.py
     - docs/shadow/django_strawberry_framework__list_field.stripped.py

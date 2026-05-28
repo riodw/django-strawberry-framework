@@ -2,84 +2,74 @@
 
 ## High
 
-### H1. `FILTER_DEFAULTS` is pinned on the schema factory path, not the runtime filter-generation path
+### H1. Nested `RelatedFilter` traversal can bypass the target `DjangoType.get_queryset`
 
-`docs/spec-021-filters-0_0_8.md#decision-4--upstream-primitives-parity-floor` says the Relay-vs-scalar FK/PK decision runs inside `FilterArgumentsFactory._ensure_built`. That only controls the Strawberry input shape. The actual `django-filter` filter instances are created earlier by `FilterSet.get_filters()` via `django_filters.filterset.BaseFilterSet.filter_for_field()` / `filter_for_lookup()`, which reads `cls.FILTER_DEFAULTS`.
+`docs/spec-021-filters-0_0_8.md #"Filter applied to a relation that has a custom get_queryset"` says the optimizer's `Prefetch` downgrade preserves the target type's visibility hook and that the filter clause applies to the visibility-scoped queryset. That is true for relation output planning in `django_strawberry_framework/optimizer/walker.py::_build_child_queryset`, but it is not true for parent-row filtering. A nested filter compiles to ORM `WHERE` joins before the optimizer plans selected output relations, so `{ shelves: { code: ... } }` can match a `Branch` through a `Shelf` that `ShelfType.get_queryset` would hide.
 
-If implementation follows the spec literally, the GraphQL input can expose `relay.GlobalID` for `BookFilter.genres` while the runtime filter instance is still whatever vanilla `django-filter` generated. That is the worst class of bug: the schema accepts one wire shape and the queryset translator expects another.
+Root fix: make `FilterSet.apply(input_value, queryset, info)` carry `info` into related-filter application. For each active `RelatedFilter`, derive the child visibility queryset from the related target `DjangoType.get_queryset(child_model._default_manager.all(), info)`, intersect it with an explicit `RelatedFilter(queryset=...)` when present, constrain the parent queryset to that child queryset, and only then apply child filter clauses. Reuse the existing sync/async `get_queryset` handling discipline from `django_strawberry_framework/types/relay.py::_apply_get_queryset_sync` and `django_strawberry_framework/types/relay.py::_apply_get_queryset_async`. Add a live HTTP test where a hidden related row would otherwise make the parent match.
 
-Root fix: make the conditional default-selection a `FilterSet` concern, not only a `FilterArgumentsFactory` concern. Put the adapted defaults on the package `FilterSet` class or a mixin it inherits, and override `filter_for_field()` / `filter_for_lookup()` where conditional target inspection is needed. Then make `FilterArgumentsFactory` derive its input field shape from `filterset_cls.get_filters()` / the actual filter instances, not from a parallel map. Add tests that assert both the generated input type and the generated filter class agree for non-Relay `ShelfType` and Relay `GenreType`.
+### H2. The self-referential lazy list annotation shape will not resolve
 
-### H2. The runtime application API is still inconsistent and conflicts with `django-filter`'s instance method contract
+Decision 3 says logical `and_` / `or_` fields use `Annotated[list["<TypeName>FilterInputType"], strawberry.lazy("django_strawberry_framework.filters.inputs")] | None`. Strawberry's lazy resolver only resolves the annotated argument when the annotated argument itself is a `ForwardRef`; wrapping `list["Foo"]` in `Annotated[..., strawberry.lazy(...)]` leaves the inner `"Foo"` unresolved.
 
-The user-facing example calls `GalaxyFilter.apply(filter, queryset, info)`, Slice 4 says root resolvers call `filters.BranchFilter.filter_queryset(...)`, and Decision 8 describes `FilterSet.filter_queryset(input, queryset, info)`. But upstream `django_filters.filterset.BaseFilterSet.filter_queryset` is an instance method with signature `filter_queryset(self, queryset)` and consumes `self.form.cleaned_data` after validation.
+Root fix: generate `list[Annotated["<TypeName>FilterInputType", strawberry.lazy("django_strawberry_framework.filters.inputs")]] | None` for `and_` and `or_`, and `Annotated["<TypeName>FilterInputType", strawberry.lazy(...)] | None` for `not_`. Keep the future-annotations test, but add a focused schema-construction test for the self-referential `and` / `or` fields because the current proposed shape can pass ordinary annotation construction and still fail during Strawberry type evaluation.
 
-Overloading that method into a class-level Strawberry-input entry point will either break `django-filter`'s `.qs` flow or force an awkward signature split. The spec also does not pin the bridge from Strawberry input dataclasses (`and_`, `or_`, nested input objects) into the dict/form data shape `django-filter` validates.
+### H3. Lookup GraphQL names are not pinned, and the examples will not match Strawberry's default camel-casing
 
-Root fix: define one public classmethod, for example `FilterSet.apply(input_value, queryset, info)`, as the resolver-facing API. That method should normalize the Strawberry input object into filter data, extract `request` from `info.context`, instantiate `cls(data=data, queryset=queryset, request=request)`, run validation/permission checks, and return `filterset.qs`. Keep `filter_queryset(self, queryset)` as the `django-filter` instance override for tree-form logic. Update all examples, Decision 8, DoD item 13, and the test plan to use the same symbol.
+The spec's live queries use lookup names like `iContains`, but a generated Python attribute named `icontains` stays `icontains` under Strawberry's default auto-camel-case behavior because there is no underscore to transform. The same naming gap appears for Python keywords: the lookup `in` cannot be a dataclass field named `in`, but the spec only handles the logical keywords `and` / `or` / `not`.
 
-### H3. `django_filters.BaseFilterSet` does not exist at the top-level import path
+Root fix: define a single lookup-name adapter for every generated lookup field. Examples: `icontains -> Python i_contains / GraphQL iContains`, `iexact -> i_exact / iExact`, `isnull -> is_null / isNull`, `in -> in_ / in`, and any other supported django-filter lookup. Use it in both `_build_input_fields` and input normalization. Add SDL or introspection assertions for at least `iContains`, `isNull`, and `in`, plus the existing live HTTP query using `iContains`.
 
-The spec repeatedly says `FilterSet` subclasses `django_filters.BaseFilterSet`. In the pinned local `django-filter` version, `django_filters.BaseFilterSet` is not exported; the class is `django_filters.filterset.BaseFilterSet`. The cookbook reference imports it through `from django_filters import filterset` and subclasses `filterset.BaseFilterSet`.
+### H4. Relay-vs-scalar ID shape cannot be decided only through `registry.get(target_model)`
 
-If an implementer writes `class FilterSet(django_filters.BaseFilterSet, ...)` from this spec, the module fails at import time.
+Decision 4 says `FilterSet.filter_for_field` / `filter_for_lookup` should call `registry.get(target_model)` and inspect the primary target `DjangoType`. That loses the owner type. With `Meta.primary`, the primary type for a model can be non-Relay while a secondary type using the same model is Relay-shaped, or the inverse. A filterset bound to the secondary type would then expose the primary type's ID shape, not the actual GraphQL type's ID shape.
 
-Root fix: make the import path exact everywhere. Prefer the cookbook shape: `from django_filters import filterset`, `class FilterSet(..., filterset.BaseFilterSet, metaclass=FilterSetMetaclass)`, and `class FilterSetMetaclass(filterset.FilterSetMetaclass)`. If you intentionally choose public `django_filters.FilterSet` instead, spell out why the extra public base is better than the cookbook's direct `BaseFilterSet` base.
-
-### H4. The related-queryset boundary HTTP test asserts output filtering that the proposed implementation does not provide
-
-`docs/spec-021-filters-0_0_8.md#examplesfakeshoptest_querytest_library_apipy-extend` says the boundary test should assert shelves outside `topic="permanent collection"` never appear. But the cookbook `_apply_related_queryset_constraints` shape filters the parent queryset using `shelves__in=<constraint_qs>`; it does not filter the nested relation resolver output.
-
-That matters in the current fakeshop schema: `examples/fakeshop/apps/library/schema.py::BranchType.shelves` is a consumer-authored resolver returning `list(self.shelves.order_by("-code"))`. A branch with one permanent shelf and one non-permanent shelf can pass the parent `Branch` filter and still return both shelves in the response.
-
-Root fix: either narrow the test to the real boundary contract ("branches without a matching constrained shelf are excluded; nested filter clauses cannot use shelves outside the constraint to make a branch match") or add a separate relation-output scoping feature. The latter is bigger than this card and would need to interact with consumer-authored relation resolvers and optimizer `Prefetch` planning, so the cleaner fix is to change the test assertion.
+Root fix: make input generation owner-aware. Either bind each `filterset_class` to the owning `DjangoTypeDefinition` during finalizer phase 2.5 and include that owner in the filter/input factory context, or explicitly reject assigning the same filterset to owner types whose Relay ID shape would require different input contracts. The test plan should cover a model with both primary and secondary `DjangoType`s where only one implements `relay.Node`.
 
 ## Medium
 
-### M1. The GOAL migration promise is still false after the parent-class-swap revision
+### M1. The filter-instance-to-Strawberry-input conversion contract is still underspecified
 
-`GOAL.md #"The existing django_filters.FilterSet plugs into Meta.filterset_class directly"` shows `class CategoryFilter(django_filters.FilterSet)` being assigned directly to `Meta.filterset_class`. The revised spec says that promise is honored by a parent-class swap, while `_validate_meta` rejects plain `django_filters.FilterSet` subclasses.
+`FilterArgumentsFactory._ensure_built` now derives input shape from resolved filter instances, which is the right direction, but the spec punts with `type(filter_instance).input_type — or whatever attr the per-primitive port exposes`. Standard `django-filter` filters do not expose an `input_type`; they expose Django form fields through `filter_instance.field`. The implementation needs a real conversion layer, not an implied attribute.
 
-That is not "plugs in directly"; it is a one-line migration. Either implement an adapter/acceptance path for plain `django_filters.FilterSet`, or update `GOAL.md` and the spec prose to say consumers swap the base class to `django_strawberry_framework.filters.FilterSet`.
+Root fix: add a named converter, for example `convert_filter_to_input_annotation(filter_instance, model_field, owner_type)`, and a matching runtime normalizer. It must handle choice enums (`Enum` member to DB value), Strawberry `relay.GlobalID` objects, `in` / `range` list shapes, nullable values, decimal/date/time values, and custom filter `method=` fields. The choice-enum and Relay GlobalID live HTTP tests should assert this path end-to-end.
 
-### M2. `filter_input_type` is a new public helper but is missing from the terms CSV and some doc sweeps
+### M2. Invalid django-filter form data will not automatically reject
 
-The spec adds a glossary entry and public re-export for `filter_input_type`, but `docs/spec-021-filters-0_0_8-terms.csv` does not list it. The checker still passes because it only validates listed terms, so the omission hides the new public symbol from the glossary gate.
+The test plan says `FilterSet.apply` rejects normalized input that fails django-filter form validation, but `django_filters.filterset.BaseFilterSet.qs` only touches `self.errors` before calling `filter_queryset`; it does not raise on invalid form data. If `apply` just returns `filterset.qs`, invalid filter values can degrade into a partially-filtered or unfiltered queryset instead of a GraphQL error.
 
-Add a CSV row for `filter_input_type` and update the expected checker count. Also include the helper in the README/docs README sweep where the spec currently says only `FilterSet` / `RelatedFilter` / `Meta.filterset_class`.
+Root fix: `FilterSet.apply` should explicitly call `filterset.form.is_valid()` after permission checks and before `.qs`, then raise a `GraphQLError` with a stable, compact error shape when validation fails. Add a package test proving invalid normalized data does not return rows.
 
-### M3. The live HTTP test count is internally inconsistent
+### M3. `Meta.fields = "__all__"` is described as matching django-filter, but the described behavior differs
 
-The spec says "6-8 new live HTTP tests", the Slice 4 table says 8, and the test-plan bullet list names 9 separate tests: scalar, choice enum, non-Relay FK, Relay M2M, reverse FK, logical operators, optimizer cooperation, related-queryset boundary, and absolute-import `RelatedFilter`.
+The spec says `"__all__"` expands to scalar fields plus FK / PK columns, excludes implicit relation traversal, and "matches django-filter's own" behavior. In `django-filter`, `get_all_model_fields` includes `opts.fields + opts.many_to_many` and excludes `AutoField` primary keys. That is the opposite of two important parts of the spec: the spec wants primary keys included and M2M relations excluded unless declared through `RelatedFilter`.
 
-Pin the exact count. If the cross-module `GenreFilter` path is meant to be covered by the Relay M2M test, merge those bullets explicitly; otherwise say 9 tests and update Slice 4 / DoD item 14 / CHANGELOG wording.
+Root fix: state the package is intentionally overriding django-filter's `"__all__"` expansion, then pin the override in `FilterSet.get_fields` / `_get_fields`. Add tests that `id` is generated for `"__all__"` and that a M2M relation is not generated without an explicit `RelatedFilter`.
 
-### M4. The Relay GlobalID test construction API is backwards
+### M4. The `RelatedFilter(queryset=...)` boundary is inconsistent about when it applies
 
-The test plan says to construct a GlobalID via `relay.GlobalID.from_id(...)` for a seeded `Genre`. In Strawberry, `GlobalID.from_id(value)` parses an already-encoded global ID string. Construction is `str(relay.GlobalID(type_name="GenreType", node_id=str(genre.pk)))`.
+Decision 8 says "for each `RelatedFilter` in the input" the explicit queryset bounds the child queryset. The cookbook method the spec cites, `_apply_related_queryset_constraints`, applies every explicit related-filter queryset unconditionally to the parent queryset. If copied literally, a `BranchFilter` with `shelves = RelatedFilter(..., queryset=permanent_shelves)` would exclude branches without permanent shelves even for `filter: { name: ... }` or possibly for an empty filter.
 
-Update the test plan so the test does not copy a parser call into the setup path.
+Root fix: pin one behavior. The better behavior is active-branch scoping: apply the explicit related queryset only when the related filter branch is present in the normalized input. If the intended behavior is global scoping, rename and document it as a global parent-scope constraint, then add tests for empty-filter and unrelated-field-filter cases so the row-loss is deliberate.
 
-### M5. `registry.clear()` needs an import-cycle-safe integration point
+### M5. The resolver examples bypass the existing visibility hook
 
-Decision 9 says `registry.clear()` calls `clear_filter_input_namespace()`, but the spec does not pin how. `django_strawberry_framework/registry.py` is a low-level module imported by most of the package; adding a top-level import from `django_strawberry_framework.filters.inputs` risks a cycle once `filters` imports exceptions, registry helpers, types, or converters.
+Decision 8 correctly says root visibility scoping runs before filters, but the user-facing resolver example and Slice 4 fakeshop instructions show `models.<Model>.objects...` followed directly by `FilterSet.apply(...)`. That skips `DjangoType.get_queryset`, which `TODAY.md #"If a root fakeshop list should apply public/staff visibility rules"` explicitly says manual root resolvers must call themselves.
 
-Pin a local import inside `TypeRegistry.clear()` or an optional callback registration pattern. Also add a test that imports `django_strawberry_framework.registry` alone before importing `django_strawberry_framework.filters` and verifies `registry.clear()` still works.
+Root fix: update every resolver example and Slice 4 instruction to call the owning type's `get_queryset` before `FilterSet.apply`, e.g. `queryset = BranchType.get_queryset(models.Branch.objects.order_by("id"), info)`. Add a live HTTP test with a root type-level `get_queryset` filter and a filter clause that would otherwise return hidden rows.
+
+### M6. The Relay GlobalID primitive needs Strawberry-specific parsing and type validation
+
+The graphene primitive parses a raw string and discards the decoded type name. Strawberry resolver inputs annotated as `relay.GlobalID` arrive as `strawberry.relay.GlobalID` objects, and accepting the wrong `type_name` would let a `GenreType` filter accept an encoded ID for some other type with the same database primary key.
+
+Root fix: the ported `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter` should accept both raw strings and `relay.GlobalID` objects, validate the decoded type name against the expected target GraphQL type name, and then pass only `node_id` to django-filter. Add tests for wrong-type GlobalIDs and mixed-type multiple-choice lists.
 
 ## Low
 
-### L1. Several `GOAL.md line 450` references should be converted to substring anchors
+### L1. The `galaxy__name` input-shape note conflicts with the cookbook tree builder
 
-The spec still uses prose references like `GOAL.md line 450`. Standing docs should use section/substr anchors, e.g. `GOAL.md #"The existing django_filters.FilterSet plugs into Meta.filterset_class directly"`.
+The edge-case section says `Meta.fields = {"galaxy__name": ["exact"]}` renders as a flat input field and does not expand the path into nested input types. The cookbook's `FilterArgumentsFactory.filterset_to_trees` splits `field_name` on Django's lookup separator and builds nested path nodes. Pin the intended GraphQL shape explicitly; otherwise an implementer can reasonably choose either `galaxy__name: { exact: ... }` or `galaxy: { name: { exact: ... } }`.
 
-### L2. `materialize_input_class` has two signatures in the prose
+### L2. The CHANGELOG doc-update block still says "6-8 tests"
 
-Decision 3 mentions `materialize_input_class(module, name, cls)`, while Decision 6 / Decision 9 / DoD item 6 use `materialize_input_class(name, cls)`. Keep the two-argument helper unless there is a real need to materialize into arbitrary modules.
-
-### L3. The `filter_input_type` timing wording is too absolute under postponed annotations
-
-Decision 11 says the helper evaluates at module-load time and catches misuse at the resolver-declaration site. With `from __future__ import annotations`, Python stores the annotation expression as a string and Strawberry evaluates it during type/field processing, potentially more than once. The helper still works, but the timing claim should be softened to "when Strawberry evaluates the annotation during schema declaration/collection." Add one package test using a module fixture with postponed annotations.
-
-### L4. The Graphene-Django Relay explanation is overstated
-
-Decision 4 says `graphene-django` is unconditional because it "always Relay-shapes". Graphene-Django supports non-Relay `DjangoObjectType`; the unconditional `GlobalIDFilter` behavior is more specifically tied to the Graphene filter connection path and its defaults. Reword so the comparison does not overclaim upstream behavior.
+Most of the spec now pins exactly 9 live HTTP tests, but the proposed `CHANGELOG.md` Added bullet still says "6-8 tests". Update that prose to exactly 9 so the Slice 5 docs do not reintroduce the earlier count drift.

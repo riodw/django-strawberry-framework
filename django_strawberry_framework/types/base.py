@@ -45,6 +45,12 @@ from .definition import DjangoTypeDefinition
 from .relations import PendingRelation, PendingRelationAnnotation
 from .relay import install_is_type_of
 
+# TODO(spec-021-filters-0_0_8 Slice 3): Promote "filterset_class" only in
+# the same change that wires finalizer phase 2.5 binding end-to-end.
+# Pseudocode:
+#   DEFERRED_META_KEYS -= {"filterset_class"}  # noqa: ERA001
+#   ALLOWED_META_KEYS |= {"filterset_class"}  # noqa: ERA001
+#   validated.filterset_class = _validate_filterset_class(meta.filterset_class)  # noqa: ERA001
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
     {
         "filterset_class",
@@ -517,6 +523,10 @@ class _ValidatedMeta(NamedTuple):
     optimizer_hints: dict[str, Any]
     fields_spec: tuple[str, ...] | str | None
     exclude_spec: tuple[str, ...] | None
+    # TODO(spec-021-filters-0_0_8 Slice 3): Add ``filterset_class`` to this
+    # snapshot after the validator accepts the Meta key.
+    # Pseudocode:
+    #   filterset_class: type[FilterSet] | None  # noqa: ERA001
 
 
 def _validate_meta(meta: type) -> _ValidatedMeta:
@@ -576,6 +586,14 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
             f"Meta keys not supported yet: {deferred}. The feature that owns them has not shipped.",
         )
 
+    # TODO(spec-021-filters-0_0_8 Slice 3): Once "filterset_class" is no
+    # longer deferred, validate it here via a local import so base.py does not
+    # grow an eager filters import cycle.
+    # Pseudocode:
+    #   filterset_class = getattr(meta, "filterset_class", None)  # noqa: ERA001
+    #   if filterset_class is not None:
+    #       from django_strawberry_framework.filters.sets import FilterSet  # noqa: ERA001
+    #       if not issubclass(filterset_class, FilterSet): raise ConfigurationError  # noqa: ERA001
     unknown = sorted(declared - ALLOWED_META_KEYS - DEFERRED_META_KEYS)
     if unknown:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")

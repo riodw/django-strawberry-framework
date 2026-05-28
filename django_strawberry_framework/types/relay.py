@@ -241,6 +241,14 @@ async def _apply_get_queryset_async(cls: type, qs: models.QuerySet, info: Any) -
     return result
 
 
+# TODO(spec-021-filters-0_0_8 Slice 1): Reuse these sync/async visibility
+# helpers from FilterSet's related-branch scoping so parent-row filtering
+# cannot bypass a target DjangoType.get_queryset hook.
+# Pseudocode:
+#   child_base = child_model._default_manager.all()  # noqa: ERA001
+#   child_qs = _apply_get_queryset_sync(target_type, child_base, info)  # noqa: ERA001
+#   child_qs = child_qs & related_filter.queryset if constraint exists
+#   parent_qs = parent_qs.filter(**{f"{relation_name}__in": child_qs})  # noqa: ERA001
 def _coerce_node_id(node_id: Any) -> Any:
     return node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
 

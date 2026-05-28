@@ -243,6 +243,21 @@ def finalize_django_types() -> None:
             _check_composite_pk_for_relay_node(type_cls)
             install_relay_node_resolvers(type_cls)
 
+    # TODO(spec-021-filters-0_0_8 Slice 3): Bind FilterSet sidecars here,
+    # after Relay setup and before strawberry.type decoration.
+    # Pseudocode:
+    #   wired_filtersets = set()  # noqa: ERA001
+    #   for type_cls, definition in registry.iter_definitions():
+    #       filterset_cls = definition.filterset_class  # noqa: ERA001
+    #       if filterset_cls is None: continue  # noqa: ERA001
+    #       validate FilterSet subclass
+    #       bind filterset_cls._owner_definition = definition
+    #       validate compatible owner Relay/scalar ID shape
+    #       filterset_cls.get_filters()  # noqa: ERA001
+    #       factory = FilterArgumentsFactory(filterset_cls)  # noqa: ERA001
+    #       for name, input_cls in factory.arguments: materialize_input_class(name, input_cls)  # noqa: ERA001
+    #       wired_filtersets.add(filterset_cls)  # noqa: ERA001
+    #   reject filter_input_type(...) helper references missing from wired_filtersets
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue

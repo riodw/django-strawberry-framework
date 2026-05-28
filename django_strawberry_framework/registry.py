@@ -408,6 +408,16 @@ class TypeRegistry:
         self._definitions.clear()
         self._pending.clear()
         self._finalized = False
+        # TODO(spec-021-filters-0_0_8 Slice 3): Co-clear filter input module
+        # globals and filter_input_type helper references once filters land.
+        # Pseudocode:
+        #   try:  # noqa: ERA001
+        #       import clear_filter_input_namespace from filters.inputs  # noqa: ERA001
+        #       from django_strawberry_framework.filters import _helper_referenced_filtersets  # noqa: ERA001
+        #   except ImportError:  # noqa: ERA001
+        #       return  # noqa: ERA001
+        #   clear_filter_input_namespace()  # noqa: ERA001
+        #   _helper_referenced_filtersets.clear()  # noqa: ERA001
 
 
 registry = TypeRegistry()

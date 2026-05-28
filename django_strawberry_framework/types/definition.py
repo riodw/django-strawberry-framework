@@ -68,4 +68,14 @@ class DjangoTypeDefinition:
     # ``interfaces`` is populated by ``_validate_meta``; consumed by
     # ``finalize_django_types()`` as the finalizer's source of truth for
     # base injection.
+    # TODO(spec-021-filters-0_0_8 Slice 3): Add the filter sidecar slot and
+    # relation-target lookup that owner-aware FilterSet binding requires.
+    # Pseudocode:
+    #   filterset_class: type | None = None  # noqa: ERA001
+    #   def related_target_for(self, field_name):
+    #       field = self.model._meta.get_field(field_name) or return None
+    #       if field is not a relation: return None
+    #       target_model = field.related_model or field.remote_field.model  # noqa: ERA001
+    #       target_type = registry.primary_for(target_model) or only registry type
+    #       return (registry.get_definition(target_type), field)  # noqa: ERA001
     finalized: bool = False

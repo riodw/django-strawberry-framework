@@ -136,3 +136,42 @@ def test_related_target_for_returns_none_when_target_unregistered():
     # resolve a target definition and returns ``None`` (the defensive
     # registry-miss branch).
     assert definition.related_target_for("shelf") is None
+
+
+def test_related_target_for_caches_resolved_pair_after_finalize():
+    """A second post-finalize lookup for the same field hits the memo cache."""
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf")
+
+    finalize_django_types()
+    book_definition = BookType.__django_strawberry_definition__
+
+    first = book_definition.related_target_for("shelf")
+    # Second call returns the SAME memoized pair via the post-finalize cache.
+    second = book_definition.related_target_for("shelf")
+    assert first is second
+    assert first is not None
+
+
+def test_related_target_for_returns_none_for_generic_foreign_key():
+    """A ``GenericForeignKey`` is a relation with no ``related_model`` -> ``None``."""
+    from apps.library.models import TaggedItem
+
+    class TaggedItemType(DjangoType):
+        class Meta:
+            model = TaggedItem
+            fields = ("id", "object_id")
+
+    finalize_django_types()
+    definition = TaggedItemType.__django_strawberry_definition__
+    # ``content_object`` is a GFK: ``is_relation`` is True but
+    # ``related_model`` is ``None`` -> the target-model guard returns ``None``.
+    assert definition.related_target_for("content_object") is None

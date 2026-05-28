@@ -20,12 +20,14 @@ from django_strawberry_framework.filters import (
     GlobalIDMultipleChoiceFilter,
     LazyRelatedClassMixin,
     ListFilter,
+    ListFilterMethod,
     RangeField,
     RangeFilter,
     RelatedFilter,
     TypedFilter,
     validate_range,
 )
+from django_strawberry_framework.filters.base import _expected_global_id_type_name
 from django_strawberry_framework.registry import registry
 
 
@@ -221,6 +223,20 @@ def test_global_id_multiple_choice_filter_decodes_every_element():
     assert captured == [["1", "2"]]
 
 
+def test_global_id_multiple_choice_filter_passes_through_none():
+    captured = {}
+
+    class _Qs:
+        def filter(self, **kwargs):
+            captured.update(kwargs)
+            return self
+
+    f = GlobalIDMultipleChoiceFilter(field_name="id")
+    result = f.filter(_Qs(), None)
+    assert captured == {}
+    assert isinstance(result, _Qs)
+
+
 # ---------------------------------------------------------------------------
 # LazyRelatedClassMixin
 # ---------------------------------------------------------------------------
@@ -339,3 +355,167 @@ def test_related_filter_get_queryset_honors_explicit_queryset():
 def test_related_filter_explicit_queryset_ledger_defaults_false_when_absent():
     f = RelatedFilter("ShelfFilter")
     assert f._has_explicit_queryset is False
+
+
+def test_related_filter_filterset_setter_substitutes_target():
+    """The `filterset` setter swaps the resolved target class in place."""
+    from tests.filters.fixtures.filtersets import BranchFilter, ShelfFilter
+
+    rel = RelatedFilter("ShelfFilter")
+    # Setter stores the substituted class on `_filterset`.
+    rel.filterset = BranchFilter
+    assert rel._filterset is BranchFilter
+    # Getter resolves the (already-concrete) class as-is and re-stores it.
+    assert rel.filterset is BranchFilter
+    # A second substitution is honored.
+    rel.filterset = ShelfFilter
+    assert rel.filterset is ShelfFilter
+
+
+# ---------------------------------------------------------------------------
+# ArrayFilterMethod / ListFilterMethod __call__ dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_array_filter_method_call_passes_through_none():
+    """`ArrayFilterMethod.__call__` returns the queryset untouched for `None`."""
+
+    def custom(qs, name, value):
+        return ("custom", name, value)
+
+    sentinel = object()
+    f = ArrayFilter(field_name="tags", method=custom)
+    assert isinstance(f.filter, ArrayFilterMethod)
+    assert f.filter(sentinel, None) is sentinel
+
+
+def test_array_filter_method_call_dispatches_to_custom_method():
+    """A non-`None` value reaches the consumer callable with `(qs, field_name, value)`."""
+
+    def custom(qs, name, value):
+        return ("custom", name, value)
+
+    f = ArrayFilter(field_name="tags", method=custom)
+    assert f.filter("qs-sentinel", [1, 2]) == ("custom", "tags", [1, 2])
+
+
+def test_list_filter_method_setter_swaps_in_list_filter_method():
+    """A consumer-supplied `method=` callable plugs in `ListFilterMethod`."""
+
+    def custom(qs, name, value):
+        return qs
+
+    f = ListFilter(field_name="ids", method=custom)
+    assert isinstance(f.filter, ListFilterMethod)
+
+
+def test_list_filter_method_call_passes_through_none():
+    """`ListFilterMethod.__call__` returns the queryset untouched for `None`."""
+
+    def custom(qs, name, value):
+        return ("custom", name, value)
+
+    sentinel = object()
+    f = ListFilter(field_name="ids", method=custom)
+    assert f.filter(sentinel, None) is sentinel
+
+
+def test_list_filter_method_call_dispatches_to_custom_method():
+    """A non-`None` value reaches the consumer callable with `(qs, field_name, value)`."""
+
+    def custom(qs, name, value):
+        return ("custom", name, value)
+
+    f = ListFilter(field_name="ids", method=custom)
+    assert f.filter("qs-sentinel", [1, 2]) == ("custom", "ids", [1, 2])
+
+
+def test_array_filter_applies_distinct_when_flagged():
+    """`ArrayFilter.filter` calls `.distinct()` when the filter is `distinct=True`."""
+    calls = {"distinct": 0}
+
+    class _Qs:
+        def distinct(self):
+            calls["distinct"] += 1
+            return self
+
+        def filter(self, **kwargs):
+            calls["filter_kwargs"] = kwargs
+            return self
+
+    f = ArrayFilter(field_name="tags", lookup_expr="exact", distinct=True)
+    result = f.filter(_Qs(), [1])
+    assert isinstance(result, _Qs)
+    assert calls["distinct"] == 1
+    assert calls["filter_kwargs"] == {"tags__exact": [1]}
+
+
+# ---------------------------------------------------------------------------
+# _expected_global_id_type_name — owner-aware GlobalID type-name resolution
+# ---------------------------------------------------------------------------
+
+
+class _FakePk:
+    name = "id"
+
+
+class _FakeMeta:
+    pk = _FakePk()
+
+
+class _FakeModel:
+    _meta = _FakeMeta()
+
+
+class _FakeTargetDefinition:
+    graphql_type_name = "GenreType"
+
+
+class _FakeOwnerDefinition:
+    model = _FakeModel()
+    graphql_type_name = "OwnerType"
+
+    def __init__(self, target):
+        self._target = target
+
+    def related_target_for(self, head):
+        return self._target
+
+
+class _FakeParent:
+    def __init__(self, owner):
+        self._owner_definition = owner
+
+
+def _global_id_filter_with_owner(field_name, owner):
+    f = GlobalIDFilter(field_name=field_name)
+    f.parent = _FakeParent(owner)
+    return f
+
+
+def test_expected_global_id_type_name_returns_none_without_owner():
+    """No bound owner → no type-name validation (Slice-1/2 unit contexts)."""
+    f = GlobalIDFilter(field_name="id")
+    f.parent = _FakeParent(None)
+    assert _expected_global_id_type_name(f) is None
+
+
+def test_expected_global_id_type_name_own_pk_branch():
+    """When the field is the owner's PK, the owner's own type name is returned."""
+    owner = _FakeOwnerDefinition(target=None)
+    f = _global_id_filter_with_owner("id", owner)
+    assert _expected_global_id_type_name(f) == "OwnerType"
+
+
+def test_expected_global_id_type_name_relation_branch():
+    """A relation head resolves through `related_target_for` to the target's type name."""
+    owner = _FakeOwnerDefinition(target=(_FakeTargetDefinition(), object()))
+    f = _global_id_filter_with_owner("genres__id", owner)
+    assert _expected_global_id_type_name(f) == "GenreType"
+
+
+def test_expected_global_id_type_name_relation_branch_unresolved_target():
+    """An unresolvable relation head returns `None` (decode without validation)."""
+    owner = _FakeOwnerDefinition(target=None)
+    f = _global_id_filter_with_owner("genres__id", owner)
+    assert _expected_global_id_type_name(f) is None

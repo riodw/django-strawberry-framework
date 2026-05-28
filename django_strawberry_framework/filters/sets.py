@@ -239,7 +239,12 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
             return fields
 
         model = cls._meta.model
-        if model is None:
+        if model is None:  # pragma: no cover - unreachable defensive guard.
+            # ``super().get_fields()`` above already dereferences
+            # ``self._meta.model._meta`` for the ``"__all__"`` shorthand and
+            # raises ``AttributeError`` when the model is ``None``; control
+            # never reaches this guard for that field shape. Kept as a
+            # forward-defensive no-op in case the upstream contract changes.
             return fields
 
         # ADD the PK if upstream excluded it (typically the auto-id column).
@@ -684,8 +689,29 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
 
     @staticmethod
     def _target_type_for_related_filter(related_filter: RelatedFilter) -> type | None:
-        """Resolve the `DjangoType` registered against the branch's model."""
+        """Resolve the `DjangoType` whose ``get_queryset()`` scopes the branch.
+
+        Prefer the child filterset's *bound owner* — the type the consumer
+        explicitly wired via ``Meta.filterset_class`` (``_owner_definition``,
+        bound at finalizer phase 2.5) — over a model-only registry lookup. When a
+        child model has more than one registered ``DjangoType`` and the child
+        filterset is bound to a non-primary one, a model-only lookup resolves the
+        *primary* type and runs ITS ``get_queryset()`` against the non-primary's
+        filterset, scoping the related branch by the wrong visibility hook (a
+        silent row-leak). ``definition.origin`` is the same ``DjangoType`` class
+        the registry stores (``types/base.py`` registers ``cls`` with
+        ``origin=cls``), so both branches hand ``_apply_get_queryset_*`` an object
+        exposing ``get_queryset``.
+
+        This mirrors ``_resolve_relation_target_type`` (already owner-aware); the
+        registry lookup is the fallback for the unbound / single-type-per-model
+        case.
+        """
         child_filterset = related_filter.filterset
+        child_owner = getattr(child_filterset, "_owner_definition", None)
+        owner_type = getattr(child_owner, "origin", None) if child_owner is not None else None
+        if owner_type is not None:
+            return owner_type
         child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
         if child_model is None:
             return None
@@ -1033,7 +1059,17 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
                 intersected = explicit & child_qs
             else:
                 intersected = child_qs if child_qs is not None else explicit
-            constrained = constrained.filter(**{f"{field_name}__in": intersected})
+            # Build the parent restriction against the relation's ORM path
+            # (``related_filter.field_name``), NOT the declared attribute name the
+            # loop iterates by. The two diverge whenever a consumer gives a
+            # ``RelatedFilter`` a friendlier GraphQL name than its ORM accessor
+            # (e.g. ``visible_shelves = RelatedFilter(ShelfFilter, field_name="shelves")``);
+            # keying off the declared name would emit ``<declared>__in`` against a
+            # non-existent relation and Django would raise ``FieldError``.
+            # ``child_qs_by_branch`` stays keyed by the declared name (see
+            # ``_derive_related_visibility_querysets_*``), so only this final
+            # ``.filter(...)`` switches to the ORM path.
+            constrained = constrained.filter(**{f"{related_filter.field_name}__in": intersected})
         return constrained
 
     @classmethod

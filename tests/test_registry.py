@@ -1305,3 +1305,37 @@ def test_unregister_raises_after_finalize():
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="finalized"):
         registry.unregister(CategoryType)
+
+
+def test_clear_tolerates_unimportable_filter_submodules(fresh_registry):
+    """Both ``except ImportError`` guards in ``clear()`` are best-effort.
+
+    The filter-namespace co-clear uses cycle-safe local imports. If either
+    submodule cannot be imported (forced here by poisoning ``sys.modules``),
+    ``clear()`` skips that block and still clears the registry's own state
+    rather than raising.
+    """
+    import sys
+
+    inputs_name = "django_strawberry_framework.filters.inputs"
+    filters_name = "django_strawberry_framework.filters"
+    saved = {name: sys.modules.get(name) for name in (inputs_name, filters_name)}
+
+    class CategoryType:
+        pass
+
+    try:
+        # ``None`` in ``sys.modules`` makes ``from <name> import ...`` raise
+        # ImportError, exercising both guards.
+        sys.modules[inputs_name] = None
+        sys.modules[filters_name] = None
+        fresh_registry.register(Category, CategoryType)
+        # Must not raise even though neither submodule can be imported.
+        fresh_registry.clear()
+        assert fresh_registry.get(Category) is None
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module

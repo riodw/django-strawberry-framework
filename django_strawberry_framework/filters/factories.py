@@ -155,6 +155,27 @@ class FilterArgumentsFactory:
 # ---------------------------------------------------------------------------
 
 
+def _make_hashable(v: Any) -> Any:
+    """Recursively convert unhashable objects into hashable equivalents.
+
+    ``dict`` and ``set`` / ``frozenset`` are *unordered* containers, so their
+    hashable form is sorted — two structurally-equal inputs must collapse to one
+    cache key regardless of source iteration order. ``list`` / ``tuple`` are
+    *ordered* (a list-shaped ``Meta.fields`` defines filter order), so their order
+    is preserved. The ``set`` / ``frozenset`` branch sorts by ``repr`` rather than
+    by the values themselves so it stays total-ordered even for mixed,
+    mutually-unorderable member types (e.g. ``{1, "a"}``); equal members produce
+    equal reprs, so the canonical order is stable.
+    """
+    if isinstance(v, dict):
+        return tuple(sorted((k, _make_hashable(val)) for k, val in v.items()))
+    if isinstance(v, (set, frozenset)):
+        return tuple(sorted((_make_hashable(item) for item in v), key=repr))
+    if isinstance(v, (list, tuple)):
+        return tuple(_make_hashable(item) for item in v)
+    return v
+
+
 def _make_cache_key(safe_meta: dict[str, Any]) -> tuple:
     """Build a hashable cache key from a ``Meta``-shaped dict.
 
@@ -163,19 +184,30 @@ def _make_cache_key(safe_meta: dict[str, Any]) -> tuple:
     list of lookups -- all serialised into a hashable form so identical
     declarations share a class. Any extra meta keys are included
     verbatim. Verbatim port of the cookbook's same-named helper.
+
+    Caveat: ``set`` / ``frozenset`` values nested under a dict-shaped
+    ``fields`` (e.g. set-valued lookups) are sorted into a canonical form by
+    ``_make_hashable``, so structurally-equal declarations share a class. A
+    *top-level* ``set``-shaped ``fields`` still keys off the set's iteration
+    order (the ``"seq"`` branch below iterates it directly) — stable within a
+    process but order-randomized across processes (``PYTHONHASHSEED``), which
+    also governs the generated *filter order*. Prefer ``list`` / ``tuple`` for
+    ``Meta.fields`` when filter order matters.
     """
     model = safe_meta.get("model")
     fields = safe_meta.get("fields")
     if isinstance(fields, dict):
         fields_key: tuple = (
             "dict",
-            tuple(sorted((k, tuple(v) if isinstance(v, list) else v) for k, v in fields.items())),
+            tuple(sorted((k, _make_hashable(v)) for k, v in fields.items())),
         )
-    elif isinstance(fields, (list, tuple)):
-        fields_key = ("seq", tuple(fields))
+    elif isinstance(fields, (list, tuple, set)):
+        fields_key = ("seq", tuple(_make_hashable(item) for item in fields))
     else:
         fields_key = ("raw", fields)
-    extra = tuple(sorted((k, v) for k, v in safe_meta.items() if k not in {"model", "fields"}))
+    extra = tuple(
+        sorted((k, _make_hashable(v)) for k, v in safe_meta.items() if k not in {"model", "fields"}),
+    )
     return (model, fields_key, extra)
 
 

@@ -32,6 +32,20 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 
 
+class ShelfProxy(library_models.Shelf):
+    """Module-scope proxy of ``Shelf`` for the model-mismatch precheck test.
+
+    Declared at module scope (not inside the test body) so Django's app
+    registry sees it during normal app loading; late-bound model
+    registration inside a function body has shifting tolerance across
+    Django releases.
+    """
+
+    class Meta:
+        proxy = True
+        app_label = "library"
+
+
 @pytest.fixture(autouse=True)
 def _isolate_registry():
     registry.clear()
@@ -694,6 +708,52 @@ def test_run_permission_checks_recurses_into_logical_branches():
     assert fired == ["name"]
 
 
+def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
+    """A child filterset gate fires once even when entered from sibling ``or`` arms.
+
+    The ``_fired`` map is keyed by ``FilterSet`` class and shared across
+    BOTH the logical-branch recursion and the child-filterset recursion.
+    So ``or: [{shelves: {...}}, {shelves: {...}}]`` enters ``ShelfFilter``
+    twice (once per arm) but its ``check_code_permission`` fires only
+    once — the per-class set keyed on ``ShelfFilter`` dedups the second
+    entry. The parent's per-branch ``check_shelves_permission`` likewise
+    fires once (deduped on the parent's per-class set).
+    """
+    fired: list[str] = []
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+        def check_code_permission(self, request):
+            fired.append("shelf.code")
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+        def check_shelves_permission(self, request):
+            fired.append("branch.shelves")
+
+    BranchFilter._run_permission_checks(
+        {
+            "or_": [
+                {"shelves": {"code": "a"}},
+                {"shelves": {"code": "b"}},
+            ],
+        },
+        request=HttpRequest(),
+    )
+    # Parent per-branch gate fires once; child class gate fires once —
+    # NOT once per arm.
+    assert fired.count("branch.shelves") == 1
+    assert fired.count("shelf.code") == 1
+
+
 def test_run_permission_checks_caps_logical_branch_nesting():
     """Pathologically-deep nesting raises ``ConfigurationError`` instead of stack-overflow.
 
@@ -715,6 +775,39 @@ def test_run_permission_checks_caps_logical_branch_nesting():
     with pytest.raises(ConfigurationError) as excinfo:
         CategoryFilter._run_permission_checks(deep, request=HttpRequest())
     assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
+
+
+def test_max_logic_depth_is_overridable_classvar():
+    """A subclass can raise ``_MAX_LOGIC_DEPTH`` without monkey-patching.
+
+    The cap is a ``ClassVar`` on ``FilterSet`` so a consumer with a
+    legitimate deeper-nesting case (machine-generated queries) can
+    subclass and override it. A 12-deep chain that trips the default
+    cap of 8 is accepted under an override of 32.
+    """
+
+    class DeepCategoryFilter(FilterSet):
+        _MAX_LOGIC_DEPTH = 32
+
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    deep: dict = {"name": "leaf"}
+    for _ in range(12):
+        deep = {"and_": [deep]}
+
+    # No raise: 12 levels is under the subclass's raised cap of 32.
+    DeepCategoryFilter._run_permission_checks(deep, request=HttpRequest())
+
+    # The base class still caps at 8 — the override is subclass-local.
+    class ShallowCategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(ConfigurationError):
+        ShallowCategoryFilter._run_permission_checks(deep, request=HttpRequest())
 
 
 @pytest.mark.django_db
@@ -950,13 +1043,10 @@ def test_apply_related_constraints_proxy_model_is_rejected():
     the raw ``TypeError`` so the failure mode is actionable. The
     docstring on ``_apply_related_constraints`` explicitly carves
     proxy / MTI out of the accepted shapes.
+
+    ``ShelfProxy`` is defined at module scope (see top of file) so the
+    app registry registers it at import time.
     """
-
-    class ShelfProxy(library_models.Shelf):
-        class Meta:
-            proxy = True
-            app_label = "library"
-
     library_models.Branch.objects.create(name="alpha")
 
     class ShelfFilter(FilterSet):

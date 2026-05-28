@@ -1,8 +1,10 @@
-# Branch review — round 4: `build-021-filters-0_0_8` vs `main`
+# Branch review — round 5: `bugfix/inputs-lookup-token-grouping` vs `main`
 
-Scope: `.py` files under `django_strawberry_framework/` only. Anchored at `origin/main` (`039c4425`) through `HEAD` (`bab59cd1`). Per-file stripped diffs regenerated via `uv run python scripts/review_changed_python_diffs_against_head.py 039c4425…`; outputs live under `docs/shadow/bug_hunt/diff/`.
+Scope: `.py` files under `django_strawberry_framework/` only. Anchored at `origin/main` (`039c4425`) through `HEAD` (`df1e090f`). Per-file stripped diffs regenerated via `uv run python scripts/review_changed_python_diffs_against_head.py 039c4425…`; outputs live under `docs/shadow/bug_hunt/diff/`.
 
-This pass compares against round 3 (now overwritten). **The round-3 list is essentially cleared.** The critical UNSET-in-operator-bag bug landed in the cleanest possible shape (outer guard + inner guard + defensive entry point in `normalize_input_value`), the `SyncMisuseError` loop is closed end-to-end, the `graphql_type_name` dedup is complete across all three call sites, and a half-dozen other risk and cleanup items got real treatment. Round 4 raises a small set of follow-up observations on the round-3 changes themselves — none rise to "blocker" — and notes one unit-test nit that has now been carried across three reviews.
+Round-5 compares against round-4 (now overwritten). **The round-4 follow-up list is fully resolved.** Permission-check dedup, the `_MAX_LOGIC_DEPTH` recursion guard, the proxy/MTI carve-out, both CHANGELOG entries for the `_q_for_branch` and `_pascal_case` behavioral changes, the `SyncMisuseError` docstring trim, AND the long-standing `_dynamic_filterset_cache` unit-test pin (carried verbatim across rounds 1–4) all landed in commit `df1e090`. The open-items list is now empty.
+
+Round 5 raises a few small new observations on the round-4 changes themselves — none are blockers; the framework code is in shippable shape.
 
 Severity legend:
 - **[Bug]** — incorrect behavior or crash risk on a realistic input.
@@ -11,111 +13,123 @@ Severity legend:
 
 ---
 
-## What was addressed since round 3
+## What was addressed since round 4
 
-| Round-3 finding | Status | Where |
+| Round-4 finding | Status | Where |
 | --- | --- | --- |
-| **UNSET in operator-bag inner loop** (round 3's critical item, carried from round 2) | **Fixed** | [filters/sets.py:464-473](django_strawberry_framework/filters/sets.py:464) — inner-loop guard mirrors the outer one; outer guard also handles top-level UNSET at [filters/sets.py:418](django_strawberry_framework/filters/sets.py:418) |
-| **`normalize_input_value` UNSET handling** (defensive entry point) | **Fixed** | [filters/inputs.py:393-401](django_strawberry_framework/filters/inputs.py:393) — every future caller, including the `_q_for_branch` recursion, inherits the protection |
-| **`SyncMisuseError` catch site still substring-matched** | **Fixed** | [filters/sets.py:975-980](django_strawberry_framework/filters/sets.py:975) — typed `except SyncMisuseError` dispatch; `_SYNC_MISUSE_SENTINEL` deleted entirely |
-| **`SyncMisuseError` needed a public export** | **Fixed** | [django_strawberry_framework/__init__.py:24](django_strawberry_framework/__init__.py:24) + [types/__init__.py:27](django_strawberry_framework/types/__init__.py:27) — consumers can catch the typed class without reaching into private `types.relay` |
-| **`_owner_type_name` still duplicated `graphql_type_name`** | **Fixed** | [filters/inputs.py:483-491](django_strawberry_framework/filters/inputs.py:483) — delegates to `DjangoTypeDefinition.graphql_type_name`; all three call sites share the rule |
-| `convert_filter_to_input_annotation` mutated filter via `_model_field` | **Fixed** | [filters/inputs.py:280-302](django_strawberry_framework/filters/inputs.py:280) — `model_field` threaded as a parameter through `_choice_enum_from_filter`; the side-effect write at the converter is gone |
-| `_apply_related_constraints` had no model-match check | **Fixed** | [filters/sets.py:892-910](django_strawberry_framework/filters/sets.py:892) — typed `ConfigurationError` names the filter and both model classes |
-| `expand_related_filter` lived on the metaclass without metaclass state | **Fixed** | [filters/sets.py:81-103](django_strawberry_framework/filters/sets.py:81) — moved to module-scope `_expand_related_filter`; call site reads cleanly |
-| `related_target_for` re-read `_meta.get_field` on every call | **Fixed** | [types/definition.py:88-97](django_strawberry_framework/types/definition.py:88) + [types/definition.py:143-178](django_strawberry_framework/types/definition.py:143) — per-instance cache via `field(default_factory=dict)`, gated on `registry.is_finalized()` |
-| `FilterSet.get_filters` single-threaded contract was undocumented | **Documented** | [filters/sets.py:154-168](django_strawberry_framework/filters/sets.py:154) — explicit "do not introduce `threading.local` without a real consumer path" warning |
-| Permission-check double-dispatch (parent-branch + child-class gates) was undocumented | **Documented** | [filters/sets.py:691-703](django_strawberry_framework/filters/sets.py:691) — explicit "audit-log warning" call-out |
-| `_pascal_case` silently returned `""` for `"_"` / `""` / `"__"` | **Fixed** | [filters/inputs.py:158-176](django_strawberry_framework/filters/inputs.py:158) — raises `ConfigurationError` at the source instead of leaking through to a downstream naming collision |
-| `_scalar_from_form_field` dead `CharField` branch | **Documented** | [filters/inputs.py:221-225](django_strawberry_framework/filters/inputs.py:221) — kept with an explanatory comment so a future reader doesn't strip it as dead code |
-| `_iter_filterset_subclasses` `__subclasses__()` traversal trade-off | **Documented** | [filters/inputs.py:826-840](django_strawberry_framework/filters/inputs.py:826) — long-running-test profiling note |
+| **`_run_permission_checks` may fire the same gate multiple times inside an `or` branch** | **Fixed** | [filters/sets.py:687-783](django_strawberry_framework/filters/sets.py:687) — keyword-only `_fired` set threaded through recursion; `_invoke_permission_method` records and short-circuits via method-name. New test `test_run_permission_checks_recurses_into_logical_branches` was updated to assert single-fire dedup. |
+| **`_apply_related_constraints` model-match uses `is`, trips on proxies / MTI** | **Documented (carve-out)** | [filters/sets.py:994-1014](django_strawberry_framework/filters/sets.py:994) — docstring + error message explicitly carve proxy and multi-table-inheritance children out, mirroring Django's `Query.combine` identity behavior. New test `test_apply_related_constraints_proxy_model_is_rejected` pins the rejection path. |
+| **`_q_for_branch` request propagation needs a CHANGELOG line** | **Fixed** | [CHANGELOG.md:25](CHANGELOG.md:25) — explicit "Changed" entry documenting that nested filterset instances now receive the live request (was hardcoded `None`). |
+| **`_pascal_case` raise replaces silent `""` return — needs a CHANGELOG line** | **Fixed** | [CHANGELOG.md:26](CHANGELOG.md:26) — explicit "Changed" entry documenting the new `ConfigurationError` shape for no-word-character inputs. |
+| **No recursion-depth guard on logical branches** | **Fixed** | [filters/sets.py:43-49](django_strawberry_framework/filters/sets.py:43) — `_MAX_LOGIC_DEPTH = 8` module constant; `_run_permission_checks`, `_evaluate_logic_tree`, `_q_for_branch` all cap and raise `ConfigurationError` past the threshold. `_q_for_branch` stashes `_logic_depth` on the sibling instance so `filter_queryset` can carry the counter across django-filter's `.qs` boundary. New test `test_run_permission_checks_caps_logical_branch_nesting` pins the cap. |
+| **`_choice_enum_from_filter` internal-API signature change** | **Acknowledged** | No action — underscore-prefixed; the round-4 review explicitly marked this as "no action required, just flagging". |
 
-Beyond the round-3 list, the same commit also added two real semantic improvements worth pinning explicitly:
+| Round-1/2/3 carry-over | Status | Where |
+| --- | --- | --- |
+| **`_dynamic_filterset_cache` keying unit-test pin** (carried across rounds 1, 2, 3, 4) | **Fixed** | [tests/filters/test_factories.py:275-334](tests/filters/test_factories.py:275) — `test_make_cache_key_structurally_equivalent_metas_share_a_slot` covers list-vs-tuple lookups, dict key order, extras order, and model-class discrimination; `test_dynamic_filterset_cache_collapses_equivalent_metas_to_one_class` is the end-to-end pin via `get_filterset_class`. The non-obvious cache-key shape is now regression-pinned. |
 
-- **`_run_permission_checks` now recurses into `and` / `or` / `not` branches** ([filters/sets.py:725-738](django_strawberry_framework/filters/sets.py:725)). Previously a `check_<field>_permission` gate fired only if the field appeared at the top level of the input. Now it also fires for fields nested under logical operators. The right semantic — permission gates should govern any active filter regardless of how it's logically composed.
-- **`_q_for_branch` propagates `request` to nested filterset instances** ([filters/sets.py:855-861](django_strawberry_framework/filters/sets.py:855)). Previously hardcoded `request=None`, which meant any `method=` filter that reads the request silently lost it inside logical branches. Now the request threads through `_evaluate_logic_tree` → `_q_for_branch` → child constructor.
+Two specific implementation notes worth pinning explicitly for future readers:
+
+- **Dedup scope is one-class-deep.** `_run_permission_checks` threads `_fired` through `cls`-recursion (logical branches) but **deliberately** omits `_fired` when descending into a `RelatedFilter` child filterset. The docstring is explicit: "gates on a different class have a different identity". This means a child filterset starts a fresh dedup set every time the parent enters it. See round-5 observation below for the corollary.
+- **Depth-counter hand-off via `_logic_depth` instance attribute.** `_q_for_branch` sets `child_set._logic_depth = _depth`; `filter_queryset` reads it back via `getattr(self, "_logic_depth", 0)`. This is the only way to carry the counter across django-filter's `.qs` boundary without owning `BaseFilterSet`. The contract is documented in both call-sites' docstrings.
 
 ---
 
-## New observations on the round-4 changes
+## New observations on the round-5 changes
 
-These are follow-ups to the new code, not blockers.
+These are follow-ups to the round-4 commit, not blockers.
 
-### [Risk] `_run_permission_checks` may fire the same gate multiple times inside an `or` branch
-[filters/sets.py:725-738](django_strawberry_framework/filters/sets.py:725)
+### [Risk] Dedup boundary is one-class-deep — same child filterset entered from multiple sibling branches still fires its gates per-branch
+[filters/sets.py:757-769](django_strawberry_framework/filters/sets.py:757)
 
-The recursion into logical branches is correct, but the same field appearing in multiple branches now fires its `check_<field>_permission` once per occurrence. Concretely:
+The parent's `_fired` set correctly dedups its own per-branch gate across sibling logic arms. The recursion into the child filterset, however, is invoked with no `_fired` argument, so each invocation starts a fresh dedup set. Concrete shape:
 
 ```graphql
 filter: {
-  or: [
-    { title: { icontains: "foo" } },
-    { title: { icontains: "bar" } }
+  or_: [
+    { shelves: { published: true } },
+    { shelves: { published: false } }
   ]
 }
 ```
 
-`check_title_permission(request)` fires twice — once for each `or` arm. The check itself is idempotent (it either raises or doesn't), so this is functionally harmless — but consumers who log from inside the gate get two audit entries for one logically-coherent filter. The existing double-dispatch docstring at [filters/sets.py:691-703](django_strawberry_framework/filters/sets.py:691) covers the parent-branch + child-class double-fire but not this logical-branch case. Either extend that docstring to cover all three double-fire shapes, or dedupe by collecting fired `(method_name)` keys in a `set` for the duration of the top-level call.
+- Parent's `check_shelves_permission` fires **once** (deduped — correct).
+- Child `ShelfFilter.check_published_permission` fires **twice** — once per `or` arm, because each arm spawns a fresh `child_filterset._run_permission_checks(child_input, request)` call with a fresh internal `_fired`.
 
-### [Risk] `_apply_related_constraints` model-match check uses `is`, which trips on proxies and multi-table inheritance
-[filters/sets.py:892-910](django_strawberry_framework/filters/sets.py:892)
+The docstring justifies this as "different class identity means different gate identity" — which is true between *different classes* but does not address the case where the same child class is entered multiple times from sibling branches of the *same* parent call. The child's gate is idempotent (it either raises or doesn't), so this is functionally harmless — but a consumer who logs from the child's gate sees the same shape that the round-4 fix specifically wanted to eliminate at the parent level: duplicate audit-log entries for one logically-coherent filter.
+
+Two options:
+- Maintain a parent-side `dict[type[FilterSet], set[str]]` so a same-class child re-entry deduplicates against its prior fired set.
+- Or extend the "Dedup contract" docstring to call out this carve-out explicitly: "same child filterset re-entered from sibling logical branches fires its own gates per branch; the dedup boundary is the immediate `cls` recursion."
+
+### [Risk] Proxy-model test fixture is declared inside the test function body
+[tests/filters/test_sets.py:947-953](tests/filters/test_sets.py:947)
 
 ```python
-if explicit.model is not child_qs.model:
-    raise ConfigurationError(...)
+class ShelfProxy(library_models.Shelf):
+    class Meta:
+        proxy = True
+        app_label = "library"
 ```
 
-If the consumer supplies a `RelatedFilter(queryset=ProxyModel.objects.all())` and the target filterset is keyed on the concrete model (or vice versa), they share a database table and `&` would actually work — but `is` rejects them. Same hazard for multi-table inheritance where a parent and child model can be `.filter(...)`-combined under specific conditions. Either:
+The proxy class is declared inside the test function. Django's app-loading machinery typically expects model classes at module scope so the app registry sees them during startup; `app_label` makes this work in practice but the pattern is fragile across Django versions (the registry's tolerance for late-bound model registration has shifted across releases). If the test currently passes that's the deciding signal, but moving `ShelfProxy` to `tests/filters/conftest.py` (or a module-scope fixture file) would make the suite resilient to future Django release-note changes around model registration timing.
 
-- Replace `is` with a check via `_meta.concrete_model` so proxies of the same table compare equal: `explicit.model._meta.concrete_model is not child_qs.model._meta.concrete_model`.
-- Or keep `is` and document the proxy/MTI carve-out in the `RelatedFilter` docstring with the suggested workaround ("pass an explicit queryset of the target's concrete model class").
+### [Risk] `_logic_depth` is an undeclared instance attribute set conditionally on the sibling
+[filters/sets.py:957-958](django_strawberry_framework/filters/sets.py:957) + [filters/sets.py:877-883](django_strawberry_framework/filters/sets.py:877)
 
-### [Risk] `_q_for_branch` request propagation is a behavioral change worth pinning
-[filters/sets.py:855-861](django_strawberry_framework/filters/sets.py:855)
+The depth counter hand-off works correctly: `_q_for_branch` sets `child_set._logic_depth = _depth`; `filter_queryset` reads it back with `getattr(self, "_logic_depth", 0)`. The implementation is the only way to thread state across django-filter's `.qs` boundary without owning `BaseFilterSet`.
 
-Previously hardcoded `request=None`; now propagates the real request. The new shape is correct, but any consumer who happened to depend on the old "request is `None` inside logical branches" behavior (e.g., a `method=` filter that branches on `request is None` to mean "I'm in a sub-branch") would see a different code path. Probably no real consumer does that, but worth a CHANGELOG line so the behavioral change is discoverable.
+Concern: the attribute is invisible to anything that walks declared class attributes (`__slots__`, dataclass introspection, strict mypy, IDE autocomplete). A future refactor toward `__slots__` or a stricter typing pass on `FilterSet` would silently lose the channel. Two stabilising options:
 
-### [Risk] `_pascal_case` now raises where it used to silently return `""`
-[filters/inputs.py:158-176](django_strawberry_framework/filters/inputs.py:158)
+- Declare `_logic_depth: int = 0` at class scope so the attribute exists on every instance and the default is explicit.
+- Or hoist the contract into a class-level `_LogicDepthMixin` (or a `__init_subclass__` hook) that types it.
 
-A pre-existing FilterSet class whose `__name__` is `"_"` (synthetic test fixtures, single-underscore module-private classes, very-unusual generated names) used to produce a downstream naming collision; it now raises `ConfigurationError` at the source. That's the right call. Worth a one-line CHANGELOG note since the surface error class did change for the same input.
+Either is a one-line change; both make the hand-off discoverable to static analysis.
 
-### [Cleanup] `_run_permission_checks` has no recursion-depth guard
-[filters/sets.py:725-738](django_strawberry_framework/filters/sets.py:725)
+### [Cleanup] `_run_permission_checks` allocates a fresh `bare` instance per recursion level
+[filters/sets.py:750](django_strawberry_framework/filters/sets.py:750)
 
-A maliciously-deep input like `and: [{and: [{and: [...]}]}]` could blow the stack. Probably not a real concern (consumer-driven graphs are typically shallow), but every level allocates a fresh `bare = object.__new__(cls)`. If you want defense in depth against pathological inputs, cap the recursion at e.g. `sys.getrecursionlimit() // 4` or a hard `MAX_LOGIC_DEPTH = 8` with a clear `ConfigurationError`. Same caveat applies to `_evaluate_logic_tree` and `_q_for_branch`. Not urgent.
+```python
+bare = object.__new__(cls)
+```
 
-### [Cleanup] `_choice_enum_from_filter` signature is now a positional `model_field` — internal-only, but a breaking signature change
-[filters/inputs.py:279-283](django_strawberry_framework/filters/inputs.py:279)
+Allocated at the top of every recursive call. The `bare` is only used as a getattr target for `check_<field>_permission` method lookup, so a single instance threaded through the recursion would suffice. Not a perf concern (object allocation is cheap), but a future static-analysis pass that flags "create-once / reuse" opportunities would point at it. Worth threading the `bare` through alongside `_fired` and `_depth` if you ever revisit the signature.
 
-The function is module-private (underscore prefix). If any future external caller imports it (unlikely; the underscore signals intent), the positional signature change would break them. No action required, just flagging that the internal API moved.
+### [Cleanup] `_MAX_LOGIC_DEPTH = 8` constant is module-private with no override hook
+[filters/sets.py:43-49](django_strawberry_framework/filters/sets.py:43)
+
+The cap is reasonable (eight levels covers every realistic consumer-driven graph), but a consumer with a legitimate deeper-nesting case (machine-generated queries, complex faceted search) has no escape hatch short of monkey-patching the module constant. Two options if a real consumer surfaces:
+
+- Expose `_MAX_LOGIC_DEPTH` as a class attribute (`FilterSet._MAX_LOGIC_DEPTH: ClassVar[int] = 8`) so subclasses can override.
+- Or leave as module constant and document the monkey-patch as the supported escape hatch.
+
+Not urgent — the cap is high enough that no realistic consumer will hit it.
 
 ---
 
 ## Still outstanding
 
-Just one. Carried forward verbatim from round 2.
-
-### [Cleanup] Unit-test the `_dynamic_filterset_cache` key for equivalent metas
-[filters/factories.py:158-170](django_strawberry_framework/filters/factories.py:158)
-
-The class-level shared-dict subclassing trap is documented (round 3). The remaining nit is a unit test that asserts two structurally-equivalent meta dicts hash to the same cache slot — the keying logic (model class + sorted fields tuple + sorted extras tuple) is non-obvious enough to deserve a regression pin. This is the only round-1 / round-2 / round-3 item that hasn't been touched.
+None on the framework code. The open-items list is empty.
 
 ---
 
 ## Cross-cutting recap
 
-After four rounds:
+After five rounds:
 
-1. **The branch is in shippable shape on the framework code.** Every `[Bug]`-tier finding across all four rounds has been resolved. The one critical correctness gap from rounds 2–3 (UNSET in operator bags) landed with the defensive entry-point shape that's hardest to regress against.
+1. **The branch is in shippable shape on the framework code.** Every `[Bug]`-tier finding across all five rounds has been resolved. The two critical correctness gaps (UNSET in operator bags from rounds 2–3, the `SyncMisuseError` substring catch from round 3) have both landed with defensive entry-point shapes that are hard to regress against.
 
-2. **The `SyncMisuseError` story is fully closed.** Class hierarchy, raise site, typed catch site, public export, sentinel-constant removal — all in one place. The round-3 "future pass" comment that the class docstring referenced is now obsolete; consider trimming the docstring to remove the reference to the substring-matching mention.
+2. **The `SyncMisuseError` story is fully closed.** Class hierarchy, raise site, typed catch site, public export, sentinel-constant removal, AND the docstring is now trimmed to remove the obsolete "future pass" reference.
 
-3. **`graphql_type_name` is the canonical derivation rule across all three former duplicate sites.** A future rename that breaks the property would break a single test instead of silently drifting across three files.
+3. **`graphql_type_name` is the canonical derivation rule across all three former duplicate sites.** A rename that breaks the property breaks a single test instead of silently drifting across three files.
 
-4. **One unit-test pin remains** (`_dynamic_filterset_cache` keying). Low priority, but it has now survived three reviews — worth knocking out before merge so the open-items list is empty.
+4. **The `_dynamic_filterset_cache` keying contract is now regression-pinned** with both unit-level (`_make_cache_key`) and end-to-end (`get_filterset_class`) tests covering list-vs-tuple, key-order, and extras-order equivalence classes. This closes the one carry-over item that survived four reviews.
 
-Round-4 follow-ups are all `[Risk]` or `[Cleanup]` and can land as a separate pass: the permission-recursion dedup, the proxy/MTI carve-out on `_apply_related_constraints`, the CHANGELOG notes for behavioral changes, and the optional recursion-depth cap on logical branches.
+5. **Permission-check dedup is correct one class deep** and **recursion-depth is guarded** via `_MAX_LOGIC_DEPTH = 8` across the three recursion paths (`_run_permission_checks` / `_evaluate_logic_tree` / `_q_for_branch`).
+
+6. **Behavioral changes are documented in CHANGELOG.** Both the `_q_for_branch` request propagation and the `_pascal_case` raise are now discoverable to a consumer reading the release notes.
+
+Round-5 follow-ups are all `[Risk]` or `[Cleanup]` and can land as a separate pass (or be deferred): the child-filterset cross-branch dedup carve-out, the proxy-model test fixture stability, the `_logic_depth` static-analysis visibility, and the optional `_MAX_LOGIC_DEPTH` override hook. None of these block a `0.0.8` cut.
 
 ---
 

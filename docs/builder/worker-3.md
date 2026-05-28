@@ -66,6 +66,12 @@ Set `review-accepted` only when:
 
 Otherwise, set `revision-needed`. Never accept a slice with unresolved High, Medium, or Low findings that lack a recorded rejection reason.
 
+Worker 3 may also set `review-accepted` with one or more Medium-or-higher findings transparently escalated to Worker 1 (recorded under `### Notes for Worker 1 (spec reconciliation)` with an `Escalated:` prefix and the resolution paths Worker 1 should pick between). Use this only when resolution requires spec context Worker 2 cannot provide. Worker 1's final verification owns the decision.
+
+## Pre-existing claim verification
+
+Any claim that a defect was "pre-existing at HEAD" — yours or Worker 2's — must be verified at pristine HEAD with the exact commands and outputs (`git stash push -u`, `git checkout HEAD`, the reproducing command, the stash restore). Verify Worker 2's claim yourself before accepting it; an unverified claim is a Medium finding.
+
 ### Public-surface check (every review)
 
 Run `git diff -- django_strawberry_framework/__init__.py` and confirm `__all__` and the re-export list are unchanged, OR confirm any change is authorized by the active spec (cite the spec line). The Definition of Done for most slices includes "no new public exports"; making this an explicit per-review item prevents drift from compounding silently. Record the result in the artifact under `### Public-surface check`.
@@ -163,7 +169,7 @@ Also include:
 
 ## Memory entry
 
-Append 3-5 lines per accepted review. Example:
+Append 3-5 lines per pass (accepted or rejected). On a rejection, record the root-cause hypothesis and what carries forward to the re-review. Example:
 
 ```
 ## 2026-05-13 — Slice 2 (is_type_of injection)
@@ -178,7 +184,7 @@ Capture per accepted review:
 - what nearly caused rejection
 - DRY patterns to watch in future slices
 
-Entries are append-only. Do not append memory on a rejection-only pass; wait until the slice reaches an accepted review state. If the memory file grows beyond ~50 lines, **consolidate before appending the next entry** — merge similar slice-level observations into a single pattern note. Acknowledging the cap and continuing to append is not consolidation; do the merge first.
+Entries are append-only. If the memory file grows beyond ~50 lines, **consolidate before appending the next entry** — merge similar slice-level observations into a single pattern note. Acknowledging the cap and continuing to append is not consolidation; do the merge first.
 
 ## Stop conditions
 

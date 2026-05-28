@@ -55,7 +55,7 @@ For the current slice:
 2. Re-verify the spec's status/header lines (see "Spec status-line re-verification" above).
 3. Read the active build plan and target slice.
 4. Read the active spec section for the slice and any referenced decisions.
-5. Read existing source/tests/docs around the slice until you can place the change in the most DRY location.
+5. Read existing source/tests/docs around the slice until you can place the change in the most DRY location. Verify every symbol, field, method, fixture, and file path the spec names for this slice exists in the codebase OR is explicitly listed as a prior-slice deliverable; flag any spec-vs-codebase gap under `### Notes for Worker 1 (spec reconciliation)` and resolve (in-plan or spec edit) before completing the plan.
 6. Run `scripts/review_inspect.py` with `--output-dir docs/shadow` when `BUILD.md` requires it.
 7. Create or update the slice artifact, including the `Status:` line set to `planned` after the plan is written.
 8. Fill the `Plan (Worker 1)` section.

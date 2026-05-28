@@ -82,6 +82,15 @@ For each unchecked slice, drive the loop by reading the artifact `Status:` field
 7. `final-accepted` → mark the slice checkbox `- [x]` in the build plan and append a short progress note to `docs/builder/worker-memory/worker-0.md`.
 8. **No maintainer pause.** Immediately return to step 1 for the next unchecked slice; do NOT stop to wait for maintainer review or maintainer commit between slices. The build runs end-to-end through every slice, the cross-slice integration pass, and the final test-run gate before Worker 0 hands off. See `docs/builder/BUILD.md` "Slice handoff (no maintainer pause between slices)". Genuine blockers (unresolvable spec ambiguity, unsalvageable diff, any stop condition listed below) still escalate to the maintainer immediately — the non-pause rule applies to the happy path, not to blockers.
 
+### Slice split dispatch
+
+When Worker 1's final-verification carves a slice into sub-slices per `docs/builder/BUILD.md` "Slice splitting":
+
+1. Confirm Worker 1 edited the active spec to record the carve (citation under `### Spec changes made (Worker 1 only)`).
+2. Update `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`: insert each new sub-slice checkbox in declared order; extend the artifact list with the new `bld-slice-<N>-<slug>.md` paths.
+3. Mark the parent slice's checkbox `[x]` only if its artifact reached `final-accepted`.
+4. Dispatch the new sub-slice's planning pass immediately (the non-pause rule still applies).
+
 ### Spawn-prompt contents
 
 Each subagent spawn prompt must include:

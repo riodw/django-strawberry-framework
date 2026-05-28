@@ -3,24 +3,39 @@ FilterSet,filterset,The declarative filter class this card ships; the primary co
 RelatedFilter,relatedfilter,Cross-relation filter traversal accepting class / absolute path / unqualified name.
 Meta.filterset_class,metafilterset_class,The Meta key this card promotes out of DEFERRED_META_KEYS.
 DjangoType,djangotype,The model-backed Strawberry type this card extends with a filter sidecar.
+Meta.model,metamodel,The required Meta key on every FilterSet declaration; new devs need it to write their first FilterSet.
+Meta.fields,metafields,The required Meta key telling FilterSet which fields to filter on; dict form `{"name": [...]}` or `"__all__"`.
+Meta.optimizer_hints,metaoptimizer_hints,Cited in Current state + Risks; the optimizer hint surface filter clauses compose with.
+Meta.interfaces,metainterfaces,Shipped 0.0.5 surface; same promotion gate pattern this card uses per Decision 7. Also the Relay-Node opt-in the FILTER_DEFAULTS conditional reads.
+Meta.primary,metaprimary,The multi-DjangoType-per-model design whose TypeRegistry keying convention this card respects per Decision 9.
 finalize_django_types,finalize_django_types,The synchronization point that runs the phase-2.5 filter-binding pass.
 DjangoOptimizerExtension,djangooptimizerextension,Cited because filter clauses must compose with the optimizer's queryset diffing.
-get_queryset visibility hook,get_queryset-visibility-hook,Pre-filter visibility scoping; composes with check_*_permission gates per Decision 8.
+Queryset diffing,queryset-diffing,Optimizer cooperation property filter clauses must preserve.
+Plan cache,plan-cache,Optimizer cache cited as composition contract.
+FK-id elision,fk-id-elision,Optimizer behavior preserved across filter clauses.
+Strictness mode,strictness-mode,Optimizer N+1 detection mode compatible with filter clauses.
+OptimizerHint,optimizerhint,The hint primitive whose `Meta.optimizer_hints` declarations interact with this card's filter clauses.
+only() projection,only-projection,Optimizer projection contract; queryset filters compose with `.only(...)` projections.
+get_queryset visibility hook,get_queryset-visibility-hook,Pre-filter visibility scoping; composes with check_*_permission gates per Decision 8. Nested visibility scoping (H1) reuses the sync/async dispatch.
+Relay Node integration,relay-node-integration,The 0.0.5 surface this card's Decision 4 Relay-vs-scalar conditional consults; FK/PK targets implementing relay.Node get GlobalIDFilter.
+Relation handling,relation-handling,FK / OneToOne / M2M / reverse-relation traversal the package already supports; RelatedFilter binds onto this same shape.
+ConfigurationError,configurationerror,Raised at type-creation/finalization for invalid filter declarations.
+Choice enum generation,choice-enum-generation,The existing converter pipeline `convert_filter_to_input_annotation` consults for ChoiceFilter input shape (M5 of rev5).
+Scalar field conversion,scalar-field-conversion,The SCALAR_MAP the FK/PK conditional reads for non-Relay scalar PK filters per Decision 4.
+Specialized scalar conversions,specialized-scalar-conversions,Decimal / Date / DateTime / Time / UUID conversions the named filter-to-input converter handles per Decision 4 M1.
+BigInt scalar,bigint-scalar,Cited in Decision 4 as a possible scalar PK shape (in addition to int and uuid.UUID).
+Input type generation,input-type-generation,The package's general input-type-generation surface; this card's FilterArgumentsFactory is the filtering-specific instance.
+Definition-order independence,definition-order-independence,The DONE-009-0.0.4 invariant the six-layer lazy-resolution pipeline preserves for cross-module RelatedFilter references.
+Cross-subsystem invariants,cross-subsystem-invariants,The deferred-Meta-key promotion rule (Decision 7) lives here; same gate pattern across all Layer-3 sidecars.
+strawberry_config,strawberry_config,Spec-020's pattern the `filter_input_type` CSV-deferral mirrors (Risks section).
 OrderSet,orderset,Sibling Layer-3 subsystem (WIP-ALPHA-022-0.0.8); out of scope here but referenced as second consumer of the lazy-resolution architecture.
 AggregateSet,aggregateset,Future Layer-3 sidecar; cited as forward composition surface.
 get_child_queryset,get_child_queryset,Future cascade hook on AggregateSet; cited in Risks/Out of scope.
 apply_cascade_permissions,apply_cascade_permissions,Future 0.0.10 permissions hook; cited as forward composition target.
 DjangoConnectionField,djangoconnectionfield,0.0.9 consumer of this card's factory machinery.
-Meta.primary,metaprimary,The multi-DjangoType-per-model design whose TypeRegistry keying convention this card respects per Decision 9.
-ConfigurationError,configurationerror,Raised at type-creation/finalization for invalid filter declarations.
 Meta.search_fields,metasearch_fields,Future 0.1.2 surface that reuses LOOKUP_PREFIXES and construct_search from this card.
 DjangoListField,djangolistfield,Shipped 0.0.7 surface cited in Current state.
 Schema export management command,schema-export-management-command,Shipped 0.0.7 surface cited in Current state.
-Meta.interfaces,metainterfaces,Shipped 0.0.5 surface; same promotion gate pattern this card uses per Decision 7.
-Queryset diffing,queryset-diffing,Optimizer cooperation property filter clauses must preserve.
-Plan cache,plan-cache,Optimizer cache cited as composition contract.
-FK-id elision,fk-id-elision,Optimizer behavior preserved across filter clauses.
-Strictness mode,strictness-mode,Optimizer N+1 detection mode compatible with filter clauses.
 DjangoConnection,djangoconnection,0.0.9 return-type alias; out of scope.
 DjangoNodeField,djangonodefield,0.0.9 root single-node field; out of scope.
 Per-field permission hooks,per-field-permission-hooks,Future 0.0.10 hooks that compose with check_*_permission gates.
@@ -31,3 +46,5 @@ Meta.orderset_class,metaorderset_class,Sibling 0.0.8 Meta key (ordering card); o
 RelatedAggregate,relatedaggregate,Future 0.1.3 aggregate-relation symbol; out of scope.
 RelatedOrder,relatedorder,Sibling 0.0.8 order-relation symbol (ordering card); out of scope here.
 Connection-aware optimizer planning,connection-aware-optimizer-planning,Future 0.0.9 optimizer feature; out of scope.
+</content>
+</invoke>

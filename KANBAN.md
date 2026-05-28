@@ -78,6 +78,8 @@ Three WIP cards opened together so the `0.0.8` cohort lands as a coherent patch 
 
 ### WIP-ALPHA-021-0.0.8 — Filtering subsystem
 
+Active spec: [`docs/spec-021-filters-0_0_8.md`](docs/spec-021-filters-0_0_8.md)
+
 Priority: high for package positioning (⚛️&🍓 parity-required)
 
 Severity: **major**
@@ -175,7 +177,7 @@ Reference symbols in the Graphene checkout (`/Users/riordenweber/projects/django
 
 Definition of done:
 
-- Add `docs/spec-filters.md`.
+- Add [`docs/spec-021-filters-0_0_8.md`](docs/spec-021-filters-0_0_8.md).
 - Add `django_strawberry_framework/filters/`.
 - Add mirrored `tests/filters/`.
 - Promote `Meta.filterset_class` only when filters are applied end-to-end from `DjangoType` / connection fields.
@@ -1549,7 +1551,7 @@ Design notes carried into `0.0.6`:
 
 Parity: 🍓 parity-adjacent (strawberry-graphql-django has an implicit primary-type concept via `is_type_of`; graphene-django does not ship this primitive — adjacent rather than required on either side).
 
-Slice-by-slice scope (per `docs/spec-014-meta_primary-0_0_6.md`):
+Slice-by-slice scope (per `docs/SPECS/spec-014-meta_primary-0_0_6.md`):
 
 - Registry stores multiple types per model (`_types: dict[Model, list[Type]]`).
 - New `Meta.primary: bool` flag (default `False`); validated in `_validate_meta`.

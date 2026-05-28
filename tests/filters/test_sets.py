@@ -1268,3 +1268,395 @@ def test_filter_queryset_negates_not_branch():
     # The pre-scoped exclusion still applies — ``hidden`` is NOT in the
     # result even though the not-branch only mentions ``x-row``.
     assert "hidden" not in names
+
+
+# ---------------------------------------------------------------------------
+# Round-5 coverage: helper / config / async / depth-cap branches
+# ---------------------------------------------------------------------------
+
+
+def test_get_filters_skips_none_target_related_filter():
+    """A ``RelatedFilter(None, ...)`` placeholder expands to nothing.
+
+    ``_expand_related_filter`` returns an empty mapping when the target
+    filterset is unresolved (``None``), so no ``<rel>__<lookup>`` keys
+    leak into ``get_filters()``.
+    """
+
+    class PlaceholderFilter(FilterSet):
+        rel = RelatedFilter(None, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    filters = PlaceholderFilter.get_filters()
+    assert not any(name.startswith("rel__") for name in filters)
+
+
+def test_normalize_input_returns_empty_for_non_dataclass_non_dict():
+    """A value that is neither a dict nor a dataclass normalizes to ``{}``."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    assert CategoryFilter._normalize_input(object()) == {}
+
+
+def test_operator_bag_items_returns_none_for_plain_mapping():
+    """``_operator_bag_items`` returns ``None`` for a non-dataclass value."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    assert CategoryFilter._operator_bag_items({"exact": "x"}) is None
+
+
+def test_extract_branch_value_returns_none_for_none_input():
+    """``_extract_branch_value(None, ...)`` short-circuits to ``None``."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    assert CategoryFilter._extract_branch_value(None, "shelves") is None
+
+
+def test_request_from_info_raises_when_context_missing():
+    """``_request_from_info`` raises when ``info.context`` is ``None``."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    class _Info:
+        context = None
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        CategoryFilter._request_from_info(_Info())
+    assert "info.context" in str(excinfo.value)
+
+
+def test_run_permission_checks_short_circuits_on_none_and_unset():
+    """A ``None`` / ``UNSET`` input is a no-op (no gate fires, no crash)."""
+    import strawberry
+
+    fired: list[str] = []
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+        def check_name_permission(self, request):
+            fired.append("name")
+
+    CategoryFilter._run_permission_checks(None, request=HttpRequest())
+    CategoryFilter._run_permission_checks(strawberry.UNSET, request=HttpRequest())
+    assert fired == []
+
+
+@pytest.mark.django_db
+def test_check_permissions_walks_explicit_requested_fields():
+    """The explicit-``requested_fields`` path fires each named gate directly."""
+    fired: list[str] = []
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+        def check_name_permission(self, request):
+            fired.append("name")
+
+    instance = CategoryFilter(data={}, queryset=Category.objects.all())
+    instance.check_permissions(HttpRequest(), requested_fields={"name", "unknown_field"})
+    # Only the declared gate fires; the unknown field has no ``check_*`` method.
+    assert fired == ["name"]
+
+
+def test_evaluate_logic_tree_caps_recursion_depth():
+    """``_evaluate_logic_tree`` raises past ``_MAX_LOGIC_DEPTH``.
+
+    The round-4 depth guard is independent of the ``_run_permission_checks``
+    cap; this pins the ``_evaluate_logic_tree`` / ``_q_for_branch`` arm.
+    """
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        CategoryFilter._evaluate_logic_tree(
+            Category.objects.all(),
+            {"and": [{"name": "x"}]},
+            _depth=CategoryFilter._MAX_LOGIC_DEPTH + 1,
+        )
+    assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
+
+
+def test_target_type_for_related_filter_returns_none_without_child_model():
+    """A ``RelatedFilter`` whose filterset has no model resolves to ``None``."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    assert CategoryFilter._target_type_for_related_filter(RelatedFilter(None)) is None
+
+
+def test_is_own_pk_under_relay_owner_false_for_relation_field():
+    """An ``is_relation`` field never takes the own-PK Relay branch."""
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    # Bind an owner directly on the throwaway local class so the early
+    # ``owner is None`` guard is passed; ``registry.clear()`` (autouse
+    # teardown) strips the binding afterward.
+    BookFilter._owner_definition = object()
+    relation_field = library_models.Book._meta.get_field("genres")
+    assert BookFilter._is_own_pk_under_relay_owner(relation_field) is False
+
+
+def test_is_own_pk_under_relay_owner_false_when_model_missing():
+    """A non-relation field with a model-less filterset returns ``False``."""
+    from types import SimpleNamespace
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    CategoryFilter._owner_definition = object()
+    # The local class is discarded after the test, so nulling its own
+    # ``_meta.model`` does not leak into other tests.
+    CategoryFilter._meta.model = None
+    non_relation = SimpleNamespace(is_relation=False)
+    assert CategoryFilter._is_own_pk_under_relay_owner(non_relation) is False
+
+
+def test_resolve_relation_target_type_uses_owner_related_target_for():
+    """When the owner resolves the relation, its target type is returned."""
+    from types import SimpleNamespace
+
+    target_type = type("ResolvedTargetType", (), {})
+
+    class _Owner:
+        def related_target_for(self, field_name):
+            return (SimpleNamespace(type=target_type), object())
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    CategoryFilter._owner_definition = _Owner()
+    relation_field = SimpleNamespace(is_relation=True, related_model=Category)
+    resolved = CategoryFilter._resolve_relation_target_type(relation_field, "category")
+    assert resolved is target_type
+
+
+def test_resolve_relation_target_type_returns_none_without_related_model():
+    """A relation field with no ``related_model`` and no owner resolves to ``None``."""
+    from types import SimpleNamespace
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    field = SimpleNamespace(is_relation=True, related_model=None)
+    assert CategoryFilter._resolve_relation_target_type(field, None) is None
+
+
+@pytest.mark.django_db
+def test_apply_related_constraints_skips_branch_without_qs_or_explicit():
+    """An active branch with neither child qs nor explicit qs is skipped."""
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        # No explicit ``queryset=`` on the RelatedFilter.
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    parent_qs = library_models.Branch.objects.all()
+    # Active ``shelves`` branch, but the child-qs map is empty AND the
+    # RelatedFilter has no explicit queryset -> the branch is skipped.
+    constrained = BranchFilter._apply_related_constraints(
+        {"shelves": {"code": "x"}},
+        parent_qs,
+        {},
+    )
+    assert "shelves__in" not in str(constrained.query)
+
+
+@pytest.mark.django_db
+def test_apply_async_filters_against_scalar_input():
+    """``apply_async`` builds the filtered queryset (no related branches)."""
+    import asyncio
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    qs = asyncio.run(
+        CategoryFilter.apply_async({"name": "alpha"}, Category.objects.all(), _make_info()),
+    )
+    sql = str(qs.query).lower()
+    assert "alpha" in sql
+
+
+@pytest.mark.django_db
+def test_derive_related_visibility_querysets_async_scopes_active_branch():
+    """The async visibility derive runs the target ``get_queryset`` per active branch."""
+    import asyncio
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    result = asyncio.run(
+        BranchFilter._derive_related_visibility_querysets_async(
+            {"shelves": {"code": "A"}},
+            _make_info(),
+        ),
+    )
+    assert "shelves" in result
+    assert result["shelves"].model is library_models.Shelf
+
+
+def test_normalize_input_operator_bag_passes_unmatched_lookup_through():
+    """An operator-bag lookup with no backing filter is written verbatim."""
+    import dataclasses
+
+    @dataclasses.dataclass
+    class _NameBag:
+        gt: Any = None
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    # ``gt`` is not a declared lookup for ``name`` -> no filter instance ->
+    # the value lands under the raw ``name__gt`` form key.
+    data = CategoryFilter._normalize_input({"name": _NameBag(gt=5)})
+    assert data == {"name__gt": 5}
+
+
+@pytest.mark.django_db
+def test_normalize_input_operator_bag_dict_value_merges_into_form_data():
+    """A dict-valued operator-bag lookup is merged into the form data via ``update``.
+
+    Exercises the operator-bag ``isinstance(normalized, dict)`` ->
+    ``data.update(normalized)`` branch. A ``range`` lookup yields
+    django-filter's ``ConcreteRangeFilter`` (a CSV-style ``NumberFilter``,
+    NOT the framework ``RangeFilter``), so ``normalize_input_value`` passes
+    the ``{start, end}`` mapping through unchanged and the loop merges its
+    keys into the form-data dict.
+    """
+    import dataclasses
+
+    @dataclasses.dataclass
+    class _FinesBag:
+        range: Any = None
+
+    class PatronFilter(FilterSet):
+        class Meta:
+            model = library_models.Patron
+            fields = {"lifetime_fines_cents": ["range"]}
+
+    data = PatronFilter._normalize_input(
+        {"lifetime_fines_cents": _FinesBag(range={"start": 1, "end": 5})},
+    )
+    # The dict-valued normalization result is merged key-by-key.
+    assert data == {"start": 1, "end": 5}
+
+
+@pytest.mark.django_db
+def test_normalize_input_top_level_range_filter_merges_positional_keys():
+    """A top-level ``RangeFilter`` attribute expands to positional keys."""
+    from django_strawberry_framework.filters import RangeFilter
+
+    class FinesRangeFilter(FilterSet):
+        fines = RangeFilter(field_name="lifetime_fines_cents")
+
+        class Meta:
+            model = library_models.Patron
+            fields = {"id": ["exact"]}
+
+    data = FinesRangeFilter._normalize_input({"fines": {"start": 1, "end": 5}})
+    assert data == {"fines_0": 1, "fines_1": 5}
+
+
+@pytest.mark.django_db
+def test_check_permissions_falls_back_to_active_input_when_no_requested_fields():
+    """``check_permissions`` with no explicit set routes through the active-input path."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    instance = CategoryFilter(data={}, queryset=Category.objects.all())
+    # No ``requested_fields`` -> the active-input ``_run_permission_checks``
+    # branch runs (and is a no-op for a gate-less filterset).
+    instance.check_permissions(HttpRequest())
+
+
+def test_derive_related_visibility_querysets_async_skips_unregistered_target():
+    """The async derive skips a branch whose target type is not registered."""
+    import asyncio
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    # No ShelfType registered -> ``_target_type_for_related_filter`` is
+    # ``None`` -> the branch is skipped (the async ``continue``).
+    result = asyncio.run(
+        BranchFilter._derive_related_visibility_querysets_async(
+            {"shelves": {"code": "A"}},
+            _make_info(),
+        ),
+    )
+    assert result == {}

@@ -91,6 +91,50 @@ def test_filter_arguments_factory_bfs_handles_cycle():
 
 
 @pytest.mark.django_db
+def test_filter_arguments_factory_dedupes_target_enqueued_twice():
+    """A diamond ``A -> {B, C} -> D`` enqueues ``D`` twice; the BFS dedups it.
+
+    Unlike the ``A -> B -> A`` cycle (caught by the enqueue-time
+    ``target not in seen`` gate), a diamond enqueues the shared child ``D``
+    from both sibling parents BEFORE ``D`` is popped, so the pop-time
+    ``if fs_class in seen: continue`` dedup is what prevents the duplicate
+    build.
+    """
+
+    class DFilter(FilterSet):
+        class Meta:
+            model = library_models.Loan
+            fields = {"note": ["exact"]}
+
+    class BFilter(FilterSet):
+        d = RelatedFilter(DFilter, field_name="loans")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class CFilter(FilterSet):
+        d = RelatedFilter(DFilter, field_name="loans")
+
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    class AFilter(FilterSet):
+        b = RelatedFilter(BFilter, field_name="shelves")
+        c = RelatedFilter(CFilter, field_name="books")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    factory = FilterArgumentsFactory(AFilter)
+    factory.arguments  # BFS: D is enqueued by both B and C, deduped at pop.
+    for name in ("AFilterInputType", "BFilterInputType", "CFilterInputType", "DFilterInputType"):
+        assert name in FilterArgumentsFactory.input_object_types
+
+
+@pytest.mark.django_db
 def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_name():
     """Two distinct `FilterSet`s named `DupFilter` in different modules -> ConfigurationError."""
 
@@ -369,6 +413,24 @@ def test_get_filterset_class_requires_model_when_dynamic():
     """Without an explicit class AND without `model`, the dynamic factory raises."""
     with pytest.raises(ConfigurationError):
         get_filterset_class(None, fields={"name": ["exact"]})
+
+
+@pytest.mark.django_db
+def test_get_filterset_class_supports_unhashable_meta_values():
+    """`get_filterset_class` should support unhashable types (like lists, dicts, sets) in Meta options without raising TypeError."""
+    # List in exclude
+    cls_a = get_filterset_class(None, model=Category, fields="__all__", exclude=["id"])
+    cls_b = get_filterset_class(None, model=Category, fields="__all__", exclude=["id"])
+    assert cls_a is cls_b
+
+    # Nested set or list in extra meta
+    cls_c = get_filterset_class(
+        None, model=Category, fields={"name": ["exact"]}, extra_opt={"nested": {1, 2, 3}},
+    )
+    cls_d = get_filterset_class(
+        None, model=Category, fields={"name": ["exact"]}, extra_opt={"nested": {1, 2, 3}},
+    )
+    assert cls_c is cls_d
 
 
 # Touch `NumberFilter` import to ensure the import is exercised (used

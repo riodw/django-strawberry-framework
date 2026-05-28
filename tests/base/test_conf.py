@@ -143,3 +143,22 @@ def test_setting_changed_receiver_uses_dispatch_uid():
     setting_changed.connect(reload_settings, dispatch_uid=_DISPATCH_UID)
     after = len(setting_changed.receivers)
     assert before == after
+
+
+def test_settings_uninitialized_user_settings_does_not_recurse():
+    """Accessing _user_settings on an uninitialized Settings object raises AttributeError directly instead of recursing."""
+    s = Settings.__new__(Settings)
+    with pytest.raises(AttributeError, match="_user_settings"):
+        _ = s._user_settings
+
+
+def test_settings_normalization_attribute_error_does_not_recurse(monkeypatch):
+    """An AttributeError in _normalize_user_settings must not trigger infinite recursion in __getattr__."""
+
+    def racy_normalize(value):
+        raise AttributeError("Simulated normalization AttributeError")
+
+    monkeypatch.setattr(conf, "_normalize_user_settings", racy_normalize)
+    s = Settings()
+    with pytest.raises(AttributeError, match="user_settings"):
+        _ = s.SOME_KEY

@@ -142,7 +142,7 @@ class Settings:
         probes by design — bad configuration should fail loud rather than
         masquerade as a missing attribute.
         """
-        if name.startswith("__"):
+        if name in {"user_settings", "_user_settings", "reload"} or name.startswith("__"):
             raise AttributeError(name)
         try:
             # ``self.user_settings`` is a descriptor (``@property``), not a

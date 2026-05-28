@@ -28,6 +28,8 @@ from django_strawberry_framework.filters import (
     GlobalIDMultipleChoiceFilter,
     ListFilter,
     RangeFilter,
+    RelatedFilter,
+    TypedFilter,
     _helper_referenced_filtersets,
     filter_input_type,
 )
@@ -36,8 +38,16 @@ from django_strawberry_framework.filters.inputs import (
     LOOKUP_NAME_MAP,
     _build_input_fields,
     _build_logic_fields,
+    _build_range_input_class,
+    _camel_case,
     _field_specs,
+    _iter_filterset_subclasses,
+    _model_field_for_filter,
+    _pascal_case,
+    _scalar_from_form_field,
+    _scalar_from_model_field,
     build_input_class,
+    clear_filter_input_namespace,
     construct_search,
     convert_filter_to_input_annotation,
     normalize_input_value,
@@ -541,3 +551,231 @@ def test_filter_input_type_rejects_non_filterset():
 
     with pytest.raises(TypeError):
         filter_input_type(None)
+
+
+# ---------------------------------------------------------------------------
+# _pascal_case / _camel_case naming helpers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["", "_", "__", "___"])
+def test_pascal_case_raises_for_no_word_character_input(bad):
+    """`_pascal_case` raises rather than silently returning `""` (round-4 fix)."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _pascal_case(bad)
+    assert repr(bad) in str(excinfo.value)
+
+
+def test_pascal_case_converts_separators():
+    assert _pascal_case("galaxy__name") == "GalaxyName"
+    assert _pascal_case("email_must_have_at_sign") == "EmailMustHaveAtSign"
+
+
+def test_camel_case_returns_input_when_no_word_characters():
+    """`_camel_case` returns the raw string when it has no word tokens."""
+    assert _camel_case("") == ""
+    assert _camel_case("_") == "_"
+
+
+def test_camel_case_lowercases_head_and_pascals_rest():
+    assert _camel_case("galaxy_name") == "galaxyName"
+
+
+# ---------------------------------------------------------------------------
+# _scalar_from_form_field — form-field -> Python scalar mapping
+# ---------------------------------------------------------------------------
+
+
+def test_scalar_from_form_field_maps_each_recognized_shape():
+    """Every recognized form-field shape maps to its Python scalar.
+
+    Regression pin for the ``django.forms`` hierarchy trap: ``FloatField``
+    and ``DecimalField`` BOTH subclass ``IntegerField``, so they must be
+    matched before the ``IntegerField`` catch — otherwise a float/decimal
+    filter mis-maps to ``int``.
+    """
+    import datetime
+    import decimal
+    import uuid
+
+    from django import forms
+
+    assert _scalar_from_form_field(forms.NullBooleanField()) is bool
+    assert _scalar_from_form_field(forms.BooleanField()) is bool
+    assert _scalar_from_form_field(forms.IntegerField()) is int
+    assert _scalar_from_form_field(forms.FloatField()) is float
+    assert _scalar_from_form_field(forms.DecimalField()) is decimal.Decimal
+    assert _scalar_from_form_field(forms.DateTimeField()) is datetime.datetime
+    assert _scalar_from_form_field(forms.DateField()) is datetime.date
+    assert _scalar_from_form_field(forms.TimeField()) is datetime.time
+    assert _scalar_from_form_field(forms.UUIDField()) is uuid.UUID
+    assert _scalar_from_form_field(forms.CharField()) is str
+    # Unknown shape falls through to the ``str`` catch-all.
+    assert _scalar_from_form_field(forms.Field()) is str
+
+
+# ---------------------------------------------------------------------------
+# _scalar_from_model_field — model-field -> Python scalar mapping
+# ---------------------------------------------------------------------------
+
+
+def test_scalar_from_model_field_none_falls_back_to_str():
+    assert _scalar_from_model_field(None) is str
+
+
+def test_scalar_from_model_field_maps_each_recognized_shape():
+    import datetime
+    import decimal
+    import uuid
+
+    assert _scalar_from_model_field(models.BooleanField()) is bool
+    assert _scalar_from_model_field(models.IntegerField()) is int
+    assert _scalar_from_model_field(models.FloatField()) is float
+    assert _scalar_from_model_field(models.DecimalField()) is decimal.Decimal
+    assert _scalar_from_model_field(models.DateTimeField()) is datetime.datetime
+    assert _scalar_from_model_field(models.DateField()) is datetime.date
+    assert _scalar_from_model_field(models.TimeField()) is datetime.time
+    assert _scalar_from_model_field(models.UUIDField()) is uuid.UUID
+    # Unknown shape falls through to the ``str`` catch-all.
+    assert _scalar_from_model_field(models.TextField()) is str
+
+
+# ---------------------------------------------------------------------------
+# convert_filter_to_input_annotation / normalize_input_value edge branches
+# ---------------------------------------------------------------------------
+
+
+def test_convert_filter_to_input_annotation_typed_filter_uses_model_scalar():
+    """A bare ``TypedFilter`` resolves its scalar from the model field."""
+    annotation = convert_filter_to_input_annotation(
+        TypedFilter(field_name="lifetime_fines_cents"),
+        models.IntegerField(),
+        None,
+    )
+    # Optional wrapper around the resolved scalar.
+    assert annotation == (int | None)
+
+
+def test_normalize_input_value_list_filter_unwraps_each_element():
+    """``ListFilter`` / ``ArrayFilter`` values normalize element-by-element."""
+    f = ListFilter(field_name="ids")
+    assert normalize_input_value(f, [1, 2, 3], field_name="ids") == [1, 2, 3]
+
+
+def test_build_range_input_class_is_cached_on_the_filter_instance():
+    """A second call returns the same cached class rather than rebuilding."""
+    f = RangeFilter(field_name="price")
+    first = _build_range_input_class(f, int)
+    second = _build_range_input_class(f, int)
+    assert first is second
+
+
+def test_build_input_class_threads_description_into_strawberry_field():
+    """A ``description`` kwarg is forwarded to ``strawberry.field``."""
+    cls = build_input_class(
+        "DescribedInputType",
+        [("note", str | None, {"default": None, "description": "a note"})],
+    )
+    # The strawberry field carries the description through decoration.
+    field = next(f for f in cls.__strawberry_definition__.fields if f.python_name == "note")
+    assert field.description == "a note"
+
+
+# ---------------------------------------------------------------------------
+# _model_field_for_filter
+# ---------------------------------------------------------------------------
+
+
+def test_model_field_for_filter_returns_none_without_model():
+    """A filterset-shaped object with no ``_meta.model`` yields ``None``."""
+
+    class _NoMeta:
+        pass
+
+    assert _model_field_for_filter(_NoMeta, GlobalIDFilter(field_name="id")) is None
+
+
+def test_model_field_for_filter_returns_none_without_field_name():
+    """A filter with no ``field_name`` yields ``None`` even on a real model."""
+    from tests.filters.fixtures.filtersets import ShelfFilter
+
+    f = GlobalIDFilter()
+    f.field_name = ""
+    assert _model_field_for_filter(ShelfFilter, f) is None
+
+
+# ---------------------------------------------------------------------------
+# _build_input_fields — RelatedFilter with an unresolved (None) target
+# ---------------------------------------------------------------------------
+
+
+def test_build_input_fields_skips_related_filter_with_none_target():
+    """A ``RelatedFilter(None, ...)`` placeholder is skipped, not materialized."""
+
+    class PlaceholderFilter(FilterSet):
+        rel = RelatedFilter(None, field_name="branch")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    # The None-target branch contributes no input triple but does not raise.
+    triples = _build_input_fields(PlaceholderFilter)
+    names = {python_attr for python_attr, _annotation, _kwargs in triples}
+    assert "rel" not in names
+    assert "code" in names
+
+
+# ---------------------------------------------------------------------------
+# clear_filter_input_namespace — cycle-safe import guards
+# ---------------------------------------------------------------------------
+
+
+def test_clear_filter_input_namespace_tolerates_unimportable_submodules():
+    """Both ImportError guards are best-effort: a broken import is skipped."""
+    import sys
+
+    factories_name = "django_strawberry_framework.filters.factories"
+    sets_name = "django_strawberry_framework.filters.sets"
+    saved = {name: sys.modules.get(name) for name in (factories_name, sets_name)}
+    try:
+        # Setting the module entry to ``None`` makes ``from ... import ...``
+        # raise ImportError, exercising both ``except ImportError`` guards.
+        sys.modules[factories_name] = None
+        sys.modules[sets_name] = None
+        # Must not raise even though neither submodule can be imported.
+        clear_filter_input_namespace()
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
+
+
+# ---------------------------------------------------------------------------
+# _iter_filterset_subclasses — diamond dedup
+# ---------------------------------------------------------------------------
+
+
+def test_iter_filterset_subclasses_dedupes_diamond_inheritance():
+    """A diamond hierarchy surfaces each subclass once (the dedup `continue`)."""
+
+    class A(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    class B(A):
+        pass
+
+    class C(A):
+        pass
+
+    class D(B, C):
+        pass
+
+    found = _iter_filterset_subclasses(A)
+    # ``D`` is reachable through both ``B`` and ``C`` but appears once.
+    assert found.count(D) == 1
+    assert {B, C, D}.issubset(set(found))

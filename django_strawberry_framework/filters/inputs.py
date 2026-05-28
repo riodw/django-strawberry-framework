@@ -204,15 +204,19 @@ def _scalar_from_form_field(form_field: Any) -> type:
         return bool
     if isinstance(form_field, forms.BooleanField):
         return bool
-    if isinstance(form_field, forms.IntegerField):
-        # ``DecimalField`` and ``FloatField`` subclass ``IntegerField`` -- no.
-        # ``DecimalField`` extends ``IntegerField`` via ``Field`` only; the
-        # explicit checks below catch them first.
-        return int
-    if isinstance(form_field, forms.FloatField):
-        return float
+    # ``DecimalField`` and ``FloatField`` BOTH subclass ``IntegerField`` in
+    # ``django.forms`` (the form-field hierarchy differs from the model-field
+    # one, where they descend straight from ``Field``). They MUST be matched
+    # before the ``IntegerField`` catch below; otherwise a decimal- or
+    # float-backed filter mis-maps to ``int``. ``DecimalField`` and
+    # ``FloatField`` are siblings (neither subclasses the other), so the
+    # order between them is immaterial.
     if isinstance(form_field, forms.DecimalField):
         return decimal.Decimal
+    if isinstance(form_field, forms.FloatField):
+        return float
+    if isinstance(form_field, forms.IntegerField):
+        return int
     if isinstance(form_field, forms.DateTimeField):
         return datetime.datetime
     if isinstance(form_field, forms.DateField):

@@ -46,6 +46,7 @@ from django_strawberry_framework.filters.inputs import (
     materialize_input_class,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.finalizer import _bind_filterset_owner
 
 
 @pytest.fixture(autouse=True)
@@ -795,3 +796,130 @@ def test_phase_2_5_runs_under_relay_node_interface():
     assert hasattr(inputs_module, "BookFilterInputType")
     # Silence ``strawberry`` import unused at module scope.
     assert strawberry is not None
+
+
+# ---------------------------------------------------------------------------
+# _bind_filterset_owner — direct unit coverage of the binding branches.
+# ---------------------------------------------------------------------------
+
+
+def _owner_definition_stub(name):
+    """Return a minimal owner-definition-shaped object for binding tests."""
+
+    class _Stub:
+        origin = type(name, (), {})
+
+        def __init__(self, resolver=None):
+            self._resolver = resolver
+
+        def related_target_for(self, field_name):
+            return self._resolver(field_name) if self._resolver is not None else None
+
+    return _Stub
+
+
+def test_bind_filterset_owner_idempotent_for_same_definition():
+    """Re-binding the SAME definition object short-circuits via identity."""
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    Stub = _owner_definition_stub("OwnerType")
+    definition = Stub()
+    _bind_filterset_owner(ShelfFilter, definition)  # previous None -> bind
+    _bind_filterset_owner(ShelfFilter, definition)  # previous IS definition -> return
+    assert ShelfFilter._owner_definition is definition
+
+
+def test_bind_filterset_owner_continues_when_both_targets_unresolved():
+    """A field neither owner can resolve is skipped (both-None continue)."""
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    class BookFilter(FilterSet):
+        shelf = RelatedFilter(ShelfFilter, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    Stub = _owner_definition_stub("OwnerType")
+    first = Stub(resolver=lambda _f: None)
+    second = Stub(resolver=lambda _f: None)
+    _bind_filterset_owner(BookFilter, first)
+    # Second distinct owner: ``shelf`` resolves to None from both -> continue,
+    # no raise, and the first binding is preserved.
+    _bind_filterset_owner(BookFilter, second)
+    assert BookFilter._owner_definition is first
+
+
+def test_bind_filterset_owner_raises_when_one_owner_resolves_and_other_does_not():
+    """A field resolved by one owner but not the other is a hard mismatch."""
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    class BookFilter(FilterSet):
+        shelf = RelatedFilter(ShelfFilter, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    Stub = _owner_definition_stub("OwnerType")
+    target_def = type("ResolvedShelfDefinition", (), {"origin": type("ResolvedShelfType", (), {})})
+    first = Stub(resolver=lambda _f: None)
+    second = Stub(resolver=lambda _f: (target_def, object()))
+    _bind_filterset_owner(BookFilter, first)
+    with pytest.raises(ConfigurationError) as excinfo:
+        _bind_filterset_owner(BookFilter, second)
+    assert "shelf" in str(excinfo.value)
+
+
+def test_phase_2_5_configuration_error_from_get_filters_propagates_unwrapped():
+    """A ``ConfigurationError`` raised inside ``get_filters()`` is re-raised as-is.
+
+    The finalize loop special-cases ``ImportError`` (rewrap) and generic
+    ``Exception`` (rewrap), but a ``ConfigurationError`` is already the
+    canonical finalize-time error class, so it propagates unchanged rather
+    than being double-wrapped.
+    """
+
+    def _config_error_factory():
+        raise ConfigurationError("intentional configuration failure inside get_filters")
+
+    class BookFilter(FilterSet):
+        broken = RelatedFilter(_config_error_factory, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name")
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf", "genres")
+            filterset_class = BookFilter
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        finalize_django_types()
+    # Re-raised unchanged: the original message survives, not the
+    # "Cannot finalize ..." rewrap used for ImportError / generic failures.
+    assert "intentional configuration failure inside get_filters" in str(excinfo.value)

@@ -48,15 +48,15 @@ class SyncMisuseError(ConfigurationError, RuntimeError):
 
     - ``except ConfigurationError`` (the package's convention for
       configuration-time errors).
-    - ``except RuntimeError`` (the dispatcher branch in
-      ``filters/sets.py::FilterSet.apply`` matches the typed subclass
-      directly via ``except SyncMisuseError``; consumer code catching
-      ``RuntimeError`` after the dispatcher rethrow also continues to
+    - ``except RuntimeError`` (consumer code catching ``RuntimeError``
+      after the ``FilterSet.apply`` dispatcher rethrow continues to
       work).
 
-    Consumers who want a focused catch should match the subclass
-    directly. Exported through ``django_strawberry_framework`` so it
-    can be imported without reaching into private ``types.relay``.
+    The dispatcher in ``filters/sets.py::FilterSet.apply`` catches
+    this subclass directly. Consumers who want a focused catch should
+    also match the subclass. Exported through
+    ``django_strawberry_framework`` so it can be imported without
+    reaching into private ``types.relay``.
     """
 
 

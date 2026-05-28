@@ -187,7 +187,7 @@ django_graphene_filters/
 
 ## django_strawberry_framework (current on-disk layout)
 
-The shared infrastructure plus model/type and optimizer subpackages are on disk: `types/`, `optimizer/`, and `utils/`. Every other module shown in the target package layout below — query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
+The shared infrastructure plus model/type, optimizer, and filters subpackages are on disk: `types/`, `optimizer/`, `filters/`, and `utils/`. Every other module shown in the target package layout below — the remaining query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
 The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`, `apps.scalars`). `apps.products` is the catalog example (Category / Item / Property / Entry); `apps.library` is the deeper relation example (Branch / Shelf / Book / Patron / Loan, with `Patron.lifetime_fines_cents` as a real-domain `BigIntegerField → BigInt` proof); `apps.scalars` is a test substrate carrying the paired `ScalarSpecimen` (every scalar non-null + self-FK) / `NullableScalarSpecimen` (every scalar nullable + cross-model FK to `ScalarSpecimen` with `on_delete=SET_NULL`) layout that pins every non-trivial converter row in both shapes via live `/graphql/` tests. `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
 
 ```text
@@ -222,6 +222,12 @@ django_strawberry_framework/
 │   ├── plans.py             # OptimizationPlan data structure + resolver_key / runtime_path helpers
 │   ├── hints.py             # OptimizerHint typed wrapper (B4)
 │   └── field_meta.py        # FieldMeta precomputed field metadata (B7)
+├── filters/                 # Filtering subsystem (Layer 3 read-side) — shipped 0.0.8
+│   ├── __init__.py          # FilterSet, RelatedFilter, filter_input_type re-exports
+│   ├── base.py              # Filter / TypedFilter / ArrayFilter / RangeFilter / ListFilter / GlobalIDFilter / GlobalIDMultipleChoiceFilter / RelatedFilter / LazyRelatedClassMixin
+│   ├── sets.py              # FilterSet + FilterSetMetaclass + apply_sync / apply_async + filter_queryset tree-form override
+│   ├── factories.py         # FilterArgumentsFactory BFS + _dynamic_filterset_cache
+│   └── inputs.py            # input-class module-globals namespace + LOOKUP_NAME_MAP / LOOKUP_PREFIXES / convert_filter_to_input_annotation / normalize_input_value / construct_search
 └── utils/                   # cross-cutting helpers
     ├── __init__.py
     ├── relations.py         # relation_kind / RelationKind / is_many_side_relation_kind
@@ -266,13 +272,6 @@ django_strawberry_framework/
 │   ├── plans.py             # OptimizationPlan, Prefetch chain helpers
 │   ├── hints.py             # OptimizerHint typed wrapper
 │   └── field_meta.py        # FieldMeta precomputed field metadata
-├── filters/                 # [alpha] Filtering subsystem (Layer 3 read-side)
-│   ├── __init__.py
-│   ├── base.py              # Filter classes; array / range / list / typed / global-ID primitives
-│   ├── sets.py              # FilterSet
-│   ├── factories.py         # filterset + GraphQL-arguments factories
-│   ├── inputs.py            # input types + input-data adapters
-│   └── search.py            # [beta] Meta.search_fields support
 ├── orders/                  # [alpha] Ordering subsystem (Layer 3 read-side)
 │   ├── __init__.py
 │   ├── base.py              # Order classes
@@ -363,6 +362,13 @@ tests/                       # Package-internal tests (current state)
 │   ├── test_plans.py        # ← OptimizationPlan data structure
 │   ├── test_relay_id_projection.py  # ← Relay GlobalID projection / connector-column behavior
 │   └── test_walker.py       # ← O2 selection-tree walker
+├── filters/                 # mirrors django_strawberry_framework/filters/
+│   ├── __init__.py
+│   ├── test_base.py         # ← Filter primitives + ArrayFilter / RangeFilter / ListFilter / GlobalIDFilter / RelatedFilter / LazyRelatedClassMixin
+│   ├── test_sets.py         # ← FilterSet + FilterSetMetaclass + apply_sync / apply_async + filter_queryset tree-form override
+│   ├── test_factories.py    # ← FilterArgumentsFactory BFS + _dynamic_filterset_cache
+│   ├── test_inputs.py       # ← input-class module-globals namespace + LOOKUP_NAME_MAP / convert_filter_to_input_annotation / normalize_input_value
+│   └── test_finalizer.py    # ← finalizer phase 2.5 binding + owner-aware materialization + filter_input_type orphan validation
 └── utils/                   # mirrors django_strawberry_framework/utils/
     ├── __init__.py
     ├── test_relations.py    # ← relation_kind / is_many_side_relation_kind

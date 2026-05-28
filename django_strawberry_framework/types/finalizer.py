@@ -20,8 +20,14 @@ decoration touches a consumer-facing class:
   ``cls.__bases__``; types that resolve to ``relay.Node`` (either via
   ``Meta.interfaces`` or direct inheritance) are gated against composite
   primary keys and receive the four ``resolve_*`` defaults Strawberry's
-  Relay interface expects. Runs before Phase 3 so the ``strawberry.type``
-  decorator sees the mutated bases.
+  Relay interface expects. ``_bind_filtersets`` then runs four ordered
+  subpasses (bind owners, expand filtersets, materialize input classes,
+  reject orphan ``filter_input_type`` references) per spec-021 Decision 6
+  / H1 of rev8 — every subpass MUST complete across all wired types
+  before the next subpass starts so cross-filterset references resolve
+  against bound owners regardless of registration order. Runs before
+  Phase 3 so the ``strawberry.type`` decorator sees the mutated bases
+  AND the materialized input-class module globals.
 - Phase 3: ``strawberry.type(cls, name=..., description=...)`` decorates
   each type and sets ``definition.finalized = True``.
 
@@ -39,6 +45,8 @@ offending type cannot be fixed in place.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import strawberry
 from django.db import models
 
@@ -55,6 +63,9 @@ from .relay import (
     install_relay_node_resolvers,
 )
 from .resolvers import _attach_relation_resolvers
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from .definition import DjangoTypeDefinition
 
 
 def _format_unresolved_targets_error(unresolved: list[PendingRelation]) -> str:
@@ -243,21 +254,8 @@ def finalize_django_types() -> None:
             _check_composite_pk_for_relay_node(type_cls)
             install_relay_node_resolvers(type_cls)
 
-    # TODO(spec-021-filters-0_0_8 Slice 3): Bind FilterSet sidecars here,
-    # after Relay setup and before strawberry.type decoration.
-    # Pseudocode:
-    #   wired_filtersets = set()  # noqa: ERA001
-    #   for type_cls, definition in registry.iter_definitions():
-    #       filterset_cls = definition.filterset_class  # noqa: ERA001
-    #       if filterset_cls is None: continue  # noqa: ERA001
-    #       validate FilterSet subclass
-    #       bind filterset_cls._owner_definition = definition
-    #       validate compatible owner Relay/scalar ID shape
-    #       filterset_cls.get_filters()  # noqa: ERA001
-    #       factory = FilterArgumentsFactory(filterset_cls)  # noqa: ERA001
-    #       for name, input_cls in factory.arguments: materialize_input_class(name, input_cls)  # noqa: ERA001
-    #       wired_filtersets.add(filterset_cls)  # noqa: ERA001
-    #   reject filter_input_type(...) helper references missing from wired_filtersets
+    _bind_filtersets()
+
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
             continue
@@ -265,3 +263,220 @@ def finalize_django_types() -> None:
         definition.finalized = True
 
     registry.mark_finalized()
+
+
+def _graphql_type_name(definition: DjangoTypeDefinition) -> str:
+    """Return the GraphQL type name Strawberry would emit for ``definition``.
+
+    Strawberry derives the surface name as ``definition.name`` when set,
+    falling back to ``definition.origin.__name__``. Centralizing the
+    fallback ensures the H2-rev8 strict-equality check compares names
+    against the same derivation rule the schema actually uses.
+    """
+    return definition.name if definition.name is not None else definition.origin.__name__
+
+
+def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition) -> None:
+    """Bind ``filterset_cls._owner_definition`` with strict multi-owner validation.
+
+    First binding writes ``filterset_cls._owner_definition = definition``
+    and returns. Re-binding the same ``(filterset_cls, definition)``
+    pair is idempotent (supports partial-finalize recovery per spec-021
+    Decision 6 lines 683-685). A second owner triggers the H2-rev8
+    strict-equality check: for every ``RelatedFilter`` declared on
+    ``filterset_cls``, both owners' ``related_target_for(field_name)``
+    must resolve to the EXACT same ``DjangoTypeDefinition`` AND the
+    EXACT same ``graphql_type_name``. Any divergence raises
+    ``ConfigurationError`` naming both owners, the offending field, and
+    both resolved target type names per spec-021 line 574.
+
+    The iteration set is ``filterset_cls.related_filters`` (the
+    Decision-3 Layer-1 declared-related-filters map populated by
+    ``FilterSetMetaclass`` at class creation). This is the conservative
+    shape sufficient for the 0.0.8 test surface; widening to every FK /
+    PK declared via ``Meta.fields`` is a forward path tracked in the
+    spec at lines 575-576 when real consumer demand surfaces.
+    """
+    previous: DjangoTypeDefinition | None = getattr(filterset_cls, "_owner_definition", None)
+    if previous is None:
+        filterset_cls._owner_definition = definition
+        return
+    if previous is definition:
+        return
+    related_filters = getattr(filterset_cls, "related_filters", {}) or {}
+    for field_name in related_filters:
+        prev_target = previous.related_target_for(field_name)
+        new_target = definition.related_target_for(field_name)
+        if prev_target is None and new_target is None:
+            continue
+        if prev_target is None or new_target is None:
+            raise ConfigurationError(
+                _format_owner_mismatch_error(
+                    filterset_cls,
+                    previous,
+                    definition,
+                    field_name,
+                    prev_target,
+                    new_target,
+                ),
+            )
+        prev_definition, _ = prev_target
+        new_definition, _ = new_target
+        if prev_definition is not new_definition or _graphql_type_name(
+            prev_definition,
+        ) != _graphql_type_name(new_definition):
+            raise ConfigurationError(
+                _format_owner_mismatch_error(
+                    filterset_cls,
+                    previous,
+                    definition,
+                    field_name,
+                    prev_target,
+                    new_target,
+                ),
+            )
+
+
+def _format_owner_mismatch_error(
+    filterset_cls: type,
+    previous: DjangoTypeDefinition,
+    new: DjangoTypeDefinition,
+    field_name: str,
+    prev_target: tuple[DjangoTypeDefinition, object] | None,
+    new_target: tuple[DjangoTypeDefinition, object] | None,
+) -> str:
+    """Return the canonical H2-rev8 multi-owner-mismatch message.
+
+    Sibling of ``_format_unresolved_targets_error`` /
+    ``_format_ambiguity_error`` above; all three formatters live at the
+    top of this module so consumer error matching stays grep-stable.
+    Names both owners' qualified names, the offending FilterSet, the
+    offending field, and both resolved target type names per spec-021
+    line 574.
+    """
+    prev_name = prev_target[0].origin.__qualname__ if prev_target is not None else "<unresolved>"
+    new_name = new_target[0].origin.__qualname__ if new_target is not None else "<unresolved>"
+    return (
+        f"FilterSet {filterset_cls.__qualname__} cannot bind to multiple owners with "
+        f"diverging targets: {previous.origin.__qualname__} resolves "
+        f"{field_name!r} to {prev_name}, but {new.origin.__qualname__} resolves it "
+        f"to {new_name}. Declare separate FilterSet subclasses for the diverging "
+        "owners (per spec-021 H2 of rev8)."
+    )
+
+
+def _format_orphan_filtersets_error(orphans: list[type]) -> str:
+    """Return the canonical orphan-``filter_input_type`` error message.
+
+    Sorted by qualified name for deterministic output. When more than
+    one orphan is present, the message uses the multi-orphan lead-in
+    mirroring ``_format_unresolved_targets_error``'s shape; the single-
+    orphan branch uses the spec-pinned actionable message from spec-021
+    line 673.
+    """
+    if len(orphans) == 1:
+        cls = orphans[0]
+        return (
+            f"FilterSet '{cls.__name__}' is referenced via filter_input_type(...) but "
+            f"never assigned to a DjangoType via Meta.filterset_class. Add "
+            f"'filterset_class = {cls.__name__}' to the relevant DjangoType's Meta."
+        )
+    lines = [f"  - {cls.__module__}.{cls.__qualname__}" for cls in orphans]
+    body = "\n".join(lines)
+    return (
+        "FilterSets referenced via filter_input_type(...) but not wired to any "
+        f"DjangoType:\n{body}\n\n"
+        "Add 'filterset_class = <Name>' to the relevant DjangoType's Meta for each."
+    )
+
+
+def _bind_filtersets() -> None:
+    """Run the four ordered phase-2.5 subpasses for filterset binding.
+
+    Subpass 1 — bind every owner. Walks every wired definition and
+    binds ``filterset_cls._owner_definition`` via
+    ``_bind_filterset_owner``. The H2-rev8 strict-equality check
+    rejects diverging multi-owner reuse before any subsequent subpass
+    runs.
+
+    Subpass 2 — expand every filterset. Calls
+    ``filterset_cls.get_filters()`` so Layer-4 expansion resolves lazy
+    ``RelatedFilter`` refs and cycle guards apply uniformly. Owner
+    binding from subpass 1 is visible to every filterset's owner-aware
+    ``filter_for_field`` / ``filter_for_lookup`` overrides regardless
+    of which type-cls is iterated first.
+
+    Subpass 3 — materialize input classes. Reads the
+    ``FilterArgumentsFactory(filterset_cls).arguments`` property
+    (triggers BFS build, idempotent through the factory's class-level
+    cache) and materializes EVERY built class from the factory's
+    ``input_object_types`` ledger as a real module global of
+    ``filters.inputs`` via ``materialize_input_class(name, cls)``. A
+    second factory instance for a sibling root sees the cached build
+    via the class-level dict.
+
+    Subpass 4 — orphan validation. Compares the FilterSets passed to
+    ``filter_input_type(...)`` (per Decision 11) against the set of
+    FilterSets wired via ``Meta.filterset_class``. Orphans raise
+    ``ConfigurationError`` per spec-021 line 673 with the actionable
+    suggestion to add the missing ``filterset_class = <Name>``.
+    """
+    # Local imports: keep ``types/finalizer.py`` independent of the
+    # filters package's module-load order. The phase-2.5 binding only
+    # runs when a definition declares ``filterset_class``, which only
+    # works when the filters subsystem has been imported by the
+    # consumer.
+    from ..filters import _helper_referenced_filtersets
+    from ..filters.factories import FilterArgumentsFactory
+    from ..filters.inputs import materialize_input_class
+
+    # Subpass 1: bind every owner before any expansion runs.
+    wired: list[type] = []
+    for _type_cls, definition in registry.iter_definitions():
+        if definition.finalized:
+            continue
+        filterset_cls = definition.filterset_class
+        if filterset_cls is None:
+            continue
+        _bind_filterset_owner(filterset_cls, definition)
+        wired.append(filterset_cls)
+
+    # Subpass 2: expand every filterset; cross-references now resolve.
+    # ``LazyRelatedClassMixin.resolve_lazy_class`` (Slice 1) raises
+    # ``ImportError`` when a string-form ``RelatedFilter("Name")`` cannot
+    # be resolved. Re-wrap as ``ConfigurationError`` per spec-021 lines
+    # 416 + 1030 and the package's "finalize-time errors are
+    # ConfigurationError" convention (sibling formatters
+    # ``_format_unresolved_targets_error`` / ``_format_ambiguity_error``
+    # / ``_format_owner_mismatch_error`` / ``_format_orphan_filtersets_error``
+    # all raise ``ConfigurationError`` at finalize time); the original
+    # ``ImportError`` is preserved via ``__cause__``.
+    for filterset_cls in wired:
+        try:
+            filterset_cls.get_filters()
+        except ImportError as exc:
+            raise ConfigurationError(
+                f"Cannot finalize Django types: filterset "
+                f"{filterset_cls.__qualname__} references an unresolved "
+                f"related-filter target. {exc}",
+            ) from exc
+
+    # Subpass 3: materialize every built input class as a module global.
+    for filterset_cls in wired:
+        factory = FilterArgumentsFactory(filterset_cls)
+        # Touch ``.arguments`` to drive ``_ensure_built`` (idempotent
+        # through the factory's class-level cache); the cache is shared
+        # across instances so dependent input classes built by one
+        # factory are visible to a sibling factory's materialize loop.
+        factory.arguments
+        for name, input_cls in factory.input_object_types.items():
+            materialize_input_class(name, input_cls)
+
+    # Subpass 4: orphan validation against the helper-tracked set.
+    wired_set = set(wired)
+    orphans = sorted(
+        _helper_referenced_filtersets - wired_set,
+        key=lambda cls: f"{cls.__module__}.{cls.__qualname__}",
+    )
+    if orphans:
+        raise ConfigurationError(_format_orphan_filtersets_error(orphans))

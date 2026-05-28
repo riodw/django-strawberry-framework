@@ -447,11 +447,13 @@ The optimizer, scalar conversions, and relation resolution machinery are richer 
 
 ### Coming from DRF + `django-filter`
 
-Your `FilterSet`s stay where they are. The DRF `Serializer` becomes the basis for the auto-generated mutation `Input` type via `Meta.serializer_class`. The existing `django_filters.FilterSet` plugs into `Meta.filterset_class` directly:
+Your existing `django_filters.FilterSet` migrates to `Meta.filterset_class` via a one-line parent-class swap to `django_strawberry_framework.filters.FilterSet`; the package's `FilterSet` IS a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive you already use carries over unchanged. The DRF `Serializer` becomes the basis for the auto-generated mutation `Input` type via `Meta.serializer_class`.
 
 ```python
-# Your existing django-filter FilterSet — no changes:
-class CategoryFilter(django_filters.FilterSet):
+from django_strawberry_framework.filters import FilterSet
+
+# Your existing django-filter FilterSet — swap the parent class:
+class CategoryFilter(FilterSet):
     class Meta:
         model = Category
         fields = ("name",)

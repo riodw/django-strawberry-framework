@@ -17,6 +17,11 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of each patch.
 
 ## [Unreleased]
+### Added
+- **Filtering subsystem.** [`FilterSet`][glossary-filterset] (declarative `Meta.model` / `Meta.fields` / `check_*_permission` gates with active-input-only scope / explicit-`queryset=` filter-scope constraint — NOT a security boundary, visibility is `get_queryset`'s job; nested `RelatedFilter` branches honor the target type's `get_queryset` so a filter cannot see through visibility to hidden related rows), [`RelatedFilter`][glossary-relatedfilter] (cross-relation traversal accepting class / absolute path / unqualified name), and [`Meta.filterset_class`][glossary-metafilterset_class] (promoted out of `DEFERRED_META_KEYS`; owner-aware binding rejects multi-owner assignments with conflicting Relay shapes). Parity-floor primitives: `ArrayFilter`, `RangeFilter`, `ListFilter`, `TypedFilter`, Strawberry-specific `GlobalIDFilter` (accepts `relay.GlobalID` objects AND raw strings; validates decoded `type_name`), `GlobalIDMultipleChoiceFilter`. Cycle-safe six-layer lazy-resolution pipeline borrowed from `django-graphene-filters` (with `django_filters.filterset.BaseFilterSet` as the shared foundation); Graphene's `lambda:` forward references become `Annotated["TypeName", strawberry.lazy("django_strawberry_framework.filters.inputs")]` (for scalar fields) and `list[Annotated["TypeName", strawberry.lazy(...)]]` (for `and_` / `or_` list-shaped logical operators) over module globals. Lookup GraphQL names pinned through `LOOKUP_NAME_MAP` so consumers see `iContains` / `iExact` / `isNull` / `in` regardless of Strawberry's default auto-camel-case. Per-package input-class namespace materialized as real module globals of `django_strawberry_framework.filters.inputs`, keyed by stable class-derived names; `clear_filter_input_namespace()` co-clears with `registry.clear()`. Consumer resolver-annotation helper `filter_input_type(FilterSet)` returns the documented `Annotated[...]` shape so root resolvers see a working `filter:` argument at `strawberry.Schema(...)` time. Subpackage at [`django_strawberry_framework/filters/`][filters] (five files); mirror tests at `tests/filters/`. Live HTTP filter coverage in [`examples/fakeshop/test_query/test_library_api.py`][test-library-api] (exactly 14 tests across scalar / choice-enum / non-Relay-FK scalar / Relay-M2M GlobalID / reverse-FK / logical / optimizer-cooperation / related-queryset parent-scope boundary / cross-module absolute-path RelatedFilter / nested-visibility-scoping / form-validation rejection via custom CharFilter / GraphQL-enum-coercion-layer error / root `get_queryset` honoring / wrong-`type_name` Relay GlobalID rejection axes). Tracked as `DONE-021-0.0.8` in [`KANBAN.md`][kanban].
+
+### Changed
+- [`Meta.filterset_class`][glossary-metafilterset_class] is no longer in `DEFERRED_META_KEYS`; declaring `Meta.filterset_class = MyFilter` now wires through to finalizer phase 2.5 and surfaces a working filter input on the GraphQL type. Consumers who declared the key against `0.0.7` saw a [`ConfigurationError`][glossary-configurationerror]; against `0.0.8` it produces a filter surface.
 
 ## [0.0.7] - 2026-05-27
 ### Added
@@ -160,10 +165,14 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 
 <!-- docs/ -->
 [glossary-bigint-scalar]: docs/GLOSSARY.md#bigint-scalar
+[glossary-configurationerror]: docs/GLOSSARY.md#configurationerror
 [glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
 [glossary-djangotype]: docs/GLOSSARY.md#djangotype
+[glossary-filterset]: docs/GLOSSARY.md#filterset
 [glossary-metafields]: docs/GLOSSARY.md#metafields
+[glossary-metafilterset_class]: docs/GLOSSARY.md#metafilterset_class
 [glossary-multi-database-cooperation]: docs/GLOSSARY.md#multi-database-cooperation
+[glossary-relatedfilter]: docs/GLOSSARY.md#relatedfilter
 [glossary-safe-wrap-connection-method]: docs/GLOSSARY.md#safe_wrap_connection_method
 [glossary-specialized-scalar-conversions]: docs/GLOSSARY.md#specialized-scalar-conversions
 [glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config
@@ -177,6 +186,7 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [apps]: django_strawberry_framework/apps.py
 [converters]: django_strawberry_framework/types/converters.py
 [django-patches]: django_strawberry_framework/_django_patches.py
+[filters]: django_strawberry_framework/filters/
 [resolvers]: django_strawberry_framework/types/resolvers.py
 [test-init]: django_strawberry_framework/test/__init__.py
 

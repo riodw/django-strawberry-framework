@@ -196,7 +196,6 @@ def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance():
 @pytest.mark.parametrize(
     "deferred_key",
     [
-        "filterset_class",
         "orderset_class",
         "aggregate_class",
         "fields_class",
@@ -209,6 +208,14 @@ def test_meta_rejects_each_deferred_key(deferred_key):
     meta_cls = type("Meta", (), meta_attrs)
     with pytest.raises(ConfigurationError, match=deferred_key):
         type("T", (DjangoType,), {"Meta": meta_cls})
+
+
+def test_meta_filterset_class_is_promoted_to_allowed_meta_keys():
+    """``Meta.filterset_class`` ships in spec-021 Slice 3 (Decision-7 promotion gate)."""
+    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
+
+    assert "filterset_class" in ALLOWED_META_KEYS
+    assert "filterset_class" not in DEFERRED_META_KEYS
 
 
 def test_interfaces_is_shipped_not_deferred():
@@ -249,15 +256,34 @@ def test_select_fields_signature_accepts_validated_specs():
     assert "name" in {f.name for f in excluded}
 
 
-def test_meta_rejects_filterset_class():
-    """Single-key smoke for the parametrized rejection above; kept for readability."""
-    with pytest.raises(ConfigurationError, match="filterset_class"):
+def test_meta_filterset_class_rejects_non_filterset_value():
+    """``_validate_filterset_class`` rejects non-``FilterSet`` values."""
+    with pytest.raises(ConfigurationError, match="must be a FilterSet subclass"):
 
         class CategoryType(DjangoType):
             class Meta:
                 model = Category
                 fields = CATEGORY_SCALAR_FIELDS
                 filterset_class = object
+
+
+def test_meta_filterset_class_accepts_filterset_subclass():
+    """A real ``FilterSet`` subclass is accepted and stored on the definition."""
+    from django_strawberry_framework.filters import FilterSet
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            filterset_class = CategoryFilter
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.filterset_class is CategoryFilter
 
 
 def test_meta_rejects_unknown_key():

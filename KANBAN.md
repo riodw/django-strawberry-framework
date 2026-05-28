@@ -48,7 +48,7 @@ For install, local development, testing, and the canonical documentation map, st
 ### In progress
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-016-0.0.7` (`DjangoListField`), `DONE-017-0.0.7` (`apps.py` and Django app config), `DONE-018-0.0.7` (schema-export management command), `DONE-019-0.0.7` (multi-database cooperation contract), `DONE-046-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-047-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-048-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
-- `0.0.8` is the active patch. Three WIP cards opened together so the Layer-3 read-side parity (`⚛️&🍓`) and the consumer-DX cleanup pass land as one coherent cut: `WIP-ALPHA-021-0.0.8` (Filtering subsystem) is being actively worked; `WIP-ALPHA-022-0.0.8` (Ordering subsystem) and `WIP-ALPHA-023-0.0.8` (`DjangoType` consumer-DX cleanup pass) are queued under the same column so the patch-level scope stays visible at a glance and the cards stay grouped for the joint cut. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
+- `0.0.8` is the active patch. `WIP-ALPHA-022-0.0.8` (Ordering subsystem) is queued for next implementation alongside `WIP-ALPHA-023-0.0.8` (`DjangoType` consumer-DX cleanup pass); `WIP-ALPHA-021-0.0.8` (Filtering subsystem) shipped as `DONE-021-0.0.8`. The remaining two cards stay grouped under the same column for the joint `0.0.8` cut. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -74,123 +74,7 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## In progress
 
-Three WIP cards opened together so the `0.0.8` cohort lands as a coherent patch (`⚛️&🍓` parity for the Layer-3 read-side plus the consumer-DX cleanup pass). Currently **only `WIP-ALPHA-021-0.0.8 — Filtering subsystem` is being actively worked**; `WIP-ALPHA-022-0.0.8 — Ordering subsystem` and `WIP-ALPHA-023-0.0.8 — `DjangoType` consumer-DX cleanup pass` are queued under the same column so the patch-level scope is visible at a glance and the cards stay grouped for the joint cut. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
-
-### WIP-ALPHA-021-0.0.8 — Filtering subsystem
-
-Active spec: [`docs/spec-021-filters-0_0_8.md`](docs/spec-021-filters-0_0_8.md)
-
-Priority: high for package positioning (⚛️&🍓 parity-required)
-
-Severity: **major**
-
-Status: planned
-
-Scope:
-
-- `Filter`
-- `FilterSet`
-- filterset factory
-- GraphQL argument factory
-- input type/data adapters
-- `Meta.filterset_class` promotion out of `DEFERRED_META_KEYS`
-
-Verified upstream filter primitives (graphene-django parity floor):
-
-- `array_filter.py` — `ArrayFilter(TypedFilter)`, `ArrayFilterMethod(FilterMethod)`
-- `range_filter.py` — `RangeFilter(TypedFilter)`, `RangeField(Field)`, `validate_range`
-- `list_filter.py` — `ListFilter(TypedFilter)`, `ListFilterMethod(FilterMethod)`
-- `typed_filter.py` — `TypedFilter(Filter)` (base class for the four above)
-- `global_id_filter.py` — `GlobalIDFilter(Filter)`, `GlobalIDMultipleChoiceFilter(MultipleChoiceFilter)`
-
-All sourced from `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/filters/`. Our implementation should ship equivalents for each (DRF-style class declarations on the filterset rather than graphene-style filter-class subclassing where it matters); the global-ID filter in particular is required for Relay-aware filtering against `relay.Node` types shipped in `DONE-011-0.0.5`.
-
-Verified upstream factory machinery (graphene-django, sibling files under the same `filter/` package):
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/__init__.py` — soft-dependency on `django-filter`: imports issue an `ImportWarning` when `DJANGO_FILTER_INSTALLED` is false. Our equivalent faces the same soft-dep question (pin the answer in the spec).
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/utils.py::get_filtering_args_from_filterset` — the upstream function that converts a FilterSet class into GraphQL filter arguments. This is graphene-django's parity equivalent of the cookbook's `FilterArgumentsFactory`; our package needs the same end-to-end function (under whatever name we settle on).
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/utils.py::get_filterset_class` — get-or-create helper that returns an explicit `Meta.filterset_class` if declared, else builds one via `custom_filterset_factory`. Note: name collision with the cookbook's `filterset_factories.py::get_filterset_class` — both files ship a function of the same name with different shapes; be explicit in the spec about which one we mirror.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/utils.py::replace_csv_filters` — already listed under "Dropped" below.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/filterset.py::GrapheneFilterSetMixin` — subclasses `django_filters.BaseFilterSet`; defines `FILTER_DEFAULTS` overriding FK/PK → `GlobalIDFilter` (cited again under "Strawberry-adapted bits" below).
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/filterset.py::setup_filterset` / `::custom_filterset_factory` — upstream wrapper-avoidance / dynamic-factory pair; `setup_filterset` is dropped (see below); `custom_filterset_factory` is graphene's ancestor of the cookbook's `_dynamic_filterset_cache`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField` — graphene-django's filter-integrated connection field; the consumer-facing surface that composes FilterSet machinery onto a Relay connection. Cited here so the `TODO-ALPHA-024-0.0.9` (`DjangoConnectionField`) cross-card integration is clean — our equivalent must accept a `filterset_class` argument and thread filter args through the connection-field resolver.
-
-`strawberry-graphql-django` covers the same surface through `filters.py` (single-file decorator-driven implementation) — verified at `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/filters.py`:
-
-- `filters.py::FilterLookup` — generic `FilterLookup[T]` typed lookup descriptor (`exact`, `i_exact`, `contains`, `i_contains`, `starts_with`, etc.).
-- `filters.py::process_filters` — compiles a filter input value into queryset filter arguments (the runtime side of the filter pipeline).
-- `filters.py::StrawberryDjangoFieldFilters` — field-base subclass that injects the `filters: <T>FilterInput` argument and threads through to `process_filters`.
-- `filters.py::filter_type` — current consumer-facing `@strawberry_django.filter_type(Model, lookups=True)` decorator (public API).
-- `filters.py #"def __getattr__"` — module-level `__getattr__` exposes a legacy `filter` alias that emits a `DeprecationWarning` and forwards to `filter_type`. Do not claim parity with the deprecated symbol.
-- `filters.py::FILTERS_ARG` (`= "filters"`) — module-level constant for the GraphQL argument name.
-
-Our equivalent ships DRF-style class declarations (`Meta.filterset_class = ItemFilterSet`) rather than decorator-on-input-type, but the runtime pipeline (a `process_filters` analog) is conceptually parallel.
-
-Foundation-slice seam:
-
-- `DjangoTypeDefinition.filterset_class` is the slot the collection phase will populate; the BFS argument factory (analogous to `FilterArgumentsFactory` in the Graphene reference) reads it during finalizer phase 3.
-- The pending-relation registry's record-now-resolve-at-finalization pattern reuses cleanly for lazy related-filter class references; a `LazyRelatedClassMixin` equivalent should reuse the same fail-loud error format ("Cannot finalize ... no registered ...") that the model-relation finalizer already produces.
-- The relation-override contract pinned in 0.0.4 is what allows filter sidecars to reference relation fields by name without the framework clobbering consumer annotations or resolvers.
-
-Lazy-resolution pipeline (borrowed from `django-graphene-filters`):
-
-The four cooperating files in the Graphene reference (`filters.py`, `filterset.py`, `filterset_factories.py`, `filter_arguments_factory.py`) implement a six-layer lazy-resolution pipeline that handles circular `RelatedFilter` references across modules. **Five of six layers are library-agnostic Python and port verbatim**; only Layer 5 (the cycle-safe forward reference in the GraphQL schema build) is Strawberry-adapted.
-
-1. **Lazy class references in `RelatedFilter`** — port verbatim from `filters.py:BaseRelatedFilter`. `RelatedFilter` accepts target as class, absolute import path string (`"myapp.filters.ManagerFilter"`), or unqualified name (`"ManagerFilter"`). `_filterset` stores it unresolved; the `.filterset` property triggers resolution.
-2. **Module-fallback resolution** — port verbatim from `mixins.py:LazyRelatedClassMixin.resolve_lazy_class`. Two-step resolution: try as absolute path via `django.utils.module_loading.import_string`; on `ImportError`, retry with `bound_class.__module__` prefix. Handles circular-import scenarios in the same module.
-3. **Metaclass discovery, deferred expansion** — port pattern from `filterset.py:FilterSetMetaclass`. Metaclass collects `BaseRelatedFilter` declarations into `cls.related_filters`, calls `f.bind_filterset(new_class)` so the module-fallback resolver knows the owning module, and **does not** expand. Expansion is deferred to `get_filters()`.
-4. **Cycle-safe expansion + cache** — port verbatim from `filterset.py:AdvancedFilterSet.get_filters`. `cls.__dict__["_expanded_filters"]` cache plus `cls.__dict__["_is_expanding_filters"]` recursion guard. Two-condition cache write: `"related_filters" in cls.__dict__` AND no string `_filterset` remaining on any related filter. This is what breaks `A → B → A` cycles cleanly.
-5. **BFS schema build with deferred references — Strawberry-adapted.** BFS algorithm in `filter_arguments_factory.py:FilterArgumentsFactory._ensure_built` ports verbatim; only the cycle-safe forward reference changes. Graphene's `graphene.InputField(lambda tn=target_name: input_object_types[tn])` becomes `strawberry.lazy("django_strawberry_framework.filters._registry.{TargetFilterSet}InputType")` (or an `Annotated[..., strawberry.lazy(...)]` annotation, whichever Strawberry's filter-input-class generator emits). The `lambda:` and `strawberry.lazy()` are exact conceptual twins — both defer the type reference until schema walk.
-6. **Memoized dynamic FilterSet generation** — port verbatim from `filterset_factories.py:_dynamic_filterset_cache`. Cache keyed by `(model, fields, extra_meta)` for connection fields declared without an explicit `filterset_class`; prevents duplicate-`__name__` collisions when two connection fields target the same model.
-
-Synchronization point: every layer runs inside `finalize_django_types()` phase 2.5 — the same seam that already wires `Meta.interfaces = (relay.Node,)` per `DONE-011-0.0.5`. For each `DjangoType` with `Meta.filterset_class`:
-
-- validate the class is a `FilterSet`
-- call `filterset_cls.get_filters()` to trigger Layer 4 expansion (resolves lazy refs, expands related filters with cycle guards)
-- call `FilterArgumentsFactory(filterset_cls).arguments` to trigger Layer 5 BFS (builds every reachable `strawberry.input` type)
-- register the resulting input types in a per-package filter-input-type registry
-
-By phase 3, when `strawberry.type(cls, ...)` runs on the `DjangoType`, every referenced filter input type already exists. **No consumer-facing `strawberry.lazy()` calls needed** — the laziness is internal to the filter-input-type generator, mirroring how `django-graphene-filters` hides its lambdas inside `FilterArgumentsFactory`.
-
-Verbatim ports beyond the six layers (also library-agnostic):
-
-- `FilterArgumentsFactory.filterset_to_trees` / `try_add_sequence` / `sequence_to_tree` — per-lookup tree-building algorithm
-- `AdvancedFilterSet._apply_related_queryset_constraints` — explicit queryset as security/scope boundary that can't be bypassed via nested filters
-- `AdvancedFilterSet.check_permissions` — recursion through `RelatedFilter`s into child filtersets' `check_*_permission` methods
-- `LOOKUP_PREFIXES` map for `construct_search` (`^` → `istartswith`, `=` → `iexact`, `@` → `search`, `$` → `iregex`)
-- Recursion-protected `_get_fields` (with `visited: set[type]`)
-
-Strawberry-adapted bits:
-
-- `_build_class_type` emits a `strawberry.input`-decorated class instead of `type(name, (graphene.InputObjectType,), fields)`
-- `_build_logic_fields` (`and` / `or` / `not`) uses self-referential `strawberry.lazy(...)` instead of `graphene.List(lambda: ...)`
-- `_build_input_fields` lambda ref to target filterset's root type → `strawberry.lazy("...module.path...")`
-- `GrapheneFilterSetMixin.FILTER_DEFAULTS` (FK/PK → `GlobalIDFilter`) → our own `FILTER_DEFAULTS` mapping FK/PK to a `strawberry.relay.GlobalID`-aware primitive (the global-ID filter in the upstream-primitives list above)
-- `graphene_django.forms.converter.convert_form_field` → our own form-field → Strawberry-input converter; pairs with `TODO-ALPHA-030-0.0.11` (Form-based mutations), which builds the same converter for the mutation surface
-
-Dropped (Graphene-specific, no Strawberry equivalent needed):
-
-- `setup_filterset` wrapper avoidance — Strawberry's eager annotation resolution doesn't have the "Graphene{X}Filter" wrapping problem that motivated this in the reference
-- `replace_csv_filters` — Strawberry's typed input handles `list[T]` natively without comma-separated-string workarounds
-
-Reference symbols in the Graphene checkout (`/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/`): `filters.py:BaseRelatedFilter`, `mixins.py:LazyRelatedClassMixin`, `filterset.py:FilterSetMetaclass` + `AdvancedFilterSet.get_filters`, `filter_arguments_factory.py:FilterArgumentsFactory`, `filterset_factories.py:get_filterset_class` + `_dynamic_filterset_cache`.
-
-Definition of done:
-
-- Add [`docs/spec-021-filters-0_0_8.md`](docs/spec-021-filters-0_0_8.md).
-- Add `django_strawberry_framework/filters/`.
-- Add mirrored `tests/filters/`.
-- Promote `Meta.filterset_class` only when filters are applied end-to-end from `DjangoType` / connection fields.
-- Keep filter declarations composable with ordering, aggregation, permissions, and optimizer planning.
-- Expose enough introspection for one type definition to show what filter surface it supports.
-- Use fakeshop flows where practical, but package tests belong under `tests/filters/`.
-- Validate Django ORM query generation for N+1 opportunities when filters traverse relations.
-- Decide whether the input-type factory's namespace shares the `TypeRegistry` or has its own (interacts with `DONE-014-0.0.6` and the `Meta.primary` design).
-
-Dependencies:
-
-- Field selection semantics may affect filter argument generation.
-- `utils/queryset.py` may become useful here.
+Two WIP cards remain in the `0.0.8` cohort after `WIP-ALPHA-021-0.0.8 — Filtering subsystem` shipped as `DONE-021-0.0.8`: `WIP-ALPHA-022-0.0.8 — Ordering subsystem` and `WIP-ALPHA-023-0.0.8 — `DjangoType` consumer-DX cleanup pass` are queued under the same column so the patch-level scope is visible at a glance and the cards stay grouped for the joint cut (`⚛️&🍓` parity for the Layer-3 read-side plus the consumer-DX cleanup pass). The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 
 ### WIP-ALPHA-022-0.0.8 — Ordering subsystem
 
@@ -920,6 +804,7 @@ Current behavior:
 
 - The package is intentionally shaped for teams coming from `django-filter`, DRF, `graphene-django`, and `strawberry-graphql-django`.
 - The feature docs explain the positioning, but there are no dedicated migration guides yet.
+- Add ability to set dsf settings to cap the number of schema hookups per model and error if it is more
 
 Potential scope:
 
@@ -1844,6 +1729,12 @@ Plus one new test in [`examples/fakeshop/test_query/test_library_api.py`][test-l
 
 **Deferred:** `ArrayField` and `HStoreField` are PostgreSQL-only; the fakeshop runs on SQLite, so their converter rows stay covered by `tests/` against package-internal fixtures. The `apps.scalars.models` module docstring records the rationale.
 
+### DONE-021-0.0.8 — Filtering subsystem
+
+Spec: [`docs/spec-021-filters-0_0_8.md`][spec-021]
+
+Shipped the filtering subsystem. [`FilterSet`][glossary-filterset], [`RelatedFilter`][glossary-relatedfilter], and [`Meta.filterset_class`][glossary-metafilterset_class] (promoted out of `DEFERRED_META_KEYS`) land at [`django_strawberry_framework/filters/`][filters] across five files (`base.py`, `sets.py`, `factories.py`, `inputs.py`, `__init__.py`); `tests/filters/` mirrors the layout. Six-layer lazy-resolution pipeline borrowed from `django-graphene-filters`: Layers 1–4 and 6 port library-agnostic verbatim on top of the shared `BaseFilterSet` foundation; Layer 5's cycle-safe forward reference adapts from Graphene's `lambda:` to `Annotated["TypeName", strawberry.lazy("django_strawberry_framework.filters.inputs")]` for scalar fields and `list[Annotated["TypeName", strawberry.lazy(...)]]` for `and_` / `or_` list-shaped logical operators; lookup GraphQL names pinned through `LOOKUP_NAME_MAP`. Parity-floor primitives (`ArrayFilter`, `RangeFilter`, `ListFilter`, `TypedFilter`, Strawberry-specific `GlobalIDFilter` validating decoded `type_name`) ship under `base.py`; `FILTER_DEFAULTS` is a class attribute on `FilterSet`; `FilterSet.filter_for_field` / `filter_for_lookup` overrides pick `GlobalIDFilter` when the FK/PK target `DjangoType` (resolved via the filterset's owner-aware `_owner_definition.related_target_for(...)`) implements `relay.Node` and the scalar PK filter when it does not. `DjangoTypeDefinition` grows a `related_target_for(field_name) -> tuple[DjangoTypeDefinition, models.Field] | None` method to feed the owner-aware lookup. `FilterArgumentsFactory` derives Strawberry input field shape from resolved filter instances via the named converter `convert_filter_to_input_annotation(filter_instance, model_field, owner_definition)`. The **resolver-facing API is the classmethod pair `FilterSet.apply_sync(input_value, queryset, info)` and `FilterSet.apply_async(input_value, queryset, info)`** (sync resolvers call the former; async resolvers await the latter), with a thin `apply(...)` dispatcher kept for back-compat; the apply pipeline decomposes into named helpers (`_normalize_input`, `_derive_related_visibility_querysets_sync` / `_async`, `_run_permission_checks`, `_validate_form_or_raise`, `_apply_related_constraints`); the pipeline derives child visibility querysets from each ACTIVE `RelatedFilter` branch's target `DjangoType.get_queryset(...)` so nested filters cannot see through visibility; runs `check_permissions` with **active-input-only scope** (per-field `check_<field>_permission` gates fire only when the consumer's input names the field); extracts the request from `info.context.request` (with an `isinstance(info.context, HttpRequest)` fallback); explicitly calls `filterset.form.is_valid()` and raises `from graphql import GraphQLError; GraphQLError('Invalid filter input', extensions={'code': 'FILTER_INVALID', 'errors': filterset.errors.get_json_data()})` on failure (with the `{field: [{'message': str, 'code': str}, ...]}` payload shape); applies explicit-`queryset=` constraints as a **filter-scope constraint** with active-branch scoping (NOT a security boundary — visibility is `get_queryset`'s job). The new `filter_input_type(BranchFilter)` helper produces the resolver-annotation shape; the finalizer enforces orphan validation by raising `ConfigurationError` for any FilterSet referenced via `filter_input_type` but never wired via `Meta.filterset_class` (tracked via `_helper_referenced_filtersets`). `registry.clear()` co-clears the filter input namespace via `clear_filter_input_namespace()` AND clears `_helper_referenced_filtersets`. Per-package input-class namespace is separate from the model-to-`DjangoType` registry (`Meta.primary` design preserved). `Meta.filterset_class` promotion runs through finalizer phase 2.5; the phase binds `_owner_definition`, validates owner compatibility, materializes each generated input class as a module global of `django_strawberry_framework.filters.inputs` before `strawberry.Schema(...)` runs. [`examples/fakeshop/apps/library/`][fakeshop-library] grows `filters.py` (carrying `BranchFilter` / `ShelfFilter` / `BookFilter` / `LoanFilter` / `PatronFilter`) and `filters_genre.py` (carrying `GenreFilter` — the cross-module fixture for the Layer-2 absolute-import-path test) wired through `Meta.filterset_class`; root resolvers accept `filter:` via `filter_input_type(<Name>Filter)` annotations and call `<OwnerType>.get_queryset(...)` BEFORE `apply_sync(...)`. [`examples/fakeshop/test_query/test_library_api.py`][test-library-api] grows exactly 14 live HTTP tests covering scalar / choice-enum / non-Relay-FK scalar PK / Relay-M2M GlobalID / reverse-FK / logical / optimizer cooperation / related-queryset parent-scope (filter-scope, NOT security) constraint via `Shelf.topic` / cross-module absolute-path `RelatedFilter` / nested-`RelatedFilter` visibility scoping / form-validation rejection via `PatronFilter.email_must_have_at_sign` custom `CharFilter` (per H4 of rev8 — the prior enum-coercion shape is unreachable) / GraphQL-enum-coercion-layer error distinct from form validation / root `get_queryset` honoring via `city == "restricted"` (per M1 of rev8) / wrong-`type_name` Relay GlobalID rejection. Spec: `docs/spec-021-filters-0_0_8.md`. The version bump from `0.0.7 → 0.0.8` is owned by the joint `0.0.8` cut (last `0.0.8` card to ship), NOT this card per Decision 10 — UNLESS this card is the last `0.0.8` card to merge, in which case the Decision-10 L5 contingency applies and this card owns the bump.
+
 ## Release readiness checklist
 
 Before a release:
@@ -1876,10 +1767,14 @@ Before a release:
 [docs-readme]: docs/README.md
 [glossary-bigint-scalar]: docs/GLOSSARY.md#bigint-scalar
 [glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
+[glossary-filterset]: docs/GLOSSARY.md#filterset
+[glossary-metafilterset_class]: docs/GLOSSARY.md#metafilterset_class
 [glossary-multi-database-cooperation]: docs/GLOSSARY.md#multi-database-cooperation
 [glossary-optimizerhint]: docs/GLOSSARY.md#optimizerhint
+[glossary-relatedfilter]: docs/GLOSSARY.md#relatedfilter
 [glossary-safe-wrap-connection-method]: docs/GLOSSARY.md#safe_wrap_connection_method
 [glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config
+[spec-021]: docs/spec-021-filters-0_0_8.md
 
 <!-- docs/SPECS/ -->
 [spec-011]: docs/SPECS/spec-011-relay_interfaces-0_0_5.md
@@ -1893,6 +1788,7 @@ Before a release:
 [apps]: django_strawberry_framework/apps.py
 [converters]: django_strawberry_framework/types/converters.py
 [django-patches]: django_strawberry_framework/_django_patches.py
+[filters]: django_strawberry_framework/filters/
 [plans]: django_strawberry_framework/optimizer/plans.py
 [resolvers]: django_strawberry_framework/types/resolvers.py
 [test-init]: django_strawberry_framework/test/__init__.py
@@ -1906,6 +1802,7 @@ Before a release:
 <!-- examples/ -->
 [db-shard-b.sqlite3]: examples/fakeshop/db_shard_b.sqlite3
 [example-schema]: examples/fakeshop/config/schema.py
+[fakeshop-library]: examples/fakeshop/apps/library/
 [fakeshop-test-multi-db]: examples/fakeshop/test_query/test_multi_db.py
 [settings]: examples/fakeshop/config/settings.py
 [test-library-api]: examples/fakeshop/test_query/test_library_api.py

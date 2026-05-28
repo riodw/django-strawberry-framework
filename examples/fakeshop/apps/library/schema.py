@@ -6,8 +6,9 @@ import strawberry
 from strawberry import relay
 from strawberry.types import Info
 
-from apps.library import models
+from apps.library import filters, filters_genre, models
 from django_strawberry_framework import DjangoListField, DjangoType, OptimizerHint
+from django_strawberry_framework.filters import filter_input_type
 
 # Consumer ``resolver=`` helper exercising the ``_post_process_consumer_sync``
 # ``Manager`` coercion line at
@@ -40,6 +41,7 @@ class LoanType(DjangoType):
     class Meta:
         model = models.Loan
         fields = ("id", "note", "book", "patron")
+        filterset_class = filters.LoanFilter
         optimizer_hints = {
             "book": OptimizerHint.prefetch_related(),
             "patron": OptimizerHint.SKIP,
@@ -52,14 +54,32 @@ class BookType(DjangoType):
     class Meta:
         model = models.Book
         fields = ("id", "title", "subtitle", "circulation_status", "shelf", "genres", "loans")
+        filterset_class = filters.BookFilter
 
 
 class ShelfType(DjangoType):
     """Shelf declared before Branch to exercise FK finalization."""
 
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:  # noqa: ARG003
+        """Hide ``topic="secret"`` shelves from non-staff requests (H1-rev4).
+
+        Spec-021 L1053: the nested-``RelatedFilter`` visibility-scoping
+        contract relies on the target type's ``get_queryset`` hiding
+        sensitive rows before the filter clause sees them. Staff requests
+        bypass the gate.
+        """
+        context = getattr(info, "context", None)
+        request = getattr(context, "request", None) or context
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_staff", False):
+            return queryset
+        return queryset.exclude(topic="secret")
+
     class Meta:
         model = models.Shelf
         fields = ("id", "code", "topic", "branch", "books")
+        filterset_class = filters.ShelfFilter
 
 
 class MembershipCardType(DjangoType):
@@ -77,19 +97,36 @@ class GenreType(DjangoType):
         model = models.Genre
         fields = ("id", "name", "books")
         interfaces = (relay.Node,)
+        filterset_class = filters_genre.GenreFilter
 
 
 class BranchType(DjangoType):
     """Branch parent with reverse FK shelves."""
 
     @strawberry.field
-    def shelves(self) -> list[ShelfType]:
+    def shelves(self) -> list["ShelfType"]:
         """Consumer-authored relation resolver used by HTTP override tests."""
         return list(self.shelves.order_by("-code"))
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:  # noqa: ARG003
+        """Hide ``city="restricted"`` branches from anonymous requests (M1-rev8).
+
+        Spec-021 L1056: the root-resolver ordering contract relies on
+        ``BranchType.get_queryset(queryset, info)`` running BEFORE
+        ``BranchFilter.apply_sync(...)``. Staff requests bypass the gate.
+        """
+        context = getattr(info, "context", None)
+        request = getattr(context, "request", None) or context
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_staff", False):
+            return queryset
+        return queryset.exclude(city="restricted")
 
     class Meta:
         model = models.Branch
         fields = ("id", "name", "city", "shelves")
+        filterset_class = filters.BranchFilter
 
 
 class PatronType(DjangoType):
@@ -98,6 +135,7 @@ class PatronType(DjangoType):
     class Meta:
         model = models.Patron
         fields = ("id", "name", "lifetime_fines_cents", "card", "loans")
+        filterset_class = filters.PatronFilter
 
 
 @strawberry.type
@@ -114,36 +152,78 @@ class Query:
     )
 
     @strawberry.field
-    def all_library_branches(self) -> list[BranchType]:
-        return models.Branch.objects.order_by("id")
+    def all_library_branches(
+        self,
+        info: strawberry.Info,
+        filter: filter_input_type(filters.BranchFilter) | None = None,  # noqa: A002
+    ) -> list[BranchType]:
+        queryset = BranchType.get_queryset(models.Branch.objects.order_by("id"), info)
+        if filter is not None:
+            queryset = filters.BranchFilter.apply_sync(filter, queryset, info)
+        return queryset
 
     @strawberry.field
-    def all_library_shelves(self) -> list[ShelfType]:
-        return models.Shelf.objects.order_by("id")
+    def all_library_shelves(
+        self,
+        info: strawberry.Info,
+        filter: filter_input_type(filters.ShelfFilter) | None = None,  # noqa: A002
+    ) -> list[ShelfType]:
+        queryset = ShelfType.get_queryset(models.Shelf.objects.order_by("id"), info)
+        if filter is not None:
+            queryset = filters.ShelfFilter.apply_sync(filter, queryset, info)
+        return queryset
 
     @strawberry.field
-    def all_library_books(self) -> list[BookType]:
-        return models.Book.objects.order_by("id")
+    def all_library_books(
+        self,
+        info: strawberry.Info,
+        filter: filter_input_type(filters.BookFilter) | None = None,  # noqa: A002
+    ) -> list[BookType]:
+        queryset = BookType.get_queryset(models.Book.objects.order_by("id"), info)
+        if filter is not None:
+            queryset = filters.BookFilter.apply_sync(filter, queryset, info)
+        return queryset
 
     @strawberry.field
     def all_library_prefetched_books(self) -> list[BookType]:
         return models.Book.objects.select_related("shelf").prefetch_related("genres").order_by("id")
 
     @strawberry.field
-    def all_library_genres(self) -> list[GenreType]:
-        return models.Genre.objects.order_by("id")
+    def all_library_genres(
+        self,
+        info: strawberry.Info,
+        filter: filter_input_type(filters_genre.GenreFilter) | None = None,  # noqa: A002
+    ) -> list[GenreType]:
+        queryset = GenreType.get_queryset(models.Genre.objects.order_by("id"), info)
+        if filter is not None:
+            queryset = filters_genre.GenreFilter.apply_sync(filter, queryset, info)
+        return queryset
 
     @strawberry.field
-    def all_library_patrons(self) -> list[PatronType]:
-        return models.Patron.objects.order_by("id")
+    def all_library_patrons(
+        self,
+        info: strawberry.Info,
+        filter: filter_input_type(filters.PatronFilter) | None = None,  # noqa: A002
+    ) -> list[PatronType]:
+        queryset = PatronType.get_queryset(models.Patron.objects.order_by("id"), info)
+        if filter is not None:
+            queryset = filters.PatronFilter.apply_sync(filter, queryset, info)
+        return queryset
 
     @strawberry.field
     def all_library_membership_cards(self) -> list[MembershipCardType]:
         return models.MembershipCard.objects.order_by("id")
 
     @strawberry.field
-    def all_library_loans(self) -> list[LoanType]:
-        return models.Loan.objects.order_by("id")
+    def all_library_loans(
+        self,
+        info: strawberry.Info,
+        filter: filter_input_type(filters.LoanFilter) | None = None,  # noqa: A002
+    ) -> list[LoanType]:
+        queryset = LoanType.get_queryset(models.Loan.objects.order_by("id"), info)
+        if filter is not None:
+            queryset = filters.LoanFilter.apply_sync(filter, queryset, info)
+        return queryset
 
 
 __all__ = ("Query",)

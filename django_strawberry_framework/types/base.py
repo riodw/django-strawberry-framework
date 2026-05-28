@@ -45,15 +45,8 @@ from .definition import DjangoTypeDefinition
 from .relations import PendingRelation, PendingRelationAnnotation
 from .relay import install_is_type_of
 
-# TODO(spec-021-filters-0_0_8 Slice 3): Promote "filterset_class" only in
-# the same change that wires finalizer phase 2.5 binding end-to-end.
-# Pseudocode:
-#   DEFERRED_META_KEYS -= {"filterset_class"}  # noqa: ERA001
-#   ALLOWED_META_KEYS |= {"filterset_class"}  # noqa: ERA001
-#   validated.filterset_class = _validate_filterset_class(meta.filterset_class)  # noqa: ERA001
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
     {
-        "filterset_class",
         "orderset_class",
         "aggregate_class",
         "fields_class",
@@ -63,16 +56,41 @@ DEFERRED_META_KEYS: frozenset[str] = frozenset(
 
 ALLOWED_META_KEYS: frozenset[str] = frozenset(
     {
-        "model",
-        "fields",
-        "exclude",
-        "name",
         "description",
-        "optimizer_hints",
+        "exclude",
+        "fields",
+        "filterset_class",
         "interfaces",
+        "model",
+        "name",
+        "optimizer_hints",
         "primary",
     },
 )
+
+
+def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
+    """Validate ``Meta.filterset_class`` is a package-``FilterSet`` subclass.
+
+    Local import of ``FilterSet`` at function scope keeps ``types/base.py``
+    free of a module-load cycle through ``filters.sets`` (which imports
+    ``types.relay`` which imports ``types.base``). Validation runs at
+    ``_validate_meta`` time — well after both modules have completed
+    module load — so the local import resolves cheaply.
+
+    Returns ``None`` when the meta does not declare ``filterset_class``;
+    raises ``ConfigurationError`` for non-``FilterSet`` values.
+    """
+    if filterset_class is None:
+        return None
+    from ..filters.sets import FilterSet
+
+    if not (isinstance(filterset_class, type) and issubclass(filterset_class, FilterSet)):
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.filterset_class must be a FilterSet subclass; "
+            f"got {filterset_class!r}",
+        )
+    return filterset_class
 
 
 _NODEID_STRING_RE = re.compile(r"(?:^|\.)NodeID\[")
@@ -249,6 +267,7 @@ class DjangoType:
             consumer_assigned_scalar_fields=consumer_assigned_scalar_fields,
             interfaces=validated.interfaces,
             primary=validated.primary,
+            filterset_class=validated.filterset_class,
         )
         registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
         for pending_relation in pending:
@@ -523,10 +542,7 @@ class _ValidatedMeta(NamedTuple):
     optimizer_hints: dict[str, Any]
     fields_spec: tuple[str, ...] | str | None
     exclude_spec: tuple[str, ...] | None
-    # TODO(spec-021-filters-0_0_8 Slice 3): Add ``filterset_class`` to this
-    # snapshot after the validator accepts the Meta key.
-    # Pseudocode:
-    #   filterset_class: type[FilterSet] | None  # noqa: ERA001
+    filterset_class: type | None
 
 
 def _validate_meta(meta: type) -> _ValidatedMeta:
@@ -586,14 +602,6 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
             f"Meta keys not supported yet: {deferred}. The feature that owns them has not shipped.",
         )
 
-    # TODO(spec-021-filters-0_0_8 Slice 3): Once "filterset_class" is no
-    # longer deferred, validate it here via a local import so base.py does not
-    # grow an eager filters import cycle.
-    # Pseudocode:
-    #   filterset_class = getattr(meta, "filterset_class", None)  # noqa: ERA001
-    #   if filterset_class is not None:
-    #       from django_strawberry_framework.filters.sets import FilterSet  # noqa: ERA001
-    #       if not issubclass(filterset_class, FilterSet): raise ConfigurationError  # noqa: ERA001
     unknown = sorted(declared - ALLOWED_META_KEYS - DEFERRED_META_KEYS)
     if unknown:
         raise ConfigurationError(f"Unknown Meta keys: {unknown}")
@@ -602,6 +610,7 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
     exclude_spec = _normalize_sequence_spec(getattr(meta, "exclude", None))
     optimizer_hints = _meta_optimizer_hints(meta)
     interfaces = _validate_interfaces(meta)
+    filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
 
     return _ValidatedMeta(
         interfaces=interfaces,
@@ -609,6 +618,7 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
         optimizer_hints=optimizer_hints,
         fields_spec=fields_spec,
         exclude_spec=exclude_spec,
+        filterset_class=filterset_class,
     )
 
 

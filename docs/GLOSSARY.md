@@ -69,7 +69,8 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`DjangoType`](#djangotype) | shipped (`0.0.5`) |
 | [`FieldError` envelope](#fielderror-envelope) | planned for `0.0.11` |
 | [`FieldSet`](#fieldset) | planned for `0.1.1` |
-| [`FilterSet`](#filterset) | planned for `0.0.8` |
+| [`FilterSet`](#filterset) | shipped (`0.0.8`) |
+| [`filter_input_type`](#filter_input_type) | shipped (`0.0.8`) |
 | [`finalize_django_types`](#finalize_django_types) | shipped (`0.0.4`) |
 | [FK-id elision](#fk-id-elision) | shipped (`0.0.3`) |
 | [`get_child_queryset`](#get_child_queryset) | planned for `0.1.3` |
@@ -82,7 +83,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Meta.exclude`](#metaexclude) | shipped |
 | [`Meta.fields`](#metafields) | shipped |
 | [`Meta.fields_class`](#metafields_class) | planned for `0.1.1` |
-| [`Meta.filterset_class`](#metafilterset_class) | planned for `0.0.8` |
+| [`Meta.filterset_class`](#metafilterset_class) | shipped (`0.0.8`) |
 | [`Meta.interfaces`](#metainterfaces) | shipped (`0.0.5`) |
 | [`Meta.model`](#metamodel) | shipped |
 | [`Meta.name`](#metaname) | shipped |
@@ -98,7 +99,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Plan cache](#plan-cache) | shipped (`0.0.3`) |
 | [Queryset diffing](#queryset-diffing) | shipped (`0.0.3`) |
 | [`RelatedAggregate`](#relatedaggregate) | planned for `0.1.3` |
-| [`RelatedFilter`](#relatedfilter) | planned for `0.0.8` |
+| [`RelatedFilter`](#relatedfilter) | shipped (`0.0.8`) |
 | [`RelatedOrder`](#relatedorder) | planned for `0.0.8` |
 | [Relation handling](#relation-handling) | shipped (`0.0.1`+) |
 | [Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
@@ -123,7 +124,7 @@ For readers exploring rather than looking up a specific term:
 - **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
 - **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.choice_enum_names`](#metachoice_enum_names).
 - **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
-- **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`Meta.filterset_class`](#metafilterset_class).
+- **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`Meta.filterset_class`](#metafilterset_class).
 - **Ordering:** [`OrderSet`](#orderset) · [`RelatedOrder`](#relatedorder) · [`Meta.orderset_class`](#metaorderset_class).
 - **Aggregation:** [`AggregateSet`](#aggregateset) · [`RelatedAggregate`](#relatedaggregate) · [`Meta.aggregate_class`](#metaaggregate_class) · [`get_child_queryset`](#get_child_queryset).
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
@@ -420,13 +421,44 @@ Declarative field-selection class for the [`Meta.fields_class`](#metafields_clas
 
 ## `FilterSet`
 
-**Status:** planned for `0.0.8`.
+**Status:** shipped (`0.0.8`).
 
-Declarative filter classes with `Meta.model`, `Meta.fields` (dict form `{"name": ["exact", "icontains"]}` or `"__all__"` shorthand), [`RelatedFilter`](#relatedfilter) for cross-relation traversal (accepts class, absolute import path, or unqualified name for circular cases), `check_*_permission` denial gates, and explicit-queryset scope boundaries that nested filters cannot bypass. Logical `and` / `or` / `not` operators on the input shape. Generated input types use stable class-derived names so two connection fields on the same model resolve to the same `FilterInputType` (Apollo cache friendly).
+Declarative filter classes with `Meta.model`, `Meta.fields` (dict form `{"name": ["exact", "icontains"]}` or `"__all__"` shorthand), [`RelatedFilter`](#relatedfilter) for cross-relation traversal (accepts class, absolute import path, or unqualified name for circular cases), `check_*_permission` denial gates with **active-input-only scope** (per-field gates fire only when the consumer's input names the field), and explicit-`queryset=` **filter-scope constraint** (NOT a security boundary; visibility / security is the job of [`get_queryset`](#get_queryset-visibility-hook), not `RelatedFilter(queryset=...)`). Logical `and` / `or` / `not` operators on the input shape. Generated input types use stable class-derived names so two connection fields on the same model resolve to the same `FilterInputType` (Apollo cache friendly).
 
-The lazy-resolution architecture is borrowed verbatim from `django-graphene-filters` — a six-layer pipeline; five layers are library-agnostic and port directly; only the cycle-safe forward reference (Graphene's `lambda:` → Strawberry's `strawberry.lazy()`) is engine-adapted.
+The lazy-resolution architecture is borrowed verbatim from `django-graphene-filters` — a cycle-safe six-layer pipeline; five layers are library-agnostic and port directly, only Layer 5's cycle-safe forward reference (Graphene's `lambda:` → Strawberry's `Annotated["TypeName", strawberry.lazy("django_strawberry_framework.filters.inputs")]`) is engine-adapted. `FilterSet` IS a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive from `django-filter` carries over.
 
-**See also:** [`Meta.filterset_class`](#metafilterset_class) · [`RelatedFilter`](#relatedfilter) · [`OrderSet`](#orderset).
+The resolver-facing API is the classmethod pair `FilterSet.apply_sync(input_value, queryset, info)` and `FilterSet.apply_async(input_value, queryset, info)` — sync resolvers call the former, async resolvers await the latter. The apply pipeline derives child visibility querysets from each ACTIVE [`RelatedFilter`](#relatedfilter) branch's target [`DjangoType.get_queryset(...)`](#get_queryset-visibility-hook) so a nested filter cannot match a parent through a child the visibility hook would hide; extracts the request from `info.context.request`; explicitly calls `filterset.form.is_valid()` and raises `GraphQLError("Invalid filter input", extensions={"code": "FILTER_INVALID", "errors": filterset.errors.get_json_data()})` on failure.
+
+**See also:** [`Meta.filterset_class`](#metafilterset_class) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`OrderSet`](#orderset).
+
+## `filter_input_type`
+
+**Status:** shipped (`0.0.8`).
+
+Consumer helper for resolver-argument annotations. `filter_input_type(BranchFilter)` returns `Annotated["BranchFilterInputType", strawberry.lazy("django_strawberry_framework.filters.inputs")]` — the lazy-resolution shape Strawberry consumes when constructing the schema. The helper validates eagerly (`TypeError` for non-[`FilterSet`](#filterset) arguments) and records the FilterSet against an internal `_helper_referenced_filtersets` ledger so [`finalize_django_types`](#finalize_django_types) can fail loudly for orphans — FilterSets passed to `filter_input_type` but never wired via [`Meta.filterset_class`](#metafilterset_class) — at finalize time.
+
+Consumer usage on a plain `@strawberry.field` resolver:
+
+```python
+from django_strawberry_framework.filters import filter_input_type
+from apps.library.filters import BranchFilter
+
+
+@strawberry.type
+class Query:
+    @strawberry.field
+    def all_library_branches(
+        self,
+        info,
+        filter: filter_input_type(BranchFilter) | None = None,
+    ) -> list[BranchType]:
+        queryset = BranchType.get_queryset(Branch.objects.all(), info)
+        if filter is not None:
+            queryset = BranchFilter.apply_sync(filter, queryset, info)
+        return queryset
+```
+
+**See also:** [`FilterSet`](#filterset) · [`Meta.filterset_class`](#metafilterset_class).
 
 ## `finalize_django_types`
 
@@ -576,9 +608,9 @@ References a [`FieldSet`](#fieldset) subclass that defines field-level permissio
 
 ## `Meta.filterset_class`
 
-**Status:** planned for `0.0.8`.
+**Status:** shipped (`0.0.8`).
 
-References a [`FilterSet`](#filterset) subclass that defines the filter input for this `DjangoType`. Surfaces as the `filter:` argument on [`DjangoConnectionField`](#djangoconnectionfield).
+References a [`FilterSet`](#filterset) subclass that defines the filter input for this [`DjangoType`](#djangotype). The key is the consumer-facing wiring seam: declaring `Meta.filterset_class = MyFilter` promotes the binding out of `DEFERRED_META_KEYS`, validates the class is a `FilterSet` subclass at type-creation time, and routes through [`finalize_django_types`](#finalize_django_types) phase 2.5 — which binds the owner (`filterset_class._owner_definition = definition`), validates owner compatibility, calls `filterset_cls.get_filters()` (Layer 4 expansion), runs the BFS argument factory (Layer 5), and materializes every generated input class as a module global of `django_strawberry_framework.filters.inputs` before `strawberry.Schema(...)` runs. Consumers reach the resulting filter input from a resolver via [`filter_input_type`](#filter_input_type).
 
 ```python
 class GalaxyType(DjangoType):
@@ -587,7 +619,7 @@ class GalaxyType(DjangoType):
         filterset_class = filters.GalaxyFilter
 ```
 
-**See also:** [`FilterSet`](#filterset).
+**See also:** [`FilterSet`](#filterset) · [`filter_input_type`](#filter_input_type).
 
 ## `Meta.interfaces`
 
@@ -789,9 +821,11 @@ Field declaration on an [`AggregateSet`](#aggregateset) for cross-relation aggre
 
 ## `RelatedFilter`
 
-**Status:** planned for `0.0.8`.
+**Status:** shipped (`0.0.8`).
 
-Field declaration on a [`FilterSet`](#filterset) for cross-relation filter traversal. Accepts a target `FilterSet` class, an absolute import path, or an unqualified name for circular references. The unqualified-name form is resolved lazily, matching `django-graphene-filters`'s six-layer pipeline.
+Field declaration on a [`FilterSet`](#filterset) for cross-relation filter traversal. Accepts a target `FilterSet` class, an absolute import path (`"apps.library.filters_genre.GenreFilter"`), or an unqualified name (`"BookFilter"`) for same-module circular references. The unqualified-name form is resolved lazily via Layer 2's module-fallback resolution — try as an absolute import path first, fall back to prepending the binding `FilterSet`'s `__module__`, fail loud with a `ConfigurationError` naming both attempts if neither resolves. Matches `django-graphene-filters`'s six-layer pipeline.
+
+An explicit `queryset=` argument is a **filter-scope constraint** intersected with the active branch's queryset, NOT a security boundary — the constraint applies only when the related branch is active in the normalized input, so it cannot serve as a visibility gate. Visibility / security is the job of [`get_queryset`](#get_queryset-visibility-hook) on the target [`DjangoType`](#djangotype); the apply pipeline derives the child visibility queryset from `<TargetType>.get_queryset(...)` for every active `RelatedFilter` branch before the parent JOIN runs, so nested filters cannot see through visibility to hidden related rows.
 
 **See also:** [`FilterSet`](#filterset) · [`RelatedOrder`](#relatedorder).
 

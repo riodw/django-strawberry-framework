@@ -1,26 +1,361 @@
-# ruff: noqa: ERA001
-"""Filter primitives planned by ``spec-021-filters-0_0_8``."""
+"""Filter primitives + `RelatedFilter` + `LazyRelatedClassMixin` (Slice 1).
 
-# TODO(spec-021-filters-0_0_8 Slice 1): Port the filter primitives from
-# graphene-django and django-graphene-filters onto django-filter's
-# ``filterset.BaseFilterSet`` foundation.
-# Pseudocode:
-#   class Filter(django_filters.Filter): ...
-#   class TypedFilter(Filter): coerce values through a typed form field.
-#   class ArrayFilter(TypedFilter): accept list-shaped ArrayField values.
-#   class RangeFilter(TypedFilter): emit RangeWidget-compatible name_0/name_1 data.
-#   class ListFilter(TypedFilter): accept native Strawberry list inputs for "in".
-#   class GlobalIDFilter(Filter): parse str or relay.GlobalID, validate type_name,
-#       and pass only node_id into django-filter.
-#
-# TODO(spec-021-filters-0_0_8 Slice 1): Add RelatedFilter and lazy class
-# resolution without making consumers spell Strawberry decorators.
-# Pseudocode:
-#   class LazyRelatedClassMixin:
-#       def resolve_lazy_class(self):
-#           try import_string(self._filterset)
-#           except ImportError: import_string(f"{bound_class.__module__}.{self._filterset}")
-#   class RelatedFilter(LazyRelatedClassMixin):
-#       def bind_filterset(self, owner): self.bound_class = owner
-#       @property
-#       def filterset(self): return resolved FilterSet subclass
+Layers 1 and 2 of the six-layer pipeline (spec-021 Decision 3) plus the
+five parity-floor primitives (spec-021 Decision 4):
+
+- `Filter` re-exported from `django_filters` for surface continuity.
+- `TypedFilter` -> `ArrayFilter` / `RangeFilter` / `ListFilter`: ports of
+  the matching `graphene_django/filter/filters/*.py` primitive minus the
+  Graphene `_input_type` constructor argument (the Strawberry-side
+  annotation is derived later by `convert_filter_to_input_annotation` in
+  Slice 2).
+- `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter`: ports of the matching
+  Graphene primitive with the decode step substituted to
+  `strawberry.relay.GlobalID.from_id(value)` per Decision 4 M6.
+- `LazyRelatedClassMixin`: verbatim port from
+  `django_graphene_filters/mixins.py::LazyRelatedClassMixin`.
+- `RelatedFilter`: collapsed port of the cookbook's
+  `BaseRelatedFilter` + `RelatedFilter(BaseRelatedFilter, ModelChoiceFilter)`
+  pair into a single consumer-facing class so the public surface matches
+  the spec's single-symbol promise (spec-021 Decision 2).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
+from django.core.exceptions import ValidationError
+from django.forms import Field
+from django.utils.module_loading import import_string
+from django_filters import Filter, ModelChoiceFilter, MultipleChoiceFilter
+from django_filters.constants import EMPTY_VALUES
+from django_filters.filters import FilterMethod
+from graphql import GraphQLError
+from strawberry import relay
+
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
+    from django.http import HttpRequest
+    from django_filters.filterset import BaseFilterSet
+
+
+class TypedFilter(Filter):
+    """Base marker for `ArrayFilter` / `RangeFilter` / `ListFilter`.
+
+    Port of `graphene_django/filter/filters/typed_filter.py::TypedFilter`
+    with the Graphene-only `_input_type` constructor argument dropped.
+    The Strawberry-side annotation derives from the resolved filter
+    instance at materialization time via `convert_filter_to_input_annotation`
+    (Slice 2); there is no Graphene-style `input_type` property.
+    """
+
+
+class ArrayFilterMethod(FilterMethod):
+    """Treat empty list as a real value; defer the rest to `FilterMethod`."""
+
+    def __call__(self, qs: Any, value: Any) -> Any:
+        """Apply the custom method, treating empty list as a real value."""
+        if value is None:
+            return qs
+        return self.method(qs, self.f.field_name, value)
+
+
+class ArrayFilter(TypedFilter):
+    """Filter shaped for PostgreSQL `ArrayField` columns.
+
+    Port of `graphene_django/filter/filters/array_filter.py::ArrayFilter`.
+    The custom `method` setter swaps in `ArrayFilterMethod` so a
+    consumer-supplied `method=` callable does not short-circuit on
+    empty-list input — the empty list is a valid filter value here, unlike
+    the default `FilterMethod` contract.
+    """
+
+    @TypedFilter.method.setter
+    def method(self, value: Any) -> None:
+        """Swap in `ArrayFilterMethod` when a consumer `method=` is set."""
+        TypedFilter.method.fset(self, value)
+        if value is not None:
+            self.filter = ArrayFilterMethod(self)
+
+    def filter(self, qs: Any, value: Any) -> Any:
+        """Apply the lookup; `[]` is a real value (not `EMPTY_VALUES`-ish)."""
+        if value in EMPTY_VALUES and value != []:
+            return qs
+        if self.distinct:
+            qs = qs.distinct()
+        lookup = f"{self.field_name}__{self.lookup_expr}"
+        return self.get_method(qs)(**{lookup: value})
+
+
+def validate_range(value: Any) -> None:
+    """Reject range values whose length is not exactly two.
+
+    Validator is only invoked by Django when the value is non-empty (the
+    standard form-field contract); a one-element or three-element list
+    raises `ValidationError(code="invalid")`.
+    """
+    if len(value) != 2:
+        raise ValidationError(
+            "Invalid range specified: it needs to contain 2 values.",
+            code="invalid",
+        )
+
+
+class RangeField(Field):
+    """`forms.Field` whose default validator is `validate_range`."""
+
+    default_validators = [validate_range]
+    empty_values = [None]
+
+
+class RangeFilter(TypedFilter):
+    """Filter that consumes a two-element list via `RangeField`."""
+
+    field_class = RangeField
+
+
+class ListFilterMethod(FilterMethod):
+    """Treat empty list as a real value; defer the rest to `FilterMethod`."""
+
+    def __call__(self, qs: Any, value: Any) -> Any:
+        """Apply the custom method, treating empty list as a real value."""
+        if value is None:
+            return qs
+        return self.method(qs, self.f.field_name, value)
+
+
+class ListFilter(TypedFilter):
+    """Filter that accepts a list-shaped input (e.g. `__in` lookups).
+
+    Port of `graphene_django/filter/filters/list_filter.py::ListFilter`:
+    an empty list short-circuits to `qs.none()` (or the original queryset
+    when `exclude=True`) instead of being normalized into a "no value
+    supplied" pass-through.
+    """
+
+    @TypedFilter.method.setter
+    def method(self, value: Any) -> None:
+        """Swap in `ListFilterMethod` when a consumer `method=` is set."""
+        TypedFilter.method.fset(self, value)
+        if value is not None:
+            self.filter = ListFilterMethod(self)
+
+    def filter(self, qs: Any, value: Any) -> Any:
+        """Short-circuit empty-list inputs to `qs.none()` (or `qs` when excluding)."""
+        if value is not None and len(value) == 0:
+            return qs if self.exclude else qs.none()
+        return super().filter(qs, value)
+
+
+def _expected_global_id_type_name(filter_instance: Filter) -> str | None:
+    """Resolve the expected GraphQL type name for a GlobalID-aware filter.
+
+    Walks the runtime ``parent.<filterset>._owner_definition`` binding that
+    Slice 3's finalizer phase 2.5 wires per spec-021 L566-567 + L603 +
+    L1057. Two routing branches:
+
+    1. **Own-PK branch.** When ``filter_instance.field_name`` matches the
+       owning model's PK column name (``_meta.pk.name``), the expected
+       type name is the owning ``DjangoType``'s ``graphql_type_name``
+       (the OWNER itself is the Relay node — its PK gets a GlobalID).
+    2. **Relation branch.** Otherwise the field name resolves through
+       ``owner_definition.related_target_for(<base_field>)`` — where
+       ``<base_field>`` is the parent-relation prefix in expanded child
+       filter names like ``"genres__id"`` (the ``RelatedFilter`` expansion
+       contract per spec-021 L988); the expected type name is the target
+       ``DjangoType``'s ``graphql_type_name``.
+
+    Returns ``None`` when no owner is bound (Slice-1 + Slice-2 unit-test
+    contexts) or when the lookup cannot resolve a target; the filter then
+    decodes the GlobalID without type-name validation per spec-021 L1057.
+    """
+    parent = getattr(filter_instance, "parent", None)
+    owner = getattr(parent, "_owner_definition", None) if parent is not None else None
+    if owner is None:
+        return None
+    field_name = filter_instance.field_name or ""
+    head, _sep, _tail = field_name.partition("__")
+    pk_name = getattr(owner.model._meta.pk, "name", None)
+    if head == pk_name or field_name == pk_name:
+        return owner.name if owner.name is not None else owner.origin.__name__
+    target = owner.related_target_for(head)
+    if target is None:
+        return None
+    target_definition, _model_field = target
+    return target_definition.name if target_definition.name is not None else target_definition.origin.__name__
+
+
+def _decode_and_validate_global_id(
+    value: Any,
+    filter_instance: Filter,
+    *,
+    index: int | None = None,
+) -> str:
+    """Decode ``value`` to a node id and validate its ``type_name``.
+
+    Accepts both raw ``str`` and ``strawberry.relay.GlobalID`` objects per
+    spec-021 L602. Raises ``GraphQLError("GlobalID type mismatch: filter
+    expects <expected> but received <actual>")`` when the decoded
+    ``type_name`` does not match the expected type for the filter (spec
+    L603). ``GlobalIDMultipleChoiceFilter`` passes ``index`` so the
+    rejected list element is named in the error message per spec L605.
+    """
+    decoded = value if isinstance(value, relay.GlobalID) else relay.GlobalID.from_id(value)
+    expected = _expected_global_id_type_name(filter_instance)
+    if expected is not None and decoded.type_name != expected:
+        suffix = "" if index is None else f" at index {index}"
+        raise GraphQLError(
+            f"GlobalID type mismatch: filter expects {expected} but received {decoded.type_name}{suffix}",
+        )
+    return decoded.node_id
+
+
+class GlobalIDFilter(Filter):
+    """Filter that decodes a Relay GlobalID before delegating to `Filter`.
+
+    Port of `graphene_django/filter/filters/global_id_filter.py::GlobalIDFilter`
+    with the decode substituted to `strawberry.relay.GlobalID.from_id(value)`
+    per spec-021 Decision 4 M6. The Graphene-only
+    `GlobalIDFormField` / `GlobalIDMultipleChoiceField` dependencies drop
+    away; the default `forms.CharField` (inherited via `Filter.field_class`)
+    is used.
+
+    Accepts both raw `str` and `strawberry.relay.GlobalID` objects per
+    spec-021 L602. Validates the decoded `type_name` against the expected
+    target GraphQL type (resolved through the parent filterset's
+    `_owner_definition.related_target_for(field_name)`, or the owner
+    itself when the filter targets the own PK) per spec-021 L603; a
+    mismatch raises `GraphQLError("GlobalID type mismatch...")` before
+    any queryset clause runs.
+    """
+
+    def filter(self, qs: Any, value: Any) -> Any:
+        """Decode + validate the GlobalID; delegate to `Filter.filter` with `node_id`."""
+        if value is None:
+            return super().filter(qs, None)
+        node_id = _decode_and_validate_global_id(value, self)
+        return super().filter(qs, node_id)
+
+
+class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
+    """Multi-value sibling of `GlobalIDFilter`.
+
+    Validates every list element independently per spec-021 L605; a
+    single wrong-type element rejects the whole input with the offending
+    index named in the error message.
+    """
+
+    def filter(self, qs: Any, value: Any) -> Any:
+        """Decode + validate every GlobalID; delegate to the parent filter."""
+        node_ids = [_decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)]
+        return super().filter(qs, node_ids)
+
+
+class LazyRelatedClassMixin:
+    """Resolve a class reference that may be a string, callable, or class.
+
+    Verbatim port of `django_graphene_filters/mixins.py::LazyRelatedClassMixin`.
+    Used by `RelatedFilter` to break cycles between filtersets declared in
+    the same module without forcing an `if TYPE_CHECKING` dance on the
+    consumer.
+    """
+
+    def resolve_lazy_class(self, class_ref: Any, bound_class: type | None) -> Any:
+        """Resolve `class_ref` to a class.
+
+        Strings resolve via two attempts:
+
+        1. As an absolute import path through `import_string`.
+        2. On `ImportError`, prefixed with `bound_class.__module__` so an
+           unqualified `"ManagerFilter"` resolves against the owning
+           filterset's module.
+
+        Callables that are not classes are invoked as zero-arg factories;
+        everything else is returned as-is.
+        """
+        if isinstance(class_ref, str):
+            try:
+                return import_string(class_ref)
+            except ImportError:
+                if bound_class:
+                    path = ".".join([bound_class.__module__, class_ref])
+                    return import_string(path)
+                raise
+        elif callable(class_ref) and not isinstance(class_ref, type):
+            return class_ref()
+        return class_ref
+
+
+class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
+    """`ModelChoiceFilter` that traverses into another `FilterSet`.
+
+    Collapsed port of `django_graphene_filters/filters.py::BaseRelatedFilter`
+    + `django_graphene_filters/filters.py::RelatedFilter` into a single
+    consumer-facing class per spec-021 Decision 2 (single-symbol public
+    surface). The lazy-resolution logic (`bind_filterset`, `.filterset`
+    property, target-model-derived queryset) carries over from the
+    cookbook unchanged.
+
+    Target acceptance shapes:
+
+    - A `FilterSet` class.
+    - An absolute import path (e.g. ``"apps.library.filters.ShelfFilter"``).
+    - An unqualified class name resolved against the owning filterset's
+      module (e.g. ``"ShelfFilter"`` when both filtersets live in the
+      same file).
+    """
+
+    def __init__(
+        self,
+        filterset: str | type[BaseFilterSet],
+        *args,
+        lookups: list[str] | None = None,
+        **kwargs,
+    ) -> None:
+        self._has_explicit_queryset = kwargs.get("queryset") is not None
+        super().__init__(*args, **kwargs)
+        self._filterset = filterset
+        self.lookups = lookups or []
+
+    def bind_filterset(self, filterset: type[BaseFilterSet]) -> None:
+        """Bind the owning `FilterSet` once; subsequent calls are no-ops.
+
+        Idempotent so the metaclass `__new__` can re-bind every related
+        filter on subclass creation without clobbering a deliberate
+        override.
+        """
+        if not hasattr(self, "bound_filterset"):
+            self.bound_filterset = filterset
+
+    @property
+    def filterset(self) -> type[BaseFilterSet]:
+        """Resolve `self._filterset` lazily on first access.
+
+        Re-stores the resolved class so the next access is a plain
+        attribute read; setter remains usable when a caller wants to
+        substitute the target.
+        """
+        self._filterset = self.resolve_lazy_class(
+            self._filterset,
+            getattr(self, "bound_filterset", None),
+        )
+        return self._filterset
+
+    @filterset.setter
+    def filterset(self, value: type[BaseFilterSet]) -> None:
+        self._filterset = value
+
+    def get_queryset(self, request: HttpRequest) -> Any:
+        """Derive the queryset from the target filterset's `Meta.model`.
+
+        When no explicit `queryset=` was supplied at construction time,
+        falls back to `target_filterset._meta.model._default_manager.all()`
+        — the cookbook's documented auto-derivation contract. An explicit
+        queryset is preserved verbatim.
+        """
+        queryset = super().get_queryset(request)
+        if queryset is None:
+            target = self.filterset
+            model = getattr(getattr(target, "_meta", None), "model", None)
+            if model is not None:
+                return model._default_manager.all()
+        return queryset

@@ -408,16 +408,31 @@ class TypeRegistry:
         self._definitions.clear()
         self._pending.clear()
         self._finalized = False
-        # TODO(spec-021-filters-0_0_8 Slice 3): Co-clear filter input module
-        # globals and filter_input_type helper references once filters land.
-        # Pseudocode:
-        #   try:  # noqa: ERA001
-        #       import clear_filter_input_namespace from filters.inputs  # noqa: ERA001
-        #       from django_strawberry_framework.filters import _helper_referenced_filtersets  # noqa: ERA001
-        #   except ImportError:  # noqa: ERA001
-        #       return  # noqa: ERA001
-        #   clear_filter_input_namespace()  # noqa: ERA001
-        #   _helper_referenced_filtersets.clear()  # noqa: ERA001
+
+        # Filter-input namespace clear (cycle-safe local import per
+        # spec-021 Decision 9, M5 of rev3 + M4 of rev8). Two independent
+        # try/except blocks — one per cleared cache — so a partial-
+        # rollback build state where one cache is reachable and the
+        # other is not still clears whatever IS reachable. The first
+        # block clears module globals + the ``_field_specs`` /
+        # ``_materialized_names`` ledgers via the public helper.
+        try:
+            from .filters.inputs import clear_filter_input_namespace
+        except ImportError:
+            # Filter subsystem not loaded; nothing to clear here.
+            pass
+        else:
+            clear_filter_input_namespace()
+
+        # Second block clears the ``filter_input_type(...)`` helper-
+        # tracked FilterSets so a clean re-finalize sees an empty
+        # orphan-validation set. Early-return on ImportError because the
+        # first block has already done what it can.
+        try:
+            from .filters import _helper_referenced_filtersets
+        except ImportError:
+            return
+        _helper_referenced_filtersets.clear()
 
 
 registry = TypeRegistry()

@@ -46,5 +46,6 @@ Meta.orderset_class,metaorderset_class,Sibling 0.0.8 Meta key (ordering card); o
 RelatedAggregate,relatedaggregate,Future 0.1.3 aggregate-relation symbol; out of scope.
 RelatedOrder,relatedorder,Sibling 0.0.8 order-relation symbol (ordering card); out of scope here.
 Connection-aware optimizer planning,connection-aware-optimizer-planning,Future 0.0.9 optimizer feature; out of scope.
+filter_input_type,filter_input_type,The consumer helper this card introduces; GLOSSARY entry created in Slice 5.
 </content>
 </invoke>

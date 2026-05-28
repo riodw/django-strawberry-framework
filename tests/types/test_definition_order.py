@@ -906,3 +906,37 @@ def test_finalize_ambiguity_error_fires_before_unresolved_target_error():
     assert "Models with multiple registered DjangoType subclasses and no primary" in msg
     assert "Cannot finalize Django types" not in msg
     assert "no registered DjangoType" not in msg
+
+
+def test_filterset_class_resolves_across_module_boundary():
+    """``Meta.filterset_class`` from two sibling modules resolves under one finalize call.
+
+    Imports both fixture modules under fresh ``sys.modules`` keys so the
+    module bodies (which declare ``DjangoType`` plus ``FilterSet`` and
+    register them against the global registry) run inside this test
+    after the autouse-fixture ``registry.clear()``. Pins spec-021
+    Slice 3's contract that the finalizer's filter-binding pass works
+    across module boundaries without ``ImportError``.
+    """
+    # Drop any previously-imported fixture module objects so the next
+    # import triggers a fresh execution that re-registers under the
+    # cleared registry. ``importlib.reload`` would leak the prior
+    # module's registered classes against the registry.
+    for stem in (
+        "tests.types.fixtures.shelf_module",
+        "tests.types.fixtures.branch_module",
+    ):
+        sys.modules.pop(stem, None)
+
+    from tests.types.fixtures import branch_module, shelf_module
+
+    finalize_django_types()
+
+    assert registry.is_finalized() is True
+    branch_def = branch_module.BranchType.__django_strawberry_definition__
+    shelf_def = shelf_module.ShelfType.__django_strawberry_definition__
+    assert branch_def.filterset_class is branch_module.BranchFilter
+    assert shelf_def.filterset_class is shelf_module.ShelfFilter
+    # Owner binding from finalize phase 2.5 wires the back-reference.
+    assert branch_module.BranchFilter._owner_definition is branch_def
+    assert shelf_module.ShelfFilter._owner_definition is shelf_def

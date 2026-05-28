@@ -644,6 +644,16 @@ def test_run_permission_checks_recurses_into_active_related_branch():
 
 
 def test_run_permission_checks_recurses_into_logical_branches():
+    """Per-call dedup: a gate fires once even when the field appears in many branches.
+
+    The recursion correctly walks ``and`` / ``or`` / ``not`` sub-trees
+    so a nested field is gated the same as a top-level one. The dedup
+    keys on ``check_<field>_permission`` method names for the lifetime
+    of one top-level call; a field appearing in multiple ``or`` arms
+    fires its gate ONCE per call (the gate's logic is idempotent, so
+    multi-firing is functionally harmless but produces duplicate audit
+    log entries — the R4 contract dedupes to avoid that).
+    """
     fired: list[str] = []
 
     class CategoryFilter(FilterSet):
@@ -654,15 +664,15 @@ def test_run_permission_checks_recurses_into_logical_branches():
         def check_name_permission(self, request):
             fired.append("name")
 
-    # test recursion in "and" logical branch
+    # ``and`` with the same field in two arms fires the gate ONCE.
     CategoryFilter._run_permission_checks(
         {"and_": [{"name": "foo"}, {"name": "bar"}]},
         request=HttpRequest(),
     )
-    assert fired == ["name", "name"]
+    assert fired == ["name"]
     fired.clear()
 
-    # test recursion in "or" logical branch
+    # ``or`` with the same field fires ONCE.
     CategoryFilter._run_permission_checks(
         {"or_": [{"name": "foo"}]},
         request=HttpRequest(),
@@ -670,12 +680,41 @@ def test_run_permission_checks_recurses_into_logical_branches():
     assert fired == ["name"]
     fired.clear()
 
-    # test recursion in "not" logical branch
+    # ``not`` with the field fires ONCE.
     CategoryFilter._run_permission_checks(
         {"not_": {"name": "baz"}},
         request=HttpRequest(),
     )
     assert fired == ["name"]
+    fired.clear()
+
+    # A fresh top-level call gets a fresh dedup set; the gate fires
+    # again because it's a new call.
+    CategoryFilter._run_permission_checks({"name": "x"}, request=HttpRequest())
+    assert fired == ["name"]
+
+
+def test_run_permission_checks_caps_logical_branch_nesting():
+    """Pathologically-deep nesting raises ``ConfigurationError`` instead of stack-overflow.
+
+    ``_MAX_LOGIC_DEPTH`` caps the recursion so a malicious or
+    accidental ``{and: [{and: [{and: [...]}]}]}`` shape surfaces a
+    typed error at the source instead of a Python ``RecursionError``.
+    """
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    # Build a 20-deep ``and`` chain — well past the 8-level cap.
+    deep: dict = {"name": "leaf"}
+    for _ in range(20):
+        deep = {"and_": [deep]}
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        CategoryFilter._run_permission_checks(deep, request=HttpRequest())
+    assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
 
 
 @pytest.mark.django_db
@@ -898,6 +937,56 @@ def test_apply_related_constraints_model_mismatch_raises_configuration_error():
     assert "Book" in msg
     assert "Shelf" in msg
     assert "shelves" in msg
+
+
+@pytest.mark.django_db
+def test_apply_related_constraints_proxy_model_is_rejected():
+    """Proxy models are rejected because Django's ``&`` rejects them.
+
+    Django's ``Query.combine`` compares ``self.model != rhs.model``
+    via identity, so a proxy and its concrete parent (which share a
+    database table) are still rejected by ``&``. The precheck
+    surfaces a typed ``ConfigurationError`` BEFORE the consumer hits
+    the raw ``TypeError`` so the failure mode is actionable. The
+    docstring on ``_apply_related_constraints`` explicitly carves
+    proxy / MTI out of the accepted shapes.
+    """
+
+    class ShelfProxy(library_models.Shelf):
+        class Meta:
+            proxy = True
+            app_label = "library"
+
+    library_models.Branch.objects.create(name="alpha")
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        # Explicit queryset is keyed on the proxy; the target filterset
+        # is keyed on the concrete model. Django's combine rejects
+        # this; the precheck surfaces ConfigurationError instead.
+        shelves = RelatedFilter(
+            ShelfFilter,
+            field_name="shelves",
+            queryset=ShelfProxy.objects.all(),
+        )
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    child_shelf_qs = library_models.Shelf.objects.all()
+    with pytest.raises(ConfigurationError) as excinfo:
+        BranchFilter._apply_related_constraints(
+            {"shelves": {"code": "active"}},
+            library_models.Branch.objects.all(),
+            {"shelves": child_shelf_qs},
+        )
+    assert "ShelfProxy" in str(excinfo.value)
+    assert "Shelf" in str(excinfo.value)
 
 
 @pytest.mark.django_db

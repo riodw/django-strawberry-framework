@@ -40,6 +40,15 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
 
 
+# Recursion-depth cap for logical-branch (``and`` / ``or`` / ``not``)
+# composition. A pathologically-deep input (``{and: [{and: [{and:
+# ...}]}]}``) would otherwise eat the Python stack inside
+# ``_run_permission_checks`` / ``_evaluate_logic_tree`` / ``_q_for_branch``.
+# Eight levels covers every realistic consumer-driven graph; beyond that
+# a typed ``ConfigurationError`` surfaces the misuse at the source.
+_MAX_LOGIC_DEPTH: int = 8
+
+
 class FilterSetMetaclass(filterset.FilterSetMetaclass):
     """Discover `RelatedFilter` declarations and bind them to the new class.
 
@@ -675,19 +684,37 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         return registry.primary_for(child_model) or registry.get(child_model)
 
     @classmethod
-    def _run_permission_checks(cls, input_value: Any, request: Any) -> None:
+    def _run_permission_checks(
+        cls,
+        input_value: Any,
+        request: Any,
+        *,
+        _fired: set[str] | None = None,
+        _depth: int = 0,
+    ) -> None:
         """Fire `check_<field>_permission(request)` for fields in the input.
 
         Active-input-only per M2 of rev5 — a declared `check_*` gate that
         is not exercised by this call leaves the queryset untouched.
         Recurses into the child filterset for each active `RelatedFilter`
-        branch so the cookbook's nested-permission contract holds.
+        branch so the cookbook's nested-permission contract holds, and
+        into ``and`` / ``or`` / ``not`` sub-trees so a logically-nested
+        field is gated the same as a top-level one.
 
         Permission methods are called via a bare instance allocated with
         ``object.__new__(cls)``; this matches the cookbook contract
         (per-field gates are written as regular ``def
         check_X_permission(self, request)`` methods on the filterset)
         without requiring a fully-constructed `FilterSet` instance.
+
+        Dedup contract:
+            ``_fired`` collects ``check_*_permission`` method names that
+            have already fired in this top-level call against ``cls``.
+            A field appearing under multiple logical branches (e.g.
+            ``or: [{title: ...}, {title: ...}]``) fires its gate ONCE.
+            Recursion into a child ``RelatedFilter`` filterset starts a
+            fresh dedup set because gates on a different class have a
+            different identity.
 
         Double-dispatch contract (audit-log warning):
             For an active ``RelatedFilter`` branch named ``shelves``
@@ -700,49 +727,85 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
             TWO audit log entries by design. Consumers who want a
             single audit-log entry per branch should choose ONE side
             (parent per-branch OR child class-level) to host the log
-            call.
+            call. The dedup above only fires the SAME method-name once;
+            the parent-vs-child split is intentional.
+
+        Recursion-depth guard:
+            ``_depth`` caps the logical-branch nesting at
+            ``_MAX_LOGIC_DEPTH``; a pathologically-deep input raises
+            ``ConfigurationError`` instead of blowing the stack.
         """
         if input_value is None or input_value is UNSET:
             return
+        if _depth > _MAX_LOGIC_DEPTH:
+            raise ConfigurationError(
+                f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
+                f"_MAX_LOGIC_DEPTH={_MAX_LOGIC_DEPTH}. Flatten the filter input "
+                "or split into multiple queries.",
+            )
+
+        if _fired is None:
+            _fired = set()
 
         bare = object.__new__(cls)
         normalized = cls._normalize_input(input_value)
         for form_key in normalized:
             if form_key in {"and", "or", "not"}:
                 continue
-            cls._invoke_permission_method(bare, form_key, request)
+            cls._invoke_permission_method(bare, form_key, request, fired=_fired)
 
         for field_name, related_filter, child_input in cls._iter_active_related_branches(input_value):
             child_filterset = related_filter.filterset
             if child_filterset is not None and hasattr(child_filterset, "_run_permission_checks"):
+                # Child filterset gets its own fired set — different
+                # class identity means different gate identity.
                 child_filterset._run_permission_checks(child_input, request)
             # Per-branch permission gate on the parent — fires e.g.
             # `check_shelves_permission` when the `shelves` branch is
             # active. Child filterset's own field gates fire via the
-            # recursive call above.
-            cls._invoke_permission_method(bare, field_name, request)
+            # recursive call above. Deduped against ``_fired`` so an
+            # ``or: [{shelves: ...}, {shelves: ...}]`` shape fires the
+            # parent's per-branch gate once.
+            cls._invoke_permission_method(bare, field_name, request, fired=_fired)
 
         # Recurse into logical branches (and, or, not) to check permissions
-        # of any nested field/lookup clauses.
+        # of any nested field/lookup clauses. Same cls, same dedup set.
         and_branches = normalized.get("and") or []
         for child_input in and_branches:
-            cls._run_permission_checks(child_input, request)
+            cls._run_permission_checks(child_input, request, _fired=_fired, _depth=_depth + 1)
 
         or_branches = normalized.get("or") or []
         for child_input in or_branches:
-            cls._run_permission_checks(child_input, request)
+            cls._run_permission_checks(child_input, request, _fired=_fired, _depth=_depth + 1)
 
         not_branch = normalized.get("not")
         if not_branch is not None:
-            cls._run_permission_checks(not_branch, request)
+            cls._run_permission_checks(not_branch, request, _fired=_fired, _depth=_depth + 1)
 
     @staticmethod
-    def _invoke_permission_method(bare_instance: Any, field_path: str, request: Any) -> None:
-        """Call `check_<field_path>_permission(request)` if defined on `bare_instance`."""
+    def _invoke_permission_method(
+        bare_instance: Any,
+        field_path: str,
+        request: Any,
+        *,
+        fired: set[str] | None = None,
+    ) -> None:
+        """Call `check_<field_path>_permission(request)` if defined on `bare_instance`.
+
+        When ``fired`` is supplied, the method-name is recorded after a
+        successful fire and subsequent calls with the same name skip the
+        attribute lookup entirely. The dedup is scoped to the supplied
+        set; pass a fresh set per top-level ``_run_permission_checks``
+        call.
+        """
         method_name = f"check_{field_path.replace('__', '_')}_permission"
+        if fired is not None and method_name in fired:
+            return
         method = getattr(bare_instance, method_name, None)
         if callable(method):
             method(request)
+            if fired is not None:
+                fired.add(method_name)
 
     def check_permissions(self, request: Any, requested_fields: set[str] | None = None) -> None:
         """Backward-compatible thin delegate to `_run_permission_checks`.
@@ -812,7 +875,12 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         carries through to every recursive level by construction.
         """
         qs = super().filter_queryset(queryset)
-        q = type(self)._evaluate_logic_tree(qs, self.data or {}, request=self.request)
+        # ``_logic_depth`` is stashed on instances built by
+        # ``_q_for_branch``; for the top-level instance (constructed by
+        # ``apply_sync`` / ``apply_async``) it is unset and the counter
+        # starts at 0.
+        depth = getattr(self, "_logic_depth", 0)
+        q = type(self)._evaluate_logic_tree(qs, self.data or {}, request=self.request, _depth=depth)
         return qs.filter(q)
 
     @classmethod
@@ -821,31 +889,41 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         queryset: models.QuerySet,
         tree_data: Any,
         request: Any = None,
+        *,
+        _depth: int = 0,
     ) -> models.Q:
         """Build the ``Q`` expression for the ``and`` / ``or`` / ``not`` branches.
 
         Recursion terminates naturally when ``tree_data`` carries no
         logical keys -- an empty ``Q()`` is the identity element for
         ``qs.filter(...)`` and the no-op for an empty sub-branch list.
+        ``_depth`` is the recursion-cap counter shared with
+        ``_q_for_branch``; both helpers cap at ``_MAX_LOGIC_DEPTH``.
         """
         q = models.Q()
         if not isinstance(tree_data, dict) or not tree_data:
             return q
+        if _depth > _MAX_LOGIC_DEPTH:
+            raise ConfigurationError(
+                f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
+                f"_MAX_LOGIC_DEPTH={_MAX_LOGIC_DEPTH}. Flatten the filter input "
+                "or split into multiple queries.",
+            )
 
         and_branches = tree_data.get("and") or []
         for child_input in and_branches:
-            q &= cls._q_for_branch(queryset, child_input, request=request)
+            q &= cls._q_for_branch(queryset, child_input, request=request, _depth=_depth + 1)
 
         or_branches = tree_data.get("or") or []
         if or_branches:
             or_q = models.Q()
             for child_input in or_branches:
-                or_q |= cls._q_for_branch(queryset, child_input, request=request)
+                or_q |= cls._q_for_branch(queryset, child_input, request=request, _depth=_depth + 1)
             q &= or_q
 
         not_branch = tree_data.get("not")
         if not_branch is not None:
-            q &= ~cls._q_for_branch(queryset, not_branch, request=request)
+            q &= ~cls._q_for_branch(queryset, not_branch, request=request, _depth=_depth + 1)
 
         return q
 
@@ -855,6 +933,8 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         queryset: models.QuerySet,
         child_input: Any,
         request: Any = None,
+        *,
+        _depth: int = 0,
     ) -> models.Q:
         """Materialize one nested-branch input into a ``pk__in`` ``Q``.
 
@@ -864,9 +944,18 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         ``.qs`` triggers ``BaseFilterSet``'s leaf-clause path against the
         child's normalized data AND re-enters this override for any
         deeper ``and`` / ``or`` / ``not`` keys the branch carries.
+
+        ``_depth`` is stashed on the sibling instance via
+        ``_logic_depth`` so ``filter_queryset`` can carry the counter
+        across django-filter's ``.qs`` machinery into the next
+        ``_evaluate_logic_tree`` call. Without this hand-off the depth
+        counter would reset at every nesting level (the recursion path
+        crosses through django-filter's ``BaseFilterSet`` which we do
+        not own and cannot pass kwargs through).
         """
         child_data = cls._normalize_input(child_input)
         child_set = cls(data=child_data, queryset=queryset, request=request)
+        child_set._logic_depth = _depth
         cls._validate_form_or_raise(child_set)
         return models.Q(pk__in=child_set.qs.values("pk"))
 
@@ -892,14 +981,24 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
             if child_qs is None and explicit is None:
                 continue
             if child_qs is not None and explicit is not None:
-                # Django raises an opaque ``AssertionError: Cannot combine
-                # queries on two different base models`` if the consumer-
-                # supplied ``RelatedFilter(queryset=...)`` is keyed on a
-                # different model than the target filterset's
+                # Django raises an opaque ``TypeError: Cannot combine
+                # queries on two different base models`` from
+                # ``Query.combine`` if the consumer-supplied
+                # ``RelatedFilter(queryset=...)`` is keyed on a
+                # different model class than the target filterset's
                 # ``_meta.model``. Surface a typed ``ConfigurationError``
                 # naming the filter and both models so a GraphQL consumer
-                # gets an actionable message instead of the raw Django
-                # assertion.
+                # gets an actionable message instead of the raw
+                # ``TypeError``.
+                #
+                # The comparison uses ``is`` identity because Django's
+                # own ``Query.combine`` does the same (``self.model !=
+                # rhs.model``) — proxies and multi-table-inheritance
+                # children carry distinct ``model`` identities even
+                # though they share a database table with their
+                # concrete parent. Consumers who need to mix
+                # proxy / concrete must pass an explicit queryset of
+                # the target filterset's exact ``_meta.model`` class.
                 if explicit.model is not child_qs.model:
                     raise ConfigurationError(
                         f"RelatedFilter {cls.__qualname__}.{field_name}: "
@@ -908,7 +1007,10 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
                         f"filterset is keyed on "
                         f"{child_qs.model.__qualname__}. Pass a queryset "
                         f"of {child_qs.model.__qualname__} instances to "
-                        "``RelatedFilter(queryset=...)``.",
+                        "``RelatedFilter(queryset=...)``; proxy and "
+                        "multi-table-inheritance children are NOT "
+                        "accepted because Django's queryset ``&`` "
+                        "operator rejects mixed model classes.",
                     )
                 intersected = explicit & child_qs
             else:

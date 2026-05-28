@@ -272,6 +272,66 @@ def test_make_cache_key_distinguishes_extra_meta_keys():
     assert key_a != key_b
 
 
+def test_make_cache_key_structurally_equivalent_metas_share_a_slot():
+    """Two metas that differ only in shape detail hash to the same key.
+
+    The cache key is the contract that lets connection fields with
+    equivalent ``Meta`` declarations collapse onto a single generated
+    ``FilterSet`` class. The keying logic walks: ``model`` identity +
+    ``fields`` normalized through ``_make_hashable`` (handles nested
+    dicts / lists / sets) + sorted extras. Pinning the equivalence
+    classes prevents a future "tweak the key shape" change from
+    silently widening or narrowing what counts as the same slot.
+    """
+    # 1. ``fields`` dict with list values: tuple-vs-list lookups
+    #    collapse onto the same key (lists normalize through
+    #    ``_make_hashable`` to tuples).
+    key_dict_a = _make_cache_key({"model": Category, "fields": {"name": ["exact", "icontains"]}})
+    key_dict_b = _make_cache_key({"model": Category, "fields": {"name": ("exact", "icontains")}})
+    assert key_dict_a == key_dict_b
+
+    # 2. ``fields`` dict key order does not matter — sorted output.
+    key_order_a = _make_cache_key({"model": Category, "fields": {"a": ["exact"], "b": ["exact"]}})
+    key_order_b = _make_cache_key({"model": Category, "fields": {"b": ["exact"], "a": ["exact"]}})
+    assert key_order_a == key_order_b
+
+    # 3. ``extras`` insertion order does not matter — sorted output.
+    key_extra_a = _make_cache_key(
+        {"model": Category, "fields": "__all__", "exclude": ("id",), "form": "x"},
+    )
+    key_extra_b = _make_cache_key(
+        {"model": Category, "fields": "__all__", "form": "x", "exclude": ("id",)},
+    )
+    assert key_extra_a == key_extra_b
+
+    # 4. Different ``model`` classes never collide even when fields match.
+    from apps.products.models import Item
+
+    key_cat = _make_cache_key({"model": Category, "fields": "__all__"})
+    key_item = _make_cache_key({"model": Item, "fields": "__all__"})
+    assert key_cat != key_item
+
+    # 5. Sequence-shape ``fields`` collapses list and tuple inputs onto
+    #    the same key (both normalize to a tuple under "seq").
+    key_seq_a = _make_cache_key({"model": Category, "fields": ["name", "is_private"]})
+    key_seq_b = _make_cache_key({"model": Category, "fields": ("name", "is_private")})
+    assert key_seq_a == key_seq_b
+
+
+def test_dynamic_filterset_cache_collapses_equivalent_metas_to_one_class():
+    """Two structurally-equivalent meta dicts return the same generated class.
+
+    End-to-end pin: even when the inputs differ in surface shape
+    (list-vs-tuple lookups, key order in fields / extras), the
+    dynamic-cache slot is shared so the BFS factory's collision check
+    cannot fire against the same logical Meta declaration arriving via
+    two connection-field call sites.
+    """
+    cls_list = get_filterset_class(None, model=Category, fields={"name": ["exact", "icontains"]})
+    cls_tuple = get_filterset_class(None, model=Category, fields={"name": ("exact", "icontains")})
+    assert cls_list is cls_tuple
+
+
 @pytest.mark.django_db
 def test_dynamic_filterset_cache_does_not_replace_csv_filters():
     """Per spec line 247, the cookbook's ``replace_csv_filters`` rewrap is dropped.

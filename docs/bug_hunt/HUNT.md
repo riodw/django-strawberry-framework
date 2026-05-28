@@ -45,23 +45,65 @@ Then run `scripts/bug_hunt.py`. The script:
   `<short-sha>` is the short hash of the same HEAD commit it refreshed
   from.
 
-## How to use the generated checklist
-Open `docs/bug_hunt/bug_hunt.<short-sha>.md` and feed the per-file
-prompts into hunter agents one at a time. For a Warp subagent run,
-point the agent at `docs/bug_hunt/dicta.md`, include exactly the
-current item's `Prompt:` text, and tell it to work from the repo root.
+## Step 3: run the next hunter
+Open `docs/bug_hunt/bug_hunt.<short-sha>.md` and find the first
+unchecked `- [ ]` source-file item. That item is the next unit of work.
+Do not batch several file prompts together unless the maintainer
+explicitly changes the hunt mode; the default hunt is one fresh hunter
+for one file.
 
-Keep checklist ownership with the orchestrator, not the hunter:
-- The hunter may edit the source file named by the prompt.
+Worker 0 owns the generated checklist. The hunter owns only the source
+file named by the current prompt:
+- Worker 0 copies exactly that item's `Prompt:` text into the hunter
+  dispatch.
+- Worker 0 points the hunter at `docs/bug_hunt/dicta.md` and tells it
+  to work from the repo root.
+- Worker 0 tells the hunter not to edit
+  `docs/bug_hunt/bug_hunt.<short-sha>.md`, not to edit
+  `docs/bug_hunt/dicta.md`, and not to commit.
+- The hunter may edit only the source file named by the prompt. For a
+  confirmed High-severity defect, the hunter may also add or update the
+  permanent test that pins the corrected behavior.
+- If the fix needs sibling source changes, public API changes, or spec
+  reconciliation, the hunter reports that as a blocker/question instead
+  of widening the diff unilaterally.
 - Scratch probes should stay outside the repo, or be removed before
   handoff if they must be created inside the working tree.
-- The hunter should not edit `docs/bug_hunt/bug_hunt.<short-sha>.md`.
-- The hunter should not commit.
-- If the hunter edits code, it should run the required ruff commands
-  for the touched source file and report what passed.
+- If the hunter edits code, it runs `uv run ruff format <file>` and
+  `uv run ruff check <file>` for each touched source file and reports
+  both outcomes.
 
-After the hunter reports done, write a concise `Result:` line under the
-matching checklist item and tick that item. "No issues" is a valid
-finding, but it should still be recorded explicitly in the generated
-checklist. Per-file `docs/bug_hunt/hunt-<flat-path>.md` notes are
-optional handoff scratch, not the canonical completion record.
+The hunter's completion report must include:
+- Target source file.
+- Result: `No issues`, `Fixed <severity>`, or `Blocked`.
+- Confirmed defect summary and severity, if any.
+- Files changed.
+- Validation commands and outcomes.
+- Any scratch files created and removed.
+
+## Step 4: record the result, then advance
+After the hunter reports done, Worker 0 reviews the report and the
+working-tree diff for scope. Then Worker 0 updates only the matching
+checklist item in `docs/bug_hunt/bug_hunt.<short-sha>.md`:
+- If the hunter completed the file, change the checkbox to `- [x]`.
+- Add a concise nested `Result:` line under the item. `No issues` is a
+  valid result and must still be recorded explicitly.
+- For a fix, include severity, changed files, and validation in the
+  `Result:` line.
+- For a blocker, leave the checkbox unchecked, add a nested `Blocked:`
+  line, and stop or ask the maintainer before retrying that item.
+
+Example result lines:
+- `Result: No issues.`
+- `Result: Fixed Medium in django_strawberry_framework/filters/sets.py;
+  validation: uv run ruff format ... pass, uv run ruff check ... pass.`
+- `Blocked: Fix requires sibling changes outside the prompted file.`
+
+Then repeat Step 3 for the next unchecked source-file item. The
+generated checklist is the canonical completion record for the hunt.
+Per-file `docs/bug_hunt/hunt-<flat-path>.md` notes are optional
+handoff scratch only; they do not replace the `Result:` line.
+
+When no unchecked items remain, Worker 0 gives the maintainer a short
+closeout summary of fixes, blockers, and files left dirty. Worker 0 does
+not commit.

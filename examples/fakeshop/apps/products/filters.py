@@ -47,7 +47,7 @@ class ItemFilter(filters.AdvancedFilterSet):
     # TODO(TODO-ALPHA-027-0.0.10 permissions; see KANBAN.md):
     #   Per-field ``check_<field>_permission`` hooks are owned by the
     #   permissions slice (``TODO-ALPHA-027-0.0.10``) and compose with the
-    #   filter subsystem (``WIP-ALPHA-021-0.0.8``). The commented method
+    #   filter subsystem (``DONE-021-0.0.8``). The commented method
     #   below is the target shape: scope ``queryset`` based on the request
     #   user so non-staff callers cannot filter by ``Item.entries``.
     #   Uncomment in the same change that lands the hook contract and

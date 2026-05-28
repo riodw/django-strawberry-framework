@@ -9,7 +9,7 @@ across nested selections without per-resolver boilerplate.
 The eventual `1.0.0` shape — Relay-node types with the cookbook-shaped
 filter / order / aggregate / fields / search / permissions surface, a
 1-to-1 port of the `django-graphene-filters` cookbook recipe — is
-tracked in `KANBAN.md` under the Layer-3 cards (`WIP-ALPHA-021-0.0.8`
+tracked in `KANBAN.md` under the Layer-3 cards (`DONE-021-0.0.8`
 filters, `WIP-ALPHA-022-0.0.8` orders, `TODO-ALPHA-024-0.0.9` `DjangoConnectionField`,
 `TODO-ALPHA-027-0.0.10` permissions, `TODO-BETA-038-0.1.1` fieldsets,
 `TODO-BETA-039-0.1.2` search, `TODO-BETA-040-0.1.3` aggregates). Each `*Type`
@@ -26,7 +26,7 @@ files are not yet present.
 # from strawberry import relay                                       # works today (DONE-011)
 # from django_strawberry_framework import DjangoConnectionField      # TODO-ALPHA-024-0.0.9
 # from django_strawberry_framework import apply_cascade_permissions  # TODO-ALPHA-027-0.0.10
-# from apps.products import aggregates, filters, orders              # WIP-ALPHA-021-0.0.8 (filters) + WIP-ALPHA-022-0.0.8 (orders) + TODO-BETA-040-0.1.3 (aggregates)
+# from apps.products import aggregates, filters, orders              # DONE-021-0.0.8 (filters) + WIP-ALPHA-022-0.0.8 (orders) + TODO-BETA-040-0.1.3 (aggregates)
 # from apps.products import fields as fieldsets                      # TODO-BETA-038-0.1.1
 
 import strawberry
@@ -52,7 +52,7 @@ class CategoryType(DjangoType):
         # Future Layer-3 additions — uncomment each as the relevant card ships:
         # interfaces = (relay.Node,)                        # works today (DONE-011)
         # search_fields = ("name", "description")           # needs TODO-BETA-039-0.1.2
-        # filterset_class = filters.CategoryFilter          # needs WIP-ALPHA-021-0.0.8 + filters.py
+        # filterset_class = filters.CategoryFilter          # needs DONE-021-0.0.8 + filters.py
         # orderset_class = orders.CategoryOrder             # needs WIP-ALPHA-022-0.0.8 + orders.py
         # aggregate_class = aggregates.CategoryAggregate    # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.CategoryFieldSet         # needs TODO-BETA-038-0.1.1 + fields.py
@@ -86,7 +86,7 @@ class ItemType(DjangoType):
         # Future Layer-3 additions — uncomment each as the relevant card ships:
         # interfaces = (relay.Node,)                                                  # works today (DONE-011)
         # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-039-0.1.2
-        # filterset_class = filters.ItemFilter           # needs WIP-ALPHA-021-0.0.8 + filters.py
+        # filterset_class = filters.ItemFilter           # needs DONE-021-0.0.8 + filters.py
         # orderset_class = orders.ItemOrder              # needs WIP-ALPHA-022-0.0.8 + orders.py
         # aggregate_class = aggregates.ItemAggregate     # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.ItemFieldSet          # needs TODO-BETA-038-0.1.1 + fields.py
@@ -120,7 +120,7 @@ class PropertyType(DjangoType):
         # Future Layer-3 additions — uncomment each as the relevant card ships:
         # interfaces = (relay.Node,)                                                  # works today (DONE-011)
         # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-039-0.1.2
-        # filterset_class = filters.PropertyFilter        # needs WIP-ALPHA-021-0.0.8 + filters.py
+        # filterset_class = filters.PropertyFilter        # needs DONE-021-0.0.8 + filters.py
         # orderset_class = orders.PropertyOrder           # needs WIP-ALPHA-022-0.0.8 + orders.py
         # aggregate_class = aggregates.PropertyAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.PropertyFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py
@@ -154,7 +154,7 @@ class EntryType(DjangoType):
         # Future Layer-3 additions — uncomment each as the relevant card ships:
         # interfaces = (relay.Node,)                                # works today (DONE-011)
         # search_fields = ("value", "property__name", "item__name") # needs TODO-BETA-039-0.1.2
-        # filterset_class = filters.EntryFilter        # needs WIP-ALPHA-021-0.0.8 + filters.py
+        # filterset_class = filters.EntryFilter        # needs DONE-021-0.0.8 + filters.py
         # orderset_class = orders.EntryOrder           # needs WIP-ALPHA-022-0.0.8 + orders.py
         # aggregate_class = aggregates.EntryAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.EntryFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py

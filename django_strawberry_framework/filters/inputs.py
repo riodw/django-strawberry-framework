@@ -180,14 +180,16 @@ def _pascal_case(name: str) -> str:
 def _input_type_name_for(filterset_class: type[FilterSet]) -> str:
     """Return the canonical Strawberry input-class name for ``filterset_class``.
 
-    Single source of truth for the spec-021 Decision 9 (lines 1023-1030)
-    class-derived naming convention: every ``FilterSet`` subclass ``Foo``
-    produces a Strawberry input class named ``FooInputType``. Consumed by
-    ``filter_input_type`` (``__init__.py``), ``FilterArgumentsFactory``
-    (``factories.py``), and ``_build_input_fields`` (this module) so the
-    five derivation sites stay pinned to one helper.
+    Thin delegate to ``FilterSet.type_name_for()`` (the shared
+    ``ClassBasedTypeNameMixin``): every ``FilterSet`` subclass ``Foo``
+    produces a Strawberry input class named ``FooInputType``. Kept as a
+    helper so its callers -- ``filter_input_type`` (``__init__.py``),
+    ``FilterArgumentsFactory`` (``factories.py``), and ``_build_input_fields``
+    (this module) -- stay pinned to one derivation site even though the
+    spec-021 Decision 9 (lines 1023-1030) naming rule now lives on the mixin
+    (shared with the future order / aggregate sets).
     """
-    return f"{filterset_class.__name__}InputType"
+    return filterset_class.type_name_for()
 
 
 def _scalar_from_form_field(form_field: Any) -> type:
@@ -665,7 +667,7 @@ def _build_input_fields(
 
         # Leaf path: build a per-field operator-bag input class.
         sample_filter = next(iter(lookup_bag.values()))
-        bag_name = f"{filterset_cls.__name__}{_pascal_case(python_attr)}FilterInputType"
+        bag_name = filterset_cls.type_name_for(python_attr)
         bag_specs: list[tuple[str, Any, dict[str, Any]]] = []
         for lookup, leaf_filter in lookup_bag.items():
             lookup_python_attr, lookup_graphql_name = LOOKUP_NAME_MAP.get(lookup, (lookup, lookup))

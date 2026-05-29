@@ -28,6 +28,7 @@ from strawberry import UNSET
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
+from ..sets_mixins import ClassBasedTypeNameMixin
 from ..types.relay import (
     SyncMisuseError,
     _apply_get_queryset_async,
@@ -39,6 +40,16 @@ from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
+
+
+# Process-lifetime memo for ``_lookups_for_field``, keyed by field CLASS.
+# A field class's concrete-lookup set is fixed by its registered class lookups
+# (Django computes ``Field.get_lookups()`` from the class MRO), so it is stable
+# across every instance of that class AND across ``registry.clear()`` (which
+# recreates DjangoTypes / FilterSets, never Django's field classes). It
+# therefore needs no clear hook -- the keys are Django field classes, not
+# package types.
+_lookups_for_field_class_cache: dict[type, list[str]] = {}
 
 
 def _lookups_for_field(model_field: models.Field | None) -> list[str]:
@@ -63,14 +74,23 @@ def _lookups_for_field(model_field: models.Field | None) -> list[str]:
     ``gt`` / ``lt`` / ``in`` / ``range`` / ``isnull`` / ``regex`` / ...); a
     consumer who wants a transform (e.g. ``created__year``) declares it as an
     explicit lookup expression instead.
+
+    Memoized by ``type(model_field)`` (see ``_lookups_for_field_class_cache``):
+    the lookup set is class-determined, so same-typed fields share one crawl.
+    A COPY is returned so a caller mutating the list cannot corrupt the cache.
     """
     if model_field is None:
         return []
-    return [
-        lookup_expr
-        for lookup_expr, lookup in model_field.get_lookups().items()
-        if not issubclass(lookup, models.Transform)
-    ]
+    field_class = type(model_field)
+    cached = _lookups_for_field_class_cache.get(field_class)
+    if cached is None:
+        cached = [
+            lookup_expr
+            for lookup_expr, lookup in model_field.get_lookups().items()
+            if not issubclass(lookup, models.Transform)
+        ]
+        _lookups_for_field_class_cache[field_class] = cached
+    return list(cached)
 
 
 class FilterSetMetaclass(filterset.FilterSetMetaclass):
@@ -138,7 +158,7 @@ def _expand_related_filter(
     return expanded
 
 
-class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
+class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
     """Consumer-facing `FilterSet` foundation.
 
     Subclasses `django_filters.filterset.BaseFilterSet` directly per
@@ -182,6 +202,13 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
     # attribute is discoverable to static analysis / `__slots__` / typing
     # and the default is explicit on every instance.
     _logic_depth: int = 0
+
+    # ``ClassBasedTypeNameMixin`` naming suffixes. The root input type keeps
+    # the mixin's default ``"InputType"`` (``FooFilter`` -> ``FooFilterInputType``);
+    # the per-field operator bag overrides to ``"FilterInputType"``
+    # (``FooFilter`` + ``Bar`` -> ``FooFilterBarFilterInputType``), matching the
+    # names ``inputs.py`` produced inline before the naming rule was shared.
+    _field_type_suffix: str = "FilterInputType"
 
     # ------------------------------------------------------------------
     # Layer 4 — cycle-safe filter expansion (cookbook port).

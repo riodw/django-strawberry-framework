@@ -40,12 +40,14 @@ class LoanType(DjangoType):
 
     class Meta:
         model = models.Loan
-        fields = ("id", "note", "book", "patron")
+        fields = (
+            "id",
+            "note",
+            "book",
+            "patron",
+        )
         filterset_class = filters.LoanFilter
-        optimizer_hints = {
-            "book": OptimizerHint.prefetch_related(),
-            "patron": OptimizerHint.SKIP,
-        }
+        optimizer_hints = {"book": OptimizerHint.prefetch_related(), "patron": OptimizerHint.SKIP}
 
 
 class BookType(DjangoType):
@@ -53,7 +55,15 @@ class BookType(DjangoType):
 
     class Meta:
         model = models.Book
-        fields = ("id", "title", "subtitle", "circulation_status", "shelf", "genres", "loans")
+        fields = (
+            "id",
+            "title",
+            "subtitle",
+            "circulation_status",
+            "shelf",
+            "genres",
+            "loans",
+        )
         filterset_class = filters.BookFilter
 
 
@@ -78,7 +88,13 @@ class ShelfType(DjangoType):
 
     class Meta:
         model = models.Shelf
-        fields = ("id", "code", "topic", "branch", "books")
+        fields = (
+            "id",
+            "code",
+            "topic",
+            "branch",
+            "books",
+        )
         filterset_class = filters.ShelfFilter
 
 
@@ -125,7 +141,12 @@ class BranchType(DjangoType):
 
     class Meta:
         model = models.Branch
-        fields = ("id", "name", "city", "shelves")
+        fields = (
+            "id",
+            "name",
+            "city",
+            "shelves",
+        )
         filterset_class = filters.BranchFilter
 
 
@@ -134,7 +155,13 @@ class PatronType(DjangoType):
 
     class Meta:
         model = models.Patron
-        fields = ("id", "name", "lifetime_fines_cents", "card", "loans")
+        fields = (
+            "id",
+            "name",
+            "lifetime_fines_cents",
+            "card",
+            "loans",
+        )
         filterset_class = filters.PatronFilter
 
 

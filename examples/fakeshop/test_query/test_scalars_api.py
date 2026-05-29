@@ -578,10 +578,7 @@ def test_scalar_specimen_bigint_input_int_literal_argument_over_http():
     # small values that JSON could represent as a bare number. That's
     # the BigInt scalar's contract: consumers must always parse the
     # response as a string. Anything else would be a wire-format leak.
-    assert body["data"]["scalarSpecimenBySignedBig"] == {
-        "label": "target",
-        "signedBig": "42",
-    }
+    assert body["data"]["scalarSpecimenBySignedBig"] == {"label": "target", "signedBig": "42"}
 
 
 @pytest.mark.django_db

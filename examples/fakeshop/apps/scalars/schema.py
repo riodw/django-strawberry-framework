@@ -49,7 +49,12 @@ class ScalarSpecimenTagType(DjangoType):
 
     class Meta:
         model = models.ScalarSpecimenTag
-        fields = ("id", "label", "active", "tagged_specimens")
+        fields = (
+            "id",
+            "label",
+            "active",
+            "tagged_specimens",
+        )
         filterset_class = filters.ScalarSpecimenTagFilter
 
 

@@ -183,7 +183,9 @@ class TypeRegistry:
         if self._primaries.get(model) is type_cls:
             self._primaries.pop(model, None)
         self._definitions.pop(type_cls, None)
-        self._pending = [pending for pending in self._pending if pending.source_type is not type_cls]
+        self._pending = [
+            pending for pending in self._pending if pending.source_type is not type_cls
+        ]
 
     def get(self, model: type[models.Model]) -> type | None:
         """Return the relation-resolution target for ``model``, or ``None``.
@@ -269,7 +271,9 @@ class TypeRegistry:
         self._check_mutable()
         existing = self._definitions.get(type_cls)
         if existing is not None and existing is not definition:
-            raise ConfigurationError(f"{type_cls.__name__} already has a registered DjangoTypeDefinition")
+            raise ConfigurationError(
+                f"{type_cls.__name__} already has a registered DjangoTypeDefinition",
+            )
         self._definitions[type_cls] = definition
 
     def register_with_definition(
@@ -384,11 +388,7 @@ class TypeRegistry:
             )
         self._enums[key] = enum_cls
 
-    def get_enum(
-        self,
-        model: type[models.Model],
-        field_name: str,
-    ) -> type[Enum] | None:
+    def get_enum(self, model: type[models.Model], field_name: str) -> type[Enum] | None:
         """Return the cached enum for ``(model, field_name)``, or ``None``."""
         return self._enums.get((model, field_name))
 

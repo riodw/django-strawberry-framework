@@ -117,7 +117,12 @@ def test_phase_2_5_binds_all_owners_before_expansion():
         class BookType(DjangoType):
             class Meta:
                 model = Book
-                fields = ("id", "title", "shelf", "genres")
+                fields = (
+                    "id",
+                    "title",
+                    "shelf",
+                    "genres",
+                )
                 filterset_class = BookFilter
 
         class GenreType(DjangoType):
@@ -276,14 +281,24 @@ def test_phase_2_5_accepts_multi_owner_with_identical_target():
     class PrimaryBookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             primary = True
             filterset_class = BookFilter
 
     class SecondaryBookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             filterset_class = BookFilter
 
     # Two distinct definitions both bind the same BookFilter; the
@@ -326,7 +341,12 @@ def test_phase_2_5_accepts_idempotent_rebind_of_same_filterset_owner_pair():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             filterset_class = BookFilter
 
     finalize_django_types()
@@ -367,7 +387,12 @@ def test_orphan_filter_input_type_reference_raises_at_finalize():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
@@ -416,7 +441,12 @@ def test_phase_2_5_orphan_check_runs_before_materialization():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             filterset_class = WiredFilter
 
     with pytest.raises(ConfigurationError):
@@ -470,13 +500,20 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
 
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
     msg = str(exc_info.value)
     # Multi-orphan lead-in (mirrors ``_format_unresolved_targets_error``'s shape).
-    assert "FilterSets referenced via filter_input_type(...) but not wired to any DjangoType:" in msg
+    assert (
+        "FilterSets referenced via filter_input_type(...) but not wired to any DjangoType:" in msg
+    )
     # Both offenders surface.
     assert "StandaloneFilterA" in msg
     assert "StandaloneFilterB" in msg
@@ -519,7 +556,12 @@ def test_phase_2_5_subpass_3_materializes_input_classes_as_module_globals():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             filterset_class = BookFilter
 
     finalize_django_types()
@@ -656,7 +698,9 @@ def test_registry_clear_works_without_filters_imported():
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 0, f"subprocess failed: stdout={result.stdout!r}, stderr={result.stderr!r}"
+    assert result.returncode == 0, (
+        f"subprocess failed: stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -696,7 +740,12 @@ def test_phase_2_5_unresolved_related_filter_raises_at_finalize():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             filterset_class = BookFilter
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -746,7 +795,12 @@ def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             filterset_class = BookFilter
 
     with pytest.raises(ConfigurationError) as exc_info:
@@ -784,7 +838,12 @@ def test_phase_2_5_runs_under_relay_node_interface():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             interfaces = (relay.Node,)
             filterset_class = BookFilter
 
@@ -993,7 +1052,12 @@ def test_phase_2_5_configuration_error_from_get_filters_propagates_unwrapped():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             filterset_class = BookFilter
 
     with pytest.raises(ConfigurationError) as excinfo:

@@ -595,7 +595,10 @@ async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_
 
     @strawberry.type
     class Query:
-        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_AsyncResolver())
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=_AsyncResolver(),
+        )
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)

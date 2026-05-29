@@ -27,10 +27,7 @@ class GenreFilter(FilterSet):
 
     class Meta:
         model = models.Genre
-        fields = {
-            "id": ["exact", "in"],
-            "name": ["exact", "icontains"],
-        }
+        fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
 
 
 __all__ = ("GenreFilter",)

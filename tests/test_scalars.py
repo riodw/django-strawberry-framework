@@ -162,7 +162,12 @@ def test_bigint_rejects_whitespace_padded_string():
 
 
 def test_bigint_rejects_non_decimal_string():
-    for bad in ("abc", "1.9", "1e3", "0x10"):
+    for bad in (
+        "abc",
+        "1.9",
+        "1e3",
+        "0x10",
+    ):
         with pytest.raises(ValueError):
             _parse_bigint(bad)
 

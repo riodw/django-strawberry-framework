@@ -43,7 +43,12 @@ from django_strawberry_framework.utils.strings import snake_case
 # ---------------------------------------------------------------------------
 
 
-def _sel(name, selections=None, directives=None, alias=None):
+def _sel(
+    name,
+    selections=None,
+    directives=None,
+    alias=None,
+):
     """Build a synthetic ``SelectedField``."""
     return SimpleNamespace(
         name=name,
@@ -70,7 +75,12 @@ def _inline_fragment(type_condition, selections=None, directives=None):
     )
 
 
-def _fragment_spread(name, type_condition, selections=None, directives=None):
+def _fragment_spread(
+    name,
+    type_condition,
+    selections=None,
+    directives=None,
+):
     """Build a synthetic ``FragmentSpread``."""
     return SimpleNamespace(
         name=name,
@@ -80,7 +90,14 @@ def _fragment_spread(name, type_condition, selections=None, directives=None):
     )
 
 
-def _register_type_definition(model, type_cls, *, optimizer_hints=None, field_map=None, primary=False):
+def _register_type_definition(
+    model,
+    type_cls,
+    *,
+    optimizer_hints=None,
+    field_map=None,
+    primary=False,
+):
     """Register a minimal definition for walker-only synthetic type classes."""
     selected_fields = tuple(model._meta.get_fields())
     registry.register(model, type_cls, primary=primary)
@@ -96,7 +113,10 @@ def _register_type_definition(model, type_cls, *, optimizer_hints=None, field_ma
             selected_fields=selected_fields,
             field_map=field_map
             if field_map is not None
-            else {snake_case(field.name): FieldMeta.from_django_field(field) for field in selected_fields},
+            else {
+                snake_case(field.name): FieldMeta.from_django_field(field)
+                for field in selected_fields
+            },
             optimizer_hints=optimizer_hints or {},
             has_custom_get_queryset=type_cls.has_custom_get_queryset(),
         ),
@@ -1071,7 +1091,11 @@ def test_plan_prefetch_obj_hint_on_forward_fk_adds_connector_column():
         def has_custom_get_queryset(cls):
             return False
 
-    _register_type_definition(Item, ItemType, optimizer_hints={"category": OptimizerHint.prefetch(explicit)})
+    _register_type_definition(
+        Item,
+        ItemType,
+        optimizer_hints={"category": OptimizerHint.prefetch(explicit)},
+    )
     try:
         plan = plan_optimizations([_sel("category", selections=[_sel("name")])], Item)
     finally:
@@ -1125,7 +1149,11 @@ def test_plan_force_select_hint_uses_select_recursion():
         def has_custom_get_queryset(cls):
             return False
 
-    _register_type_definition(Item, ItemType, optimizer_hints={"category": OptimizerHint.select_related()})
+    _register_type_definition(
+        Item,
+        ItemType,
+        optimizer_hints={"category": OptimizerHint.select_related()},
+    )
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("name"), _sel("items", selections=[_sel("name")])])],
@@ -1165,7 +1193,11 @@ def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
             return False
 
     registry.register(Category, CategoryType)
-    _register_type_definition(Item, ItemType, optimizer_hints={"category": OptimizerHint.select_related()})
+    _register_type_definition(
+        Item,
+        ItemType,
+        optimizer_hints={"category": OptimizerHint.select_related()},
+    )
     try:
         plan = plan_optimizations(
             [_sel("category", selections=[_sel("name")])],
@@ -1415,10 +1447,7 @@ def test_plan_prefetch_obj_hint_dedupes_repeat_lookups():
         # collapses them, but the dedupe guard is the load-bearing invariant
         # here — assert there is exactly one prefetch entry on the plan.
         plan = plan_optimizations(
-            [
-                _sel("items", selections=[_sel("name")]),
-                _sel("items", selections=[_sel("name")]),
-            ],
+            [_sel("items", selections=[_sel("name")]), _sel("items", selections=[_sel("name")])],
             Category,
         )
     finally:

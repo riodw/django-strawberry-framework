@@ -275,10 +275,7 @@ def test_check_n1_ignores_bare_field_name_key():
         pass
 
     fake_info = SimpleNamespace(
-        context={
-            "dst_optimizer_planned": {"category"},
-            "dst_optimizer_strictness": "raise",
-        },
+        context={"dst_optimizer_planned": {"category"}, "dst_optimizer_strictness": "raise"},
         field_name="category",
         path=_path("allItems", 0, "category"),
     )
@@ -297,10 +294,7 @@ def test_check_n1_returns_when_relation_is_already_loaded():
         pass
 
     fake_info = SimpleNamespace(
-        context={
-            "dst_optimizer_planned": set(),
-            "dst_optimizer_strictness": "raise",
-        },
+        context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
         path=_path("allItems", 0, "category"),
     )
 
@@ -317,10 +311,7 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog):
         pass
 
     fake_info = SimpleNamespace(
-        context={
-            "dst_optimizer_planned": set(),
-            "dst_optimizer_strictness": "warn",
-        },
+        context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "warn"},
         path=_path("allItems", 0, "category"),
     )
 
@@ -356,10 +347,7 @@ def test_check_n1_planned_hit_is_silent():
 
     key = resolver_key(ItemType, "category", ("allItems", "category"))
     fake_info = SimpleNamespace(
-        context={
-            "dst_optimizer_planned": {key},
-            "dst_optimizer_strictness": "raise",
-        },
+        context={"dst_optimizer_planned": {key}, "dst_optimizer_strictness": "raise"},
         path=_path("allItems", 0, "category"),
     )
     _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind="forward")
@@ -392,10 +380,7 @@ def test_check_n1_raise_strictness_raises_on_lazy_load():
         pass
 
     fake_info = SimpleNamespace(
-        context={
-            "dst_optimizer_planned": set(),
-            "dst_optimizer_strictness": "raise",
-        },
+        context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
         path=_path("allItems", 0, "category"),
     )
     with pytest.raises(OptimizerError, match="Unplanned N\\+1: category"):
@@ -419,10 +404,7 @@ def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(kind):
         pass
 
     fake_info = SimpleNamespace(
-        context={
-            "dst_optimizer_planned": set(),
-            "dst_optimizer_strictness": "raise",
-        },
+        context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
         path=_path("allCategories", 0, "items"),
     )
     # ``items`` is set directly on the root — that would short-circuit the
@@ -443,10 +425,7 @@ def test_check_n1_many_kind_respects_prefetched_objects_cache():
         pass
 
     fake_info = SimpleNamespace(
-        context={
-            "dst_optimizer_planned": set(),
-            "dst_optimizer_strictness": "raise",
-        },
+        context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
         path=_path("allCategories", 0, "items"),
     )
     root = SimpleNamespace(_prefetched_objects_cache={"items": []})

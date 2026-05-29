@@ -34,11 +34,7 @@ from . import models
 class ScalarSpecimenTagFilter(FilterSet):
     class Meta:
         model = models.ScalarSpecimenTag
-        fields = {
-            "id": "__all__",
-            "label": "__all__",
-            "active": "__all__",
-        }
+        fields = {"id": "__all__", "label": "__all__", "active": "__all__"}
 
 
 class ScalarSpecimenFilter(FilterSet):

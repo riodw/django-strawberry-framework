@@ -12,10 +12,7 @@ RelationKind: TypeAlias = Literal[
 ]
 
 MANY_SIDE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
-    {
-        "many",
-        "reverse_many_to_one",
-    },
+    {"many", "reverse_many_to_one"},
 )
 
 

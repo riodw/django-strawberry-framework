@@ -106,10 +106,7 @@ class LoanFilter(FilterSet):
 
     class Meta:
         model = models.Loan
-        fields = {
-            "id": ["exact", "in"],
-            "note": ["exact", "icontains"],
-        }
+        fields = {"id": ["exact", "in"], "note": ["exact", "icontains"]}
 
 
 class PatronFilter(FilterSet):
@@ -133,10 +130,7 @@ class PatronFilter(FilterSet):
 
     class Meta:
         model = models.Patron
-        fields = {
-            "id": ["exact", "in"],
-            "name": ["exact", "icontains"],
-        }
+        fields = {"id": ["exact", "in"], "name": ["exact", "icontains"]}
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)

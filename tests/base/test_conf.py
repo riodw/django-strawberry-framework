@@ -56,7 +56,11 @@ def test_settings_user_settings_falsy_falls_back_to_empty_dict(settings):
 
 def test_settings_user_settings_rejects_non_mapping_django_setting(monkeypatch):
     django_settings = type("DjangoSettings", (), {})()
-    setattr(django_settings, conf.DJANGO_SETTINGS_KEY, ["not", "a", "mapping"])
+    setattr(
+        django_settings,
+        conf.DJANGO_SETTINGS_KEY,
+        ["not", "a", "mapping"],
+    )
     monkeypatch.setattr(conf, "django_settings", django_settings)
 
     s = Settings()

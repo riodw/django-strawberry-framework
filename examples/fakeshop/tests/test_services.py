@@ -190,7 +190,12 @@ def test_delete_data_int_mode_deletes_first_n_items():
 def test_delete_data_int_mode_no_data_returns_zeros():
     """When no items exist, the int-mode branch short-circuits before any deletes."""
     result = services.delete_data(5)
-    assert result == {"categories": 0, "properties": 0, "items": 0, "entries": 0}
+    assert result == {
+        "categories": 0,
+        "properties": 0,
+        "items": 0,
+        "entries": 0,
+    }
 
 
 @pytest.mark.django_db

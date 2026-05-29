@@ -31,7 +31,13 @@ class CategoryAggregate(aggregates.AdvancedAggregateSet):
     class Meta:
         model = models.Category
         fields = {
-            "name": ["count", "min", "max", "mode", "uniques"],
+            "name": [
+                "count",
+                "min",
+                "max",
+                "mode",
+                "uniques",
+            ],
             "description": ["count", "min", "max"],
         }
 
@@ -44,7 +50,15 @@ class PropertyAggregate(aggregates.AdvancedAggregateSet):
 
     class Meta:
         model = models.Property
-        fields = {"name": ["count", "min", "max", "mode", "uniques"]}
+        fields = {
+            "name": [
+                "count",
+                "min",
+                "max",
+                "mode",
+                "uniques",
+            ],
+        }
 
     get_child_queryset = _private_aware_child_qs
 
@@ -56,7 +70,13 @@ class ItemAggregate(aggregates.AdvancedAggregateSet):
     class Meta:
         model = models.Item
         fields = {
-            "name": ["count", "min", "max", "mode", "uniques"],
+            "name": [
+                "count",
+                "min",
+                "max",
+                "mode",
+                "uniques",
+            ],
             "description": ["count", "min", "max"],
         }
 
@@ -78,7 +98,14 @@ class EntryAggregate(aggregates.AdvancedAggregateSet):
     class Meta:
         model = models.Entry
         fields = {
-            "value": ["count", "min", "max", "mode", "uniques", "centroid"],
+            "value": [
+                "count",
+                "min",
+                "max",
+                "mode",
+                "uniques",
+                "centroid",
+            ],
         }
         custom_stats = {
             "centroid": str,

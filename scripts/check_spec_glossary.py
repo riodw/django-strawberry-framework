@@ -245,7 +245,9 @@ def _insert_glossary_ref_def(text: str, ref_id: str, target: str) -> str | None:
         end_idx += 1
     existing = lines[header_idx + 1 : end_idx]
     new_defs = sorted([*existing, f"[{ref_id}]: {target}"])
-    return "\n".join([*lines[: header_idx + 1], *new_defs, *lines[end_idx:]])
+    return "\n".join(
+        [*lines[: header_idx + 1], *new_defs, *lines[end_idx:]],
+    )
 
 
 def auto_link_terms(

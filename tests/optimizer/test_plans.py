@@ -89,7 +89,8 @@ def test_resolver_key_includes_parent_type_and_runtime_path():
         pass
 
     assert (
-        resolver_key(ItemType, "category", ("allItems", "category")) == "ItemType.category@allItems.category"
+        resolver_key(ItemType, "category", ("allItems", "category"))
+        == "ItemType.category@allItems.category"
     )
 
 
@@ -190,7 +191,10 @@ class TestPlanHelperRelocations:
         from django_strawberry_framework.optimizer.plans import append_unique_many
 
         values: list[str] = []
-        append_unique_many(values, ("a", "b", "a"))
+        append_unique_many(
+            values,
+            ("a", "b", "a"),
+        )
         assert values == ["a", "b"]
 
     def test_append_prefetch_unique_dedupes_by_lookup_path(self):
@@ -255,7 +259,11 @@ class TestConsumerOnlyFields:
         or any other unpacking-incompatible value falls through to ``None``
         instead of crashing the optimizer.
         """
-        bad_three_tuple = SimpleNamespace(query=SimpleNamespace(deferred_loading=(set(), False, "extra")))
+        bad_three_tuple = SimpleNamespace(
+            query=SimpleNamespace(
+                deferred_loading=(set(), False, "extra"),
+            ),
+        )
         bad_scalar = SimpleNamespace(query=SimpleNamespace(deferred_loading=42))
         assert _consumer_only_fields(bad_three_tuple) is None
         assert _consumer_only_fields(bad_scalar) is None

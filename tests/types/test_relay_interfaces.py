@@ -120,10 +120,7 @@ def test_meta_interfaces_rejects_non_interface_classes():
 
 @pytest.mark.parametrize(
     "entry",
-    [
-        object(),
-        42,
-    ],
+    [object(), 42],
 )
 def test_meta_interfaces_rejects_non_class_entries(entry):
     """Non-class non-string entries (instances, ints) raise the must-contain-interface-classes error."""
@@ -461,7 +458,12 @@ def test_relay_node_injects_default_resolvers():
 
     finalize_django_types()
     assert relay.Node in CategoryNode.__mro__
-    for attr in ("resolve_id", "resolve_id_attr", "resolve_node", "resolve_nodes"):
+    for attr in (
+        "resolve_id",
+        "resolve_id_attr",
+        "resolve_node",
+        "resolve_nodes",
+    ):
         assert attr in CategoryNode.__dict__, f"{attr} was not injected"
         descriptor = CategoryNode.__dict__[attr]
         assert isinstance(descriptor, classmethod)
@@ -630,7 +632,8 @@ def test_resolve_nodes_accepts_generator_node_ids():
     rows = list(Category.objects.order_by("id")[:2])
     a, b = rows[0], rows[1]
     node_ids = (
-        relay.GlobalID(type_name="CategoryNode", node_id=str(node_id)) for node_id in (a.id, 999999, b.id)
+        relay.GlobalID(type_name="CategoryNode", node_id=str(node_id))
+        for node_id in (a.id, 999999, b.id)
     )
 
     results = CategoryNode.resolve_nodes(
@@ -823,7 +826,9 @@ async def test_resolve_nodes_async_awaits_async_get_queryset():
     contract still emits ``None`` at the indexes the hook filtered out.
     """
     CategoryNode = await sync_to_async(_build_seeded_category_node_with_async_get_queryset)()
-    public_rows = [row async for row in Category.objects.filter(is_private=False).order_by("id")[:2]]
+    public_rows = [
+        row async for row in Category.objects.filter(is_private=False).order_by("id")[:2]
+    ]
     private_row = await Category.objects.filter(is_private=True).afirst()
     assert len(public_rows) == 2 and private_row is not None
     a, b = public_rows
@@ -946,7 +951,12 @@ async def test_consumer_async_resolve_node_wins():
             interfaces = (relay.Node,)
 
         @classmethod
-        async def resolve_node(cls, info, node_id, required=False):  # noqa: ARG003
+        async def resolve_node(
+            cls,
+            info,
+            node_id,
+            required=False,
+        ):  # noqa: ARG003
             return sentinel
 
     finalize_django_types()
@@ -1000,7 +1010,12 @@ def test_consumer_resolve_node_wins():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_node(cls, info, node_id, required=False):  # noqa: ARG003
+        def resolve_node(
+            cls,
+            info,
+            node_id,
+            required=False,
+        ):  # noqa: ARG003
             return sentinel
 
     finalize_django_types()
@@ -1018,7 +1033,12 @@ def test_consumer_resolve_nodes_wins():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_nodes(cls, info, node_ids=None, required=False):  # noqa: ARG003
+        def resolve_nodes(
+            cls,
+            info,
+            node_ids=None,
+            required=False,
+        ):  # noqa: ARG003
             return sentinel
 
     finalize_django_types()
@@ -1294,7 +1314,12 @@ def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
     # ``Meta.interfaces`` was empty — the definition stores the empty tuple.
     assert CategoryNode.__django_strawberry_definition__.interfaces == ()
     # All four resolver defaults landed on the class itself.
-    for attr in ("resolve_id", "resolve_id_attr", "resolve_node", "resolve_nodes"):
+    for attr in (
+        "resolve_id",
+        "resolve_id_attr",
+        "resolve_node",
+        "resolve_nodes",
+    ):
         assert attr in CategoryNode.__dict__, f"{attr} was not injected"
         assert isinstance(CategoryNode.__dict__[attr], classmethod)
     # The synthesized ``id`` annotation was dropped so the interface-supplied

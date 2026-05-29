@@ -45,7 +45,13 @@ def test_related_target_for_resolves_fk_m2m_and_reverse():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres", "loans")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+                "loans",
+            )
 
     finalize_django_types()
 

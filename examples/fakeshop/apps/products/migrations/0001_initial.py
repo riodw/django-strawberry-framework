@@ -136,7 +136,10 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name="item",
-            constraint=models.UniqueConstraint(fields=("category", "name"), name="unique_item_per_category"),
+            constraint=models.UniqueConstraint(
+                fields=("category", "name"),
+                name="unique_item_per_category",
+            ),
         ),
         migrations.AddConstraint(
             model_name="property",

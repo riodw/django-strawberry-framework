@@ -41,7 +41,12 @@ def test_generic_foreign_key_works_if_excluded():
     assert hasattr(TaggedItemType, "__strawberry_definition__")
     field_names = {field.python_name for field in TaggedItemType.__strawberry_definition__.fields}
     assert "content_object" not in field_names
-    assert {"id", "tag", "content_type", "object_id"} <= field_names
+    assert {
+        "id",
+        "tag",
+        "content_type",
+        "object_id",
+    } <= field_names
 
 
 def test_generic_relation_reverse_side_finalizes_to_list_target():
@@ -101,9 +106,6 @@ def test_generic_relation_executes_with_optimizer_extension():
     assert result.errors is None
     assert result.data == {
         "branches": [
-            {
-                "name": "Central",
-                "tags": [{"tag": "public"}],
-            },
+            {"name": "Central", "tags": [{"tag": "public"}]},
         ],
     }

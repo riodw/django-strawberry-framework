@@ -42,7 +42,9 @@ def _strawberry_field(type_cls: type, field_name: str):
     changes this field shape, these tests should fail loudly.
     """
     return next(
-        field for field in type_cls.__strawberry_definition__.fields if field.python_name == field_name
+        field
+        for field in type_cls.__strawberry_definition__.fields
+        if field.python_name == field_name
     )
 
 
@@ -120,7 +122,12 @@ def test_many_to_many_forward_and_reverse_relations_resolve():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
 
     class GenreType(DjangoType):
         class Meta:
@@ -146,22 +153,42 @@ def test_multi_cycle_finalizes_every_edge():
     class CategoryType(DjangoType):
         class Meta:
             model = Category
-            fields = ("id", "name", "items", "properties")
+            fields = (
+                "id",
+                "name",
+                "items",
+                "properties",
+            )
 
     class ItemType(DjangoType):
         class Meta:
             model = Item
-            fields = ("id", "name", "category", "entries")
+            fields = (
+                "id",
+                "name",
+                "category",
+                "entries",
+            )
 
     class EntryType(DjangoType):
         class Meta:
             model = Entry
-            fields = ("id", "value", "item", "property")
+            fields = (
+                "id",
+                "value",
+                "item",
+                "property",
+            )
 
     class PropertyType(DjangoType):
         class Meta:
             model = Property
-            fields = ("id", "name", "category", "entries")
+            fields = (
+                "id",
+                "name",
+                "category",
+                "entries",
+            )
 
     finalize_django_types()
 
@@ -922,10 +949,7 @@ def test_filterset_class_resolves_across_module_boundary():
     # import triggers a fresh execution that re-registers under the
     # cleared registry. ``importlib.reload`` would leak the prior
     # module's registered classes against the registry.
-    for stem in (
-        "tests.types.fixtures.shelf_module",
-        "tests.types.fixtures.branch_module",
-    ):
+    for stem in ("tests.types.fixtures.shelf_module", "tests.types.fixtures.branch_module"):
         sys.modules.pop(stem, None)
 
     from tests.types.fixtures import branch_module, shelf_module

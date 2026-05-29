@@ -97,7 +97,9 @@ class Settings:
         construction rather than at attribute lookup, matching the
         ``user_settings`` and ``reload`` write sites.
         """
-        self._user_settings = None if user_settings is None else _normalize_user_settings(user_settings)
+        self._user_settings = (
+            None if user_settings is None else _normalize_user_settings(user_settings)
+        )
 
     @property
     def user_settings(self) -> dict[str, Any]:

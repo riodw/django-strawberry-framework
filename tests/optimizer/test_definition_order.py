@@ -71,15 +71,30 @@ def test_plan_relation_decisions_match_cardinality_after_finalization():
 
     finalize_django_types()
 
-    assert plan_relation(_model_field(Item, "category"), CategoryType, info=None) == ("select", "default")
-    assert plan_relation(_model_field(Category, "items"), ItemType, info=None) == ("prefetch", "default")
+    assert plan_relation(_model_field(Item, "category"), CategoryType, info=None) == (
+        "select",
+        "default",
+    )
+    assert plan_relation(_model_field(Category, "items"), ItemType, info=None) == (
+        "prefetch",
+        "default",
+    )
     assert plan_relation(_model_field(MembershipCard, "patron"), PatronType, info=None) == (
         "select",
         "default",
     )
-    assert plan_relation(_model_field(Patron, "card"), MembershipCardType, info=None) == ("select", "default")
-    assert plan_relation(_model_field(Book, "genres"), GenreType, info=None) == ("prefetch", "default")
-    assert plan_relation(_model_field(Genre, "books"), BookType, info=None) == ("prefetch", "default")
+    assert plan_relation(_model_field(Patron, "card"), MembershipCardType, info=None) == (
+        "select",
+        "default",
+    )
+    assert plan_relation(_model_field(Book, "genres"), GenreType, info=None) == (
+        "prefetch",
+        "default",
+    )
+    assert plan_relation(_model_field(Genre, "books"), BookType, info=None) == (
+        "prefetch",
+        "default",
+    )
 
 
 def test_plan_relation_downgrades_custom_get_queryset_target_after_finalization():

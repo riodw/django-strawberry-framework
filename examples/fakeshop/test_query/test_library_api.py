@@ -784,6 +784,61 @@ def test_library_books_filter_by_relay_m2m_global_id():
 
 
 @pytest.mark.django_db
+def test_library_genres_filter_by_relay_own_pk_global_id_in_list():
+    """Own-PK Relay ``id: {in: [...]}`` accepts a LIST of GlobalIDs (H5 + M1 E2E).
+
+    ``GenreType`` is a Relay node, so ``GenreFilter.id`` is a GlobalID. The
+    ``in`` lookup must take a *list*: the resolved filter is
+    ``GlobalIDMultipleChoiceFilter`` (cardinality, H5a), its form field
+    accepts the submitted list instead of rejecting it against an empty
+    ``choices`` set (H5b), and each element is decoded + type-validated
+    before the ``id__in`` clause runs (M1). Previously the own-PK branch
+    collapsed every lookup to a single ``GlobalIDFilter`` and ``in`` could
+    not take a list at all.
+    """
+    sci_fi = models.Genre.objects.create(name="SciFi")
+    fantasy = models.Genre.objects.create(name="Fantasy")
+    models.Genre.objects.create(name="Mystery")
+
+    gid_sci_fi = str(relay.GlobalID(type_name="GenreType", node_id=str(sci_fi.pk)))
+    gid_fantasy = str(relay.GlobalID(type_name="GenreType", node_id=str(fantasy.pk)))
+    _assert_graphql_data(
+        f"""
+        query {{
+          allLibraryGenres(filter: {{ id: {{ in: ["{gid_sci_fi}", "{gid_fantasy}"] }} }}) {{
+            name
+          }}
+        }}
+        """,
+        {"allLibraryGenres": [{"name": "SciFi"}, {"name": "Fantasy"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_library_genres_filter_by_relay_own_pk_global_id_in_rejects_wrong_type():
+    """A wrong-type GlobalID in the ``in`` list is rejected before the query (M1 + H5b).
+
+    Each list element is type-validated against ``GenreType``; a ``BookType``
+    GlobalID must raise rather than silently decode to a bare node id.
+    """
+    genre = models.Genre.objects.create(name="SciFi")
+    wrong = str(relay.GlobalID(type_name="BookType", node_id=str(genre.pk)))
+    response = _post_graphql(
+        f"""
+        query {{
+          allLibraryGenres(filter: {{ id: {{ in: ["{wrong}"] }} }}) {{
+            name
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert "GlobalID type mismatch" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
 def test_library_branches_filter_by_reverse_fk_lookup():
     """Spec-021 L1048: reverse-FK filter (``shelves.code``) routes through ``ShelfFilter``."""
     branch_with = models.Branch.objects.create(name="With Match", city="Boston")

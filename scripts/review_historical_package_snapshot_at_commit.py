@@ -17,6 +17,12 @@ contain any, but the guard matches the diff helper's contract).
 ``review_inspect.main`` is imported and called in-process so the
 orchestrator does not pay Python / ``uv`` startup cost per file.
 
+This module is also the canonical home for the shared review-orchestration
+plumbing -- the git helpers and the ``_materialize_and_inspect`` primitive that
+renders ``commit:path`` through ``review_inspect`` into an output dir. The diff
+helper (``review_changed_python_diffs_against_head``) imports these rather than
+duplicating them.
+
 Usage:
     uv run python scripts/review_historical_package_snapshot_at_commit.py <commit-hash> [--package-dir DIR]
 
@@ -108,8 +114,25 @@ def _stem_for(path: str) -> str:
     return Path(path).with_suffix("").as_posix().replace("/", "__")
 
 
-def _file_at_commit(commit: str, path: str) -> str:
-    """Return the file contents at ``commit:path``."""
+def _file_at_commit(commit: str, path: str) -> str | None:
+    """Return the file contents at ``commit:path``, or ``None`` if absent there.
+
+    The ``cat-file -e`` guard lets the diff helper reuse this for added/deleted
+    files; the snapshot caller feeds only paths from ``git ls-tree``, so it never
+    reaches the ``None`` branch.
+    """
+    exists = subprocess.run(
+        [
+            "git",
+            "cat-file",
+            "-e",
+            f"{commit}:{path}",
+        ],
+        capture_output=True,
+        check=False,
+    )
+    if exists.returncode != 0:
+        return None
     return _run_git(["show", f"{commit}:{path}"])
 
 
@@ -148,16 +171,21 @@ def _clear_shadow_output(output_dir: Path) -> None:
             child.unlink()
 
 
-def _write_snapshot(commit: str, path: str, repo_root: Path) -> None:
-    """Materialize ``commit:path`` under a temp root and inspect it.
+def _materialize_and_inspect(commit: str, path: str, out_dir: Path) -> None:
+    """Render ``commit:path`` through ``review_inspect`` into ``out_dir``.
 
-    Mirroring the repo-relative path under the temp root lets
-    ``review_inspect`` derive the same stable ``a__b__c`` stem the file
-    would get from the working tree, so the output names stay consistent
-    across snapshots.
+    Mirroring the repo-relative path under a temp root lets ``review_inspect``
+    derive the same stable ``a__b__c`` stem the file would get from the working
+    tree, so output names stay consistent across snapshots and diffs. When the
+    file is absent at ``commit`` (an added file, from the diff helper's view) an
+    empty ``*.stripped.py`` placeholder is written so a downstream diff renders.
+
+    Shared primitive: both this orchestrator and the diff helper build on it.
     """
-    out_dir = repo_root / SHADOW_DIR
     contents = _file_at_commit(commit, path)
+    if contents is None:
+        (out_dir / f"{_stem_for(path)}.stripped.py").write_text("")
+        return
     with tempfile.TemporaryDirectory() as tmp:
         tmp_root = Path(tmp)
         tmp_target = tmp_root / path
@@ -201,7 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     _clear_shadow_output(out_dir)
     for path in paths:
-        _write_snapshot(args.commit_hash, path, repo_root)
+        _materialize_and_inspect(args.commit_hash, path, out_dir)
 
     print(
         f"Wrote {len(paths)} snapshots from {args.commit_hash} to {SHADOW_DIR.as_posix()}/",

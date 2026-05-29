@@ -3,26 +3,27 @@
 For every Python file changed between ``<commit-hash>`` and the currently
 checked-out branch (HEAD) whose path does not contain ``test``, the script
 
-1. Reads the OLD revision via ``git show <commit>:<path>`` into a temp tree
-   that mirrors the repo layout, then runs ``scripts/review_inspect`` against
-   it so the generated ``*.stripped.py`` and ``*.overview.md`` land in
-   ``docs/shadow/bug_hunt/old/`` with a stable ``django_strawberry_framework__conf``
-   style stem.
-2. Runs ``scripts/review_inspect`` against the NEW revision (the file as it
-   exists in the working tree) into ``docs/shadow/bug_hunt/new/``.
+1. Renders the OLD revision (``commit:path``) through ``review_inspect`` into
+   ``docs/shadow/bug_hunt/old/`` with a stable ``a__b__c`` stem.
+2. Renders the NEW revision (the working-tree copy) into
+   ``docs/shadow/bug_hunt/new/``.
 3. Writes a unified diff of the two stripped shadow files to
    ``docs/shadow/bug_hunt/diff/``.
 
-``review_inspect.main`` is imported and called in-process so the orchestrator
-does not pay Python / ``uv`` startup cost twice per changed file. Added or
-deleted files get an empty stripped file on the missing side so the per-file
+The shared git / ``review_inspect`` plumbing -- ``_run_git``,
+``_validate_commit``, ``_stem_for``, ``_inspect_quiet`` and the temp-tree
+``_materialize_and_inspect`` primitive -- lives in
+``review_historical_package_snapshot_at_commit`` (the canonical home for the
+shared review machinery) and is imported here. This module adds only the
+changed-file enumeration, the working-tree NEW side, and the diff writer. Added
+or deleted files get an empty stripped file on the missing side so the per-file
 diff still renders.
 
 Usage:
     uv run python scripts/review_changed_python_diffs_against_head.py <commit-hash>
 
 The ``uv run`` prefix is required so the script sees the project's virtual
-environment (it imports ``review_inspect`` and the inspector depends on the
+environment (it transitively imports ``review_inspect``, which depends on the
 project's pinned Python / dependency versions). Run from anywhere inside the
 repository; the orchestrator resolves ``git rev-parse --show-toplevel`` and
 writes outputs under ``docs/shadow/bug_hunt/{old,new,diff}/`` at the repo root.
@@ -34,50 +35,22 @@ Example:
 from __future__ import annotations
 
 import argparse
-import contextlib
 import difflib
-import io
-import subprocess
 import sys
-import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from review_inspect import main as review_inspect_main
+from review_historical_package_snapshot_at_commit import (
+    _inspect_quiet,
+    _materialize_and_inspect,
+    _run_git,
+    _stem_for,
+    _validate_commit,
+)
 
 OUTPUT_OLD = Path("docs/shadow/bug_hunt/old")
 OUTPUT_NEW = Path("docs/shadow/bug_hunt/new")
 OUTPUT_DIFF = Path("docs/shadow/bug_hunt/diff")
-
-
-def _run_git(args: Sequence[str]) -> str:
-    """Run ``git --no-pager <args>`` and return its stdout."""
-    result = subprocess.run(
-        ["git", "--no-pager", *args],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout
-
-
-def _validate_commit(commit: str) -> None:
-    """Exit with code 2 if ``commit`` does not resolve to a real commit."""
-    try:
-        subprocess.run(
-            [
-                "git",
-                "rev-parse",
-                "--verify",
-                "--quiet",
-                f"{commit}^{{commit}}",
-            ],
-            check=True,
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError:
-        print(f"Not a valid commit hash: {commit}", file=sys.stderr)
-        sys.exit(2)
 
 
 def _changed_python_files(commit: str) -> list[str]:
@@ -101,76 +74,14 @@ def _changed_python_files(commit: str) -> list[str]:
     return [line for line in output.splitlines() if line and Path(line).name != "__init__.py"]
 
 
-def _stem_for(path: str) -> str:
-    """Convert ``a/b/c.py`` into the ``a__b__c`` stem used by review artifacts."""
-    return Path(path).with_suffix("").as_posix().replace("/", "__")
-
-
-def _file_at_commit(commit: str, path: str) -> str | None:
-    """Return the file contents at ``commit:path`` or ``None`` if absent."""
-    exists = subprocess.run(
-        [
-            "git",
-            "cat-file",
-            "-e",
-            f"{commit}:{path}",
-        ],
-        capture_output=True,
-        check=False,
-    )
-    if exists.returncode != 0:
-        return None
-    return _run_git(["show", f"{commit}:{path}"])
-
-
-def _inspect_quiet(target: Path, output_dir: Path, root: Path) -> None:
-    """Invoke ``review_inspect.main`` while silencing its stdout chatter."""
-    with contextlib.redirect_stdout(io.StringIO()):
-        exit_code = review_inspect_main(
-            [
-                str(target),
-                "--output-dir",
-                str(output_dir),
-                "--root",
-                str(root),
-            ],
-        )
-    if exit_code != 0:
-        raise RuntimeError(
-            f"review_inspect failed for {target} (exit code {exit_code}).",
-        )
-
-
-def _write_old_side(commit: str, path: str, repo_root: Path) -> None:
-    """Materialize the OLD revision under a temp root and inspect it.
-
-    Mirroring the repo-relative path under the temp root lets
-    ``review_inspect`` derive the same stable stem the NEW side uses, so no
-    post-hoc renames are needed.
-    """
-    out_dir = repo_root / OUTPUT_OLD
-    stem = _stem_for(path)
-    contents = _file_at_commit(commit, path)
-    if contents is None:
-        (out_dir / f"{stem}.stripped.py").write_text("")
-        return
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_root = Path(tmp)
-        tmp_target = tmp_root / path
-        tmp_target.parent.mkdir(parents=True, exist_ok=True)
-        tmp_target.write_text(contents)
-        _inspect_quiet(tmp_target, out_dir, tmp_root)
-
-
 def _write_new_side(path: str, repo_root: Path) -> None:
     """Inspect the working-tree copy of ``path``; emit a placeholder if missing."""
     out_dir = repo_root / OUTPUT_NEW
-    stem = _stem_for(path)
     new_file = repo_root / path
     if new_file.is_file():
         _inspect_quiet(new_file, out_dir, repo_root)
     else:
-        (out_dir / f"{stem}.stripped.py").write_text("")
+        (out_dir / f"{_stem_for(path)}.stripped.py").write_text("")
 
 
 def _write_diff(path: str, repo_root: Path) -> None:
@@ -218,7 +129,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     for path in changed:
-        _write_old_side(args.commit_hash, path, repo_root)
+        _materialize_and_inspect(args.commit_hash, path, repo_root / OUTPUT_OLD)
         _write_new_side(path, repo_root)
         _write_diff(path, repo_root)
 

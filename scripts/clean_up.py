@@ -2,7 +2,9 @@
 
 This script intentionally targets only known generated paths:
 
-- contents of ``docs/shadow/`` including static-helper and bug-hunt shadow byproducts
+- contents of ``docs/shadow/`` (recursive) — every per-script folder
+  (``current/`` snapshot, ``old/`` ``new/`` ``diff/`` diff sides) plus any
+  static-helper / bug-hunt byproducts written to the root
 - ``rev-*.py`` and case-sensitive ``review-*.py`` files directly under ``docs/review/``
 - contents of ``docs/builder/temp-tests/``
 - ``bld-*.py`` and case-sensitive ``review-*.py`` files directly under ``docs/builder/``

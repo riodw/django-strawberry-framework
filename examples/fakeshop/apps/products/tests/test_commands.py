@@ -3,10 +3,11 @@
 from io import StringIO
 
 import pytest
-from apps.products.models import Category, Item
-from apps.products.services import create_users, seed_data
 from django.contrib.auth import get_user_model
 from django.core.management import CommandError, call_command
+
+from apps.products.models import Category, Item
+from apps.products.services import create_users, seed_data
 
 User = get_user_model()
 

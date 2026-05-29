@@ -3,10 +3,12 @@
 Enumerates every ``.py`` file under a target package directory at a given
 commit and runs ``review_inspect`` against each file's content as it existed
 *at that commit* (the working tree is never read). Outputs land in
-``docs/shadow/`` with the usual ``a__b__c`` stem scheme. **Existing files
-under ``docs/shadow/`` (including the ``bug_hunt/`` subtree) are deleted
-before the new snapshot is written**, so any prior review/build helper
-output or diff-helper output there is discarded.
+``docs/shadow/current/`` with the usual ``a__b__c`` stem scheme. This is a
+single flat folder (one snapshot, no old/new sides) and is this script's
+dedicated, fixed output location: its existing contents are cleared before
+each run, but the diff helper's sibling ``docs/shadow/{old,new,diff}/``
+folders are left untouched -- each script owns and clears only its own
+folder(s) under ``docs/shadow/``, so the two never clobber each other.
 
 Use this when you want a static review snapshot of the entire package at
 some historical checkout, without actually checking that commit out and
@@ -30,7 +32,7 @@ The ``uv run`` prefix is required so the script sees the project's virtual
 environment (it imports ``review_inspect`` and the inspector depends on the
 project's pinned Python / dependency versions). Run from anywhere inside
 the repository; the orchestrator resolves ``git rev-parse --show-toplevel``
-and writes outputs under ``docs/shadow/`` at the repo root.
+and writes outputs under ``docs/shadow/current/`` at the repo root.
 
 Example:
     uv run python scripts/review_historical_package_snapshot_at_commit.py \
@@ -51,7 +53,7 @@ from pathlib import Path
 
 from review_inspect import main as review_inspect_main
 
-SHADOW_DIR = Path("docs/shadow")
+SHADOW_DIR = Path("docs/shadow/current")
 DEFAULT_PACKAGE_DIR = "django_strawberry_framework"
 
 

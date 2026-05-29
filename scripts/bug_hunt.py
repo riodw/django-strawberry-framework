@@ -1,11 +1,13 @@
 """Generate the per-commit bug-hunt checklist markdown.
 
 The script resolves the current branch's HEAD commit hash, refreshes
-``docs/shadow/`` in-process via
-``review_historical_package_snapshot_at_commit.main([<head-sha>])``,
-reads the passed-in dicta (default ``docs/bug_hunt/dicta.md``), appends
-the static single-file review boilerplate, and emits one checkbox +
-prompt block per ``*.stripped.py`` file under ``docs/shadow/``.
+the snapshot helper's ``docs/shadow/current/`` folder in-process via
+``review_historical_package_snapshot_at_commit.main([<head-sha>])``
+(the output location is imported as ``SHADOW_DIR`` so it cannot drift
+from the snapshot helper), reads the passed-in dicta (default
+``docs/bug_hunt/dicta.md``), appends the static single-file review
+boilerplate, and emits one checkbox + prompt block per ``*.stripped.py``
+file under ``docs/shadow/current/``.
 
 The output path defaults to ``docs/bug_hunt/bug_hunt.<short-sha>.md``.
 
@@ -25,13 +27,13 @@ from pathlib import Path
 
 from review_historical_package_snapshot_at_commit import (
     DEFAULT_PACKAGE_DIR,
+    SHADOW_DIR,
 )
 from review_historical_package_snapshot_at_commit import (
     main as review_historical_package_snapshot_at_commit_main,
 )
 
 BUG_HUNT_DIR = Path("docs/bug_hunt")
-SHADOW_DIR = Path("docs/shadow")
 DICTA_PATH = BUG_HUNT_DIR / "dicta.md"
 
 # Fallback dicta used when ``--dicta`` points at a missing file.
@@ -134,7 +136,7 @@ def _stripped_files(current_dir: Path) -> list[Path]:
 
 
 def _refresh_historical_package_snapshot(commit: str, package_dir: str, current_dir: Path) -> None:
-    """Rebuild ``docs/shadow/`` from ``commit`` in-process.
+    """Rebuild the snapshot helper's ``docs/shadow/current/`` from ``commit`` in-process.
 
     Output is silenced here; ``bug_hunt.py`` prints its own status line.
     """
@@ -175,7 +177,7 @@ def _read_dicta(dicta_path: Path) -> str:
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Resolve HEAD, refresh docs/shadow/ from that commit, "
+            "Resolve HEAD, refresh docs/shadow/current/ from that commit, "
             "then generate the per-commit bug-hunt checklist by combining "
             "the passed-in dicta, the static how-to-review boilerplate, and "
             "one prompt per .stripped.py file."
@@ -205,7 +207,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=DEFAULT_PACKAGE_DIR,
         help=(
             "Repo-relative directory passed through to "
-            "review_historical_package_snapshot_at_commit.py when refreshing docs/shadow/. "
+            "review_historical_package_snapshot_at_commit.py when refreshing docs/shadow/current/. "
             f"Defaults to {DEFAULT_PACKAGE_DIR!r}."
         ),
     )

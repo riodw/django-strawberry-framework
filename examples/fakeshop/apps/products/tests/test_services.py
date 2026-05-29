@@ -3,10 +3,11 @@
 from unittest.mock import patch
 
 import pytest
-from apps.products import services
-from apps.products.models import Category, Entry, Item, Property
 from django.contrib.auth import get_user_model
 from faker import Faker
+
+from apps.products import services
+from apps.products.models import Category, Entry, Item, Property
 
 User = get_user_model()
 

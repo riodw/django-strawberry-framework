@@ -5,6 +5,7 @@ hand-rolls Category/Item/Property/Entry instances.
 """
 
 import pytest
+
 from apps.products.models import Category, Entry, Item, Property
 from apps.products.services import seed_data
 

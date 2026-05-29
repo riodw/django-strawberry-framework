@@ -27,7 +27,10 @@ from django_strawberry_framework.filters import (
     TypedFilter,
     validate_range,
 )
-from django_strawberry_framework.filters.base import _expected_global_id_type_name
+from django_strawberry_framework.filters.base import (
+    _expected_global_id_type_name,
+    _GlobalIDMultipleChoiceField,
+)
 from django_strawberry_framework.registry import registry
 
 
@@ -519,3 +522,22 @@ def test_expected_global_id_type_name_relation_branch_unresolved_target():
     owner = _FakeOwnerDefinition(target=None)
     f = _global_id_filter_with_owner("genres__id", owner)
     assert _expected_global_id_type_name(f) is None
+
+
+def test_global_id_multiple_choice_filter_field_accepts_arbitrary_values():
+    """The custom field skips empty-``choices`` validation (H5b).
+
+    ``GlobalIDMultipleChoiceFilter`` has no static ``choices``, so the stock
+    ``MultipleChoiceField`` would reject EVERY submitted GlobalID at
+    form-clean time (``"Select a valid choice"``) before the filter's own
+    decode/type-validation could run. The ``_GlobalIDMultipleChoiceField``
+    override accepts any value and defers validation to ``filter``.
+    """
+    f = GlobalIDMultipleChoiceFilter(field_name="id")
+    field = f.field
+    assert isinstance(field, _GlobalIDMultipleChoiceField)
+    # ``valid_value`` short-circuits to True regardless of ``choices``.
+    assert field.valid_value("QXV0aG9yOjU=") is True
+    # A non-empty GlobalID list clears ``clean`` instead of being rejected.
+    cleaned = field.clean(["QXV0aG9yOjU=", "QXV0aG9yOjY="])
+    assert cleaned == ["QXV0aG9yOjU=", "QXV0aG9yOjY="]

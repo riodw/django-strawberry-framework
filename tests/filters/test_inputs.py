@@ -19,6 +19,7 @@ import strawberry
 from apps.library import models as library_models
 from apps.products.models import Category, Item
 from django.db import models
+from django_filters.filters import BaseCSVFilter
 from strawberry import relay
 
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -378,11 +379,19 @@ def test_convert_filter_to_input_annotation_does_not_wrap_required():
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_input_value_decodes_globalid():
-    """``relay.GlobalID(type_name, node_id)`` -> ``node_id`` (string)."""
+def test_normalize_input_value_encodes_globalid_object_to_wire_form():
+    """``relay.GlobalID`` OBJECT -> base64 wire string (``type_name`` preserved).
+
+    The object keeps its type through normalization (M1 fix) so the bound
+    ``GlobalIDFilter.filter`` can validate it before decoding; the value
+    round-trips back to the original ``(type_name, node_id)``.
+    """
     f = GlobalIDFilter()
     gid = relay.GlobalID(type_name="X", node_id="42")
-    assert normalize_input_value(f, gid) == "42"
+    encoded = normalize_input_value(f, gid)
+    assert encoded == str(gid)
+    round_tripped = relay.GlobalID.from_id(encoded)
+    assert (round_tripped.type_name, round_tripped.node_id) == ("X", "42")
 
 
 def test_normalize_input_value_passes_string_globalid_through():
@@ -418,10 +427,22 @@ def test_normalize_input_value_range_filter_emits_positional_keys():
 
 
 def test_normalize_input_value_global_id_list():
+    """GlobalID OBJECTS keep their ``type_name`` (wire form), not bare node_ids.
+
+    Pre-decoding to a bare ``node_id`` here stripped the type *before*
+    the bound filter could validate it (M1 of the implementation review),
+    so a wrong-type GlobalID object passed silently. The normalizer now
+    re-encodes objects to the base64 wire string so
+    ``GlobalIDMultipleChoiceFilter.filter`` runs the type-name check;
+    the value still round-trips to the original ``(type_name, node_id)``.
+    """
     f = GlobalIDMultipleChoiceFilter()
     gid_a = relay.GlobalID(type_name="X", node_id="1")
     gid_b = relay.GlobalID(type_name="X", node_id="2")
-    assert normalize_input_value(f, [gid_a, gid_b]) == ["1", "2"]
+    encoded = normalize_input_value(f, [gid_a, gid_b])
+    assert encoded == [str(gid_a), str(gid_b)]
+    decoded = [relay.GlobalID.from_id(value) for value in encoded]
+    assert [(g.type_name, g.node_id) for g in decoded] == [("X", "1"), ("X", "2")]
 
 
 def test_normalize_input_value_none_returns_none():
@@ -779,3 +800,44 @@ def test_iter_filterset_subclasses_dedupes_diamond_inheritance():
     # ``D`` is reachable through both ``B`` and ``C`` but appears once.
     assert found.count(D) == 1
     assert {B, C, D}.issubset(set(found))
+
+
+# ---------------------------------------------------------------------------
+# CSV (`in` / `range`) lookups — generated BaseCSVFilter -> list[...] (H5c)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_convert_filter_to_input_annotation_csv_in_filter_is_list():
+    """django-filter's generated ``in`` filter (a ``BaseCSVFilter``) -> ``list[...]``.
+
+    H5c: ``Meta.fields = {..., "x": ["in"]}`` expands to a
+    ``ConcreteInFilter(BaseInFilter, ...)`` whose form field consumes a
+    LIST. Without the converter's ``BaseCSVFilter`` branch it fell to the
+    scalar catch-all and the generated input was a single value.
+    """
+
+    class PatronFilter(FilterSet):
+        class Meta:
+            model = library_models.Patron
+            fields = {"lifetime_fines_cents": ["in"]}
+
+    in_filter = PatronFilter.base_filters["lifetime_fines_cents__in"]
+    assert isinstance(in_filter, BaseCSVFilter)  # sanity: it IS a CSV filter
+    model_field = library_models.Patron._meta.get_field("lifetime_fines_cents")
+    annotation = convert_filter_to_input_annotation(in_filter, model_field)
+    # ``list[int] | None`` -- the inner annotation is a list, not a scalar.
+    assert list[int] in get_args(annotation)
+
+
+@pytest.mark.django_db
+def test_normalize_input_value_csv_in_filter_returns_list():
+    """A CSV ``in`` filter normalizes a list value through unchanged (H5c)."""
+
+    class PatronFilter(FilterSet):
+        class Meta:
+            model = library_models.Patron
+            fields = {"lifetime_fines_cents": ["in"]}
+
+    in_filter = PatronFilter.base_filters["lifetime_fines_cents__in"]
+    assert normalize_input_value(in_filter, [1, 2, 3]) == [1, 2, 3]

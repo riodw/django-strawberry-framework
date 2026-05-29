@@ -271,20 +271,36 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
     First binding writes ``filterset_cls._owner_definition = definition``
     and returns. Re-binding the same ``(filterset_cls, definition)``
     pair is idempotent (supports partial-finalize recovery per spec-021
-    Decision 6 lines 683-685). A second owner triggers the H2-rev8
-    strict-equality check: for every ``RelatedFilter`` declared on
-    ``filterset_cls``, both owners' ``related_target_for(field_name)``
-    must resolve to the EXACT same ``DjangoTypeDefinition`` AND the
-    EXACT same ``graphql_type_name``. Any divergence raises
-    ``ConfigurationError`` naming both owners, the offending field, and
-    both resolved target type names per spec-021 line 574.
+    Decision 6 lines 683-685). A second, distinct owner triggers the
+    H2-rev8 strict-equality check across the two owner-dependent axes:
 
-    The iteration set is ``filterset_cls.related_filters`` (the
-    Decision-3 Layer-1 declared-related-filters map populated by
-    ``FilterSetMetaclass`` at class creation). This is the conservative
-    shape sufficient for the 0.0.8 test surface; widening to every FK /
-    PK declared via ``Meta.fields`` is a forward path tracked in the
-    spec at lines 575-576 when real consumer demand surfaces.
+    1. **Own-PK Relay identity.** A filterset's own primary key resolves
+       to a Relay ``GlobalID`` typed to the *owner* — keyed on
+       ``owner.origin``'s Relay-node-ness and its ``graphql_type_name``.
+       Two owners that disagree on either would make the shared
+       filterset's ``id`` filter resolve to a different (or
+       differently-typed) GlobalID depending on which owner finalized
+       first; only the FIRST binding is stored, so the second owner would
+       silently mis-resolve. This is the genuine owner-dependent axis (see
+       the scope note), so it is checked directly.
+    2. **Declared relation targets.** For every ``RelatedFilter`` declared
+       on ``filterset_cls``, both owners' ``related_target_for(field_name)``
+       must resolve to the EXACT same ``DjangoTypeDefinition`` AND the
+       EXACT same ``graphql_type_name``.
+
+    Any divergence raises ``ConfigurationError`` naming both owners (and,
+    for the relation axis, the offending field and both resolved target
+    type names) per spec-021 line 574.
+
+    Scope note: ``related_target_for`` resolves a relation's target via the
+    process-global ``registry.primary_for(target_model)`` lookup keyed on
+    the TARGET model — NOT on the owner — so for two legitimate owners
+    (which necessarily share the filterset's ``Meta.model``) the relation
+    targets are invariant and cannot diverge. The own-PK identity is the
+    real owner-dependent axis. Widening the relation walk to every FK / PK
+    declared via ``Meta.fields`` would therefore guard a non-divergent
+    surface and stays deferred (spec lines 575-576) until real demand
+    surfaces.
     """
     previous: DjangoTypeDefinition | None = getattr(filterset_cls, "_owner_definition", None)
     if previous is None:
@@ -292,6 +308,19 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
         return
     if previous is definition:
         return
+    # Axis 1 — own-PK Relay identity. ``owner.origin`` Relay-node-ness and
+    # ``graphql_type_name`` are the only owner-dependent inputs to the
+    # filterset's own-PK GlobalID resolution; a divergence here means the
+    # shared ``id`` filter would resolve ambiguously across owners.
+    prev_is_relay = implements_relay_node(previous.origin)
+    new_is_relay = implements_relay_node(definition.origin)
+    if prev_is_relay != new_is_relay or (
+        prev_is_relay and previous.graphql_type_name != definition.graphql_type_name
+    ):
+        raise ConfigurationError(
+            _format_owner_pk_mismatch_error(filterset_cls, previous, definition),
+        )
+    # Axis 2 — declared relation targets.
     related_filters = getattr(filterset_cls, "related_filters", {}) or {}
     for field_name in related_filters:
         prev_target = previous.related_target_for(field_name)
@@ -352,6 +381,31 @@ def _format_owner_mismatch_error(
         f"{field_name!r} to {prev_name}, but {new.origin.__qualname__} resolves it "
         f"to {new_name}. Declare separate FilterSet subclasses for the diverging "
         "owners (per spec-021 H2 of rev8)."
+    )
+
+
+def _format_owner_pk_mismatch_error(
+    filterset_cls: type,
+    previous: DjangoTypeDefinition,
+    new: DjangoTypeDefinition,
+) -> str:
+    """Return the multi-owner own-PK Relay-identity mismatch message.
+
+    Sibling of ``_format_owner_mismatch_error``; names both owners and
+    their Relay-node-ness + ``graphql_type_name`` so the consumer can see
+    why the shared filterset's own-PK GlobalID would resolve ambiguously.
+    Grep-stable alongside the other ``_format_*`` finalize-error helpers.
+    """
+    return (
+        f"FilterSet {filterset_cls.__qualname__} cannot bind to multiple owners with "
+        f"diverging own-primary-key Relay identity: {previous.origin.__qualname__} "
+        f"(relay_node={implements_relay_node(previous.origin)}, "
+        f"type_name={previous.graphql_type_name!r}) vs {new.origin.__qualname__} "
+        f"(relay_node={implements_relay_node(new.origin)}, "
+        f"type_name={new.graphql_type_name!r}). The filterset's own `id` filter "
+        "resolves to a GlobalID typed to its owner, so owners diverging on "
+        "Relay-node-ness or GraphQL type name cannot share one FilterSet. Declare "
+        "separate FilterSet subclasses for the diverging owners (per spec-021 H2 of rev8)."
     )
 
 

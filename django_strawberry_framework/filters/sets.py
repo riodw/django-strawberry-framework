@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from django.db import models
 from django.http import HttpRequest
 from django_filters import filterset
+from django_filters.utils import get_model_field
 from graphql import GraphQLError
 from strawberry import UNSET
 
@@ -38,6 +39,38 @@ from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
+
+
+def _lookups_for_field(model_field: models.Field | None) -> list[str]:
+    """Return every concrete (non-transform) lookup valid for ``model_field``.
+
+    Backs the per-field ``Meta.fields = {"<field>": "__all__"}`` shorthand
+    (``graphene-django`` / cookbook ``filter_fields`` parity). ``django-filter``
+    expands only the TOP-LEVEL ``fields = "__all__"``; a per-field ``"__all__"``
+    value is passed through verbatim and would otherwise be mis-read as a
+    literal lookup expression, so ``FilterSet.get_fields`` expands it through
+    this helper.
+
+    Django's ``Field.get_lookups()`` returns both ``Lookup`` and ``Transform``
+    registrations. Transforms (``year`` / ``month`` / ``date`` / ``time`` / ...
+    on temporal fields, ``unaccent`` on PostgreSQL text) are EXCLUDED: the
+    cookbook's ``lookups_for_field`` expands each transform into a nested
+    ``<transform>__<sublookup>`` tree consumed by Graphene's tree-shaped input
+    builder, but this package's per-field operator-bag input shape (one flat
+    ``<Field>FilterInputType`` bag of lookup attributes) has no nested-transform
+    form. ``"__all__"`` therefore yields the flat comparison / membership /
+    pattern lookups (``exact`` / ``iexact`` / ``contains`` / ``icontains`` /
+    ``gt`` / ``lt`` / ``in`` / ``range`` / ``isnull`` / ``regex`` / ...); a
+    consumer who wants a transform (e.g. ``created__year``) declares it as an
+    explicit lookup expression instead.
+    """
+    if model_field is None:
+        return []
+    return [
+        lookup_expr
+        for lookup_expr, lookup in model_field.get_lookups().items()
+        if not issubclass(lookup, models.Transform)
+    ]
 
 
 class FilterSetMetaclass(filterset.FilterSetMetaclass):
@@ -220,25 +253,41 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
 
     @classmethod
     def get_fields(cls) -> OrderedDict:
-        """Include the PK and exclude M2M when `Meta.fields == "__all__"`.
+        """Expand per-field ``"__all__"`` and narrow the top-level ``"__all__"`` sweep.
 
-        M3-of-rev4 narrowing: `django-filter`'s default treats the PK as
-        a non-filterable column and includes M2M in the `"__all__"`
-        sweep; the package's preferred shape is the opposite (PK is a
-        canonical filter; M2M cannot be filtered without an explicit
-        `RelatedFilter`). Only runs when `Meta.fields == "__all__"`; the
-        explicit-dict case follows the upstream behavior unchanged.
+        Two overrides over ``django-filter``'s ``get_fields``:
 
-        The upstream method is named ``get_fields`` (no underscore
-        prefix); we override the same name so `super().get_filters()`'s
-        internal call routes through our narrowing.
+        - **Per-field ``"__all__"``** (dict form, e.g. ``{"name": "__all__"}``):
+          ``django-filter`` expands only the top-level ``fields = "__all__"``
+          and passes a per-field ``"__all__"`` value through verbatim — which
+          is then mis-read as a literal lookup expression. We expand each such
+          value to the field's concrete lookups via `_lookups_for_field`
+          (transforms excluded; see that helper). This is the cookbook /
+          ``graphene-django`` ``filter_fields = {"field": "__all__"}`` parity.
+        - **Top-level ``"__all__"`` narrowing** (M3-of-rev4): ``django-filter``
+          treats the PK as a non-filterable column and includes M2M in the
+          ``"__all__"`` sweep; the package's preferred shape is the opposite
+          (PK is a canonical filter; M2M needs an explicit `RelatedFilter`).
+
+        The upstream method is named ``get_fields`` (no underscore prefix);
+        we override the same name so `super().get_filters()`'s internal call
+        routes through both narrowings.
         """
         fields = super().get_fields()
+        model = cls._meta.model
         meta_fields = getattr(cls._meta, "fields", None)
+
+        # Per-field ``"__all__"`` expansion (dict form). Runs before the
+        # top-level branch below; the two shapes are mutually exclusive
+        # (``meta_fields`` is either the ``"__all__"`` string or a dict).
+        if model is not None and isinstance(meta_fields, dict):
+            for field_name in list(fields):
+                if fields[field_name] == "__all__":
+                    fields[field_name] = _lookups_for_field(get_model_field(model, field_name))
+
         if meta_fields != "__all__":
             return fields
 
-        model = cls._meta.model
         if model is None:  # pragma: no cover - unreachable defensive guard.
             # ``super().get_fields()`` above already dereferences
             # ``self._meta.model._meta`` for the ``"__all__"`` shorthand and
@@ -291,7 +340,15 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         """
         default = super().filter_for_field(field, field_name, lookup_expr)
         if cls._is_own_pk_under_relay_owner(field):
-            return GlobalIDFilter(
+            # The owner's own PK is a GlobalID over the wire. Honor the
+            # lookup cardinality: an ``in`` lookup consumes a LIST of
+            # GlobalIDs (multi-choice), every other lookup a single one.
+            # Without this split ``id: {in: [...]}`` collapsed to a single
+            # ``GlobalIDFilter`` and silently dropped to a scalar input.
+            own_pk_filter_class = (
+                GlobalIDMultipleChoiceFilter if default.lookup_expr == "in" else GlobalIDFilter
+            )
+            return own_pk_filter_class(
                 field_name=default.field_name,
                 lookup_expr=default.lookup_expr,
                 **default.extra,
@@ -319,6 +376,10 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         """
         default_class, params = super().filter_for_lookup(field, lookup_type)
         if cls._is_own_pk_under_relay_owner(field):
+            # Own-PK GlobalID, cardinality by lookup: ``in`` -> list of
+            # GlobalIDs (multi-choice), otherwise a single GlobalID.
+            if lookup_type == "in":
+                return GlobalIDMultipleChoiceFilter, params
             return GlobalIDFilter, params
         if not field.is_relation:
             return default_class, params
@@ -350,7 +411,7 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         pk = getattr(model._meta, "pk", None)
         if pk is None or field is not pk:
             return False
-        owner_type = getattr(owner, "origin", None) or getattr(owner, "type", None)
+        owner_type = getattr(owner, "origin", None)
         return owner_type is not None and implements_relay_node(owner_type)
 
     @staticmethod
@@ -388,20 +449,21 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
             return None
         owner = cls._owner_definition
         if owner is not None and field_name is not None:
-            # TODO(spec-021-filters-0_0_8 Slice 3): consult
-            # `owner.related_target_for(field_name)` once the method
-            # lands; for now the fallback below is the only reachable
-            # branch.
+            # Owner-aware path (Slice-3 binding has landed): resolve the
+            # target `DjangoType` through `owner.related_target_for(...)`.
+            # The pair's first member is a `DjangoTypeDefinition`, whose
+            # registered `DjangoType` class is its `.origin` attribute --
+            # NOT `.type` / `.type_cls`, which the definition never
+            # exposes (a stale read there silently returned `None` and
+            # dropped every owner-aware resolution to the registry
+            # fallback). Mirrors `_is_own_pk_under_relay_owner` /
+            # `_target_type_for_related_filter`, which both read `.origin`.
             resolved = getattr(owner, "related_target_for", None)
             if callable(resolved):
                 pair = resolved(field_name)
                 if pair is not None:
                     target_definition, _ = pair
-                    return getattr(target_definition, "type", None) or getattr(
-                        target_definition,
-                        "type_cls",
-                        None,
-                    )
+                    return getattr(target_definition, "origin", None)
         related_model = getattr(field, "related_model", None)
         if related_model is None:
             return None
@@ -790,10 +852,18 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
         bare = _bare if _bare is not None else object.__new__(cls)
 
         normalized = cls._normalize_input(input_value)
-        for form_key in normalized:
-            if form_key in {"and", "or", "not"}:
-                continue
-            cls._invoke_permission_method(bare, form_key, request, fired=class_fired)
+        # Permission gates are keyed on the SOURCE FIELD, not the
+        # lookup-expanded form key: ``check_<field>_permission`` gates a
+        # field across ALL its lookups (``exact`` / ``icontains`` /
+        # ``in`` / ``range`` / ...). Iterating ``normalized``'s flattened
+        # form keys would build ``check_<field>_<lookup>_permission`` and
+        # silently skip the gate for every non-``exact`` lookup -- only
+        # ``exact`` lands a suffix-free form key (``name``), so the gate
+        # fired for it by accident while ``name__icontains`` etc. slipped
+        # past ungated. ``_active_permission_field_paths`` strips back to
+        # the per-field source path so the gate fires once per field.
+        for field_path in cls._active_permission_field_paths(input_value):
+            cls._invoke_permission_method(bare, field_path, request, fired=class_fired)
 
         for field_name, related_filter, child_input in cls._iter_active_related_branches(input_value):
             child_filterset = related_filter.filterset
@@ -850,6 +920,51 @@ class FilterSet(filterset.BaseFilterSet, metaclass=FilterSetMetaclass):
             method(request)
             if fired is not None:
                 fired.add(method_name)
+
+    @classmethod
+    def _active_permission_field_paths(cls, input_value: Any) -> list[str]:
+        """Return the base Django source path for each active top-level field.
+
+        Drives ``_run_permission_checks``'s per-field gate dispatch. Emits
+        one entry per supplied top-level field -- its ``django_source_path``
+        (the lookup-free source field, e.g. ``name`` for both ``name`` and
+        ``name__icontains``) -- so ``check_<field>_permission`` fires once
+        for a field no matter which lookups the consumer populated. This
+        is the fix for the form-key dispatch bug: the per-field operator
+        bag means a single top-level field carries many lookups, and the
+        gate must key on the field, not the lookup.
+
+        Logic keys (``and`` / ``or`` / ``not``) and ``RelatedFilter``
+        branches are excluded here -- the former are walked by the
+        logical-branch recursion, the latter by the related-branch loop
+        (each fires its own per-branch gate). ``UNSET`` / ``None`` values
+        are skipped: a Strawberry input dataclass defaults unsupplied
+        fields to ``UNSET``, and only consumer-supplied fields are gated
+        (active-input-only contract, M2 of rev5).
+        """
+        if input_value is None or input_value is UNSET:
+            return []
+        if isinstance(input_value, dict):
+            items = list(input_value.items())
+        else:
+            dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
+            if dataclass_fields is None:
+                return []
+            items = [(name, getattr(input_value, name)) for name in dataclass_fields]
+
+        logic_lookup = dict(_LOGIC_KEYS)
+        related_keys = set(getattr(cls, "related_filters", {}) or {})
+        paths: list[str] = []
+        for python_attr, raw_value in items:
+            if raw_value is None or raw_value is UNSET:
+                continue
+            if python_attr in logic_lookup or python_attr in related_keys:
+                continue
+            spec = _field_specs.get((cls, python_attr))
+            paths.append(
+                spec.django_source_path if spec is not None else cls._form_key_for_python_attr(python_attr),
+            )
+        return paths
 
     def check_permissions(self, request: Any, requested_fields: set[str] | None = None) -> None:
         """Backward-compatible thin delegate to `_run_permission_checks`.

@@ -32,5 +32,5 @@ finalize_django_types()
 schema = strawberry.Schema(
     query=Query,
     config=strawberry_config(),
-    extensions=[DjangoOptimizerExtension()],
+    extensions=[DjangoOptimizerExtension],
 )

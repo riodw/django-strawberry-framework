@@ -58,11 +58,7 @@ def plan_optimizations(
     return plan.finalize()
 
 
-def plan_relation(
-    field: Any,
-    target_type: type | None,
-    info: Any | None,
-) -> tuple[str, str]:
+def plan_relation(field: Any, target_type: type | None, info: Any | None) -> tuple[str, str]:
     """Return relation traversal kind without constructing querysets."""
     if _target_has_custom_get_queryset(target_type):
         logger.debug(
@@ -111,7 +107,9 @@ def _resolve_field_map(
     type_cls = source_type if source_type is not None else registry.get(model)
     definition = registry.get_definition(type_cls) if type_cls is not None else None
     field_map = (
-        definition.field_map if definition is not None else {f.name: f for f in model._meta.get_fields()}
+        definition.field_map
+        if definition is not None
+        else {f.name: f for f in model._meta.get_fields()}
     )
     return type_cls, field_map
 
@@ -235,7 +233,9 @@ def _walk_selections(
             resolver_key(type_cls, django_name, runtime_path) for runtime_path in runtime_paths
         )
         target_type = (
-            registry.get(django_field.related_model) if django_field.related_model is not None else None
+            registry.get(django_field.related_model)
+            if django_field.related_model is not None
+            else None
         )
 
         hints_map = _resolve_optimizer_hints(type_cls)
@@ -389,7 +389,12 @@ def _build_prefetch_child_queryset(
     if not child_plan.cacheable:
         parent_plan.cacheable = False
     child_queryset = child_plan.apply(
-        _build_child_queryset(django_field, target_type, info, has_custom_qs=has_custom_get_queryset),
+        _build_child_queryset(
+            django_field,
+            target_type,
+            info,
+            has_custom_qs=has_custom_get_queryset,
+        ),
     )
     return child_queryset
 
@@ -579,7 +584,9 @@ def _can_elide_fk_id(field: Any) -> bool:
         if target_field is not None
         else getattr(field, "target_field_name", None)
     )
-    pk_fields = getattr(related_model._meta, "pk_fields", None) if related_model is not None else None
+    pk_fields = (
+        getattr(related_model._meta, "pk_fields", None) if related_model is not None else None
+    )
     if pk_fields is not None and len(pk_fields) > 1:  # pragma: no cover
         # Composite primary key (Django 5.2+).  Test fixtures do not
         # define one; the guard exists so the elision branch fails
@@ -673,7 +680,9 @@ def _included_field_selections(selections: list[Any]) -> list[Any]:
         if not _should_include(selection):
             continue
         if _is_fragment(selection):
-            result.extend(_included_field_selections(list(getattr(selection, "selections", None) or [])))
+            result.extend(
+                _included_field_selections(list(getattr(selection, "selections", None) or [])),
+            )
             continue
         result.append(selection)
     return result
@@ -698,7 +707,9 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             # Keep duplicate selections as defensive as the first-seen
             # construction below; Strawberry currently provides a list here,
             # but some tests and future integration shims may omit it.
-            merged.selections = list(merged.selections) + list(getattr(sel, "selections", None) or [])
+            merged.selections = list(merged.selections) + list(
+                getattr(sel, "selections", None) or [],
+            )
             response_key = _response_key(sel)
             if response_key not in merged._optimizer_response_keys:
                 merged._optimizer_response_keys.append(response_key)
@@ -738,7 +749,9 @@ def _response_key(selection: Any) -> str:
 
 def _response_keys(selection: Any) -> tuple[str, ...]:
     """Return all response keys represented by a possibly merged selection."""
-    return tuple(getattr(selection, "_optimizer_response_keys", None) or (_response_key(selection),))
+    return tuple(
+        getattr(selection, "_optimizer_response_keys", None) or (_response_key(selection),),
+    )
 
 
 def _is_fragment(selection: Any) -> bool:

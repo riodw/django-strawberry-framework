@@ -106,15 +106,7 @@ def grouped_choice_field(choice_fixture_model):
     """
     field = choice_fixture_model._meta.get_field("status")
     original = field.choices
-    field.choices = (
-        (
-            "Active States",
-            (
-                ("active", "Active"),
-                ("archived", "Archived"),
-            ),
-        ),
-    )
+    field.choices = (("Active States", (("active", "Active"), ("archived", "Archived"))),)
     yield field
     field.choices = original
 
@@ -724,7 +716,9 @@ def test_array_field_of_int_maps_to_list_int_via_fake_sentinel(monkeypatch):
     class Query:
         @strawberry.field
         def owner(self) -> ArrayIntOwnerType:
-            return ArrayIntOwner(arr=[1, 2, 3])
+            return ArrayIntOwner(
+                arr=[1, 2, 3],
+            )
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "ArrayIntOwnerType", "arr")
@@ -797,7 +791,9 @@ def test_array_field_nullable_inner_via_fake_sentinel(monkeypatch):
     class Query:
         @strawberry.field
         def owner(self) -> ArrayNullableInnerOwnerType:
-            return ArrayNullableInnerOwner(arr=[1, None, 2])
+            return ArrayNullableInnerOwner(
+                arr=[1, None, 2],
+            )
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "ArrayNullableInnerOwnerType", "arr")
@@ -1023,7 +1019,9 @@ def test_real_array_field_compatible_with_strawberry():
     class Query:
         @strawberry.field
         def owner(self) -> RealArrayIntOwnerType:
-            return RealArrayIntOwner(arr=[1, 2, 3])
+            return RealArrayIntOwner(
+                arr=[1, 2, 3],
+            )
 
     schema = strawberry.Schema(query=Query)
     type_payload = _introspect_field_type(schema, "RealArrayIntOwnerType", "arr")
@@ -1389,7 +1387,9 @@ def test_consumer_assigned_strawberry_field_relation_survives_always_defer():
     # Post-finalize: the consumer's resolver function is preserved and
     # exposed via Strawberry's field definition.
     items_field = next(
-        field for field in CategoryType.__strawberry_definition__.fields if field.python_name == "items"
+        field
+        for field in CategoryType.__strawberry_definition__.fields
+        if field.python_name == "items"
     )
     assert items_field.base_resolver is not None
     assert items_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.items")

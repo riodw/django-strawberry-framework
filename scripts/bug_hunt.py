@@ -107,7 +107,9 @@ def _head_sha() -> str:
 
 def _short_sha(commit: str) -> str:
     """Return the short SHA for ``commit``."""
-    return _run_git(["rev-parse", "--short", commit]).strip()
+    return _run_git(
+        ["rev-parse", "--short", commit],
+    ).strip()
 
 
 def _source_path_for(stripped_path: Path) -> str:
@@ -138,11 +140,7 @@ def _refresh_historical_package_snapshot(commit: str, package_dir: str, current_
     """
     with contextlib.redirect_stdout(io.StringIO()):
         exit_code = review_historical_package_snapshot_at_commit_main(
-            [
-                commit,
-                "--package-dir",
-                package_dir,
-            ],
+            [commit, "--package-dir", package_dir],
         )
     if exit_code != 0:
         raise RuntimeError(

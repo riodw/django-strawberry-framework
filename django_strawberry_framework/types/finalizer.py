@@ -92,9 +92,7 @@ def _format_unresolved_targets_error(unresolved: list[PendingRelation]) -> str:
     )
 
 
-def _format_ambiguity_error(
-    offenders: list[tuple[type[models.Model], tuple[type, ...]]],
-) -> str:
+def _format_ambiguity_error(offenders: list[tuple[type[models.Model], tuple[type, ...]]]) -> str:
     """Return the canonical primary-ambiguity error message.
 
     Sibling of ``_format_unresolved_targets_error`` above; both formatters live
@@ -104,7 +102,9 @@ def _format_ambiguity_error(
     audit's tests pin against (spec-014 #"with the fix sentence",
     spec-014 #"test_finalize_ambiguity_error_message_contains_actionable_fix").
     """
-    parts = [f"  {model.__name__}: {', '.join(t.__name__ for t in types)}" for model, types in offenders]
+    parts = [
+        f"  {model.__name__}: {', '.join(t.__name__ for t in types)}" for model, types in offenders
+    ]
     body = "\n".join(parts)
     return (
         "Models with multiple registered DjangoType subclasses and no primary:\n"
@@ -207,7 +207,9 @@ def finalize_django_types() -> None:
             unresolved.append(pending)
             continue
         field_meta = definition.field_map[snake_case(pending.field_name)]
-        resolved.append((pending, target_type, field_meta))
+        resolved.append(
+            (pending, target_type, field_meta),
+        )
 
     if unresolved:
         raise ConfigurationError(_format_unresolved_targets_error(unresolved))

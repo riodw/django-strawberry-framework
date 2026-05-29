@@ -35,7 +35,10 @@ from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.base import _detect_custom_get_queryset
-from django_strawberry_framework.types.converters import convert_scalar, resolved_relation_annotation
+from django_strawberry_framework.types.converters import (
+    convert_scalar,
+    resolved_relation_annotation,
+)
 from django_strawberry_framework.types.relations import PendingRelationAnnotation
 
 CATEGORY_SCALAR_FIELDS = (
@@ -429,7 +432,17 @@ def test_meta_primary_absent_does_not_register_primary():
     assert registry.get(Item) is ItemType
 
 
-@pytest.mark.parametrize("bad", ["yes", 1, 0, [], None, 1.0])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "yes",
+        1,
+        0,
+        [],
+        None,
+        1.0,
+    ],
+)
 def test_meta_primary_non_bool_raises_configuration_error(bad):
     """``Meta.primary`` must be a ``bool``; any other shape raises.
 
@@ -549,12 +562,22 @@ def test_meta_exclude_filters_concrete_fields():
             # Exclude scalars under test plus the reverse rels (Item /
             # Property are unregistered in this test, so leaving them
             # selected would trip ``convert_relation``).
-            exclude = ("description", "updated_date", "items", "properties")
+            exclude = (
+                "description",
+                "updated_date",
+                "items",
+                "properties",
+            )
 
     a = CategoryType.__annotations__
     assert "description" not in a
     assert "updated_date" not in a
-    assert {"id", "name", "is_private", "created_date"} <= set(a)
+    assert {
+        "id",
+        "name",
+        "is_private",
+        "created_date",
+    } <= set(a)
 
 
 # ---------------------------------------------------------------------------
@@ -757,7 +780,12 @@ def test_relation_reverse_fk_returns_list():
     class CategoryType(DjangoType):
         class Meta:
             model = Category
-            fields = ("id", "name", "items", "properties")
+            fields = (
+                "id",
+                "name",
+                "items",
+                "properties",
+            )
 
     finalize_django_types()
     a = CategoryType.__annotations__
@@ -784,7 +812,12 @@ def test_relation_meta_default_when_neither_fields_nor_exclude_set():
 
     finalize_django_types()
     a = CategoryType.__annotations__
-    assert {"id", "name", "items", "properties"} <= set(a)
+    assert {
+        "id",
+        "name",
+        "items",
+        "properties",
+    } <= set(a)
     assert a["items"] == list[ItemType]
     assert a["properties"] == list[PropertyType]
 
@@ -831,7 +864,12 @@ def test_relation_full_chain_when_all_targets_registered():
     class EntryType(DjangoType):
         class Meta:
             model = Entry
-            fields = ("id", "value", "property", "item")
+            fields = (
+                "id",
+                "value",
+                "property",
+                "item",
+            )
 
     finalize_django_types()
     assert PropertyType.__annotations__["category"] is CategoryType

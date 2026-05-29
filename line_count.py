@@ -8,7 +8,16 @@ import os
 from pathlib import Path
 
 # Directories to skip entirely
-SKIP_DIRS = {".venv", "__pycache__", ".git", "node_modules", ".tox", "dist", "build", ".eggs"}
+SKIP_DIRS = {
+    ".venv",
+    "__pycache__",
+    ".git",
+    "node_modules",
+    ".tox",
+    "dist",
+    "build",
+    ".eggs",
+}
 
 
 def count_lines(filepath: Path) -> tuple[int, int, int]:

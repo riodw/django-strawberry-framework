@@ -65,7 +65,11 @@ _MAX_PLAN_CACHE_SIZE = 256
 # keep working without a churn pass.  Canonical implementation lives in
 # ``optimizer/_context.py`` for cross-subpackage reuse with the read-side
 # ``get_context_value`` (consumed by ``types/resolvers.py``).
-__all__ = ("CacheInfo", "DjangoOptimizerExtension", "_stash_on_context")
+__all__ = (
+    "CacheInfo",
+    "DjangoOptimizerExtension",
+    "_stash_on_context",
+)
 
 
 def _collect_directive_var_names(
@@ -227,10 +231,7 @@ def _walk_reachable_fragment_definitions(
         _walk_reachable_fragment_definitions(child, fragments, visited_fragments, reachable)
 
 
-def _print_operation_with_reachable_fragments(
-    operation: Any,
-    fragments: dict[str, Any],
-) -> str:
+def _print_operation_with_reachable_fragments(operation: Any, fragments: dict[str, Any]) -> str:
     """Render the plan-cache document key.
 
     Concatenates ``print_ast(operation)`` with the printed AST of
@@ -246,7 +247,8 @@ def _print_operation_with_reachable_fragments(
     """
     parts = [print_ast(operation)]
     parts.extend(
-        print_ast(fragment) for fragment in _collect_reachable_fragment_definitions(operation, fragments)
+        print_ast(fragment)
+        for fragment in _collect_reachable_fragment_definitions(operation, fragments)
     )
     return "\n".join(parts)
 
@@ -385,7 +387,11 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
                 for impl_type in impl_objects:
                     _walk_gql_type(impl_type)
 
-    for root_type in (gql_schema.query_type, gql_schema.mutation_type, gql_schema.subscription_type):
+    for root_type in (
+        gql_schema.query_type,
+        gql_schema.mutation_type,
+        gql_schema.subscription_type,
+    ):
         if root_type is not None:
             _walk_gql_type(root_type)
     return reachable
@@ -603,7 +609,12 @@ class DjangoOptimizerExtension(SchemaExtension):
         from strawberry.types.nodes import convert_selections
 
         selections = convert_selections(info, info.field_nodes)
-        plan = self._get_or_build_plan(_root_child_selections(selections), target_model, info, origin)
+        plan = self._get_or_build_plan(
+            _root_child_selections(selections),
+            target_model,
+            info,
+            origin,
+        )
         self._publish_plan_to_context(plan, info)
         if plan.is_empty:
             return result
@@ -786,7 +797,13 @@ class DjangoOptimizerExtension(SchemaExtension):
         relevant_vars = frozenset(
             (k, variable_values[k]) for k in directive_var_names if k in variable_values
         )
-        return (doc_key, relevant_vars, target_model, runtime_path_from_info(info), origin)
+        return (
+            doc_key,
+            relevant_vars,
+            target_model,
+            runtime_path_from_info(info),
+            origin,
+        )
 
     def plan_relation(
         self,

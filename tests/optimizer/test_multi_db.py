@@ -56,7 +56,12 @@ def _sel(name, selections=None):
     )
 
 
-def _register_type_definition(model, type_cls, *, optimizer_hints=None):
+def _register_type_definition(
+    model,
+    type_cls,
+    *,
+    optimizer_hints=None,
+):
     """Register a minimal definition for walker-only synthetic type classes.
 
     Mirrors the helper at ``tests/optimizer/test_walker.py::_register_type_definition`` —
@@ -76,7 +81,8 @@ def _register_type_definition(model, type_cls, *, optimizer_hints=None):
             exclude_spec=None,
             selected_fields=selected_fields,
             field_map={
-                snake_case(field.name): FieldMeta.from_django_field(field) for field in selected_fields
+                snake_case(field.name): FieldMeta.from_django_field(field)
+                for field in selected_fields
             },
             optimizer_hints=optimizer_hints or {},
             has_custom_get_queryset=type_cls.has_custom_get_queryset(),

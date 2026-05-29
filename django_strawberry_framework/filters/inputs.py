@@ -491,10 +491,7 @@ def _build_range_input_class(filter_instance: RangeFilter, inner: type) -> type:
     cls_name = f"{_pascal_case(field_name)}RangeInputType"
     cls = build_input_class(
         cls_name,
-        [
-            ("start", inner | None, {"default": None}),
-            ("end", inner | None, {"default": None}),
-        ],
+        [("start", inner | None, {"default": None}), ("end", inner | None, {"default": None})],
     )
     filter_instance._range_input_cls = cls  # type: ignore[attr-defined]
     return cls
@@ -515,8 +512,14 @@ def _normalize_range_value(
     the Strawberry attr differs from the django-filter form-key).
     """
     base = field_name or filter_instance.field_name or "range"
-    start = getattr(raw_value, "start", None) if not isinstance(raw_value, dict) else raw_value.get("start")
-    end = getattr(raw_value, "end", None) if not isinstance(raw_value, dict) else raw_value.get("end")
+    start = (
+        getattr(raw_value, "start", None)
+        if not isinstance(raw_value, dict)
+        else raw_value.get("start")
+    )
+    end = (
+        getattr(raw_value, "end", None) if not isinstance(raw_value, dict) else raw_value.get("end")
+    )
     return {f"{base}_0": start, f"{base}_1": end}
 
 
@@ -536,10 +539,7 @@ def _owner_type_name(owner_definition: DjangoTypeDefinition | None) -> str | Non
 # ---------------------------------------------------------------------------
 
 
-def build_input_class(
-    name: str,
-    field_specs: list[tuple[str, Any, dict[str, Any] | None]],
-) -> type:
+def build_input_class(name: str, field_specs: list[tuple[str, Any, dict[str, Any] | None]]) -> type:
     """Construct a ``@strawberry.input``-decorated dataclass.
 
     ``field_specs`` is a list of ``(python_attr, annotation, field_kwargs)``
@@ -578,9 +578,7 @@ def build_input_class(
 # ---------------------------------------------------------------------------
 
 
-def _build_logic_fields(
-    type_name: str,
-) -> list[tuple[str, Any, dict[str, Any]]]:
+def _build_logic_fields(type_name: str) -> list[tuple[str, Any, dict[str, Any]]]:
     """Return ``(python_attr, annotation, field_kwargs)`` triples for ``and_`` / ``or_`` / ``not_``.
 
     The annotations follow the H2-of-rev4 INSIDE-list shape: the
@@ -657,7 +655,9 @@ def _build_input_fields(
             field_kwargs: dict[str, Any] = {}
             if python_attr != graphql_name:
                 field_kwargs["name"] = graphql_name
-            triples.append((python_attr, inner | None, field_kwargs))
+            triples.append(
+                (python_attr, inner | None, field_kwargs),
+            )
             _field_specs[(filterset_cls, python_attr)] = FieldSpec(
                 python_attr=python_attr,
                 graphql_name=graphql_name,
@@ -672,16 +672,24 @@ def _build_input_fields(
         for lookup, leaf_filter in lookup_bag.items():
             lookup_python_attr, lookup_graphql_name = LOOKUP_NAME_MAP.get(lookup, (lookup, lookup))
             model_field = _model_field_for_filter(filterset_cls, leaf_filter)
-            annotation = convert_filter_to_input_annotation(leaf_filter, model_field, owner_definition)
+            annotation = convert_filter_to_input_annotation(
+                leaf_filter,
+                model_field,
+                owner_definition,
+            )
             leaf_kwargs: dict[str, Any] = {}
             if lookup_python_attr != lookup_graphql_name:
                 leaf_kwargs["name"] = lookup_graphql_name
-            bag_specs.append((lookup_python_attr, annotation, leaf_kwargs))
+            bag_specs.append(
+                (lookup_python_attr, annotation, leaf_kwargs),
+            )
         bag_class = build_input_class(bag_name, bag_specs)
         outer_kwargs: dict[str, Any] = {}
         if python_attr != graphql_name:
             outer_kwargs["name"] = graphql_name
-        triples.append((python_attr, bag_class | None, outer_kwargs))
+        triples.append(
+            (python_attr, bag_class | None, outer_kwargs),
+        )
         # ``django_source_path`` is the form-key prefix the normalizer emits
         # into ``django-filter`` form data. For autogen filters whose form
         # key derives from the field name (``name`` / ``name__icontains``)
@@ -730,7 +738,10 @@ def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Fil
             field = cursor_model._meta.get_field(part)
         except Exception:  # pragma: no cover - defensive: bad lookup path
             return None
-        if getattr(field, "is_relation", False) and getattr(field, "related_model", None) is not None:
+        if (
+            getattr(field, "is_relation", False)
+            and getattr(field, "related_model", None) is not None
+        ):
             cursor_model = field.related_model
     return field
 

@@ -153,7 +153,9 @@ class FieldMeta:
         if is_m2m or is_o2m:
             nullable = False
         else:
-            nullable = relation_kind(field) == "reverse_one_to_one" or bool(getattr(field, "null", False))
+            nullable = relation_kind(field) == "reverse_one_to_one" or bool(
+                getattr(field, "null", False),
+            )
         return cls(
             name=field.name,
             is_relation=bool(field.is_relation),

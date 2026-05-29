@@ -112,7 +112,11 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         # Allow consumers to use `filter_fields` as a synonym for `fields`
         # under `Meta`; matches the cookbook's `graphene-django` alias.
         meta_class = attrs.get("Meta")
-        if meta_class and hasattr(meta_class, "filter_fields") and not hasattr(meta_class, "fields"):
+        if (
+            meta_class
+            and hasattr(meta_class, "filter_fields")
+            and not hasattr(meta_class, "fields")
+        ):
             meta_class.fields = meta_class.filter_fields
 
         new_class = super().__new__(cls, name, bases, attrs)
@@ -131,10 +135,7 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         return new_class
 
 
-def _expand_related_filter(
-    filter_name: str,
-    f: RelatedFilter,
-) -> OrderedDict[str, Any]:
+def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[str, Any]:
     """Expand `f` against its target filterset's resolved filters.
 
     Verbatim port of the cookbook's `expand_related_filter`. The
@@ -329,7 +330,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             fields[pk_field.name] = ["exact"]
 
         # REMOVE every ManyToManyField from the swept dict.
-        m2m_names = {f.name for f in model._meta.get_fields() if isinstance(f, models.ManyToManyField)}
+        m2m_names = {
+            f.name for f in model._meta.get_fields() if isinstance(f, models.ManyToManyField)
+        }
         for name in list(fields):
             if name in m2m_names:
                 del fields[name]
@@ -460,11 +463,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         return GlobalIDFilter
 
     @classmethod
-    def _resolve_relation_target_type(
-        cls,
-        field: Any,
-        field_name: str | None,
-    ) -> type | None:
+    def _resolve_relation_target_type(cls, field: Any, field_name: str | None) -> type | None:
         """Look up the registered target `DjangoType` for a relation field.
 
         Consults `_owner_definition.related_target_for(...)` when the
@@ -584,7 +583,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                     if lookup_value is None or lookup_value is UNSET:
                         continue
                     django_lookup = cls._form_key_for_python_attr(lookup_attr)
-                    form_key = base_path if django_lookup == "exact" else f"{base_path}__{django_lookup}"
+                    form_key = (
+                        base_path if django_lookup == "exact" else f"{base_path}__{django_lookup}"
+                    )
                     filter_instance = all_filters.get(form_key) or all_filters.get(
                         f"{base_path}__{django_lookup}",
                     )
@@ -626,9 +627,26 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         ``_apply_related_constraints`` so this helper does NOT see them.
         Returns ``None`` for scalar inputs that are not operator bags.
         """
-        if isinstance(raw_value, (str, bytes, int, float, bool)):
+        if isinstance(
+            raw_value,
+            (
+                str,
+                bytes,
+                int,
+                float,
+                bool,
+            ),
+        ):
             return None
-        if isinstance(raw_value, (list, tuple, set, frozenset)):
+        if isinstance(
+            raw_value,
+            (
+                list,
+                tuple,
+                set,
+                frozenset,
+            ),
+        ):
             return None
         dataclass_fields = getattr(raw_value, "__dataclass_fields__", None)
         if dataclass_fields is None:
@@ -698,7 +716,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             child_input = cls._extract_branch_value(input_value, field_name)
             if child_input is None:
                 continue
-            active.append((field_name, related_filter, child_input))
+            active.append(
+                (field_name, related_filter, child_input),
+            )
         return active
 
     @staticmethod
@@ -892,7 +912,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         for field_path in cls._active_permission_field_paths(input_value):
             cls._invoke_permission_method(bare, field_path, request, fired=class_fired)
 
-        for field_name, related_filter, child_input in cls._iter_active_related_branches(input_value):
+        for field_name, related_filter, child_input in cls._iter_active_related_branches(
+            input_value,
+        ):
             child_filterset = related_filter.filterset
             if child_filterset is not None and hasattr(child_filterset, "_run_permission_checks"):
                 # Child filterset is a different class; it keys its own
@@ -913,15 +935,33 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # the shared ``_fired`` map.
         and_branches = normalized.get("and") or []
         for child_input in and_branches:
-            cls._run_permission_checks(child_input, request, _fired=_fired, _bare=bare, _depth=_depth + 1)
+            cls._run_permission_checks(
+                child_input,
+                request,
+                _fired=_fired,
+                _bare=bare,
+                _depth=_depth + 1,
+            )
 
         or_branches = normalized.get("or") or []
         for child_input in or_branches:
-            cls._run_permission_checks(child_input, request, _fired=_fired, _bare=bare, _depth=_depth + 1)
+            cls._run_permission_checks(
+                child_input,
+                request,
+                _fired=_fired,
+                _bare=bare,
+                _depth=_depth + 1,
+            )
 
         not_branch = normalized.get("not")
         if not_branch is not None:
-            cls._run_permission_checks(not_branch, request, _fired=_fired, _bare=bare, _depth=_depth + 1)
+            cls._run_permission_checks(
+                not_branch,
+                request,
+                _fired=_fired,
+                _bare=bare,
+                _depth=_depth + 1,
+            )
 
     @staticmethod
     def _invoke_permission_method(
@@ -989,7 +1029,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 continue
             spec = _field_specs.get((cls, python_attr))
             paths.append(
-                spec.django_source_path if spec is not None else cls._form_key_for_python_attr(python_attr),
+                spec.django_source_path
+                if spec is not None
+                else cls._form_key_for_python_attr(python_attr),
             )
         return paths
 
@@ -1163,7 +1205,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         constrained = parent_qs
         for field_name, related_filter, _ in cls._iter_active_related_branches(input_value):
             child_qs = child_qs_by_branch.get(field_name)
-            explicit = related_filter.extra.get("queryset") if related_filter._has_explicit_queryset else None
+            explicit = (
+                related_filter.extra.get("queryset")
+                if related_filter._has_explicit_queryset
+                else None
+            )
             if child_qs is None and explicit is None:
                 continue
             if child_qs is not None and explicit is not None:

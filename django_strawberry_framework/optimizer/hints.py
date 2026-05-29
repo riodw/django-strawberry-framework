@@ -80,7 +80,9 @@ class OptimizerHint:
         mistake at ``Meta.optimizer_hints`` build time instead of at
         query time.
         """
-        if self.skip and (self.force_select or self.force_prefetch or self.prefetch_obj is not None):
+        if self.skip and (
+            self.force_select or self.force_prefetch or self.prefetch_obj is not None
+        ):
             raise ConfigurationError(
                 "OptimizerHint.SKIP (skip=True) cannot be combined with "
                 "select_related(), prefetch_related(), or prefetch(obj).",

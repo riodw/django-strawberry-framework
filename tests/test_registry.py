@@ -141,7 +141,10 @@ def test_register_enum_different_class_for_same_key_raises(fresh_registry):
         ACTIVE = "active"
 
     fresh_registry.register_enum(Category, "status", StatusA)
-    with pytest.raises(ConfigurationError, match="Category.status is already registered as StatusA"):
+    with pytest.raises(
+        ConfigurationError,
+        match="Category.status is already registered as StatusA",
+    ):
         fresh_registry.register_enum(Category, "status", StatusB)
     # Original cache is preserved.
     assert fresh_registry.get_enum(Category, "status") is StatusA
@@ -402,7 +405,12 @@ def test_registry_clear_allows_fresh_relay_declared_type_to_finalize():
     assert registry.is_finalized() is True
     assert registry.get(Category) is FreshCategoryNode
     assert relay.Node in FreshCategoryNode.__mro__
-    for attr in ("resolve_id", "resolve_id_attr", "resolve_node", "resolve_nodes"):
+    for attr in (
+        "resolve_id",
+        "resolve_id_attr",
+        "resolve_node",
+        "resolve_nodes",
+    ):
         assert attr in FreshCategoryNode.__dict__
 
 
@@ -442,7 +450,12 @@ def test_phase_1_failure_does_not_rewrite_any_pending_annotations_when_one_targe
     class CategoryType(DjangoType):
         class Meta:
             model = Category
-            fields = ("id", "name", "items", "properties")
+            fields = (
+                "id",
+                "name",
+                "items",
+                "properties",
+            )
 
     class ItemType(DjangoType):
         class Meta:
@@ -1096,7 +1109,9 @@ def test_finalize_ambiguity_error_message_contains_actionable_fix():
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
 
-    assert ("Declare Meta.primary = True on exactly one of the registered DjangoType subclasses.") in str(
+    assert (
+        "Declare Meta.primary = True on exactly one of the registered DjangoType subclasses."
+    ) in str(
         exc_info.value,
     )
 
@@ -1273,7 +1288,9 @@ def test_unregister_of_primary_leaves_state_that_audit_rejects():
     assert "Item" in msg
     assert "ItemTypeB" in msg
     assert "ItemTypeC" in msg
-    assert "Declare Meta.primary = True on exactly one of the registered DjangoType subclasses." in msg
+    assert (
+        "Declare Meta.primary = True on exactly one of the registered DjangoType subclasses." in msg
+    )
 
 
 def test_unregister_is_noop_on_unknown_type(fresh_registry):

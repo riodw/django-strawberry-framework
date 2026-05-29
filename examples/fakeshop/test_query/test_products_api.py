@@ -73,7 +73,12 @@ def _post_graphql(query: str, *, client: Client | None = None):
     )
 
 
-def _assert_graphql_data(query: str, expected: dict, *, client: Client | None = None):
+def _assert_graphql_data(
+    query: str,
+    expected: dict,
+    *,
+    client: Client | None = None,
+):
     response = _post_graphql(query, client=client)
     assert response.status_code == 200
     payload = response.json()

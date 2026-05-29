@@ -423,7 +423,11 @@ def test_normalize_input_maps_in_python_attr_to_in_form_data_key():
             model = Category
             fields = {"name": ["in"]}
 
-    data = CategoryFilter._normalize_input({"in_": [1, 2, 3]})
+    data = CategoryFilter._normalize_input(
+        {
+            "in_": [1, 2, 3],
+        },
+    )
     assert "in" in data
     assert data["in"] == [1, 2, 3]
 
@@ -435,11 +439,7 @@ def test_normalize_input_maps_logic_keys_to_short_form():
             fields = {"name": ["exact"]}
 
     data = CategoryFilter._normalize_input(
-        {
-            "and_": [{"name": "foo"}],
-            "or_": [{"name": "bar"}],
-            "not_": {"name": "baz"},
-        },
+        {"and_": [{"name": "foo"}], "or_": [{"name": "bar"}], "not_": {"name": "baz"}},
     )
     assert data["and"] == [{"name": "foo"}]
     assert data["or"] == [{"name": "bar"}]
@@ -742,10 +742,7 @@ def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
 
     BranchFilter._run_permission_checks(
         {
-            "or_": [
-                {"shelves": {"code": "a"}},
-                {"shelves": {"code": "b"}},
-            ],
+            "or_": [{"shelves": {"code": "a"}}, {"shelves": {"code": "b"}}],
         },
         request=HttpRequest(),
     )
@@ -1169,10 +1166,7 @@ def test_filter_queryset_intersects_and_branch():
 
     qs = BranchFilter.apply_sync(
         {
-            "and_": [
-                {"name": "match"},
-                {"city": "match"},
-            ],
+            "and_": [{"name": "match"}, {"city": "match"}],
         },
         library_models.Branch.objects.all(),
         _make_info(),
@@ -1196,10 +1190,7 @@ def test_filter_queryset_unions_or_branch():
 
     qs = BranchFilter.apply_sync(
         {
-            "or_": [
-                {"name": "x-row"},
-                {"city": "y-row"},
-            ],
+            "or_": [{"name": "x-row"}, {"city": "y-row"}],
         },
         library_models.Branch.objects.all(),
         _make_info(),
@@ -1617,10 +1608,7 @@ def test_normalize_input_operator_bag_dict_value_merges_into_form_data():
         {"lifetime_fines_cents": _FinesBag(range={"start": 1, "end": 5})},
     )
     # The dict-valued normalization result is merged key-by-key.
-    assert data == {
-        "lifetime_fines_cents__range_0": 1,
-        "lifetime_fines_cents__range_1": 5,
-    }
+    assert data == {"lifetime_fines_cents__range_0": 1, "lifetime_fines_cents__range_1": 5}
 
 
 @pytest.mark.django_db
@@ -1734,13 +1722,29 @@ def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms():
     date_field = Category._meta.get_field("created_date")  # DateTimeField
 
     name_lookups = _lookups_for_field(name_field)
-    assert {"exact", "icontains", "gt", "lt", "in", "range", "isnull", "startswith"} <= set(name_lookups)
+    assert {
+        "exact",
+        "icontains",
+        "gt",
+        "lt",
+        "in",
+        "range",
+        "isnull",
+        "startswith",
+    } <= set(name_lookups)
 
     date_lookups = _lookups_for_field(date_field)
     assert {"exact", "gt", "lt"} <= set(date_lookups)
     # Temporal transforms (year / month / date / time / ...) are excluded:
     # the per-field operator-bag input shape has no nested-transform form.
-    assert {"year", "month", "day", "date", "time", "week"}.isdisjoint(date_lookups)
+    assert {
+        "year",
+        "month",
+        "day",
+        "date",
+        "time",
+        "week",
+    }.isdisjoint(date_lookups)
 
     # A missing field resolves to an empty list (defensive).
     assert _lookups_for_field(None) == []

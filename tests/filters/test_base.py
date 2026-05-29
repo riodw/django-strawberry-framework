@@ -124,7 +124,9 @@ def test_validate_range_rejects_single_value():
 
 def test_validate_range_rejects_three_values():
     with pytest.raises(ValidationError):
-        validate_range([1, 2, 3])
+        validate_range(
+            [1, 2, 3],
+        )
 
 
 def test_range_filter_uses_range_field_class():

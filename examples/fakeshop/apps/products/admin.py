@@ -15,9 +15,21 @@ admin.site.unregister(User)
 
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
-    list_display = ("id", "username", "first_name", "last_name", "is_staff", "is_superuser")
+    list_display = (
+        "id",
+        "username",
+        "first_name",
+        "last_name",
+        "is_staff",
+        "is_superuser",
+    )
     list_display_links = ("id", "username")
-    list_filter = ("is_staff", "is_superuser", "is_active", "user_permissions")
+    list_filter = (
+        "is_staff",
+        "is_superuser",
+        "is_active",
+        "user_permissions",
+    )
 
     def changelist_view(self, request, extra_context=None):
         # --- create_users ---
@@ -49,7 +61,9 @@ class UserAdmin(BaseUserAdmin):
                 result = delete_users(delete_target)
                 self.message_user(
                     request,
-                    f"Deleted {result['users']} users." if result["users"] else "Nothing to delete.",
+                    f"Deleted {result['users']} users."
+                    if result["users"]
+                    else "Nothing to delete.",
                     messages.SUCCESS if result["users"] else messages.WARNING,
                 )
                 new_get = request.GET.copy()
@@ -79,7 +93,12 @@ class PropertyInline(admin.TabularInline):
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    list_display = ("name", "description", "created_date", "updated_date")
+    list_display = (
+        "name",
+        "description",
+        "created_date",
+        "updated_date",
+    )
     search_fields = ("name", "description")
     inlines = [PropertyInline, ItemInline]
 
@@ -183,10 +202,11 @@ class EntryAdmin(admin.ModelAdmin):
         "created_date",
         "updated_date",
     )
-    list_filter = (
-        "property__category",
-        "property",
-        "created_date",
+    list_filter = ("property__category", "property", "created_date")
+    search_fields = (
+        "value",
+        "description",
+        "item__name",
+        "property__name",
     )
-    search_fields = ("value", "description", "item__name", "property__name")
     autocomplete_fields = ["property", "item"]

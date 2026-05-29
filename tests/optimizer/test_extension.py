@@ -311,7 +311,12 @@ def test_optimizer_does_not_elide_forward_fk_when_extra_scalar_selected_plan_sha
     plan = ctx.dst_optimizer_plan
     assert plan.select_related == ("category",)
     assert plan.fk_id_elisions == ()
-    assert plan.only_fields == ("name", "category_id", "category__id", "category__name")
+    assert plan.only_fields == (
+        "name",
+        "category_id",
+        "category__id",
+        "category__name",
+    )
 
 
 @pytest.mark.django_db
@@ -925,7 +930,16 @@ def test_cache_eviction_removes_old_entries(monkeypatch):
 
     ext = DjangoOptimizerExtension()
     monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 4)
-    ext._plan_cache = {(idx, frozenset(), Category, (f"root{idx}",), None): object() for idx in range(4)}
+    ext._plan_cache = {
+        (
+            idx,
+            frozenset(),
+            Category,
+            (f"root{idx}",),
+            None,
+        ): object()
+        for idx in range(4)
+    }
 
     @strawberry.type
     class Query:
@@ -940,7 +954,13 @@ def test_cache_eviction_removes_old_entries(monkeypatch):
     assert result.errors is None
     assert ext.cache_info().misses == 1
     assert ext.cache_info().size == 4
-    assert (0, frozenset(), Category, ("root0",), None) not in ext._plan_cache
+    assert (
+        0,
+        frozenset(),
+        Category,
+        ("root0",),
+        None,
+    ) not in ext._plan_cache
 
 
 @pytest.mark.django_db
@@ -1301,7 +1321,8 @@ def test_strictness_with_empty_plan_does_not_raise_or_warn(mode, caplog):
     assert result.errors is None
     # No optimizer-level warning logged (would surface a "warn" strictness trip).
     assert not any(
-        record.name == optimizer_logger.name and record.levelname == "WARNING" for record in caplog.records
+        record.name == optimizer_logger.name and record.levelname == "WARNING"
+        for record in caplog.records
     )
     # Strictness sentinels are still stashed (the plan is published before the
     # is_empty short-circuit); the planned set is just empty.
@@ -1405,7 +1426,9 @@ def test_will_lazy_load_false_when_prefetched():
     from django_strawberry_framework.types.resolvers import _will_lazy_load_many
 
     root = SimpleNamespace()
-    root._prefetched_objects_cache = {"items": [1, 2, 3]}
+    root._prefetched_objects_cache = {
+        "items": [1, 2, 3],
+    }
     assert _will_lazy_load_many(root, "items") is False
 
 
@@ -1483,10 +1506,7 @@ def test_strictness_raise_accepts_unplanned_cached_reverse_one_to_one():
     assert result.errors is None
     assert result.data == {
         "allPatrons": [
-            {
-                "name": "Rio",
-                "card": {"barcode": "1234"},
-            },
+            {"name": "Rio", "card": {"barcode": "1234"}},
         ],
     }
 
@@ -2147,9 +2167,7 @@ def test_optimizer_hint_force_prefetch(django_assert_num_queries):
 
 
 @pytest.mark.django_db
-def test_optimizer_hint_force_select_does_not_bypass_custom_get_queryset(
-    django_assert_num_queries,
-):
+def test_optimizer_hint_force_select_does_not_bypass_custom_get_queryset(django_assert_num_queries):
     """B4+O6: ``force_select`` downgrades when the target type filters visibility."""
     from django.db.models import Prefetch
 

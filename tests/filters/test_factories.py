@@ -130,7 +130,12 @@ def test_filter_arguments_factory_dedupes_target_enqueued_twice():
 
     factory = FilterArgumentsFactory(AFilter)
     factory.arguments  # BFS: D is enqueued by both B and C, deduped at pop.
-    for name in ("AFilterInputType", "BFilterInputType", "CFilterInputType", "DFilterInputType"):
+    for name in (
+        "AFilterInputType",
+        "BFilterInputType",
+        "CFilterInputType",
+        "DFilterInputType",
+    ):
         assert name in FilterArgumentsFactory.input_object_types
 
 
@@ -151,7 +156,11 @@ def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_n
         "DupFilter",
         (FilterSet,),
         {
-            "Meta": type("Meta", (), {"model": library_models.Shelf, "fields": {"code": ["exact"]}}),
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": library_models.Shelf, "fields": {"code": ["exact"]}},
+            ),
         },
     )
     factory2 = FilterArgumentsFactory(DupFilter2)
@@ -311,7 +320,9 @@ def test_make_cache_key_normalizes_scalar_all_fields_shape():
 
 
 def test_make_cache_key_distinguishes_extra_meta_keys():
-    key_a = _make_cache_key({"model": Category, "fields": "__all__", "exclude": ("id",)})
+    key_a = _make_cache_key(
+        {"model": Category, "fields": "__all__", "exclude": ("id",)},
+    )
     key_b = _make_cache_key({"model": Category, "fields": "__all__"})
     assert key_a != key_b
 
@@ -341,10 +352,20 @@ def test_make_cache_key_structurally_equivalent_metas_share_a_slot():
 
     # 3. ``extras`` insertion order does not matter — sorted output.
     key_extra_a = _make_cache_key(
-        {"model": Category, "fields": "__all__", "exclude": ("id",), "form": "x"},
+        {
+            "model": Category,
+            "fields": "__all__",
+            "exclude": ("id",),
+            "form": "x",
+        },
     )
     key_extra_b = _make_cache_key(
-        {"model": Category, "fields": "__all__", "form": "x", "exclude": ("id",)},
+        {
+            "model": Category,
+            "fields": "__all__",
+            "form": "x",
+            "exclude": ("id",),
+        },
     )
     assert key_extra_a == key_extra_b
 
@@ -428,13 +449,17 @@ def test_get_filterset_class_supports_unhashable_meta_values():
         None,
         model=Category,
         fields={"name": ["exact"]},
-        extra_opt={"nested": {1, 2, 3}},
+        extra_opt={
+            "nested": {1, 2, 3},
+        },
     )
     cls_d = get_filterset_class(
         None,
         model=Category,
         fields={"name": ["exact"]},
-        extra_opt={"nested": {1, 2, 3}},
+        extra_opt={
+            "nested": {1, 2, 3},
+        },
     )
     assert cls_c is cls_d
 

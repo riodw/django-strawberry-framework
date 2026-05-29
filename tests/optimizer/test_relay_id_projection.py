@@ -202,7 +202,9 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
         # primary keys for Relay nodes".
         assert "uuid" in plan.only_fields
         assert "id" not in plan.only_fields
-        assert result.data == {"allItems": [{"id": result.data["allItems"][0]["id"], "name": "widget"}]}
+        assert result.data == {
+            "allItems": [{"id": result.data["allItems"][0]["id"], "name": "widget"}],
+        }
         # The Relay GlobalID round-trip carries the custom-pk value.
         node_id = relay.GlobalID.from_id(result.data["allItems"][0]["id"])
         assert node_id.type_name == "CustomPKItemNode"

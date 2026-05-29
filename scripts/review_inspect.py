@@ -197,19 +197,27 @@ class _StaticVisitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
         """Record an import statement."""
         names = ", ".join(
-            alias.name if alias.asname is None else f"{alias.name} as {alias.asname}" for alias in node.names
+            alias.name if alias.asname is None else f"{alias.name} as {alias.asname}"
+            for alias in node.names
         )
-        self.imports.append(_ImportRecord(node.lineno, f"import {names}", self._categorize_import(names)))
+        self.imports.append(
+            _ImportRecord(node.lineno, f"import {names}", self._categorize_import(names)),
+        )
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
         """Record a from-import statement."""
         module = "." * node.level + (node.module or "")
         names = ", ".join(
-            alias.name if alias.asname is None else f"{alias.name} as {alias.asname}" for alias in node.names
+            alias.name if alias.asname is None else f"{alias.name} as {alias.asname}"
+            for alias in node.names
         )
         self.imports.append(
-            _ImportRecord(node.lineno, f"from {module} import {names}", self._categorize_import(module)),
+            _ImportRecord(
+                node.lineno,
+                f"from {module} import {names}",
+                self._categorize_import(module),
+            ),
         )
         self.generic_visit(node)
 
@@ -621,7 +629,9 @@ def _render_overview(
 def _render_imports(records: Sequence[_ImportRecord]) -> str:
     if not records:
         return "None."
-    return "\n".join(f"- line {record.lineno}: `{record.text}` ({record.category})" for record in records)
+    return "\n".join(
+        f"- line {record.lineno}: `{record.text}` ({record.category})" for record in records
+    )
 
 
 def _render_quick_scan(
@@ -721,10 +731,7 @@ def _render_calls(records: Sequence[_CallRecord], markers: Sequence[str]) -> str
         ),
     )
     lines.extend(
-        [
-            "",
-            "Line items:",
-        ],
+        ["", "Line items:"],
     )
     lines.extend(
         _with_truncation_notice(
@@ -788,7 +795,12 @@ def _target_files_for_all(package_root: Path) -> list[Path]:
     return sorted(path for path in package_root.rglob("*.py") if path.is_file())
 
 
-def _inspect_target(target: Path, args: argparse.Namespace, markers: Sequence[str], output_dir: Path) -> int:
+def _inspect_target(
+    target: Path,
+    args: argparse.Namespace,
+    markers: Sequence[str],
+    output_dir: Path,
+) -> int:
     if not target.exists():
         print(f"Target does not exist: {target}", file=sys.stderr)
         return 2

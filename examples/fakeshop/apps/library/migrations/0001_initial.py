@@ -192,6 +192,9 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name="book",
-            constraint=models.UniqueConstraint(fields=("shelf", "title"), name="unique_book_title_per_shelf"),
+            constraint=models.UniqueConstraint(
+                fields=("shelf", "title"),
+                name="unique_book_title_per_shelf",
+            ),
         ),
     ]

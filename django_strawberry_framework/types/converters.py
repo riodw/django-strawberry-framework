@@ -81,7 +81,9 @@ SCALAR_MAP: dict[type[models.Field], Any] = {
 }
 
 _NON_IDENT = re.compile(r"\W+", flags=re.ASCII)
-_GRAPHQL_RESERVED_ENUM_VALUES = frozenset({"false", "null", "true"})
+_GRAPHQL_RESERVED_ENUM_VALUES = frozenset(
+    {"false", "null", "true"},
+)
 
 
 def _resolve_array_field() -> type[models.Field] | None:
@@ -300,7 +302,8 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
             members[member] = value
     if collisions:
         details = ", ".join(
-            f"{member!r} from values {sorted(map(repr, vals))}" for member, vals in sorted(collisions.items())
+            f"{member!r} from values {sorted(map(repr, vals))}"
+            for member, vals in sorted(collisions.items())
         )
         raise ConfigurationError(
             f"{field.model.__name__}.{field.name} choices sanitize to the same enum member: "

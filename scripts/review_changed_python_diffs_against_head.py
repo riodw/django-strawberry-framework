@@ -65,7 +65,13 @@ def _validate_commit(commit: str) -> None:
     """Exit with code 2 if ``commit`` does not resolve to a real commit."""
     try:
         subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"],
+            [
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                f"{commit}^{{commit}}",
+            ],
             check=True,
             capture_output=True,
         )
@@ -103,7 +109,12 @@ def _stem_for(path: str) -> str:
 def _file_at_commit(commit: str, path: str) -> str | None:
     """Return the file contents at ``commit:path`` or ``None`` if absent."""
     exists = subprocess.run(
-        ["git", "cat-file", "-e", f"{commit}:{path}"],
+        [
+            "git",
+            "cat-file",
+            "-e",
+            f"{commit}:{path}",
+        ],
         capture_output=True,
         check=False,
     )

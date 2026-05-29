@@ -200,14 +200,20 @@ class DjangoType:
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         consumer_annotations = dict(cls.__annotations__)
         consumer_annotated_relation_fields = frozenset(
-            field.name for field in fields if field.is_relation and field.name in consumer_annotations
+            field.name
+            for field in fields
+            if field.is_relation and field.name in consumer_annotations
         )
         consumer_annotated_scalar_fields = frozenset(
-            field.name for field in fields if not field.is_relation and field.name in consumer_annotations
+            field.name
+            for field in fields
+            if not field.is_relation and field.name in consumer_annotations
         )
-        consumer_assigned_relation_fields, consumer_assigned_scalar_fields = _consumer_assigned_fields(
-            cls,
-            fields,
+        consumer_assigned_relation_fields, consumer_assigned_scalar_fields = (
+            _consumer_assigned_fields(
+                cls,
+                fields,
+            )
         )
         consumer_authored_fields = frozenset(
             {
@@ -330,7 +336,9 @@ def _normalize_fields_spec(value: Any) -> tuple[str, ...] | str | None:
     if value is None or value == "__all__":
         return value
     if isinstance(value, str) or not isinstance(value, Sequence):
-        raise ConfigurationError("Meta.fields must be '__all__' or a non-string sequence of field names")
+        raise ConfigurationError(
+            "Meta.fields must be '__all__' or a non-string sequence of field names",
+        )
     return tuple(value)
 
 
@@ -425,7 +433,13 @@ def _meta_optimizer_hints(meta: type) -> dict[str, Any]:
     return dict(value)
 
 
-def _format_unknown_fields_error(*, model: type, attr: str, unknown: list[str], available: set[str]) -> str:
+def _format_unknown_fields_error(
+    *,
+    model: type,
+    attr: str,
+    unknown: list[str],
+    available: set[str],
+) -> str:
     """Return the standard "unknown fields … Available: …" error message.
 
     Used by every validator that points at a typo in ``Meta.fields``,
@@ -437,7 +451,8 @@ def _format_unknown_fields_error(*, model: type, attr: str, unknown: list[str], 
 
 
 _INTERFACES_SHAPE_ERROR_LEAD_IN = (
-    "Meta.interfaces must be a tuple/list of Strawberry interface classes or a single interface class"
+    "Meta.interfaces must be a tuple/list of Strawberry interface classes "
+    "or a single interface class"
 )
 
 

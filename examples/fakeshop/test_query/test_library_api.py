@@ -129,10 +129,7 @@ def test_library_branch_shelf_book_loan_graph_over_http():
                                     "title": "Kindred",
                                     "subtitle": None,
                                     "circulationStatus": "checked_out",
-                                    "shelf": {
-                                        "code": "A-1",
-                                        "branch": {"name": "Central"},
-                                    },
+                                    "shelf": {"code": "A-1", "branch": {"name": "Central"}},
                                     "genres": [{"name": "Speculative"}],
                                     "loans": [
                                         {
@@ -175,25 +172,15 @@ def test_library_patron_card_and_genre_reverse_paths_over_http():
             "allLibraryPatrons": [
                 {
                     "name": "Ada",
-                    "card": {
-                        "barcode": "CARD-1",
-                        "patron": {"name": "Ada"},
-                    },
+                    "card": {"barcode": "CARD-1", "patron": {"name": "Ada"}},
                     "loans": [
                         {
                             "note": "first checkout",
-                            "book": {
-                                "title": "Kindred",
-                                "genres": [{"name": "Speculative"}],
-                            },
+                            "book": {"title": "Kindred", "genres": [{"name": "Speculative"}]},
                         },
                     ],
                 },
-                {
-                    "name": "Grace",
-                    "card": None,
-                    "loans": [],
-                },
+                {"name": "Grace", "card": None, "loans": []},
             ],
             "allLibraryGenres": [
                 {
@@ -201,10 +188,7 @@ def test_library_patron_card_and_genre_reverse_paths_over_http():
                     "books": [
                         {
                             "title": "Kindred",
-                            "shelf": {
-                                "code": "A-1",
-                                "branch": {"name": "Central"},
-                            },
+                            "shelf": {"code": "A-1", "branch": {"name": "Central"}},
                         },
                     ],
                 },
@@ -267,10 +251,7 @@ def test_library_optimizer_selects_book_shelf_in_http_query():
     assert response.json() == {
         "data": {
             "allLibraryBooks": [
-                {
-                    "title": "Kindred",
-                    "shelf": {"code": "A-1"},
-                },
+                {"title": "Kindred", "shelf": {"code": "A-1"}},
             ],
         },
     }
@@ -312,10 +293,7 @@ def test_library_reverse_fk_and_m2m_prefetch_sql_shape_over_http():
                 {
                     "code": "A-1",
                     "books": [
-                        {
-                            "title": "Kindred",
-                            "genres": [{"name": "Speculative"}],
-                        },
+                        {"title": "Kindred", "genres": [{"name": "Speculative"}]},
                     ],
                 },
             ],
@@ -345,11 +323,7 @@ def test_library_choice_enum_and_nullable_subtitle_are_deliberate_http_contracts
         """,
         {
             "allLibraryBooks": [
-                {
-                    "title": "Kindred",
-                    "subtitle": None,
-                    "circulationStatus": "checked_out",
-                },
+                {"title": "Kindred", "subtitle": None, "circulationStatus": "checked_out"},
             ],
         },
     )
@@ -379,11 +353,7 @@ def test_library_choice_enum_and_nullable_subtitle_are_deliberate_http_contracts
         "name": "BookTypeCirculationStatusEnum",
     }
     subtitle_type = _field_type(type_info, "subtitle")
-    assert subtitle_type == {
-        "kind": "SCALAR",
-        "name": "String",
-        "ofType": None,
-    }
+    assert subtitle_type == {"kind": "SCALAR", "name": "String", "ofType": None}
 
 
 @pytest.mark.django_db
@@ -407,11 +377,7 @@ def test_library_consumer_prefetched_queryset_cooperates_with_optimizer_over_htt
     assert response.json() == {
         "data": {
             "allLibraryPrefetchedBooks": [
-                {
-                    "title": "Kindred",
-                    "shelf": {"code": "A-1"},
-                    "genres": [{"name": "Speculative"}],
-                },
+                {"title": "Kindred", "shelf": {"code": "A-1"}, "genres": [{"name": "Speculative"}]},
             ],
         },
     }
@@ -513,20 +479,8 @@ def test_library_relation_override_shapes_http_response_data():
     assert response.json() == {
         "data": {
             "allLibraryBranches": [
-                {
-                    "name": "Override",
-                    "shelves": [
-                        {"code": "B-2"},
-                        {"code": "A-1"},
-                    ],
-                },
-                {
-                    "name": "Override East",
-                    "shelves": [
-                        {"code": "B-2"},
-                        {"code": "A-1"},
-                    ],
-                },
+                {"name": "Override", "shelves": [{"code": "B-2"}, {"code": "A-1"}]},
+                {"name": "Override East", "shelves": [{"code": "B-2"}, {"code": "A-1"}]},
             ],
         },
     }
@@ -625,7 +579,10 @@ def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_htt
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
-    names = {branch["name"] for branch in payload["data"]["allLibraryBranchesViaListFieldManagerResolver"]}
+    names = {
+        branch["name"]
+        for branch in payload["data"]["allLibraryBranchesViaListFieldManagerResolver"]
+    }
     assert names == {"ManagerResolver West", "ManagerResolver East"}
 
 

@@ -122,7 +122,10 @@ def test_patch_is_inherited_by_test_case():
     ``SimpleTestCase`` (via ``TransactionTestCase``) — one patch
     covers the whole Django test-case hierarchy.
     """
-    assert TestCase._remove_databases_failures.__func__ is _django_patches._patched_remove_databases_failures
+    assert (
+        TestCase._remove_databases_failures.__func__
+        is _django_patches._patched_remove_databases_failures
+    )
 
 
 def test_patch_is_installed_returns_false_when_attribute_absent_from_class_dict():

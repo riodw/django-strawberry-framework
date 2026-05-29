@@ -57,7 +57,16 @@ def _is_safe_generator(fake: Faker, method_name: str) -> bool:
         return False
 
     # Only accept simple scalar types that can be meaningfully stored as text
-    return isinstance(result, (str, int, float, bool, Decimal))
+    return isinstance(
+        result,
+        (
+            str,
+            int,
+            float,
+            bool,
+            Decimal,
+        ),
+    )
 
 
 def discover_providers(fake: Faker) -> dict[str, list[str]]:
@@ -110,7 +119,8 @@ def discover_providers(fake: Faker) -> dict[str, list[str]]:
                     p
                     for p in params[1:]  # skip self
                     if p.default is inspect.Parameter.empty
-                    and p.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+                    and p.kind
+                    not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
                 ]
                 if len(required) != 0:
                     continue

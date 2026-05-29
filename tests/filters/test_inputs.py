@@ -174,7 +174,9 @@ def test_build_input_class_emits_strawberry_field_name_alias():
     """`name=...` field kwarg lands as the Strawberry field's GraphQL alias."""
     cls = build_input_class(
         "AliasedInput",
-        [("in_", list[int] | None, {"name": "in", "default": None})],
+        [
+            ("in_", list[int] | None, {"name": "in", "default": None}),
+        ],
     )
     # Walk the Strawberry definition to find the field named `in`.
     fields = cls.__strawberry_definition__.fields
@@ -233,7 +235,9 @@ def test_build_input_fields_emits_lookup_name_override_only_when_python_attr_dif
     name_annotation = by_attr["name"][0]
     # `bag_class | None` -> strip None to get the bag class.
     bag = [arg for arg in get_args(name_annotation) if arg is not type(None)][0]
-    bag_fields = {field.python_name: field.graphql_name for field in bag.__strawberry_definition__.fields}
+    bag_fields = {
+        field.python_name: field.graphql_name for field in bag.__strawberry_definition__.fields
+    }
     # `exact` -> attr `exact`, NO alias emitted (python_attr == graphql_name).
     # Strawberry returns `None` for `graphql_name` when no explicit alias is set.
     assert bag_fields["exact"] is None
@@ -244,7 +248,9 @@ def test_build_input_fields_emits_lookup_name_override_only_when_python_attr_dif
 
     id_annotation = by_attr["id"][0]
     id_bag = [arg for arg in get_args(id_annotation) if arg is not type(None)][0]
-    id_fields = {field.python_name: field.graphql_name for field in id_bag.__strawberry_definition__.fields}
+    id_fields = {
+        field.python_name: field.graphql_name for field in id_bag.__strawberry_definition__.fields
+    }
     # `in_` -> alias `in`.
     assert id_fields["in_"] == "in"
 
@@ -462,10 +468,7 @@ def test_normalize_input_value_unset_returns_none():
     """
     import strawberry
 
-    for f in (
-        GlobalIDFilter(),
-        GlobalIDMultipleChoiceFilter(),
-    ):
+    for f in (GlobalIDFilter(), GlobalIDMultipleChoiceFilter()):
         assert normalize_input_value(f, strawberry.UNSET) is None
 
 
@@ -578,7 +581,15 @@ def test_filter_input_type_rejects_non_filterset():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("bad", ["", "_", "__", "___"])
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "_",
+        "__",
+        "___",
+    ],
+)
 def test_pascal_case_raises_for_no_word_character_input(bad):
     """`_pascal_case` raises rather than silently returning `""` (round-4 fix)."""
     with pytest.raises(ConfigurationError) as excinfo:
@@ -679,7 +690,11 @@ def test_convert_filter_to_input_annotation_typed_filter_uses_model_scalar():
 def test_normalize_input_value_list_filter_unwraps_each_element():
     """``ListFilter`` / ``ArrayFilter`` values normalize element-by-element."""
     f = ListFilter(field_name="ids")
-    assert normalize_input_value(f, [1, 2, 3], field_name="ids") == [1, 2, 3]
+    assert normalize_input_value(
+        f,
+        [1, 2, 3],
+        field_name="ids",
+    ) == [1, 2, 3]
 
 
 def test_build_range_input_class_is_cached_on_the_filter_instance():
@@ -694,7 +709,9 @@ def test_build_input_class_threads_description_into_strawberry_field():
     """A ``description`` kwarg is forwarded to ``strawberry.field``."""
     cls = build_input_class(
         "DescribedInputType",
-        [("note", str | None, {"default": None, "description": "a note"})],
+        [
+            ("note", str | None, {"default": None, "description": "a note"}),
+        ],
     )
     # The strawberry field carries the description through decoration.
     field = next(f for f in cls.__strawberry_definition__.fields if f.python_name == "note")

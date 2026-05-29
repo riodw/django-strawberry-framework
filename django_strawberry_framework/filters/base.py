@@ -295,7 +295,9 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         """Decode + validate every GlobalID; delegate to the parent filter."""
         if value is None:
             return super().filter(qs, None)
-        node_ids = [_decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)]
+        node_ids = [
+            _decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)
+        ]
         return super().filter(qs, node_ids)
 
 

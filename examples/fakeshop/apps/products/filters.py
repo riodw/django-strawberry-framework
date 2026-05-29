@@ -43,11 +43,7 @@ from . import models
 class CategoryFilter(FilterSet):
     class Meta:
         model = models.Category
-        fields = {
-            "id": "__all__",
-            "name": "__all__",
-            "description": "__all__",
-        }
+        fields = {"id": "__all__", "name": "__all__", "description": "__all__"}
 
     def check_name_permission(self, request):
         """Only staff users may filter by ``Category.name``."""
@@ -87,11 +83,7 @@ class PropertyFilter(FilterSet):
 
     class Meta:
         model = models.Property
-        fields = {
-            "id": "__all__",
-            "name": "__all__",
-            "description": "__all__",
-        }
+        fields = {"id": "__all__", "name": "__all__", "description": "__all__"}
 
 
 class EntryFilter(FilterSet):
@@ -114,4 +106,9 @@ class EntryFilter(FilterSet):
         }
 
 
-__all__ = ("CategoryFilter", "ItemFilter", "PropertyFilter", "EntryFilter")
+__all__ = (
+    "CategoryFilter",
+    "ItemFilter",
+    "PropertyFilter",
+    "EntryFilter",
+)

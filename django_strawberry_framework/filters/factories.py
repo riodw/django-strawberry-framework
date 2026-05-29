@@ -18,7 +18,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from ..exceptions import ConfigurationError
-from .inputs import _build_input_fields, _build_logic_fields, _input_type_name_for, build_input_class
+from .inputs import (
+    _build_input_fields,
+    _build_logic_fields,
+    _input_type_name_for,
+    build_input_class,
+)
 from .sets import FilterSet
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
@@ -201,12 +206,17 @@ def _make_cache_key(safe_meta: dict[str, Any]) -> tuple:
             "dict",
             tuple(sorted((k, _make_hashable(v)) for k, v in fields.items())),
         )
-    elif isinstance(fields, (list, tuple, set)):
+    elif isinstance(
+        fields,
+        (list, tuple, set),
+    ):
         fields_key = ("seq", tuple(_make_hashable(item) for item in fields))
     else:
         fields_key = ("raw", fields)
     extra = tuple(
-        sorted((k, _make_hashable(v)) for k, v in safe_meta.items() if k not in {"model", "fields"}),
+        sorted(
+            (k, _make_hashable(v)) for k, v in safe_meta.items() if k not in {"model", "fields"}
+        ),
     )
     return (model, fields_key, extra)
 
@@ -232,10 +242,7 @@ def _create_dynamic_filterset_class(safe_meta: dict[str, Any]) -> type[FilterSet
     return type(name, (FilterSet,), {"Meta": meta_class})
 
 
-def get_filterset_class(
-    filterset_class: type[FilterSet] | None,
-    **meta: Any,
-) -> type[FilterSet]:
+def get_filterset_class(filterset_class: type[FilterSet] | None, **meta: Any) -> type[FilterSet]:
     """Return a ``FilterSet`` class for use against a connection / list field.
 
     Mirrors the cookbook's same-named helper at

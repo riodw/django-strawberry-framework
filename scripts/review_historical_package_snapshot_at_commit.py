@@ -64,7 +64,13 @@ def _validate_commit(commit: str) -> None:
     """Exit with code 2 if ``commit`` does not resolve to a real commit."""
     try:
         subprocess.run(
-            ["git", "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"],
+            [
+                "git",
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                f"{commit}^{{commit}}",
+            ],
             check=True,
             capture_output=True,
         )
@@ -81,7 +87,14 @@ def _package_python_files_at_commit(commit: str, package_dir: str) -> list[str]:
     exclusion contract.
     """
     output = _run_git(
-        ["ls-tree", "-r", "--name-only", commit, "--", package_dir],
+        [
+            "ls-tree",
+            "-r",
+            "--name-only",
+            commit,
+            "--",
+            package_dir,
+        ],
     )
     return [
         line

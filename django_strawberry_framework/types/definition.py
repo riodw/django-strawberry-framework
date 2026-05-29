@@ -171,7 +171,11 @@ class DjangoTypeDefinition:
                         result = None
                     else:
                         target_definition = registry.get_definition(target_type)
-                        result = (target_definition, model_field) if target_definition is not None else None
+                        result = (
+                            (target_definition, model_field)
+                            if target_definition is not None
+                            else None
+                        )
 
         if cache_ok:
             self._related_target_cache[field_name] = result

@@ -69,7 +69,10 @@ class Item(models.Model):
         verbose_name_plural = "Items"
         constraints = [
             models.UniqueConstraint(
-                fields=["category", "name"],
+                fields=[
+                    "category",
+                    "name",
+                ],
                 name="unique_item_per_category",
             ),
         ]
@@ -106,7 +109,10 @@ class Property(models.Model):
         verbose_name_plural = "Properties"
         constraints = [
             models.UniqueConstraint(
-                fields=["category", "name"],
+                fields=[
+                    "category",
+                    "name",
+                ],
                 name="unique_property_per_category",
             ),
         ]
@@ -148,7 +154,10 @@ class Entry(models.Model):
         verbose_name_plural = "Entries"
         constraints = [
             models.UniqueConstraint(
-                fields=["item", "property"],
+                fields=[
+                    "item",
+                    "property",
+                ],
                 name="unique_entry_per_item_property",
             ),
         ]

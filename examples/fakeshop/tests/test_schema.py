@@ -15,7 +15,11 @@ from django_strawberry_framework import DjangoType
 @pytest.mark.django_db
 def test_project_schema_executes_products_categories_list():
     """The composed project schema exposes the products app's `all_categories` root field."""
-    products_models.Category.objects.create(name="Books", description="Reading material", is_private=False)
+    products_models.Category.objects.create(
+        name="Books",
+        description="Reading material",
+        is_private=False,
+    )
     products_models.Category.objects.create(name="Tools", description="Hardware", is_private=False)
 
     result = project_schema.execute_sync(
@@ -38,8 +42,17 @@ def test_project_schema_executes_products_categories_list():
 @pytest.mark.django_db
 def test_project_schema_traverses_products_relations():
     """Forward + reverse relation traversal works through the products schema."""
-    category = products_models.Category.objects.create(name="Books", description="", is_private=False)
-    products_models.Item.objects.create(name="Dune", description="", category=category, is_private=False)
+    category = products_models.Category.objects.create(
+        name="Books",
+        description="",
+        is_private=False,
+    )
+    products_models.Item.objects.create(
+        name="Dune",
+        description="",
+        category=category,
+        is_private=False,
+    )
     products_models.Item.objects.create(
         name="Foundation",
         description="",
@@ -86,7 +99,9 @@ def test_project_schema_includes_products_types():
 
     assert result.errors is None
     assert result.data["__type"]["name"] == "ItemType"
-    assert {"name", "category", "entries"} <= {field["name"] for field in result.data["__type"]["fields"]}
+    assert {"name", "category", "entries"} <= {
+        field["name"] for field in result.data["__type"]["fields"]
+    }
 
 
 def test_project_schema_includes_library_types():
@@ -104,7 +119,9 @@ def test_project_schema_includes_library_types():
 
     assert result.errors is None
     assert result.data["__type"]["name"] == "BookType"
-    assert {"title", "shelf", "genres"} <= {field["name"] for field in result.data["__type"]["fields"]}
+    assert {"title", "shelf", "genres"} <= {
+        field["name"] for field in result.data["__type"]["fields"]
+    }
 
 
 def test_library_djangotype_declaration_order_stays_awkward():

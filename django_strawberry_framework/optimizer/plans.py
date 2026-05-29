@@ -137,11 +137,7 @@ class OptimizationPlan:
         return queryset
 
 
-def resolver_key(
-    parent_type: type | None,
-    field_name: str,
-    runtime_path: tuple[str, ...],
-) -> str:
+def resolver_key(parent_type: type | None, field_name: str, runtime_path: tuple[str, ...]) -> str:
     """Return the branch-sensitive resolver key shared by walker and resolvers."""
     path = ".".join(runtime_path)
     if parent_type is None:
@@ -327,10 +323,7 @@ def _optimizer_can_absorb(
     return all(path in opt_covered for path in consumer_paths)
 
 
-def diff_plan_for_queryset(
-    plan: OptimizationPlan,
-    queryset: Any,
-) -> tuple[OptimizationPlan, Any]:
+def diff_plan_for_queryset(plan: OptimizationPlan, queryset: Any) -> tuple[OptimizationPlan, Any]:
     """Reconcile ``plan`` against optimizations already on ``queryset``.
 
     Returns ``(delta_plan, queryset_to_apply_against)``. The plan is
@@ -445,7 +438,9 @@ def _diff_prefetch_related(
         opt_path = _lookup_path(opt_entry)
         descendant_prefix = f"{opt_path}__"
         matching_paths = [
-            path for path in consumer_by_path if path == opt_path or path.startswith(descendant_prefix)
+            path
+            for path in consumer_by_path
+            if path == opt_path or path.startswith(descendant_prefix)
         ]
         if not matching_paths:
             new_prefetch.append(opt_entry)

@@ -20,7 +20,10 @@ class TaggedItem(models.Model):
     class Meta:
         indexes = [
             models.Index(
-                fields=["content_type", "object_id"],
+                fields=[
+                    "content_type",
+                    "object_id",
+                ],
                 name="library_tagged_lookup_idx",
             ),
         ]
@@ -62,7 +65,10 @@ class Shelf(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["branch", "code"],
+                fields=[
+                    "branch",
+                    "code",
+                ],
                 name="unique_shelf_code_per_branch",
             ),
         ]
@@ -108,7 +114,10 @@ class Book(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["shelf", "title"],
+                fields=[
+                    "shelf",
+                    "title",
+                ],
                 name="unique_book_title_per_shelf",
             ),
         ]
@@ -165,7 +174,10 @@ class Loan(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["book", "patron"],
+                fields=[
+                    "book",
+                    "patron",
+                ],
                 name="unique_open_loan_per_book_patron",
             ),
         ]

@@ -13,8 +13,8 @@
 - Add tests in the same change as code; sweep all three test trees for orphan imports when removing code
 - Do not run pytest after edits; run only when explicitly asked
 - Run uv run ruff format . and uv run ruff check --fix . after every edit
-- Line length 110
-- COM812 enabled: trailing comma on multi-arg calls expands the layout and locks it in; do not remove
+- Line length 100: ruff line-length=100 is the formatter target and scripts/check_trailing_commas.py reads it from pyproject.toml at runtime (so the fit check cannot drift from the formatter); E501 is graced to 110 via [tool.ruff.lint.pycodestyle] max-line-length=110 so long strings/comments the formatter cannot break do not error
+- Trailing-comma layout is mandatory and enforced by scripts/check_trailing_commas.py (default auto-fix; pre-commit hook + CI `--check`): every list/tuple/dict/set literal or def/method signature with >= the file's threshold items carries a trailing comma so ruff format expands it one item per line; threshold is 4 by default and 2 for any models.py; anything below threshold is collapsed back inline (the fixer removes the over-explosion) unless a nested >=threshold child or the line length forces it multi-line; COM812 only auto-adds to already-multi-line constructs so single-line layout is not enforceable by ruff alone; never put a trailing comma after *args/**kwargs (SyntaxError) or inside a 1-element tuple
 - ERA001 enabled but TODO-anchored Pseudo blocks are exempt; suppress inline with noqa ERA001 if needed; do not refactor pseudo code to satisfy the lint
 - django_strawberry_framework.conf.settings reads DJANGO_STRAWBERRY_FRAMEWORK from the consumer's settings dict; missing keys raise AttributeError
 - Add settings keys only when the feature that needs them lands; do not preemptively populate

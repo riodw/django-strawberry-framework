@@ -1,0 +1,33 @@
+# Pre-commit hooks for django-strawberry-framework.
+#
+# Install once:   uvx pre-commit install
+# Run on all:     uvx pre-commit run --all-files
+#
+# Local hooks use `uv run` so they share the project's pinned ruff (no separate
+# pinned-rev drift). Order matters: the trailing-comma fixer adds/removes the
+# commas (and reflows the files it touches), then ruff-format normalizes the
+# rest, then ruff lints.
+repos:
+  - repo: local
+    hooks:
+      - id: trailing-comma-layout
+        name: trailing-comma layout (explode >=4; models.py >=2; collapse below)
+        entry: uv run python scripts/check_trailing_commas.py --fix
+        language: system
+        types: [python]
+        exclude: /migrations/
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+        require_serial: true
+
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+        require_serial: true

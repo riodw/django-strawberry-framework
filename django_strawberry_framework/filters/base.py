@@ -1,4 +1,4 @@
-"""Filter primitives + `RelatedFilter` + `LazyRelatedClassMixin` (Slice 1).
+"""Filter primitives + `RelatedFilter` (Slice 1).
 
 Layers 1 and 2 of the six-layer pipeline (spec-021 Decision 3) plus the
 five parity-floor primitives (spec-021 Decision 4):
@@ -12,8 +12,10 @@ five parity-floor primitives (spec-021 Decision 4):
 - `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter`: ports of the matching
   Graphene primitive with the decode step substituted to
   `strawberry.relay.GlobalID.from_id(value)` per Decision 4 M6.
-- `LazyRelatedClassMixin`: verbatim port from
-  `django_graphene_filters/mixins.py::LazyRelatedClassMixin`.
+- `LazyRelatedClassMixin`: re-exported from the package-root
+  `sets_mixins` module (shared with the future order / aggregate sets);
+  imported here so `RelatedFilter` and the `filters` public surface keep
+  exposing it unchanged.
 - `RelatedFilter`: collapsed port of the cookbook's
   `BaseRelatedFilter` + `RelatedFilter(BaseRelatedFilter, ModelChoiceFilter)`
   pair into a single consumer-facing class so the public surface matches
@@ -26,12 +28,13 @@ from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import ValidationError
 from django.forms import Field, MultipleChoiceField
-from django.utils.module_loading import import_string
 from django_filters import Filter, ModelChoiceFilter, MultipleChoiceFilter
 from django_filters.constants import EMPTY_VALUES
 from django_filters.filters import FilterMethod
 from graphql import GraphQLError
 from strawberry import relay
+
+from ..sets_mixins import LazyRelatedClassMixin
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.http import HttpRequest
@@ -294,41 +297,6 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
             return super().filter(qs, None)
         node_ids = [_decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)]
         return super().filter(qs, node_ids)
-
-
-class LazyRelatedClassMixin:
-    """Resolve a class reference that may be a string, callable, or class.
-
-    Verbatim port of `django_graphene_filters/mixins.py::LazyRelatedClassMixin`.
-    Used by `RelatedFilter` to break cycles between filtersets declared in
-    the same module without forcing an `if TYPE_CHECKING` dance on the
-    consumer.
-    """
-
-    def resolve_lazy_class(self, class_ref: Any, bound_class: type | None) -> Any:
-        """Resolve `class_ref` to a class.
-
-        Strings resolve via two attempts:
-
-        1. As an absolute import path through `import_string`.
-        2. On `ImportError`, prefixed with `bound_class.__module__` so an
-           unqualified `"ManagerFilter"` resolves against the owning
-           filterset's module.
-
-        Callables that are not classes are invoked as zero-arg factories;
-        everything else is returned as-is.
-        """
-        if isinstance(class_ref, str):
-            try:
-                return import_string(class_ref)
-            except ImportError:
-                if bound_class:
-                    path = ".".join([bound_class.__module__, class_ref])
-                    return import_string(path)
-                raise
-        elif callable(class_ref) and not isinstance(class_ref, type):
-            return class_ref()
-        return class_ref
 
 
 class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):

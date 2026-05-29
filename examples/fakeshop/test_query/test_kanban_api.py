@@ -19,11 +19,10 @@ import importlib
 import sys
 
 import pytest
+from apps.kanban import models
 from django.test import Client
 from django.urls import clear_url_caches
 from strawberry import relay
-
-from apps.kanban import models
 
 
 @pytest.fixture(autouse=True)

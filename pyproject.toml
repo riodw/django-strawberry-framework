@@ -55,7 +55,7 @@ build-backend = "hatchling.build"
 packages = ["django_strawberry_framework"]
 
 [tool.ruff]
-line-length = 110
+line-length = 100
 target-version = "py310"
 exclude = [
     ".git",
@@ -115,6 +115,11 @@ convention = "google"
 [tool.ruff.lint.flake8-quotes]
 inline-quotes = "double"
 multiline-quotes = "double"
+
+[tool.ruff.lint.pycodestyle]
+# The formatter wraps code at line-length (100); E501 only flags lines past 110
+# -- the grace covers long strings/comments the formatter cannot break.
+max-line-length = 110
 
 [tool.coverage.run]
 source = ["django_strawberry_framework"]

@@ -25,6 +25,8 @@ jobs:
         run: uv run ruff check .
       - name: Ruff Format Check
         run: uv run ruff format --check .
+      - name: Trailing-comma layout (>=4 elements; models.py >=2)
+        run: uv run python scripts/check_trailing_commas.py --check
 
   test:
     name: Python ${{ matrix.python }} - Django ${{ matrix.django }} - ${{ matrix.database }}

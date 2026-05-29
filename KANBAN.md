@@ -345,6 +345,142 @@ Dependencies:
 - optimizer `Prefetch` downgrade
 - future `DjangoConnectionField`
 
+Upstream reference — the permission model to honor (prior research):
+
+> Captured here so `docs/spec-permissions.md` starts from the verified upstream
+> design instead of re-deriving it. Surfaced while reviewing the `DONE-021-0.0.8`
+> filter card and relocated from `docs/feedback.md` — the cascade is a
+> permissions-subsystem concern, not a filter-input one. Paths below are absolute
+> into the two upstreams (`~/projects/django-graphene-filters/`,
+> `~/projects/strawberry-django-main/`). Be exhaustive in the spec; we cannot get
+> this wrong.
+
+Core principle: **permissions are written ONCE per model/field and auto-gated by
+traversal.** Row security is a `get_queryset` row-visibility cascade — NEVER a
+per-filter-field denial gate. The visibility rule is written once on each type and
+enforced at the root query, at every nested resolver, AND through every filter path
+(flat or nested), because filtering runs on top of the already-scoped queryset.
+
+Upstream mechanism (`~/projects/django-graphene-filters/`):
+
+- Each node type writes visibility ONCE in `get_queryset`
+  (`examples/cookbook/cookbook/recipes/schema.py:32-39`; `Object` / `Attribute` /
+  `Value` nodes at `:59-66`, `:86-93`, `:121-128`):
+
+  ```python
+  @classmethod
+  def get_queryset(cls, queryset, info):
+      if user.is_staff: return queryset
+      return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+  ```
+
+- `apply_cascade_permissions(node_class, queryset, info, fields=None)`
+  (`django_graphene_filters/permissions.py:19-111`) excludes rows whose FK points to a
+  target the user cannot see, by consulting the **target node's own `get_queryset`**
+  (`:87-98`) and AND-ing `Q(<fk>__in=<visible target qs>) | Q(<fk>__isnull=True)`
+  (`:103-105`). Invariants to port verbatim:
+  - **Cycle detection** via a `ContextVar` "seen" set (`:16`, `:61-69`) — correct for
+    sync (WSGI) and async (ASGI); breaks self/mutually-referential graphs.
+  - **Single-column FK / O2O only**: skip relations without a `column` attribute, so
+    M2M (join-table) is NOT cascaded here (`:79`).
+  - **Multi-DB / sharding**: the target visibility subquery is pinned to the caller's
+    alias (`field.related_model._default_manager.using(queryset.db)`, `:96`) so the
+    outer `__in` stays on one database.
+  - **Nullable FK rows preserved** (a NULL FK references no hidden target) (`:103-105`).
+  - Optional `fields=` to cascade only specific FK names (`:82-84`).
+- The contract is proven across depth in
+  `examples/cookbook/cookbook/recipes/tests/`:
+  - `test_permissions_nested.py::test_not_authenticated_cascade_permissions` — an
+    anonymous user gets NO private data at `objectType`, `values`,
+    `values.attribute`, or `values.attribute.objectType`, all from the single
+    per-model rule.
+  - `test_permissions.py` — root cascade counts (`cascade_public_count` = public rows
+    whose FK targets are also public) for ObjectType / Object / Attribute / Value.
+  - `test_permissions_nested.py::test_view_object_user_object_type_id_consistency` —
+    the **sentinel** behavior: a user who can see Objects but not ObjectTypes gets a
+    sentinel preserving the real FK id, so ids stay consistent across the root and
+    nested occurrences of the hidden target.
+  - `test_permissions_async.py`, `test_permissions_combos.py`,
+    `test_permissions_django.py`, `test_permissions_nested_1.py` — async, combination,
+    Django-permission, and additional nested coverage.
+
+`check_<field>_permission` is a FieldSet concern (field VISIBILITY), NOT row security
+and NOT a filter gate:
+
+- Upstream's `check_<field>_permission(info)` lives on `AdvancedFieldSet`
+  (`django_graphene_filters/fieldset.py:1-13, 40-46, 103-115`). The metaclass
+  discovers the methods (`:40-46`); at resolve time a denied field returns a
+  type-appropriate default / sentinel (cascade order `:1-13`: gate → `resolve_<field>`
+  override → default resolver).
+- `AggregateSet` carries its own `check_<field>_permission` /
+  `check_<field>_<stat>_permission` gates fired in the planning phase
+  (`django_graphene_filters/aggregateset.py:534-562, 665-666`).
+- A per-field **filter-denial** gate (raise to block *filtering by* a field) exists in
+  neither upstream. The field-level permission story belongs with the FieldSet
+  (`TODO-BETA-038-0.1.1`) — cross-reference that card.
+
+Why filter-input shape (flat vs nested) is permission-irrelevant (the
+`DONE-021-0.0.8` finding that routed here): filtering narrows an already-cascade-scoped
+queryset, so `allObjects(objectTypeName: "Secret")` cannot surface an Object whose
+ObjectType is private — the cascade removed it first. Flat or nested path, identical
+result. The `HIDE_FLAT_FILTERS` toggle shipped in `DONE-021-0.0.8` is a surface-shape
+preference, not a security control.
+
+strawberry-django side (🍓 parity-adjacent, weaker): its filter compiler
+(`~/projects/strawberry-django-main/strawberry_django/filters.py::process_filters`,
+`:164-283`) has no permission cascade; field-permission is via separate field
+extensions, not a model-graph cascade. So the cascade is primarily ⚛️ graphene-django
+parity.
+
+Mapping to this framework — what exists vs what this card must add:
+
+- EXISTS: per-active-`RelatedFilter`-branch `get_queryset` scoping
+  (`django_strawberry_framework/filters/sets.py::_derive_related_visibility_querysets_sync`
+  / `_async`, the Decision-8 / spec-021 H1-rev5 path) and the sync/async dispatch
+  `django_strawberry_framework/types/relay.py::_apply_get_queryset_sync` / `_async`.
+  Reuse these for the per-target visibility subquery.
+- EXISTS (registry seam): walk owner types via `registry.iter_definitions()` to find
+  each model's owning type + its `get_queryset` (per the Foundation-slice seam above).
+- MISSING: the parent-queryset FK cascade itself — a framework
+  `apply_cascade_permissions(cls, queryset, info)` analog (sync + async). Core
+  deliverable.
+- RECONCILE: the framework currently ships a per-field FILTER-denial gate
+  `check_<field>_permission(self, request)` (`DONE-021-0.0.8` —
+  `sets.py::_run_permission_checks` / `_invoke_permission_method` / `check_permissions`;
+  demonstrated by `examples/fakeshop/apps/products/filters.py::CategoryFilter.check_name_permission`).
+  This is NOT row security and fires only on the nested branch (flat traversal does not
+  trigger it). The spec must decide its fate (keep as explicit non-security UX denial,
+  or replace with FieldSet field-visibility + the cascade) — do NOT leave it presented
+  as a security boundary.
+
+Design requirements for `docs/spec-permissions.md`:
+
+- `apply_cascade_permissions(cls, queryset, info)` with sync AND async variants
+  (mirror `_apply_get_queryset_sync` / `_async`).
+- Port the four upstream invariants verbatim with a test each: ContextVar cycle guard;
+  single-column FK / O2O only (skip M2M here); multi-DB alias pinning via `queryset.db`;
+  nullable-FK preservation.
+- Hidden-FK semantics reached via selection: upstream sentinels with a real id —
+  decide whether this framework excludes the row, nulls the field, or sentinels, and
+  keep ids consistent across depths (per `test_view_object_user_object_type_id_consistency`).
+- Per-field permission hooks via `Meta` (Scope) — pin whether they live on the FieldSet
+  (visibility) or the FilterSet (filter-denial), and how they compose with the cascade.
+- Optimizer `Prefetch`-downgrade integration (Scope): a cascaded relation must downgrade
+  a `select_related` join to a filtered `Prefetch` so visibility holds on prefetched
+  sets; check every permission ORM path for N+1 (DoD).
+- Composability: permission rules stay visible from the owning type/query surface (Scope).
+
+Open questions the spec must answer:
+
+- Does `check_<field>_permission(self, request)` (filter-denial) survive, deprecate, or
+  move to the FieldSet? Migration path for `DONE-021-0.0.8` consumers.
+- Hidden-FK semantics: exclude row vs null field vs sentinel — and the cross-depth id
+  consistency guarantee.
+- Cascade performance: subquery-per-FK vs a single annotated pass; N+1 under nested
+  connections; interaction with the optimizer's `only` / `select_related` plan.
+- M2M / reverse-relation visibility (upstream's cascade skips M2M) — in scope here or
+  deferred?
+
 ### TODO-ALPHA-028-0.0.11 — Mutations + auto-generated Input types
 
 Priority: high

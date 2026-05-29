@@ -470,6 +470,49 @@ Design requirements for `docs/spec-permissions.md`:
   sets; check every permission ORM path for N+1 (DoD).
 - Composability: permission rules stay visible from the owning type/query surface (Scope).
 
+Concrete defects in the current `DONE-021-0.0.8` pipeline to fix in this rework
+(surfaced in a `filters/` review pass):
+
+- **Double-fire + ordering of related-branch gates** (Medium). `apply_sync` /
+  `apply_async` derive each active branch's visibility by calling the child
+  filterset's full `apply_sync`
+  (`django_strawberry_framework/filters/sets.py::FilterSet._derive_related_visibility_querysets_sync`
+  / `_async`), which fires the child's `check_*_permission` gates and validates its
+  form. The parent's later
+  `django_strawberry_framework/filters/sets.py::FilterSet._run_permission_checks` then
+  recurses into the SAME child branch and fires those gates AGAIN — the two paths
+  allocate independent `_fired` dedup maps, so the per-class dedup in
+  `_run_permission_checks` cannot span them. Consequences: child gates fire twice
+  (O(N) for depth-N nesting) — harmless for a boolean gate, a real defect for any gate
+  with side effects (audit / rate-limit / metrics); and child-side evaluation happens
+  during visibility derivation, i.e. BEFORE the parent's per-branch
+  `check_<rel>_permission` runs, so a parent gate cannot prevent the child-side work /
+  exposure that already happened. Fix here: derive visibility through a
+  **permission-free** child path (`get_queryset` + nested-leaf narrowing only, not the
+  child's gates/form) and run the parent's per-branch gate **before** child evaluation.
+
+- **`check_permissions` back-compat shim regresses the per-lookup gate-name bug**
+  (Low). `django_strawberry_framework/filters/sets.py::FilterSet.check_permissions`
+  routes already-flattened `django-filter` form keys (`name__icontains`) through
+  `_run_permission_checks`;
+  `django_strawberry_framework/filters/sets.py::FilterSet._active_permission_field_paths`
+  finds no `_field_specs` entry and falls through to
+  `django_strawberry_framework/filters/sets.py::FilterSet._form_key_for_python_attr`,
+  building `check_name_icontains_permission` instead of `check_name_permission` — the
+  per-lookup dispatch the H2 fix removed from the main GraphQL path (which keys on the
+  source field via `django_source_path`). Only this cookbook-compat delegate
+  regresses. Either normalize form-keys back to source fields before dispatch, or
+  document that this entry point gates per-form-key by contract.
+
+- **`_normalize_input` recomputed 3x per `apply`** (Low / perf).
+  `django_strawberry_framework/filters/sets.py::FilterSet._normalize_input` runs in
+  `apply_sync`, again in `_run_permission_checks`, and again per logical branch in
+  `django_strawberry_framework/filters/sets.py::FilterSet._q_for_branch`. Inside
+  `_run_permission_checks` the full normalize is done only to read the `and` / `or` /
+  `not` keys — it could read `and_` / `or_` / `not_` straight off the input via
+  `django_strawberry_framework/filters/inputs.py #"_LOGIC_KEYS"`, skipping a hot-path
+  normalize. Compounds with the redundant child traversal above.
+
 Open questions the spec must answer:
 
 - Does `check_<field>_permission(self, request)` (filter-denial) survive, deprecate, or

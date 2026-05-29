@@ -47,6 +47,7 @@ from django_strawberry_framework.filters.inputs import (
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.finalizer import _bind_filterset_owner
+from django_strawberry_framework.types.relay import apply_interfaces
 
 
 @pytest.fixture(autouse=True)
@@ -856,6 +857,83 @@ def test_bind_filterset_owner_continues_when_both_targets_unresolved():
     # no raise, and the first binding is preserved.
     _bind_filterset_owner(BookFilter, second)
     assert BookFilter._owner_definition is first
+
+
+def test_bind_filterset_owner_rejects_diverging_own_pk_relay_node_ness():
+    """A Relay-node owner and a plain owner cannot share one FilterSet (H4b).
+
+    The filterset's own ``id`` resolves to a GlobalID under the Relay owner
+    but a scalar under the plain owner — an own-PK ambiguity the binding
+    must reject loudly rather than silently pinning to whichever bound
+    first. This is the genuine owner-dependent axis (relation targets
+    resolve globally by target model and cannot diverge).
+    """
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    class RelayShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            interfaces = (relay.Node,)
+            fields = ("id", "code")
+
+    class PlainShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+
+    # ``apply_interfaces`` injects ``relay.Node`` so ``implements_relay_node``
+    # sees the Relay owner as a node (the finalizer's phase-2.5 step, run
+    # here in isolation).
+    apply_interfaces(RelayShelfType, RelayShelfType.__django_strawberry_definition__)
+
+    relay_def = RelayShelfType.__django_strawberry_definition__
+    plain_def = PlainShelfType.__django_strawberry_definition__
+
+    _bind_filterset_owner(ShelfFilter, relay_def)  # first binds
+    with pytest.raises(ConfigurationError) as exc_info:
+        _bind_filterset_owner(ShelfFilter, plain_def)
+    msg = str(exc_info.value)
+    assert "own-primary-key Relay identity" in msg
+    assert "RelayShelfType" in msg
+    assert "PlainShelfType" in msg
+
+
+def test_bind_filterset_owner_rejects_diverging_own_pk_type_name():
+    """Two Relay-node owners with different GraphQL type names can't share a FilterSet (H4b).
+
+    Each owner types the own-PK GlobalID to its own ``graphql_type_name``,
+    so the shared ``id`` filter would validate GlobalIDs against whichever
+    owner finalized first.
+    """
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    class FirstShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            interfaces = (relay.Node,)
+            fields = ("id", "code")
+
+    class SecondShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            interfaces = (relay.Node,)
+            fields = ("id", "code")
+
+    apply_interfaces(FirstShelfType, FirstShelfType.__django_strawberry_definition__)
+    apply_interfaces(SecondShelfType, SecondShelfType.__django_strawberry_definition__)
+
+    _bind_filterset_owner(ShelfFilter, FirstShelfType.__django_strawberry_definition__)
+    with pytest.raises(ConfigurationError) as exc_info:
+        _bind_filterset_owner(ShelfFilter, SecondShelfType.__django_strawberry_definition__)
+    assert "own-primary-key Relay identity" in str(exc_info.value)
 
 
 def test_bind_filterset_owner_raises_when_one_owner_resolves_and_other_does_not():

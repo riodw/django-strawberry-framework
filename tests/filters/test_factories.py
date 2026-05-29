@@ -425,10 +425,16 @@ def test_get_filterset_class_supports_unhashable_meta_values():
 
     # Nested set or list in extra meta
     cls_c = get_filterset_class(
-        None, model=Category, fields={"name": ["exact"]}, extra_opt={"nested": {1, 2, 3}},
+        None,
+        model=Category,
+        fields={"name": ["exact"]},
+        extra_opt={"nested": {1, 2, 3}},
     )
     cls_d = get_filterset_class(
-        None, model=Category, fields={"name": ["exact"]}, extra_opt={"nested": {1, 2, 3}},
+        None,
+        model=Category,
+        fields={"name": ["exact"]},
+        extra_opt={"nested": {1, 2, 3}},
     )
     assert cls_c is cls_d
 

@@ -28,6 +28,7 @@ from django_strawberry_framework.filters import (
     GlobalIDMultipleChoiceFilter,
     RelatedFilter,
 )
+from django_strawberry_framework.filters.sets import _lookups_for_field
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 
@@ -1454,7 +1455,11 @@ def test_resolve_relation_target_type_uses_owner_related_target_for():
 
     class _Owner:
         def related_target_for(self, field_name):
-            return (SimpleNamespace(type=target_type), object())
+            # The pair's first member is a ``DjangoTypeDefinition``, whose
+            # registered ``DjangoType`` class is ``.origin`` -- NOT ``.type``
+            # / ``.type_cls`` (the H3 bug read those nonexistent attrs and
+            # dropped every owner-aware resolution to the registry fallback).
+            return (SimpleNamespace(origin=target_type), object())
 
     class CategoryFilter(FilterSet):
         class Meta:
@@ -1580,28 +1585,42 @@ def test_normalize_input_operator_bag_dict_value_merges_into_form_data():
     """A dict-valued operator-bag lookup is merged into the form data via ``update``.
 
     Exercises the operator-bag ``isinstance(normalized, dict)`` ->
-    ``data.update(normalized)`` branch. A ``range`` lookup yields
-    django-filter's ``ConcreteRangeFilter`` (a CSV-style ``NumberFilter``,
-    NOT the framework ``RangeFilter``), so ``normalize_input_value`` passes
-    the ``{start, end}`` mapping through unchanged and the loop merges its
-    keys into the form-data dict.
+    ``data.update(normalized)`` branch. The framework ``RangeFilter``
+    declared at a ``<field>__range`` name groups under the ``<field>``
+    operator bag; its ``{start, end}`` value normalizes to the positional
+    ``<key>_0`` / ``<key>_1`` patch that the loop merges in. (django-filter's
+    own ``range`` lookup instead produces a CSV ``BaseRangeFilter`` whose
+    value is a *list*, not a dict -- see
+    ``test_convert_filter_to_input_annotation_csv_in_filter_is_list`` -- so
+    the framework ``RangeFilter`` is the primitive that drives this
+    dict-merge path.)
     """
     import dataclasses
+
+    from django_strawberry_framework.filters import RangeFilter
 
     @dataclasses.dataclass
     class _FinesBag:
         range: Any = None
 
     class PatronFilter(FilterSet):
+        lifetime_fines_cents__range = RangeFilter(
+            field_name="lifetime_fines_cents",
+            lookup_expr="range",
+        )
+
         class Meta:
             model = library_models.Patron
-            fields = {"lifetime_fines_cents": ["range"]}
+            fields = []
 
     data = PatronFilter._normalize_input(
         {"lifetime_fines_cents": _FinesBag(range={"start": 1, "end": 5})},
     )
     # The dict-valued normalization result is merged key-by-key.
-    assert data == {"start": 1, "end": 5}
+    assert data == {
+        "lifetime_fines_cents__range_0": 1,
+        "lifetime_fines_cents__range_1": 5,
+    }
 
 
 @pytest.mark.django_db
@@ -1660,3 +1679,168 @@ def test_derive_related_visibility_querysets_async_skips_unregistered_target():
         ),
     )
     assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# Own-PK Relay lookup cardinality (H5a)
+# ---------------------------------------------------------------------------
+
+
+def test_own_pk_in_lookup_uses_global_id_multiple_choice_filter():
+    """Own-PK ``in`` -> ``GlobalIDMultipleChoiceFilter`` (a LIST of GlobalIDs).
+
+    H5a: the own-PK branch must honor lookup cardinality. ``exact`` is a
+    single GlobalID; ``in`` consumes a list. Both ``filter_for_lookup``
+    (class selection) and ``filter_for_field`` (instance construction)
+    previously collapsed EVERY lookup to a single ``GlobalIDFilter``.
+    """
+
+    class BookType(DjangoType):
+        class Meta:
+            model = library_models.Book
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(BookType, BookType.__django_strawberry_definition__)
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    BookFilter._owner_definition = BookType.__django_strawberry_definition__
+    pk_field = library_models.Book._meta.pk
+
+    # Class-selection path.
+    exact_cls, _ = BookFilter.filter_for_lookup(pk_field, "exact")
+    in_cls, _ = BookFilter.filter_for_lookup(pk_field, "in")
+    assert exact_cls is GlobalIDFilter
+    assert in_cls is GlobalIDMultipleChoiceFilter
+
+    # Instance-construction path agrees.
+    resolved_exact = BookFilter.filter_for_field(pk_field, "id", "exact")
+    assert isinstance(resolved_exact, GlobalIDFilter)
+    assert not isinstance(resolved_exact, GlobalIDMultipleChoiceFilter)
+    resolved_in = BookFilter.filter_for_field(pk_field, "id", "in")
+    assert isinstance(resolved_in, GlobalIDMultipleChoiceFilter)
+
+
+# ---------------------------------------------------------------------------
+# Permission gate dispatch keys on the field, not the lookup (H2)
+# ---------------------------------------------------------------------------
+
+
+def test_run_permission_checks_fires_gate_for_non_exact_lookup():
+    """``check_<field>_permission`` fires for ANY lookup, not just ``exact`` (H2).
+
+    The gate was dispatched on the lookup-expanded form key
+    (``name__icontains`` -> ``check_name_icontains_permission``), so only
+    ``exact`` (whose form key is the bare field name) ever matched. The
+    gate now keys on the source field, firing once across every lookup.
+    """
+    import dataclasses
+
+    fired: list[str] = []
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact", "icontains"]}
+
+        def check_name_permission(self, request):
+            fired.append("name")
+
+    @dataclasses.dataclass
+    class _NameBag:
+        i_contains: str | None = None
+
+    @dataclasses.dataclass
+    class _Input:
+        name: Any = None
+
+    # Only the ``icontains`` lookup is supplied -- under the old form-key
+    # dispatch this produced ``name__icontains`` and the gate never fired.
+    CategoryFilter._run_permission_checks(
+        _Input(name=_NameBag(i_contains="foo")),
+        request=HttpRequest(),
+    )
+    assert fired == ["name"]
+
+
+def test_active_permission_field_paths_covers_input_shapes():
+    """``_active_permission_field_paths`` resolves source paths, skips the rest (H2)."""
+    import dataclasses
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    # None / UNSET / non-(dict-or-dataclass) -> empty.
+    assert BranchFilter._active_permission_field_paths(None) == []
+    assert BranchFilter._active_permission_field_paths(strawberry.UNSET) == []
+    assert BranchFilter._active_permission_field_paths(42) == []
+
+    @dataclasses.dataclass
+    class _Input:
+        name: Any = None
+        shelves: Any = None
+        and_: Any = None
+
+    # Active scalar resolves to its source path; the related branch and the
+    # logical-operator key are excluded (gated elsewhere); ``None`` skipped.
+    paths = BranchFilter._active_permission_field_paths(
+        _Input(name="x", shelves={"code": "y"}, and_=[{"name": "z"}]),
+    )
+    assert paths == ["name"]
+    # A raw dict resolves via the form-key fallback.
+    assert BranchFilter._active_permission_field_paths({"name": "x"}) == ["name"]
+
+
+# ---------------------------------------------------------------------------
+# Per-field ``Meta.fields = {"<field>": "__all__"}`` lookup expansion
+# ---------------------------------------------------------------------------
+
+
+def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms():
+    """`_lookups_for_field` returns concrete lookups and drops Transforms."""
+    name_field = Category._meta.get_field("name")  # TextField
+    date_field = Category._meta.get_field("created_date")  # DateTimeField
+
+    name_lookups = _lookups_for_field(name_field)
+    assert {"exact", "icontains", "gt", "lt", "in", "range", "isnull", "startswith"} <= set(name_lookups)
+
+    date_lookups = _lookups_for_field(date_field)
+    assert {"exact", "gt", "lt"} <= set(date_lookups)
+    # Temporal transforms (year / month / date / time / ...) are excluded:
+    # the per-field operator-bag input shape has no nested-transform form.
+    assert {"year", "month", "day", "date", "time", "week"}.isdisjoint(date_lookups)
+
+    # A missing field resolves to an empty list (defensive).
+    assert _lookups_for_field(None) == []
+
+
+def test_get_fields_expands_per_field_all_lookups():
+    """`Meta.fields = {"field": "__all__"}` expands to the field's concrete lookups."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": "__all__", "description": ["exact"]}
+
+    fields = CategoryFilter.get_fields()
+    # ``name`` expanded to its full concrete-lookup set; ``description`` left
+    # exactly as declared (only the ``"__all__"`` value is rewritten).
+    assert {"exact", "icontains", "gt", "in", "range", "isnull", "startswith"} <= set(fields["name"])
+    assert fields["description"] == ["exact"]
+
+    # The expansion makes ``get_filters()`` succeed where the raw ``"__all__"``
+    # string previously raised ``FieldLookupError`` (mis-read as a lookup).
+    filter_names = set(CategoryFilter.get_filters())
+    assert {"name", "name__icontains", "name__startswith", "name__in"} <= filter_names

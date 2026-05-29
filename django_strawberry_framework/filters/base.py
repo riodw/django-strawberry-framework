@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import ValidationError
-from django.forms import Field
+from django.forms import Field, MultipleChoiceField
 from django.utils.module_loading import import_string
 from django_filters import Filter, ModelChoiceFilter, MultipleChoiceFilter
 from django_filters.constants import EMPTY_VALUES
@@ -254,13 +254,39 @@ class GlobalIDFilter(Filter):
         return super().filter(qs, node_id)
 
 
+class _GlobalIDMultipleChoiceField(MultipleChoiceField):
+    """``MultipleChoiceField`` that skips fixed-``choices`` validation.
+
+    ``MultipleChoiceField.valid_value`` rejects any submitted value that
+    is not in ``self.choices`` -- and a ``GlobalIDMultipleChoiceFilter``
+    has no static choice set (its ``choices`` default to ``[]``), so the
+    stock field rejected EVERY GlobalID at form-clean time before the
+    filter's own decode/validate could run. GlobalID list elements are
+    decoded and type-checked in ``GlobalIDMultipleChoiceFilter.filter``
+    (per spec-021 L605), not against a fixed set, so this field accepts
+    any submitted value and defers validation to the filter. Mirrors
+    graphene-django's ``GlobalIDMultipleChoiceField``.
+    """
+
+    def valid_value(self, value: Any) -> bool:  # noqa: ARG002 - signature fixed by Django.
+        """Accept any value; GlobalID validation happens in the filter."""
+        return True
+
+
 class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
     """Multi-value sibling of `GlobalIDFilter`.
 
     Validates every list element independently per spec-021 L605; a
     single wrong-type element rejects the whole input with the offending
     index named in the error message.
+
+    Uses `_GlobalIDMultipleChoiceField` so the form-clean step does not
+    reject submitted GlobalIDs against an empty `choices` set (the stock
+    `MultipleChoiceField` would); decode + type validation run in
+    `filter` instead.
     """
+
+    field_class = _GlobalIDMultipleChoiceField
 
     def filter(self, qs: Any, value: Any) -> Any:
         """Decode + validate every GlobalID; delegate to the parent filter."""

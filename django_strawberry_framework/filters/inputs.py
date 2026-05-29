@@ -28,6 +28,7 @@ import strawberry
 from django.db import models
 from django_filters import ChoiceFilter, Filter, TypedChoiceFilter
 from django_filters import RangeFilter as _DjangoRangeFilter
+from django_filters.filters import BaseCSVFilter
 from strawberry import UNSET, relay
 
 from ..exceptions import ConfigurationError
@@ -338,6 +339,16 @@ def convert_filter_to_input_annotation(
         annotation = list[str]
     elif isinstance(filter_instance, GlobalIDFilter):
         annotation = str
+    elif isinstance(filter_instance, BaseCSVFilter):
+        # django-filter expands ``Meta.fields`` ``in`` / ``range`` lookups
+        # into ``BaseInFilter`` / ``BaseRangeFilter`` (both ``BaseCSVFilter``
+        # subclasses) whose form field consumes a LIST of values, not a
+        # scalar. Without this branch they fell through to the scalar
+        # catch-all and the generated input was a single value -- the
+        # runtime CSV field then mis-parsed a lone scalar as a 1-element
+        # list. Our own ``RangeFilter`` primitive (a ``{start, end}`` input)
+        # is a separate, non-CSV class handled by the branch below.
+        annotation = list[_scalar_from_model_field(model_field)]
     elif isinstance(filter_instance, (RangeFilter, _DjangoRangeFilter)):
         inner = _scalar_from_model_field(model_field)
         annotation = _build_range_input_class(filter_instance, inner)
@@ -382,8 +393,11 @@ def normalize_input_value(
 
     Returns one of three shapes:
 
-    - a scalar value (``str`` / ``int`` / decoded ``node_id`` / enum
-      ``.value``) when the filter consumes a single form-data key;
+    - a scalar value (``str`` / ``int`` / wire-form GlobalID string /
+      enum ``.value``) when the filter consumes a single form-data key.
+      A GlobalID is kept in its base64 wire form (not pre-decoded to a
+      bare ``node_id``) so the bound filter can validate its
+      ``type_name`` before decoding;
     - a ``list`` (for ``GlobalIDMultipleChoiceFilter`` / ``ListFilter`` /
       ``ArrayFilter``) when ``django-filter`` consumes a list;
     - a ``dict[str, Any]`` patch the caller merges into the form-data
@@ -405,9 +419,13 @@ def normalize_input_value(
         return None
 
     if isinstance(filter_instance, GlobalIDMultipleChoiceFilter):
-        return [_decode_global_id(item) for item in raw_value]
+        return [_encode_global_id_input(item) for item in raw_value]
     if isinstance(filter_instance, GlobalIDFilter):
-        return _decode_global_id(raw_value)
+        return _encode_global_id_input(raw_value)
+    if isinstance(filter_instance, BaseCSVFilter):
+        # ``in`` / ``range`` generated CSV filters consume a list; unwrap
+        # any enum members per element (parity with ``ListFilter`` below).
+        return [_unwrap_enum_member(item) for item in raw_value]
     if isinstance(filter_instance, (RangeFilter, _DjangoRangeFilter)):
         return _normalize_range_value(filter_instance, raw_value, field_name=field_name)
     if isinstance(filter_instance, (ChoiceFilter, TypedChoiceFilter)):
@@ -422,10 +440,26 @@ def normalize_input_value(
 # ---------------------------------------------------------------------------
 
 
-def _decode_global_id(value: Any) -> Any:
-    """Return the underlying ``node_id`` for a ``relay.GlobalID``-or-string."""
+def _encode_global_id_input(value: Any) -> Any:
+    """Return the wire-form GlobalID string for a ``relay.GlobalID``-or-string.
+
+    ``normalize_input_value`` feeds GlobalID-aware filters their form-data
+    value. A ``relay.GlobalID`` OBJECT (the shape a direct-Python
+    ``apply_sync`` / ``apply_async`` caller passes) MUST keep its
+    ``type_name`` so ``GlobalIDFilter.filter`` /
+    ``GlobalIDMultipleChoiceFilter.filter`` can validate it against the
+    target GraphQL type (spec-021 L603) before any queryset clause runs.
+    The previous implementation eagerly decoded the object down to its
+    bare ``node_id`` here -- stripping the ``type_name`` *before*
+    validation, so a wrong-type GlobalID object silently passed the gate.
+    Re-encoding to the base64 wire string preserves the type, survives
+    the ``django-filter`` form ``clean`` step, and lets the bound filter
+    run the canonical decode-and-validate path. A ``str`` value is
+    already wire-form and passes through unchanged, so the GraphQL string
+    path is untouched.
+    """
     if isinstance(value, relay.GlobalID):
-        return value.node_id
+        return relay.to_base64(value.type_name, value.node_id)
     return value
 
 

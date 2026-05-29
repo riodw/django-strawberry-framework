@@ -29,8 +29,9 @@ from typing import Any
 import strawberry
 from strawberry.types import Info
 
-from apps.scalars import models
+from apps.scalars import filters, models
 from django_strawberry_framework import BigInt, DjangoType
+from django_strawberry_framework.filters import filter_input_type
 
 
 class ScalarSpecimenTagType(DjangoType):
@@ -49,6 +50,7 @@ class ScalarSpecimenTagType(DjangoType):
     class Meta:
         model = models.ScalarSpecimenTag
         fields = ("id", "label", "active", "tagged_specimens")
+        filterset_class = filters.ScalarSpecimenTagFilter
 
 
 class ScalarSpecimenType(DjangoType):
@@ -74,6 +76,7 @@ class ScalarSpecimenType(DjangoType):
             "nullable_partners",
             "tag",
         )
+        filterset_class = filters.ScalarSpecimenFilter
 
 
 class NullableScalarSpecimenType(DjangoType):
@@ -102,6 +105,7 @@ class NullableScalarSpecimenType(DjangoType):
             "unsigned_big",
             "partner",
         )
+        filterset_class = filters.NullableScalarSpecimenFilter
 
 
 @strawberry.type
@@ -109,8 +113,15 @@ class Query:
     """Scalars coverage root fields."""
 
     @strawberry.field
-    def all_scalar_specimens(self) -> list[ScalarSpecimenType]:
-        return models.ScalarSpecimen.objects.order_by("id")
+    def all_scalar_specimens(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.ScalarSpecimenFilter) | None = None,  # noqa: A002
+    ) -> list[ScalarSpecimenType]:
+        queryset = models.ScalarSpecimen.objects.order_by("id")
+        if filter is not None:
+            queryset = filters.ScalarSpecimenFilter.apply_sync(filter, queryset, info)
+        return queryset
 
     @strawberry.field
     def all_scalar_specimens_via_manager(self) -> list[ScalarSpecimenType]:
@@ -128,12 +139,26 @@ class Query:
         return models.ScalarSpecimen.objects  # type: ignore[return-value]
 
     @strawberry.field
-    def all_nullable_scalar_specimens(self) -> list[NullableScalarSpecimenType]:
-        return models.NullableScalarSpecimen.objects.order_by("id")
+    def all_nullable_scalar_specimens(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.NullableScalarSpecimenFilter) | None = None,  # noqa: A002
+    ) -> list[NullableScalarSpecimenType]:
+        queryset = models.NullableScalarSpecimen.objects.order_by("id")
+        if filter is not None:
+            queryset = filters.NullableScalarSpecimenFilter.apply_sync(filter, queryset, info)
+        return queryset
 
     @strawberry.field
-    def all_scalar_specimen_tags(self) -> list[ScalarSpecimenTagType]:
-        return models.ScalarSpecimenTag.objects.order_by("id")
+    def all_scalar_specimen_tags(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.ScalarSpecimenTagFilter) | None = None,  # noqa: A002
+    ) -> list[ScalarSpecimenTagType]:
+        queryset = models.ScalarSpecimenTag.objects.order_by("id")
+        if filter is not None:
+            queryset = filters.ScalarSpecimenTagFilter.apply_sync(filter, queryset, info)
+        return queryset
 
     @strawberry.field
     def scalar_specimen_by_signed_big(self, signed_big: BigInt) -> ScalarSpecimenType | None:

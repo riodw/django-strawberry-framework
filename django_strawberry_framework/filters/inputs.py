@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime
 import decimal
+import enum
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -467,13 +468,18 @@ def _encode_global_id_input(value: Any) -> Any:
 
 
 def _unwrap_enum_member(value: Any) -> Any:
-    """Return ``value.value`` for a Strawberry-enum member; passthrough otherwise."""
-    member_value = getattr(value, "value", None)
-    if member_value is not None and hasattr(value, "name"):
-        # Strawberry-enum members have both ``.name`` and ``.value``; the
-        # ``hasattr`` check distinguishes them from plain wrapper objects
-        # that happen to expose ``.value`` (e.g. ``decimal.Decimal``).
-        return member_value
+    """Return ``value.value`` for an ``enum.Enum`` member; passthrough otherwise.
+
+    Structural ``isinstance(value, enum.Enum)`` rather than duck-typing on
+    ``.value`` / ``.name``: a ``@strawberry.enum`` decorates a Python
+    ``enum.Enum``, so its members ARE ``enum.Enum`` instances. The structural
+    check also correctly unwraps a member whose ``.value`` is legitimately
+    ``None`` (the prior value-truthiness guard returned such a member
+    un-unwrapped), and it never misfires on plain objects that merely expose a
+    ``.value`` attribute (e.g. ``decimal.Decimal``).
+    """
+    if isinstance(value, enum.Enum):
+        return value.value
     return value
 
 

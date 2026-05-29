@@ -418,6 +418,22 @@ def test_normalize_input_value_unwraps_enum_member():
     assert normalize_input_value(f, Color.RED) == "red"
 
 
+def test_normalize_input_value_unwraps_enum_member_with_none_value():
+    """An enum member whose ``.value`` is ``None`` unwraps to ``None`` (feedback2 #4).
+
+    The structural ``isinstance(value, enum.Enum)`` check unwraps it; the prior
+    value-truthiness guard returned the member object un-unwrapped instead.
+    """
+
+    class Tri(Enum):
+        YES = "yes"
+        UNKNOWN = None
+
+    from django_filters import ChoiceFilter
+
+    assert normalize_input_value(ChoiceFilter(), Tri.UNKNOWN) is None
+
+
 def test_normalize_input_value_range_filter_emits_positional_keys():
     """RangeFilter -> `{<field>_0: start, <field>_1: end}` positional patch."""
     f = RangeFilter(field_name="lifetime_fines_cents")

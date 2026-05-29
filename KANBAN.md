@@ -1017,6 +1017,45 @@ Files likely touched:
 - `docs/GLOSSARY.md`
 
 
+### TODO-BETA-049-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)
+
+Priority: medium-high
+
+Status: planned
+
+Relative size: M
+
+- An in-process `tests/` (NON-`/graphql/`) hardening pass whose goal is to BREAK the framework, not to earn line coverage. Live-reachable coverage already lives in `examples/fakeshop/test_query/` per its README rule; the root `tests/` tree is reserved for cases a live query cannot reach — fill it with hostile / pathological inputs rather than coverage duplicates.
+
+Why it matters:
+
+- `fail_under = 100` proves every LINE executes, not that the code is CORRECT under abuse. The failures that matter — deeply nested logic trees, malformed / wrong-`type_name` GlobalIDs, cyclic `RelatedFilter` graphs, conflicting multi-owner reuse, UNSET/None permutations, oversized `Meta.fields = "__all__"` expansions, unicode / null-byte / oversized values — are exactly the ones a happy-path live query never exercises.
+
+Current behavior:
+
+- Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-021-0.0.8`).
+- There is no deliberate "try to break it" suite; adversarial inputs are covered only incidentally.
+
+Potential scope:
+
+- Property-based / fuzz-style tests (e.g. Hypothesis) for the filter input normalizer, GlobalID decode/validate, and `Meta.fields = "__all__"` expansion.
+- Pathological structure: logic-tree nesting past `_MAX_LOGIC_DEPTH`, cyclic / self-referential `RelatedFilter` graphs, conflicting multi-owner reuse, proxy / MTI model mixing.
+- Hostile wire values: bad-base64 / wrong-`type_name` GlobalIDs, oversized `in` lists, unicode / emoji / null bytes, `strawberry.UNSET` / `None` across every operator-bag slot.
+- Scale / resource: very large `"__all__"` field sets and many-relation BFS; assert every failure surfaces as `ConfigurationError` / `GraphQLError` (never a bare traceback) and finalize stays bounded.
+- Extend the same philosophy to the future order / aggregate / fieldset subsystems as they land.
+
+Definition of done:
+
+- A dedicated adversarial suite under `tests/` exercises the categories above; every hostile input fails LOUDLY with a typed error rather than crashing.
+- Root `tests/` holds only genuinely-unreachable-from-live cases plus the new adversarial ones; any remaining live-reachable duplicates are pruned (per `examples/fakeshop/test_query/README.md`).
+- Coverage stays at 100% without relying on the pruned duplicates.
+
+Files likely touched:
+
+- new adversarial test modules under `tests/`
+- `examples/fakeshop/test_query/README.md` (cross-reference the adversarial-vs-unreachable split)
+
+
 ### TODO-STABLE-046-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)
 
 Priority: critical — release card

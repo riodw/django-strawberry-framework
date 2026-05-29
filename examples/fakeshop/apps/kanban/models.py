@@ -1,0 +1,600 @@
+"""A relational rendering of this repository's own ``KANBAN.md`` board.
+
+The app dogfoods the framework: every value that can recur across cards is its
+own lookup model (no inline ``choices``/enums), so the board can be queried from
+either side (``status(key:"done"){cards}`` or a ``CardFilter``), and the
+resulting schema is the example tree's most FK-dense / O2O-dense graph.
+
+Two foundations every model leans on:
+
+* :class:`TimeStampedModel` -- an abstract base adding ``created_date`` /
+  ``updated_date`` to every table (the products app inlines the same two
+  fields; an abstract base is the DRY equivalent for this many models).
+* :class:`UUIDModel` -- a single side-table whose UUID primary key is the
+  stable, opaque identifier for whichever model row its (one non-null)
+  one-to-one link points at. This is NOT a ``uuid`` column on each model; each
+  domain row reaches its UUID via the reverse accessor ``instance.uuid.id``. A
+  ``post_save`` signal creates the row automatically on first save.
+"""
+
+import operator
+import uuid
+from functools import reduce
+
+from django.db import models
+from django.db.models.lookups import Exact
+from django.db.models.signals import post_save
+
+# ---------------------------------------------------------------------------
+# Abstract bases
+# ---------------------------------------------------------------------------
+
+
+class TimeStampedModel(models.Model):
+    """Audit timestamps inherited by every kanban model."""
+
+    created_date = models.DateTimeField(auto_now_add=True, editable=False)
+    updated_date = models.DateTimeField(auto_now=True, editable=False)
+
+    class Meta:
+        abstract = True
+
+
+class LookupBase(TimeStampedModel):
+    """Common shape for the option/lookup tables: ``key`` / ``label`` / ``order``.
+
+    A two-level abstract chain (``LookupBase`` -> ``TimeStampedModel``) so the
+    concrete lookups inherit both the audit timestamps and the lookup columns --
+    which also exercises the framework's handling of fields flattened from more
+    than one abstract ancestor.
+    """
+
+    key = models.SlugField(unique=True)
+    label = models.TextField()
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        abstract = True
+        ordering = ["order"]
+
+    def __str__(self):
+        return self.label
+
+
+# ---------------------------------------------------------------------------
+# Lookup (option) models -- each row recurs across many cards
+# ---------------------------------------------------------------------------
+
+
+class Milestone(LookupBase):
+    """The development phase: ``alpha`` / ``beta`` / ``stable``."""
+
+    version_floor = models.TextField(blank=True, default="")
+    version_ceiling = models.TextField(blank=True, default="")
+    description = models.TextField(blank=True, default="")
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "milestone"
+        verbose_name_plural = "milestones"
+
+
+class Status(LookupBase):
+    """The board column: ``todo`` / ``wip`` / ``blocked`` / ``done``."""
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "status"
+        verbose_name_plural = "statuses"
+
+
+class Priority(LookupBase):
+    """``high`` / ``medium`` / ``low``."""
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "priority"
+        verbose_name_plural = "priorities"
+
+
+class Severity(LookupBase):
+    """``major`` / ``medium`` / ``low``."""
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "severity"
+        verbose_name_plural = "severities"
+
+
+class RelativeSize(LookupBase):
+    """T-shirt size: ``xs`` / ``s`` / ``m`` / ``l`` / ``xl``."""
+
+    rank = models.PositiveIntegerField(default=0)
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "relative size"
+        verbose_name_plural = "relative sizes"
+
+
+class PlanningState(LookupBase):
+    """The ``Status:`` line keyword: ``planned`` / ``needs_spec`` / ``in_progress`` / ..."""
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "planning state"
+        verbose_name_plural = "planning states"
+
+
+class Upstream(LookupBase):
+    """A parity target: ``graphene_django`` (⚛️) / ``strawberry_django`` (🍓)."""
+
+    emoji = models.TextField(blank=True, default="")
+    homepage = models.TextField(blank=True, default="")
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "upstream"
+        verbose_name_plural = "upstreams"
+
+
+class ParityLevel(LookupBase):
+    """``required`` / ``adjacent``."""
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "parity level"
+        verbose_name_plural = "parity levels"
+
+
+class Section(LookupBase):
+    """The kind of a card's bulleted section (``scope`` / ``definition_of_done`` / ...)."""
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "section"
+        verbose_name_plural = "sections"
+
+
+# ---------------------------------------------------------------------------
+# Version + spec
+# ---------------------------------------------------------------------------
+
+
+class TargetVersion(TimeStampedModel):
+    """The ``X.Y.Z`` a card ships / is planned to ship in (the "target number")."""
+
+    number = models.TextField(unique=True)
+    milestone = models.ForeignKey(
+        Milestone,
+        related_name="target_versions",
+        on_delete=models.PROTECT,
+    )
+    shipped_on = models.DateField(null=True, blank=True)
+    git_ref = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["number"]
+        verbose_name = "target version"
+        verbose_name_plural = "target versions"
+
+    def __str__(self):
+        return f"{self.number} ({self.milestone.key})"
+
+
+class SpecDoc(TimeStampedModel):
+    """A spec file: just a name and a link to it on GitHub."""
+
+    # Unique: the importer upserts a spec by name, and a spec maps to one card.
+    name = models.TextField(unique=True)
+    url = models.URLField(max_length=500)
+
+    class Meta:
+        verbose_name = "spec doc"
+        verbose_name_plural = "spec docs"
+
+    def __str__(self):
+        return self.name
+
+
+# ---------------------------------------------------------------------------
+# Card + its edges
+# ---------------------------------------------------------------------------
+
+
+class Card(TimeStampedModel):
+    """One board card. Every categorical line is a foreign key into a lookup."""
+
+    title = models.TextField(unique=True)
+    # The NNN sequence number. Explicitly unstable / per-card (recomputed when
+    # cards reorder), so it stays a plain integer -- never a key, never a lookup.
+    number = models.PositiveIntegerField()
+
+    status = models.ForeignKey(Status, related_name="cards", on_delete=models.PROTECT)
+    milestone = models.ForeignKey(
+        Milestone,
+        null=True,
+        blank=True,
+        related_name="cards",
+        on_delete=models.SET_NULL,
+    )
+    target_version = models.ForeignKey(
+        TargetVersion,
+        related_name="cards",
+        on_delete=models.PROTECT,
+    )
+    priority = models.ForeignKey(
+        Priority,
+        null=True,
+        blank=True,
+        related_name="cards",
+        on_delete=models.SET_NULL,
+    )
+    severity = models.ForeignKey(
+        Severity,
+        null=True,
+        blank=True,
+        related_name="cards",
+        on_delete=models.SET_NULL,
+    )
+    relative_size = models.ForeignKey(
+        RelativeSize,
+        related_name="cards",
+        on_delete=models.PROTECT,
+    )
+    # Only set for ranges ("S–M"); a second FK into the same lookup.
+    relative_size_high = models.ForeignKey(
+        RelativeSize,
+        null=True,
+        blank=True,
+        related_name="cards_high",
+        on_delete=models.SET_NULL,
+    )
+    planning_state = models.ForeignKey(
+        PlanningState,
+        related_name="cards",
+        on_delete=models.PROTECT,
+    )
+    planning_note = models.TextField(blank=True, default="")
+    summary = models.TextField(blank=True, default="")
+    body = models.TextField(blank=True, default="")
+
+    spec = models.OneToOneField(
+        SpecDoc,
+        null=True,
+        blank=True,
+        related_name="card",
+        on_delete=models.SET_NULL,
+    )
+
+    dependencies = models.ManyToManyField(
+        "self",
+        symmetrical=False,
+        related_name="dependents",
+        blank=True,
+    )
+    parity = models.ManyToManyField(
+        Upstream,
+        through="ParityClaim",
+        related_name="cards",
+        blank=True,
+    )
+    labels = models.ManyToManyField(
+        "Label",
+        related_name="cards",
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["number"]
+        verbose_name = "card"
+        verbose_name_plural = "cards"
+        constraints = [
+            # The board's card id -- STATUS[-MILESTONE]-NNN-X.Y.Z -- is unique.
+            # NNN alone is not (DONE/TODO keep independent sequences), so the
+            # uniqueness key is (status, number, target_version).
+            models.UniqueConstraint(
+                fields=[
+                    "status",
+                    "number",
+                    "target_version",
+                ],
+                name="unique_card_id",
+            ),
+        ]
+        indexes = [
+            # ``number`` is the default ordering and a common filter; it is not a
+            # prefix of the (status, number, target_version) unique index.
+            models.Index(fields=["number"]),
+        ]
+
+    def __str__(self):
+        milestone = f"-{self.milestone.key.upper()}" if self.milestone_id else ""
+        return f"{self.status.key.upper()}{milestone}-{self.number:03d}-{self.target_version.number} — {self.title}"
+
+
+class ParityClaim(TimeStampedModel):
+    """A ``Card`` ↔ ``Upstream`` edge carrying the parity ``level``."""
+
+    card = models.ForeignKey(Card, related_name="parity_claims", on_delete=models.CASCADE)
+    upstream = models.ForeignKey(Upstream, related_name="parity_claims", on_delete=models.PROTECT)
+    level = models.ForeignKey(ParityLevel, related_name="parity_claims", on_delete=models.PROTECT)
+    note = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = "parity claim"
+        verbose_name_plural = "parity claims"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "card",
+                    "upstream",
+                ],
+                name="unique_parity_per_card_upstream",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.card.title} / {self.upstream.key} ({self.level.key})"
+
+
+class CardItem(TimeStampedModel):
+    """One bullet from a card's section (Scope / Definition of done / ...)."""
+
+    card = models.ForeignKey(Card, related_name="items", on_delete=models.CASCADE)
+    section = models.ForeignKey(Section, related_name="items", on_delete=models.PROTECT)
+    text = models.TextField()
+    order = models.PositiveIntegerField(default=0)
+    # Only meaningful for ``definition_of_done`` items.
+    is_complete = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = [
+            "card",
+            "section",
+            "order",
+        ]
+        verbose_name = "card item"
+        verbose_name_plural = "card items"
+        constraints = [
+            # One bullet per (card, section, order). The importer's reconcile
+            # step matches existing items on exactly this key.
+            models.UniqueConstraint(
+                fields=[
+                    "card",
+                    "section",
+                    "order",
+                ],
+                name="unique_item_position_per_card",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.card.title} · {self.section.label}: {self.text[:40]}"
+
+
+class Label(TimeStampedModel):
+    """An optional cross-cutting tag (``security`` / ``dx`` / ...)."""
+
+    key = models.SlugField(unique=True)
+    color = models.TextField(blank=True, default="")
+
+    class Meta:
+        verbose_name = "label"
+        verbose_name_plural = "labels"
+
+    def __str__(self):
+        return self.key
+
+
+# ---------------------------------------------------------------------------
+# UUID side-table
+# ---------------------------------------------------------------------------
+
+
+# The O2O link field names on UUIDModel -- one per linked model. Kept in sync
+# with ``_UUID_LINKED_MODELS`` (below): these names equal each model's
+# ``_meta.model_name``.
+_UUID_LINK_NAMES = (
+    "milestone",
+    "status",
+    "priority",
+    "severity",
+    "relativesize",
+    "planningstate",
+    "upstream",
+    "paritylevel",
+    "section",
+    "targetversion",
+    "specdoc",
+    "card",
+    "parityclaim",
+    "carditem",
+    "label",
+)
+
+
+def _exactly_one_link_constraint() -> models.CheckConstraint:
+    """Enforce the one-hot invariant: exactly one O2O link field is non-null.
+
+    Makes the registry invariant real at the DB level rather than advisory, so
+    admin / fixtures / future code cannot create empty or multi-linked rows that
+    the ``post_save`` signal would never produce.
+    """
+    non_null_count = reduce(
+        operator.add,
+        (
+            models.Case(
+                models.When(**{f"{name}__isnull": False}, then=1),
+                default=0,
+                output_field=models.IntegerField(),
+            )
+            for name in _UUID_LINK_NAMES
+        ),
+    )
+    return models.CheckConstraint(
+        condition=Exact(non_null_count, models.Value(1)),
+        name="kanban_uuidmodel_exactly_one_link",
+    )
+
+
+class UUIDModel(TimeStampedModel):
+    """Central UUID registry: one row per object, linked O2O to every model.
+
+    NOT an abstract mixin and NOT a ``uuid`` column on each model. The UUID
+    primary key here is the stable identifier for whichever single domain row
+    the (one non-null) one-to-one link points at; each domain row reaches it via
+    the reverse accessor ``instance.uuid.id``. Field names match
+    ``sender._meta.model_name`` so :func:`_create_uuid_row` needs no special
+    casing. The one-hot invariant is enforced by a check constraint (see
+    :func:`_exactly_one_link_constraint`).
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    milestone = models.OneToOneField(
+        "Milestone",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    status = models.OneToOneField(
+        "Status",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    priority = models.OneToOneField(
+        "Priority",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    severity = models.OneToOneField(
+        "Severity",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    relativesize = models.OneToOneField(
+        "RelativeSize",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    planningstate = models.OneToOneField(
+        "PlanningState",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    upstream = models.OneToOneField(
+        "Upstream",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    paritylevel = models.OneToOneField(
+        "ParityLevel",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    section = models.OneToOneField(
+        "Section",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    targetversion = models.OneToOneField(
+        "TargetVersion",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    specdoc = models.OneToOneField(
+        "SpecDoc",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    card = models.OneToOneField(
+        "Card",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    parityclaim = models.OneToOneField(
+        "ParityClaim",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    carditem = models.OneToOneField(
+        "CardItem",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    label = models.OneToOneField(
+        "Label",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+
+    class Meta:
+        verbose_name = "UUID"
+        verbose_name_plural = "UUIDs"
+        constraints = [_exactly_one_link_constraint()]
+
+    def __str__(self):
+        # Reference the single linked domain row (the one non-null O2O), if any.
+        for name in _UUID_LINK_NAMES:
+            if getattr(self, f"{name}_id") is not None:
+                return f"{getattr(self, name)} <{self.id}>"
+        return str(self.id)
+
+
+# Every model whose rows should carry a stable UUID via the side-table.
+_UUID_LINKED_MODELS = (
+    Milestone,
+    Status,
+    Priority,
+    Severity,
+    RelativeSize,
+    PlanningState,
+    Upstream,
+    ParityLevel,
+    Section,
+    TargetVersion,
+    SpecDoc,
+    Card,
+    ParityClaim,
+    CardItem,
+    Label,
+)
+
+
+def _create_uuid_row(sender, instance, created, **kwargs):
+    """On first save of a linked model, create its ``UUIDModel`` side-row.
+
+    ``bulk_create`` does not emit ``post_save``; importers must use
+    ``.save()`` / ``.objects.create()`` for this to fire.
+    """
+    if created:
+        UUIDModel.objects.create(**{sender._meta.model_name: instance})
+
+
+for _model in _UUID_LINKED_MODELS:
+    post_save.connect(
+        _create_uuid_row,
+        sender=_model,
+        dispatch_uid=f"kanban_uuid_{_model._meta.model_name}",
+    )

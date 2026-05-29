@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     "apps.library.apps.LibraryConfig",
     "apps.products.apps.ProductsConfig",
     "apps.scalars.apps.ScalarsConfig",
+    "apps.kanban.apps.KanbanConfig",
 ]
 
 MIDDLEWARE = [
@@ -116,10 +117,7 @@ TEMPLATES = [
 #     FAKESHOP_SHARDED=1 uv run pytest                              # sharded
 #     FAKESHOP_SHARDED=1 uv run python manage.py seed_shards        # populate shard_b
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    },
+    "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"},
 }
 if os.environ.get("FAKESHOP_SHARDED") == "1":  # pragma: no cover
     DATABASES["shard_b"] = {

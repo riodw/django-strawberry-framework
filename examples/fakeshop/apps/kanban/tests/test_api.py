@@ -1,0 +1,678 @@
+"""Live GraphQL HTTP tests for the kanban board.
+
+Mirrors ``test_products_api.py``'s harness. Seeds a small deterministic board
+directly (not via the importer, so assertions stay independent of how the real
+``KANBAN.md`` evolves) and drives the kanban schema end to end:
+
+* ``RelatedFilter`` on a lookup ``key`` (the FK-dense filter surface) -- the
+  central showcase of this app;
+* own-PK Relay ``GlobalID`` filtering (``id: { in: [...] }``) on ``CardType``;
+* plain-integer ``id: { in: [...] }`` on the non-Relay ``CardItemType``;
+* M2M-through filtering + selection (``parity`` / ``parityClaims``);
+* self-referential M2M filtering + selection (``dependencies``);
+* O2O selection (``spec``) plus the reverse ``uuid`` side-table and the
+  inherited ``createdDate`` audit column;
+* reverse-FK from a lookup (``status { cards }``).
+"""
+
+import importlib
+import sys
+
+import pytest
+from django.test import Client
+from django.urls import clear_url_caches
+from strawberry import relay
+
+from apps.kanban import models
+
+
+@pytest.fixture(autouse=True)
+def _reload_project_schema_for_acceptance_tests():
+    """Recreate imported DjangoType classes if package tests cleared the registry.
+
+    Mirrors the ``test_products_api.py`` fixture: package tests clear the global
+    registry, while the example schema finalizes import-time ``DjangoType``
+    classes. Reload only schema modules (not ``apps.kanban.models``) so Django
+    model classes -- and the connected ``post_save`` UUID signal -- stay stable.
+    """
+    from django_strawberry_framework.registry import registry
+
+    registry.clear()
+    kanban_schema = sys.modules.get("apps.kanban.schema")
+    if kanban_schema is None:
+        importlib.import_module("apps.kanban.schema")
+    else:
+        importlib.reload(kanban_schema)
+
+    project_schema = sys.modules.get("config.schema")
+    if project_schema is None:
+        importlib.import_module("config.schema")
+    else:
+        importlib.reload(project_schema)
+
+    urls = sys.modules.get("config.urls")
+    if urls is not None:
+        importlib.reload(urls)
+        clear_url_caches()
+
+
+def _seed_board():
+    """A tiny deterministic board: two cards + lookups + edges."""
+    done = models.Status.objects.create(key="done", label="Done", order=3)
+    todo = models.Status.objects.create(key="todo", label="To Do", order=0)
+    alpha = models.Milestone.objects.create(key="alpha", label="Alpha", order=0)
+    version = models.TargetVersion.objects.create(number="0.0.8", milestone=alpha)
+    xl = models.RelativeSize.objects.create(key="xl", label="XL", order=4, rank=4)
+    size_m = models.RelativeSize.objects.create(key="m", label="M", order=2, rank=2)
+    high = models.Priority.objects.create(key="high", label="High", order=0)
+    shipped = models.PlanningState.objects.create(key="shipped", label="Shipped", order=4)
+    planned = models.PlanningState.objects.create(key="planned", label="Planned", order=0)
+    graphene = models.Upstream.objects.create(
+        key="graphene_django",
+        label="graphene-django",
+        emoji="⚛️",
+        order=0,
+    )
+    straw = models.Upstream.objects.create(
+        key="strawberry_django",
+        label="strawberry-graphql-django",
+        emoji="🍓",
+        order=1,
+    )
+    required = models.ParityLevel.objects.create(key="required", label="Required", order=0)
+    adjacent = models.ParityLevel.objects.create(key="adjacent", label="Parity-adjacent", order=1)
+    scope = models.Section.objects.create(key="scope", label="Scope", order=0)
+    spec = models.SpecDoc.objects.create(
+        name="spec-021-filters-0_0_8",
+        url="https://github.com/example/spec-021-filters-0_0_8.md",
+    )
+
+    filters_card = models.Card.objects.create(
+        title="Filtering subsystem",
+        number=21,
+        status=done,
+        milestone=None,
+        target_version=version,
+        priority=high,
+        relative_size=xl,
+        planning_state=shipped,
+        spec=spec,
+    )
+    conn_card = models.Card.objects.create(
+        title="DjangoConnectionField",
+        number=24,
+        status=todo,
+        milestone=alpha,
+        target_version=version,
+        priority=high,
+        relative_size=size_m,
+        planning_state=planned,
+    )
+    conn_card.dependencies.add(filters_card)
+
+    models.ParityClaim.objects.create(card=filters_card, upstream=graphene, level=required)
+    models.ParityClaim.objects.create(card=filters_card, upstream=straw, level=required)
+    models.ParityClaim.objects.create(card=conn_card, upstream=straw, level=adjacent)
+
+    item_filters = models.CardItem.objects.create(
+        card=filters_card,
+        section=scope,
+        text="FilterSet",
+        order=0,
+    )
+    item_conn = models.CardItem.objects.create(
+        card=conn_card,
+        section=scope,
+        text="Relay connection field",
+        order=0,
+    )
+
+    return {
+        "filters": filters_card,
+        "conn": conn_card,
+        "item_filters": item_filters,
+        "item_conn": item_conn,
+    }
+
+
+def _post_graphql(query: str, *, client: Client | None = None):
+    graphql_client = client or Client()
+    return graphql_client.post("/graphql/", data={"query": query}, content_type="application/json")
+
+
+def _graphql_data(query: str, *, client: Client | None = None):
+    response = _post_graphql(query, client=client)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    return payload["data"]
+
+
+def _assert_graphql_data(
+    query: str,
+    expected: dict,
+    *,
+    client: Client | None = None,
+):
+    assert _graphql_data(query, client=client) == expected
+
+
+@pytest.mark.django_db
+def test_filter_cards_by_status_key_via_related_filter():
+    """The FK-dense surface: filter cards by the related ``status.key``."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { status: { key: { exact: "done" } } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "Filtering subsystem"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_by_own_pk_relay_global_id_in():
+    """Own-PK Relay ``id: { in: [...] }`` accepts a list of GlobalIDs."""
+    seed = _seed_board()
+    gid_filters = str(relay.GlobalID(type_name="CardType", node_id=str(seed["filters"].pk)))
+    gid_conn = str(relay.GlobalID(type_name="CardType", node_id=str(seed["conn"].pk)))
+    _assert_graphql_data(
+        f"""
+        query {{
+          allCards(filter: {{ id: {{ in: ["{gid_filters}", "{gid_conn}"] }} }}) {{
+            title
+          }}
+        }}
+        """,
+        {"allCards": [{"title": "Filtering subsystem"}, {"title": "DjangoConnectionField"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_non_relay_card_items_by_plain_integer_id_in():
+    """``CardItemType`` is non-Relay, so ``id: { in: [...] }`` takes plain ints."""
+    seed = _seed_board()
+    _assert_graphql_data(
+        f"""
+        query {{
+          allKanbanCardItems(filter: {{ id: {{ in: [{seed["item_filters"].pk}, {seed["item_conn"].pk}] }} }}) {{
+            text
+          }}
+        }}
+        """,
+        {"allKanbanCardItems": [{"text": "FilterSet"}, {"text": "Relay connection field"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_by_m2m_through_parity_key():
+    """M2M-through traversal: only the card with a graphene parity claim matches."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { parity: { key: { exact: "graphene_django" } } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "Filtering subsystem"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_by_self_referential_dependency():
+    """Self-referential M2M: cards depending on card #21."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { dependencies: { number: { exact: 21 } } }) {
+            title
+            dependencies { title }
+          }
+        }
+        """,
+        {
+            "allCards": [
+                {
+                    "title": "DjangoConnectionField",
+                    "dependencies": [{"title": "Filtering subsystem"}],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_select_m2m_through_parity_claims_with_edge_level():
+    """Select the through-edge data (level + upstream) off a card."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { status: { key: { exact: "todo" } } }) {
+            title
+            parityClaims {
+              level { key }
+              upstream { key emoji }
+            }
+          }
+        }
+        """,
+        {
+            "allCards": [
+                {
+                    "title": "DjangoConnectionField",
+                    "parityClaims": [
+                        {
+                            "level": {"key": "adjacent"},
+                            "upstream": {"key": "strawberry_django", "emoji": "🍓"},
+                        },
+                    ],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_select_o2o_spec_uuid_side_table_and_timestamps():
+    """O2O spec link, the reverse ``uuid`` side-table, and inherited timestamps."""
+    _seed_board()
+    data = _graphql_data(
+        """
+        query {
+          allCards(filter: { status: { key: { exact: "done" } } }) {
+            title
+            createdDate
+            spec { name url }
+            uuid { id }
+          }
+        }
+        """,
+    )
+    (card,) = data["allCards"]
+    assert card["title"] == "Filtering subsystem"
+    assert card["spec"] == {
+        "name": "spec-021-filters-0_0_8",
+        "url": "https://github.com/example/spec-021-filters-0_0_8.md",
+    }
+    assert card["createdDate"] is not None
+    # The UUID side-table row exists and exposes a UUID scalar (a UUIDField PK).
+    assert len(card["uuid"]["id"]) == 36
+
+
+@pytest.mark.django_db
+def test_reverse_fk_from_lookup_status_to_cards():
+    """Query the board from the option side: ``status { cards }`` reverse-FK."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allKanbanStatuses(filter: { key: { exact: "done" } }) {
+            key
+            cards { title }
+          }
+        }
+        """,
+        {"allKanbanStatuses": [{"key": "done", "cards": [{"title": "Filtering subsystem"}]}]},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Logical composition (and / or / not)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_filter_cards_logical_or_across_statuses():
+    """``or: [...]`` unions two status branches (ordered by number)."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: {
+            or: [
+              { status: { key: { exact: "done" } } },
+              { status: { key: { exact: "todo" } } }
+            ]
+          }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "Filtering subsystem"}, {"title": "DjangoConnectionField"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_logical_not_scalar():
+    """``not: {...}`` negates a scalar branch -- every card whose number isn't 21.
+
+    (Negation is exercised over a direct scalar field; ``not`` over a
+    *RelatedFilter* traversal is a separate, narrower path in the filter
+    subsystem and is not asserted here.)
+    """
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { not: { number: { exact: 21 } } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "DjangoConnectionField"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_logical_and_number_range():
+    """``and: [...]`` intersects two number-range branches."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: {
+            and: [{ number: { gte: 20 } }, { number: { lt: 24 } }]
+          }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "Filtering subsystem"}]},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-field "__all__" lookups on Card's own scalar fields
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_filter_cards_by_title_icontains():
+    """``title: { iContains }`` -- a lookup that exists only via per-field "__all__"."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { title: { iContains: "subsystem" } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "Filtering subsystem"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_by_number_gt():
+    """``number: { gt }`` numeric lookup on the card's own integer field."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { number: { gt: 21 } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "DjangoConnectionField"}]},
+    )
+
+
+# ---------------------------------------------------------------------------
+# More RelatedFilter traversals
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_filter_cards_by_milestone_key():
+    """Filter by the related ``milestone.key`` (the DONE card has a null milestone)."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { milestone: { key: { exact: "alpha" } } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "DjangoConnectionField"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_by_related_size_rank_numeric_lookup():
+    """A numeric lookup (``rank: { gte }``) reached through the size RelatedFilter."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { relativeSize: { rank: { gte: 4 } } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "Filtering subsystem"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_by_items_text_reverse_fk_related_filter():
+    """Reverse-FK RelatedFilter: filter cards by a child ``CardItem.text``."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { items: { text: { iContains: "connection" } } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "DjangoConnectionField"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_combined_related_and_scalar():
+    """Top-level fields AND together: a RelatedFilter plus a scalar lookup."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { status: { key: { exact: "done" } }, number: { gte: 21 } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": [{"title": "Filtering subsystem"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_filter_cards_empty_result():
+    """A filter matching nothing returns an empty list, not an error."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { title: { exact: "Nonexistent Card" } }) {
+            title
+          }
+        }
+        """,
+        {"allCards": []},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Deeper selections
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_select_multi_fk_fanout_and_second_hop():
+    """Select every FK lookup off a card, plus the second hop targetVersion -> milestone."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { status: { key: { exact: "todo" } } }) {
+            title
+            status { key }
+            priority { key }
+            relativeSize { key rank }
+            planningState { key }
+            milestone { key }
+            targetVersion { number milestone { key } }
+          }
+        }
+        """,
+        {
+            "allCards": [
+                {
+                    "title": "DjangoConnectionField",
+                    "status": {"key": "todo"},
+                    "priority": {"key": "high"},
+                    "relativeSize": {"key": "m", "rank": 2},
+                    "planningState": {"key": "planned"},
+                    "milestone": {"key": "alpha"},
+                    "targetVersion": {"number": "0.0.8", "milestone": {"key": "alpha"}},
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_select_self_referential_dependents_reverse():
+    """The reverse side of the self-M2M: ``dependents`` off the depended-on card."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { status: { key: { exact: "done" } } }) {
+            title
+            dependents { title }
+          }
+        }
+        """,
+        {
+            "allCards": [
+                {
+                    "title": "Filtering subsystem",
+                    "dependents": [{"title": "DjangoConnectionField"}],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_reverse_m2m_from_upstream_to_cards():
+    """M2M-through reverse: an ``Upstream`` lists the cards that claim it."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allKanbanUpstreams(filter: { key: { exact: "strawberry_django" } }) {
+            key
+            cards { title }
+          }
+        }
+        """,
+        {
+            "allKanbanUpstreams": [
+                {
+                    "key": "strawberry_django",
+                    "cards": [{"title": "Filtering subsystem"}, {"title": "DjangoConnectionField"}],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_select_lookup_uuid_side_table():
+    """Lookups carry a UUID side-row too (the signal is connected for every model)."""
+    _seed_board()
+    data = _graphql_data(
+        """
+        query {
+          allKanbanStatuses(filter: { key: { exact: "done" } }) {
+            key
+            uuid { id }
+          }
+        }
+        """,
+    )
+    (status,) = data["allKanbanStatuses"]
+    assert status["key"] == "done"
+    assert len(status["uuid"]["id"]) == 36
+
+
+@pytest.mark.django_db
+def test_relative_size_two_reverse_sets_cards_and_cards_high():
+    """A size exposes BOTH reverse sets: ``cards`` (low bound) and ``cardsHigh`` (range high)."""
+    _seed_board()
+    # A ranged card ("S–M"-style): low bound m, high bound xl.
+    xl = models.RelativeSize.objects.get(key="xl")
+    size_m = models.RelativeSize.objects.get(key="m")
+    done = models.Status.objects.get(key="done")
+    alpha = models.Milestone.objects.get(key="alpha")
+    version = models.TargetVersion.objects.get(number="0.0.8")
+    planned = models.PlanningState.objects.get(key="planned")
+    models.Card.objects.create(
+        title="Ordering subsystem",
+        number=22,
+        status=done,
+        milestone=alpha,
+        target_version=version,
+        relative_size=size_m,
+        relative_size_high=xl,
+        planning_state=planned,
+    )
+    _assert_graphql_data(
+        """
+        query {
+          allKanbanRelativeSizes(filter: { key: { exact: "xl" } }) {
+            key
+            cards { title }
+            cardsHigh { title }
+          }
+        }
+        """,
+        {
+            "allKanbanRelativeSizes": [
+                {
+                    "key": "xl",
+                    "cards": [{"title": "Filtering subsystem"}],
+                    "cardsHigh": [{"title": "Ordering subsystem"}],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_select_labels_m2m():
+    """Plain M2M selection: a card's labels."""
+    _seed_board()
+    filters_card = models.Card.objects.get(title="Filtering subsystem")
+    filters_card.labels.add(models.Label.objects.create(key="security", color="#f00"))
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { status: { key: { exact: "done" } } }) {
+            title
+            labels { key }
+          }
+        }
+        """,
+        {"allCards": [{"title": "Filtering subsystem", "labels": [{"key": "security"}]}]},
+    )

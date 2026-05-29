@@ -12,9 +12,10 @@ through ``convert_filter_to_input_annotation`` /
 
 These types are NOT Relay nodes (no ``interfaces`` on the owning
 ``DjangoType``), so each model's own ``id`` is a plain integer filter --
-which makes ``"id": ["exact", "in"]`` exercise the django-filter-generated
-``BaseInFilter`` -> ``list[int]`` converter path (the non-Relay
-counterpart to the library app's own-PK ``GlobalIDMultipleChoiceFilter``).
+which makes the ``id`` ``"__all__"`` set (notably its ``in`` lookup)
+exercise the django-filter-generated ``BaseInFilter`` -> ``list[int]``
+converter path (the non-Relay counterpart to the library app's own-PK
+``GlobalIDMultipleChoiceFilter``).
 
 ``ScalarSpecimenFilter.tag`` is a ``RelatedFilter`` onto
 ``ScalarSpecimenTagFilter``, whose owning ``ScalarSpecimenTagType``
@@ -34,9 +35,9 @@ class ScalarSpecimenTagFilter(FilterSet):
     class Meta:
         model = models.ScalarSpecimenTag
         fields = {
-            "id": ["exact", "in"],
-            "label": ["exact", "icontains"],
-            "active": ["exact"],
+            "id": "__all__",
+            "label": "__all__",
+            "active": "__all__",
         }
 
 
@@ -46,20 +47,22 @@ class ScalarSpecimenFilter(FilterSet):
     class Meta:
         model = models.ScalarSpecimen
         # Every converted scalar except ``payload`` (JSONField has no
-        # django-filter default). ``gt`` / ``lt`` on the ordered scalars
-        # exercises comparison-lookup inputs alongside ``exact``.
+        # django-filter default). Each ``"__all__"`` expands to that field's
+        # full concrete-lookup set, exercising the lookup-expansion path
+        # across bool / float / Decimal / date / datetime / time / UUID /
+        # BigInt as well as the integer PK.
         fields = {
-            "id": ["exact", "in"],
-            "label": ["exact", "icontains"],
-            "flag": ["exact"],
-            "score": ["exact", "gt", "lt"],
-            "price": ["exact", "gt", "lt"],
-            "occurred_on": ["exact", "gt", "lt"],
-            "occurred_at": ["exact"],
-            "occurred_time": ["exact"],
-            "external_id": ["exact"],
-            "signed_big": ["exact", "gt", "lt"],
-            "unsigned_big": ["exact"],
+            "id": "__all__",
+            "label": "__all__",
+            "flag": "__all__",
+            "score": "__all__",
+            "price": "__all__",
+            "occurred_on": "__all__",
+            "occurred_at": "__all__",
+            "occurred_time": "__all__",
+            "external_id": "__all__",
+            "signed_big": "__all__",
+            "unsigned_big": "__all__",
         }
 
 
@@ -69,14 +72,14 @@ class NullableScalarSpecimenFilter(FilterSet):
     class Meta:
         model = models.NullableScalarSpecimen
         fields = {
-            "id": ["exact", "in"],
-            "label": ["exact", "icontains"],
-            "flag": ["exact"],
-            "score": ["exact"],
-            "price": ["exact"],
-            "occurred_on": ["exact"],
-            "external_id": ["exact"],
-            "signed_big": ["exact"],
+            "id": "__all__",
+            "label": "__all__",
+            "flag": "__all__",
+            "score": "__all__",
+            "price": "__all__",
+            "occurred_on": "__all__",
+            "external_id": "__all__",
+            "signed_big": "__all__",
         }
 
 

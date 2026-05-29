@@ -6,10 +6,11 @@ Ported from the ``django-graphene-filters`` cookbook recipe
 
 * ``FilterSet`` (not the cookbook's ``AdvancedFilterSet``);
 * ``Meta.fields`` (not ``Meta.filter_fields``);
-* per-field ``"__all__"`` expands to every concrete (non-transform) lookup
-  for the field -- the same shorthand the cookbook's ``filter_fields``
-  accepts (``CategoryFilter.name`` / ``ItemFilter.name`` use it); other
-  fields declare explicit lookup lists;
+* every field uses the per-field ``"__all__"`` shorthand, which expands to
+  every concrete (non-transform) lookup valid for that field -- the same
+  shorthand the cookbook's ``filter_fields`` accepts -- maximally exercising
+  the lookup-expansion path across each field type (including the ``id`` PK
+  and the relation-traversal paths such as ``category__name``);
 * ``interfaces`` lives on the owning ``DjangoType`` (``apps.products.schema``),
   NOT on the FilterSet ``Meta``.
 
@@ -20,9 +21,9 @@ same-module unqualified-name form (e.g. ``RelatedFilter("EntryFilter")``) so
 the lazy Layer-2 resolution path is exercised end to end.
 
 Because the owning ``DjangoType``\\ s declare ``interfaces = (relay.Node,)``,
-each model's own ``id`` is a Relay GlobalID over the wire -- so the
-``"id": ["exact", "in"]`` entries exercise the own-PK ``GlobalIDFilter`` /
-``GlobalIDMultipleChoiceFilter`` conversion.
+each model's own ``id`` is a Relay GlobalID over the wire -- so the ``id``
+``"__all__"`` entry exercises the own-PK ``GlobalIDFilter`` /
+``GlobalIDMultipleChoiceFilter`` conversion across the PK's lookups.
 
 ``check_<field>_permission(self, request)`` is the filter subsystem's
 (``DONE-021-0.0.8``) per-field permission gate; the queryset-scoping
@@ -43,9 +44,9 @@ class CategoryFilter(FilterSet):
     class Meta:
         model = models.Category
         fields = {
-            "id": ["exact", "in"],
+            "id": "__all__",
             "name": "__all__",
-            "description": ["exact", "icontains"],
+            "description": "__all__",
         }
 
     def check_name_permission(self, request):
@@ -62,10 +63,10 @@ class ItemFilter(FilterSet):
     class Meta:
         model = models.Item
         fields = {
-            "id": ["exact", "in"],
+            "id": "__all__",
             "name": "__all__",
-            "description": ["exact", "icontains"],
-            "category__name": ["exact"],
+            "description": "__all__",
+            "category__name": "__all__",
         }
 
     # TODO(TODO-ALPHA-027-0.0.10 permissions; see KANBAN.md):
@@ -87,9 +88,9 @@ class PropertyFilter(FilterSet):
     class Meta:
         model = models.Property
         fields = {
-            "id": ["exact", "in"],
-            "name": ["exact", "icontains"],
-            "description": ["exact", "icontains"],
+            "id": "__all__",
+            "name": "__all__",
+            "description": "__all__",
         }
 
 
@@ -105,11 +106,11 @@ class EntryFilter(FilterSet):
     class Meta:
         model = models.Entry
         fields = {
-            "id": ["exact", "in"],
-            "value": ["exact", "icontains"],
-            "description": ["exact", "icontains"],
-            "property__name": ["exact"],
-            "property__category__name": ["exact"],
+            "id": "__all__",
+            "value": "__all__",
+            "description": "__all__",
+            "property__name": "__all__",
+            "property__category__name": "__all__",
         }
 
 

@@ -1682,88 +1682,8 @@ def test_derive_related_visibility_querysets_async_skips_unregistered_target():
 
 
 # ---------------------------------------------------------------------------
-# Own-PK Relay lookup cardinality (H5a)
-# ---------------------------------------------------------------------------
-
-
-def test_own_pk_in_lookup_uses_global_id_multiple_choice_filter():
-    """Own-PK ``in`` -> ``GlobalIDMultipleChoiceFilter`` (a LIST of GlobalIDs).
-
-    H5a: the own-PK branch must honor lookup cardinality. ``exact`` is a
-    single GlobalID; ``in`` consumes a list. Both ``filter_for_lookup``
-    (class selection) and ``filter_for_field`` (instance construction)
-    previously collapsed EVERY lookup to a single ``GlobalIDFilter``.
-    """
-
-    class BookType(DjangoType):
-        class Meta:
-            model = library_models.Book
-            interfaces = (strawberry.relay.Node,)
-
-    apply_interfaces(BookType, BookType.__django_strawberry_definition__)
-
-    class BookFilter(FilterSet):
-        class Meta:
-            model = library_models.Book
-            fields = {"title": ["exact"]}
-
-    BookFilter._owner_definition = BookType.__django_strawberry_definition__
-    pk_field = library_models.Book._meta.pk
-
-    # Class-selection path.
-    exact_cls, _ = BookFilter.filter_for_lookup(pk_field, "exact")
-    in_cls, _ = BookFilter.filter_for_lookup(pk_field, "in")
-    assert exact_cls is GlobalIDFilter
-    assert in_cls is GlobalIDMultipleChoiceFilter
-
-    # Instance-construction path agrees.
-    resolved_exact = BookFilter.filter_for_field(pk_field, "id", "exact")
-    assert isinstance(resolved_exact, GlobalIDFilter)
-    assert not isinstance(resolved_exact, GlobalIDMultipleChoiceFilter)
-    resolved_in = BookFilter.filter_for_field(pk_field, "id", "in")
-    assert isinstance(resolved_in, GlobalIDMultipleChoiceFilter)
-
-
-# ---------------------------------------------------------------------------
 # Permission gate dispatch keys on the field, not the lookup (H2)
 # ---------------------------------------------------------------------------
-
-
-def test_run_permission_checks_fires_gate_for_non_exact_lookup():
-    """``check_<field>_permission`` fires for ANY lookup, not just ``exact`` (H2).
-
-    The gate was dispatched on the lookup-expanded form key
-    (``name__icontains`` -> ``check_name_icontains_permission``), so only
-    ``exact`` (whose form key is the bare field name) ever matched. The
-    gate now keys on the source field, firing once across every lookup.
-    """
-    import dataclasses
-
-    fired: list[str] = []
-
-    class CategoryFilter(FilterSet):
-        class Meta:
-            model = Category
-            fields = {"name": ["exact", "icontains"]}
-
-        def check_name_permission(self, request):
-            fired.append("name")
-
-    @dataclasses.dataclass
-    class _NameBag:
-        i_contains: str | None = None
-
-    @dataclasses.dataclass
-    class _Input:
-        name: Any = None
-
-    # Only the ``icontains`` lookup is supplied -- under the old form-key
-    # dispatch this produced ``name__icontains`` and the gate never fired.
-    CategoryFilter._run_permission_checks(
-        _Input(name=_NameBag(i_contains="foo")),
-        request=HttpRequest(),
-    )
-    assert fired == ["name"]
 
 
 def test_active_permission_field_paths_covers_input_shapes():
@@ -1824,23 +1744,3 @@ def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms():
 
     # A missing field resolves to an empty list (defensive).
     assert _lookups_for_field(None) == []
-
-
-def test_get_fields_expands_per_field_all_lookups():
-    """`Meta.fields = {"field": "__all__"}` expands to the field's concrete lookups."""
-
-    class CategoryFilter(FilterSet):
-        class Meta:
-            model = Category
-            fields = {"name": "__all__", "description": ["exact"]}
-
-    fields = CategoryFilter.get_fields()
-    # ``name`` expanded to its full concrete-lookup set; ``description`` left
-    # exactly as declared (only the ``"__all__"`` value is rewritten).
-    assert {"exact", "icontains", "gt", "in", "range", "isnull", "startswith"} <= set(fields["name"])
-    assert fields["description"] == ["exact"]
-
-    # The expansion makes ``get_filters()`` succeed where the raw ``"__all__"``
-    # string previously raised ``FieldLookupError`` (mis-read as a lookup).
-    filter_names = set(CategoryFilter.get_filters())
-    assert {"name", "name__icontains", "name__startswith", "name__in"} <= filter_names

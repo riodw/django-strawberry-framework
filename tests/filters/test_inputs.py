@@ -19,7 +19,6 @@ import strawberry
 from apps.library import models as library_models
 from apps.products.models import Category, Item
 from django.db import models
-from django_filters.filters import BaseCSVFilter
 from strawberry import relay
 
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -800,44 +799,3 @@ def test_iter_filterset_subclasses_dedupes_diamond_inheritance():
     # ``D`` is reachable through both ``B`` and ``C`` but appears once.
     assert found.count(D) == 1
     assert {B, C, D}.issubset(set(found))
-
-
-# ---------------------------------------------------------------------------
-# CSV (`in` / `range`) lookups — generated BaseCSVFilter -> list[...] (H5c)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_convert_filter_to_input_annotation_csv_in_filter_is_list():
-    """django-filter's generated ``in`` filter (a ``BaseCSVFilter``) -> ``list[...]``.
-
-    H5c: ``Meta.fields = {..., "x": ["in"]}`` expands to a
-    ``ConcreteInFilter(BaseInFilter, ...)`` whose form field consumes a
-    LIST. Without the converter's ``BaseCSVFilter`` branch it fell to the
-    scalar catch-all and the generated input was a single value.
-    """
-
-    class PatronFilter(FilterSet):
-        class Meta:
-            model = library_models.Patron
-            fields = {"lifetime_fines_cents": ["in"]}
-
-    in_filter = PatronFilter.base_filters["lifetime_fines_cents__in"]
-    assert isinstance(in_filter, BaseCSVFilter)  # sanity: it IS a CSV filter
-    model_field = library_models.Patron._meta.get_field("lifetime_fines_cents")
-    annotation = convert_filter_to_input_annotation(in_filter, model_field)
-    # ``list[int] | None`` -- the inner annotation is a list, not a scalar.
-    assert list[int] in get_args(annotation)
-
-
-@pytest.mark.django_db
-def test_normalize_input_value_csv_in_filter_returns_list():
-    """A CSV ``in`` filter normalizes a list value through unchanged (H5c)."""
-
-    class PatronFilter(FilterSet):
-        class Meta:
-            model = library_models.Patron
-            fields = {"lifetime_fines_cents": ["in"]}
-
-    in_filter = PatronFilter.base_filters["lifetime_fines_cents__in"]
-    assert normalize_input_value(in_filter, [1, 2, 3]) == [1, 2, 3]

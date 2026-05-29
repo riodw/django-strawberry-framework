@@ -829,6 +829,107 @@ def test_build_input_fields_hides_flat_relational_when_hide_flat_filters_true(se
     assert "shelves_code" not in names  # flat relational traversal hidden
 
 
+@pytest.mark.django_db
+def test_build_input_fields_hides_deep_multi_hop_flat_relational_when_true(settings):
+    """``HIDE_FLAT_FILTERS=True`` hides flat traversal at EVERY depth, not just one hop.
+
+    A two-hop chain (Branch → shelves → books → title) produces a flat
+    ``shelves_books_title`` field when shown; the ``is_expanded_child`` guard keys on
+    the first path segment, so it drops the path at any depth. The relation stays
+    reachable through the chained nested branches.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
+
+    class DeepBookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact"]}
+
+    class DeepShelfFilter(FilterSet):
+        books = RelatedFilter(DeepBookFilter, field_name="books")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class DeepBranchFilter(FilterSet):
+        shelves = RelatedFilter(DeepShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    names = {
+        python_attr for python_attr, _annotation, _kwargs in _build_input_fields(DeepBranchFilter)
+    }
+    assert "shelves" in names  # nested branch (reach the chain through here)
+    assert "shelves_code" not in names  # one-hop flat hidden
+    assert "shelves_books_title" not in names  # two-hop flat hidden
+
+
+@pytest.mark.django_db
+def test_build_input_fields_keeps_non_relatedfilter_flat_traversal_visible_when_true(settings):
+    """A flat ``<rel>__<field>`` whose root is NOT a declared ``RelatedFilter`` survives.
+
+    The guard only trims expansions of declared ``RelatedFilter`` relations; an explicit
+    ``Meta.fields`` traversal with no nested alternative (spec-021 L1's intentional flat
+    shape) stays visible even when ``HIDE_FLAT_FILTERS=True``.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
+
+    class PlainTraversalShelfFilter(FilterSet):
+        # ``branch`` is a real FK but is NOT declared as a RelatedFilter here.
+        class Meta:
+            model = library_models.Shelf
+            fields = {"branch__name": ["exact"], "code": ["exact"]}
+
+    names = {
+        python_attr
+        for python_attr, _annotation, _kwargs in _build_input_fields(PlainTraversalShelfFilter)
+    }
+    assert "branch_name" in names  # non-RelatedFilter flat traversal stays visible
+    assert "code" in names
+
+
+@pytest.mark.django_db
+def test_hide_flat_filters_propagates_to_built_input_type(settings):
+    """End-to-end: the toggle changes the GraphQL fields on the BUILT Strawberry input.
+
+    Build the actual ``@strawberry.input`` class from the triples (the same path
+    ``materialize_input_class`` takes) and assert the camelCase GraphQL field names —
+    not just the python attrs — so the contract is locked at the schema-shape level.
+    """
+
+    class GqlShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class GqlBranchFilter(FilterSet):
+        shelves = RelatedFilter(GqlShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    def _graphql_field_names(name: str) -> set[str]:
+        built = build_input_class(name, _build_input_fields(GqlBranchFilter))
+        return {
+            field.graphql_name or field.python_name
+            for field in built.__strawberry_definition__.fields
+        }
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": False}
+    shown = _graphql_field_names("GqlBranchShownInput")
+    assert "shelves" in shown  # nested branch
+    assert "shelvesCode" in shown  # flat relational field on the built GraphQL input
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
+    hidden = _graphql_field_names("GqlBranchHiddenInput")
+    assert "shelves" in hidden  # nested branch still there
+    assert "shelvesCode" not in hidden  # gone from the built GraphQL input type
+
+
 # ---------------------------------------------------------------------------
 # clear_filter_input_namespace — cycle-safe import guards
 # ---------------------------------------------------------------------------

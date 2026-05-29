@@ -764,6 +764,72 @@ def test_build_input_fields_skips_related_filter_with_none_target():
 
 
 # ---------------------------------------------------------------------------
+# _build_input_fields — HIDE_FLAT_FILTERS toggle (django-graphene-filters parity)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_build_input_fields_shows_flat_relational_when_hide_flat_filters_false(settings):
+    """Default (``HIDE_FLAT_FILTERS=False``) exposes BOTH shapes for a relation.
+
+    The nested ``RelatedFilter`` branch (``shelves`` -- the strawberry-django
+    shape) AND the flat relational traversal field (``shelves_code`` -- the
+    django-graphene-filters shape) are both emitted, matching the upstream
+    default at ``django_graphene_filters/conf.py`` (``HIDE_FLAT_FILTERS: False``).
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": False}
+
+    class HffShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact", "icontains"]}
+
+    class HffBranchFilter(FilterSet):
+        shelves = RelatedFilter(HffShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    names = {
+        python_attr for python_attr, _annotation, _kwargs in _build_input_fields(HffBranchFilter)
+    }
+    assert "shelves" in names  # nested branch (strawberry-django shape)
+    assert "shelves_code" in names  # flat relational traversal (graphene-django shape)
+    assert "name" in names  # scalar own field
+
+
+@pytest.mark.django_db
+def test_build_input_fields_hides_flat_relational_when_hide_flat_filters_true(settings):
+    """``HIDE_FLAT_FILTERS=True`` drops only the flat relational traversal fields.
+
+    The relation is then reachable solely through its nested branch
+    (``shelves``); the nested branch and scalar own fields are untouched, so
+    strawberry-django parity is preserved in either toggle position.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
+
+    class HffShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact", "icontains"]}
+
+    class HffBranchFilter(FilterSet):
+        shelves = RelatedFilter(HffShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    names = {
+        python_attr for python_attr, _annotation, _kwargs in _build_input_fields(HffBranchFilter)
+    }
+    assert "shelves" in names  # nested branch still present
+    assert "name" in names  # scalar own field still present
+    assert "shelves_code" not in names  # flat relational traversal hidden
+
+
+# ---------------------------------------------------------------------------
 # clear_filter_input_namespace — cycle-safe import guards
 # ---------------------------------------------------------------------------
 

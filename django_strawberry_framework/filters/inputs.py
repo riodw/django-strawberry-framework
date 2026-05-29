@@ -31,6 +31,7 @@ from django_filters import RangeFilter as _DjangoRangeFilter
 from django_filters.filters import BaseCSVFilter
 from strawberry import UNSET, relay
 
+from ..conf import settings
 from ..exceptions import ConfigurationError
 from .base import (
     ArrayFilter,
@@ -641,8 +642,31 @@ def _build_input_fields(
             head, lookup_token = filter_name, filter_instance.lookup_expr
         grouped.setdefault(head, OrderedDict())[lookup_token] = filter_instance
 
+    # ``HIDE_FLAT_FILTERS`` (default ``False`` -- matches
+    # ``django-graphene-filters``'s ``conf.py`` default) controls whether the
+    # flat relational traversal fields (``categoryName``, deep
+    # ``entriesPropertyCategoryName``, ...) are emitted. When hidden, the
+    # relation is filtered only through its nested ``RelatedFilter`` branch
+    # (``category: { name: { ... } }``) -- the strawberry-django shape. When
+    # shown, BOTH the flat and nested shapes appear (graphene-django parity).
+    # Upstream achieves this with a throwaway trimmed-subclass + a separate
+    # flat-args merge on the connection field
+    # (``connection_field.py::_get_trimmed_filterset_class``); because this
+    # package emits a single Strawberry input type here, the same
+    # ``is_expanded_child`` rule is just a skip in this loop, so the hidden
+    # operator-bag classes are never built in the first place.
+    hide_flat_filters = bool(getattr(settings, "HIDE_FLAT_FILTERS", False))
+
     triples: list[tuple[str, Any, dict[str, Any]]] = []
     for top_name, lookup_bag in grouped.items():
+        # A flat relational traversal path (``category__name``,
+        # ``entries__property__category__name``) is an "expanded child" of a
+        # declared ``RelatedFilter`` -- its first path segment names the
+        # relation. Such paths are reachable through the nested branch already;
+        # hide them when ``HIDE_FLAT_FILTERS`` is set (upstream parity:
+        # ``connection_field.py:238-242``).
+        if hide_flat_filters and "__" in top_name and top_name.split("__", 1)[0] in related_filters:
+            continue
         python_attr = top_name.replace("__", "_")
         graphql_name = _camel_case(python_attr)
         rel_filter = related_filters.get(top_name)

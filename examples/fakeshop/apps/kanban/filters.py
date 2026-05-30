@@ -71,6 +71,18 @@ class UpstreamFilter(FilterSet):
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
+class CardReferenceKindFilter(FilterSet):
+    class Meta:
+        model = models.CardReferenceKind
+        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
+
+
+class CardReferenceSourceFilter(FilterSet):
+    class Meta:
+        model = models.CardReferenceSource
+        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
+
+
 class TargetVersionFilter(FilterSet):
     class Meta:
         model = models.TargetVersion
@@ -91,6 +103,19 @@ class CardItemFilter(FilterSet):
         }
 
 
+class CardReferenceFilter(FilterSet):
+    kind = RelatedFilter(CardReferenceKindFilter, field_name="kind")
+    source = RelatedFilter(CardReferenceSourceFilter, field_name="source")
+
+    class Meta:
+        model = models.CardReference
+        fields = {
+            "id": "__all__",
+            "raw_text": "__all__",
+            "order": "__all__",
+        }
+
+
 # ---------------------------------------------------------------------------
 # Card -- RelatedFilter-dense, including a self-referential dependency filter
 # ---------------------------------------------------------------------------
@@ -108,6 +133,8 @@ class CardFilter(FilterSet):
     # Self-referential RelatedFilter -- exercises the cycle-safe expansion path
     # against a genuine self-reference (a CardFilter pointing back at itself).
     dependencies = RelatedFilter("apps.kanban.filters.CardFilter", field_name="dependencies")
+    outgoing_references = RelatedFilter(CardReferenceFilter, field_name="outgoing_references")
+    incoming_references = RelatedFilter(CardReferenceFilter, field_name="incoming_references")
 
     class Meta:
         model = models.Card
@@ -124,7 +151,10 @@ __all__ = (
     "SeverityFilter",
     "RelativeSizeFilter",
     "UpstreamFilter",
+    "CardReferenceKindFilter",
+    "CardReferenceSourceFilter",
     "TargetVersionFilter",
     "CardItemFilter",
+    "CardReferenceFilter",
     "CardFilter",
 )

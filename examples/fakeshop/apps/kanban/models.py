@@ -147,6 +147,22 @@ class Section(LookupBase):
         verbose_name_plural = "sections"
 
 
+class CardReferenceKind(LookupBase):
+    """Why one card points at another card."""
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "card reference kind"
+        verbose_name_plural = "card reference kinds"
+
+
+class CardReferenceSource(LookupBase):
+    """Where the importer found a card-to-card reference in the board source."""
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "card reference source"
+        verbose_name_plural = "card reference sources"
+
+
 # ---------------------------------------------------------------------------
 # Version + spec
 # ---------------------------------------------------------------------------
@@ -304,6 +320,64 @@ class Card(TimeStampedModel):
         return f"{self.status.key.upper()}{milestone}-{self.number:03d}-{self.target_version.number} — {self.title}"
 
 
+class CardReference(TimeStampedModel):
+    """A normalized card-to-card reference parsed out of prose.
+
+    ``Card.dependencies`` remains the compatibility/convenience M2M. This model
+    preserves the richer source data: the reference kind, where it came from,
+    the raw prose that contained it, and the position within that source.
+    """
+
+    source_card = models.ForeignKey(
+        Card,
+        related_name="outgoing_references",
+        on_delete=models.CASCADE,
+    )
+    target_card = models.ForeignKey(
+        Card,
+        related_name="incoming_references",
+        on_delete=models.CASCADE,
+    )
+    kind = models.ForeignKey(
+        CardReferenceKind,
+        related_name="card_references",
+        on_delete=models.PROTECT,
+    )
+    source = models.ForeignKey(
+        CardReferenceSource,
+        related_name="card_references",
+        on_delete=models.PROTECT,
+    )
+    raw_text = models.TextField(blank=True, default="")
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = [
+            "source_card",
+            "source",
+            "order",
+        ]
+        verbose_name = "card reference"
+        verbose_name_plural = "card references"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "source_card",
+                    "source",
+                    "order",
+                ],
+                name="unique_card_reference_position",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["target_card", "kind"]),
+            models.Index(fields=["source_card", "kind"]),
+        ]
+
+    def __str__(self):
+        return f"{self.source_card.title} -> {self.target_card.title} ({self.kind.key})"
+
+
 class ParityClaim(TimeStampedModel):
     """A ``Card`` ↔ ``Upstream`` edge carrying the parity ``level``."""
 
@@ -396,9 +470,12 @@ _UUID_LINK_NAMES = (
     "upstream",
     "paritylevel",
     "section",
+    "cardreferencekind",
+    "cardreferencesource",
     "targetversion",
     "specdoc",
     "card",
+    "cardreference",
     "parityclaim",
     "carditem",
     "label",
@@ -506,6 +583,20 @@ class UUIDModel(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="uuid",
     )
+    cardreferencekind = models.OneToOneField(
+        "CardReferenceKind",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    cardreferencesource = models.OneToOneField(
+        "CardReferenceSource",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
     targetversion = models.OneToOneField(
         "TargetVersion",
         null=True,
@@ -522,6 +613,13 @@ class UUIDModel(TimeStampedModel):
     )
     card = models.OneToOneField(
         "Card",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    cardreference = models.OneToOneField(
+        "CardReference",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
@@ -573,9 +671,12 @@ _UUID_LINKED_MODELS = (
     Upstream,
     ParityLevel,
     Section,
+    CardReferenceKind,
+    CardReferenceSource,
     TargetVersion,
     SpecDoc,
     Card,
+    CardReference,
     ParityClaim,
     CardItem,
     Label,

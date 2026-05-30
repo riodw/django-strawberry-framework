@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any
 
 import strawberry
-from django.db import models
 from django_filters import ChoiceFilter, Filter, TypedChoiceFilter
 from django_filters import RangeFilter as _DjangoRangeFilter
 from django_filters.filters import BaseCSVFilter
@@ -240,49 +239,23 @@ def _scalar_from_form_field(form_field: Any) -> type:
     return str
 
 
-def _scalar_from_model_field(model_field: Any) -> type:
-    """Map a Django model field to a Python scalar via ``to_python``.
+def _scalar_from_model_field(model_field: Any) -> Any:
+    """Map a Django model field to its scalar via the shared ``SCALAR_MAP`` lookup.
 
-    Falls back to the model field's form-field shape when ``model_field``
-    is ``None`` (e.g., a custom-method filter without a backing field).
+    Delegates to ``types.converters.scalar_for_field`` -- a LOCAL import, to
+    avoid the top-level cycle through ``converters`` (same pattern as
+    ``_choice_enum_from_filter``) -- so a filter input and the selected
+    ``DjangoType`` field resolve a column to the SAME GraphQL scalar, including
+    consumer-registered ``SCALAR_MAP`` entries and the ``BigInt`` scalar for
+    64-bit columns. An unsupported field raises the same ``ConfigurationError``
+    as field selection rather than silently degrading to ``str``. ``None`` (a
+    method filter with no backing model field) keeps the ``str`` fallback.
     """
     if model_field is None:
         return str
-    # Mirror ``types.converters.SCALAR_MAP`` for the common cases. We do
-    # NOT import ``SCALAR_MAP`` here because ``inputs.py`` is a leaf
-    # module and ``converters.py`` already has heavy imports; replicating
-    # the small subset of mappings the filter-input converter needs is
-    # cheaper than carrying the cycle risk.
-    if isinstance(model_field, models.BooleanField):
-        return bool
-    if isinstance(
-        model_field,
-        (
-            models.AutoField,
-            models.IntegerField,
-            models.BigAutoField,
-            models.SmallAutoField,
-            models.BigIntegerField,
-            models.SmallIntegerField,
-            models.PositiveIntegerField,
-            models.PositiveSmallIntegerField,
-            models.PositiveBigIntegerField,
-        ),
-    ):
-        return int
-    if isinstance(model_field, models.FloatField):
-        return float
-    if isinstance(model_field, models.DecimalField):
-        return decimal.Decimal
-    if isinstance(model_field, models.DateTimeField):
-        return datetime.datetime
-    if isinstance(model_field, models.DateField):
-        return datetime.date
-    if isinstance(model_field, models.TimeField):
-        return datetime.time
-    if isinstance(model_field, models.UUIDField):
-        return uuid.UUID
-    return str
+    from ..types.converters import scalar_for_field
+
+    return scalar_for_field(model_field)
 
 
 def _choice_enum_from_filter(
@@ -315,6 +288,35 @@ def _choice_enum_from_filter(
             "custom scalar via `SCALAR_MAP`.",
         )
     return convert_choices_to_enum(model_field, type_name)
+
+
+def _element_annotation(
+    filter_instance: Filter,
+    model_field: Any,
+    owner_definition: DjangoTypeDefinition | None,
+) -> Any:
+    """Single-element Strawberry type with the MODEL FIELD as source of truth.
+
+    A backing model field's choices become the shared GraphQL enum and its
+    column type becomes the scalar (including the ``BigInt`` scalar for 64-bit
+    columns). The ``django-filter`` form field is consulted ONLY as the
+    fallback for a custom ``method=`` filter with no backing model field --
+    otherwise ``django-filter``'s ``NumberFilter`` form (a ``DecimalField``)
+    mis-types integer columns and a CSV ``in`` over a choice column collapses
+    to ``str``. Callers that need a different shape for a specific lookup (e.g.
+    ``isnull`` is always boolean) handle that before calling this.
+    """
+    if model_field is not None and getattr(model_field, "choices", None):
+        type_name = _owner_type_name(owner_definition) or "Filter"
+        return _choice_enum_from_filter(filter_instance, type_name, model_field)
+    if model_field is not None:
+        return _scalar_from_model_field(model_field)
+    form_field = getattr(filter_instance, "field", None)
+    return (
+        _scalar_from_form_field(form_field)
+        if form_field is not None
+        else _scalar_from_model_field(model_field)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -351,15 +353,17 @@ def convert_filter_to_input_annotation(
         # catch-all and the generated input was a single value -- the
         # runtime CSV field then mis-parsed a lone scalar as a 1-element
         # list. Our own ``RangeFilter`` primitive (a ``{start, end}`` input)
-        # is a separate, non-CSV class handled by the branch below.
-        annotation = list[_scalar_from_model_field(model_field)]
+        # is a separate, non-CSV class handled by the branch below. The element
+        # type is model-field-driven so a CSV ``in`` over a choice column keeps
+        # its enum and a 64-bit column keeps ``BigInt`` (not ``str`` / ``Int``).
+        annotation = list[_element_annotation(filter_instance, model_field, owner_definition)]
     elif isinstance(filter_instance, (RangeFilter, _DjangoRangeFilter)):
         inner = _scalar_from_model_field(model_field)
         annotation = _build_range_input_class(filter_instance, inner)
     elif isinstance(filter_instance, (ListFilter, ArrayFilter)):
-        annotation = list[_scalar_from_model_field(model_field)]
+        annotation = list[_element_annotation(filter_instance, model_field, owner_definition)]
     elif isinstance(filter_instance, TypedFilter):
-        annotation = _scalar_from_model_field(model_field)
+        annotation = _element_annotation(filter_instance, model_field, owner_definition)
     elif isinstance(filter_instance, (ChoiceFilter, TypedChoiceFilter)):
         type_name = _owner_type_name(owner_definition) or "Filter"
         annotation = _choice_enum_from_filter(filter_instance, type_name, model_field)
@@ -375,13 +379,12 @@ def convert_filter_to_input_annotation(
                 "form field; declare an explicit `Filter(method=..., field_class=...)` "
                 "or wrap the method on a typed filter primitive.",
             )
-        annotation = (
-            _scalar_from_form_field(form_field)
-            if form_field is not None
-            else _scalar_from_model_field(
-                model_field,
-            )
-        )
+        if getattr(filter_instance, "lookup_expr", None) == "isnull":
+            # ``isnull`` is a boolean predicate regardless of the column type;
+            # the model field (the column's value type) is irrelevant here.
+            annotation = bool
+        else:
+            annotation = _element_annotation(filter_instance, model_field, owner_definition)
 
     if not required:
         annotation = annotation | None

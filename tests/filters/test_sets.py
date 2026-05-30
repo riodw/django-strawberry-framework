@@ -1438,6 +1438,52 @@ def test_is_own_pk_under_relay_owner_false_when_model_missing():
     assert CategoryFilter._is_own_pk_under_relay_owner(non_relation) is False
 
 
+def test_filter_for_lookup_rejects_unsupported_lookup_on_relay_owner_pk():
+    """Spec-021 H1: an explicit unsupported lookup on a Relay owner's PK raises.
+
+    The ``get_fields`` ``"__all__"`` narrowing only covers the generated
+    surface; an explicit ``Meta.fields`` list naming ``range`` / ``gt`` / a
+    pattern lookup still reaches ``filter_for_lookup``. A Relay node's wire id
+    has no ordering / pattern semantics, so those lookups are rejected with a
+    ``ConfigurationError`` (naming the lookup) instead of silently becoming a
+    GlobalID-shaped ``String``. Only ``exact`` / ``in`` / ``isnull`` are allowed.
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            interfaces = (strawberry.relay.Node,)
+
+    apply_interfaces(CategoryType, CategoryType.__django_strawberry_definition__)
+
+    class _Owner:
+        origin = CategoryType
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    CategoryFilter._owner_definition = _Owner()
+    pk_field = Category._meta.pk
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        CategoryFilter.filter_for_lookup(pk_field, "range")
+    assert "range" in str(excinfo.value)
+    # The same rejection holds via the per-field entry point (which routes
+    # through ``filter_for_lookup`` in ``super().filter_for_field``).
+    with pytest.raises(ConfigurationError):
+        CategoryFilter.filter_for_field(pk_field, "id", "range")
+
+    # The three supported lookups resolve without raising.
+    exact_class, _ = CategoryFilter.filter_for_lookup(pk_field, "exact")
+    assert exact_class is GlobalIDFilter
+    in_class, _ = CategoryFilter.filter_for_lookup(pk_field, "in")
+    assert in_class is GlobalIDMultipleChoiceFilter
+    isnull_class, _ = CategoryFilter.filter_for_lookup(pk_field, "isnull")
+    assert isnull_class is not GlobalIDFilter
+
+
 def test_resolve_relation_target_type_uses_owner_related_target_for():
     """When the owner resolves the relation, its target type is returned."""
     from types import SimpleNamespace

@@ -116,6 +116,29 @@ _ARRAY_FIELD_CLS: type[models.Field] | None = _resolve_array_field()
 _HSTORE_FIELD_CLS: type[models.Field] | None = _resolve_hstore_field()
 
 
+def scalar_for_field(field: models.Field) -> Any:
+    """Resolve a Django field to its ``SCALAR_MAP`` Python / Strawberry scalar.
+
+    Walks ``type(field).__mro__`` so consumer-defined subclasses of a supported
+    field resolve to the parent's scalar, and raises ``ConfigurationError`` for
+    an unsupported field class. This is the single field-class -> scalar lookup
+    shared by :func:`convert_scalar` (full DjangoType field conversion) and the
+    filter-input converter (``filters.inputs._scalar_from_model_field``), so a
+    column resolves to the SAME scalar on the selected-field side and the
+    filter-input side -- including consumer-registered ``SCALAR_MAP`` entries.
+    It does NOT apply choice substitution or null widening; callers layer those
+    on (``convert_scalar`` does; filter inputs handle choices separately).
+    """
+    for klass in type(field).__mro__:
+        if klass in SCALAR_MAP:
+            return SCALAR_MAP[klass]
+    raise ConfigurationError(
+        f"Unsupported Django field type {type(field).__name__!r} on "
+        f"{field.model.__name__}.{field.name}. Add an entry to "
+        "SCALAR_MAP or exclude this field via Meta.exclude.",
+    )
+
+
 def convert_scalar(field: models.Field, type_name: str) -> Any:
     """Map a Django scalar field to a Python / Strawberry type.
 
@@ -196,23 +219,11 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
             )
         py_type = strawberry.scalars.JSON
         return py_type | None if field.null else py_type
-    py_type = None
-    # Walk the field's MRO so consumer-defined subclasses of a supported
-    # Django field (e.g. ``class TrimmedCharField(models.CharField)`` or
-    # third-party encrypted/money field subclasses that ultimately store
-    # to a supported column type) resolve to the parent's scalar instead
-    # of raising. Exact-type lookup would force every subclass to be
-    # registered in ``SCALAR_MAP`` explicitly.
-    for klass in type(field).__mro__:
-        if klass in SCALAR_MAP:
-            py_type = SCALAR_MAP[klass]
-            break
-    if py_type is None:
-        raise ConfigurationError(
-            f"Unsupported Django field type {type(field).__name__!r} on "
-            f"{field.model.__name__}.{field.name}. Add an entry to "
-            "SCALAR_MAP or exclude this field via Meta.exclude.",
-        )
+    # Shared field-class -> scalar lookup (also used by the filter-input
+    # converter) so a column resolves to the same scalar on both sides. Walks
+    # the MRO, so consumer subclasses of a supported field resolve to the
+    # parent's scalar and an unsupported field raises ``ConfigurationError``.
+    py_type = scalar_for_field(field)
     if field.choices:
         py_type = convert_choices_to_enum(field, type_name)
     if field.null:

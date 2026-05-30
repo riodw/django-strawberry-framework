@@ -198,6 +198,32 @@ def test_scalar_specimen_bigint_zero_serializes_as_string():
 
 
 @pytest.mark.django_db
+def test_filter_specimens_by_bigint_in_accepts_64bit_values():
+    """Spec-021 H2: a ``BigIntegerField`` ``in`` lookup uses the ``BigInt`` scalar.
+
+    Regression for the generated CSV (``BaseInFilter``) element collapsing to
+    ``Int`` (32-bit), which rejected the 64-bit values a ``BigIntegerField``
+    holds. The element type now mirrors ``SCALAR_MAP`` (``BigIntegerField`` ->
+    ``BigInt``), so a value past 2**31 coerces instead of erroring.
+    """
+    _seed_specimen(label="big", signed_big=_SIGNED_BIG)
+    _seed_specimen(label="small", signed_big=1)
+    response = _post_graphql(
+        f"""
+        query {{
+          allScalarSpecimens(filter: {{ signedBig: {{ in: [{_SIGNED_BIG}] }} }}) {{
+            label
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    assert body["data"]["allScalarSpecimens"] == [{"label": "big"}]
+
+
+@pytest.mark.django_db
 def test_scalar_specimen_self_referential_parent_children_over_http():
     """Self-FK round-trip: parent + reverse-FK ``children`` traversal both work.
 

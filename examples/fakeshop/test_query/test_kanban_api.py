@@ -228,6 +228,54 @@ def test_filter_non_relay_card_items_by_plain_integer_id_in():
 
 
 @pytest.mark.django_db
+def test_filter_cards_by_own_pk_relay_id_isnull_coerces_boolean():
+    """Spec-021 H1: own-PK Relay ``id: { isNull: ... }`` coerces a Boolean.
+
+    Regression for forcing every non-``in`` lookup on a Relay PK to
+    ``GlobalIDFilter``, which typed ``isNull`` as ``String`` so
+    ``id: { isNull: true }`` failed coercion ("String cannot represent a non
+    string value: true"). A PK is never null: ``isNull: false`` matches every
+    card and ``isNull: true`` matches none. (Ordering / pattern lookups are now
+    dropped from a Relay PK's surface rather than emitted as corrupt strings.)
+    """
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          present: allCards(filter: { id: { isNull: false } }) { title }
+          absent: allCards(filter: { id: { isNull: true } }) { title }
+        }
+        """,
+        {
+            "present": [{"title": "Filtering subsystem"}, {"title": "DjangoConnectionField"}],
+            "absent": [],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_filter_non_relay_card_items_by_plain_integer_id_exact():
+    """Spec-021 H2: non-Relay int PK ``id: { exact: <int> }`` accepts an Int.
+
+    Companion to the ``id: { in: [...] }`` case: the scalar catch-all now uses
+    the ``AutoField`` model field (-> ``Int``) as the source of truth instead
+    of django-filter's ``NumberFilter`` form field (a ``DecimalField`` ->
+    ``Decimal``). Filtering by a plain integer returns the matching item.
+    """
+    seed = _seed_board()
+    _assert_graphql_data(
+        f"""
+        query {{
+          allKanbanCardItems(filter: {{ id: {{ exact: {seed["item_filters"].pk} }} }}) {{
+            text
+          }}
+        }}
+        """,
+        {"allKanbanCardItems": [{"text": "FilterSet"}]},
+    )
+
+
+@pytest.mark.django_db
 def test_filter_cards_by_m2m_through_parity_key():
     """M2M-through traversal: only the card with a graphene parity claim matches."""
     _seed_board()

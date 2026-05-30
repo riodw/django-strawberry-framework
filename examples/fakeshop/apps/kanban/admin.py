@@ -36,8 +36,6 @@ class TargetVersionAdmin(admin.ModelAdmin):
     list_display = (
         "number",
         "milestone",
-        "shipped_on",
-        "git_ref",
     )
     list_filter = ("milestone",)
     search_fields = ("number",)
@@ -91,7 +89,7 @@ class CardAdmin(admin.ModelAdmin):
         "relative_size",
         "planning_state",
     )
-    search_fields = ("title", "summary", "body")
+    search_fields = ("title",)
     autocomplete_fields = (
         "status",
         "milestone",

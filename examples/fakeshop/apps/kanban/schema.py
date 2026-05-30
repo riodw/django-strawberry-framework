@@ -53,7 +53,6 @@ class MilestoneType(DjangoType):
             "order",
             "version_floor",
             "version_ceiling",
-            "description",
             "created_date",
             "updated_date",
             "uuid",
@@ -153,7 +152,6 @@ class UpstreamType(DjangoType):
             "label",
             "order",
             "emoji",
-            "homepage",
             "created_date",
             "updated_date",
             "uuid",
@@ -236,8 +234,6 @@ class TargetVersionType(DjangoType):
         fields = (
             "id",
             "number",
-            "shipped_on",
-            "git_ref",
             "milestone",
             "created_date",
             "updated_date",
@@ -267,6 +263,8 @@ class SpecDocType(DjangoType):
 
 
 class CardType(DjangoType):
+    slug: str
+
     class Meta:
         model = models.Card
         fields = (
@@ -276,8 +274,6 @@ class CardType(DjangoType):
             "created_date",
             "updated_date",
             "planning_note",
-            "summary",
-            "body",
             "status",
             "priority",
             "severity",
@@ -334,7 +330,6 @@ class ParityClaimType(DjangoType):
             "card",
             "upstream",
             "level",
-            "note",
             "created_date",
             "updated_date",
             "uuid",

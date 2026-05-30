@@ -86,7 +86,7 @@ class CardReferenceSourceFilter(FilterSet):
 class TargetVersionFilter(FilterSet):
     class Meta:
         model = models.TargetVersion
-        fields = {"id": "__all__", "number": "__all__", "git_ref": "__all__"}
+        fields = {"id": "__all__", "number": "__all__"}
 
 
 class CardItemFilter(FilterSet):

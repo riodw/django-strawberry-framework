@@ -358,4 +358,3 @@ The cross-slice integration pass closes the build's two named cross-module DRY i
 None this pass. The two folds are pure code-side consolidations that honor pre-existing spec contracts; the spec language is the source of truth that the consolidation respects rather than alters. The L4 status line already describes the shipped reality and needs no edit.
 
 `Status: final-accepted`. Worker 0 may now mark the integration checkbox `- [x]` in `build-021-filters-0_0_8.md` and dispatch Worker 1 for the final test-run gate (`bld-final.md`).
-

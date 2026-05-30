@@ -33,10 +33,7 @@ for _model in (
 
 @admin.register(models.TargetVersion)
 class TargetVersionAdmin(admin.ModelAdmin):
-    list_display = (
-        "number",
-        "milestone",
-    )
+    list_display = ("number", "milestone")
     list_filter = ("milestone",)
     search_fields = ("number",)
 
@@ -63,11 +60,7 @@ class CardReferenceInline(admin.TabularInline):
     fk_name = "source_card"
     extra = 0
     show_change_link = True
-    autocomplete_fields = (
-        "target_card",
-        "kind",
-        "source",
-    )
+    autocomplete_fields = ("target_card", "kind", "source")
 
 
 @admin.register(models.Card)
@@ -111,11 +104,7 @@ class CardReferenceAdmin(admin.ModelAdmin):
         "order",
     )
     list_filter = ("kind", "source")
-    search_fields = (
-        "source_card__title",
-        "target_card__title",
-        "raw_text",
-    )
+    search_fields = ("source_card__title", "target_card__title", "raw_text")
     autocomplete_fields = (
         "source_card",
         "target_card",

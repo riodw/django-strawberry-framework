@@ -109,11 +109,7 @@ class CardReferenceFilter(FilterSet):
 
     class Meta:
         model = models.CardReference
-        fields = {
-            "id": "__all__",
-            "raw_text": "__all__",
-            "order": "__all__",
-        }
+        fields = {"id": "__all__", "raw_text": "__all__", "order": "__all__"}
 
 
 # ---------------------------------------------------------------------------

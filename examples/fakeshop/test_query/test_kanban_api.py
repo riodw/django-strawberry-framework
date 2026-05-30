@@ -10,6 +10,8 @@ directly (not via the importer, so assertions stay independent of how the real
 * plain-integer ``id: { in: [...] }`` on the non-Relay ``CardItemType``;
 * M2M-through filtering + selection (``parity`` / ``parityClaims``);
 * self-referential M2M filtering + selection (``dependencies``);
+* normalized card-to-card references parsed out of prose
+  (``outgoingReferences``);
 * O2O selection (``spec``) plus the reverse ``uuid`` side-table and the
   inherited ``createdDate`` audit column;
 * reverse-FK from a lookup (``status { cards }``).
@@ -81,6 +83,16 @@ def _seed_board():
     required = models.ParityLevel.objects.create(key="required", label="Required", order=0)
     adjacent = models.ParityLevel.objects.create(key="adjacent", label="Parity-adjacent", order=1)
     scope = models.Section.objects.create(key="scope", label="Scope", order=0)
+    dependency = models.CardReferenceKind.objects.create(
+        key="dependency",
+        label="Dependency",
+        order=0,
+    )
+    planning_note = models.CardReferenceSource.objects.create(
+        key="planning_note",
+        label="Planning note",
+        order=0,
+    )
     spec = models.SpecDoc.objects.create(
         name="spec-021-filters-0_0_8",
         url="https://github.com/example/spec-021-filters-0_0_8.md",
@@ -108,6 +120,14 @@ def _seed_board():
         planning_state=planned,
     )
     conn_card.dependencies.add(filters_card)
+    reference = models.CardReference.objects.create(
+        source_card=conn_card,
+        target_card=filters_card,
+        kind=dependency,
+        source=planning_note,
+        raw_text="planned; gated on `DONE-021-0.0.8`",
+        order=0,
+    )
 
     models.ParityClaim.objects.create(card=filters_card, upstream=graphene, level=required)
     models.ParityClaim.objects.create(card=filters_card, upstream=straw, level=required)
@@ -131,6 +151,7 @@ def _seed_board():
         "conn": conn_card,
         "item_filters": item_filters,
         "item_conn": item_conn,
+        "reference": reference,
     }
 
 
@@ -240,6 +261,44 @@ def test_filter_cards_by_self_referential_dependency():
                 {
                     "title": "DjangoConnectionField",
                     "dependencies": [{"title": "Filtering subsystem"}],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_filter_and_select_normalized_card_references():
+    """Card references expose the parsed source/kind instead of only prose."""
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { outgoingReferences: { kind: { key: { exact: "dependency" } } } }) {
+            title
+            outgoingReferences {
+              targetCard { title }
+              kind { key }
+              source { key }
+              rawText
+              order
+            }
+          }
+        }
+        """,
+        {
+            "allCards": [
+                {
+                    "title": "DjangoConnectionField",
+                    "outgoingReferences": [
+                        {
+                            "targetCard": {"title": "Filtering subsystem"},
+                            "kind": {"key": "dependency"},
+                            "source": {"key": "planning_note"},
+                            "rawText": "planned; gated on `DONE-021-0.0.8`",
+                            "order": 0,
+                        },
+                    ],
                 },
             ],
         },

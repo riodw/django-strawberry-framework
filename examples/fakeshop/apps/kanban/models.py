@@ -24,6 +24,7 @@ from functools import reduce
 from django.db import models
 from django.db.models.lookups import Exact
 from django.db.models.signals import post_save
+from django.utils.text import slugify
 
 # ---------------------------------------------------------------------------
 # Abstract bases
@@ -71,7 +72,6 @@ class Milestone(LookupBase):
 
     version_floor = models.TextField(blank=True, default="")
     version_ceiling = models.TextField(blank=True, default="")
-    description = models.TextField(blank=True, default="")
 
     class Meta(LookupBase.Meta):
         verbose_name = "milestone"
@@ -124,7 +124,6 @@ class Upstream(LookupBase):
     """A parity target: ``graphene_django`` (⚛️) / ``strawberry_django`` (🍓)."""
 
     emoji = models.TextField(blank=True, default="")
-    homepage = models.TextField(blank=True, default="")
 
     class Meta(LookupBase.Meta):
         verbose_name = "upstream"
@@ -163,6 +162,19 @@ class CardReferenceSource(LookupBase):
         verbose_name_plural = "card reference sources"
 
 
+class BoardDocKind(LookupBase):
+    """The role a :class:`BoardDoc` section plays in the rendered board.
+
+    ``preamble`` (the title + intro), ``reference`` (legend / scale / snapshot),
+    ``column`` (a card-bearing column's heading + intro), or ``footer`` (release
+    checklist / maintenance notes / link definitions).
+    """
+
+    class Meta(LookupBase.Meta):
+        verbose_name = "board doc kind"
+        verbose_name_plural = "board doc kinds"
+
+
 # ---------------------------------------------------------------------------
 # Version + spec
 # ---------------------------------------------------------------------------
@@ -177,8 +189,6 @@ class TargetVersion(TimeStampedModel):
         related_name="target_versions",
         on_delete=models.PROTECT,
     )
-    shipped_on = models.DateField(null=True, blank=True)
-    git_ref = models.TextField(blank=True, default="")
 
     class Meta:
         ordering = ["number"]
@@ -263,8 +273,6 @@ class Card(TimeStampedModel):
         on_delete=models.PROTECT,
     )
     planning_note = models.TextField(blank=True, default="")
-    summary = models.TextField(blank=True, default="")
-    body = models.TextField(blank=True, default="")
 
     spec = models.OneToOneField(
         SpecDoc,
@@ -319,6 +327,17 @@ class Card(TimeStampedModel):
         milestone = f"-{self.milestone.key.upper()}" if self.milestone_id else ""
         return f"{self.status.key.upper()}{milestone}-{self.number:03d}-{self.target_version.number} — {self.title}"
 
+    @property
+    def slug(self) -> str:
+        """Stable, link-friendly id derived from the unique ``title``.
+
+        Deep links into the dashboard use ``kanban_board.html#<slug>`` so a
+        reference survives card reordering -- unlike the volatile ``number``.
+        Not stored: it is a pure function of ``title`` (which is already unique),
+        so there is nothing to keep in sync and no second column to migrate.
+        """
+        return slugify(self.title)
+
 
 class CardReference(TimeStampedModel):
     """A normalized card-to-card reference parsed out of prose.
@@ -370,8 +389,18 @@ class CardReference(TimeStampedModel):
             ),
         ]
         indexes = [
-            models.Index(fields=["target_card", "kind"]),
-            models.Index(fields=["source_card", "kind"]),
+            models.Index(
+                fields=[
+                    "target_card",
+                    "kind",
+                ]
+            ),
+            models.Index(
+                fields=[
+                    "source_card",
+                    "kind",
+                ]
+            ),
         ]
 
     def __str__(self):
@@ -384,7 +413,6 @@ class ParityClaim(TimeStampedModel):
     card = models.ForeignKey(Card, related_name="parity_claims", on_delete=models.CASCADE)
     upstream = models.ForeignKey(Upstream, related_name="parity_claims", on_delete=models.PROTECT)
     level = models.ForeignKey(ParityLevel, related_name="parity_claims", on_delete=models.PROTECT)
-    note = models.TextField(blank=True, default="")
 
     class Meta:
         verbose_name = "parity claim"
@@ -453,6 +481,40 @@ class Label(TimeStampedModel):
 
 
 # ---------------------------------------------------------------------------
+# Board document (the prose around the cards)
+# ---------------------------------------------------------------------------
+
+
+class BoardDoc(TimeStampedModel):
+    """One ordered prose section of the board document -- everything in the
+    board that is not a card.
+
+    The card-ID-format legend, the relative-size scale, the snapshot narrative,
+    each column's intro, the release checklist, and the maintenance notes all
+    live here as ordered markdown. Storing them in the DB lets the same data
+    drive the HTML dashboard and regenerate a ``KANBAN.md`` file from the board.
+    """
+
+    key = models.SlugField(unique=True)
+    kind = models.ForeignKey(
+        BoardDocKind,
+        related_name="docs",
+        on_delete=models.PROTECT,
+    )
+    title = models.TextField(blank=True, default="")
+    order = models.PositiveIntegerField(default=0)
+    body = models.TextField(blank=True, default="")
+
+    class Meta:
+        ordering = ["order"]
+        verbose_name = "board doc"
+        verbose_name_plural = "board docs"
+
+    def __str__(self):
+        return self.title or self.key
+
+
+# ---------------------------------------------------------------------------
 # UUID side-table
 # ---------------------------------------------------------------------------
 
@@ -472,6 +534,7 @@ _UUID_LINK_NAMES = (
     "section",
     "cardreferencekind",
     "cardreferencesource",
+    "boarddockind",
     "targetversion",
     "specdoc",
     "card",
@@ -479,6 +542,7 @@ _UUID_LINK_NAMES = (
     "parityclaim",
     "carditem",
     "label",
+    "boarddoc",
 )
 
 
@@ -597,6 +661,13 @@ class UUIDModel(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="uuid",
     )
+    boarddockind = models.OneToOneField(
+        "BoardDocKind",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
     targetversion = models.OneToOneField(
         "TargetVersion",
         null=True,
@@ -646,6 +717,13 @@ class UUIDModel(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="uuid",
     )
+    boarddoc = models.OneToOneField(
+        "BoardDoc",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
 
     class Meta:
         verbose_name = "UUID"
@@ -673,6 +751,7 @@ _UUID_LINKED_MODELS = (
     Section,
     CardReferenceKind,
     CardReferenceSource,
+    BoardDocKind,
     TargetVersion,
     SpecDoc,
     Card,
@@ -680,6 +759,7 @@ _UUID_LINKED_MODELS = (
     ParityClaim,
     CardItem,
     Label,
+    BoardDoc,
 )
 
 

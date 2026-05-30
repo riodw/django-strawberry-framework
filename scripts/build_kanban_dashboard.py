@@ -25,10 +25,9 @@ query StaticKanbanCards {
       id
     }
     title
+    slug
     number
     planningNote
-    summary
-    body
     createdDate
     updatedDate
     status {
@@ -70,7 +69,6 @@ query StaticKanbanCards {
       uuid {
         id
       }
-      note
       createdDate
       updatedDate
       upstream {
@@ -141,7 +139,6 @@ fragment MilestoneFields on MilestoneType {
   order
   versionFloor
   versionCeiling
-  description
   createdDate
   updatedDate
 }
@@ -152,8 +149,6 @@ fragment TargetVersionFields on TargetVersionType {
     id
   }
   number
-  shippedOn
-  gitRef
   createdDate
   updatedDate
   milestone {
@@ -222,7 +217,6 @@ fragment UpstreamFields on UpstreamType {
   label
   order
   emoji
-  homepage
   createdDate
   updatedDate
 }
@@ -281,6 +275,7 @@ fragment CardLinkFields on CardType {
     id
   }
   title
+  slug
   number
   status {
     id

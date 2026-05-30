@@ -65,7 +65,18 @@ def test_import_board_counts():
     assert result["target_versions"] == 2
     assert result["items"] == 5  # 3 (scope×2 + dod) + 2 (deps + scope)
     assert result["parity_claims"] == 3  # 2 + 1
+    assert result["card_references"] == 1
     assert result["dependency_edges"] == 1
+
+
+@pytest.mark.django_db
+def test_import_board_snapshot_loads_preparsed_snapshot():
+    """The DB loader accepts a normalized snapshot without reparsing markdown."""
+    snapshot = services.parse_board_snapshot(EXCERPT)
+    result = services.import_board_snapshot(snapshot)
+    assert result["cards"] == 2
+    assert models.Card.objects.filter(title="First shipped thing").exists()
+    assert models.Card.objects.filter(title="Second planned thing").exists()
 
 
 @pytest.mark.django_db
@@ -101,6 +112,10 @@ def test_import_board_resolves_self_referential_dependency():
     # The "(`DONE-001-0.0.1`)" reference resolves to the first card by number.
     assert list(second.dependencies.all()) == [first]
     assert list(first.dependents.all()) == [second]
+    reference = second.outgoing_references.get()
+    assert reference.target_card == first
+    assert reference.kind.key == "dependency"
+    assert reference.source.key == "dependencies_section"
 
 
 @pytest.mark.django_db
@@ -122,6 +137,7 @@ def test_uuid_signal_creates_side_row():
     assert isinstance(models.Status.objects.get(key="done").uuid.id, uuid_module.UUID)
     # One UUID row per object created (2 cards + 5 items + lookups + versions).
     assert models.UUIDModel.objects.filter(card__isnull=False).count() == 2
+    assert models.UUIDModel.objects.filter(cardreference__isnull=False).count() == 1
     assert models.UUIDModel.objects.filter(carditem__isnull=False).count() == 5
 
 
@@ -136,6 +152,7 @@ def test_import_board_is_idempotent():
     # Dependency edges are cleared + re-added, not duplicated.
     second = models.Card.objects.get(title="Second planned thing")
     assert second.dependencies.count() == 1
+    assert second.outgoing_references.count() == 1
 
 
 @pytest.mark.django_db
@@ -171,22 +188,126 @@ def test_import_updates_in_place_by_title():
 
 
 def test_parse_size_variants():
-    """``parse_cards`` handles a single size and an en-dash range (no DB)."""
+    """``parse_board_snapshot`` handles a single size and an en-dash range."""
     md = (
         "### TODO-ALPHA-010-0.0.9 — Single size card\n\n"
         "Relative size: XS\n\n"
         "### TODO-ALPHA-011-0.0.9 — Range size card\n\n"
         "Relative size: S–M\n"
     )
-    cards = {c["title"]: c for c in services.parse_cards(md)}
-    assert (cards["Single size card"]["size_low"], cards["Single size card"]["size_high"]) == (
+    snapshot = services.parse_board_snapshot(md)
+    cards = {card.title: card for card in snapshot.cards}
+    assert (cards["Single size card"].size_low_key, cards["Single size card"].size_high_key) == (
         "xs",
         None,
     )
-    assert (cards["Range size card"]["size_low"], cards["Range size card"]["size_high"]) == (
+    assert (cards["Range size card"].size_low_key, cards["Range size card"].size_high_key) == (
         "s",
         "m",
     )
+
+
+def test_parse_board_snapshot_normalizes_edges_and_versions():
+    """The parser emits a stable DTO layer before any database reconciliation."""
+    snapshot = services.parse_board_snapshot(EXCERPT)
+    assert isinstance(snapshot, services.BoardSnapshot)
+    assert snapshot.target_versions == ("0.0.1", "0.0.2")
+    assert snapshot.spec_paths == ()
+
+    first, second = snapshot.cards
+    assert first.id_key == ("done", 1, "0.0.1")
+    assert first.milestone_key is None
+    assert first.parity_claims == (
+        services.ParityClaimSnapshot(upstream_key="graphene_django", level_key="required"),
+        services.ParityClaimSnapshot(upstream_key="strawberry_django", level_key="required"),
+    )
+    assert first.items[0] == services.CardItemSnapshot(
+        section_key="scope",
+        text="alpha scope item",
+        order=0,
+    )
+    assert second.id_key == ("todo", 2, "0.0.2")
+    assert second.references == (
+        services.CardReferenceSnapshot(
+            target_key=("done", 1, "0.0.1"),
+            kind_key="dependency",
+            source_key="dependencies_section",
+            raw_text="`First shipped thing` (`DONE-001-0.0.1`)",
+            order=0,
+        ),
+    )
+    assert second.dependency_keys == frozenset({("done", 1, "0.0.1")})
+
+
+@pytest.mark.django_db
+def test_import_planning_note_references_are_normalized():
+    """``Status:`` prose references become rows and dependency M2M edges."""
+    md = (
+        "### DONE-001-0.0.1 — First shipped thing\n\n"
+        "Status: shipped\n\n"
+        "Relative size: S\n\n"
+        "### TODO-ALPHA-002-0.0.2 — Second planned thing\n\n"
+        "Status: planned\n\n"
+        "Relative size: M\n\n"
+        "### TODO-ALPHA-003-0.0.3 — Gated card\n\n"
+        "Status: planned; gated on `DONE-001-0.0.1` and `TODO-ALPHA-002-0.0.2`\n\n"
+        "Relative size: L\n\n"
+        "### TODO-ALPHA-004-0.0.4 — Related mention card\n\n"
+        "Status: planned; related to First shipped thing\n\n"
+        "Relative size: XS\n"
+    )
+    result = services.import_board(markdown=md)
+
+    assert result["card_references"] == 3
+    assert result["dependency_edges"] == 2
+
+    gated = models.Card.objects.get(title="Gated card")
+    references = list(gated.outgoing_references.order_by("order"))
+    assert [
+        (
+            reference.target_card.title,
+            reference.kind.key,
+            reference.source.key,
+            reference.order,
+        )
+        for reference in references
+    ] == [
+        ("First shipped thing", "dependency", "planning_note", 0),
+        ("Second planned thing", "dependency", "planning_note", 1),
+    ]
+    assert set(gated.dependencies.values_list("title", flat=True)) == {
+        "First shipped thing",
+        "Second planned thing",
+    }
+
+    related = models.Card.objects.get(title="Related mention card")
+    reference = related.outgoing_references.get()
+    assert reference.target_card.title == "First shipped thing"
+    assert reference.kind.key == "related"
+    assert reference.source.key == "planning_note"
+    assert related.dependencies.count() == 0
+
+
+@pytest.mark.django_db
+def test_reimport_removes_stale_card_references():
+    """A removed planning-note reference clears both the rich row and M2M edge."""
+    md = (
+        "### DONE-001-0.0.1 — First shipped thing\n\n"
+        "Status: shipped\n\n"
+        "Relative size: S\n\n"
+        "### TODO-ALPHA-002-0.0.2 — Gated card\n\n"
+        "Status: planned; gated on `DONE-001-0.0.1`\n\n"
+        "Relative size: M\n"
+    )
+    services.import_board(markdown=md)
+    gated = models.Card.objects.get(title="Gated card")
+    assert gated.outgoing_references.count() == 1
+    assert gated.dependencies.count() == 1
+
+    services.import_board(markdown=md.replace("; gated on `DONE-001-0.0.1`", "", 1))
+    gated.refresh_from_db()
+    assert gated.outgoing_references.count() == 0
+    assert gated.dependencies.count() == 0
 
 
 @pytest.mark.django_db

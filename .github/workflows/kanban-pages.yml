@@ -5,7 +5,14 @@ on:
     branches: ["main"]
     paths:
       - ".github/workflows/kanban-pages.yml"
+      - "django_strawberry_framework/**"
+      - "examples/fakeshop/apps/kanban/**"
+      - "examples/fakeshop/config/**"
+      - "examples/fakeshop/db.sqlite3"
       - "examples/fakeshop/kanban_board.html"
+      - "pyproject.toml"
+      - "scripts/build_kanban_dashboard.py"
+      - "uv.lock"
   workflow_dispatch:
 
 permissions:
@@ -19,9 +26,18 @@ jobs:
   build:
     name: Build Pages Artifact
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --no-dev --python 3.12
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
@@ -30,6 +46,7 @@ jobs:
         run: |
           mkdir -p _site
           cp examples/fakeshop/kanban_board.html _site/index.html
+          uv run python scripts/build_kanban_dashboard.py --html _site/index.html
           touch _site/.nojekyll
 
       - name: Upload GitHub Pages artifact
@@ -41,6 +58,7 @@ jobs:
     name: Deploy GitHub Pages
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       id-token: write

@@ -4,9 +4,29 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Kanban Board</title>
-    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <script>
-      tailwind.config = {
+      (() => {
+        const query = window.matchMedia("(prefers-color-scheme: dark)");
+        const applyTheme = (matches) => {
+          const isDark = Boolean(matches);
+          document.documentElement.dataset.theme = isDark ? "dark" : "light";
+          document.documentElement.classList.toggle("dark", isDark);
+        };
+        const listen = (listener) => {
+          if (query.addEventListener) {
+            query.addEventListener("change", listener);
+          } else {
+            query.addListener(listener);
+          }
+        };
+
+        applyTheme(query.matches);
+        listen((event) => applyTheme(event.matches));
+      })();
+
+      window.tailwind = window.tailwind || {};
+      window.tailwind.config = {
+        darkMode: "class",
         theme: {
           extend: {
             fontFamily: {
@@ -16,6 +36,7 @@
         },
       };
     </script>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
@@ -28,6 +49,17 @@
     <style>
       [v-cloak] {
         display: none;
+      }
+      :root {
+        color-scheme: light;
+      }
+      html.dark {
+        color-scheme: dark;
+      }
+      *,
+      *::before,
+      *::after {
+        border-radius: 0 !important;
       }
       body {
         font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
@@ -42,10 +74,18 @@
       }
       .kanban-scroll::-webkit-scrollbar-thumb {
         background: #d4d4d8;
-        border-radius: 9999px;
       }
       .kanban-scroll::-webkit-scrollbar-thumb:hover {
         background: #a1a1aa;
+      }
+      .dark .kanban-scroll {
+        scrollbar-color: #52525b transparent;
+      }
+      .dark .kanban-scroll::-webkit-scrollbar-thumb {
+        background: #52525b;
+      }
+      .dark .kanban-scroll::-webkit-scrollbar-thumb:hover {
+        background: #71717a;
       }
       .kanban-scroll::-webkit-scrollbar-track {
         background: transparent;
@@ -108,7 +148,6 @@
         background: #f4f4f5;
         color: #be123c;
         border: 1px solid #e4e4e7;
-        border-radius: 4px;
         padding: 0.05rem 0.3rem;
         font-size: 0.85em;
         overflow-wrap: anywhere;
@@ -143,6 +182,116 @@
         color: inherit;
         padding: 0;
       }
+
+      .dark .bg-white {
+        background-color: #18181b !important;
+      }
+      .dark .bg-zinc-50 {
+        background-color: #09090b !important;
+      }
+      .dark .bg-zinc-100 {
+        background-color: #27272a !important;
+      }
+      .dark .hover\:bg-zinc-100:hover,
+      .dark .hover\:bg-zinc-50:hover {
+        background-color: #27272a !important;
+      }
+      .dark .bg-zinc-100\/70 {
+        background-color: rgb(24 24 27 / 0.82) !important;
+      }
+      .dark .bg-zinc-200\/70,
+      .dark .hover\:bg-zinc-200\/70:hover {
+        background-color: rgb(63 63 70 / 0.7) !important;
+      }
+      .dark .bg-zinc-200\/80 {
+        background-color: rgb(63 63 70 / 0.8) !important;
+      }
+      .dark .border-zinc-100,
+      .dark .border-zinc-200 {
+        border-color: #3f3f46 !important;
+      }
+      .dark .border-zinc-300,
+      .dark .hover\:border-zinc-300:hover {
+        border-color: #52525b !important;
+      }
+      .dark .focus\:border-zinc-400:focus {
+        border-color: #71717a !important;
+      }
+      .dark .ring-zinc-200 {
+        --tw-ring-color: #3f3f46 !important;
+      }
+      .dark .focus\:ring-zinc-900\/5:focus {
+        --tw-ring-color: rgb(244 244 245 / 0.1) !important;
+      }
+      .dark .focus\:ring-zinc-900\/20:focus {
+        --tw-ring-color: rgb(244 244 245 / 0.2) !important;
+      }
+      .dark .text-zinc-900,
+      .dark .hover\:text-zinc-900:hover {
+        color: #f4f4f5 !important;
+      }
+      .dark .text-zinc-800,
+      .dark .hover\:text-zinc-800:hover {
+        color: #e4e4e7 !important;
+      }
+      .dark .text-zinc-700,
+      .dark .hover\:text-zinc-700:hover {
+        color: #d4d4d8 !important;
+      }
+      .dark .text-zinc-600 {
+        color: #a1a1aa !important;
+      }
+      .dark .text-zinc-500,
+      .dark .hover\:text-zinc-500:hover {
+        color: #a1a1aa !important;
+      }
+      .dark .text-zinc-400,
+      .dark .placeholder\:text-zinc-400::placeholder {
+        color: #71717a !important;
+      }
+      .dark .text-blue-600 {
+        color: #93c5fd !important;
+      }
+      .dark input,
+      .dark select {
+        background-color: #18181b;
+        color: #f4f4f5;
+      }
+      .dark input[type="checkbox"] {
+        background-color: #27272a;
+      }
+      .dark .shadow-sm {
+        --tw-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.28) !important;
+        --tw-shadow-colored: 0 1px 2px 0 var(--tw-shadow-color) !important;
+      }
+      .dark .shadow-md {
+        --tw-shadow:
+          0 4px 6px -1px rgb(0 0 0 / 0.35),
+          0 2px 4px -2px rgb(0 0 0 / 0.35) !important;
+        --tw-shadow-colored:
+          0 4px 6px -1px var(--tw-shadow-color),
+          0 2px 4px -2px var(--tw-shadow-color) !important;
+      }
+      .dark .shadow-2xl {
+        --tw-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.65) !important;
+        --tw-shadow-colored: 0 25px 50px -12px var(--tw-shadow-color) !important;
+      }
+      .dark .md :not(pre) > code,
+      .dark .prose :not(pre) > code,
+      .dark .md code,
+      .dark .prose code {
+        background: #27272a;
+        color: #fda4af;
+        border-color: #3f3f46;
+      }
+      .dark .md a,
+      .dark .prose a {
+        color: #93c5fd;
+      }
+      .dark .md strong,
+      .dark .prose strong {
+        color: #f4f4f5;
+      }
     </style>
   </head>
   <body class="bg-zinc-50 text-zinc-900 antialiased">
@@ -156,7 +305,9 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
       <header class="z-30 border-b border-zinc-200 bg-white">
         <div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
           <div class="flex items-center gap-2.5">
-            <div class="grid h-7 w-7 place-items-center rounded-md bg-zinc-900 text-xs font-bold text-white">
+            <div
+              class="grid h-7 w-7 place-items-center bg-zinc-900 text-xs font-bold text-white dark:bg-zinc-100 dark:text-zinc-950"
+            >
               K
             </div>
             <div>
@@ -184,7 +335,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
               v-model="search"
               type="search"
               placeholder="Search title or key…"
-              class="w-56 rounded-md border border-zinc-200 bg-white py-1.5 pl-8 pr-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-900/5"
+              class="w-56 border border-zinc-200 bg-white py-1.5 pl-8 pr-3 text-sm outline-none transition placeholder:text-zinc-400 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-900/5"
             />
           </div>
 
@@ -192,7 +343,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
             <input
               type="checkbox"
               v-model="hideEmptyColumns"
-              class="h-3.5 w-3.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900/20"
+              class="h-3.5 w-3.5 border-zinc-300 text-zinc-900 focus:ring-zinc-900/20"
             />
             Hide empty columns
           </label>
@@ -214,8 +365,8 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
             <button
               type="button"
               @click="activeVersions = []"
-              class="rounded-md border px-2 py-0.5 text-[11px] font-medium transition"
-              :class="!activeVersions.length ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'"
+              class="border px-2 py-0.5 text-[11px] font-medium transition"
+              :class="!activeVersions.length ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'"
             >
               All
             </button>
@@ -224,8 +375,8 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
               :key="version.number"
               type="button"
               @click="toggleVersion(version.number)"
-              class="rounded-md border px-2 py-0.5 text-[11px] font-medium transition"
-              :class="activeVersions.includes(version.number) ? 'border-zinc-900 bg-zinc-900 text-white' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'"
+              class="border px-2 py-0.5 text-[11px] font-medium transition"
+              :class="activeVersions.includes(version.number) ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950' : 'border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300'"
             >
               {{ version.number }}
             </button>
@@ -240,18 +391,18 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
             v-for="column in displayedColumns"
             :key="column.key"
             class="flex h-full flex-col"
-            :class="isColumnCollapsed(column) ? 'w-11 shrink-0' : 'w-[300px] shrink-0'"
+            :class="isColumnCollapsed(column) ? 'w-11 shrink-0' : 'w-[380px] shrink-0'"
           >
             <!-- Collapsed strip -->
             <button
               v-if="isColumnCollapsed(column)"
               type="button"
               @click="toggleColumn(column.key)"
-              class="flex h-full w-11 flex-col items-center gap-3 rounded-xl border border-zinc-200 bg-zinc-100/70 py-3 text-zinc-500 transition hover:bg-zinc-100"
+              class="flex h-full w-11 flex-col items-center gap-3 border border-zinc-200 bg-zinc-100/70 py-3 text-zinc-500 transition hover:bg-zinc-100"
               :title="'Expand ' + column.title"
             >
-              <span class="h-2 w-2 rounded-full" :style="{ backgroundColor: columnColor(column) }"></span>
-              <span class="rounded-full bg-zinc-200/80 px-1.5 py-0.5 text-[10px] font-semibold">
+              <span class="h-2 w-2" :style="{ backgroundColor: columnColor(column) }"></span>
+              <span class="bg-zinc-200/80 px-1.5 py-0.5 text-[10px] font-semibold">
                 {{ columnCards(column).length }}
               </span>
               <span class="mt-1 rotate-180 text-[12px] font-semibold tracking-wide [writing-mode:vertical-rl]">
@@ -260,17 +411,17 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
             </button>
 
             <!-- Expanded column -->
-            <div v-else class="flex h-full flex-col rounded-xl border border-zinc-200 bg-zinc-100/70">
+            <div v-else class="flex h-full flex-col border border-zinc-200 bg-zinc-100/70">
               <div class="flex items-center gap-2 px-3 py-2.5">
-                <span class="h-2 w-2 rounded-full" :style="{ backgroundColor: columnColor(column) }"></span>
+                <span class="h-2 w-2" :style="{ backgroundColor: columnColor(column) }"></span>
                 <h2 class="text-[13px] font-semibold text-zinc-700">{{ column.title }}</h2>
-                <span class="rounded-full bg-zinc-200/80 px-2 py-0.5 text-[11px] font-medium text-zinc-600">
+                <span class="bg-zinc-200/80 px-2 py-0.5 text-[11px] font-medium text-zinc-600">
                   {{ columnCards(column).length }}
                 </span>
                 <button
                   type="button"
                   @click="toggleColumn(column.key)"
-                  class="ml-auto grid h-6 w-6 place-items-center rounded text-zinc-400 transition hover:bg-zinc-200/70 hover:text-zinc-700"
+                  class="ml-auto grid h-6 w-6 place-items-center text-zinc-400 transition hover:bg-zinc-200/70 hover:text-zinc-700"
                   title="Collapse column"
                 >
                   <svg
@@ -290,7 +441,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
               <div class="kanban-scroll flex-1 space-y-2 overflow-y-auto px-2 pb-2">
                 <p
                   v-if="columnCards(column).length === 0"
-                  class="rounded-lg border border-dashed border-zinc-300 px-3 py-6 text-center text-xs text-zinc-400"
+                  class="border border-dashed border-zinc-300 px-3 py-6 text-center text-xs text-zinc-400"
                 >
                   No cards
                 </p>
@@ -299,23 +450,23 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                   v-for="card in columnCards(column)"
                   :key="card.id"
                   @click="openCard(card)"
-                  class="group cursor-pointer rounded-lg border border-zinc-200 bg-white p-3 shadow-sm transition duration-150 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md"
+                  class="group cursor-pointer border border-zinc-200 bg-white p-3 shadow-sm transition duration-150 hover:-translate-y-0.5 hover:border-zinc-300 hover:shadow-md"
                 >
                   <div class="mb-2 flex items-center justify-between gap-2 text-[10px] font-medium">
                     <div class="flex items-center gap-1">
-                      <span class="rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-500 ring-1 ring-inset ring-zinc-200">
+                      <span class="bg-zinc-100 px-1.5 py-0.5 text-zinc-500 ring-1 ring-inset ring-zinc-200">
                         #{{ card.number }}
                       </span>
                       <span
                         v-if="card.targetVersion"
-                        class="rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-600 ring-1 ring-inset ring-zinc-200"
+                        class="bg-zinc-100 px-1.5 py-0.5 text-zinc-600 ring-1 ring-inset ring-zinc-200"
                       >
                         v{{ card.targetVersion.number }}
                       </span>
                     </div>
                     <span
                       v-if="card.milestone"
-                      class="rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-600 ring-1 ring-inset ring-zinc-200"
+                      class="bg-zinc-100 px-1.5 py-0.5 text-zinc-600 ring-1 ring-inset ring-zinc-200"
                     >
                       {{ milestoneLabel(card.milestone) }}
                     </span>
@@ -328,16 +479,16 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                   <div class="mt-2 flex flex-wrap items-center gap-1 text-[10px] font-medium">
                     <span
                       v-if="card.priority"
-                      class="inline-flex items-center gap-1 rounded px-1.5 py-0.5"
+                      class="inline-flex items-center gap-1 px-1.5 py-0.5"
                       :style="chipStyle(priorityColor(card))"
                     >
-                      <span class="h-1.5 w-1.5 rounded-full" :style="{ backgroundColor: priorityColor(card) }"></span>
+                      <span class="h-1.5 w-1.5" :style="{ backgroundColor: priorityColor(card) }"></span>
                       {{ card.priority.label }}
                     </span>
-                    <span v-if="card.status" class="rounded px-1.5 py-0.5" :style="chipStyle(statusColor(card))">
+                    <span v-if="card.status" class="px-1.5 py-0.5" :style="chipStyle(statusColor(card))">
                       {{ card.status.label }}
                     </span>
-                    <span v-if="sizeLabel(card)" class="rounded px-1.5 py-0.5" :style="chipStyle(sizeColor(card))">
+                    <span v-if="sizeLabel(card)" class="px-1.5 py-0.5" :style="chipStyle(sizeColor(card))">
                       {{ sizeLabel(card) }}
                     </span>
                   </div>
@@ -346,7 +497,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                     <span
                       v-for="label in card.labels"
                       :key="label.id"
-                      class="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                      class="px-1.5 py-0.5 text-[10px] font-medium"
                       :style="chipStyle(label.color)"
                     >
                       {{ label.key }}
@@ -384,19 +535,21 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
         <div
           v-if="selected"
           class="fixed inset-0 z-40 flex items-center justify-center bg-zinc-900/40 p-4"
+          role="dialog"
+          aria-modal="true"
           @click.self="closeCard"
         >
           <article
-            class="modal-pop flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-zinc-200 bg-white shadow-2xl"
+            class="modal-pop flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden border border-zinc-200 bg-white shadow-2xl"
           >
             <header class="flex items-start justify-between gap-4 border-b border-zinc-200 px-5 py-4">
               <div class="min-w-0">
                 <div class="mb-1.5 flex items-center gap-2">
-                  <span class="h-2 w-2 rounded-full" :style="{ backgroundColor: priorityColor(selected) }"></span>
+                  <span class="h-2 w-2" :style="{ backgroundColor: priorityColor(selected) }"></span>
                   <span class="font-mono text-[11px] text-zinc-400">{{ cardKey(selected) }}</span>
                   <span
                     v-if="selected.status"
-                    class="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                    class="px-1.5 py-0.5 text-[10px] font-medium"
                     :style="chipStyle(statusColor(selected))"
                   >
                     {{ selected.status.label }}
@@ -407,7 +560,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                   <span
                     v-for="label in selected.labels"
                     :key="label.id"
-                    class="rounded px-1.5 py-0.5 text-[10px] font-medium"
+                    class="px-1.5 py-0.5 text-[10px] font-medium"
                     :style="chipStyle(label.color)"
                   >
                     {{ label.key }}
@@ -417,7 +570,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
               <button
                 type="button"
                 @click="closeCard"
-                class="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-zinc-200 text-zinc-500 transition hover:border-zinc-300 hover:text-zinc-900"
+                class="grid h-8 w-8 shrink-0 place-items-center border border-zinc-200 text-zinc-500 transition hover:border-zinc-300 hover:text-zinc-900"
                 title="Close (Esc)"
               >
                 <svg
@@ -440,14 +593,14 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                 <summary class="flex items-center gap-2 py-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-800">
                   <svg class="chevron h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
                   Dependencies
-                  <span class="rounded-full bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.dependencies.length }}</span>
+                  <span class="bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.dependencies.length }}</span>
                 </summary>
                 <ul class="space-y-1.5 pb-4 pl-5">
                   <li v-for="dep in selected.dependencies" :key="dep.id">
                     <button
                       type="button"
                       @click="openRelated(dep)"
-                      class="flex w-full items-center gap-2 rounded-md border border-zinc-200 px-2.5 py-1.5 text-left text-sm transition hover:border-zinc-300 hover:bg-zinc-50"
+                      class="flex w-full items-center gap-2 border border-zinc-200 px-2.5 py-1.5 text-left text-sm transition hover:border-zinc-300 hover:bg-zinc-50"
                     >
                       <span class="font-mono text-[10px] text-zinc-400">{{ cardKey(dep) }}</span>
                       <span class="truncate text-zinc-700">{{ cleanTitle(dep.title) }}</span>
@@ -460,14 +613,14 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                 <summary class="flex items-center gap-2 py-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-800">
                   <svg class="chevron h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
                   Dependents
-                  <span class="rounded-full bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.dependents.length }}</span>
+                  <span class="bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.dependents.length }}</span>
                 </summary>
                 <ul class="space-y-1.5 pb-4 pl-5">
                   <li v-for="dep in selected.dependents" :key="dep.id">
                     <button
                       type="button"
                       @click="openRelated(dep)"
-                      class="flex w-full items-center gap-2 rounded-md border border-zinc-200 px-2.5 py-1.5 text-left text-sm transition hover:border-zinc-300 hover:bg-zinc-50"
+                      class="flex w-full items-center gap-2 border border-zinc-200 px-2.5 py-1.5 text-left text-sm transition hover:border-zinc-300 hover:bg-zinc-50"
                     >
                       <span class="font-mono text-[10px] text-zinc-400">{{ cardKey(dep) }}</span>
                       <span class="truncate text-zinc-700">{{ cleanTitle(dep.title) }}</span>
@@ -496,7 +649,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                   <div class="mt-3">
                     <span class="text-[10px] font-semibold uppercase tracking-wide text-zinc-400">UUID</span>
                     <div class="mt-1">
-                      <code class="select-all inline-block rounded bg-zinc-100 px-2 py-1 font-mono text-xs text-zinc-700 ring-1 ring-inset ring-zinc-200">{{ selected.uuid ? selected.uuid.id : "—" }}</code>
+                      <code class="select-all inline-block bg-zinc-100 px-2 py-1 font-mono text-xs text-zinc-700 ring-1 ring-inset ring-zinc-200">{{ selected.uuid ? selected.uuid.id : "—" }}</code>
                     </div>
                   </div>
                 </div>
@@ -525,10 +678,10 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                 <summary class="flex items-center gap-2 py-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-800">
                   <svg class="chevron h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
                   Parity
-                  <span class="rounded-full bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.parityClaims.length }}</span>
+                  <span class="bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.parityClaims.length }}</span>
                 </summary>
                 <div class="space-y-2 pb-4 pl-5">
-                  <div v-for="(claim, idx) in selected.parityClaims" :key="claim.upstream.key + '-' + idx" class="rounded-lg border border-zinc-200 p-3">
+                  <div v-for="(claim, idx) in selected.parityClaims" :key="claim.upstream.key + '-' + idx" class="border border-zinc-200 p-3">
                     <div class="grid grid-cols-2 gap-3">
                       <fk-select label="Upstream" :options="options.upstreams" :current="claim.upstream.key"></fk-select>
                       <fk-select label="Level" :options="options.parityLevels" :current="claim.level.key"></fk-select>
@@ -544,16 +697,16 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                   Items
                 </summary>
                 <div class="space-y-3 pb-4 pl-5">
-                  <div v-for="group in itemGroups(selected)" :key="group.key" class="rounded-lg border border-zinc-200 p-3">
+                  <div v-for="group in itemGroups(selected)" :key="group.key" class="border border-zinc-200 p-3">
                     <fk-select label="Section" :options="options.sections" :current="group.key"></fk-select>
                     <ol class="mt-2 space-y-1 text-sm">
                       <li v-for="item in group.items" :key="item.order" class="flex items-start gap-2">
                         <span
-                          class="mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded border text-[9px]"
+                          class="mt-0.5 grid h-4 w-4 shrink-0 place-items-center border text-[9px]"
                           :class="item.isComplete ? 'border-emerald-500 bg-emerald-500 text-white' : 'border-zinc-300 text-transparent'"
                           >✓</span
                         >
-                        <span class="md" :class="item.isComplete ? 'text-zinc-400 line-through' : 'text-zinc-700'" v-html="renderInline(item.text)"></span>
+                        <span class="md" :class="item.isComplete ? 'text-zinc-400' : 'text-zinc-700'" v-html="renderInline(item.text)"></span>
                       </li>
                     </ol>
                   </div>
@@ -564,10 +717,10 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                 <summary class="flex items-center gap-2 py-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-800">
                   <svg class="chevron h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
                   Outgoing References
-                  <span class="rounded-full bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.outgoingReferences.length }}</span>
+                  <span class="bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.outgoingReferences.length }}</span>
                 </summary>
                 <div class="space-y-2 pb-4 pl-5">
-                  <div v-for="reference in selected.outgoingReferences" :key="reference.source.key + '-' + reference.order" class="rounded-lg border border-zinc-200 p-3 text-sm">
+                  <div v-for="reference in selected.outgoingReferences" :key="reference.source.key + '-' + reference.order" class="border border-zinc-200 p-3 text-sm">
                     <button type="button" @click="openRelated(reference.targetCard)" class="font-medium text-zinc-800 hover:underline">{{ cleanTitle(reference.targetCard.title) }}</button>
                     <div class="mt-2 grid grid-cols-2 gap-3">
                       <fk-select label="Kind" :options="options.refKinds" :current="reference.kind.key"></fk-select>
@@ -582,10 +735,10 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                 <summary class="flex items-center gap-2 py-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-800">
                   <svg class="chevron h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
                   Incoming References
-                  <span class="rounded-full bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.incomingReferences.length }}</span>
+                  <span class="bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500">{{ selected.incomingReferences.length }}</span>
                 </summary>
                 <div class="space-y-2 pb-4 pl-5">
-                  <div v-for="reference in selected.incomingReferences" :key="reference.source.key + '-' + reference.order + '-' + reference.sourceCard.id" class="rounded-lg border border-zinc-200 p-3 text-sm">
+                  <div v-for="reference in selected.incomingReferences" :key="reference.source.key + '-' + reference.order + '-' + reference.sourceCard.id" class="border border-zinc-200 p-3 text-sm">
                     <button type="button" @click="openRelated(reference.sourceCard)" class="font-medium text-zinc-800 hover:underline">{{ cleanTitle(reference.sourceCard.title) }}</button>
                     <div class="mt-2 grid grid-cols-2 gap-3">
                       <fk-select label="Kind" :options="options.refKinds" :current="reference.kind.key"></fk-select>
@@ -601,7 +754,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
                   <svg class="chevron h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6" /></svg>
                   Raw JSON
                 </summary>
-                <pre class="kanban-scroll mb-4 ml-5 max-h-96 overflow-auto rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs leading-5 text-zinc-100">{{ stringify(selected) }}</pre>
+                <pre class="kanban-scroll mb-4 ml-5 max-h-96 overflow-auto border border-zinc-800 bg-zinc-950 p-3 text-xs leading-5 text-zinc-100">{{ stringify(selected) }}</pre>
               </details>
             </div>
           </article>
@@ -667,7 +820,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
             <div class="relative">
               <select
                 v-model="local"
-                class="w-full appearance-none rounded-md border border-zinc-200 bg-white py-1.5 pl-2.5 pr-7 text-[13px] text-zinc-800 outline-none transition hover:border-zinc-300 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-900/5"
+                class="w-full appearance-none border border-zinc-200 bg-white py-1.5 pl-2.5 pr-7 text-[13px] text-zinc-800 outline-none transition hover:border-zinc-300 focus:border-zinc-400 focus:ring-2 focus:ring-zinc-900/5"
               >
                 <option value="">— none —</option>
                 <option v-for="opt in options" :key="opt[valueField]" :value="opt[valueField]">
@@ -698,6 +851,7 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
             search: "",
             activeVersions: [],
             hideEmptyColumns: false,
+            theme: document.documentElement.dataset.theme || "light",
             collapsedColumns: {},
             columns: [
               { key: "backlog", title: "Backlog" },
@@ -786,6 +940,9 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
           hasActiveFilters() {
             return Boolean(this.search) || this.activeVersions.length > 0 || this.hideEmptyColumns;
           },
+          isDarkTheme() {
+            return this.theme === "dark";
+          },
         },
         created() {
           if (typeof marked !== "undefined") {
@@ -799,9 +956,27 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
             }
           };
           window.addEventListener("keydown", this._onKeydown);
+
+          this._themeQuery = window.matchMedia("(prefers-color-scheme: dark)");
+          this._onThemeChange = (event) => {
+            this.theme = event.matches ? "dark" : "light";
+          };
+          this.theme = this._themeQuery.matches ? "dark" : "light";
+          if (this._themeQuery.addEventListener) {
+            this._themeQuery.addEventListener("change", this._onThemeChange);
+          } else {
+            this._themeQuery.addListener(this._onThemeChange);
+          }
         },
         beforeUnmount() {
           window.removeEventListener("keydown", this._onKeydown);
+          if (this._themeQuery && this._onThemeChange) {
+            if (this._themeQuery.removeEventListener) {
+              this._themeQuery.removeEventListener("change", this._onThemeChange);
+            } else {
+              this._themeQuery.removeListener(this._onThemeChange);
+            }
+          }
         },
         methods: {
           openCard(card) {
@@ -834,11 +1009,19 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
             if (typeof marked === "undefined") {
               return this._escapeHtml(raw);
             }
+            if (typeof DOMPurify === "undefined") {
+              return this._escapeHtml(raw);
+            }
             const html = inline ? marked.parseInline(raw) : marked.parse(raw);
-            return typeof DOMPurify !== "undefined" ? DOMPurify.sanitize(html) : html;
+            return DOMPurify.sanitize(html);
           },
           _escapeHtml(value) {
-            return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+            return value
+              .replaceAll("&", "&amp;")
+              .replaceAll("<", "&lt;")
+              .replaceAll(">", "&gt;")
+              .replaceAll('"', "&quot;")
+              .replaceAll("'", "&#039;");
           },
           cardKey(card) {
             const status = (card.status && card.status.key ? card.status.key : "card").toUpperCase();
@@ -934,10 +1117,12 @@ window.KANBAN_CARDS = [{"id":"Q2FyZFR5cGU6Mjc=","uuid":{"id":"0f85d165-f347-49b1
           },
           chipStyle(hex) {
             const color = hex || FALLBACK;
+            const backgroundAlpha = this.isDarkTheme ? 0.2 : 0.12;
+            const borderAlpha = this.isDarkTheme ? 0.45 : 0.25;
             return {
               color: color,
-              backgroundColor: this.hexToRgba(color, 0.12),
-              border: `1px solid ${this.hexToRgba(color, 0.25)}`,
+              backgroundColor: this.hexToRgba(color, backgroundAlpha),
+              border: `1px solid ${this.hexToRgba(color, borderAlpha)}`,
             };
           },
           statusColor(card) {

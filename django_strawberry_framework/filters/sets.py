@@ -311,7 +311,17 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         if model is not None and isinstance(meta_fields, dict):
             for field_name in list(fields):
                 if fields[field_name] == "__all__":
-                    fields[field_name] = _lookups_for_field(get_model_field(model, field_name))
+                    model_field = get_model_field(model, field_name)
+                    lookups = _lookups_for_field(model_field)
+                    if cls._is_own_pk_under_relay_owner(model_field):
+                        # A Relay node's own PK is a GlobalID over the wire, so
+                        # only equality / membership / null are meaningful.
+                        # Ordering and pattern lookups (``range`` / ``gt`` /
+                        # ``contains`` / ...) have no GlobalID semantics and are
+                        # dropped from the generated surface rather than emitted
+                        # as corrupt ``String`` inputs (spec-021 H1).
+                        lookups = [lk for lk in lookups if lk in ("exact", "in", "isnull")]
+                    fields[field_name] = lookups
 
         if meta_fields != "__all__":
             return fields
@@ -375,6 +385,10 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # GlobalIDs (multi-choice), every other lookup a single one.
             # Without this split ``id: {in: [...]}`` collapsed to a single
             # ``GlobalIDFilter`` and silently dropped to a scalar input.
+            # ``isnull`` is a Boolean predicate, not a GlobalID, so pass the
+            # upstream filter through unchanged (spec-021 H1).
+            if default.lookup_expr == "isnull":
+                return default
             own_pk_filter_class = (
                 GlobalIDMultipleChoiceFilter if default.lookup_expr == "in" else GlobalIDFilter
             )
@@ -406,11 +420,27 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """
         default_class, params = super().filter_for_lookup(field, lookup_type)
         if cls._is_own_pk_under_relay_owner(field):
-            # Own-PK GlobalID, cardinality by lookup: ``in`` -> list of
-            # GlobalIDs (multi-choice), otherwise a single GlobalID.
+            # Own-PK GlobalID. A Relay node's wire id supports only equality
+            # (``exact`` -> a single GlobalID), membership (``in`` -> a list of
+            # GlobalIDs), and null (``isnull`` -> the upstream Boolean; a
+            # GlobalID cannot represent ``true``). Any other lookup has no
+            # GlobalID ordering / pattern semantics. This guard is authoritative
+            # (not only the ``get_fields`` ``"__all__"`` narrowing): an explicit
+            # ``Meta.fields`` list that names an unsupported lookup is rejected
+            # here so it cannot silently generate a corrupt GlobalID-shaped
+            # input (spec-021 H1).
             if lookup_type == "in":
                 return GlobalIDMultipleChoiceFilter, params
-            return GlobalIDFilter, params
+            if lookup_type == "isnull":
+                return default_class, params
+            if lookup_type == "exact":
+                return GlobalIDFilter, params
+            field_name = getattr(field, "name", "<pk>")
+            raise ConfigurationError(
+                f"{cls.__name__}: lookup {lookup_type!r} is not supported on the "
+                f"Relay node's own primary key {field_name!r}; a GlobalID supports "
+                "only 'exact', 'in', and 'isnull'. Remove it from Meta.fields.",
+            )
         if not field.is_relation:
             return default_class, params
         target_type = cls._resolve_relation_target_type(field, getattr(field, "name", None))

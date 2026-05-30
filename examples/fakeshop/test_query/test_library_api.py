@@ -694,6 +694,41 @@ def test_library_books_filter_by_choice_enum():
 
 
 @pytest.mark.django_db
+def test_library_books_filter_by_choice_enum_in():
+    """Spec-021 H2: a choice column's ``in`` lookup keeps its enum element type.
+
+    Regression for the CSV (``BaseInFilter``) branch collapsing a choice
+    column's ``in`` element to ``String`` -- so ``{ in: [available] }`` failed
+    coercion ("String cannot represent ... available") while ``exact``
+    correctly used the enum. The element type now comes from the model field,
+    so the shared ``BookTypeCirculationStatusEnum`` is reused.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    models.Book.objects.create(
+        title="Foundation",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.AVAILABLE,
+    )
+    models.Book.objects.create(
+        title="Kindred",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.CHECKED_OUT,
+    )
+
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryBooks(filter: { circulationStatus: { in: [available] } }) {
+            title
+          }
+        }
+        """,
+        {"allLibraryBooks": [{"title": "Foundation"}]},
+    )
+
+
+@pytest.mark.django_db
 def test_library_books_filter_by_non_relay_fk_scalar_id():
     """Spec-021 L1046: ``ShelfType`` is non-Relay so ``shelf.id`` is a scalar PK."""
     branch_a = models.Branch.objects.create(name="Branch A", city="Boston")

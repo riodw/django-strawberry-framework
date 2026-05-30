@@ -686,8 +686,8 @@ def test_registry_clear_works_without_filters_imported():
             (
                 "import django; "
                 "import os; "
-                "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'fakeshop.settings'); "
                 "import sys; sys.path.insert(0, 'examples/fakeshop'); "
+                "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings'); "
                 "django.setup(); "
                 "import django_strawberry_framework.registry as r; "
                 "assert 'django_strawberry_framework.filters' not in sys.modules; "

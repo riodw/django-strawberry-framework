@@ -23,6 +23,7 @@ class Command(BaseCommand):
                 f"{result['target_versions']} versions, "
                 f"{result['items']} items, "
                 f"{result['parity_claims']} parity claims, "
+                f"{result['card_references']} card references, "
                 f"{result['dependency_edges']} dependency edges.",
             ),
         )

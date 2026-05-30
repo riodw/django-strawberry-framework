@@ -25,6 +25,8 @@ for _model in (
     models.Upstream,
     models.ParityLevel,
     models.Section,
+    models.CardReferenceKind,
+    models.CardReferenceSource,
 ):
     admin.site.register(_model, _LookupAdmin)
 
@@ -58,6 +60,18 @@ class ParityClaimInline(admin.TabularInline):
     extra = 0
 
 
+class CardReferenceInline(admin.TabularInline):
+    model = models.CardReference
+    fk_name = "source_card"
+    extra = 0
+    show_change_link = True
+    autocomplete_fields = (
+        "target_card",
+        "kind",
+        "source",
+    )
+
+
 @admin.register(models.Card)
 class CardAdmin(admin.ModelAdmin):
     list_display = (
@@ -86,7 +100,30 @@ class CardAdmin(admin.ModelAdmin):
         "severity",
     )
     filter_horizontal = ("dependencies", "labels")
-    inlines = [CardItemInline, ParityClaimInline]
+    inlines = [CardItemInline, ParityClaimInline, CardReferenceInline]
+
+
+@admin.register(models.CardReference)
+class CardReferenceAdmin(admin.ModelAdmin):
+    list_display = (
+        "source_card",
+        "target_card",
+        "kind",
+        "source",
+        "order",
+    )
+    list_filter = ("kind", "source")
+    search_fields = (
+        "source_card__title",
+        "target_card__title",
+        "raw_text",
+    )
+    autocomplete_fields = (
+        "source_card",
+        "target_card",
+        "kind",
+        "source",
+    )
 
 
 @admin.register(models.CardItem)

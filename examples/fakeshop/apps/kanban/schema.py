@@ -193,6 +193,38 @@ class SectionType(DjangoType):
         )
 
 
+class CardReferenceKindType(DjangoType):
+    class Meta:
+        model = models.CardReferenceKind
+        fields = (
+            "id",
+            "key",
+            "label",
+            "order",
+            "created_date",
+            "updated_date",
+            "uuid",
+            "card_references",
+        )
+        filterset_class = filters.CardReferenceKindFilter
+
+
+class CardReferenceSourceType(DjangoType):
+    class Meta:
+        model = models.CardReferenceSource
+        fields = (
+            "id",
+            "key",
+            "label",
+            "order",
+            "created_date",
+            "updated_date",
+            "uuid",
+            "card_references",
+        )
+        filterset_class = filters.CardReferenceSourceFilter
+
+
 # ---------------------------------------------------------------------------
 # Version + spec
 # ---------------------------------------------------------------------------
@@ -260,6 +292,8 @@ class CardType(DjangoType):
             "parity_claims",
             "dependencies",
             "dependents",
+            "outgoing_references",
+            "incoming_references",
             "parity",
             "labels",
         )
@@ -269,7 +303,27 @@ class CardType(DjangoType):
             "items": OptimizerHint.prefetch_related(),
             "parity_claims": OptimizerHint.prefetch_related(),
             "dependencies": OptimizerHint.prefetch_related(),
+            "outgoing_references": OptimizerHint.prefetch_related(),
+            "incoming_references": OptimizerHint.prefetch_related(),
         }
+
+
+class CardReferenceType(DjangoType):
+    class Meta:
+        model = models.CardReference
+        fields = (
+            "id",
+            "source_card",
+            "target_card",
+            "kind",
+            "source",
+            "raw_text",
+            "order",
+            "created_date",
+            "updated_date",
+            "uuid",
+        )
+        filterset_class = filters.CardReferenceFilter
 
 
 class ParityClaimType(DjangoType):

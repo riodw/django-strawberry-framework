@@ -74,7 +74,8 @@ def test_project_schema_traverses_products_relations():
     for name in products_models.Category.objects.values_list("name", flat=True):
         expected_category_items[name] = []
     for category_name, item_name in products_models.Item.objects.values_list(
-        "category__name", "name",
+        "category__name",
+        "name",
     ):
         expected_category_items[category_name].append(item_name)
     got_category_items = {

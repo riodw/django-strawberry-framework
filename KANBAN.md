@@ -69,7 +69,7 @@ demoted to a bullet under its label.
 ### In progress
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-016-0.0.7` (`DjangoListField`), `DONE-017-0.0.7` (`apps.py` and Django app config), `DONE-018-0.0.7` (schema-export management command), `DONE-019-0.0.7` (multi-database cooperation contract), `DONE-020-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-021-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-022-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
-- `0.0.8` is the active patch. `WIP-ALPHA-024-0.0.8` (Ordering subsystem) is queued for next implementation alongside `BLOCKED-ALPHA-025-0.0.9` (`DjangoType` consumer-DX cleanup pass); the Filtering subsystem shipped as `DONE-023-0.0.8`. The remaining two cards stay grouped under the same column for the joint `0.0.8` cut. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
+- `0.0.8` is the active patch. `WIP-ALPHA-024-0.0.8` (Ordering subsystem) is the only card currently in progress for this patch; the Filtering subsystem shipped as `DONE-023-0.0.8`. `BLOCKED-ALPHA-025-0.0.9` (`DjangoType` consumer-DX cleanup pass) remains blocked for `0.0.9`, outside the active in-progress column. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -94,7 +94,7 @@ demoted to a bullet under its label.
 
 ## In progress
 
-Two WIP cards remain in the `0.0.8` cohort after the Filtering subsystem shipped as `DONE-023-0.0.8`: `WIP-ALPHA-024-0.0.8 — Ordering subsystem` and `BLOCKED-ALPHA-025-0.0.9 — `DjangoType` consumer-DX cleanup pass` are queued under the same column so the patch-level scope is visible at a glance and the cards stay grouped for the joint cut (`⚛️&🍓` parity for the Layer-3 read-side plus the consumer-DX cleanup pass). The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-016-list_field-0_0_7.md`.
+The only active WIP card is `WIP-ALPHA-024-0.0.8 — Ordering subsystem`, and it is in the `0.0.8` patch. The Filtering subsystem shipped as `DONE-023-0.0.8`; blocked and future cards stay in their own board columns instead of the in-progress column.
 
 ### WIP-ALPHA-024-0.0.8 — Ordering subsystem
 

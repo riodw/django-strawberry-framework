@@ -491,7 +491,7 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
                             "card": {
                                 "title": "Filtering subsystem",
                                 "number": 21,
-                                "slug": "filtering-subsystem",
+                                "slug": "filtering_subsystem",
                             },
                         },
                     ],

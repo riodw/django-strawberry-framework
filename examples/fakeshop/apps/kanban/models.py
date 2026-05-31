@@ -318,7 +318,7 @@ class Card(TimeStampedModel):
         Not stored: it is a pure function of ``title`` (which is already unique),
         so there is nothing to keep in sync and no second column to migrate.
         """
-        return slugify(self.title)
+        return slugify(self.title).replace("-", "_")
 
 
 class CardReference(TimeStampedModel):

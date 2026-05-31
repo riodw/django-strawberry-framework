@@ -144,7 +144,7 @@ def _literal_constructs(text: str, blines: list[bytes]) -> Iterator[Construct]:
         close_byte = node.end_col_offset - 1
         close_bytes = blines[node.end_lineno - 1]
         if (
-            not (0 < close_byte <= len(close_bytes))
+            not (0 <= close_byte < len(close_bytes))
             or close_bytes[close_byte : close_byte + 1] not in _CLOSE_BYTES
         ):
             continue  # self-verify: bail unless the offset really is a closing bracket
@@ -180,6 +180,7 @@ def _tokenize_info(text: str) -> tuple[list[Construct], list[int]]:
                 last_seg_star = False
                 seg_content = False
                 commas = 0
+                separators = 0
                 close_tok = None
                 k = j + 1
                 while k < n:
@@ -199,15 +200,34 @@ def _tokenize_info(text: str) -> tuple[list[Construct], list[int]]:
                     elif tk.type in _SKIP_TOK:
                         pass
                     elif depth == 1 and expect_seg:
-                        last_seg_star = tk.type == tokenize.OP and tk.string in ("*", "**")
-                        seg_content = True
+                        # A depth-1 segment starting with a bare ``/`` (positional-
+                        # only marker) or bare ``*`` (keyword-only marker) is a
+                        # separator, NOT a parameter -- counting it would inflate
+                        # the param total and could explode a 1-arg method to the
+                        # syntactically-wrong ``def m(self, /,)``. ``*args`` /
+                        # ``**kwargs`` ARE parameters: a ``*`` followed by an
+                        # identifier is ``*args`` (real), while a ``*`` followed by
+                        # ``,`` / ``)`` is the bare keyword-only marker.
+                        is_separator = tk.string == "/"
+                        if tk.string == "*":
+                            nxt = k + 1
+                            while nxt < n and toks[nxt].type in _SKIP_TOK:
+                                nxt += 1
+                            is_separator = nxt >= n or toks[nxt].string in (",", ")")
+                        if is_separator:
+                            separators += 1
+                        else:
+                            last_seg_star = tk.type == tokenize.OP and tk.string in ("*", "**")
+                            seg_content = True
                         expect_seg = False
                     k += 1
                 if close_tok is not None and seg_content:
                     # ``expect_seg`` is True at the close only when the last
                     # depth-1 token was a comma -- i.e. a trailing comma, which
-                    # must not be counted as an extra parameter.
-                    params = commas if expect_seg else commas + 1
+                    # must not be counted as an extra parameter. Bare ``/`` / ``*``
+                    # separators occupy comma-delimited slots but are not params,
+                    # so subtract them from the segment total.
+                    params = (commas if expect_seg else commas + 1) - separators
                     if params >= 2:
                         sigs.append(
                             (
@@ -309,9 +329,12 @@ def _run_ruff_format(files: list[Path]) -> None:
     ruff = shutil.which("ruff")
     cmd = ([ruff] if ruff else ["uv", "run", "ruff"]) + ["format", *(str(f) for f in files)]
     try:
-        subprocess.run(cmd, check=False)  # noqa: S603
+        result = subprocess.run(cmd, check=False)  # noqa: S603
     except FileNotFoundError:
         print("note: ruff not found on PATH; run `uv run ruff format` to reflow", file=sys.stderr)
+        return
+    if result.returncode != 0:
+        print(f"warning: `ruff format` exited {result.returncode}", file=sys.stderr)
 
 
 def iter_files(paths: list[str]) -> Iterator[Path]:

@@ -5,11 +5,7 @@ internal package imports — so the exception hierarchy can be raised from
 anywhere without circulars.
 """
 
-__all__ = (
-    "ConfigurationError",
-    "DjangoStrawberryFrameworkError",
-    "OptimizerError",
-)
+__all__ = ("ConfigurationError", "DjangoStrawberryFrameworkError", "OptimizerError")
 
 
 class DjangoStrawberryFrameworkError(Exception):

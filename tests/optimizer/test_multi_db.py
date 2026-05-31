@@ -56,12 +56,7 @@ def _sel(name, selections=None):
     )
 
 
-def _register_type_definition(
-    model,
-    type_cls,
-    *,
-    optimizer_hints=None,
-):
+def _register_type_definition(model, type_cls, *, optimizer_hints=None):
     """Register a minimal definition for walker-only synthetic type classes.
 
     Mirrors the helper at ``tests/optimizer/test_walker.py::_register_type_definition`` —

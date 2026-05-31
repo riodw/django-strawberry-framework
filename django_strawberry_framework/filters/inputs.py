@@ -111,11 +111,7 @@ LOOKUP_NAME_MAP: dict[str, tuple[str, str]] = {
 # self-referential ``and_`` / ``or_`` / ``not_`` fields whose GraphQL
 # surface names land through ``strawberry.field(name=...)`` because
 # ``and`` / ``or`` / ``not`` cannot be dataclass field names.
-_LOGIC_KEYS: tuple[tuple[str, str], ...] = (
-    ("and_", "and"),
-    ("or_", "or"),
-    ("not_", "not"),
-)
+_LOGIC_KEYS: tuple[tuple[str, str], ...] = (("and_", "and"), ("or_", "or"), ("not_", "not"))
 
 
 @dataclass(frozen=True)

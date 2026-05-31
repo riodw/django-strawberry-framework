@@ -190,12 +190,7 @@ def _resolve_id_attr_default(cls: type) -> str:
         return "pk"
 
 
-def _resolve_id_default(
-    cls: type,
-    root: models.Model,
-    *,
-    info: Any,
-) -> str:
+def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:
     """Default ``Node.resolve_id`` with a ``__dict__`` cache check.
 
     Signature mirrors ``strawberry.relay.Node.resolve_id`` after

@@ -283,6 +283,7 @@ class SpecDocType(DjangoType):
 
 class CardType(DjangoType):
     slug: str
+    is_blocked: bool
 
     class Meta:
         model = models.Card

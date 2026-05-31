@@ -17,7 +17,7 @@ DEFAULT_REFERENCE_KIND_KEY = "dependency"
 DEFAULT_REFERENCE_KIND_LABEL = "Dependency"
 DEFAULT_REFERENCE_SOURCE_KEY = "dependencies_section"
 DEFAULT_REFERENCE_SOURCE_LABEL = "Dependencies section"
-DEPENDENCY_REFERENCE_KIND_KEYS = frozenset({"blocked_by", "dependency"})
+DEPENDENCY_REFERENCE_KIND_KEYS = models.DEPENDENCY_REFERENCE_KIND_KEYS
 DEPENDENCY_SYNC_FLAG = "_kanban_syncing_dependency_edges"
 
 
@@ -62,7 +62,9 @@ def _target_milestone_id(card: models.Card, using: str | None) -> int | None:
 
 
 def _card_identifier(card: models.Card) -> str:
-    milestone = f"-{card.milestone.key.upper()}" if card.milestone_id else ""
+    milestone = ""
+    if card.status.key != "done" and card.milestone_id:
+        milestone = f"-{card.milestone.key.upper()}"
     return f"{card.status.key.upper()}{milestone}-{card.number:03d}-{card.target_version.number}"
 
 
@@ -287,7 +289,6 @@ def _remove_dependency_if_unreferenced(
         return
     with _dependency_sync(source_card):
         source_card.dependencies.remove(target_card)
-    _reconcile_card_block_state(source_card.pk, using)
 
 
 def _dependency_edges_from_pk_set(
@@ -315,73 +316,8 @@ def _dependency_edges_for_clear(
     return [(instance.pk, target_id) for target_id in target_ids if target_id is not None]
 
 
-def _unfinished_dependency_exists(card: models.Card, using: str | None) -> bool:
-    return (
-        _manager(models.Card, using)
-        .filter(dependents__pk=card.pk)
-        .exclude(status__key="done")
-        .exists()
-    )
-
-
-def _lookup_status(key: str, using: str | None) -> models.Status | None:
-    return _manager(models.Status, using).filter(key=key).first()
-
-
-def _lookup_planning_state(key: str, using: str | None) -> models.PlanningState | None:
-    return _manager(models.PlanningState, using).filter(key=key).first()
-
-
-def _save_card_state(card: models.Card, update_fields: list[str]) -> None:
-    update_fields.append("updated_date")
-    card.save(update_fields=update_fields)
-
-
-def _reconcile_card_block_state(card_id: int, using: str | None) -> None:
-    card = (
-        _manager(models.Card, using)
-        .select_related("planning_state", "status")
-        .filter(pk=card_id)
-        .first()
-    )
-    if card is None or card.status.key == "done":
-        return
-
-    update_fields: list[str] = []
-    if _unfinished_dependency_exists(card, using):
-        blocked_status = _lookup_status("blocked", using)
-        blocked_state = _lookup_planning_state("blocked", using)
-        if blocked_status is not None and card.status_id != blocked_status.pk:
-            card.status = blocked_status
-            update_fields.append("status")
-        if blocked_state is not None and card.planning_state_id != blocked_state.pk:
-            card.planning_state = blocked_state
-            update_fields.append("planning_state")
-    elif card.status.key == "blocked":
-        todo_status = _lookup_status("todo", using)
-        planned_state = _lookup_planning_state("planned", using)
-        if todo_status is not None and card.status_id != todo_status.pk:
-            card.status = todo_status
-            update_fields.append("status")
-        if planned_state is not None and card.planning_state_id != planned_state.pk:
-            card.planning_state = planned_state
-            update_fields.append("planning_state")
-
-    if update_fields:
-        _save_card_state(card, update_fields)
-
-
 @receiver(pre_save, sender=models.Card, dispatch_uid="kanban_prepare_card_save")
 def prepare_card_save(sender, instance: models.Card, using: str | None, **kwargs) -> None:
-    if instance.pk is not None:
-        instance._kanban_old_status_id = (
-            _manager(models.Card, using)
-            .filter(pk=instance.pk)
-            .values_list("status_id", flat=True)
-            .first()
-        )
-    else:
-        instance._kanban_old_status_id = None
     instance.milestone_id = _target_milestone_id(instance, using)
 
 
@@ -403,21 +339,6 @@ def sync_card_after_save(
             milestone_id=instance.milestone_id,
             updated_date=timezone.now(),
         )
-
-    old_status_id = getattr(instance, "_kanban_old_status_id", None)
-    if created or old_status_id == instance.status_id:
-        return
-
-    dependent_ids = (
-        _manager(models.Card, using)
-        .filter(dependencies=instance)
-        .values_list(
-            "pk",
-            flat=True,
-        )
-    )
-    for dependent_id in dependent_ids:
-        _reconcile_card_block_state(dependent_id, using)
 
 
 @receiver(pre_save, sender=models.CardReference, dispatch_uid="kanban_prepare_card_reference")
@@ -468,7 +389,6 @@ def sync_reference_dependency(
     if not _dependency_edge_exists(instance.source_card, instance.target_card, using):
         with _dependency_sync(instance.source_card):
             instance.source_card.dependencies.add(instance.target_card)
-    _reconcile_card_block_state(instance.source_card_id, using)
 
 
 @receiver(
@@ -525,7 +445,6 @@ def sync_dependency_references(
                 card_by_id[target_card_id],
                 using,
             )
-            _reconcile_card_block_state(source_card_id, using)
         return
 
     if action == "pre_clear":
@@ -546,7 +465,6 @@ def sync_dependency_references(
     for source_card_id, target_card_id in dependency_edges:
         _delete_default_references(source_card_id, target_card_id, using)
         _restore_dependency_if_references_remain(source_card_id, target_card_id, using)
-        _reconcile_card_block_state(source_card_id, using)
 
 
 def create_uuid_row(sender, instance, created: bool, using: str | None = None, **kwargs) -> None:

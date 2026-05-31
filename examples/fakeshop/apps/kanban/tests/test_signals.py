@@ -8,12 +8,10 @@ from apps.kanban import models
 
 def _board_parts():
     statuses = {
-        "blocked": models.Status.objects.create(key="blocked", label="Blocked"),
         "done": models.Status.objects.create(key="done", label="Done"),
         "todo": models.Status.objects.create(key="todo", label="To Do"),
     }
     planning_states = {
-        "blocked": models.PlanningState.objects.create(key="blocked", label="Blocked"),
         "planned": models.PlanningState.objects.create(key="planned", label="Planned"),
     }
     alpha = models.Milestone.objects.create(key="alpha", label="Alpha")
@@ -52,6 +50,10 @@ def _card(
 
 def _reference_kind() -> models.CardReferenceKind:
     return models.CardReferenceKind.objects.create(key="dependency", label="Dependency")
+
+
+def _blocked_by_reference_kind() -> models.CardReferenceKind:
+    return models.CardReferenceKind.objects.create(key="blocked_by", label="Blocked by")
 
 
 def _related_reference_kind() -> models.CardReferenceKind:
@@ -156,7 +158,7 @@ def test_self_dependency_is_rejected_from_card_reference():
 
 
 @pytest.mark.django_db
-def test_dependency_status_changes_block_and_unblock_dependent_cards():
+def test_dependency_reference_does_not_store_or_derive_blocked_badge():
     parts = _board_parts()
     dependency = _card(parts, number=1, title="Dependency")
     dependent = _card(parts, number=2, title="Dependent")
@@ -164,8 +166,11 @@ def test_dependency_status_changes_block_and_unblock_dependent_cards():
     dependent.dependencies.add(dependency)
 
     dependent.refresh_from_db()
-    assert dependent.status.key == "blocked"
-    assert dependent.planning_state.key == "blocked"
+    assert dependent.status.key == "todo"
+    assert dependent.planning_state.key == "planned"
+    assert not dependent.is_blocked
+    assert not dependent.labels.filter(key="blocked").exists()
+    assert not models.Label.objects.filter(key="blocked").exists()
 
     dependency.status = parts["statuses"]["done"]
     dependency.save(update_fields=["status"])
@@ -173,3 +178,23 @@ def test_dependency_status_changes_block_and_unblock_dependent_cards():
     dependent.refresh_from_db()
     assert dependent.status.key == "todo"
     assert dependent.planning_state.key == "planned"
+    assert not dependent.is_blocked
+    assert not dependent.labels.filter(key="blocked").exists()
+
+
+@pytest.mark.django_db
+def test_blocked_by_reference_kind_derives_blocked_state():
+    parts = _board_parts()
+    dependency = _card(parts, number=1, title="Dependency")
+    dependent = _card(parts, number=2, title="Dependent")
+
+    models.CardReference.objects.create(
+        source_card=dependent,
+        target_card=dependency,
+        kind=_blocked_by_reference_kind(),
+        source=_reference_source(),
+    )
+
+    dependent.refresh_from_db()
+    assert dependent.is_blocked
+    assert dependent.dependencies.filter(pk=dependency.pk).exists()

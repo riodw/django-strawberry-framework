@@ -25,6 +25,14 @@ from django.db import models
 from django.db.models.lookups import Exact
 from django.utils.text import slugify
 
+DEPENDENCY_REFERENCE_KIND_KEYS = frozenset(
+    {
+        "blocked_by",
+        "dependency",
+    },
+)
+BLOCKING_REFERENCE_KIND_KEYS = frozenset({"blocked_by"})
+
 # ---------------------------------------------------------------------------
 # Abstract bases
 # ---------------------------------------------------------------------------
@@ -78,7 +86,7 @@ class Milestone(LookupBase):
 
 
 class Status(LookupBase):
-    """The board column: ``todo`` / ``wip`` / ``blocked`` / ``done``."""
+    """The card workflow state that drives board placement: ``todo`` / ``wip`` / ``done``."""
 
     class Meta(LookupBase.Meta):
         verbose_name = "status"
@@ -112,7 +120,7 @@ class RelativeSize(LookupBase):
 
 
 class PlanningState(LookupBase):
-    """The ``Status:`` line keyword: ``planned`` / ``needs_spec`` / ``in_progress`` / ..."""
+    """The planning keyword: ``planned`` / ``needs_spec`` / ``in_progress`` / ``shipped``."""
 
     class Meta(LookupBase.Meta):
         verbose_name = "planning state"
@@ -193,6 +201,12 @@ class TargetVersion(TimeStampedModel):
         ordering = ["number"]
         verbose_name = "target version"
         verbose_name_plural = "target versions"
+        constraints = [
+            models.CheckConstraint(
+                condition=~models.Q(number=""),
+                name="target_version_number_required",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.number} ({self.milestone.key})"
@@ -230,10 +244,8 @@ class Card(TimeStampedModel):
     status = models.ForeignKey(Status, related_name="cards", on_delete=models.PROTECT)
     milestone = models.ForeignKey(
         Milestone,
-        null=True,
-        blank=True,
         related_name="cards",
-        on_delete=models.SET_NULL,
+        on_delete=models.PROTECT,
     )
     target_version = models.ForeignKey(
         TargetVersion,
@@ -304,9 +316,17 @@ class Card(TimeStampedModel):
         ordering = ["number"]
         verbose_name = "card"
         verbose_name_plural = "cards"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(number__gte=1),
+                name="card_number_required",
+            ),
+        ]
 
     def __str__(self):
-        milestone = f"-{self.milestone.key.upper()}" if self.milestone_id else ""
+        milestone = ""
+        if self.status.key != "done" and self.milestone_id:
+            milestone = f"-{self.milestone.key.upper()}"
         return f"{self.status.key.upper()}{milestone}-{self.number:03d}-{self.target_version.number} — {self.title}"
 
     @property
@@ -319,6 +339,17 @@ class Card(TimeStampedModel):
         so there is nothing to keep in sync and no second column to migrate.
         """
         return slugify(self.title).replace("-", "_")
+
+    @property
+    def is_blocked(self) -> bool:
+        """Whether this card is waiting on an unfinished ``blocked_by`` reference."""
+        if self.pk is None or self.status.key == "done":
+            return False
+        return (
+            self.outgoing_references.filter(kind__key__in=BLOCKING_REFERENCE_KIND_KEYS)
+            .exclude(target_card__status__key="done")
+            .exists()
+        )
 
 
 class CardReference(TimeStampedModel):

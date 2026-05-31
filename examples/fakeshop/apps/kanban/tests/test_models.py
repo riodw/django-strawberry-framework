@@ -12,6 +12,21 @@ from django.db import IntegrityError, transaction
 from apps.kanban import models
 
 
+def _card_required_parts():
+    """Create the required FK rows for card invariant tests."""
+    status = models.Status.objects.create(key="todo", label="To Do")
+    alpha = models.Milestone.objects.create(key="alpha", label="Alpha")
+    version = models.TargetVersion.objects.create(number="0.0.1", milestone=alpha)
+    size = models.RelativeSize.objects.create(key="m", label="M")
+    state = models.PlanningState.objects.create(key="planned", label="Planned")
+    return {
+        "status": status,
+        "target_version": version,
+        "relative_size": size,
+        "planning_state": state,
+    }
+
+
 @pytest.mark.django_db
 def test_uuidmodel_accepts_exactly_one_link():
     """The normal path: creating a linked model yields a valid one-hot UUID row."""
@@ -40,6 +55,74 @@ def test_uuidmodel_rejects_multiple_links():
     models.UUIDModel.objects.filter(label=label).delete()
     with pytest.raises(IntegrityError), transaction.atomic():
         models.UUIDModel.objects.create(status=status, label=label)
+
+
+@pytest.mark.django_db
+def test_target_version_number_is_required():
+    """A target version cannot be stored without the actual X.Y.Z value."""
+    alpha = models.Milestone.objects.create(key="alpha", label="Alpha")
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.TargetVersion.objects.create(number="", milestone=alpha)
+
+
+@pytest.mark.django_db
+def test_card_target_version_is_required():
+    """A card cannot be stored without its planned or shipped version."""
+    status = models.Status.objects.create(key="todo", label="To Do")
+    size = models.RelativeSize.objects.create(key="m", label="M")
+    state = models.PlanningState.objects.create(key="planned", label="Planned")
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.Card.objects.create(
+            title="No version",
+            number=1,
+            status=status,
+            relative_size=size,
+            planning_state=state,
+        )
+
+
+@pytest.mark.django_db
+def test_card_number_is_required():
+    """A card cannot be stored without its board sequence number."""
+    required_parts = _card_required_parts()
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.Card.objects.create(
+            title="No number",
+            **required_parts,
+        )
+
+
+@pytest.mark.django_db
+def test_card_number_must_be_positive():
+    """A card sequence number starts at one, not zero."""
+    required_parts = _card_required_parts()
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.Card.objects.create(
+            title="Zero number",
+            number=0,
+            **required_parts,
+        )
+
+
+@pytest.mark.django_db
+def test_card_milestone_is_required():
+    """The derived milestone is still a required stored FK."""
+    required_parts = _card_required_parts()
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.Card.objects.bulk_create(
+            [
+                models.Card(
+                    title="No milestone",
+                    number=1,
+                    **required_parts,
+                ),
+            ],
+        )
 
 
 @pytest.mark.django_db

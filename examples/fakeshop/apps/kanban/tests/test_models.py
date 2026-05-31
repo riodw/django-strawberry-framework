@@ -40,3 +40,70 @@ def test_uuidmodel_rejects_multiple_links():
     models.UUIDModel.objects.filter(label=label).delete()
     with pytest.raises(IntegrityError), transaction.atomic():
         models.UUIDModel.objects.create(status=status, label=label)
+
+
+@pytest.mark.django_db
+def test_card_number_is_globally_unique():
+    """The NNN sequence cannot be reused across statuses or target versions."""
+    done = models.Status.objects.create(key="done", label="Done")
+    todo = models.Status.objects.create(key="todo", label="To Do")
+    alpha = models.Milestone.objects.create(key="alpha", label="Alpha")
+    version_1 = models.TargetVersion.objects.create(number="0.0.1", milestone=alpha)
+    version_2 = models.TargetVersion.objects.create(number="0.0.2", milestone=alpha)
+    size = models.RelativeSize.objects.create(key="m", label="M")
+    state = models.PlanningState.objects.create(key="planned", label="Planned")
+
+    models.Card.objects.create(
+        title="First",
+        number=1,
+        status=done,
+        target_version=version_1,
+        relative_size=size,
+        planning_state=state,
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.Card.objects.create(
+            title="Second",
+            number=1,
+            status=todo,
+            target_version=version_2,
+            relative_size=size,
+            planning_state=state,
+        )
+
+
+@pytest.mark.django_db
+def test_board_doc_card_reference_is_fk_backed_and_ordered_per_doc():
+    """Board prose card mentions point at cards instead of storing live card ids."""
+    kind = models.BoardDocKind.objects.create(key="reference", label="Reference")
+    doc = models.BoardDoc.objects.create(key="snapshot", kind=kind, title="Snapshot")
+    status = models.Status.objects.create(key="done", label="Done")
+    alpha = models.Milestone.objects.create(key="alpha", label="Alpha")
+    version = models.TargetVersion.objects.create(number="0.0.1", milestone=alpha)
+    size = models.RelativeSize.objects.create(key="m", label="M")
+    state = models.PlanningState.objects.create(key="shipped", label="Shipped")
+    card = models.Card.objects.create(
+        title="Stored card",
+        number=1,
+        status=status,
+        target_version=version,
+        relative_size=size,
+        planning_state=state,
+    )
+
+    reference = models.BoardDocCardReference.objects.create(
+        doc=doc,
+        card=card,
+        raw_text="DONE-001-0.0.1",
+        order=0,
+    )
+
+    assert reference.uuid.boarddoccardreference == reference
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.BoardDocCardReference.objects.create(
+            doc=doc,
+            card=card,
+            raw_text="DONE-001-0.0.1",
+            order=0,
+        )

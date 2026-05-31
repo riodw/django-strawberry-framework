@@ -9,9 +9,11 @@ on:
       - "examples/fakeshop/apps/kanban/**"
       - "examples/fakeshop/config/**"
       - "examples/fakeshop/db.sqlite3"
-      - "examples/fakeshop/kanban_board.html"
+      - "KANBAN.html"
+      - "KANBAN.md"
       - "pyproject.toml"
-      - "scripts/build_kanban_dashboard.py"
+      - "scripts/build_kanban_html.py"
+      - "scripts/build_kanban_md.py"
       - "uv.lock"
   workflow_dispatch:
 
@@ -45,8 +47,9 @@ jobs:
       - name: Prepare static site
         run: |
           mkdir -p _site
-          cp examples/fakeshop/kanban_board.html _site/index.html
-          uv run python scripts/build_kanban_dashboard.py --html _site/index.html
+          cp KANBAN.html _site/index.html
+          uv run python scripts/build_kanban_html.py --html _site/index.html
+          uv run python scripts/build_kanban_md.py --md _site/KANBAN.md
           touch _site/.nojekyll
 
       - name: Upload GitHub Pages artifact

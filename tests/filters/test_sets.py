@@ -987,6 +987,50 @@ def test_apply_related_constraints_runs_active_branch_only():
 
 
 @pytest.mark.django_db
+def test_apply_sync_nested_or_branch_applies_related_constraint():
+    """A ``RelatedFilter`` nested in ``or`` constrains the parent (B1 of pre-merge review).
+
+    ``_normalize_input`` strips related-branch keys from a child branch's
+    form data; before the fix ``_q_for_branch`` never re-derived the
+    related constraint, so ``or: [{shelves: {...}}]`` silently widened to
+    the WHOLE parent queryset (every branch passed). This pins that the
+    nested branch now restricts the parent to branches whose shelves
+    intersect the constraint, exactly as a top-level ``{shelves: {...}}``
+    would — driving the full ``apply_sync`` pipeline so the
+    ``_evaluate_logic_tree`` -> ``_q_for_branch`` recursion is exercised
+    end to end.
+    """
+    alpha = library_models.Branch.objects.create(name="alpha")
+    library_models.Shelf.objects.create(branch=alpha, code="match")
+    beta = library_models.Branch.objects.create(name="beta")
+    library_models.Shelf.objects.create(branch=beta, code="other")
+
+    explicit_qs = library_models.Shelf.objects.filter(code="match")
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves", queryset=explicit_qs)
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    qs = BranchFilter.apply_sync(
+        {"or_": [{"shelves": {"code": "match"}}]},
+        library_models.Branch.objects.all(),
+        _make_info(),
+    )
+    # Only "alpha" owns a shelf in the constrained set; "beta" must NOT
+    # leak through — which it would if the nested related branch were
+    # dropped (the B1 bug).
+    assert list(qs.values_list("name", flat=True)) == ["alpha"]
+
+
+@pytest.mark.django_db
 def test_apply_related_constraints_model_mismatch_raises_configuration_error():
     """A divergent-model ``RelatedFilter(queryset=...)`` surfaces ``ConfigurationError``.
 

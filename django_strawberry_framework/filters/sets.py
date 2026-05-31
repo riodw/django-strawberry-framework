@@ -51,6 +51,16 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
 # package types.
 _lookups_for_field_class_cache: dict[type, list[str]] = {}
 
+# Reverse of ``LOOKUP_NAME_MAP``'s ``django_lookup -> (python_attr, ...)``
+# direction, built once at import so ``_form_key_for_python_attr`` is an O(1)
+# dict lookup instead of an O(n) linear scan on every normalized field. Built
+# from a ``reversed`` view so the FIRST ``django_lookup`` wins when two map to
+# the same ``python_attr`` -- matching the original first-match-wins scan.
+_FORM_KEY_BY_PYTHON_ATTR: dict[str, str] = {
+    python_attr: django_lookup
+    for django_lookup, (python_attr, _) in reversed(LOOKUP_NAME_MAP.items())
+}
+
 
 def _lookups_for_field(model_field: models.Field | None) -> list[str]:
     """Return every concrete (non-transform) lookup valid for ``model_field``.
@@ -203,6 +213,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     # attribute is discoverable to static analysis / `__slots__` / typing
     # and the default is explicit on every instance.
     _logic_depth: int = 0
+
+    # Resolver-``info`` hand-off channel, threaded the same way as
+    # `_logic_depth`: set by `apply_sync` / `apply_async` on the top-level
+    # instance and by `_q_for_branch` on each sibling so nested logical
+    # branches can re-derive their `RelatedFilter` visibility across the
+    # `.qs` boundary. `None` for instances built outside the apply pipeline
+    # (they carry no related branches to re-derive).
+    _apply_info: Any = None
 
     # ``ClassBasedTypeNameMixin`` naming suffixes. The root input type keeps
     # the mixin's default ``"InputType"`` (``FooFilter`` -> ``FooFilterInputType``);
@@ -424,8 +442,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # (``exact`` -> a single GlobalID), membership (``in`` -> a list of
             # GlobalIDs), and null (``isnull`` -> the upstream Boolean; a
             # GlobalID cannot represent ``true``). Any other lookup has no
-            # GlobalID ordering / pattern semantics. This guard is authoritative
-            # (not only the ``get_fields`` ``"__all__"`` narrowing): an explicit
+            # GlobalID ordering / pattern semantics. This guard is
+            # authoritative once the owner is bound (finalizer phase 2.5):
+            # ``_is_own_pk_under_relay_owner`` keys off ``cls._owner_definition``,
+            # which is ``None`` during class creation, so the check is inert
+            # then and becomes authoritative at finalize (not only the
+            # ``get_fields`` ``"__all__"`` narrowing). An explicit
             # ``Meta.fields`` list that names an unsupported lookup is rejected
             # here so it cannot silently generate a corrupt GlobalID-shaped
             # input (spec-021 H1).
@@ -687,17 +709,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _form_key_for_python_attr(python_attr: str) -> str:
         """Map a Strawberry dataclass attr back to a `django-filter` form key.
 
-        Walks `LOOKUP_NAME_MAP` once for `(python_attr, ...)` matches.
+        Looks the attr up in the precomputed ``_FORM_KEY_BY_PYTHON_ATTR``
+        reverse map (built once from ``LOOKUP_NAME_MAP`` at import).
         Falls through to the attr name verbatim when no lookup pair
         rewrites it. Used by ``_normalize_input`` both at the top-level
         scalar branch and inside the per-field operator-bag iteration
         (mapping ``i_contains`` -> ``icontains`` etc.); the two callers
         share this single helper rather than duplicating the walk.
         """
-        for django_lookup, (mapped_python_attr, _) in LOOKUP_NAME_MAP.items():
-            if mapped_python_attr == python_attr:
-                return django_lookup
-        return python_attr
+        return _FORM_KEY_BY_PYTHON_ATTR.get(python_attr, python_attr)
 
     @classmethod
     def _request_from_info(cls, info: Any) -> Any:
@@ -1136,9 +1156,20 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # ``_logic_depth`` is stashed on instances built by
         # ``_q_for_branch``; for the top-level instance (constructed by
         # ``apply_sync`` / ``apply_async``) it is unset and the counter
-        # starts at 0.
+        # starts at 0. ``_apply_info`` is stashed the same way so nested
+        # branches can re-derive their ``RelatedFilter`` visibility +
+        # constraints (B1 of the pre-merge review); it is ``None`` for
+        # instances built outside the apply pipeline, which carry no
+        # related branches to re-derive.
         depth = getattr(self, "_logic_depth", 0)
-        q = type(self)._evaluate_logic_tree(qs, self.data or {}, request=self.request, _depth=depth)
+        info = getattr(self, "_apply_info", None)
+        q = type(self)._evaluate_logic_tree(
+            qs,
+            self.data or {},
+            request=self.request,
+            info=info,
+            _depth=depth,
+        )
         return qs.filter(q)
 
     @classmethod
@@ -1147,6 +1178,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         queryset: models.QuerySet,
         tree_data: Any,
         request: Any = None,
+        info: Any = None,
         *,
         _depth: int = 0,
     ) -> models.Q:
@@ -1170,18 +1202,36 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
         and_branches = tree_data.get("and") or []
         for child_input in and_branches:
-            q &= cls._q_for_branch(queryset, child_input, request=request, _depth=_depth + 1)
+            q &= cls._q_for_branch(
+                queryset,
+                child_input,
+                request=request,
+                info=info,
+                _depth=_depth + 1,
+            )
 
         or_branches = tree_data.get("or") or []
         if or_branches:
             or_q = models.Q()
             for child_input in or_branches:
-                or_q |= cls._q_for_branch(queryset, child_input, request=request, _depth=_depth + 1)
+                or_q |= cls._q_for_branch(
+                    queryset,
+                    child_input,
+                    request=request,
+                    info=info,
+                    _depth=_depth + 1,
+                )
             q &= or_q
 
         not_branch = tree_data.get("not")
         if not_branch is not None:
-            q &= ~cls._q_for_branch(queryset, not_branch, request=request, _depth=_depth + 1)
+            q &= ~cls._q_for_branch(
+                queryset,
+                not_branch,
+                request=request,
+                info=info,
+                _depth=_depth + 1,
+            )
 
         return q
 
@@ -1191,29 +1241,47 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         queryset: models.QuerySet,
         child_input: Any,
         request: Any = None,
+        info: Any = None,
         *,
         _depth: int = 0,
     ) -> models.Q:
         """Materialize one nested-branch input into a ``pk__in`` ``Q``.
 
-        Normalizes the Strawberry input via the existing
-        ``_normalize_input`` classmethod, then builds a sibling
-        ``FilterSet`` instance against the parent ``queryset``. Reading
-        ``.qs`` triggers ``BaseFilterSet``'s leaf-clause path against the
-        child's normalized data AND re-enters this override for any
-        deeper ``and`` / ``or`` / ``not`` keys the branch carries.
+        Re-applies this branch's ``RelatedFilter`` visibility scoping +
+        constraints exactly as ``apply_sync`` does at the top level, THEN
+        normalizes the Strawberry input and builds a sibling ``FilterSet``
+        instance against the constrained ``queryset``. Reading ``.qs``
+        triggers ``BaseFilterSet``'s leaf-clause path against the child's
+        normalized data AND re-enters this override for any deeper
+        ``and`` / ``or`` / ``not`` keys the branch carries.
 
-        ``_depth`` is stashed on the sibling instance via
-        ``_logic_depth`` so ``filter_queryset`` can carry the counter
-        across django-filter's ``.qs`` machinery into the next
-        ``_evaluate_logic_tree`` call. Without this hand-off the depth
-        counter would reset at every nesting level (the recursion path
-        crosses through django-filter's ``BaseFilterSet`` which we do
-        not own and cannot pass kwargs through).
+        The related re-application is essential: ``_normalize_input``
+        STRIPS related-branch keys from the child's form data (the parent
+        form cannot validate the nested-dict shape), so without deriving
+        and applying them here a related branch nested inside a logical
+        clause -- ``or: [{shelves: {code: {iContains: "X"}}}]`` -- would
+        silently widen to the whole parent queryset (B1 of the pre-merge
+        review). Derivation is sync because ``.qs`` is read synchronously
+        even under ``apply_async``; a nested related target whose
+        ``get_queryset`` is async-only raises the usual ``SyncMisuseError``
+        rather than leaking rows.
+
+        ``_depth`` and ``_apply_info`` are stashed on the sibling instance
+        so ``filter_queryset`` can carry the recursion counter and the
+        resolver ``info`` across django-filter's ``.qs`` machinery into the
+        next ``_evaluate_logic_tree`` call. Without this hand-off the depth
+        counter would reset at every nesting level and deeper branches
+        would lose the ``info`` needed to re-derive their related
+        visibility (the recursion path crosses through django-filter's
+        ``BaseFilterSet`` which we do not own and cannot pass kwargs
+        through).
         """
+        child_qs_by_branch = cls._derive_related_visibility_querysets_sync(child_input, info)
+        constrained = cls._apply_related_constraints(child_input, queryset, child_qs_by_branch)
         child_data = cls._normalize_input(child_input)
-        child_set = cls(data=child_data, queryset=queryset, request=request)
+        child_set = cls(data=child_data, queryset=constrained, request=request)
         child_set._logic_depth = _depth
+        child_set._apply_info = info
         cls._validate_form_or_raise(child_set)
         return models.Q(pk__in=child_set.qs.values("pk"))
 
@@ -1310,6 +1378,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         request = cls._request_from_info(info)
         constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
         filterset_instance = cls(data=data, queryset=constrained, request=request)
+        filterset_instance._apply_info = info
         cls._run_permission_checks(input_value, request)
         cls._validate_form_or_raise(filterset_instance)
         return filterset_instance.qs
@@ -1327,6 +1396,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         request = cls._request_from_info(info)
         constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
         filterset_instance = cls(data=data, queryset=constrained, request=request)
+        filterset_instance._apply_info = info
         cls._run_permission_checks(input_value, request)
         cls._validate_form_or_raise(filterset_instance)
         return filterset_instance.qs

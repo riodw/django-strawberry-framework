@@ -36,6 +36,14 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 # duplicate-``__name__`` collision break-glass: two connection fields
 # targeting the same model without an explicit ``filterset_class``
 # resolve to the same generated class.
+#
+# Lifecycle (M-filters-3 review, accepted as-is): this cache has NO clear
+# hook, so after ``registry.clear()`` rebuilds model classes a dynamic
+# FilterSet built against the prior model class remains parked here. That
+# is a test-isolation nicety only -- the keys embed the model identity, so
+# a rebuilt model gets a fresh key rather than a wrong hit -- and carries
+# no real-world cost in a normal (non-reloading) process. Add a clear hook
+# here only if a consumer reload path ever demands it.
 _dynamic_filterset_cache: dict[tuple, type[FilterSet]] = {}
 
 
@@ -63,11 +71,12 @@ class FilterArgumentsFactory:
     ``arguments`` property returns the built input class for the root
     filterset (per Implementation discretion item 5).
 
-    Subclassing is not supported. The class-level caches above are
-    mutable dicts; a subclass would inherit the SAME dict instances
-    rather than getting its own, so a subclass cache would silently
-    cross-contaminate with the base. The factory is a leaf class by
-    contract — extend the cookbook's flow by composition (wrap an
+    Subclassing is not supported, and is rejected at class-creation time
+    by ``__init_subclass__`` (raises ``TypeError``). The class-level caches
+    above are mutable dicts; a subclass would inherit the SAME dict
+    instances rather than getting its own, so a subclass cache would
+    silently cross-contaminate with the base. The factory is a leaf class
+    by contract — extend the cookbook's flow by composition (wrap an
     instance), not by subclassing.
     """
 
@@ -78,6 +87,24 @@ class FilterArgumentsFactory:
     # class-based naming, a collision means two distinct classes share a
     # ``__name__`` -- always a bug. Strict raise, not warn.
     _type_filterset_registry: dict[str, type] = {}
+
+    def __init_subclass__(cls) -> None:
+        """Reject subclassing — the class-level caches are not subclass-safe.
+
+        ``input_object_types`` / ``_type_filterset_registry`` are mutable
+        dicts SHARED with the base: a subclass inherits the same instances
+        rather than isolating its own, so its builds would silently
+        cross-contaminate the base's. Subclassing is therefore an
+        unsupported design path (spec-021 review M-filters-3 / H-filters-3);
+        extend by composition (wrap an instance), not inheritance.
+        """
+        raise TypeError(
+            f"{FilterArgumentsFactory.__name__} does not support subclassing "
+            f"(attempted by {cls.__name__!r}): its class-level caches are shared "
+            "mutable dicts a subclass would inherit rather than isolate, silently "
+            "cross-contaminating builds. Extend it by composition (wrap an "
+            "instance), not inheritance.",
+        )
 
     def __init__(self, filterset_class: type[FilterSet]) -> None:
         """Initialize the factory.

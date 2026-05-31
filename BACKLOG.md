@@ -264,7 +264,7 @@ This mirrors how every other Django setting works (project setting overrides pac
 
 #### Design decision 3: routing decoded IDs
 
-The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — `DONE-014-0.0.6`), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
+The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — [014-multiple_djangotypes_per_model_with_metaprimary-0.0.6][card-multiple-djangotypes-per-model-with-metaprimary]), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
 
 This works *better* than the type-name encoding for the multi-`DjangoType`-per-model case: instead of needing a separate GlobalID for every type variant over the same model, all variants share one ID space and the schema author picks the discriminator (primary type, or explicit inline fragments).
 
@@ -344,7 +344,7 @@ class TransitionalType(DjangoType):
 
 - **Item 39 (Relay magic)** — sub-feature 1 (GlobalID migrations) collapses to a tiny *"app-move alias helper"* once `"model"` is the default. The full migration system this item replaces was always a workaround for the type-name convention's fragility; with model identity as the durable anchor, the migration system isn't needed for the common case.
 - **Item 15 (Content-versioned Node types)** — composes cleanly; content versions are computed off the row data, not the encoding strategy.
-- **`BLOCKED-ALPHA-023` (Full Relay story)** — this item is the *recommended encoding strategy* for that card's `1.0.0` Relay surface. Worth pinning the decision *before* `BLOCKED-ALPHA-023` ships so client deployments are minted against the durable identifier from day one. Promoting this item to a `TODO-ALPHA-*` card before `BLOCKED-ALPHA-023` is the cleanest path.
+- **[023-full_relay_story_node_connection_root_validation-0.0.9][card-full-relay-story-node-connection-root-validation] (Full Relay story)** — this item is the *recommended encoding strategy* for that card's `1.0.0` Relay surface. Worth pinning the decision *before* [023-full_relay_story_node_connection_root_validation-0.0.9][card-full-relay-story-node-connection-root-validation] ships so client deployments are minted against the durable identifier from day one. Promoting this item to a `TODO-ALPHA-*` card before [023-full_relay_story_node_connection_root_validation-0.0.9][card-full-relay-story-node-connection-root-validation] is the cleanest path.
 
 #### Why it matters
 
@@ -1338,7 +1338,7 @@ class ItemType(DjangoType):
 
 **What `strawberry-graphql-django` does**: `strawberry-django.relay` provides cursor-connection support but no migration tooling for type renames, no first-class polymorphic connections, no declarative cursor field, no refetchable container metadata. Each gap is per-team plumbing.
 
-**What we'd do**: ship six Relay-specific extensions, all opt-in, all composable with the shipped `Meta.interfaces = (relay.Node,)` foundation and the `1.0.0` Connection surface (`BLOCKED-ALPHA-023`).
+**What we'd do**: ship six Relay-specific extensions, all opt-in, all composable with the shipped `Meta.interfaces = (relay.Node,)` foundation and the `1.0.0` Connection surface ([023-full_relay_story_node_connection_root_validation-0.0.9][card-full-relay-story-node-connection-root-validation]).
 
 #### Sub-feature 1: GlobalID model-rename / app-move helper
 
@@ -1415,7 +1415,7 @@ class ItemType(DjangoType):
         refetchable = True   # advertises this type as a Relay refetchable container target
 ```
 
-The package emits the right schema metadata (the `@refetchable` directive when present in the consumer's Strawberry version; a documented introspection hint otherwise), and the `node(id:)` root resolver (shipped in `BLOCKED-ALPHA-023`) is guaranteed to return the same shape the consumer queried — no field-set drift between the connection edge and the refetched object.
+The package emits the right schema metadata (the `@refetchable` directive when present in the consumer's Strawberry version; a documented introspection hint otherwise), and the `node(id:)` root resolver (shipped in [023-full_relay_story_node_connection_root_validation-0.0.9][card-full-relay-story-node-connection-root-validation]) is guaranteed to return the same shape the consumer queried — no field-set drift between the connection edge and the refetched object.
 
 #### Sub-feature 6: Permission-aware cursor decoding
 
@@ -1431,7 +1431,7 @@ Relay is the canonical GraphQL pagination + identity spec. It's also where teams
 
 The headline pitch: *"Relay just works — type renames don't break IDs, cursors don't drift on inserts, polymorphic feeds use one connection, permissions are honored across pagination."* Combined with the shipped `Meta.interfaces = (relay.Node,)` foundation and the `1.0.0` Connection surface, this completes the *"Relay is the easiest part of our package, not the hardest"* story.
 
-**Framework integration**: composes with `BLOCKED-ALPHA-023` (Full Relay story, the `1.0.0` connective tissue) — this item is the *post-stable* expansion of that card. Composes with item 15 (content-versioned Node types) for per-Node freshness gossip. Composes with item 33 (DoS policy stack) since stable cursors and polymorphic connections need their own cost weights. Composes with item 4 (polymorphic / `GenericForeignKey` support) — sub-feature 2 (polymorphic connections) is the *Relay-shaped* version of the same underlying machinery item 4 introduces for non-Relay polymorphic types.
+**Framework integration**: composes with [023-full_relay_story_node_connection_root_validation-0.0.9][card-full-relay-story-node-connection-root-validation] (Full Relay story, the `1.0.0` connective tissue) — this item is the *post-stable* expansion of that card. Composes with item 15 (content-versioned Node types) for per-Node freshness gossip. Composes with item 33 (DoS policy stack) since stable cursors and polymorphic connections need their own cost weights. Composes with item 4 (polymorphic / `GenericForeignKey` support) — sub-feature 2 (polymorphic connections) is the *Relay-shaped* version of the same underlying machinery item 4 introduces for non-Relay polymorphic types.
 
 ### 15. Content-versioned Node types with response-extensions gossip
 
@@ -2005,17 +2005,17 @@ Nothing in the Django ecosystem does this today. `django-grpc-framework` ships g
 
 **Difficulty**: 8/10 — Cross-shard queryset planning, shard-aware `Prefetch` reconciliation, and cross-shard aggregate composition. The hard cases (FK from shard A pointing into shard B) require schema-aware routing decisions the optimizer doesn't currently make. Concentrating the routing decision behind `Meta.preferred_database` keeps the consumer-facing surface small, but the optimizer-internal work is substantial.
 
-**What this is**: a multi-database story that goes beyond polite cooperation (which the package already does — see [`KANBAN.md`][kanban] `WIP-ALPHA-019-0.0.7` for the contract that pins today's `router.db_for_read` cooperation, strictness-mode routing, and `.using()` plan correctness). First-class means:
+**What this is**: a multi-database story that goes beyond polite cooperation (which the package already does — see [`KANBAN.md`][kanban] [019-multi_database_cooperation_contract-0.0.7][card-multi-database-cooperation-contract] for the contract that pins today's `router.db_for_read` cooperation, strictness-mode routing, and `.using()` plan correctness). First-class means:
 
 - the optimizer detects when a planned join would cross shards and falls back to a routed `Prefetch` instead
 - `Meta.preferred_database = "shard_b"` declares a `DjangoType`'s home shard so the optimizer can route automatically without `.using()` boilerplate everywhere
 - multi-shard aggregates compose results from each shard (count / sum / min / max are trivial; avg and group-by need explicit reduce semantics)
 - M2M through-tables respect routing for the through-table's database
-- connection pagination (`TODO-ALPHA-024` Connection-aware optimizer planning) respects shard locality — sharded connections paginate within a shard, not across
+- connection pagination ([024-connection_aware_optimizer_planning-0.0.9][card-connection-aware-optimizer-planning] Connection-aware optimizer planning) respects shard locality — sharded connections paginate within a shard, not across
 
 **Why it matters**: apps that run sharded Django today (Instagram-shape large multi-tenants, fintech with per-region data residency, multi-tenant SaaS with isolated tenant DBs) currently hand-roll their queryset routing. They write `.using(tenant_db)` everywhere and the optimizer doesn't help them — it just gets out of the way. First-class support means GraphQL queries against routed types automatically plan against the right database, cross-shard relations downgrade to a `Prefetch` instead of failing or N+1ing, and the response shape stays consistent with the single-DB case. Nobody else in the Django GraphQL ecosystem is even close.
 
-**Framework integration**: builds on the shipped cooperation contract from `WIP-ALPHA-019-0.0.7`. Composes with `Meta.get_queryset` (the routing decision could live there per-type, in tandem with the explicit `Meta.preferred_database`). Composes with `TODO-ALPHA-024` (Connection-aware optimizer — sharded connection pagination). Composes with item 33 (DoS policy stack — per-shard rate limits and cost budgets). Composes with item 19 (typed error envelope — surfacing cross-shard routing errors with a stable error code). Composes with item 4 (polymorphic / `GenericForeignKey`) when the polymorphic targets live on different shards.
+**Framework integration**: builds on the shipped cooperation contract from [019-multi_database_cooperation_contract-0.0.7][card-multi-database-cooperation-contract]. Composes with `Meta.get_queryset` (the routing decision could live there per-type, in tandem with the explicit `Meta.preferred_database`). Composes with [024-connection_aware_optimizer_planning-0.0.9][card-connection-aware-optimizer-planning] (Connection-aware optimizer — sharded connection pagination). Composes with item 33 (DoS policy stack — per-shard rate limits and cost budgets). Composes with item 19 (typed error envelope — surfacing cross-shard routing errors with a stable error code). Composes with item 4 (polymorphic / `GenericForeignKey`) when the polymorphic targets live on different shards.
 
 ## How to use this file
 - When scheduling a slice after parity items land, pull a high-`Realistic` `BACKLOG.md` item that isn't already on `KANBAN.md`.
@@ -2028,6 +2028,10 @@ If a `BACKLOG.md` item turns out to be wrong (the upstream packages ship it, rea
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+[card-connection-aware-optimizer-planning]: KANBAN.md#connection_aware_optimizer_planning
+[card-full-relay-story-node-connection-root-validation]: KANBAN.md#full_relay_story_node_connection_root_validation
+[card-multi-database-cooperation-contract]: KANBAN.md#multi_database_cooperation_contract
+[card-multiple-djangotypes-per-model-with-metaprimary]: KANBAN.md#multiple_djangotypes_per_model_with_metaprimary
 [kanban]: KANBAN.md
 
 <!-- docs/ -->

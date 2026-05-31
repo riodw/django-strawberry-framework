@@ -21,7 +21,6 @@ COLUMN_DOC_KEYS = {
     "in-progress",
     "to-do-alpha-010",
     "to-do-beta-100",
-    "blocked",
     "done",
 }
 
@@ -56,8 +55,6 @@ def card_column_key(card: dict[str, Any]) -> str:
     milestone = card["milestone"]["key"] if card.get("milestone") else ""
     if status == "done":
         return "done"
-    if status == "blocked":
-        return "blocked"
     if status == "wip":
         return "in-progress"
     if status == "todo" and milestone == "alpha":
@@ -183,7 +180,12 @@ def render_doc(doc: dict[str, Any]) -> list[str]:
 def render_card(card: dict[str, Any]) -> list[str]:
     """Render a kanban card with its lookup metadata and child rows."""
     text_replacements, token_replacements = card_reference_replacements(card)
-    lines = [f"### {card_key(card)} — {card['title']}", ""]
+    slug = card["slug"]
+    lines = [
+        f'<a id="{slug}"></a>',
+        f"### [{card_key(card)} — {card['title']}](KANBAN.html#{slug})",
+        "",
+    ]
 
     if card.get("priority"):
         lines.append(f"- Priority: {card['priority']['label']}")
@@ -303,6 +305,8 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     rendered = []
     rendered_card_ids = set()
     for doc in docs:
+        if doc["kind"]["key"] == "column" and doc["key"] not in COLUMN_DOC_KEYS:
+            continue
         rendered.extend(render_doc(doc))
         if doc["key"] in COLUMN_DOC_KEYS:
             for card in cards_by_column.get(doc["key"], []):

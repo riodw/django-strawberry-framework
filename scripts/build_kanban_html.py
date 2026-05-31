@@ -26,6 +26,7 @@ query StaticKanbanDashboard {
     }
     title
     slug
+    isBlocked
     number
     planningNote
     createdDate
@@ -487,6 +488,7 @@ LOOKUP_FIELDS = {
 
 def fetch_dashboard_data() -> dict[str, Any]:
     """Fetch the kanban dashboard payload through the real ``/graphql/`` route."""
+    from apps.kanban import models as kanban_models
     from django.test import Client
 
     response = Client(HTTP_HOST="localhost").post(
@@ -518,7 +520,12 @@ def fetch_dashboard_data() -> dict[str, Any]:
             raise TypeError(f"GraphQL response did not include data.{graphql_name} as a list.")
         lookups[payload_name] = values
 
-    return {"cards": cards, "boardDocs": board_docs, "lookups": lookups}
+    return {
+        "cards": cards,
+        "boardDocs": board_docs,
+        "lookups": lookups,
+        "blockingReferenceKindKeys": sorted(kanban_models.BLOCKING_REFERENCE_KIND_KEYS),
+    }
 
 
 def render_data_block(dashboard_data: dict[str, Any]) -> str:

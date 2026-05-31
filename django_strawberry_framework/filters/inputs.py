@@ -132,6 +132,12 @@ class FieldSpec:
 
 # Provenance table populated by ``_build_input_fields`` and consulted at
 # runtime by ``FilterSet._normalize_input`` and ``normalize_input_value``.
+# Cleanup contract: keyed by ``(FilterSet subclass, python_attr)`` and
+# emptied ONLY by ``clear_filter_input_namespace`` (driven by
+# ``registry.clear()``). A consumer test suite that reloads model / filter
+# modules WITHOUT routing through ``registry.clear()`` retains stale entries
+# from the prior build; the filter test files' ``_isolate_registry`` autouse
+# fixture clears this map explicitly for exactly that reason.
 _field_specs: dict[tuple[type[FilterSet], str], FieldSpec] = {}
 
 
@@ -301,6 +307,13 @@ def _element_annotation(
     mis-types integer columns and a CSV ``in`` over a choice column collapses
     to ``str``. Callers that need a different shape for a specific lookup (e.g.
     ``isnull`` is always boolean) handle that before calling this.
+
+    Known contract limit: a custom ``method=`` filter has no backing
+    ``model_field``, so its element type is inferred from the
+    ``django-filter`` form field and a CSV/list ``method=`` filter therefore
+    yields ``list[str]`` even when the column it ultimately queries is an
+    ``int``. To get a typed element on a method filter, back it with a model
+    field (``field_name=``) or declare the input annotation explicitly.
     """
     if model_field is not None and getattr(model_field, "choices", None):
         type_name = _owner_type_name(owner_definition) or "Filter"

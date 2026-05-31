@@ -304,6 +304,14 @@ def _analyze(text: str, threshold: int) -> tuple[list[int], list[int], list[tupl
             # A nested magic trailing comma (a child >= threshold, a 1-tuple, or a
             # too-long child) keeps that child multi-line, so this construct cannot
             # collapse. Detect any trailing comma other than our own.
+            #
+            # Known false-positive (degraded, never wrong): this scans raw text,
+            # so a single-line string literal that happens to contain ``,)`` /
+            # ``,]`` / ``,}`` (e.g. ``"(a,)"``) reads as a nested trailing comma
+            # and the construct is conservatively NOT collapsed. The triple-quote
+            # guard above already excludes multi-line strings; tightening this to
+            # ignore string contents would need tokenizing ``inner``, which is not
+            # worth it for a missed collapse (the layout stays valid either way).
             inner = src[: scan - open_abs] + src[scan - open_abs + 1 :]
             if re.search(r",\s*[)\]}]", inner):
                 continue

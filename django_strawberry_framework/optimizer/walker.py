@@ -97,12 +97,17 @@ def _resolve_field_map(
     which routes through ``registry.get(model)`` and resolves nested
     relation targets to the primary (the spec-014 nested contract).
 
-    The fallback path (when no ``DjangoType`` is registered for the
-    model) returns raw Django field objects keyed by name. Downstream
-    walker code reads attributes via ``getattr(..., default)`` so both
-    ``FieldMeta`` and raw Django field shapes satisfy the consumer
-    contract; treat the values as ``FieldMeta | Any`` until the
-    registry-coverage gate lands.
+    DUAL CONTRACT (read before consuming the returned map): the values
+    are ``FieldMeta`` when the model has a registered ``DjangoType``, but
+    raw Django field objects (from ``model._meta.get_fields()``) on the
+    fallback path when it does not. Both shapes are read via
+    ``getattr(..., default)`` downstream -- that defensive access is the
+    ONLY reason the two coexist safely, so never read a ``FieldMeta``-only
+    attribute without a ``getattr`` default. Treat the values as
+    ``FieldMeta | Any`` until the registry-coverage gate lands. The same
+    divergence (and the same ``getattr``-defensive fallback) lives in
+    ``optimizer/resolvers.py::_field_meta_for_resolver``; keep the two in
+    sync.
     """
     type_cls = source_type if source_type is not None else registry.get(model)
     definition = registry.get_definition(type_cls) if type_cls is not None else None

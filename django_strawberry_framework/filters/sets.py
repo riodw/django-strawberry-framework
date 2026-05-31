@@ -410,6 +410,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             own_pk_filter_class = (
                 GlobalIDMultipleChoiceFilter if default.lookup_expr == "in" else GlobalIDFilter
             )
+            # ``**default.extra`` is safe to forward even to
+            # ``GlobalIDMultipleChoiceFilter``: ``default`` is the upstream
+            # SCALAR filter for the PK column (a NumberFilter-shaped default),
+            # so ``.extra`` carries no ``queryset=`` and no incompatible
+            # ``ModelChoiceField`` kwargs. ``GlobalIDMultipleChoiceFilter``
+            # backs onto ``_GlobalIDMultipleChoiceField`` (a plain
+            # ``MultipleChoiceField``, NOT a model-backed field), which needs
+            # no ``queryset`` and accepts an empty ``choices`` set, so the
+            # forwarded extras can never leave it under-configured.
             return own_pk_filter_class(
                 field_name=default.field_name,
                 lookup_expr=default.lookup_expr,
@@ -1390,7 +1399,18 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         queryset: models.QuerySet,
         info: Any,
     ) -> models.QuerySet:
-        """Async sibling of `apply_sync` awaiting the visibility step."""
+        """Async sibling of `apply_sync` awaiting the visibility step.
+
+        Contract caveat: only the visibility-derivation step is awaited.
+        ``apply_async`` does NOT wrap consumer hooks -- ``check_*_permission``
+        gates or a custom ``method=`` filter's body -- in ``sync_to_async``,
+        and reads ``.qs`` synchronously (which is also where nested logical
+        branches re-derive their related visibility, see ``_q_for_branch``).
+        The built-in pipeline does no synchronous I/O on that path, but a
+        consumer hook that issues a blocking ORM call would block the event
+        loop without raising. Keep such hooks non-blocking, or do the I/O in
+        the awaited ``get_queryset`` visibility step.
+        """
         data = cls._normalize_input(input_value)
         child_qs_by_branch = await cls._derive_related_visibility_querysets_async(input_value, info)
         request = cls._request_from_info(info)

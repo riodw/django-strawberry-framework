@@ -568,6 +568,14 @@ def _bind_filtersets() -> None:
     # Subpass 3: orphan validation against the helper-tracked set. Runs
     # BEFORE materialization so a failure here doesn't leave half-
     # materialized input classes in the inputs-module namespace.
+    #
+    # Test-isolation dependency: ``_helper_referenced_filtersets`` is a
+    # module-global ledger cleared only by ``registry.clear()``. A consumer
+    # test suite that reloads filter modules WITHOUT routing through
+    # ``registry.clear()`` can leave stale entries here -- FilterSet classes
+    # from a prior build that no consumer wires this build -- producing a
+    # spurious orphan error. The filter test files' ``_isolate_registry``
+    # autouse fixture clears it explicitly for exactly that reason.
     wired_set = set(wired)
     orphans = sorted(
         _helper_referenced_filtersets - wired_set,

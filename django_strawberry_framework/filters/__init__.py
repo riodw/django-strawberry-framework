@@ -6,6 +6,13 @@ consumer helper `filter_input_type` (Slice 2). Slice 3 will wire the
 finalizer-phase-2.5 orphan check that compares
 `_helper_referenced_filtersets` against the set of `Meta.filterset_class`-
 wired filtersets.
+
+Note: `Filter` re-exported here IS `django_filters.Filter` itself (a
+plain re-export, not a subclass), surfaced under this package's namespace
+so consumers writing a custom `method=` filter import one base class from
+`django_strawberry_framework.filters`. It deliberately shadows the
+upstream name; reach for `django_filters.Filter` directly only if you
+need to distinguish the two.
 """
 
 from __future__ import annotations

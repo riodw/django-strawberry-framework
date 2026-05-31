@@ -358,7 +358,14 @@ def parse_args() -> argparse.Namespace:
 
 
 def configure_django() -> None:
-    """Load the fakeshop Django settings for the in-process GraphQL request."""
+    """Load the fakeshop Django settings for the in-process GraphQL request.
+
+    Mutates process state without undoing it: prepends ``FAKESHOP_ROOT`` to
+    ``sys.path`` and sets ``DJANGO_SETTINGS_MODULE``. Fine for this top-level
+    build script (one process, exits after writing the dashboard); if this
+    module is ever imported into a longer-lived process, isolate or restore
+    these instead.
+    """
     sys.path.insert(0, str(FAKESHOP_ROOT))
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
 

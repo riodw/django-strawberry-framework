@@ -384,7 +384,7 @@ def fetch_cards() -> list[dict[str, Any]]:
     if payload.get("errors"):
         raise RuntimeError(json.dumps(payload["errors"], indent=2, sort_keys=True))
 
-    cards = payload["data"]["allCards"]
+    cards = (payload.get("data") or {}).get("allCards")
     if not isinstance(cards, list):
         raise TypeError("GraphQL response did not include data.allCards as a list.")
     return cards

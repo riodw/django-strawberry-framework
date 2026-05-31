@@ -65,9 +65,27 @@ class RelativeSizeFilter(FilterSet):
         }
 
 
+class PlanningStateFilter(FilterSet):
+    class Meta:
+        model = models.PlanningState
+        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
+
+
 class UpstreamFilter(FilterSet):
     class Meta:
         model = models.Upstream
+        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
+
+
+class ParityLevelFilter(FilterSet):
+    class Meta:
+        model = models.ParityLevel
+        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
+
+
+class SectionFilter(FilterSet):
+    class Meta:
+        model = models.Section
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
@@ -83,10 +101,22 @@ class CardReferenceSourceFilter(FilterSet):
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
+class BoardDocKindFilter(FilterSet):
+    class Meta:
+        model = models.BoardDocKind
+        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
+
+
 class TargetVersionFilter(FilterSet):
     class Meta:
         model = models.TargetVersion
         fields = {"id": "__all__", "number": "__all__"}
+
+
+class LabelFilter(FilterSet):
+    class Meta:
+        model = models.Label
+        fields = {"id": "__all__", "key": "__all__", "color": "__all__"}
 
 
 class CardItemFilter(FilterSet):
@@ -110,6 +140,29 @@ class CardReferenceFilter(FilterSet):
     class Meta:
         model = models.CardReference
         fields = {"id": "__all__", "raw_text": "__all__", "order": "__all__"}
+
+
+class BoardDocCardReferenceFilter(FilterSet):
+    class Meta:
+        model = models.BoardDocCardReference
+        fields = {"id": "__all__", "raw_text": "__all__", "order": "__all__"}
+
+
+class BoardDocFilter(FilterSet):
+    kind = RelatedFilter(BoardDocKindFilter, field_name="kind")
+    card_references = RelatedFilter(
+        BoardDocCardReferenceFilter,
+        field_name="card_references",
+    )
+
+    class Meta:
+        model = models.BoardDoc
+        fields = {
+            "id": "__all__",
+            "key": "__all__",
+            "title": "__all__",
+            "order": "__all__",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -146,11 +199,18 @@ __all__ = (
     "PriorityFilter",
     "SeverityFilter",
     "RelativeSizeFilter",
+    "PlanningStateFilter",
     "UpstreamFilter",
+    "ParityLevelFilter",
+    "SectionFilter",
     "CardReferenceKindFilter",
     "CardReferenceSourceFilter",
+    "BoardDocKindFilter",
     "TargetVersionFilter",
+    "LabelFilter",
     "CardItemFilter",
     "CardReferenceFilter",
+    "BoardDocCardReferenceFilter",
+    "BoardDocFilter",
     "CardFilter",
 )

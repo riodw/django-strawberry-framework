@@ -58,7 +58,7 @@ def _reload_project_schema_for_acceptance_tests():
 
 
 def _seed_board():
-    """A tiny deterministic board: two cards + lookups + edges."""
+    """A tiny deterministic board: two cards + docs + lookups + edges."""
     done = models.Status.objects.create(key="done", label="Done", order=3)
     todo = models.Status.objects.create(key="todo", label="To Do", order=0)
     alpha = models.Milestone.objects.create(key="alpha", label="Alpha", order=0)
@@ -66,6 +66,7 @@ def _seed_board():
     xl = models.RelativeSize.objects.create(key="xl", label="XL", order=4, rank=4)
     size_m = models.RelativeSize.objects.create(key="m", label="M", order=2, rank=2)
     high = models.Priority.objects.create(key="high", label="High", order=0)
+    major = models.Severity.objects.create(key="major", label="Major", order=0)
     shipped = models.PlanningState.objects.create(key="shipped", label="Shipped", order=4)
     planned = models.PlanningState.objects.create(key="planned", label="Planned", order=0)
     graphene = models.Upstream.objects.create(
@@ -93,6 +94,11 @@ def _seed_board():
         label="Planning note",
         order=0,
     )
+    reference_doc = models.BoardDocKind.objects.create(
+        key="reference",
+        label="Reference",
+        order=1,
+    )
     spec = models.SpecDoc.objects.create(
         name="spec-021-filters-0_0_8",
         url="https://github.com/example/spec-021-filters-0_0_8.md",
@@ -105,6 +111,7 @@ def _seed_board():
         milestone=None,
         target_version=version,
         priority=high,
+        severity=major,
         relative_size=xl,
         planning_state=shipped,
         spec=spec,
@@ -116,6 +123,7 @@ def _seed_board():
         milestone=alpha,
         target_version=version,
         priority=high,
+        severity=major,
         relative_size=size_m,
         planning_state=planned,
     )
@@ -132,6 +140,20 @@ def _seed_board():
     models.ParityClaim.objects.create(card=filters_card, upstream=graphene, level=required)
     models.ParityClaim.objects.create(card=filters_card, upstream=straw, level=required)
     models.ParityClaim.objects.create(card=conn_card, upstream=straw, level=adjacent)
+
+    board_doc = models.BoardDoc.objects.create(
+        key="snapshot",
+        kind=reference_doc,
+        title="Snapshot",
+        order=0,
+        body="The active filter card is {{card_ref:0}}.",
+    )
+    board_doc_reference = models.BoardDocCardReference.objects.create(
+        doc=board_doc,
+        card=filters_card,
+        raw_text="DONE-021-0.0.8",
+        order=0,
+    )
 
     item_filters = models.CardItem.objects.create(
         card=filters_card,
@@ -152,6 +174,8 @@ def _seed_board():
         "item_filters": item_filters,
         "item_conn": item_conn,
         "reference": reference,
+        "board_doc": board_doc,
+        "board_doc_reference": board_doc_reference,
     }
 
 
@@ -421,6 +445,69 @@ def test_reverse_fk_from_lookup_status_to_cards():
         }
         """,
         {"allKanbanStatuses": [{"key": "done", "cards": [{"title": "Filtering subsystem"}]}]},
+    )
+
+
+@pytest.mark.django_db
+def test_select_board_docs_and_lookup_roots_for_static_dashboard():
+    """The static dashboard can fetch board docs and FK options directly."""
+    _seed_board()
+    models.Label.objects.create(key="filters", color="#2563eb")
+    _assert_graphql_data(
+        """
+        query {
+          allKanbanBoardDocs {
+            key
+            title
+            body
+            kind { key }
+            cardReferences {
+              rawText
+              order
+              card { title number slug }
+            }
+          }
+          allKanbanPriorities { key }
+          allKanbanSeverities { key }
+          allKanbanPlanningStates { key }
+          allKanbanParityLevels { key }
+          allKanbanSections { key }
+          allKanbanReferenceKinds { key }
+          allKanbanReferenceSources { key }
+          allKanbanBoardDocKinds { key docs { key } }
+          allKanbanLabels { key color }
+        }
+        """,
+        {
+            "allKanbanBoardDocs": [
+                {
+                    "key": "snapshot",
+                    "title": "Snapshot",
+                    "body": "The active filter card is {{card_ref:0}}.",
+                    "kind": {"key": "reference"},
+                    "cardReferences": [
+                        {
+                            "rawText": "DONE-021-0.0.8",
+                            "order": 0,
+                            "card": {
+                                "title": "Filtering subsystem",
+                                "number": 21,
+                                "slug": "filtering-subsystem",
+                            },
+                        },
+                    ],
+                },
+            ],
+            "allKanbanPriorities": [{"key": "high"}],
+            "allKanbanSeverities": [{"key": "major"}],
+            "allKanbanPlanningStates": [{"key": "planned"}, {"key": "shipped"}],
+            "allKanbanParityLevels": [{"key": "required"}, {"key": "adjacent"}],
+            "allKanbanSections": [{"key": "scope"}],
+            "allKanbanReferenceKinds": [{"key": "dependency"}],
+            "allKanbanReferenceSources": [{"key": "planning_note"}],
+            "allKanbanBoardDocKinds": [{"key": "reference", "docs": [{"key": "snapshot"}]}],
+            "allKanbanLabels": [{"key": "filters", "color": "#2563eb"}],
+        },
     )
 
 
@@ -775,5 +862,9 @@ def test_select_labels_m2m():
           }
         }
         """,
-        {"allCards": [{"title": "Filtering subsystem", "labels": [{"key": "security"}]}]},
+        {
+            "allCards": [
+                {"title": "Filtering subsystem", "labels": [{"key": "security"}]},
+            ],
+        },
     )

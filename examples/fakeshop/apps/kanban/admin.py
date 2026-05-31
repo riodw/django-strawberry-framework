@@ -27,6 +27,7 @@ for _model in (
     models.Section,
     models.CardReferenceKind,
     models.CardReferenceSource,
+    models.BoardDocKind,
 ):
     admin.site.register(_model, _LookupAdmin)
 
@@ -124,6 +125,45 @@ class CardItemAdmin(admin.ModelAdmin):
     )
     list_filter = ("section", "is_complete")
     search_fields = ("text",)
+
+
+class BoardDocCardReferenceInline(admin.TabularInline):
+    model = models.BoardDocCardReference
+    extra = 0
+    show_change_link = True
+    autocomplete_fields = ("card",)
+
+
+@admin.register(models.BoardDoc)
+class BoardDocAdmin(admin.ModelAdmin):
+    list_display = (
+        "key",
+        "kind",
+        "title",
+        "order",
+    )
+    list_filter = ("kind",)
+    search_fields = ("key", "title", "body")
+    autocomplete_fields = ("kind",)
+    inlines = [BoardDocCardReferenceInline]
+
+
+@admin.register(models.BoardDocCardReference)
+class BoardDocCardReferenceAdmin(admin.ModelAdmin):
+    list_display = (
+        "doc",
+        "card",
+        "order",
+        "raw_text",
+    )
+    list_filter = ("doc",)
+    search_fields = (
+        "doc__key",
+        "doc__title",
+        "card__title",
+        "raw_text",
+    )
+    autocomplete_fields = ("doc", "card")
 
 
 @admin.register(models.ParityClaim)

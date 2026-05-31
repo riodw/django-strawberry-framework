@@ -14,7 +14,7 @@ Two foundations every model leans on:
   stable, opaque identifier for whichever model row its (one non-null)
   one-to-one link points at. This is NOT a ``uuid`` column on each model; each
   domain row reaches its UUID via the reverse accessor ``instance.uuid.id``. A
-  ``post_save`` signal creates the row automatically on first save.
+  signal receiver creates the row automatically on first save.
 """
 
 import operator
@@ -23,7 +23,6 @@ from functools import reduce
 
 from django.db import models
 from django.db.models.lookups import Exact
-from django.db.models.signals import post_save
 from django.utils.text import slugify
 
 # ---------------------------------------------------------------------------
@@ -223,9 +222,10 @@ class Card(TimeStampedModel):
     """One board card. Every categorical line is a foreign key into a lookup."""
 
     title = models.TextField(unique=True)
-    # The NNN sequence number. Explicitly unstable / per-card (recomputed when
-    # cards reorder), so it stays a plain integer -- never a key, never a lookup.
-    number = models.PositiveIntegerField()
+    # The NNN sequence number is intentionally unstable and recomputed when cards
+    # reorder, but it is still globally unique on a board snapshot. Card
+    # references should use ``title`` / ``slug``; the number exists for ordering.
+    number = models.PositiveIntegerField(unique=True)
 
     status = models.ForeignKey(Status, related_name="cards", on_delete=models.PROTECT)
     milestone = models.ForeignKey(
@@ -304,24 +304,6 @@ class Card(TimeStampedModel):
         ordering = ["number"]
         verbose_name = "card"
         verbose_name_plural = "cards"
-        constraints = [
-            # The board's card id -- STATUS[-MILESTONE]-NNN-X.Y.Z -- is unique.
-            # NNN alone is not (DONE/TODO keep independent sequences), so the
-            # uniqueness key is (status, number, target_version).
-            models.UniqueConstraint(
-                fields=[
-                    "status",
-                    "number",
-                    "target_version",
-                ],
-                name="unique_card_id",
-            ),
-        ]
-        indexes = [
-            # ``number`` is the default ordering and a common filter; it is not a
-            # prefix of the (status, number, target_version) unique index.
-            models.Index(fields=["number"]),
-        ]
 
     def __str__(self):
         milestone = f"-{self.milestone.key.upper()}" if self.milestone_id else ""
@@ -393,13 +375,13 @@ class CardReference(TimeStampedModel):
                 fields=[
                     "target_card",
                     "kind",
-                ]
+                ],
             ),
             models.Index(
                 fields=[
                     "source_card",
                     "kind",
-                ]
+                ],
             ),
         ]
 
@@ -514,6 +496,51 @@ class BoardDoc(TimeStampedModel):
         return self.title or self.key
 
 
+class BoardDocCardReference(TimeStampedModel):
+    """A card mention embedded in a board-prose document.
+
+    ``BoardDoc.body`` stores placeholders such as ``{{card_ref:0}}`` instead of
+    live card-id strings. The FK on this edge is the canonical source of truth,
+    so prose references survive card renumbering and status/version moves.
+    """
+
+    doc = models.ForeignKey(
+        BoardDoc,
+        related_name="card_references",
+        on_delete=models.CASCADE,
+    )
+    card = models.ForeignKey(
+        Card,
+        related_name="board_doc_references",
+        on_delete=models.CASCADE,
+    )
+    raw_text = models.TextField(blank=True, default="")
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = [
+            "doc",
+            "order",
+        ]
+        verbose_name = "board doc card reference"
+        verbose_name_plural = "board doc card references"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "doc",
+                    "order",
+                ],
+                name="unique_board_doc_card_reference_position",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["card"]),
+        ]
+
+    def __str__(self):
+        return f"{self.doc} -> {self.card} ({self.order})"
+
+
 # ---------------------------------------------------------------------------
 # UUID side-table
 # ---------------------------------------------------------------------------
@@ -543,6 +570,7 @@ _UUID_LINK_NAMES = (
     "carditem",
     "label",
     "boarddoc",
+    "boarddoccardreference",
 )
 
 
@@ -724,6 +752,13 @@ class UUIDModel(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="uuid",
     )
+    boarddoccardreference = models.OneToOneField(
+        "BoardDocCardReference",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
 
     class Meta:
         verbose_name = "UUID"
@@ -736,46 +771,3 @@ class UUIDModel(TimeStampedModel):
             if getattr(self, f"{name}_id") is not None:
                 return f"{getattr(self, name)} <{self.id}>"
         return str(self.id)
-
-
-# Every model whose rows should carry a stable UUID via the side-table.
-_UUID_LINKED_MODELS = (
-    Milestone,
-    Status,
-    Priority,
-    Severity,
-    RelativeSize,
-    PlanningState,
-    Upstream,
-    ParityLevel,
-    Section,
-    CardReferenceKind,
-    CardReferenceSource,
-    BoardDocKind,
-    TargetVersion,
-    SpecDoc,
-    Card,
-    CardReference,
-    ParityClaim,
-    CardItem,
-    Label,
-    BoardDoc,
-)
-
-
-def _create_uuid_row(sender, instance, created, **kwargs):
-    """On first save of a linked model, create its ``UUIDModel`` side-row.
-
-    ``bulk_create`` does not emit ``post_save``; importers must use
-    ``.save()`` / ``.objects.create()`` for this to fire.
-    """
-    if created:
-        UUIDModel.objects.create(**{sender._meta.model_name: instance})
-
-
-for _model in _UUID_LINKED_MODELS:
-    post_save.connect(
-        _create_uuid_row,
-        sender=_model,
-        dispatch_uid=f"kanban_uuid_{_model._meta.model_name}",
-    )

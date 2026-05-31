@@ -141,6 +141,7 @@ class PlanningStateType(DjangoType):
             "uuid",
             "cards",
         )
+        filterset_class = filters.PlanningStateFilter
 
 
 class UpstreamType(DjangoType):
@@ -174,6 +175,7 @@ class ParityLevelType(DjangoType):
             "uuid",
             "parity_claims",
         )
+        filterset_class = filters.ParityLevelFilter
 
 
 class SectionType(DjangoType):
@@ -189,6 +191,7 @@ class SectionType(DjangoType):
             "uuid",
             "items",
         )
+        filterset_class = filters.SectionFilter
 
 
 class CardReferenceKindType(DjangoType):
@@ -221,6 +224,22 @@ class CardReferenceSourceType(DjangoType):
             "card_references",
         )
         filterset_class = filters.CardReferenceSourceFilter
+
+
+class BoardDocKindType(DjangoType):
+    class Meta:
+        model = models.BoardDocKind
+        fields = (
+            "id",
+            "key",
+            "label",
+            "order",
+            "created_date",
+            "updated_date",
+            "uuid",
+            "docs",
+        )
+        filterset_class = filters.BoardDocKindFilter
 
 
 # ---------------------------------------------------------------------------
@@ -367,6 +386,42 @@ class LabelType(DjangoType):
             "uuid",
             "cards",
         )
+        filterset_class = filters.LabelFilter
+
+
+class BoardDocType(DjangoType):
+    class Meta:
+        model = models.BoardDoc
+        fields = (
+            "id",
+            "key",
+            "kind",
+            "title",
+            "order",
+            "body",
+            "created_date",
+            "updated_date",
+            "uuid",
+            "card_references",
+        )
+        filterset_class = filters.BoardDocFilter
+        optimizer_hints = {"card_references": OptimizerHint.prefetch_related()}
+
+
+class BoardDocCardReferenceType(DjangoType):
+    class Meta:
+        model = models.BoardDocCardReference
+        fields = (
+            "id",
+            "doc",
+            "card",
+            "raw_text",
+            "order",
+            "created_date",
+            "updated_date",
+            "uuid",
+        )
+        filterset_class = filters.BoardDocCardReferenceFilter
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +467,28 @@ class Query:
         return queryset
 
     @strawberry.field
+    def all_kanban_priorities(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.PriorityFilter) | None = None,  # noqa: A002
+    ) -> list[PriorityType]:
+        queryset = models.Priority.objects.order_by("order")
+        if filter is not None:
+            queryset = filters.PriorityFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
+    def all_kanban_severities(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.SeverityFilter) | None = None,  # noqa: A002
+    ) -> list[SeverityType]:
+        queryset = models.Severity.objects.order_by("order")
+        if filter is not None:
+            queryset = filters.SeverityFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
     def all_kanban_milestones(
         self,
         info: Info,
@@ -420,6 +497,17 @@ class Query:
         queryset = models.Milestone.objects.order_by("order")
         if filter is not None:
             queryset = filters.MilestoneFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
+    def all_kanban_planning_states(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.PlanningStateFilter) | None = None,  # noqa: A002
+    ) -> list[PlanningStateType]:
+        queryset = models.PlanningState.objects.order_by("order")
+        if filter is not None:
+            queryset = filters.PlanningStateFilter.apply_sync(filter, queryset, info)
         return queryset
 
     @strawberry.field
@@ -434,6 +522,61 @@ class Query:
         return queryset
 
     @strawberry.field
+    def all_kanban_parity_levels(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.ParityLevelFilter) | None = None,  # noqa: A002
+    ) -> list[ParityLevelType]:
+        queryset = models.ParityLevel.objects.order_by("order")
+        if filter is not None:
+            queryset = filters.ParityLevelFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
+    def all_kanban_sections(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.SectionFilter) | None = None,  # noqa: A002
+    ) -> list[SectionType]:
+        queryset = models.Section.objects.order_by("order")
+        if filter is not None:
+            queryset = filters.SectionFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
+    def all_kanban_reference_kinds(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.CardReferenceKindFilter) | None = None,  # noqa: A002
+    ) -> list[CardReferenceKindType]:
+        queryset = models.CardReferenceKind.objects.order_by("order")
+        if filter is not None:
+            queryset = filters.CardReferenceKindFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
+    def all_kanban_reference_sources(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.CardReferenceSourceFilter) | None = None,  # noqa: A002
+    ) -> list[CardReferenceSourceType]:
+        queryset = models.CardReferenceSource.objects.order_by("order")
+        if filter is not None:
+            queryset = filters.CardReferenceSourceFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
+    def all_kanban_board_doc_kinds(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.BoardDocKindFilter) | None = None,  # noqa: A002
+    ) -> list[BoardDocKindType]:
+        queryset = models.BoardDocKind.objects.order_by("order")
+        if filter is not None:
+            queryset = filters.BoardDocKindFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
     def all_kanban_target_versions(
         self,
         info: Info,
@@ -445,6 +588,17 @@ class Query:
         return queryset
 
     @strawberry.field
+    def all_kanban_labels(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.LabelFilter) | None = None,  # noqa: A002
+    ) -> list[LabelType]:
+        queryset = models.Label.objects.order_by("key")
+        if filter is not None:
+            queryset = filters.LabelFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
     def all_kanban_relative_sizes(
         self,
         info: Info,
@@ -453,6 +607,17 @@ class Query:
         queryset = models.RelativeSize.objects.order_by("rank")
         if filter is not None:
             queryset = filters.RelativeSizeFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
+    def all_kanban_board_docs(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.BoardDocFilter) | None = None,  # noqa: A002
+    ) -> list[BoardDocType]:
+        queryset = models.BoardDoc.objects.order_by("order")
+        if filter is not None:
+            queryset = filters.BoardDocFilter.apply_sync(filter, queryset, info)
         return queryset
 
 

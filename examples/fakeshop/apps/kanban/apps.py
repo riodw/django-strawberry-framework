@@ -7,3 +7,6 @@ class KanbanConfig(AppConfig):
     # adding apps/ itself to sys.path.
     name = "apps.kanban"
     verbose_name = "Kanban"
+
+    def ready(self) -> None:
+        from . import signals  # noqa: F401

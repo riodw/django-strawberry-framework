@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import strawberry
@@ -679,6 +680,9 @@ def test_clear_filter_input_namespace_can_be_called_directly():
 
 def test_registry_clear_works_without_filters_imported():
     """``registry.clear()`` must not raise when filters package was never imported."""
+    # Absolute, ``__file__``-derived path so the subprocess resolves the
+    # example app regardless of pytest's working directory.
+    fakeshop = Path(__file__).resolve().parents[2] / "examples" / "fakeshop"
     result = subprocess.run(
         [
             sys.executable,
@@ -686,7 +690,7 @@ def test_registry_clear_works_without_filters_imported():
             (
                 "import django; "
                 "import os; "
-                "import sys; sys.path.insert(0, 'examples/fakeshop'); "
+                f"import sys; sys.path.insert(0, {str(fakeshop)!r}); "
                 "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings'); "
                 "django.setup(); "
                 "import django_strawberry_framework.registry as r; "
@@ -868,6 +872,7 @@ def _owner_definition_stub(name):
 
     class _Stub:
         origin = type(name, (), {})
+        model = None  # real owner definitions always carry a Django model
 
         def __init__(self, resolver=None):
             self._resolver = resolver
@@ -916,6 +921,37 @@ def test_bind_filterset_owner_continues_when_both_targets_unresolved():
     # no raise, and the first binding is preserved.
     _bind_filterset_owner(BookFilter, second)
     assert BookFilter._owner_definition is first
+
+
+def test_bind_filterset_owner_rejects_filterset_model_unrelated_to_owner():
+    """A first bind whose filterset ``Meta.model`` is unrelated to the owner raises (H-core-3).
+
+    The single most common Phase-2.5 user error is wiring
+    ``Meta.filterset_class`` to a FilterSet keyed on an entirely different
+    model. Without this guard the FIRST binding stores silently and the
+    mismatch only surfaces at query time as an opaque ``FieldError``; the
+    guard fails loud at finalize, naming both models.
+    """
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    class BookOwnerType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+
+    book_def = BookOwnerType.__django_strawberry_definition__
+    with pytest.raises(ConfigurationError) as exc_info:
+        _bind_filterset_owner(ShelfFilter, book_def)
+    msg = str(exc_info.value)
+    assert "ShelfFilter" in msg
+    assert "Shelf" in msg  # the filterset's own Meta.model
+    assert "Book" in msg  # the owner's model
+    # The rejected owner must NOT have been stored.
+    assert getattr(ShelfFilter, "_owner_definition", None) is None
 
 
 def test_bind_filterset_owner_rejects_diverging_own_pk_relay_node_ness():

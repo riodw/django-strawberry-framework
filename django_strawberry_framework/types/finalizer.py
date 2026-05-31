@@ -306,6 +306,24 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
     """
     previous: DjangoTypeDefinition | None = getattr(filterset_cls, "_owner_definition", None)
     if previous is None:
+        # First binding — reject a ``Meta.filterset_class`` whose own
+        # ``Meta.model`` is unrelated to this owner's model BEFORE storing
+        # it. ``definition.model`` must BE the filterset's model or derive
+        # from it (proxy / multi-table-inheritance owners carry every field
+        # the filterset's lookups reference); otherwise the filterset's
+        # lookups would run against a queryset of the wrong model. Catching
+        # it here — at finalize, on the FIRST bind — replaces the opaque
+        # query-time ``FieldError`` the mismatch would otherwise raise far
+        # from its cause (H-core-3 of the pre-merge review).
+        filterset_model = filterset_cls._meta.model
+        if (
+            filterset_model is not None
+            and definition.model is not None
+            and not issubclass(definition.model, filterset_model)
+        ):
+            raise ConfigurationError(
+                _format_owner_model_mismatch_error(filterset_cls, definition),
+            )
         filterset_cls._owner_definition = definition
         return
     if previous is definition:
@@ -363,8 +381,8 @@ def _format_owner_mismatch_error(
     previous: DjangoTypeDefinition,
     new: DjangoTypeDefinition,
     field_name: str,
-    prev_target: tuple[DjangoTypeDefinition, object] | None,
-    new_target: tuple[DjangoTypeDefinition, object] | None,
+    prev_target: tuple[DjangoTypeDefinition, models.Field] | None,
+    new_target: tuple[DjangoTypeDefinition, models.Field] | None,
 ) -> str:
     """Return the canonical H2-rev8 multi-owner-mismatch message.
 
@@ -408,6 +426,28 @@ def _format_owner_pk_mismatch_error(
         "resolves to a GlobalID typed to its owner, so owners diverging on "
         "Relay-node-ness or GraphQL type name cannot share one FilterSet. Declare "
         "separate FilterSet subclasses for the diverging owners (per spec-021 H2 of rev8)."
+    )
+
+
+def _format_owner_model_mismatch_error(filterset_cls: type, owner: DjangoTypeDefinition) -> str:
+    """Return the first-bind owner/filterset model-mismatch message.
+
+    Fires on the FIRST owner binding when a ``Meta.filterset_class`` is
+    keyed on a model unrelated to its owner type's model. Surfacing it at
+    finalize — rather than as the opaque query-time ``FieldError`` the
+    mismatch would otherwise raise once a lookup runs against the wrong
+    model's queryset — names both models so the consumer can realign the
+    wiring. Grep-stable alongside the other ``_format_*`` finalize-error
+    helpers (H-core-3 of the pre-merge review).
+    """
+    return (
+        f"FilterSet {filterset_cls.__qualname__} is declared as the filterset_class "
+        f"of {owner.origin.__qualname__} (model {owner.model.__name__}), but its own "
+        f"Meta.model is {filterset_cls._meta.model.__name__}. A filterset's Meta.model "
+        f"must be its owner's model — or a base the owner derives from — so the "
+        f"filterset's lookups resolve against the owner's queryset. Key "
+        f"{filterset_cls.__qualname__} on {owner.model.__name__}, or attach it to a "
+        f"{filterset_cls._meta.model.__name__} type."
     )
 
 
@@ -543,6 +583,6 @@ def _bind_filtersets() -> None:
         # through the factory's class-level cache); the cache is shared
         # across instances so dependent input classes built by one
         # factory are visible to a sibling factory's materialize loop.
-        factory.arguments
+        _ = factory.arguments
         for name, input_cls in factory.input_object_types.items():
             materialize_input_class(name, input_cls)

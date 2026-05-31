@@ -79,8 +79,4 @@ class NullableScalarSpecimenFilter(FilterSet):
         }
 
 
-__all__ = (
-    "ScalarSpecimenTagFilter",
-    "ScalarSpecimenFilter",
-    "NullableScalarSpecimenFilter",
-)
+__all__ = ("ScalarSpecimenTagFilter", "ScalarSpecimenFilter", "NullableScalarSpecimenFilter")

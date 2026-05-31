@@ -168,12 +168,7 @@ def _graphql_data(query: str, *, client: Client | None = None):
     return payload["data"]
 
 
-def _assert_graphql_data(
-    query: str,
-    expected: dict,
-    *,
-    client: Client | None = None,
-):
+def _assert_graphql_data(query: str, expected: dict, *, client: Client | None = None):
     assert _graphql_data(query, client=client) == expected
 
 

@@ -65,11 +65,7 @@ _MAX_PLAN_CACHE_SIZE = 256
 # keep working without a churn pass.  Canonical implementation lives in
 # ``optimizer/_context.py`` for cross-subpackage reuse with the read-side
 # ``get_context_value`` (consumed by ``types/resolvers.py``).
-__all__ = (
-    "CacheInfo",
-    "DjangoOptimizerExtension",
-    "_stash_on_context",
-)
+__all__ = ("CacheInfo", "DjangoOptimizerExtension", "_stash_on_context")
 
 
 def _collect_directive_var_names(
@@ -482,12 +478,7 @@ class DjangoOptimizerExtension(SchemaExtension):
     consumer wrote ``Model.objects`` or ``Model.objects.all()``.
     """
 
-    def __init__(
-        self,
-        strictness: str = "off",
-        *,
-        execution_context: Any = None,
-    ) -> None:
+    def __init__(self, strictness: str = "off", *, execution_context: Any = None) -> None:
         # Explicitly accept ``execution_context`` because Strawberry
         # instantiates extension classes with that keyword when an
         # extension *class* (not an instance) is passed in

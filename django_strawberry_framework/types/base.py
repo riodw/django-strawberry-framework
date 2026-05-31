@@ -595,6 +595,13 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
     if not isinstance(model, type) or not issubclass(model, models.Model):
         raise ConfigurationError("Meta.model must be a Django model class")
 
+    # ``meta.__dict__`` (this class's OWN keys only, no MRO walk) is
+    # deliberate for the typo-guard below (the ``deferred`` / ``unknown``
+    # checks): an unsupported key is flagged only when THIS ``Meta``
+    # declares it, so a base ``Meta``'s already-validated keys are not
+    # re-flagged on every subclass. This is the intentional counterpart to
+    # the MRO-walking ``getattr`` check just below; the two differ on
+    # purpose -- do not "unify" them.
     declared = {k for k in meta.__dict__ if not k.startswith("_")}
 
     # Use ``getattr(..., None) is not None`` rather than ``meta.__dict__``

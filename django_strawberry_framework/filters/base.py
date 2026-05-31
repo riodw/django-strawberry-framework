@@ -349,6 +349,19 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
             check), so a real divergent-owner reuse still surfaces a
             ``ConfigurationError`` with both owners named — just not at
             class-creation time.
+
+        Unqualified-string caveat:
+            ``bound_filterset`` is the resolution scope for an UNQUALIFIED
+            string target (``RelatedFilter("ShelfFilter")``) — the
+            ``.filterset`` property resolves the name against
+            ``bound_filterset.__module__``. Because re-bind is a no-op, a
+            single ``RelatedFilter`` INSTANCE shared across two subclasses
+            (defined on a base ``FilterSet`` and inherited) keeps the FIRST
+            subclass's module as that scope, so a second subclass in a
+            different module that meant a same-named-but-different
+            ``ShelfFilter`` would resolve to the first's. Use a class object
+            or an absolute import path for a shared/inherited
+            ``RelatedFilter``, or declare it per subclass.
         """
         if not hasattr(self, "bound_filterset"):
             self.bound_filterset = filterset

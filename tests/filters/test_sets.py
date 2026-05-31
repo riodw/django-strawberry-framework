@@ -857,6 +857,48 @@ def test_apply_sync_filters_against_simple_scalar_input():
 
 
 @pytest.mark.django_db
+def test_permission_checks_run_only_through_apply_entrypoint():
+    """``apply_*`` is the sole permission-aware entry; the bare ``.qs`` path does not gate.
+
+    Permission hooks fire from ``_run_permission_checks``, which
+    ``apply_sync`` / ``apply_async`` invoke up-front (recursing into nested
+    branches). The tree-composition path
+    (``filter_queryset`` -> ``_q_for_branch`` -> ``.qs``) deliberately does
+    NOT re-run permission checks -- it relies on that up-front call. This
+    pins the contract (H-filters-7 of the pre-merge review): bypassing
+    ``apply_*`` by constructing the filterset and reading ``.qs`` directly
+    skips the gate, so ``apply_*`` must remain the only permission-aware
+    entry point. If a future refactor moves filtering off ``apply_*`` this
+    test fails loudly, so permissions are re-wired rather than silently lost.
+    """
+    fired: list[str] = []
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+        def check_name_permission(self, request):
+            fired.append("name")
+
+    Category.objects.create(name="alpha")
+
+    # Through ``apply_sync`` (the legal entry): the gate fires.
+    CategoryFilter.apply_sync({"name": "alpha"}, Category.objects.all(), _make_info())
+    assert fired == ["name"]
+
+    # Bypassing ``apply_*`` (direct construction + ``.qs``): the gate does NOT fire.
+    fired.clear()
+    bare = CategoryFilter(
+        data={"name": "alpha"},
+        queryset=Category.objects.all(),
+        request=HttpRequest(),
+    )
+    list(bare.qs)
+    assert fired == []
+
+
+@pytest.mark.django_db
 def test_apply_sync_passes_through_empty_filter_input():
     Category.objects.create(name="alpha")
     Category.objects.create(name="beta")

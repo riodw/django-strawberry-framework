@@ -464,6 +464,22 @@ def test_get_filterset_class_supports_unhashable_meta_values():
     assert cls_c is cls_d
 
 
+def test_filter_arguments_factory_rejects_subclassing():
+    """Subclassing is rejected at class-creation time (M-filters-3 / H-filters-3).
+
+    The class-level ``input_object_types`` / ``_type_filterset_registry``
+    caches are shared mutable dicts a subclass would inherit rather than
+    isolate, so subclassing is an unsupported design path; the factory's
+    ``__init_subclass__`` raises ``TypeError`` to enforce it.
+    """
+    with pytest.raises(TypeError) as excinfo:
+
+        class _SubFactory(FilterArgumentsFactory):
+            pass
+
+    assert "does not support subclassing" in str(excinfo.value)
+
+
 # Touch `NumberFilter` import to ensure the import is exercised (used
 # implicitly by django-filter for the integer-PK FK in the
 # `test_filter_arguments_factory_input_shape_matches_runtime_filter_for_non_relay_target`

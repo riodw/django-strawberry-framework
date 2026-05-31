@@ -903,19 +903,24 @@ def clear_filter_input_namespace() -> None:
     # would otherwise force `_bind_filterset_owner` down the multi-owner
     # strict-equality branch on the next finalize even though the
     # caller intended a clean rebuild.
+    # Symmetric with the factory guard above (M-core-4 review): on a broken
+    # import this ``pass``es rather than ``return``s, so this phase never
+    # short-circuits a later cleanup phase added after it. Today it is the
+    # last phase, but the early-return was a latent footgun.
     try:
         from .sets import FilterSet
     except ImportError:
-        return
-    for subclass in _iter_filterset_subclasses(FilterSet):
-        # `delattr` on the subclass so an inherited default (the
-        # `FilterSet` base's `_owner_definition = None`) is restored
-        # rather than masked. Each attribute is removed only when set
-        # directly on the subclass (``in subclass.__dict__``) so a
-        # subclass that never had a binding tolerates the clear.
-        for attr in ("_owner_definition", "_expanded_filters", "_is_expanding_filters"):
-            if attr in subclass.__dict__:
-                delattr(subclass, attr)
+        pass
+    else:
+        for subclass in _iter_filterset_subclasses(FilterSet):
+            # `delattr` on the subclass so an inherited default (the
+            # `FilterSet` base's `_owner_definition = None`) is restored
+            # rather than masked. Each attribute is removed only when set
+            # directly on the subclass (``in subclass.__dict__``) so a
+            # subclass that never had a binding tolerates the clear.
+            for attr in ("_owner_definition", "_expanded_filters", "_is_expanding_filters"):
+                if attr in subclass.__dict__:
+                    delattr(subclass, attr)
 
 
 def _iter_filterset_subclasses(root: type) -> list[type]:

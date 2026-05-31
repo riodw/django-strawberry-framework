@@ -1284,6 +1284,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         visibility (the recursion path crosses through django-filter's
         ``BaseFilterSet`` which we do not own and cannot pass kwargs
         through).
+
+        Perf note (M-filters-6 review, accepted as-is): constructing the
+        sibling ``cls(...)`` per branch triggers django-filter's
+        ``BaseFilterSet.__init__`` deepcopy of ``base_filters``, so cost
+        scales with branches x filters. This is correctness-neutral and
+        bounded by ``_MAX_LOGIC_DEPTH``; not optimized here because doing so
+        means reaching into upstream's per-instance copy semantics. Profile
+        before optimizing if a deeply-nested query ever shows up hot.
         """
         child_qs_by_branch = cls._derive_related_visibility_querysets_sync(child_input, info)
         constrained = cls._apply_related_constraints(child_input, queryset, child_qs_by_branch)

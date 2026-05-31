@@ -313,7 +313,7 @@ class Card(TimeStampedModel):
     def slug(self) -> str:
         """Stable, link-friendly id derived from the unique ``title``.
 
-        Deep links into the dashboard use ``kanban_board.html#<slug>`` so a
+        Deep links into the dashboard use ``KANBAN.html#<slug>`` so a
         reference survives card reordering -- unlike the volatile ``number``.
         Not stored: it is a pure function of ``title`` (which is already unique),
         so there is nothing to keep in sync and no second column to migrate.

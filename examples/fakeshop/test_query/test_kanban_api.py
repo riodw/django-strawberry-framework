@@ -127,7 +127,6 @@ def _seed_board():
         relative_size=size_m,
         planning_state=planned,
     )
-    conn_card.dependencies.add(filters_card)
     reference = models.CardReference.objects.create(
         source_card=conn_card,
         target_card=filters_card,
@@ -620,7 +619,12 @@ def test_filter_cards_by_number_gt():
 
 @pytest.mark.django_db
 def test_filter_cards_by_milestone_key():
-    """Filter by the related ``milestone.key`` (the DONE card has a null milestone)."""
+    """Filter by the related ``milestone.key``.
+
+    Both cards target version ``0.0.8``, whose milestone is ``alpha``; the
+    ``milestone`` field is derived from ``target_version`` on save, so both
+    resolve to ``alpha`` and match.
+    """
     _seed_board()
     _assert_graphql_data(
         """
@@ -630,7 +634,7 @@ def test_filter_cards_by_milestone_key():
           }
         }
         """,
-        {"allCards": [{"title": "DjangoConnectionField"}]},
+        {"allCards": [{"title": "Filtering subsystem"}, {"title": "DjangoConnectionField"}]},
     )
 
 

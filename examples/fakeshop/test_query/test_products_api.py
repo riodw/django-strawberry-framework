@@ -21,6 +21,7 @@ robust across Faker versions.
 """
 
 import importlib
+import json
 import sys
 
 import pytest
@@ -71,12 +72,7 @@ def _post_graphql(query: str, *, client: Client | None = None):
     )
 
 
-def _assert_graphql_data(
-    query: str,
-    expected: dict,
-    *,
-    client: Client | None = None,
-):
+def _assert_graphql_data(query: str, expected: dict, *, client: Client | None = None):
     response = _post_graphql(query, client=client)
     assert response.status_code == 200
     payload = response.json()
@@ -99,7 +95,7 @@ def test_products_categories_filter_by_name_exact_as_staff():
     seed_data(1)
     category = models.Category.objects.order_by("id").first()
     _assert_graphql_data(
-        f'query {{ allCategories(filter: {{ name: {{ exact: "{category.name}" }} }}) {{ name }} }}',
+        f"query {{ allCategories(filter: {{ name: {{ exact: {json.dumps(category.name)} }} }}) {{ name }} }}",
         {"allCategories": [{"name": category.name}]},
         client=_staff_client(),
     )
@@ -111,7 +107,7 @@ def test_products_categories_filter_by_name_denied_for_anonymous():
     seed_data(1)
     category = models.Category.objects.order_by("id").first()
     response = _post_graphql(
-        f'query {{ allCategories(filter: {{ name: {{ exact: "{category.name}" }} }}) {{ name }} }}',
+        f"query {{ allCategories(filter: {{ name: {{ exact: {json.dumps(category.name)} }} }}) {{ name }} }}",
     )
     payload = response.json()
     assert "errors" in payload, payload
@@ -131,7 +127,7 @@ def test_products_categories_name_permission_fires_for_non_exact_lookup():
     seed_data(1)
     category = models.Category.objects.order_by("id").first()
     response = _post_graphql(
-        f'query {{ allCategories(filter: {{ name: {{ iContains: "{category.name[:2]}" }} }}) {{ name }} }}',
+        f"query {{ allCategories(filter: {{ name: {{ iContains: {json.dumps(category.name[:2])} }} }}) {{ name }} }}",
     )
     payload = response.json()
     assert "errors" in payload, payload

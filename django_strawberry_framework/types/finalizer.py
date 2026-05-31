@@ -557,12 +557,14 @@ def _bind_filtersets() -> None:
             # Uniform finalize-time error shape: any failure surfacing from
             # ``get_filters()`` rebinds as ``ConfigurationError`` so the
             # consumer sees one error class for every finalize failure
-            # instead of having to guard for the underlying exception
-            # type.
+            # instead of having to guard for the underlying exception type.
+            # ``repr(exc)`` keeps the underlying error fully in the
+            # consumer-visible message (class + every arg, not just
+            # ``str(exc)``), and ``from exc`` preserves the original
+            # traceback on ``__cause__`` (H-core-1 of the pre-merge review).
             raise ConfigurationError(
                 f"Cannot finalize Django types: filterset "
-                f"{filterset_cls.__qualname__} raised during expansion. "
-                f"{exc.__class__.__name__}: {exc}",
+                f"{filterset_cls.__qualname__} raised during expansion. {exc!r}",
             ) from exc
 
     # Subpass 3: orphan validation against the helper-tracked set. Runs

@@ -1,4 +1,4 @@
-"""Build the single-file kanban dashboard from the fakeshop GraphQL endpoint."""
+"""Build ``KANBAN.html`` from the fakeshop GraphQL endpoint."""
 
 from __future__ import annotations
 
@@ -12,13 +12,13 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"
-DEFAULT_HTML_PATH = FAKESHOP_ROOT / "kanban_board.html"
+DEFAULT_HTML_PATH = REPO_ROOT / "KANBAN.html"
 DATA_BLOCK_RE = re.compile(
     r"(?s)<!-- KANBAN_DATA_START -->.*?<!-- KANBAN_DATA_END -->",
 )
 
 STATIC_KANBAN_QUERY = """
-query StaticKanbanCards {
+query StaticKanbanDashboard {
   allCards {
     id
     uuid {
@@ -114,6 +114,76 @@ query StaticKanbanCards {
       createdDate
       updatedDate
     }
+  }
+  allKanbanBoardDocs {
+    id
+    uuid {
+      id
+    }
+    key
+    title
+    order
+    body
+    createdDate
+    updatedDate
+    kind {
+      ...BoardDocKindFields
+    }
+    cardReferences {
+      id
+      uuid {
+        id
+      }
+      rawText
+      order
+      createdDate
+      updatedDate
+      card {
+        ...CardLinkFields
+      }
+    }
+  }
+  allKanbanStatuses {
+    ...StatusFields
+  }
+  allKanbanMilestones {
+    ...MilestoneFields
+  }
+  allKanbanTargetVersions {
+    ...TargetVersionFields
+  }
+  allKanbanPriorities {
+    ...PriorityFields
+  }
+  allKanbanSeverities {
+    ...SeverityFields
+  }
+  allKanbanRelativeSizes {
+    ...RelativeSizeFields
+  }
+  allKanbanPlanningStates {
+    ...PlanningStateFields
+  }
+  allKanbanUpstreams {
+    ...UpstreamFields
+  }
+  allKanbanParityLevels {
+    ...ParityLevelFields
+  }
+  allKanbanSections {
+    ...SectionFields
+  }
+  allKanbanReferenceKinds {
+    ...CardReferenceKindFields
+  }
+  allKanbanReferenceSources {
+    ...CardReferenceSourceFields
+  }
+  allKanbanBoardDocKinds {
+    ...BoardDocKindFields
+  }
+  allKanbanLabels {
+    ...LabelFields
   }
 }
 
@@ -269,6 +339,29 @@ fragment CardReferenceSourceFields on CardReferenceSourceType {
   updatedDate
 }
 
+fragment BoardDocKindFields on BoardDocKindType {
+  id
+  uuid {
+    id
+  }
+  key
+  label
+  order
+  createdDate
+  updatedDate
+}
+
+fragment LabelFields on LabelType {
+  id
+  uuid {
+    id
+  }
+  key
+  color
+  createdDate
+  updatedDate
+}
+
 fragment CardLinkFields on CardType {
   id
   uuid {
@@ -352,7 +445,7 @@ def parse_args() -> argparse.Namespace:
         "--html",
         type=Path,
         default=DEFAULT_HTML_PATH,
-        help="HTML file to update. Defaults to examples/fakeshop/kanban_board.html.",
+        help="HTML file to update. Defaults to the repository-root KANBAN.html.",
     )
     return parser.parse_args()
 
@@ -374,8 +467,26 @@ def configure_django() -> None:
     django.setup()
 
 
-def fetch_cards() -> list[dict[str, Any]]:
-    """Fetch all kanban cards through the real ``/graphql/`` route."""
+LOOKUP_FIELDS = {
+    "allKanbanStatuses": "statuses",
+    "allKanbanMilestones": "milestones",
+    "allKanbanTargetVersions": "targetVersions",
+    "allKanbanPriorities": "priorities",
+    "allKanbanSeverities": "severities",
+    "allKanbanRelativeSizes": "relativeSizes",
+    "allKanbanPlanningStates": "planningStates",
+    "allKanbanUpstreams": "upstreams",
+    "allKanbanParityLevels": "parityLevels",
+    "allKanbanSections": "sections",
+    "allKanbanReferenceKinds": "referenceKinds",
+    "allKanbanReferenceSources": "referenceSources",
+    "allKanbanBoardDocKinds": "boardDocKinds",
+    "allKanbanLabels": "labels",
+}
+
+
+def fetch_dashboard_data() -> dict[str, Any]:
+    """Fetch the kanban dashboard payload through the real ``/graphql/`` route."""
     from django.test import Client
 
     response = Client(HTTP_HOST="localhost").post(
@@ -391,29 +502,46 @@ def fetch_cards() -> list[dict[str, Any]]:
     if payload.get("errors"):
         raise RuntimeError(json.dumps(payload["errors"], indent=2, sort_keys=True))
 
-    cards = (payload.get("data") or {}).get("allCards")
+    data = payload.get("data") or {}
+    cards = data.get("allCards")
     if not isinstance(cards, list):
         raise TypeError("GraphQL response did not include data.allCards as a list.")
-    return cards
+
+    board_docs = data.get("allKanbanBoardDocs")
+    if not isinstance(board_docs, list):
+        raise TypeError("GraphQL response did not include data.allKanbanBoardDocs as a list.")
+
+    lookups = {}
+    for graphql_name, payload_name in LOOKUP_FIELDS.items():
+        values = data.get(graphql_name)
+        if not isinstance(values, list):
+            raise TypeError(f"GraphQL response did not include data.{graphql_name} as a list.")
+        lookups[payload_name] = values
+
+    return {"cards": cards, "boardDocs": board_docs, "lookups": lookups}
 
 
-def render_data_block(cards: list[dict[str, Any]]) -> str:
+def render_data_block(dashboard_data: dict[str, Any]) -> str:
     """Render the replaceable dashboard data block."""
-    encoded = json.dumps(cards, ensure_ascii=True, separators=(",", ":"))
+    encoded = json.dumps(dashboard_data, ensure_ascii=True, separators=(",", ":"))
     encoded = encoded.replace("</", "<\\/")
     return (
         "<!-- KANBAN_DATA_START -->\n"
         "<script>\n"
-        f"window.KANBAN_CARDS = {encoded};\n"
+        f"window.KANBAN_DATA = {encoded};\n"
+        "window.KANBAN_CARDS = window.KANBAN_DATA.cards;\n"
         "</script>\n"
         "<!-- KANBAN_DATA_END -->"
     )
 
 
-def embed_cards(html_path: Path, cards: list[dict[str, Any]]) -> None:
+def embed_dashboard_data(html_path: Path, dashboard_data: dict[str, Any]) -> None:
     """Replace the marked data block in ``html_path``."""
     html = html_path.read_text(encoding="utf-8")
-    updated, replacements = DATA_BLOCK_RE.subn(lambda _match: render_data_block(cards), html)
+    updated, replacements = DATA_BLOCK_RE.subn(
+        lambda _match: render_data_block(dashboard_data),
+        html,
+    )
     if replacements != 1:
         raise RuntimeError(f"Expected exactly one kanban data block in {html_path}.")
     html_path.write_text(updated, encoding="utf-8")
@@ -423,9 +551,14 @@ def main() -> None:
     """Build the dashboard."""
     args = parse_args()
     configure_django()
-    cards = fetch_cards()
-    embed_cards(args.html, cards)
-    print(f"Wrote {len(cards)} cards to {args.html}")
+    dashboard_data = fetch_dashboard_data()
+    embed_dashboard_data(args.html, dashboard_data)
+    print(
+        "Wrote "
+        f"{len(dashboard_data['cards'])} cards, "
+        f"{len(dashboard_data['boardDocs'])} board docs, and "
+        f"{len(dashboard_data['lookups'])} lookup arrays to {args.html}",
+    )
 
 
 if __name__ == "__main__":

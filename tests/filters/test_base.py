@@ -207,10 +207,9 @@ def test_global_id_filter_passes_through_none():
     assert isinstance(result, _Qs)
 
 
-def test_global_id_multiple_choice_filter_decodes_every_element():
+def test_global_id_multiple_choice_filter_decodes_every_element(monkeypatch):
     """Decoded `node_id`s reach the underlying `MultipleChoiceFilter.filter`."""
     captured: list[list[str]] = []
-    real_super_filter = GlobalIDMultipleChoiceFilter.__mro__[1].filter
 
     def spy(self, qs, value):
         captured.append(list(value))
@@ -218,12 +217,13 @@ def test_global_id_multiple_choice_filter_decodes_every_element():
 
     encoded_one = relay.to_base64("BookType", "1")
     encoded_two = relay.to_base64("BookType", "2")
-    GlobalIDMultipleChoiceFilter.__mro__[1].filter = spy
-    try:
-        f = GlobalIDMultipleChoiceFilter(field_name="id")
-        f.filter(object(), [encoded_one, encoded_two])
-    finally:
-        GlobalIDMultipleChoiceFilter.__mro__[1].filter = real_super_filter
+    # Spy on the upstream ``MultipleChoiceFilter.filter`` via the bound
+    # parent class. ``monkeypatch`` auto-restores on teardown (xdist-safe
+    # and exception-safe) instead of the prior manual try/finally that
+    # wrote through to the upstream class.
+    monkeypatch.setattr(GlobalIDMultipleChoiceFilter.__mro__[1], "filter", spy)
+    f = GlobalIDMultipleChoiceFilter(field_name="id")
+    f.filter(object(), [encoded_one, encoded_two])
     assert captured == [["1", "2"]]
 
 

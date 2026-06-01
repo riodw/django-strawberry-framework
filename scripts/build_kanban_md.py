@@ -12,6 +12,7 @@ from build_kanban_html import configure_django, fetch_dashboard_data
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"
+KANBAN_PAGE_URL = "https://riodw.github.io/django-strawberry-framework/"
 CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
 CARD_ID_RE = re.compile(
     r"\b(?:TODO|WIP|BLOCKED|DONE)(?:-[A-Z]+)?-\d{3}-\d+\.\d+\.\d+\b",
@@ -47,6 +48,11 @@ def card_key(card: dict[str, Any]) -> str:
     if status != "DONE" and milestone:
         status_parts.append(milestone["key"].upper())
     return f"{'-'.join(status_parts)}-{int(card['number']):03d}-{card['targetVersion']['number']}"
+
+
+def card_url(card: dict[str, Any]) -> str:
+    """Return the published dashboard URL for ``card``."""
+    return f"{KANBAN_PAGE_URL}#{card['slug']}"
 
 
 def card_column_key(card: dict[str, Any]) -> str:
@@ -192,7 +198,7 @@ def render_card(card: dict[str, Any]) -> list[str]:
     slug = card["slug"]
     lines = [
         f'<a id="{slug}"></a>',
-        f"### [{card_key(card)} — {card['title']}](KANBAN.html#{slug})",
+        f"### [{card_key(card)} — {card['title']}]({card_url(card)})",
         "",
     ]
 

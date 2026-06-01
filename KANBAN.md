@@ -97,7 +97,7 @@ demoted to a bullet under its label.
 The only active WIP card is `WIP-ALPHA-024-0.0.8 — Ordering subsystem`, and it is in the `0.0.8` patch. The Filtering subsystem shipped as `DONE-023-0.0.8`; blocked cards stay in their normal planning column with a derived `blocked` badge, and future cards stay outside the in-progress column.
 
 <a id="ordering_subsystem"></a>
-### [WIP-ALPHA-024-0.0.8 — Ordering subsystem](KANBAN.html#ordering_subsystem)
+### [WIP-ALPHA-024-0.0.8 — Ordering subsystem](https://riodw.github.io/django-strawberry-framework/#ordering_subsystem)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -165,7 +165,7 @@ planned
 Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="djangotype_consumer_dx_cleanup_pass"></a>
-### [TODO-ALPHA-025-0.0.9 — `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)
+### [TODO-ALPHA-025-0.0.9 — `DjangoType` consumer-DX cleanup pass](https://riodw.github.io/django-strawberry-framework/#djangotype_consumer_dx_cleanup_pass)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -216,7 +216,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Dependency via Dependencies section: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `TODO-ALPHA-026-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `TODO-ALPHA-026-0.0.9` — `DjangoConnectionField`
 
 <a id="djangoconnectionfield"></a>
-### [TODO-ALPHA-026-0.0.9 — `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)
+### [TODO-ALPHA-026-0.0.9 — `DjangoConnectionField`](https://riodw.github.io/django-strawberry-framework/#djangoconnectionfield)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -277,7 +277,7 @@ planned
 - Related via Card item: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-040-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-040-0.1.1` — `FieldSet`
 
 <a id="full_relay_story_node_connection_root_validation"></a>
-### [TODO-ALPHA-027-0.0.9 — Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
+### [TODO-ALPHA-027-0.0.9 — Full Relay story (Node + Connection + Root + validation)](https://riodw.github.io/django-strawberry-framework/#full_relay_story_node_connection_root_validation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -377,7 +377,7 @@ blocked on `TODO-ALPHA-026-0.0.9` (`DjangoConnectionField`). When the connection
 - Related via Card item: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-ALPHA-026-0.0.9`) -> `TODO-ALPHA-026-0.0.9` — `DjangoConnectionField`
 
 <a id="connection_aware_optimizer_planning"></a>
-### [TODO-ALPHA-028-0.0.9 — Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
+### [TODO-ALPHA-028-0.0.9 — Connection-aware optimizer planning](https://riodw.github.io/django-strawberry-framework/#connection_aware_optimizer_planning)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -423,7 +423,7 @@ planned
 - Related via Card item: gated on `TODO-ALPHA-026-0.0.9` / Relay decisions. -> `TODO-ALPHA-026-0.0.9` — `DjangoConnectionField`
 
 <a id="permissions_subsystem"></a>
-### [TODO-ALPHA-029-0.0.10 — Permissions subsystem](KANBAN.html#permissions_subsystem)
+### [TODO-ALPHA-029-0.0.10 — Permissions subsystem](https://riodw.github.io/django-strawberry-framework/#permissions_subsystem)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -511,7 +511,7 @@ planned
 - Dependency via Dependencies section: future `DjangoConnectionField` -> `TODO-ALPHA-026-0.0.9` — `DjangoConnectionField`
 
 <a id="mutations_auto_generated_input_types"></a>
-### [TODO-ALPHA-030-0.0.11 — Mutations + auto-generated Input types](KANBAN.html#mutations_auto_generated_input_types)
+### [TODO-ALPHA-030-0.0.11 — Mutations + auto-generated Input types](https://riodw.github.io/django-strawberry-framework/#mutations_auto_generated_input_types)
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -576,7 +576,7 @@ needs spec
 - Related via Card item: `DONE-023-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 031 / 032 / 033. -> `DONE-023-0.0.8` — Filtering subsystem
 
 <a id="upload_scalar_and_file_image_field_mapping"></a>
-### [TODO-ALPHA-031-0.0.11 — Upload scalar and file / image field mapping](KANBAN.html#upload_scalar_and_file_image_field_mapping)
+### [TODO-ALPHA-031-0.0.11 — Upload scalar and file / image field mapping](https://riodw.github.io/django-strawberry-framework/#upload_scalar_and_file_image_field_mapping)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -622,7 +622,7 @@ planned
 - Related via Card item: pairs with `TODO-ALPHA-030-0.0.11` for the write side. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 
 <a id="form_based_mutations_django_forms_modelforms"></a>
-### [TODO-ALPHA-032-0.0.11 — Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
+### [TODO-ALPHA-032-0.0.11 — Form-based mutations (Django Forms / ModelForms)](https://riodw.github.io/django-strawberry-framework/#form_based_mutations_django_forms_modelforms)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -682,7 +682,7 @@ needs spec
 - Related via Card item: Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `TODO-ALPHA-030-0.0.11`. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 
 <a id="drf_serializer_mutations_serializermutation"></a>
-### [TODO-ALPHA-033-0.0.11 — DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
+### [TODO-ALPHA-033-0.0.11 — DRF serializer mutations (`SerializerMutation`)](https://riodw.github.io/django-strawberry-framework/#drf_serializer_mutations_serializermutation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -742,7 +742,7 @@ needs spec
 - Related via Card item: Validation errors surface through the shared `errors: list[FieldError]` envelope from `TODO-ALPHA-030-0.0.11`, populated from `serializer.errors`. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 
 <a id="auth_mutations_login_logout_register"></a>
-### [TODO-ALPHA-034-0.0.11 — Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
+### [TODO-ALPHA-034-0.0.11 — Auth mutations (login / logout / register)](https://riodw.github.io/django-strawberry-framework/#auth_mutations_login_logout_register)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -780,7 +780,7 @@ planned
 - Related via Card item: depends on `TODO-ALPHA-030-0.0.11`. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 
 <a id="channels_asgi_router_migration_aid"></a>
-### [TODO-ALPHA-035-0.0.12 — Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
+### [TODO-ALPHA-035-0.0.12 — Channels ASGI router (migration aid)](https://riodw.github.io/django-strawberry-framework/#channels_asgi_router_migration_aid)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -826,7 +826,7 @@ planned
 - Related via Card item: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-047-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-047-0.1.6` — Migration and adoption guides
 
 <a id="debug_toolbar_middleware"></a>
-### [TODO-ALPHA-036-0.0.12 — Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
+### [TODO-ALPHA-036-0.0.12 — Debug-toolbar middleware](https://riodw.github.io/django-strawberry-framework/#debug_toolbar_middleware)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -873,7 +873,7 @@ planned
 - subclass django-debug-toolbar's middleware with two injection paths (GraphiQL HTML + `/graphql/` JSON), a template asset, introspection-skip behavior, and a soft dependency. Single module + tests.
 
 <a id="test_client_helper"></a>
-### [TODO-ALPHA-037-0.0.12 — Test client helper](KANBAN.html#test_client_helper)
+### [TODO-ALPHA-037-0.0.12 — Test client helper](https://riodw.github.io/django-strawberry-framework/#test_client_helper)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -937,7 +937,7 @@ planned
 - Related via Card item: **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `TODO-ALPHA-031-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls. -> `TODO-ALPHA-031-0.0.11` — Upload scalar and file / image field mapping
 
 <a id="response_extensions_debug_middleware"></a>
-### [TODO-ALPHA-038-0.0.12 — Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
+### [TODO-ALPHA-038-0.0.12 — Response-extensions debug middleware](https://riodw.github.io/django-strawberry-framework/#response_extensions_debug_middleware)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
@@ -1011,7 +1011,7 @@ planned
 Cards that complete the django-graphene-filters Layer-3 richness on top of parity (`fields_class`, `aggregate_class`, `search_fields`, plus pre-stable cleanup). Each card targets its own `0.1.x` patch within the road to **1.0.0**. The final card in this column is the `1.0.0` release itself (API freeze, cleanup, verification, beta → stable cut-over). Cards in NNN order = planned ship order.
 
 <a id="beta_release_cleanup_verification_alpha_beta"></a>
-### [TODO-BETA-039-0.1.0 — Beta release (cleanup, verification, alpha → beta)](KANBAN.html#beta_release_cleanup_verification_alpha_beta)
+### [TODO-BETA-039-0.1.0 — Beta release (cleanup, verification, alpha → beta)](https://riodw.github.io/django-strawberry-framework/#beta_release_cleanup_verification_alpha_beta)
 
 - Priority: High
 - Severity: Major
@@ -1057,7 +1057,7 @@ planned
 - release / verification card, no new subsystem: full `(Python, Django, Strawberry)` matrix pass, 100% coverage, version bump to `0.1.0`, CHANGELOG promotion, doc status cross-check, parity audit, tag + publish.
 
 <a id="fieldset"></a>
-### [TODO-BETA-040-0.1.1 — `FieldSet`](KANBAN.html#fieldset)
+### [TODO-BETA-040-0.1.1 — `FieldSet`](https://riodw.github.io/django-strawberry-framework/#fieldset)
 
 - Priority: High
 - Severity: Medium
@@ -1092,7 +1092,7 @@ needs spec or implementation slice
 - the smallest Layer-3 subsystem: `fieldset.py` + `docs/spec-fieldset.md` + tests; defines field-selection semantics the connection field consumes. Meta-driven.
 
 <a id="metasearch_fields_support"></a>
-### [TODO-BETA-041-0.1.2 — `Meta.search_fields` support](KANBAN.html#metasearch_fields_support)
+### [TODO-BETA-041-0.1.2 — `Meta.search_fields` support](https://riodw.github.io/django-strawberry-framework/#metasearch_fields_support)
 
 - Priority: High
 - Severity: Medium
@@ -1151,7 +1151,7 @@ planned; gated on `DONE-023-0.0.8` (Filtering) and `TODO-ALPHA-026-0.0.9` (Djang
 - Related via Card item: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-023-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-023-0.0.8` — Filtering subsystem
 
 <a id="aggregation_subsystem"></a>
-### [TODO-BETA-042-0.1.3 — Aggregation subsystem](KANBAN.html#aggregation_subsystem)
+### [TODO-BETA-042-0.1.3 — Aggregation subsystem](https://riodw.github.io/django-strawberry-framework/#aggregation_subsystem)
 
 - Priority: Medium-high
 - Severity: Major
@@ -1195,7 +1195,7 @@ planned
 - Related via Card item: full subsystem, parallel to Ordering: reuses `DONE-023-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-aggregates.md` + tests. -> `DONE-023-0.0.8` — Filtering subsystem
 
 <a id="layer_3_meta_key_promotion"></a>
-### [TODO-BETA-043-0.1.3 — Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
+### [TODO-BETA-043-0.1.3 — Layer 3 Meta key promotion](https://riodw.github.io/django-strawberry-framework/#layer_3_meta_key_promotion)
 
 - Priority: Low
 - Severity: Low
@@ -1215,7 +1215,7 @@ planned
 - mechanical bookkeeping: move keys from `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` as each subsystem lands end-to-end. The real work lives in the subsystem cards, not here.
 
 <a id="stable_choice_enum_naming_override"></a>
-### [TODO-BETA-044-0.1.4 — Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
+### [TODO-BETA-044-0.1.4 — Stable choice enum naming override](https://riodw.github.io/django-strawberry-framework/#stable_choice_enum_naming_override)
 
 - Priority: Low-medium
 - Severity: Medium
@@ -1252,7 +1252,7 @@ planned
 - Preserve enum reuse by `(model, field_name)` while making the published schema name explicit when consumers need it.
 
 <a id="fakeshop_graphql_schema_activation"></a>
-### [TODO-BETA-045-0.1.5 — Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
+### [TODO-BETA-045-0.1.5 — Fakeshop GraphQL schema activation](https://riodw.github.io/django-strawberry-framework/#fakeshop_graphql_schema_activation)
 
 - Priority: Medium
 - Severity: Medium
@@ -1289,7 +1289,7 @@ blocked on `TODO-ALPHA-027-0.0.9` (Relay decisions) and `TODO-BETA-043-0.1.3` (L
 - Blocked by via Planning note: blocked on `TODO-ALPHA-027-0.0.9` (Relay decisions) and `TODO-BETA-043-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-043-0.1.3` — Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
-### [TODO-BETA-046-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
+### [TODO-BETA-046-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests](https://riodw.github.io/django-strawberry-framework/#product_catalog_layer_3_http_graphql_tests)
 
 - Priority: Medium
 - Severity: Medium
@@ -1307,7 +1307,7 @@ blocked on `TODO-ALPHA-027-0.0.9` (Relay decisions) and `TODO-BETA-043-0.1.3` (L
 - bounded test suite: live `/graphql/` acceptance tests for the activated product-catalog schema, reusing the library app's placement + schema-reload pattern.
 
 <a id="migration_and_adoption_guides"></a>
-### [TODO-BETA-047-0.1.6 — Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
+### [TODO-BETA-047-0.1.6 — Migration and adoption guides](https://riodw.github.io/django-strawberry-framework/#migration_and_adoption_guides)
 
 - Priority: Medium
 - Severity: Medium
@@ -1342,7 +1342,7 @@ planned
 - Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
 
 <a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
-### [TODO-BETA-048-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
+### [TODO-BETA-048-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)](https://riodw.github.io/django-strawberry-framework/#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
 - Severity: Medium
@@ -1385,7 +1385,7 @@ planned
 - Related via Card item: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-023-0.0.8`). -> `DONE-023-0.0.8` — Filtering subsystem
 
 <a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
-### [TODO-STABLE-049-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
+### [TODO-STABLE-049-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)](https://riodw.github.io/django-strawberry-framework/#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
 - Severity: Major
@@ -1438,7 +1438,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 ## Done
 
 <a id="filtering_subsystem"></a>
-### [DONE-023-0.0.8 — Filtering subsystem](KANBAN.html#filtering_subsystem)
+### [DONE-023-0.0.8 — Filtering subsystem](https://riodw.github.io/django-strawberry-framework/#filtering_subsystem)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1458,7 +1458,7 @@ shipped
 - the milestone anchor: six-layer lazy-resolution filtering pipeline, `FilterSet` / `RelatedFilter` / `Meta.filterset_class`, parity-floor filter primitives, finalizer phase-2.5 wiring, 14 live HTTP tests.
 
 <a id="scalar_conversion_end_to_end_coverage_in_the_fakeshop_example"></a>
-### [DONE-022-0.0.7 — Scalar conversion end-to-end coverage in the fakeshop example](KANBAN.html#scalar_conversion_end_to_end_coverage_in_the_fakeshop_example)
+### [DONE-022-0.0.7 — Scalar conversion end-to-end coverage in the fakeshop example](https://riodw.github.io/django-strawberry-framework/#scalar_conversion_end_to_end_coverage_in_the_fakeshop_example)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1489,7 +1489,7 @@ shipped
 - Self-FK `parent` / `children` traversal
 
 <a id="warning_free_scalar_registration_via_strawberryconfigscalar_map"></a>
-### [DONE-021-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`](KANBAN.html#warning_free_scalar_registration_via_strawberryconfigscalar_map)
+### [DONE-021-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`](https://riodw.github.io/django-strawberry-framework/#warning_free_scalar_registration_via_strawberryconfigscalar_map)
 
 - Priority: Medium
 - Severity: Medium
@@ -1508,7 +1508,7 @@ shipped
 - `strawberry_config()` factory registering `BigInt` via `scalar_map` and removing the deprecation-suppression block; a documented breaking change in alpha.
 
 <a id="django_trac_37064_hardening_safe_wrap_connection_method"></a>
-### [DONE-020-0.0.7 — Django Trac #37064 hardening + `safe_wrap_connection_method`](KANBAN.html#django_trac_37064_hardening_safe_wrap_connection_method)
+### [DONE-020-0.0.7 — Django Trac #37064 hardening + `safe_wrap_connection_method`](https://riodw.github.io/django-strawberry-framework/#django_trac_37064_hardening_safe_wrap_connection_method)
 
 - Priority: Low
 - Severity: Low
@@ -1526,7 +1526,7 @@ shipped
 - two-half defense for Trac #37064: a package-level unwrap patch (auto-applied at app-load) plus the cooperative `safe_wrap_connection_method` helper + tests.
 
 <a id="multi_database_cooperation_contract"></a>
-### [DONE-019-0.0.7 — Multi-database cooperation contract](KANBAN.html#multi_database_cooperation_contract)
+### [DONE-019-0.0.7 — Multi-database cooperation contract](https://riodw.github.io/django-strawberry-framework/#multi_database_cooperation_contract)
 
 - Priority: Low
 - Severity: Low
@@ -1545,7 +1545,7 @@ shipped
 - pin the multi-DB cooperation contract (router-aware FK-id stubs, `.using()` preservation, `Prefetch` `_db` round-trip) + tests; zero production-code change.
 
 <a id="schema_export_management_command"></a>
-### [DONE-018-0.0.7 — Schema export management command](KANBAN.html#schema_export_management_command)
+### [DONE-018-0.0.7 — Schema export management command](https://riodw.github.io/django-strawberry-framework/#schema_export_management_command)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -1565,7 +1565,7 @@ shipped
 - one management command (positional `schema`, `--path`, SDL via `print_schema`, `CommandError` paths) + tests.
 
 <a id="appspy_and_django_app_config"></a>
-### [DONE-017-0.0.7 — `apps.py` and Django app config](KANBAN.html#appspy_and_django_app_config)
+### [DONE-017-0.0.7 — `apps.py` and Django app config](https://riodw.github.io/django-strawberry-framework/#appspy_and_django_app_config)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1585,7 +1585,7 @@ shipped
 - tiny `AppConfig` (two class attributes, no `ready()` body in 0.0.7) + tests.
 
 <a id="djangolistfield_non_relay_list"></a>
-### [DONE-016-0.0.7 — `DjangoListField` (non-Relay list)](KANBAN.html#djangolistfield_non_relay_list)
+### [DONE-016-0.0.7 — `DjangoListField` (non-Relay list)](https://riodw.github.io/django-strawberry-framework/#djangolistfield_non_relay_list)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -1605,7 +1605,7 @@ shipped
 - `DjangoListField` factory: default + consumer resolver, `Manager → QuerySet` coercion, sync/async `get_queryset`, outer-list nullability, root-gated optimizer cooperation.
 
 <a id="consumer_override_semantics_scalar_fields"></a>
-### [DONE-015-0.0.6 — Consumer override semantics (scalar fields)](KANBAN.html#consumer_override_semantics_scalar_fields)
+### [DONE-015-0.0.6 — Consumer override semantics (scalar fields)](https://riodw.github.io/django-strawberry-framework/#consumer_override_semantics_scalar_fields)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1636,7 +1636,7 @@ shipped
 - Type-annotation overrides are the consumer's responsibility for runtime
 
 <a id="multiple_djangotypes_per_model_with_metaprimary"></a>
-### [DONE-014-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`](KANBAN.html#multiple_djangotypes_per_model_with_metaprimary)
+### [DONE-014-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`](https://riodw.github.io/django-strawberry-framework/#multiple_djangotypes_per_model_with_metaprimary)
 
 - Priority: Medium
 - Severity: Medium
@@ -1671,7 +1671,7 @@ shipped
 - Already-shipped consumer relation overrides (direct annotation
 
 <a id="deferred_scalar_conversions"></a>
-### [DONE-013-0.0.6 — Deferred scalar conversions](KANBAN.html#deferred_scalar_conversions)
+### [DONE-013-0.0.6 — Deferred scalar conversions](https://riodw.github.io/django-strawberry-framework/#deferred_scalar_conversions)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1709,7 +1709,7 @@ shipped
 - Related via Card item: The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `DONE-021-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor. -> `DONE-021-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map`
 
 <a id="fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement"></a>
-### [DONE-012-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement](KANBAN.html#fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement)
+### [DONE-012-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement](https://riodw.github.io/django-strawberry-framework/#fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement)
 
 - Priority: Medium
 - Severity: Medium
@@ -1756,7 +1756,7 @@ shipped
 - Internal refactor only; no `Meta` key changes, no public surface changes, no consumer-visible behavior changes. Existing tests pass without modification.
 
 <a id="005_relay_interfaces_and_node_foundation"></a>
-### [DONE-011-0.0.5 — 0.0.5 Relay interfaces and Node foundation](KANBAN.html#005_relay_interfaces_and_node_foundation)
+### [DONE-011-0.0.5 — 0.0.5 Relay interfaces and Node foundation](https://riodw.github.io/django-strawberry-framework/#005_relay_interfaces_and_node_foundation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1806,7 +1806,7 @@ shipped
 - `Meta.interfaces` is the first `0.0.4`-reserved `DjangoTypeDefinition` slot that ships end-to-end through finalizer phase 2.5; subsequent Layer 3 subsystems plug into the same architectural seam.
 
 <a id="move_test_fixture_out_of_example_settings"></a>
-### [DONE-010-0.0.4 — Move test fixture out of example settings](KANBAN.html#move_test_fixture_out_of_example_settings)
+### [DONE-010-0.0.4 — Move test fixture out of example settings](https://riodw.github.io/django-strawberry-framework/#move_test_fixture_out_of_example_settings)
 
 - Priority: Low
 - Severity: Low
@@ -1835,7 +1835,7 @@ shipped
 - `docs/TREE.md`
 
 <a id="real_m2m_coverage"></a>
-### [DONE-009-0.0.4 — Real M2M coverage](KANBAN.html#real_m2m_coverage)
+### [DONE-009-0.0.4 — Real M2M coverage](https://riodw.github.io/django-strawberry-framework/#real_m2m_coverage)
 
 - Priority: Medium
 - Severity: Low
@@ -1862,7 +1862,7 @@ shipped
 - `tests/optimizer/test_definition_order.py`
 
 <a id="004_version_and_release_alignment"></a>
-### [DONE-008-0.0.4 — 0.0.4 version and release alignment](KANBAN.html#004_version_and_release_alignment)
+### [DONE-008-0.0.4 — 0.0.4 version and release alignment](https://riodw.github.io/django-strawberry-framework/#004_version_and_release_alignment)
 
 - Priority: Low
 - Severity: Low
@@ -1890,7 +1890,7 @@ shipped
 - `CHANGELOG.md`
 
 <a id="stale_placeholder_cleanup"></a>
-### [DONE-007-0.0.4 — Stale placeholder cleanup](KANBAN.html#stale_placeholder_cleanup)
+### [DONE-007-0.0.4 — Stale placeholder cleanup](https://riodw.github.io/django-strawberry-framework/#stale_placeholder_cleanup)
 
 - Priority: Low
 - Severity: Low
@@ -1921,7 +1921,7 @@ shipped
 - Related via Card item: Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-015-0.0.6`. -> `DONE-015-0.0.6` — Consumer override semantics (scalar fields)
 
 <a id="004_foundation_slice_definition_order_independence"></a>
-### [DONE-006-0.0.4 — 0.0.4 foundation slice (definition-order independence)](KANBAN.html#004_foundation_slice_definition_order_independence)
+### [DONE-006-0.0.4 — 0.0.4 foundation slice (definition-order independence)](https://riodw.github.io/django-strawberry-framework/#004_foundation_slice_definition_order_independence)
 
 - Priority: High
 - Severity: Major
@@ -1973,7 +1973,7 @@ shipped
 - The previous foundation-slice in-progress cards have been retired; this card is their successor in Done.
 
 <a id="004_onboarding_docs_and_spec_consolidation"></a>
-### [DONE-005-0.0.4 — 0.0.4 onboarding docs and spec consolidation](KANBAN.html#004_onboarding_docs_and_spec_consolidation)
+### [DONE-005-0.0.4 — 0.0.4 onboarding docs and spec consolidation](https://riodw.github.io/django-strawberry-framework/#004_onboarding_docs_and_spec_consolidation)
 
 - Priority: Medium
 - Severity: Low
@@ -2006,7 +2006,7 @@ shipped
 - Future in-flight design docs use the `docs/spec-<NNN>-<topic>-<0_0_X>.md` convention (NNN matches the KANBAN card number; see `docs/builder/BUILD.md` "Spec filename pattern"), then get folded into durable docs when shipped.
 
 <a id="documentationstatus_positioning_for_shipped_layer_2"></a>
-### [DONE-004-0.0.3 — Documentation/status positioning for shipped Layer 2](KANBAN.html#documentationstatus_positioning_for_shipped_layer_2)
+### [DONE-004-0.0.3 — Documentation/status positioning for shipped Layer 2](https://riodw.github.io/django-strawberry-framework/#documentationstatus_positioning_for_shipped_layer_2)
 
 - Priority: Medium
 - Severity: Low
@@ -2034,7 +2034,7 @@ shipped
 - User-facing docs avoid internal slice shorthand; maintainer docs can still use it where useful.
 
 <a id="optimizer_beyond_slices_b1_b8"></a>
-### [DONE-003-0.0.3 — Optimizer beyond slices B1-B8](KANBAN.html#optimizer_beyond_slices_b1_b8)
+### [DONE-003-0.0.3 — Optimizer beyond slices B1-B8](https://riodw.github.io/django-strawberry-framework/#optimizer_beyond_slices_b1_b8)
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -2074,7 +2074,7 @@ shipped
 - Fragment-spread directive and multi-operation cache-key bugs have been fixed in source; the old `alpha-review-feedback.md` entries are now historical.
 
 <a id="optimizer_o1_o6_foundation"></a>
-### [DONE-002-0.0.2 — Optimizer O1-O6 foundation](KANBAN.html#optimizer_o1_o6_foundation)
+### [DONE-002-0.0.2 — Optimizer O1-O6 foundation](https://riodw.github.io/django-strawberry-framework/#optimizer_o1_o6_foundation)
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -2110,7 +2110,7 @@ shipped
 - Shipped behavior is consolidated into `docs/GLOSSARY.md`; source/tests are the truth for optimizer behavior.
 
 <a id="djangotype_core_foundation"></a>
-### [DONE-001-0.0.1 — DjangoType core foundation](KANBAN.html#djangotype_core_foundation)
+### [DONE-001-0.0.1 — DjangoType core foundation](https://riodw.github.io/django-strawberry-framework/#djangotype_core_foundation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)

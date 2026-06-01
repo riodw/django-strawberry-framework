@@ -16,7 +16,7 @@ unconditionally. This module is the consumer-facing wrap-time half;
 the patch module is the package-internal unwrap-time half. Both halves
 share the same private ``_DatabaseFailure`` predicate so a future
 Django private-symbol move degrades the helper instead of making the
-public ``django_strawberry_framework.test`` import crash.
+public ``django_strawberry_framework.testing`` import crash.
 """
 
 from collections.abc import Callable
@@ -88,7 +88,7 @@ def safe_wrap_connection_method(
     .. code-block:: python
 
         from django.db import connections
-        from django_strawberry_framework.test import safe_wrap_connection_method
+        from django_strawberry_framework.testing import safe_wrap_connection_method
 
 
         class _MyTest(TransactionTestCase):

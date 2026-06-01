@@ -33,7 +33,7 @@ Symbols re-exported from `django_strawberry_framework`:
 - `auto` — re-export from Strawberry for `auto`-typed field annotations inside this package's import surface.
 - `__version__` — package version string.
 
-Symbols available from the `django_strawberry_framework.test` subpackage (consumer test utilities):
+Symbols available from the `django_strawberry_framework.testing` subpackage (consumer test utilities):
 
 - [`safe_wrap_connection_method`](#safe_wrap_connection_method) — cooperative wrap helper for monkey-patching `connections[alias]` methods without clobbering Django's `_DatabaseFailure` wrapper (the wrap-time half of the [Django Trac #37064 hardening](#django-trac-37064-hardening) defense-in-depth).
 
@@ -912,7 +912,7 @@ Cooperative wrap helper for consumers (or third-party libraries) who need to rep
 
 ```python
 from django.db import connections
-from django_strawberry_framework.test import safe_wrap_connection_method
+from django_strawberry_framework.testing import safe_wrap_connection_method
 
 connection = connections["default"]
 original = connection.cursor

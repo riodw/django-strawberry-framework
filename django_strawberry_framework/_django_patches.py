@@ -81,7 +81,7 @@ package can influence.
 This package does NOT wrap any connection method itself, so it has
 no wrap-time site of its OWN at which to add the debug-toolbar-style
 preventive check. Instead the package ships
-:func:`django_strawberry_framework.test.safe_wrap_connection_method`
+:func:`django_strawberry_framework.testing.safe_wrap_connection_method`
 as a consumer-facing helper: any consumer code path that wraps a
 connection method (typically in a test ``setUp`` or in middleware)
 calls the helper instead of raw ``setattr``, and the helper applies

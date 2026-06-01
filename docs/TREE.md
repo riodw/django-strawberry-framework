@@ -187,7 +187,7 @@ django_graphene_filters/
 
 ## django_strawberry_framework (current on-disk layout)
 
-The shared infrastructure plus model/type, optimizer, and filters subpackages are on disk: `types/`, `optimizer/`, `filters/`, and `utils/`. Every other module shown in the target package layout below — the remaining query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
+The shared infrastructure plus model/type, optimizer, filters, testing, and utility subpackages are on disk: `types/`, `optimizer/`, `filters/`, `testing/`, and `utils/`. Every other module shown in the target package layout below — the remaining query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the full test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
 The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`, `apps.scalars`). `apps.products` is the catalog example (Category / Item / Property / Entry); `apps.library` is the deeper relation example (Branch / Shelf / Book / Patron / Loan, with `Patron.lifetime_fines_cents` as a real-domain `BigIntegerField → BigInt` proof); `apps.scalars` is a test substrate carrying the paired `ScalarSpecimen` (every scalar non-null + self-FK) / `NullableScalarSpecimen` (every scalar nullable + cross-model FK to `ScalarSpecimen` with `on_delete=SET_NULL`) layout that pins every non-trivial converter row in both shapes via live `/graphql/` tests. `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
 
 ```text
@@ -205,6 +205,9 @@ django_strawberry_framework/
 │   └── commands/
 │       ├── __init__.py
 │       └── export_schema.py  # `manage.py export_schema` — print/write GraphQL SDL
+├── testing/                 # consumer testing utilities
+│   ├── __init__.py          # safe_wrap_connection_method re-export
+│   └── _wrap.py             # cooperative connection-method wrapping for Trac #37064
 ├── types/                   # DjangoType subsystem (Layer 2) — shipped
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
@@ -276,7 +279,8 @@ django_strawberry_framework/
 │   ├── __init__.py
 │   ├── base.py              # Order classes
 │   ├── sets.py              # OrderSet
-│   └── factories.py         # GraphQL-arguments factory
+│   ├── factories.py         # GraphQL-arguments factory
+│   └── inputs.py            # TODO(spec-028-orders-0_0_8 Slice 5): flip orders/ to current on-disk layout with mirrored tests/orders tree
 ├── aggregates/              # [beta] Aggregation subsystem (Layer 3)
 │   ├── __init__.py
 │   ├── base.py              # Sum/Count/Avg/Min/Max/GroupBy result types
@@ -307,7 +311,7 @@ django_strawberry_framework/
 ├── middleware/              # [alpha] Django middleware
 │   ├── __init__.py
 │   └── debug_toolbar.py     # django-debug-toolbar SQL-panel capture during /graphql/
-├── test/                    # [alpha] Test utilities for consumers
+├── testing/                 # [alpha] Testing utilities for consumers
 │   ├── __init__.py
 │   └── client.py            # TestClient, AsyncTestClient, GraphQLTestCase
 ├── management/              # Django management commands
@@ -340,6 +344,9 @@ tests/                       # Package-internal tests (current state)
 ├── test_apps.py             # AppConfig (single-file Layer-3 module)
 ├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
 ├── test_registry.py         # model→type registry
+├── testing/                 # mirrors django_strawberry_framework/testing/
+│   ├── __init__.py
+│   └── test_wrap.py         # ← safe_wrap_connection_method consumer helper
 ├── base/                    # FROZEN: only conf and version checks
 │   ├── __init__.py
 │   ├── test_conf.py

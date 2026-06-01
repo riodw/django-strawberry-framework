@@ -378,14 +378,14 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 - Filter / order arguments accepted on Connection fields when the corresponding `*_class` is declared on the type.
 - Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
 - Six schema-validation diagnostics from Goal 6 raise `ConfigurationError` with the documented messages.
-- `django_strawberry_framework.test.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
+- `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
 - The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-049-0.1.5`.
 - 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
 - `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-ALPHA-030-0.0.9`)
 - `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
 - `django_strawberry_framework/types/base.py` — `Meta.connection` / `Meta.relation_shapes` validation
 - `django_strawberry_framework/types/finalizer.py` — auto-upgrade reverse-FK / M2M to Connection
-- `django_strawberry_framework/test/relay.py` (new) — test helpers
+- `django_strawberry_framework/testing/relay.py` (new) — test helpers
 - `tests/test_relay_node_field.py`, `tests/test_relay_connection.py` (new)
 - `examples/fakeshop/test_query/test_library_api.py` — Relay-shape HTTP tests
 - `examples/fakeshop/apps/products/schema.py` — Relay surface activation (lit up at fakeshop activation time)
@@ -926,12 +926,12 @@ planned
 
 #### Definition of done
 
-- [ ] Implement `django_strawberry_framework/test/client.py` exposing `TestClient` / `AsyncTestClient` (per the inheritance shape pinned above) plus a `GraphQLTestMixin` and two concrete `(Mixin, TestCase)` / `(Mixin, TransactionTestCase)` combinations for the unittest crowd.
+- [ ] Implement `django_strawberry_framework/testing/client.py` exposing `TestClient` / `AsyncTestClient` (per the inheritance shape pinned above) plus a `GraphQLTestMixin` and two concrete `(Mixin, TestCase)` / `(Mixin, TransactionTestCase)` combinations for the unittest crowd.
 - [ ] Mixin carries `assertResponseNoErrors` / `assertResponseHasErrors` helpers (or the equivalent named for the chosen `.query()` return type).
 - [ ] Project-wide endpoint settings key (working name `GRAPHQL_TESTING_ENDPOINT`, final name pinned during implementation) under `DJANGO_STRAWBERRY_FRAMEWORK`, with constructor / per-call override.
 - [ ] Multipart file-upload support on `request()` so consumers can drive `Upload`-scalar mutations from the same helper once `TODO-ALPHA-035-0.0.11` ships.
 - [ ] Live HTTP tests under `examples/fakeshop/test_query/` switch to the helper.
-- [ ] Tests under `tests/test/test_client.py`.
+- [ ] Tests under `tests/testing/test_client.py`.
 
 #### Verified in upstream
 
@@ -2361,8 +2361,8 @@ Ref: spec-021 pre-merge review M-filters-3 / H-filters-3.
 [filters]: django_strawberry_framework/filters/
 [plans]: django_strawberry_framework/optimizer/plans.py
 [resolvers]: django_strawberry_framework/types/resolvers.py
-[test-init]: django_strawberry_framework/test/__init__.py
-[wrap]: django_strawberry_framework/test/_wrap.py
+[test-init]: django_strawberry_framework/testing/__init__.py
+[wrap]: django_strawberry_framework/testing/_wrap.py
 
 <!-- tests/ -->
 [test-converters]: tests/types/test_converters.py

@@ -1,4 +1,4 @@
-"""Test utilities for consumers of ``django-strawberry-framework``.
+"""Testing utilities for consumers of ``django-strawberry-framework``.
 
 Currently exports
 -----------------
@@ -23,10 +23,10 @@ Future exports (tracked in ``docs/GLOSSARY.md``; planned for
   bundles the common patterns.
 
 The subpackage exists now so consumers have a stable import path
-(``from django_strawberry_framework.test import …``) regardless of
+(``from django_strawberry_framework.testing import …``) regardless of
 which utility lands first.
 """
 
-from django_strawberry_framework.test._wrap import safe_wrap_connection_method
+from django_strawberry_framework.testing._wrap import safe_wrap_connection_method
 
 __all__ = ["safe_wrap_connection_method"]

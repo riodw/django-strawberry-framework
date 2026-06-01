@@ -1,7 +1,7 @@
-"""Tests for ``django_strawberry_framework.test._wrap``.
+"""Tests for ``django_strawberry_framework.testing._wrap``.
 
 System-under-test:
-:func:`django_strawberry_framework.test.safe_wrap_connection_method` —
+:func:`django_strawberry_framework.testing.safe_wrap_connection_method` —
 the wrap-time half of the package's Django Trac #37064 defense-in-depth
 (the unwrap-time half lives in :mod:`django_strawberry_framework._django_patches`
 and is tested in ``tests/test_django_patches.py``).
@@ -16,7 +16,7 @@ import pytest
 from django.db import connections
 
 from django_strawberry_framework import _django_patches
-from django_strawberry_framework.test import safe_wrap_connection_method
+from django_strawberry_framework.testing import safe_wrap_connection_method
 
 
 def _database_failure(wrapped):

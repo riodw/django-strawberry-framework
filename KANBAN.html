@@ -1202,7 +1202,11 @@ window.KANBAN_CARDS = window.KANBAN_DATA.cards;
             return "backlog";
           },
           columnCards(column) {
-            return this.filteredCards.filter((card) => this.cardColumnKey(card) === column.key);
+            const cards = this.filteredCards.filter((card) => this.cardColumnKey(card) === column.key);
+            if (column.key !== "done") {
+              return cards;
+            }
+            return cards.slice().sort((left, right) => Number(right.number) - Number(left.number));
           },
           isBlockingReference(reference) {
             const key = reference && reference.kind ? reference.kind.key : "";

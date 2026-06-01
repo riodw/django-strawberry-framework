@@ -96,7 +96,8 @@ demoted to a bullet under its label.
 
 The only active WIP card is `WIP-ALPHA-024-0.0.8 — Ordering subsystem`, and it is in the `0.0.8` patch. The Filtering subsystem shipped as `DONE-023-0.0.8`; blocked cards stay in their normal planning column with a derived `blocked` badge, and future cards stay outside the in-progress column.
 
-### WIP-ALPHA-024-0.0.8 — Ordering subsystem
+<a id="ordering_subsystem"></a>
+### [WIP-ALPHA-024-0.0.8 — Ordering subsystem](KANBAN.html#ordering_subsystem)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -163,7 +164,8 @@ planned
 
 Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
-### TODO-ALPHA-025-0.0.9 — `DjangoType` consumer-DX cleanup pass
+<a id="djangotype_consumer_dx_cleanup_pass"></a>
+### [TODO-ALPHA-025-0.0.9 — `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -213,7 +215,8 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 - Dependency via Dependencies section: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `TODO-ALPHA-026-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `TODO-ALPHA-026-0.0.9` — `DjangoConnectionField`
 
-### TODO-ALPHA-026-0.0.9 — `DjangoConnectionField`
+<a id="djangoconnectionfield"></a>
+### [TODO-ALPHA-026-0.0.9 — `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -273,7 +276,8 @@ planned
 - Related via Card item: Connection-aware optimizer planning is its own follow-up slice (`TODO-ALPHA-028-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `TODO-ALPHA-028-0.0.9` — Connection-aware optimizer planning
 - Related via Card item: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-040-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-040-0.1.1` — `FieldSet`
 
-### TODO-ALPHA-027-0.0.9 — Full Relay story (Node + Connection + Root + validation)
+<a id="full_relay_story_node_connection_root_validation"></a>
+### [TODO-ALPHA-027-0.0.9 — Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -372,7 +376,8 @@ blocked on `TODO-ALPHA-026-0.0.9` (`DjangoConnectionField`). When the connection
 - Related via Card item: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-045-0.1.5`. -> `TODO-BETA-045-0.1.5` — Fakeshop GraphQL schema activation
 - Related via Card item: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-ALPHA-026-0.0.9`) -> `TODO-ALPHA-026-0.0.9` — `DjangoConnectionField`
 
-### TODO-ALPHA-028-0.0.9 — Connection-aware optimizer planning
+<a id="connection_aware_optimizer_planning"></a>
+### [TODO-ALPHA-028-0.0.9 — Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -417,7 +422,8 @@ planned
 
 - Related via Card item: gated on `TODO-ALPHA-026-0.0.9` / Relay decisions. -> `TODO-ALPHA-026-0.0.9` — `DjangoConnectionField`
 
-### TODO-ALPHA-029-0.0.10 — Permissions subsystem
+<a id="permissions_subsystem"></a>
+### [TODO-ALPHA-029-0.0.10 — Permissions subsystem](KANBAN.html#permissions_subsystem)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -504,7 +510,8 @@ planned
 
 - Dependency via Dependencies section: future `DjangoConnectionField` -> `TODO-ALPHA-026-0.0.9` — `DjangoConnectionField`
 
-### TODO-ALPHA-030-0.0.11 — Mutations + auto-generated Input types
+<a id="mutations_auto_generated_input_types"></a>
+### [TODO-ALPHA-030-0.0.11 — Mutations + auto-generated Input types](KANBAN.html#mutations_auto_generated_input_types)
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -568,7 +575,8 @@ needs spec
 - Related via Card item: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-031-0.0.11`, `TODO-ALPHA-032-0.0.11`, and `TODO-ALPHA-033-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-033-0.0.11` — DRF serializer mutations (`SerializerMutation`)
 - Related via Card item: `DONE-023-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 031 / 032 / 033. -> `DONE-023-0.0.8` — Filtering subsystem
 
-### TODO-ALPHA-031-0.0.11 — Upload scalar and file / image field mapping
+<a id="upload_scalar_and_file_image_field_mapping"></a>
+### [TODO-ALPHA-031-0.0.11 — Upload scalar and file / image field mapping](KANBAN.html#upload_scalar_and_file_image_field_mapping)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -613,7 +621,8 @@ planned
 - Related via Card item: Mutation input-type generation (`TODO-ALPHA-030-0.0.11`) maps the same fields to Strawberry's `Upload` scalar. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 - Related via Card item: pairs with `TODO-ALPHA-030-0.0.11` for the write side. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 
-### TODO-ALPHA-032-0.0.11 — Form-based mutations (Django Forms / ModelForms)
+<a id="form_based_mutations_django_forms_modelforms"></a>
+### [TODO-ALPHA-032-0.0.11 — Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -672,7 +681,8 @@ needs spec
 - Related via Card item: Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `TODO-ALPHA-030-0.0.11`, populated from `form.errors`. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 - Related via Card item: Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `TODO-ALPHA-030-0.0.11`. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 
-### TODO-ALPHA-033-0.0.11 — DRF serializer mutations (`SerializerMutation`)
+<a id="drf_serializer_mutations_serializermutation"></a>
+### [TODO-ALPHA-033-0.0.11 — DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -731,7 +741,8 @@ needs spec
 - Dependency via Dependencies section: `TODO-ALPHA-030-0.0.11` — general mutation infrastructure (including the shared `errors` envelope). -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 - Related via Card item: Validation errors surface through the shared `errors: list[FieldError]` envelope from `TODO-ALPHA-030-0.0.11`, populated from `serializer.errors`. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 
-### TODO-ALPHA-034-0.0.11 — Auth mutations (login / logout / register)
+<a id="auth_mutations_login_logout_register"></a>
+### [TODO-ALPHA-034-0.0.11 — Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -768,7 +779,8 @@ planned
 
 - Related via Card item: depends on `TODO-ALPHA-030-0.0.11`. -> `TODO-ALPHA-030-0.0.11` — Mutations + auto-generated Input types
 
-### TODO-ALPHA-035-0.0.12 — Channels ASGI router (migration aid)
+<a id="channels_asgi_router_migration_aid"></a>
+### [TODO-ALPHA-035-0.0.12 — Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -813,7 +825,8 @@ planned
 - Related via Card item: Migration guide (`TODO-BETA-047-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-047-0.1.6` — Migration and adoption guides
 - Related via Card item: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-047-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-047-0.1.6` — Migration and adoption guides
 
-### TODO-ALPHA-036-0.0.12 — Debug-toolbar middleware
+<a id="debug_toolbar_middleware"></a>
+### [TODO-ALPHA-036-0.0.12 — Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -859,7 +872,8 @@ planned
 - strawberry-graphql-django ships a debug-toolbar middleware; graphene-django ships none.
 - subclass django-debug-toolbar's middleware with two injection paths (GraphiQL HTML + `/graphql/` JSON), a template asset, introspection-skip behavior, and a soft dependency. Single module + tests.
 
-### TODO-ALPHA-037-0.0.12 — Test client helper
+<a id="test_client_helper"></a>
+### [TODO-ALPHA-037-0.0.12 — Test client helper](KANBAN.html#test_client_helper)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -922,7 +936,8 @@ planned
 - Related via Card item: Multipart file-upload support on `request()` so consumers can drive `Upload`-scalar mutations from the same helper once `TODO-ALPHA-031-0.0.11` ships. -> `TODO-ALPHA-031-0.0.11` — Upload scalar and file / image field mapping
 - Related via Card item: **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `TODO-ALPHA-031-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls. -> `TODO-ALPHA-031-0.0.11` — Upload scalar and file / image field mapping
 
-### TODO-ALPHA-038-0.0.12 — Response-extensions debug middleware
+<a id="response_extensions_debug_middleware"></a>
+### [TODO-ALPHA-038-0.0.12 — Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
@@ -995,7 +1010,8 @@ planned
 
 Cards that complete the django-graphene-filters Layer-3 richness on top of parity (`fields_class`, `aggregate_class`, `search_fields`, plus pre-stable cleanup). Each card targets its own `0.1.x` patch within the road to **1.0.0**. The final card in this column is the `1.0.0` release itself (API freeze, cleanup, verification, beta → stable cut-over). Cards in NNN order = planned ship order.
 
-### TODO-BETA-039-0.1.0 — Beta release (cleanup, verification, alpha → beta)
+<a id="beta_release_cleanup_verification_alpha_beta"></a>
+### [TODO-BETA-039-0.1.0 — Beta release (cleanup, verification, alpha → beta)](KANBAN.html#beta_release_cleanup_verification_alpha_beta)
 
 - Priority: High
 - Severity: Major
@@ -1040,7 +1056,8 @@ planned
 - final card in the Alpha queue; gates the alpha → beta milestone.
 - release / verification card, no new subsystem: full `(Python, Django, Strawberry)` matrix pass, 100% coverage, version bump to `0.1.0`, CHANGELOG promotion, doc status cross-check, parity audit, tag + publish.
 
-### TODO-BETA-040-0.1.1 — `FieldSet`
+<a id="fieldset"></a>
+### [TODO-BETA-040-0.1.1 — `FieldSet`](KANBAN.html#fieldset)
 
 - Priority: High
 - Severity: Medium
@@ -1074,7 +1091,8 @@ needs spec or implementation slice
 
 - the smallest Layer-3 subsystem: `fieldset.py` + `docs/spec-fieldset.md` + tests; defines field-selection semantics the connection field consumes. Meta-driven.
 
-### TODO-BETA-041-0.1.2 — `Meta.search_fields` support
+<a id="metasearch_fields_support"></a>
+### [TODO-BETA-041-0.1.2 — `Meta.search_fields` support](KANBAN.html#metasearch_fields_support)
 
 - Priority: High
 - Severity: Medium
@@ -1132,7 +1150,8 @@ planned; gated on `DONE-023-0.0.8` (Filtering) and `TODO-ALPHA-026-0.0.9` (Djang
 - Related via Card item: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-045-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-045-0.1.5` — Fakeshop GraphQL schema activation
 - Related via Card item: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-023-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-023-0.0.8` — Filtering subsystem
 
-### TODO-BETA-042-0.1.3 — Aggregation subsystem
+<a id="aggregation_subsystem"></a>
+### [TODO-BETA-042-0.1.3 — Aggregation subsystem](KANBAN.html#aggregation_subsystem)
 
 - Priority: Medium-high
 - Severity: Major
@@ -1175,7 +1194,8 @@ planned
 
 - Related via Card item: full subsystem, parallel to Ordering: reuses `DONE-023-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-aggregates.md` + tests. -> `DONE-023-0.0.8` — Filtering subsystem
 
-### TODO-BETA-043-0.1.3 — Layer 3 Meta key promotion
+<a id="layer_3_meta_key_promotion"></a>
+### [TODO-BETA-043-0.1.3 — Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
 
 - Priority: Low
 - Severity: Low
@@ -1194,7 +1214,8 @@ planned
 - Do not move a key from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` until the pipeline applies it end-to-end.
 - mechanical bookkeeping: move keys from `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` as each subsystem lands end-to-end. The real work lives in the subsystem cards, not here.
 
-### TODO-BETA-044-0.1.4 — Stable choice enum naming override
+<a id="stable_choice_enum_naming_override"></a>
+### [TODO-BETA-044-0.1.4 — Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
 
 - Priority: Low-medium
 - Severity: Medium
@@ -1230,7 +1251,8 @@ planned
 - Decide whether this belongs in the consumer-overrides spec or a small choice-enum follow-up spec.
 - Preserve enum reuse by `(model, field_name)` while making the published schema name explicit when consumers need it.
 
-### TODO-BETA-045-0.1.5 — Fakeshop GraphQL schema activation
+<a id="fakeshop_graphql_schema_activation"></a>
+### [TODO-BETA-045-0.1.5 — Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
 
 - Priority: Medium
 - Severity: Medium
@@ -1266,7 +1288,8 @@ blocked on `TODO-ALPHA-027-0.0.9` (Relay decisions) and `TODO-BETA-043-0.1.3` (L
 - Blocked by via Planning note: blocked on `TODO-ALPHA-027-0.0.9` (Relay decisions) and `TODO-BETA-043-0.1.3` (Layer 3 Meta key promotion). -> `TODO-ALPHA-027-0.0.9` — Full Relay story (Node + Connection + Root + validation)
 - Blocked by via Planning note: blocked on `TODO-ALPHA-027-0.0.9` (Relay decisions) and `TODO-BETA-043-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-043-0.1.3` — Layer 3 Meta key promotion
 
-### TODO-BETA-046-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests
+<a id="product_catalog_layer_3_http_graphql_tests"></a>
+### [TODO-BETA-046-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
 
 - Priority: Medium
 - Severity: Medium
@@ -1283,7 +1306,8 @@ blocked on `TODO-ALPHA-027-0.0.9` (Relay decisions) and `TODO-BETA-043-0.1.3` (L
 - In-process `schema.execute_sync` tests still go under `examples/fakeshop/tests/`.
 - bounded test suite: live `/graphql/` acceptance tests for the activated product-catalog schema, reusing the library app's placement + schema-reload pattern.
 
-### TODO-BETA-047-0.1.6 — Migration and adoption guides
+<a id="migration_and_adoption_guides"></a>
+### [TODO-BETA-047-0.1.6 — Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
 - Severity: Medium
@@ -1317,7 +1341,8 @@ planned
 - Add a `strawberry-graphql-django` migration guide covering decorator-to-`Meta` translation, optimizer differences, `get_queryset`, and optimizer hints.
 - Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
 
-### TODO-BETA-048-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)
+<a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
+### [TODO-BETA-048-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
 - Severity: Medium
@@ -1359,7 +1384,8 @@ planned
 
 - Related via Card item: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-023-0.0.8`). -> `DONE-023-0.0.8` — Filtering subsystem
 
-### TODO-STABLE-049-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)
+<a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
+### [TODO-STABLE-049-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
 - Severity: Major
@@ -1411,14 +1437,334 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 ## Done
 
-### DONE-001-0.0.1 — DjangoType core foundation
+<a id="filtering_subsystem"></a>
+### [DONE-023-0.0.8 — Filtering subsystem](KANBAN.html#filtering_subsystem)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
+- Severity: Major
+- Status: Shipped
+- Relative size: XL
+- Labels: `example-app`, `filters`, `graphql-api`, `public-api`
+- Spec: [spec-021-filters-0_0_8](https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-021-filters-0_0_8.md)
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- both upstreams ship a FilterSet / filter surface; `django-graphene-filters` is the cookbook source.
+- the milestone anchor: six-layer lazy-resolution filtering pipeline, `FilterSet` / `RelatedFilter` / `Meta.filterset_class`, parity-floor filter primitives, finalizer phase-2.5 wiring, 14 live HTTP tests.
+
+<a id="scalar_conversion_end_to_end_coverage_in_the_fakeshop_example"></a>
+### [DONE-022-0.0.7 — Scalar conversion end-to-end coverage in the fakeshop example](KANBAN.html#scalar_conversion_end_to_end_coverage_in_the_fakeshop_example)
+
+- Priority: Medium
+- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
+- Severity: Low
+- Status: Shipped
+- Relative size: M
+- Labels: `example-app`, `graphql-api`, `scalars`, `tests`
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- both upstreams ship scalar conversion for the full numeric / date / JSON / UUID set; this card moves those converter rows to live `/graphql/` HTTP coverage in both nullable and non-null shapes.
+- new `apps.scalars` example app (paired non-null / nullable models, self-FK + cross-model `SET_NULL` FK) + eight live HTTP tests + a real-domain `BigIntegerField` on `Patron`.
+- `ScalarSpecimen` — every scalar field non-null, exposed via `ScalarSpecimenType`. Adds an intra-model self-FK `parent` (`related_name="children"`) so the example exercises self-referential FK planning under the optimizer.
+- `NullableScalarSpecimen` — every scalar field nullable (`null=True, blank=True`), exposed via `NullableScalarSpecimenType`. Adds a cross-model FK `partner: ForeignKey(ScalarSpecimen, on_delete=SET_NULL, related_name="nullable_partners")` — the only `SET_NULL` ondelete in the example tree, and the only cross-model FK in the scalars app.
+- The pairing is deliberate (not a single model with paired fields). It exercises **upstream code paths no other example app reaches**: Django's two-`CreateModel` initial migration path, the registry / `finalize_django_types()` resolving sibling `DjangoType` classes in one app, Strawberry type registration across sibling types in one schema build, the optimizer planning across two managed models in one query, and `SET_NULL` ondelete behavior.
+- `apps.scalars.schema` composes two root resolvers (`all_scalar_specimens`, `all_nullable_scalar_specimens`) into the project root `Query` at [`examples/fakeshop/config/schema.py`][example-schema]; `ScalarsConfig` lands in `INSTALLED_APPS` at [`examples/fakeshop/config/settings.py`][settings].
+- Full non-null wire-format sweep covering every field on `ScalarSpecimen`
+- Signed-negative `BigInt` round-trip
+- `BigInt`-at-zero edge case
+- Schema introspection asserting `BigInt` converter resolves correctly in both shapes (`NON_NULL` on `ScalarSpecimenType`; bare `SCALAR` on `NullableScalarSpecimenType`)
+- All-NULL nullable wire format covering every nullable converter branch
+- Cross-model `partner` FK linkage round-trip
+- Reverse-FK `nullablePartners` exposure
+- Self-FK `parent` / `children` traversal
+
+<a id="warning_free_scalar_registration_via_strawberryconfigscalar_map"></a>
+### [DONE-021-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`](KANBAN.html#warning_free_scalar_registration_via_strawberryconfigscalar_map)
+
+- Priority: Medium
+- Severity: Medium
+- Status: Shipped
+- Relative size: S
+- Labels: `config`, `public-api`, `scalar-map`, `scalars`
+- Spec: [spec-020-scalar_map_helper-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-020-scalar_map_helper-0_0_7.md)
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- package-specific scalar-registration plumbing (`StrawberryConfig.scalar_map` via `strawberry_config()`); not an upstream-parity primitive.
+- `strawberry_config()` factory registering `BigInt` via `scalar_map` and removing the deprecation-suppression block; a documented breaking change in alpha.
+
+<a id="django_trac_37064_hardening_safe_wrap_connection_method"></a>
+### [DONE-020-0.0.7 — Django Trac #37064 hardening + `safe_wrap_connection_method`](KANBAN.html#django_trac_37064_hardening_safe_wrap_connection_method)
+
+- Priority: Low
+- Severity: Low
+- Status: Shipped
+- Relative size: S
+- Labels: `django-integration`, `hardening`
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- defensive hardening unique to this package; neither upstream ships a Django Trac #37064 patch.
+- two-half defense for Trac #37064: a package-level unwrap patch (auto-applied at app-load) plus the cooperative `safe_wrap_connection_method` helper + tests.
+
+<a id="multi_database_cooperation_contract"></a>
+### [DONE-019-0.0.7 — Multi-database cooperation contract](KANBAN.html#multi_database_cooperation_contract)
+
+- Priority: Low
+- Severity: Low
+- Status: Shipped
+- Relative size: S
+- Labels: `multi-db`, `optimizer`, `tests`
+- Spec: [spec-019-multi_db-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-019-multi_db-0_0_7.md)
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- multi-DB is a Django capability neither upstream specifies a contract around (⚛️&🍓 parity-adjacent); pinning ours smooths the migrant story.
+- pin the multi-DB cooperation contract (router-aware FK-id stubs, `.using()` preservation, `Prefetch` `_db` round-trip) + tests; zero production-code change.
+
+<a id="schema_export_management_command"></a>
+### [DONE-018-0.0.7 — Schema export management command](KANBAN.html#schema_export_management_command)
+
+- Priority: Medium
+- Parity: 🍓 strawberry-graphql-django (Required)
+- Severity: Low
+- Status: Shipped
+- Relative size: S
+- Labels: `management-command`, `public-api`, `schema`
+- Spec: [spec-018-export_schema-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-018-export_schema-0_0_7.md)
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- strawberry-graphql-django ships `manage.py export_schema`; graphene-django's different `graphql_schema` command is parity-adjacent (deliberately not borrowed).
+- one management command (positional `schema`, `--path`, SDL via `print_schema`, `CommandError` paths) + tests.
+
+<a id="appspy_and_django_app_config"></a>
+### [DONE-017-0.0.7 — `apps.py` and Django app config](KANBAN.html#appspy_and_django_app_config)
+
+- Priority: Medium
+- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
+- Severity: Low
+- Status: Shipped
+- Relative size: XS
+- Labels: `django-app`, `packaging`
+- Spec: [spec-017-apps-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-017-apps-0_0_7.md)
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- both upstreams ship an `apps.py` `AppConfig` for `INSTALLED_APPS`-driven discovery.
+- tiny `AppConfig` (two class attributes, no `ready()` body in 0.0.7) + tests.
+
+<a id="djangolistfield_non_relay_list"></a>
+### [DONE-016-0.0.7 — `DjangoListField` (non-Relay list)](KANBAN.html#djangolistfield_non_relay_list)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Required)
+- Severity: Medium
+- Status: Shipped
+- Relative size: M
+- Labels: `graphql-api`, `list-field`, `optimizer`, `public-api`
+- Spec: [spec-016-list_field-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-016-list_field-0_0_7.md)
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- graphene-django ships `DjangoListField`; strawberry-graphql-django has no non-Relay list-field primitive.
+- `DjangoListField` factory: default + consumer resolver, `Manager → QuerySet` coercion, sync/async `get_queryset`, outer-list nullability, root-gated optimizer cooperation.
+
+<a id="consumer_override_semantics_scalar_fields"></a>
+### [DONE-015-0.0.6 — Consumer override semantics (scalar fields)](KANBAN.html#consumer_override_semantics_scalar_fields)
+
+- Priority: Medium
+- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
+- Severity: Medium
+- Status: Shipped
+- Relative size: L
+- Labels: `public-api`, `relay`, `scalars`, `types`
+- Spec: [spec-015-consumer_overrides_scalar-0_0_6](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-015-consumer_overrides_scalar-0_0_6.md)
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- both upstreams support consumer-authored scalar field overrides on model-backed types.
+- annotation/assigned scalar-override contract (four-corner matrix), `relay.Node` `id`-collision rejection, cross-type choice-enum cache semantics.
+- `DjangoType.__init_subclass__` collected `consumer_annotated_scalar_fields`
+- `DjangoTypeDefinition` gained `consumer_annotated_scalar_fields: frozenset[str]`.
+- The previously-skipped `test_consumer_annotation_overrides_synthesized`
+- End-to-end test pinned the override surviving `strawberry.type(...)`
+- **Consumer annotation overrides are authoritative.** `_build_annotations`'s
+- **`relay.Node` `id` collision rejected at type-creation time.** A consumer
+- No new public API. No `Meta.field_overrides = {...}`-style key. Opt-out
+- 100% coverage was reached across `tests/types/test_definition_order.py`
+- The four `consumer_*_fields` sets on `DjangoTypeDefinition`
+- Resolver / metadata overrides for scalars stay on the assigned
+- Type-annotation overrides are the consumer's responsibility for runtime
+
+<a id="multiple_djangotypes_per_model_with_metaprimary"></a>
+### [DONE-014-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`](KANBAN.html#multiple_djangotypes_per_model_with_metaprimary)
+
+- Priority: Medium
+- Severity: Medium
+- Status: Shipped
+- Relative size: L
+- Labels: `optimizer`, `public-api`, `registry`, `types`
+- Spec: [spec-014-meta_primary-0_0_6](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-014-meta_primary-0_0_6.md)
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- 🍓 parity-adjacent (strawberry-graphql-django has an implicit primary-type concept via `is_type_of`; graphene-django ships no equivalent) — not required on either side.
+- registry stores multiple types per model, `Meta.primary` flag, ambiguity audit at finalize, relation-deferral, optimizer origin-type threading.
+- Registry stores multiple types per model (`_types: dict[Model, list[Type]]`).
+- New `Meta.primary: bool` flag (default `False`); validated in `_validate_meta`.
+- `registry.register(..., *, primary: bool = False) -> bool` and
+- New registry surface: `primary_for(model)`, `types_for(model)`,
+- `registry.get(model)` returns the primary if declared, else the single
+- `finalize_django_types()` runs `audit_primary_ambiguity()` first: any
+- Two primary types for the same model: rejected at registration time
+- Relation conversion in `types/base.py` defers all **auto-synthesized**
+- Optimizer planning threads the resolved origin Strawberry type from
+- Schema audit (`optimizer/extension.py`) iterates every reachable
+- `model_for_type` continues to work for any registered type so
+- `DjangoTypeDefinition` gains `primary: bool = False`.
+- 100% coverage across `tests/test_registry.py`, `tests/types/test_base.py`,
+- Single-type-no-primary stays backward compatible: `registry.get(model)`
+- `Meta.primary` is a per-class declaration, not a registry-level
+- Already-shipped consumer relation overrides (direct annotation
+
+<a id="deferred_scalar_conversions"></a>
+### [DONE-013-0.0.6 — Deferred scalar conversions](KANBAN.html#deferred_scalar_conversions)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
+- Severity: Medium
+- Status: Shipped
+- Relative size: M
+- Labels: `converters`, `public-api`, `scalars`
+- Spec: [spec-013-deferred_scalars-0_0_6](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-013-deferred_scalars-0_0_6.md)
+
+#### Planning note
+
+shipped
+
+#### Other
+
+- both upstreams ship scalar conversion for `BigIntegerField` / `JSONField` / `HStoreField` / `ArrayField`, etc.
+- `BigInt` scalar + strict parser/serializer, `JSONField` / `ArrayField` / `HStoreField` conversion, `SCALAR_MAP` value-type widening.
+- Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based) with the Strawberry class-direct-to-`scalar()` `DeprecationWarning` suppressed at the definition site so consumers see no warning at import time.
+- Strict `BigInt` parser via regex `^(0|-?[1-9][0-9]*)$` — rejects `bool`, `float`, empty / whitespace-padded strings, non-decimal strings, underscores, plus signs, leading zeroes, `-0`, and Unicode digits.
+- Strict `BigInt` serializer — rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`.
+- `BigIntegerField → BigInt` and `PositiveBigIntegerField → BigInt` in `SCALAR_MAP`. `BigAutoField` preserved as `int` (no override recourse at the time of DONE-013; annotation-override recourse now available via `DONE-015-0.0.6`).
+- `JSONField → strawberry.scalars.JSON` in `SCALAR_MAP`.
+- `ArrayField` and `HStoreField` mapped via sentinel-guarded branches in `convert_scalar`. `HStoreField` not added to `SCALAR_MAP`.
+- `ArrayField` rejects nested arrays and outer `choices` with `ConfigurationError`.
+- `SCALAR_MAP`'s declared value type widened from `dict[type[models.Field], type]` to `dict[type[models.Field], Any]`.
+- `BigInt` added to `django_strawberry_framework.__all__`; `tests/base/test_init.py`'s pinned `__all__` and `__version__` assertions updated.
+- Atomic version-bump quintet: `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `docs/GLOSSARY.md` package-version line, `uv.lock`.
+- 100% coverage via `tests/test_scalars.py` (new flat file) and `tests/types/test_converters.py` (extended). Includes a `test_package_import_does_not_emit_strawberry_deprecation_warning` guard so future regressions to the suppression are explicit.
+- Docs: `docs/GLOSSARY.md`, `docs/README.md`, `README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`.
+- The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `DONE-021-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor.
+
+#### Card references
+
+- Related via Card item: `BigAutoField` preserved as `int` before scalar override recourse shipped in `DONE-015-0.0.6`. -> `DONE-015-0.0.6` — Consumer override semantics (scalar fields)
+- Related via Card item: The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `DONE-021-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor. -> `DONE-021-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map`
+
+<a id="fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement"></a>
+### [DONE-012-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement](KANBAN.html#fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement)
+
+- Priority: Medium
+- Severity: Medium
+- Status: Shipped
+- Relative size: M
+- Labels: `cleanup`, `field-meta`, `metadata`, `optimizer`, `types`
+
+#### Planning note
+
+shipped
+
+#### Scope
+
+- **SSoT consolidation.** Three reader sites now read `FieldMeta` from the canonical source on `DjangoTypeDefinition.field_map`:
+- `django_strawberry_framework/types/base.py:_record_pending_relation`
+- `django_strawberry_framework/types/converters.py:resolved_relation_annotation`
+- `django_strawberry_framework/types/resolvers.py:_make_relation_resolver`
+- **Mirror retirement.** `DjangoType.__init_subclass__` no longer writes the legacy class-attribute mirrors. The optimizer reads from `registry.get_definition(type_cls)` directly at all four former reader sites:
+- `optimizer/walker.py:_resolve_field_map`
+- `optimizer/walker.py:_walk_selections` (hints read)
+- `optimizer/extension.py:_collect_schema_reachable_types`
+- `optimizer/extension.py:check_schema`
+- All `TODO(spec-fieldmeta-*)` source anchors removed.
+- 100% package coverage maintained; no consumer-visible API change.
+
+#### Why it matters
+
+- Three reader sites were re-deriving relation shape via `relation_kind(field)` + raw `getattr(field, ...)` instead of reading the `FieldMeta` already on `DjangoTypeDefinition.field_map` — duplicating logic and creating drift surface for any future relation-flag addition.
+- `DjangoType.__init_subclass__` was writing legacy class-attribute mirrors (`cls._optimizer_field_map`, `cls._optimizer_hints`) that survived `registry.clear()`, then four optimizer sites read those mirrors instead of the canonical `DjangoTypeDefinition`. Two parallel sources of field metadata with no enforced consistency.
+
+#### Other
+
+- internal metadata-architecture refactor; no consumer-visible API change.
+- consolidate field metadata onto `DjangoTypeDefinition` (single source of truth) and retire legacy class-attribute mirrors across ~7 reader sites.
+- Commit `de35a62` (`refactor(types,optimizer): consolidate metadata onto DjangoTypeDefinition`).
+- `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/types/converters.py`
+- `django_strawberry_framework/types/resolvers.py`
+- `django_strawberry_framework/optimizer/walker.py`
+- `django_strawberry_framework/optimizer/extension.py`
+- `CHANGELOG.md` (under `[Unreleased] → Changed`)
+- Originally tracked as `BACKLOG.md` item 35 ("`FieldMeta` single-source-of-truth consolidation and mirror retirement"). Promoted to a DONE card and removed from `BACKLOG.md` when the work shipped — per `BACKLOG.md`'s "graduate into a `KANBAN.md` card when scheduled" workflow. This is the first `BACKLOG.md` item to graduate; the precedent for shipped items: strike-through with SHIPPED status is fine while the item awaits a release; once a release is imminent, move the item to a `KANBAN.md` `DONE` card and delete it from `BACKLOG.md` so the strategic-differentiation file doesn't keep pointing at completed architecture debt.
+- The consolidation eliminates ~7 sites of duplicated relation-shape logic and removes legacy class-attribute residue that previously survived `registry.clear()`. Single source of truth for field metadata reduces drift surface whenever Django adds a new relation flag or changes a descriptor attribute.
+- Internal refactor only; no `Meta` key changes, no public surface changes, no consumer-visible behavior changes. Existing tests pass without modification.
+
+<a id="005_relay_interfaces_and_node_foundation"></a>
+### [DONE-011-0.0.5 — 0.0.5 Relay interfaces and Node foundation](KANBAN.html#005_relay_interfaces_and_node_foundation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Labels: `public-api`, `registry`, `relations`, `scalars`, `types`
+- Labels: `public-api`, `relay`, `types`
+- Spec: [spec-011-relay_interfaces-0_0_5](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-011-relay_interfaces-0_0_5.md)
 
 #### Planning note
 
@@ -1426,167 +1772,156 @@ shipped
 
 #### Scope
 
-- `DjangoType` base class
-- Meta validation
-- scalar conversion
-- relation conversion
-- choice enums
-- type registry
-- relation resolvers
-- `get_queryset` hook and `has_custom_get_queryset`
+- `Meta.interfaces` accepted end-to-end for any Strawberry interface.
+- Four Relay node resolver defaults injected when `relay.Node` is declared (canonical order: `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes`); consumer-declared overrides are preserved via Strawberry's `__func__` identity test.
+- Automatic synthesized `id: int!` suppression when `relay.Node` is in `Meta.interfaces`; the Relay-supplied `id: GlobalID!` is used instead.
+- `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
+- Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise `ConfigurationError` at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
+- Both sync and async paths for `_resolve_node_default` / `_resolve_nodes_default`; async `get_queryset` hooks are awaited on the async branch and rejected with `ConfigurationError` on the sync branch.
+- `Meta.interfaces` promoted from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
+- Package version bumped to `0.0.5` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
 
 #### Other
 
-- `DjangoObjectType` (graphene-django) / `@strawberry_django.type` (strawberry-graphql-django) are the namesake primitive.
-- core foundational subsystem: `DjangoType` base, Meta validation, scalar/relation conversion, choice enums, type registry, relation resolvers, `get_queryset` hook.
+- both upstreams ship Relay Node interfaces; this shipped our 🍓-shaped Relay Node integration.
+- Relay Node foundation: `Meta.interfaces`, four `resolve_*` defaults, `id: GlobalID!` suppression, `is_type_of` injection, composite-PK rejection, sync + async node resolution.
 - `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/types/converters.py`
-- `django_strawberry_framework/types/resolvers.py`
-- `tests/types/test_base.py`
-- `tests/types/test_converters.py`
-- `tests/types/test_resolvers.py`
-- The public shape is intentionally narrow and explicit.
-- Deferred Meta keys are rejected, not silently accepted.
-- Definition-order independence is now covered by `DONE-006-0.0.4`.
+- `django_strawberry_framework/types/relay.py`
+- `django_strawberry_framework/types/finalizer.py`
+- `tests/types/test_relay_interfaces.py`
+- `tests/types/test_definition_order_schema.py`
+- `tests/optimizer/test_relay_id_projection.py`
+- `tests/test_registry.py`
+- `examples/fakeshop/test_query/test_library_api.py`
+- `examples/fakeshop/apps/library/schema.py` (`GenreType` declares `Meta.interfaces = (relay.Node,)`)
+- `CHANGELOG.md`
+- `docs/GLOSSARY.md`
+- `docs/README.md`
+- `TODAY.md`
+- `pyproject.toml`
+- `django_strawberry_framework/__init__.py`
+- `tests/base/test_init.py`
+- `uv.lock`
+- Borrowed patterns from `strawberry-django` (spec "Borrowing posture", Decision 3). The override discriminator triad stays distinct across the three injection sites: `__dict__` membership for `is_type_of`, tuple membership for id suppression, `__func__` identity for the four `resolve_*` defaults.
+- `Meta.interfaces` is the first `0.0.4`-reserved `DjangoTypeDefinition` slot that ships end-to-end through finalizer phase 2.5; subsequent Layer 3 subsystems plug into the same architectural seam.
+
+<a id="move_test_fixture_out_of_example_settings"></a>
+### [DONE-010-0.0.4 — Move test fixture out of example settings](KANBAN.html#move_test_fixture_out_of_example_settings)
+
+- Priority: Low
+- Severity: Low
+- Status: Shipped
+- Relative size: S
+- Labels: `cleanup`, `example-app`, `tests`
+
+#### Planning note
+
+shipped
+
+#### Scope
+
+- Removed `tests.fixtures.apps.TestsCardinalityConfig` from the example project.
+- Removed the old unmanaged cardinality fixture files under `tests/fixtures/`.
+- Package tests that need OneToOne / M2M / cardinality coverage now use real models from `examples/fakeshop/apps/library/`.
+
+#### Other
+
+- test hygiene.
+- remove the `tests.fixtures.apps` fixture app + unmanaged cardinality fixtures; switch package tests to real `library` models.
+- `examples/fakeshop/config/settings.py`
+- `examples/fakeshop/apps/library/models.py`
+- `docs/spec-testing_shift.md`
+- `AGENTS.md`
+- `docs/TREE.md`
+
+<a id="real_m2m_coverage"></a>
+### [DONE-009-0.0.4 — Real M2M coverage](KANBAN.html#real_m2m_coverage)
+
+- Priority: Medium
+- Severity: Low
+- Status: Shipped
+- Relative size: S
+- Labels: `example-app`, `m2m`, `tests`
+
+#### Planning note
+
+shipped
+
+#### Scope
+
+- Replaced test-only M2M/cardinality fixtures with real managed models in the `library` example app.
+- Added package-level and HTTP-level coverage for M2M traversal and optimizer planning.
+
+#### Other
+
+- test hygiene.
+- replace test-only M2M / cardinality fixtures with real `library` models; add package + HTTP coverage.
+- `examples/fakeshop/apps/library/models.py`
+- `examples/fakeshop/test_query/test_library_api.py`
+- `tests/types/test_definition_order.py`
+- `tests/optimizer/test_definition_order.py`
+
+<a id="004_version_and_release_alignment"></a>
+### [DONE-008-0.0.4 — 0.0.4 version and release alignment](KANBAN.html#004_version_and_release_alignment)
+
+- Priority: Low
+- Severity: Low
+- Status: Shipped
+- Relative size: XS
+- Labels: `release`, `versioning`
+
+#### Planning note
+
+shipped
+
+#### Scope
+
+- Package metadata, runtime version, lockfile, tests, and changelog now agree on `0.0.4`.
+- The changelog entry is condensed for the alpha release and covers the actual commit range through 2026-05-08.
+
+#### Other
+
+- release housekeeping (version alignment).
+- align package metadata / runtime version / lockfile / tests / changelog on `0.0.4`.
+- `pyproject.toml`
+- `django_strawberry_framework/__init__.py`
+- `tests/base/test_init.py`
+- `uv.lock`
+- `CHANGELOG.md`
+
+<a id="stale_placeholder_cleanup"></a>
+### [DONE-007-0.0.4 — Stale placeholder cleanup](KANBAN.html#stale_placeholder_cleanup)
+
+- Priority: Low
+- Severity: Low
+- Status: Shipped
+- Relative size: XS
+- Labels: `cleanup`, `docs`, `tests`
+
+#### Planning note
+
+shipped
+
+#### Scope
+
+- Replaced stale M2M and forward-reference skips with definition-order tests.
+- Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-015-0.0.6`.
+
+#### Other
+
+- internal test/doc cleanup.
+- replace stale M2M / forward-reference skips with definition-order tests.
+- `tests/types/test_definition_order.py`
+- `tests/types/test_definition_order_schema.py`
+- `tests/optimizer/test_definition_order.py`
+- `DONE-015-0.0.6`
 
 #### Card references
 
-- Related via Card item: Definition-order independence is now covered by `DONE-006-0.0.4`. -> `DONE-006-0.0.4` — 0.0.4 foundation slice (definition-order independence)
+- Related via Card item: Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-015-0.0.6`. -> `DONE-015-0.0.6` — Consumer override semantics (scalar fields)
 
-### DONE-002-0.0.2 — Optimizer O1-O6 foundation
-
-- Priority: High
-- Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Major
-- Status: Shipped
-- Relative size: L
-- Labels: `optimizer`, `performance`, `query-planning`, `relations`
-
-#### Planning note
-
-shipped
-
-#### Scope
-
-- generated relation resolvers
-- selection-tree walker
-- root-gated optimizer extension
-- nested `Prefetch` chains
-- same-query `select_related` recursion
-- `only()` projection
-- custom `get_queryset` downgrade to `Prefetch`
-
-#### Other
-
-- strawberry-graphql-django ships a heavy optimizer extension; graphene-django has only `select_related_field` (⚛️ parity-adjacent).
-- heavy optimizer extension: relation resolvers, selection-tree walker, root-gated planning, nested `Prefetch` chains, `only()` projection, `get_queryset` downgrade.
-- `django_strawberry_framework/optimizer/extension.py`
-- `django_strawberry_framework/optimizer/walker.py`
-- `django_strawberry_framework/optimizer/plans.py`
-- `tests/optimizer/test_extension.py`
-- `tests/optimizer/test_walker.py`
-- `tests/optimizer/test_plans.py`
-- Shipped behavior is consolidated into `docs/GLOSSARY.md`; source/tests are the truth for optimizer behavior.
-
-### DONE-003-0.0.3 — Optimizer beyond slices B1-B8
-
-- Priority: High
-- Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Major
-- Status: Shipped
-- Relative size: L
-- Labels: `optimizer`, `performance`, `query-planning`, `schema-audit`
-
-#### Planning note
-
-shipped
-
-#### Scope
-
-- B1: plan cache keyed by selected operation AST, directive variables, model, and root runtime path
-- B2: forward-FK-id elision
-- B3: strictness mode (`off`, `warn`, `raise`)
-- B4: `Meta.optimizer_hints` with `OptimizerHint`
-- B5: plan introspection via context
-- B6: schema-build-time audit
-- B7: precomputed optimizer field metadata
-- B8: queryset diffing against consumer-applied `select_related`, `prefetch_related`, and `Prefetch`
-
-#### Other
-
-- continuation of DONE-002's optimizer lineage (⚛️ parity-adjacent).
-- eight optimizer sub-features B1–B8: AST plan cache, FK-id elision, strictness modes, `OptimizerHint`, context plan introspection, schema audit, precomputed field metadata, queryset diffing.
-- `django_strawberry_framework/optimizer/extension.py`
-- `django_strawberry_framework/optimizer/hints.py`
-- `django_strawberry_framework/optimizer/field_meta.py`
-- `django_strawberry_framework/optimizer/plans.py`
-- `tests/optimizer/test_extension.py`
-- `tests/optimizer/test_hints.py`
-- `tests/optimizer/test_field_meta.py`
-- `tests/optimizer/test_plans.py`
-- B8 went beyond the initial simple exact-match diff and now handles subtree-aware prefetch reconciliation.
-- Fragment-spread directive and multi-operation cache-key bugs have been fixed in source; the old `alpha-review-feedback.md` entries are now historical.
-
-### DONE-004-0.0.3 — Documentation/status positioning for shipped Layer 2
-
-- Priority: Medium
-- Severity: Low
-- Status: Shipped
-- Relative size: S
-- Labels: `docs`
-
-#### Planning note
-
-shipped
-
-#### Scope
-
-- `docs/README.md` gives a quickstart, package positioning, optimizer value, and status.
-- `docs/GLOSSARY.md` describes shipped, planned, deferred, and alpha-constrained capabilities.
-- `docs/TREE.md` preserves detailed package/test tree responsibilities.
-
-#### Other
-
-- internal docs / status-positioning card — no upstream-parity surface.
-- docs pass: `docs/README.md`, `docs/GLOSSARY.md`, `docs/TREE.md` quickstart + status positioning.
-- `docs/README.md`
-- `docs/GLOSSARY.md`
-- `docs/TREE.md`
-- User-facing docs avoid internal slice shorthand; maintainer docs can still use it where useful.
-
-### DONE-005-0.0.4 — 0.0.4 onboarding docs and spec consolidation
-
-- Priority: Medium
-- Severity: Low
-- Status: Shipped
-- Relative size: S
-- Labels: `docs`, `release`
-
-#### Planning note
-
-shipped
-
-#### Scope
-
-- Root `README.md` is the canonical documentation map and operational entry point.
-- `docs/README.md` is code-first: quickstart, three-minute path, optimizer behavior, and status.
-- `docs/GLOSSARY.md` is the capability catalog with value-led optimizer language and comparison table.
-- `docs/TREE.md` is the detailed layout/test-tree reference.
-- `CHANGELOG.md` is condensed and no longer relies on design-doc pointers for release context.
-- Completed design-doc content is folded into durable docs, while remaining specs preserve design history and follow-up work.
-
-#### Other
-
-- internal docs cleanup / spec consolidation — no upstream-parity surface.
-- onboarding-doc consolidation across README / docs / CHANGELOG; completed spec content folded into durable docs.
-- `README.md`
-- `docs/README.md`
-- `docs/GLOSSARY.md`
-- `docs/TREE.md`
-- `CHANGELOG.md`
-- Future in-flight design docs use the `docs/spec-<NNN>-<topic>-<0_0_X>.md` convention (NNN matches the KANBAN card number; see `docs/builder/BUILD.md` "Spec filename pattern"), then get folded into durable docs when shipped.
-
-### DONE-006-0.0.4 — 0.0.4 foundation slice (definition-order independence)
+<a id="004_foundation_slice_definition_order_independence"></a>
+### [DONE-006-0.0.4 — 0.0.4 foundation slice (definition-order independence)](KANBAN.html#004_foundation_slice_definition_order_independence)
 
 - Priority: High
 - Severity: Major
@@ -1637,70 +1972,14 @@ shipped
 - The pending-resolution pattern (record at class creation, resolve at finalization, fail loud on missing target with named source model / field / target) generalizes directly to lazy related class references for `RelatedFilter`, `RelatedOrder`, and `RelatedAggregate`.
 - The previous foundation-slice in-progress cards have been retired; this card is their successor in Done.
 
-### DONE-007-0.0.4 — Stale placeholder cleanup
-
-- Priority: Low
-- Severity: Low
-- Status: Shipped
-- Relative size: XS
-- Labels: `cleanup`, `docs`, `tests`
-
-#### Planning note
-
-shipped
-
-#### Scope
-
-- Replaced stale M2M and forward-reference skips with definition-order tests.
-- Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-015-0.0.6`.
-
-#### Other
-
-- internal test/doc cleanup.
-- replace stale M2M / forward-reference skips with definition-order tests.
-- `tests/types/test_definition_order.py`
-- `tests/types/test_definition_order_schema.py`
-- `tests/optimizer/test_definition_order.py`
-- `DONE-015-0.0.6`
-
-#### Card references
-
-- Related via Card item: Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-015-0.0.6`. -> `DONE-015-0.0.6` — Consumer override semantics (scalar fields)
-
-### DONE-008-0.0.4 — 0.0.4 version and release alignment
-
-- Priority: Low
-- Severity: Low
-- Status: Shipped
-- Relative size: XS
-- Labels: `release`, `versioning`
-
-#### Planning note
-
-shipped
-
-#### Scope
-
-- Package metadata, runtime version, lockfile, tests, and changelog now agree on `0.0.4`.
-- The changelog entry is condensed for the alpha release and covers the actual commit range through 2026-05-08.
-
-#### Other
-
-- release housekeeping (version alignment).
-- align package metadata / runtime version / lockfile / tests / changelog on `0.0.4`.
-- `pyproject.toml`
-- `django_strawberry_framework/__init__.py`
-- `tests/base/test_init.py`
-- `uv.lock`
-- `CHANGELOG.md`
-
-### DONE-009-0.0.4 — Real M2M coverage
+<a id="004_onboarding_docs_and_spec_consolidation"></a>
+### [DONE-005-0.0.4 — 0.0.4 onboarding docs and spec consolidation](KANBAN.html#004_onboarding_docs_and_spec_consolidation)
 
 - Priority: Medium
 - Severity: Low
 - Status: Shipped
 - Relative size: S
-- Labels: `example-app`, `m2m`, `tests`
+- Labels: `docs`, `release`
 
 #### Planning note
 
@@ -1708,25 +1987,32 @@ shipped
 
 #### Scope
 
-- Replaced test-only M2M/cardinality fixtures with real managed models in the `library` example app.
-- Added package-level and HTTP-level coverage for M2M traversal and optimizer planning.
+- Root `README.md` is the canonical documentation map and operational entry point.
+- `docs/README.md` is code-first: quickstart, three-minute path, optimizer behavior, and status.
+- `docs/GLOSSARY.md` is the capability catalog with value-led optimizer language and comparison table.
+- `docs/TREE.md` is the detailed layout/test-tree reference.
+- `CHANGELOG.md` is condensed and no longer relies on design-doc pointers for release context.
+- Completed design-doc content is folded into durable docs, while remaining specs preserve design history and follow-up work.
 
 #### Other
 
-- test hygiene.
-- replace test-only M2M / cardinality fixtures with real `library` models; add package + HTTP coverage.
-- `examples/fakeshop/apps/library/models.py`
-- `examples/fakeshop/test_query/test_library_api.py`
-- `tests/types/test_definition_order.py`
-- `tests/optimizer/test_definition_order.py`
+- internal docs cleanup / spec consolidation — no upstream-parity surface.
+- onboarding-doc consolidation across README / docs / CHANGELOG; completed spec content folded into durable docs.
+- `README.md`
+- `docs/README.md`
+- `docs/GLOSSARY.md`
+- `docs/TREE.md`
+- `CHANGELOG.md`
+- Future in-flight design docs use the `docs/spec-<NNN>-<topic>-<0_0_X>.md` convention (NNN matches the KANBAN card number; see `docs/builder/BUILD.md` "Spec filename pattern"), then get folded into durable docs when shipped.
 
-### DONE-010-0.0.4 — Move test fixture out of example settings
+<a id="documentationstatus_positioning_for_shipped_layer_2"></a>
+### [DONE-004-0.0.3 — Documentation/status positioning for shipped Layer 2](KANBAN.html#documentationstatus_positioning_for_shipped_layer_2)
 
-- Priority: Low
+- Priority: Medium
 - Severity: Low
 - Status: Shipped
 - Relative size: S
-- Labels: `cleanup`, `example-app`, `tests`
+- Labels: `docs`
 
 #### Planning note
 
@@ -1734,29 +2020,104 @@ shipped
 
 #### Scope
 
-- Removed `tests.fixtures.apps.TestsCardinalityConfig` from the example project.
-- Removed the old unmanaged cardinality fixture files under `tests/fixtures/`.
-- Package tests that need OneToOne / M2M / cardinality coverage now use real models from `examples/fakeshop/apps/library/`.
+- `docs/README.md` gives a quickstart, package positioning, optimizer value, and status.
+- `docs/GLOSSARY.md` describes shipped, planned, deferred, and alpha-constrained capabilities.
+- `docs/TREE.md` preserves detailed package/test tree responsibilities.
 
 #### Other
 
-- test hygiene.
-- remove the `tests.fixtures.apps` fixture app + unmanaged cardinality fixtures; switch package tests to real `library` models.
-- `examples/fakeshop/config/settings.py`
-- `examples/fakeshop/apps/library/models.py`
-- `docs/spec-testing_shift.md`
-- `AGENTS.md`
+- internal docs / status-positioning card — no upstream-parity surface.
+- docs pass: `docs/README.md`, `docs/GLOSSARY.md`, `docs/TREE.md` quickstart + status positioning.
+- `docs/README.md`
+- `docs/GLOSSARY.md`
 - `docs/TREE.md`
+- User-facing docs avoid internal slice shorthand; maintainer docs can still use it where useful.
 
-### DONE-011-0.0.5 — 0.0.5 Relay interfaces and Node foundation
+<a id="optimizer_beyond_slices_b1_b8"></a>
+### [DONE-003-0.0.3 — Optimizer beyond slices B1-B8](KANBAN.html#optimizer_beyond_slices_b1_b8)
+
+- Priority: High
+- Parity: 🍓 strawberry-graphql-django (Required)
+- Severity: Major
+- Status: Shipped
+- Relative size: L
+- Labels: `optimizer`, `performance`, `query-planning`, `schema-audit`
+
+#### Planning note
+
+shipped
+
+#### Scope
+
+- B1: plan cache keyed by selected operation AST, directive variables, model, and root runtime path
+- B2: forward-FK-id elision
+- B3: strictness mode (`off`, `warn`, `raise`)
+- B4: `Meta.optimizer_hints` with `OptimizerHint`
+- B5: plan introspection via context
+- B6: schema-build-time audit
+- B7: precomputed optimizer field metadata
+- B8: queryset diffing against consumer-applied `select_related`, `prefetch_related`, and `Prefetch`
+
+#### Other
+
+- continuation of DONE-002's optimizer lineage (⚛️ parity-adjacent).
+- eight optimizer sub-features B1–B8: AST plan cache, FK-id elision, strictness modes, `OptimizerHint`, context plan introspection, schema audit, precomputed field metadata, queryset diffing.
+- `django_strawberry_framework/optimizer/extension.py`
+- `django_strawberry_framework/optimizer/hints.py`
+- `django_strawberry_framework/optimizer/field_meta.py`
+- `django_strawberry_framework/optimizer/plans.py`
+- `tests/optimizer/test_extension.py`
+- `tests/optimizer/test_hints.py`
+- `tests/optimizer/test_field_meta.py`
+- `tests/optimizer/test_plans.py`
+- B8 went beyond the initial simple exact-match diff and now handles subtree-aware prefetch reconciliation.
+- Fragment-spread directive and multi-operation cache-key bugs have been fixed in source; the old `alpha-review-feedback.md` entries are now historical.
+
+<a id="optimizer_o1_o6_foundation"></a>
+### [DONE-002-0.0.2 — Optimizer O1-O6 foundation](KANBAN.html#optimizer_o1_o6_foundation)
+
+- Priority: High
+- Parity: 🍓 strawberry-graphql-django (Required)
+- Severity: Major
+- Status: Shipped
+- Relative size: L
+- Labels: `optimizer`, `performance`, `query-planning`, `relations`
+
+#### Planning note
+
+shipped
+
+#### Scope
+
+- generated relation resolvers
+- selection-tree walker
+- root-gated optimizer extension
+- nested `Prefetch` chains
+- same-query `select_related` recursion
+- `only()` projection
+- custom `get_queryset` downgrade to `Prefetch`
+
+#### Other
+
+- strawberry-graphql-django ships a heavy optimizer extension; graphene-django has only `select_related_field` (⚛️ parity-adjacent).
+- heavy optimizer extension: relation resolvers, selection-tree walker, root-gated planning, nested `Prefetch` chains, `only()` projection, `get_queryset` downgrade.
+- `django_strawberry_framework/optimizer/extension.py`
+- `django_strawberry_framework/optimizer/walker.py`
+- `django_strawberry_framework/optimizer/plans.py`
+- `tests/optimizer/test_extension.py`
+- `tests/optimizer/test_walker.py`
+- `tests/optimizer/test_plans.py`
+- Shipped behavior is consolidated into `docs/GLOSSARY.md`; source/tests are the truth for optimizer behavior.
+
+<a id="djangotype_core_foundation"></a>
+### [DONE-001-0.0.1 — DjangoType core foundation](KANBAN.html#djangotype_core_foundation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Labels: `public-api`, `relay`, `types`
-- Spec: [spec-011-relay_interfaces-0_0_5](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-011-relay_interfaces-0_0_5.md)
+- Labels: `public-api`, `registry`, `relations`, `scalars`, `types`
 
 #### Planning note
 
@@ -1764,344 +2125,32 @@ shipped
 
 #### Scope
 
-- `Meta.interfaces` accepted end-to-end for any Strawberry interface.
-- Four Relay node resolver defaults injected when `relay.Node` is declared (canonical order: `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes`); consumer-declared overrides are preserved via Strawberry's `__func__` identity test.
-- Automatic synthesized `id: int!` suppression when `relay.Node` is in `Meta.interfaces`; the Relay-supplied `id: GlobalID!` is used instead.
-- `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
-- Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise `ConfigurationError` at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
-- Both sync and async paths for `_resolve_node_default` / `_resolve_nodes_default`; async `get_queryset` hooks are awaited on the async branch and rejected with `ConfigurationError` on the sync branch.
-- `Meta.interfaces` promoted from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
-- Package version bumped to `0.0.5` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
+- `DjangoType` base class
+- Meta validation
+- scalar conversion
+- relation conversion
+- choice enums
+- type registry
+- relation resolvers
+- `get_queryset` hook and `has_custom_get_queryset`
 
 #### Other
 
-- both upstreams ship Relay Node interfaces; this shipped our 🍓-shaped Relay Node integration.
-- Relay Node foundation: `Meta.interfaces`, four `resolve_*` defaults, `id: GlobalID!` suppression, `is_type_of` injection, composite-PK rejection, sync + async node resolution.
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/types/relay.py`
-- `django_strawberry_framework/types/finalizer.py`
-- `tests/types/test_relay_interfaces.py`
-- `tests/types/test_definition_order_schema.py`
-- `tests/optimizer/test_relay_id_projection.py`
-- `tests/test_registry.py`
-- `examples/fakeshop/test_query/test_library_api.py`
-- `examples/fakeshop/apps/library/schema.py` (`GenreType` declares `Meta.interfaces = (relay.Node,)`)
-- `CHANGELOG.md`
-- `docs/GLOSSARY.md`
-- `docs/README.md`
-- `TODAY.md`
-- `pyproject.toml`
-- `django_strawberry_framework/__init__.py`
-- `tests/base/test_init.py`
-- `uv.lock`
-- Borrowed patterns from `strawberry-django` (spec "Borrowing posture", Decision 3). The override discriminator triad stays distinct across the three injection sites: `__dict__` membership for `is_type_of`, tuple membership for id suppression, `__func__` identity for the four `resolve_*` defaults.
-- `Meta.interfaces` is the first `0.0.4`-reserved `DjangoTypeDefinition` slot that ships end-to-end through finalizer phase 2.5; subsequent Layer 3 subsystems plug into the same architectural seam.
-
-### DONE-012-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement
-
-- Priority: Medium
-- Severity: Medium
-- Status: Shipped
-- Relative size: M
-- Labels: `cleanup`, `field-meta`, `metadata`, `optimizer`, `types`
-
-#### Planning note
-
-shipped
-
-#### Scope
-
-- **SSoT consolidation.** Three reader sites now read `FieldMeta` from the canonical source on `DjangoTypeDefinition.field_map`:
-- `django_strawberry_framework/types/base.py:_record_pending_relation`
-- `django_strawberry_framework/types/converters.py:resolved_relation_annotation`
-- `django_strawberry_framework/types/resolvers.py:_make_relation_resolver`
-- **Mirror retirement.** `DjangoType.__init_subclass__` no longer writes the legacy class-attribute mirrors. The optimizer reads from `registry.get_definition(type_cls)` directly at all four former reader sites:
-- `optimizer/walker.py:_resolve_field_map`
-- `optimizer/walker.py:_walk_selections` (hints read)
-- `optimizer/extension.py:_collect_schema_reachable_types`
-- `optimizer/extension.py:check_schema`
-- All `TODO(spec-fieldmeta-*)` source anchors removed.
-- 100% package coverage maintained; no consumer-visible API change.
-
-#### Why it matters
-
-- Three reader sites were re-deriving relation shape via `relation_kind(field)` + raw `getattr(field, ...)` instead of reading the `FieldMeta` already on `DjangoTypeDefinition.field_map` — duplicating logic and creating drift surface for any future relation-flag addition.
-- `DjangoType.__init_subclass__` was writing legacy class-attribute mirrors (`cls._optimizer_field_map`, `cls._optimizer_hints`) that survived `registry.clear()`, then four optimizer sites read those mirrors instead of the canonical `DjangoTypeDefinition`. Two parallel sources of field metadata with no enforced consistency.
-
-#### Other
-
-- internal metadata-architecture refactor; no consumer-visible API change.
-- consolidate field metadata onto `DjangoTypeDefinition` (single source of truth) and retire legacy class-attribute mirrors across ~7 reader sites.
-- Commit `de35a62` (`refactor(types,optimizer): consolidate metadata onto DjangoTypeDefinition`).
+- `DjangoObjectType` (graphene-django) / `@strawberry_django.type` (strawberry-graphql-django) are the namesake primitive.
+- core foundational subsystem: `DjangoType` base, Meta validation, scalar/relation conversion, choice enums, type registry, relation resolvers, `get_queryset` hook.
 - `django_strawberry_framework/types/base.py`
 - `django_strawberry_framework/types/converters.py`
 - `django_strawberry_framework/types/resolvers.py`
-- `django_strawberry_framework/optimizer/walker.py`
-- `django_strawberry_framework/optimizer/extension.py`
-- `CHANGELOG.md` (under `[Unreleased] → Changed`)
-- Originally tracked as `BACKLOG.md` item 35 ("`FieldMeta` single-source-of-truth consolidation and mirror retirement"). Promoted to a DONE card and removed from `BACKLOG.md` when the work shipped — per `BACKLOG.md`'s "graduate into a `KANBAN.md` card when scheduled" workflow. This is the first `BACKLOG.md` item to graduate; the precedent for shipped items: strike-through with SHIPPED status is fine while the item awaits a release; once a release is imminent, move the item to a `KANBAN.md` `DONE` card and delete it from `BACKLOG.md` so the strategic-differentiation file doesn't keep pointing at completed architecture debt.
-- The consolidation eliminates ~7 sites of duplicated relation-shape logic and removes legacy class-attribute residue that previously survived `registry.clear()`. Single source of truth for field metadata reduces drift surface whenever Django adds a new relation flag or changes a descriptor attribute.
-- Internal refactor only; no `Meta` key changes, no public surface changes, no consumer-visible behavior changes. Existing tests pass without modification.
-
-### DONE-013-0.0.6 — Deferred scalar conversions
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
-- Status: Shipped
-- Relative size: M
-- Labels: `converters`, `public-api`, `scalars`
-- Spec: [spec-013-deferred_scalars-0_0_6](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-013-deferred_scalars-0_0_6.md)
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- both upstreams ship scalar conversion for `BigIntegerField` / `JSONField` / `HStoreField` / `ArrayField`, etc.
-- `BigInt` scalar + strict parser/serializer, `JSONField` / `ArrayField` / `HStoreField` conversion, `SCALAR_MAP` value-type widening.
-- Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based) with the Strawberry class-direct-to-`scalar()` `DeprecationWarning` suppressed at the definition site so consumers see no warning at import time.
-- Strict `BigInt` parser via regex `^(0|-?[1-9][0-9]*)$` — rejects `bool`, `float`, empty / whitespace-padded strings, non-decimal strings, underscores, plus signs, leading zeroes, `-0`, and Unicode digits.
-- Strict `BigInt` serializer — rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`.
-- `BigIntegerField → BigInt` and `PositiveBigIntegerField → BigInt` in `SCALAR_MAP`. `BigAutoField` preserved as `int` (no override recourse at the time of DONE-013; annotation-override recourse now available via `DONE-015-0.0.6`).
-- `JSONField → strawberry.scalars.JSON` in `SCALAR_MAP`.
-- `ArrayField` and `HStoreField` mapped via sentinel-guarded branches in `convert_scalar`. `HStoreField` not added to `SCALAR_MAP`.
-- `ArrayField` rejects nested arrays and outer `choices` with `ConfigurationError`.
-- `SCALAR_MAP`'s declared value type widened from `dict[type[models.Field], type]` to `dict[type[models.Field], Any]`.
-- `BigInt` added to `django_strawberry_framework.__all__`; `tests/base/test_init.py`'s pinned `__all__` and `__version__` assertions updated.
-- Atomic version-bump quintet: `pyproject.toml`, `__init__.py`, `tests/base/test_init.py`, `docs/GLOSSARY.md` package-version line, `uv.lock`.
-- 100% coverage via `tests/test_scalars.py` (new flat file) and `tests/types/test_converters.py` (extended). Includes a `test_package_import_does_not_emit_strawberry_deprecation_warning` guard so future regressions to the suppression are explicit.
-- Docs: `docs/GLOSSARY.md`, `docs/README.md`, `README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`.
-- The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `DONE-021-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor.
+- `tests/types/test_base.py`
+- `tests/types/test_converters.py`
+- `tests/types/test_resolvers.py`
+- The public shape is intentionally narrow and explicit.
+- Deferred Meta keys are rejected, not silently accepted.
+- Definition-order independence is now covered by `DONE-006-0.0.4`.
 
 #### Card references
 
-- Related via Card item: `BigAutoField` preserved as `int` before scalar override recourse shipped in `DONE-015-0.0.6`. -> `DONE-015-0.0.6` — Consumer override semantics (scalar fields)
-- Related via Card item: The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `DONE-021-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor. -> `DONE-021-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map`
-
-### DONE-014-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`
-
-- Priority: Medium
-- Severity: Medium
-- Status: Shipped
-- Relative size: L
-- Labels: `optimizer`, `public-api`, `registry`, `types`
-- Spec: [spec-014-meta_primary-0_0_6](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-014-meta_primary-0_0_6.md)
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- 🍓 parity-adjacent (strawberry-graphql-django has an implicit primary-type concept via `is_type_of`; graphene-django ships no equivalent) — not required on either side.
-- registry stores multiple types per model, `Meta.primary` flag, ambiguity audit at finalize, relation-deferral, optimizer origin-type threading.
-- Registry stores multiple types per model (`_types: dict[Model, list[Type]]`).
-- New `Meta.primary: bool` flag (default `False`); validated in `_validate_meta`.
-- `registry.register(..., *, primary: bool = False) -> bool` and
-- New registry surface: `primary_for(model)`, `types_for(model)`,
-- `registry.get(model)` returns the primary if declared, else the single
-- `finalize_django_types()` runs `audit_primary_ambiguity()` first: any
-- Two primary types for the same model: rejected at registration time
-- Relation conversion in `types/base.py` defers all **auto-synthesized**
-- Optimizer planning threads the resolved origin Strawberry type from
-- Schema audit (`optimizer/extension.py`) iterates every reachable
-- `model_for_type` continues to work for any registered type so
-- `DjangoTypeDefinition` gains `primary: bool = False`.
-- 100% coverage across `tests/test_registry.py`, `tests/types/test_base.py`,
-- Single-type-no-primary stays backward compatible: `registry.get(model)`
-- `Meta.primary` is a per-class declaration, not a registry-level
-- Already-shipped consumer relation overrides (direct annotation
-
-### DONE-015-0.0.6 — Consumer override semantics (scalar fields)
-
-- Priority: Medium
-- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
-- Status: Shipped
-- Relative size: L
-- Labels: `public-api`, `relay`, `scalars`, `types`
-- Spec: [spec-015-consumer_overrides_scalar-0_0_6](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-015-consumer_overrides_scalar-0_0_6.md)
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- both upstreams support consumer-authored scalar field overrides on model-backed types.
-- annotation/assigned scalar-override contract (four-corner matrix), `relay.Node` `id`-collision rejection, cross-type choice-enum cache semantics.
-- `DjangoType.__init_subclass__` collected `consumer_annotated_scalar_fields`
-- `DjangoTypeDefinition` gained `consumer_annotated_scalar_fields: frozenset[str]`.
-- The previously-skipped `test_consumer_annotation_overrides_synthesized`
-- End-to-end test pinned the override surviving `strawberry.type(...)`
-- **Consumer annotation overrides are authoritative.** `_build_annotations`'s
-- **`relay.Node` `id` collision rejected at type-creation time.** A consumer
-- No new public API. No `Meta.field_overrides = {...}`-style key. Opt-out
-- 100% coverage was reached across `tests/types/test_definition_order.py`
-- The four `consumer_*_fields` sets on `DjangoTypeDefinition`
-- Resolver / metadata overrides for scalars stay on the assigned
-- Type-annotation overrides are the consumer's responsibility for runtime
-
-### DONE-016-0.0.7 — `DjangoListField` (non-Relay list)
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Required)
-- Severity: Medium
-- Status: Shipped
-- Relative size: M
-- Labels: `graphql-api`, `list-field`, `optimizer`, `public-api`
-- Spec: [spec-016-list_field-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-016-list_field-0_0_7.md)
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- graphene-django ships `DjangoListField`; strawberry-graphql-django has no non-Relay list-field primitive.
-- `DjangoListField` factory: default + consumer resolver, `Manager → QuerySet` coercion, sync/async `get_queryset`, outer-list nullability, root-gated optimizer cooperation.
-
-### DONE-017-0.0.7 — `apps.py` and Django app config
-
-- Priority: Medium
-- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Low
-- Status: Shipped
-- Relative size: XS
-- Labels: `django-app`, `packaging`
-- Spec: [spec-017-apps-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-017-apps-0_0_7.md)
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- both upstreams ship an `apps.py` `AppConfig` for `INSTALLED_APPS`-driven discovery.
-- tiny `AppConfig` (two class attributes, no `ready()` body in 0.0.7) + tests.
-
-### DONE-018-0.0.7 — Schema export management command
-
-- Priority: Medium
-- Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Low
-- Status: Shipped
-- Relative size: S
-- Labels: `management-command`, `public-api`, `schema`
-- Spec: [spec-018-export_schema-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-018-export_schema-0_0_7.md)
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- strawberry-graphql-django ships `manage.py export_schema`; graphene-django's different `graphql_schema` command is parity-adjacent (deliberately not borrowed).
-- one management command (positional `schema`, `--path`, SDL via `print_schema`, `CommandError` paths) + tests.
-
-### DONE-019-0.0.7 — Multi-database cooperation contract
-
-- Priority: Low
-- Severity: Low
-- Status: Shipped
-- Relative size: S
-- Labels: `multi-db`, `optimizer`, `tests`
-- Spec: [spec-019-multi_db-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-019-multi_db-0_0_7.md)
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- multi-DB is a Django capability neither upstream specifies a contract around (⚛️&🍓 parity-adjacent); pinning ours smooths the migrant story.
-- pin the multi-DB cooperation contract (router-aware FK-id stubs, `.using()` preservation, `Prefetch` `_db` round-trip) + tests; zero production-code change.
-
-### DONE-020-0.0.7 — Django Trac #37064 hardening + `safe_wrap_connection_method`
-
-- Priority: Low
-- Severity: Low
-- Status: Shipped
-- Relative size: S
-- Labels: `django-integration`, `hardening`
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- defensive hardening unique to this package; neither upstream ships a Django Trac #37064 patch.
-- two-half defense for Trac #37064: a package-level unwrap patch (auto-applied at app-load) plus the cooperative `safe_wrap_connection_method` helper + tests.
-
-### DONE-021-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`
-
-- Priority: Medium
-- Severity: Medium
-- Status: Shipped
-- Relative size: S
-- Labels: `config`, `public-api`, `scalar-map`, `scalars`
-- Spec: [spec-020-scalar_map_helper-0_0_7](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-020-scalar_map_helper-0_0_7.md)
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- package-specific scalar-registration plumbing (`StrawberryConfig.scalar_map` via `strawberry_config()`); not an upstream-parity primitive.
-- `strawberry_config()` factory registering `BigInt` via `scalar_map` and removing the deprecation-suppression block; a documented breaking change in alpha.
-
-### DONE-022-0.0.7 — Scalar conversion end-to-end coverage in the fakeshop example
-
-- Priority: Medium
-- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Low
-- Status: Shipped
-- Relative size: M
-- Labels: `example-app`, `graphql-api`, `scalars`, `tests`
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- both upstreams ship scalar conversion for the full numeric / date / JSON / UUID set; this card moves those converter rows to live `/graphql/` HTTP coverage in both nullable and non-null shapes.
-- new `apps.scalars` example app (paired non-null / nullable models, self-FK + cross-model `SET_NULL` FK) + eight live HTTP tests + a real-domain `BigIntegerField` on `Patron`.
-- `ScalarSpecimen` — every scalar field non-null, exposed via `ScalarSpecimenType`. Adds an intra-model self-FK `parent` (`related_name="children"`) so the example exercises self-referential FK planning under the optimizer.
-- `NullableScalarSpecimen` — every scalar field nullable (`null=True, blank=True`), exposed via `NullableScalarSpecimenType`. Adds a cross-model FK `partner: ForeignKey(ScalarSpecimen, on_delete=SET_NULL, related_name="nullable_partners")` — the only `SET_NULL` ondelete in the example tree, and the only cross-model FK in the scalars app.
-- The pairing is deliberate (not a single model with paired fields). It exercises **upstream code paths no other example app reaches**: Django's two-`CreateModel` initial migration path, the registry / `finalize_django_types()` resolving sibling `DjangoType` classes in one app, Strawberry type registration across sibling types in one schema build, the optimizer planning across two managed models in one query, and `SET_NULL` ondelete behavior.
-- `apps.scalars.schema` composes two root resolvers (`all_scalar_specimens`, `all_nullable_scalar_specimens`) into the project root `Query` at [`examples/fakeshop/config/schema.py`][example-schema]; `ScalarsConfig` lands in `INSTALLED_APPS` at [`examples/fakeshop/config/settings.py`][settings].
-- Full non-null wire-format sweep covering every field on `ScalarSpecimen`
-- Signed-negative `BigInt` round-trip
-- `BigInt`-at-zero edge case
-- Schema introspection asserting `BigInt` converter resolves correctly in both shapes (`NON_NULL` on `ScalarSpecimenType`; bare `SCALAR` on `NullableScalarSpecimenType`)
-- All-NULL nullable wire format covering every nullable converter branch
-- Cross-model `partner` FK linkage round-trip
-- Reverse-FK `nullablePartners` exposure
-- Self-FK `parent` / `children` traversal
-
-### DONE-023-0.0.8 — Filtering subsystem
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Major
-- Status: Shipped
-- Relative size: XL
-- Labels: `example-app`, `filters`, `graphql-api`, `public-api`
-- Spec: [spec-021-filters-0_0_8](https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-021-filters-0_0_8.md)
-
-#### Planning note
-
-shipped
-
-#### Other
-
-- both upstreams ship a FilterSet / filter surface; `django-graphene-filters` is the cookbook source.
-- the milestone anchor: six-layer lazy-resolution filtering pipeline, `FilterSet` / `RelatedFilter` / `Meta.filterset_class`, parity-floor filter primitives, finalizer phase-2.5 wiring, 14 live HTTP tests.
+- Related via Card item: Definition-order independence is now covered by `DONE-006-0.0.4`. -> `DONE-006-0.0.4` — 0.0.4 foundation slice (definition-order independence)
 
 ## Release readiness checklist
 

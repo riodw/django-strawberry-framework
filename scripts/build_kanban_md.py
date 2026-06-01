@@ -64,6 +64,15 @@ def card_column_key(card: dict[str, Any]) -> str:
     return "backlog"
 
 
+def sorted_column_cards(column_key: str, cards: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return cards in the display order for one board column."""
+    return sorted(
+        cards,
+        key=lambda value: value["number"],
+        reverse=column_key == "done",
+    )
+
+
 def size_label(card: dict[str, Any]) -> str:
     """Render a card's relative-size range."""
     relative_size = card.get("relativeSize")
@@ -299,7 +308,7 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     docs = [doc for doc in docs if doc["key"] != LINK_DEFINITIONS_KEY]
 
     cards_by_column = defaultdict(list)
-    for card in sorted(dashboard_data["cards"], key=lambda value: value["number"]):
+    for card in dashboard_data["cards"]:
         cards_by_column[card_column_key(card)].append(card)
 
     rendered = []
@@ -309,7 +318,7 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
             continue
         rendered.extend(render_doc(doc))
         if doc["key"] in COLUMN_DOC_KEYS:
-            for card in cards_by_column.get(doc["key"], []):
+            for card in sorted_column_cards(doc["key"], cards_by_column.get(doc["key"], [])):
                 rendered.extend(render_card(card))
                 rendered_card_ids.add(card["id"])
 
@@ -321,7 +330,7 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     ]
     if remaining_cards:
         rendered.extend(["## Backlog", ""])
-        for card in sorted(remaining_cards, key=lambda value: value["number"]):
+        for card in sorted_column_cards("backlog", remaining_cards):
             rendered.extend(render_card(card))
 
     if link_definitions is not None:

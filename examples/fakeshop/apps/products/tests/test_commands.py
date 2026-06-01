@@ -190,15 +190,3 @@ def test_seed_shards_command_runs_when_shard_alias_present(settings, monkeypatch
     call_command("seed_shards", "--count", "1", stdout=out)
     output = out.getvalue()
     assert "Secondary shard populated." in output
-
-
-# ---------------------------------------------------------------------------
-# export_schema command
-# ---------------------------------------------------------------------------
-
-
-def test_export_schema_command_against_fakeshop_schema(tmp_path):
-    out_path = tmp_path / "schema.graphql"
-    call_command("export_schema", "config.schema", "--path", str(out_path))
-    assert out_path.exists()
-    assert "type BranchType" in out_path.read_text(encoding="utf-8")

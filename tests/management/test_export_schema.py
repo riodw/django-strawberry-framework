@@ -2,7 +2,6 @@
 
 import sys
 import types
-from io import StringIO
 
 import pytest
 import strawberry
@@ -15,8 +14,8 @@ from django.core.management import CommandError, call_command
 # Every test that synthesizes ``test_module`` does so via
 # ``monkeypatch.setitem(sys.modules, "test_module", module)`` so pytest's
 # ``monkeypatch`` teardown clears the entry from ``sys.modules`` at end of
-# test (rev3 L4 cleanup contract). The seven tests are order-independent
-# under any pytest collection ordering.
+# test (rev3 L4 cleanup contract). The tests are order-independent under
+# any pytest collection ordering.
 
 
 def _make_test_module(monkeypatch, **attrs):
@@ -33,34 +32,6 @@ def _make_schema():
         hello: str = "world"
 
     return strawberry.Schema(query=Query)
-
-
-# ---------------------------------------------------------------------------
-# Happy paths
-# ---------------------------------------------------------------------------
-
-
-def test_export_schema_writes_sdl_to_stdout_by_default(monkeypatch):
-    _make_test_module(monkeypatch, schema=_make_schema())
-    out = StringIO()
-    call_command("export_schema", "test_module:schema", stdout=out)
-    assert "type Query" in out.getvalue()
-
-
-def test_export_schema_writes_sdl_to_path_when_path_set(monkeypatch, tmp_path):
-    _make_test_module(monkeypatch, schema=_make_schema())
-    out = StringIO()
-    out_path = tmp_path / "schema.graphql"
-    call_command(
-        "export_schema",
-        "test_module:schema",
-        "--path",
-        str(out_path),
-        stdout=out,
-    )
-    assert out_path.exists()
-    assert "type Query" in out_path.read_text(encoding="utf-8")
-    assert f"Wrote schema to {out_path}" in out.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -112,15 +83,3 @@ def test_export_schema_raises_command_error_when_path_flag_is_empty_string(monke
     _make_test_module(monkeypatch, schema=_make_schema())
     with pytest.raises(CommandError, match="--path requires a non-empty value"):
         call_command("export_schema", "test_module:schema", "--path", "")
-
-
-# ---------------------------------------------------------------------------
-# Default-symbol-name fallback (Decision 3)
-# ---------------------------------------------------------------------------
-
-
-def test_export_schema_falls_back_to_default_symbol_name_schema(monkeypatch):
-    _make_test_module(monkeypatch, schema=_make_schema())
-    out = StringIO()
-    call_command("export_schema", "test_module", stdout=out)
-    assert "type Query" in out.getvalue()

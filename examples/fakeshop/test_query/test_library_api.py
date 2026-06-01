@@ -16,8 +16,7 @@ from strawberry import relay
 from django_strawberry_framework.registry import registry
 
 
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
+def _reload_library_project_schema() -> None:
     """Recreate imported DjangoType classes if package tests cleared the registry."""
     # This reload is mandatory for order-independent suite isolation:
     # package tests clear the global registry, while the example project
@@ -43,6 +42,12 @@ def _reload_project_schema_for_acceptance_tests():
     if urls is not None:
         importlib.reload(urls)
         clear_url_caches()
+
+
+@pytest.fixture(autouse=True)
+def _reload_project_schema_for_acceptance_tests():
+    """Recreate the project schema around package-test registry clears."""
+    _reload_library_project_schema()
 
 
 def _seed_library_graph():
@@ -86,6 +91,24 @@ def _assert_graphql_data(query: str, expected: dict):
 
 def _field_type(type_info: dict, field_name: str) -> dict:
     return next(field["type"] for field in type_info["fields"] if field["name"] == field_name)
+
+
+def _input_field_names(type_name: str) -> set[str]:
+    response = _post_graphql(
+        f"""
+        query {{
+          __type(name: "{type_name}") {{
+            inputFields {{ name }}
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    type_info = payload["data"]["__type"]
+    assert type_info is not None
+    return {field["name"] for field in type_info["inputFields"]}
 
 
 @pytest.mark.django_db
@@ -662,6 +685,65 @@ def test_library_branches_filter_by_name_icontains():
         }
         """,
         {"allLibraryBranches": [{"name": "Andromeda Main"}]},
+    )
+
+
+def test_hide_flat_filters_changes_library_filter_input_shape_over_http(settings):
+    """``HIDE_FLAT_FILTERS`` changes the real GraphQL input shape exposed at ``/graphql/``."""
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": False}
+    _reload_library_project_schema()
+    shown = _input_field_names("BranchFilterInputType")
+    assert "shelves" in shown
+    assert "shelvesCode" in shown
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
+    _reload_library_project_schema()
+    hidden = _input_field_names("BranchFilterInputType")
+    assert "shelves" in hidden
+    assert "shelvesCode" not in hidden
+
+
+@pytest.mark.django_db
+def test_library_branches_empty_filter_input_is_noop_over_http():
+    """An empty GraphQL filter input behaves like no filter while preserving root visibility."""
+    models.Branch.objects.create(name="Visible", city="Boston")
+    models.Branch.objects.create(name="Restricted", city="restricted")
+
+    _assert_graphql_data(
+        """
+        query {
+          unfiltered: allLibraryBranches {
+            name
+          }
+          filtered: allLibraryBranches(filter: {}) {
+            name
+          }
+        }
+        """,
+        {
+            "unfiltered": [{"name": "Visible"}],
+            "filtered": [{"name": "Visible"}],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_library_branches_not_filter_respects_root_visibility_over_http():
+    """``not`` filtering runs inside the root ``get_queryset`` visibility scope."""
+    models.Branch.objects.create(name="x-row", city="Boston")
+    models.Branch.objects.create(name="keep-1", city="Boston")
+    models.Branch.objects.create(name="keep-2", city="Boston")
+    models.Branch.objects.create(name="Hidden", city="restricted")
+
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryBranches(filter: { not: { name: { exact: "x-row" } } }) {
+            name
+          }
+        }
+        """,
+        {"allLibraryBranches": [{"name": "keep-1"}, {"name": "keep-2"}]},
     )
 
 

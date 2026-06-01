@@ -211,13 +211,13 @@ def _decode_and_validate_global_id(
     *,
     index: int | None = None,
 ) -> str:
-    """Decode ``value`` to a node id and validate its ``type_name``.
+    """Decode `value` to a node id and validate its `type_name`.
 
-    Accepts both raw ``str`` and ``strawberry.relay.GlobalID`` objects per
-    spec-021 L602. Raises ``GraphQLError("GlobalID type mismatch: filter
-    expects <expected> but received <actual>")`` when the decoded
-    ``type_name`` does not match the expected type for the filter (spec
-    L603). ``GlobalIDMultipleChoiceFilter`` passes ``index`` so the
+    Accepts both raw `str` and `strawberry.relay.GlobalID` objects per
+    spec-021 L602. Raises `GraphQLError("GlobalID type mismatch: filter
+    expects <expected> but received <actual>")` when the decoded
+    `type_name` does not match the expected type for the filter (spec
+    L603). `GlobalIDMultipleChoiceFilter` passes `index` so the
     rejected list element is named in the error message per spec L605.
     """
     decoded = value if isinstance(value, relay.GlobalID) else relay.GlobalID.from_id(value)
@@ -258,17 +258,17 @@ class GlobalIDFilter(Filter):
 
 
 class _GlobalIDMultipleChoiceField(MultipleChoiceField):
-    """``MultipleChoiceField`` that skips fixed-``choices`` validation.
+    """`MultipleChoiceField` that skips fixed-`choices` validation.
 
-    ``MultipleChoiceField.valid_value`` rejects any submitted value that
-    is not in ``self.choices`` -- and a ``GlobalIDMultipleChoiceFilter``
-    has no static choice set (its ``choices`` default to ``[]``), so the
+    `MultipleChoiceField.valid_value` rejects any submitted value that
+    is not in `self.choices` -- and a `GlobalIDMultipleChoiceFilter`
+    has no static choice set (its `choices` default to `[]`), so the
     stock field rejected EVERY GlobalID at form-clean time before the
     filter's own decode/validate could run. GlobalID list elements are
-    decoded and type-checked in ``GlobalIDMultipleChoiceFilter.filter``
+    decoded and type-checked in `GlobalIDMultipleChoiceFilter.filter`
     (per spec-021 L605), not against a fixed set, so this field accepts
     any submitted value and defers validation to the filter. Mirrors
-    graphene-django's ``GlobalIDMultipleChoiceField``.
+    graphene-django's `GlobalIDMultipleChoiceField`.
     """
 
     def valid_value(self, value: Any) -> bool:  # noqa: ARG002 - signature fixed by Django.
@@ -324,13 +324,26 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
         self,
         filterset: str | type[BaseFilterSet],
         *args,
-        lookups: list[str] | None = None,
         **kwargs,
     ) -> None:
+        """Bind the target `filterset` and record explicit-queryset intent.
+
+        Rejects `lookups=` with `TypeError` before delegating to
+        `ModelChoiceFilter.__init__`. The kwarg was a verbatim port of
+        an upstream cookbook artifact with no readers in this package
+        and was removed in 0.0.7; the explicit guard runs ahead of
+        `super().__init__` because `django_filters.Filter.__init__`
+        silently absorbs unknown kwargs into `self.extra`, which would
+        otherwise mask the dead-state shape under a different name.
+        """
+        if "lookups" in kwargs:
+            raise TypeError(
+                "`RelatedFilter` does not accept `lookups=`; the kwarg was "
+                "removed in 0.0.7 because it had no readers.",
+            )
         self._has_explicit_queryset = kwargs.get("queryset") is not None
         super().__init__(*args, **kwargs)
         self._filterset = filterset
-        self.lookups = lookups or []
 
     def bind_filterset(self, filterset: type[BaseFilterSet]) -> None:
         """Bind the owning `FilterSet` once; subsequent calls are no-ops.
@@ -345,7 +358,8 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
             two ``FilterSet`` subclasses) is also silenced here. The
             strict cross-owner mismatch detection runs later at
             finalize time in
-            ``types/finalizer.py::_bind_filterset_owner`` (H2-rev8
+            ``types/finalizer.py::_bind_filterset_owner`` (subpass 1 of
+            finalizer phase 2.5's ``_bind_filtersets`` umbrella; H2-rev8
             check), so a real divergent-owner reuse still surfaces a
             ``ConfigurationError`` with both owners named — just not at
             class-creation time.

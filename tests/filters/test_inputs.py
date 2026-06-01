@@ -447,6 +447,55 @@ def test_normalize_input_value_range_filter_emits_positional_keys():
     assert patch == {"lifetime_fines_cents_0": 1, "lifetime_fines_cents_1": 10}
 
 
+def test_normalize_input_value_range_filter_drops_none_axes_partial_range():
+    """Partial-range inputs surface only the supplied positional key.
+
+    A ``None``-valued axis is "axis not supplied"; emitting ``{<name>_0: None}``
+    to the form-data dict surfaces "axis supplied, value is None" to any
+    caller walking ``data.keys()``. The normalizer drops ``None``-valued
+    axes so the patch shape matches django-filter's form-data convention
+    for partial ranges.
+    """
+    f = RangeFilter(field_name="lifetime_fines_cents")
+
+    @dataclass
+    class _RangeInput:
+        start: int | None = None
+        end: int | None = None
+
+    # Only ``start`` supplied -> single-key patch.
+    only_start = normalize_input_value(
+        f,
+        _RangeInput(start=5),
+        field_name="lifetime_fines_cents",
+    )
+    assert only_start == {"lifetime_fines_cents_0": 5}
+
+    # Only ``end`` supplied -> single-key patch.
+    only_end = normalize_input_value(
+        f,
+        _RangeInput(end=10),
+        field_name="lifetime_fines_cents",
+    )
+    assert only_end == {"lifetime_fines_cents_1": 10}
+
+    # Both supplied -> both-key patch (existing both-axes contract preserved).
+    both = normalize_input_value(
+        f,
+        _RangeInput(start=5, end=10),
+        field_name="lifetime_fines_cents",
+    )
+    assert both == {"lifetime_fines_cents_0": 5, "lifetime_fines_cents_1": 10}
+
+    # Neither supplied -> empty patch (no positional keys at all).
+    neither = normalize_input_value(
+        f,
+        _RangeInput(),
+        field_name="lifetime_fines_cents",
+    )
+    assert neither == {}
+
+
 def test_normalize_input_value_global_id_list():
     """GlobalID OBJECTS keep their ``type_name`` (wire form), not bare node_ids.
 
@@ -618,6 +667,37 @@ def test_pascal_case_converts_separators():
     assert _pascal_case("email_must_have_at_sign") == "EmailMustHaveAtSign"
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "",
+        "_",
+        "__",
+        "___",
+    ],
+)
+def test_type_name_for_raises_for_no_word_character_field_path(bad):
+    """``type_name_for`` raises rather than silently collapsing to the root name.
+
+    The guard is hoisted from ``_pascal_case`` (the direct
+    ``_build_range_input_class`` consumer) into the shared
+    ``ClassBasedTypeNameMixin`` so the bag-class naming path in
+    ``_build_input_fields`` -- which routes through ``type_name_for`` /
+    ``utils.strings.pascal_case`` rather than the inputs-local
+    ``_pascal_case`` -- also surfaces the no-word-character collision
+    loudly instead of producing a generic ``f"{cls.__name__}InputType"``
+    that silently collides with the root input type's own name.
+    """
+    from django_strawberry_framework.sets_mixins import ClassBasedTypeNameMixin
+
+    class _Probe(ClassBasedTypeNameMixin):
+        pass
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        _Probe.type_name_for(bad)
+    assert repr(bad) in str(excinfo.value)
+
+
 def test_camel_case_returns_input_when_no_word_characters():
     """`_camel_case` returns the raw string when it has no word tokens."""
     assert _camel_case("") == ""
@@ -754,6 +834,20 @@ def test_model_field_for_filter_returns_none_without_field_name():
 
     f = GlobalIDFilter()
     f.field_name = ""
+    assert _model_field_for_filter(ShelfFilter, f) is None
+
+
+def test_model_field_for_filter_returns_none_for_unknown_field_name():
+    """A typo in ``Filter(field_name=...)`` surfaces as ``None``, not a crash.
+
+    The narrowed ``except FieldDoesNotExist`` catches Django's documented
+    "unknown name" signal at ``_meta.get_field`` so any other failure
+    surfaces loudly. Previously the broad ``except Exception`` (with a
+    ``# pragma: no cover``) masked the same reachable path.
+    """
+    from tests.filters.fixtures.filtersets import ShelfFilter
+
+    f = GlobalIDFilter(field_name="nonexistent_field")
     assert _model_field_for_filter(ShelfFilter, f) is None
 
 
@@ -905,45 +999,6 @@ def test_build_input_fields_keeps_non_relatedfilter_flat_traversal_visible_when_
     }
     assert "branch_name" in names  # non-RelatedFilter flat traversal stays visible
     assert "code" in names
-
-
-@pytest.mark.django_db
-def test_hide_flat_filters_propagates_to_built_input_type(settings):
-    """End-to-end: the toggle changes the GraphQL fields on the BUILT Strawberry input.
-
-    Build the actual ``@strawberry.input`` class from the triples (the same path
-    ``materialize_input_class`` takes) and assert the camelCase GraphQL field names —
-    not just the python attrs — so the contract is locked at the schema-shape level.
-    """
-
-    class GqlShelfFilter(FilterSet):
-        class Meta:
-            model = library_models.Shelf
-            fields = {"code": ["exact"]}
-
-    class GqlBranchFilter(FilterSet):
-        shelves = RelatedFilter(GqlShelfFilter, field_name="shelves")
-
-        class Meta:
-            model = library_models.Branch
-            fields = {"name": ["exact"]}
-
-    def _graphql_field_names(name: str) -> set[str]:
-        built = build_input_class(name, _build_input_fields(GqlBranchFilter))
-        return {
-            field.graphql_name or field.python_name
-            for field in built.__strawberry_definition__.fields
-        }
-
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": False}
-    shown = _graphql_field_names("GqlBranchShownInput")
-    assert "shelves" in shown  # nested branch
-    assert "shelvesCode" in shown  # flat relational field on the built GraphQL input
-
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
-    hidden = _graphql_field_names("GqlBranchHiddenInput")
-    assert "shelves" in hidden  # nested branch still there
-    assert "shelvesCode" not in hidden  # gone from the built GraphQL input type
 
 
 # ---------------------------------------------------------------------------

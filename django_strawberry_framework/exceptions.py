@@ -33,8 +33,12 @@ class ConfigurationError(DjangoStrawberryFrameworkError):
 class OptimizerError(DjangoStrawberryFrameworkError):
     """Raised when ``DjangoOptimizerExtension`` cannot plan a relation traversal.
 
-    Most planning failures should be programmer errors caught early; a
-    runtime ``OptimizerError`` typically signals a registry miss for a
-    type that should have been registered by
-    ``DjangoType.__init_subclass__``.
+    Current raise sites in 0.0.7:
+        - ``FieldMeta.from_django_field`` rejects an input that is not a
+          Django field descriptor (missing ``name`` / ``is_relation``),
+          converting an otherwise late ``AttributeError`` into a typed,
+          call-site failure naming the bad input.
+        - The relation resolver's N+1 guard fires when optimizer
+          ``strictness`` is ``"raise"`` and a request reaches an unplanned
+          relation that would lazy-load.
     """

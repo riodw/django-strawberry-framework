@@ -3,9 +3,9 @@
 Ported from ``django_graphene_filters/mixins.py`` and refactored to this
 package's structure (Strawberry, not Graphene) and dependencies. This module
 lives at the package root so the ``filters`` subpackage -- and the future
-``orders`` / ``aggregates`` / ``fields`` subpackages (``WIP-ALPHA-022`` and
-later) -- all import shared set-machinery from one neutral home rather than
-from each other.
+``orders`` / ``aggregates`` / ``fieldsets`` subpackages (``WIP-ALPHA-028-0.0.8``
+and later) -- all import shared set-machinery from one neutral home rather
+than from each other.
 
 Scope is deliberately limited to the two mixins the shipped ``FilterSet``
 already uses:
@@ -30,6 +30,7 @@ from typing import Any
 from django.db.models.constants import LOOKUP_SEP
 from django.utils.module_loading import import_string
 
+from .exceptions import ConfigurationError
 from .utils.strings import pascal_case
 
 
@@ -59,17 +60,36 @@ class ClassBasedTypeNameMixin:
 
     @classmethod
     def type_name_for(cls, field_path: str | None = None) -> str:
-        """Return the GraphQL type name for this class, or for a sub-field path."""
+        """Return the GraphQL type name for this class, or for a sub-field path.
+
+        Raises ``ConfigurationError`` when ``field_path`` contains no
+        word-character tokens (e.g. ``""``, ``"_"``, ``"__"``); without the
+        guard the per-field segment would silently collapse to an empty
+        string and the resulting type name would collide with the root
+        ``f"{cls.__name__}{cls._root_type_suffix}"`` (or with a sibling
+        field's bag class). Raising here surfaces the real cause at the
+        call site for every consumer (``_build_input_fields`` operator-bag
+        naming, future ``OrderSet`` / ``AggregateSet`` per-field naming).
+        """
         if field_path is None:
             return f"{cls.__name__}{cls._root_type_suffix}"
-        pascal = "".join(pascal_case(part) for part in field_path.split(LOOKUP_SEP))
+        parts = [pascal_case(part) for part in field_path.split(LOOKUP_SEP)]
+        pascal = "".join(parts)
+        if not pascal:
+            raise ConfigurationError(
+                f"{cls.__name__}.type_name_for received field_path {field_path!r} "
+                "which contains no word characters; rename the filter / field so "
+                "its name has at least one alphanumeric token.",
+            )
         return f"{cls.__name__}{pascal}{cls._field_type_suffix}"
 
 
 class LazyRelatedClassMixin:
     """Resolve a class reference that may be a string, callable, or class.
 
-    Verbatim port of `django_graphene_filters/mixins.py::LazyRelatedClassMixin`.
+    Port of `django_graphene_filters/mixins.py::LazyRelatedClassMixin`; the
+    ``resolve_lazy_class`` body is byte-equivalent to upstream while the
+    class docstring is rewritten to surface the consumer-side rationale.
     Used by `RelatedFilter` to break cycles between filtersets declared in
     the same module without forcing an `if TYPE_CHECKING` dance on the
     consumer.
@@ -84,6 +104,9 @@ class LazyRelatedClassMixin:
         2. On `ImportError`, prefixed with `bound_class.__module__` so an
            unqualified `"ManagerFilter"` resolves against the owning
            filterset's module.
+
+        If attempt 1 raises and `bound_class` is `None` (or otherwise
+        falsy), the original `ImportError` propagates unchanged.
 
         Callables that are not classes are invoked as zero-arg factories;
         everything else is returned as-is.

@@ -1,13 +1,16 @@
 """Public scalars defined by django-strawberry-framework.
 
-Today: ``BigInt``. Future scalars (e.g. ``Upload`` per TODO-ALPHA-028) land here.
+Today: ``BigInt``. Future scalars (e.g. ``Upload`` per TODO-ALPHA-035-0.0.11) land here.
 
 ``BigInt`` is a JSON-safe scalar typically used to map Django's 64-bit
 integer fields (``BigIntegerField``, ``PositiveBigIntegerField``). It is
 technically arbitrary-precision — serialized as a decimal string via Python
 ``str(int_value)`` so values past GraphQL's signed 32-bit ``Int`` boundary
-survive transit without truncation. The strict parser / serializer keep the
-input and output sides symmetric.
+survive transit without truncation. The strict parser and serializer keep the
+wire-level input and output sides symmetric (decimal string in, decimal string
+out), even though the in-Python accept-sets differ — the parser additionally
+accepts ``int`` for direct-call sites while the serializer rejects ``str`` so a
+schema cannot emit a value the parser would reject.
 """
 
 import re
@@ -105,7 +108,7 @@ def strawberry_config(
 
     The keyword-only ``extra_scalar_map`` lets consumers register their own
     scalars alongside the package defaults; collisions with package-defined
-    keys raise ``ValueError`` (per spec-020 Decision 4). Every other keyword
+    keys raise ``ValueError`` (per spec-025 Decision 4). Every other keyword
     argument in ``**config_kwargs`` is forwarded verbatim to
     ``StrawberryConfig(...)`` (e.g. ``auto_camel_case``, ``relay_max_results``).
     Passing ``scalar_map=`` directly is rejected with ``ValueError`` because

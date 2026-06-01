@@ -539,7 +539,19 @@ def _normalize_range_value(
     end = (
         getattr(raw_value, "end", None) if not isinstance(raw_value, dict) else raw_value.get("end")
     )
-    return {f"{base}_0": start, f"{base}_1": end}
+    # Drop ``None``-valued axes so partial-range inputs surface only the
+    # supplied positional key. Django's ``RangeWidget.value_from_datadict``
+    # treats a missing key the same as a ``None``-valued one, but emitting
+    # ``{<name>_0: None}`` to the form-data dict surfaces "axis supplied,
+    # value is None" to any caller walking ``data.keys()`` -- the explicit
+    # ``is not None`` rigor mirrors ``normalize_input_value``'s ``raw_value
+    # is None or raw_value is UNSET`` entry guard.
+    patch: dict[str, Any] = {}
+    if start is not None:
+        patch[f"{base}_0"] = start
+    if end is not None:
+        patch[f"{base}_1"] = end
+    return patch
 
 
 def _owner_type_name(owner_definition: DjangoTypeDefinition | None) -> str | None:
@@ -762,6 +774,8 @@ def _camel_case(name: str) -> str:
 
 def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Filter) -> Any:
     """Resolve the Django model field a filter targets (or ``None``)."""
+    from django.core.exceptions import FieldDoesNotExist
+
     model = getattr(getattr(filterset_cls, "_meta", None), "model", None)
     if model is None:
         return None
@@ -778,7 +792,12 @@ def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Fil
     for part in parts:
         try:
             field = cursor_model._meta.get_field(part)
-        except Exception:  # pragma: no cover - defensive: bad lookup path
+        except FieldDoesNotExist:
+            # A typo in a declared ``Filter(field_name=...)`` reaches here;
+            # the broader ``except Exception`` previously masked unrelated
+            # ``_meta.get_field`` failures. ``FieldDoesNotExist`` matches
+            # Django's documented contract for unknown names; any other
+            # failure now surfaces loudly instead of degrading to ``None``.
             return None
         if (
             getattr(field, "is_relation", False)

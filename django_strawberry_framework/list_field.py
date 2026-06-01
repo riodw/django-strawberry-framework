@@ -1,6 +1,6 @@
 """``DjangoListField`` — non-Relay ``list[T]`` field for root Query fields.
 
-Spec: ``docs/spec-020-list_field-0_0_7.md``.
+Spec: ``docs/SPECS/spec-020-list_field-0_0_7.md``.
 Target release: ``0.0.7``.
 """
 
@@ -62,7 +62,8 @@ def _is_async_callable(fn: Any) -> bool:
       Without this branch an async-callable-object resolver would land in the
       sync wrapper, its coroutine return would bypass
       ``_post_process_consumer_sync``, and the awaited QuerySet would silently
-      skip ``target_type.get_queryset(...)`` (``docs/feedback.md`` High #2).
+      skip ``target_type.get_queryset(...)``. The contract is pinned by
+      ``tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied``.
 
     Resolvers whose sync entry point returns an awaitable (e.g., a plain ``def``
     that produces a coroutine from somewhere else) remain undetected — the
@@ -85,11 +86,11 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
 ) -> Any:
     """Factory for a non-Relay ``list[T]`` root Query field bound to a ``DjangoType``.
 
-    See ``docs/spec-020-list_field-0_0_7.md`` Decision 1 (mechanism) and
+    See ``docs/SPECS/spec-020-list_field-0_0_7.md`` Decision 1 (mechanism) and
     Decision 2 (default-resolver shape) for the design contract.
     """
     # Decision 5 validation guards
-    # (spec-016 #"DjangoListField requires a DjangoType class"): four
+    # (spec-020 #"DjangoListField requires a DjangoType class"): four
     # constructor-site checks that fail at the line that wrote ``DjangoListField(...)`` rather
     # than at finalize-time. Order is load-bearing: each target-type check
     # assumes the previous one passed. The own-class registration check

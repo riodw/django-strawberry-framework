@@ -135,6 +135,19 @@ def test_products_categories_name_permission_fires_for_non_exact_lookup():
 
 
 @pytest.mark.django_db
+def test_products_items_related_category_name_permission_fires_for_anonymous():
+    """A child ``RelatedFilter`` permission gate fires through the live API."""
+    seed_data(1)
+    category = models.Category.objects.order_by("id").first()
+    response = _post_graphql(
+        f"query {{ allItems(filter: {{ category: {{ name: {{ exact: {json.dumps(category.name)} }} }} }}) {{ name }} }}",
+    )
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert "staff user" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
 def test_products_categories_filter_by_relay_own_pk_global_id_in():
     """Own-PK Relay ``id: { in: [...] }`` accepts a list of GlobalIDs.
 

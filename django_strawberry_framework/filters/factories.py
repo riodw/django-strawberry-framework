@@ -9,8 +9,9 @@ that target the same model without an explicit ``filterset_class``).
 The BFS factory consumes resolved ``django-filter`` filter instances --
 NOT a parallel ``FILTER_DEFAULTS`` map -- so the runtime filter shape
 and the GraphQL input shape stay downstream of one decision site
-(Decision 4 H1 / spec-021 lines 579-584). Slice 3's finalizer materializes
-the built classes as module globals; Slice 2 only builds them.
+(Decision 4 H1 / spec-021 lines 579-584). The finalizer materializes the
+built classes as module globals at finalize time; this module owns
+build-only.
 """
 
 from __future__ import annotations
@@ -173,11 +174,10 @@ class FilterArgumentsFactory:
         owner_definition = getattr(fs_class, "_owner_definition", None)
         input_field_triples = _build_input_fields(fs_class, owner_definition)
         logic_field_triples = _build_logic_fields(type_name)
-        field_specs: list[tuple[str, Any, dict[str, Any] | None]] = [
-            (python_attr, annotation, kwargs)
-            for python_attr, annotation, kwargs in (*input_field_triples, *logic_field_triples)
-        ]
-        input_cls = build_input_class(type_name, field_specs)
+        input_cls = build_input_class(
+            type_name,
+            [*input_field_triples, *logic_field_triples],
+        )
         self.input_object_types[type_name] = input_cls
         self._type_filterset_registry[type_name] = fs_class
 
@@ -194,13 +194,16 @@ def _make_hashable(v: Any) -> Any:
     hashable form is sorted — two structurally-equal inputs must collapse to one
     cache key regardless of source iteration order. ``list`` / ``tuple`` are
     *ordered* (a list-shaped ``Meta.fields`` defines filter order), so their order
-    is preserved. The ``set`` / ``frozenset`` branch sorts by ``repr`` rather than
-    by the values themselves so it stays total-ordered even for mixed,
-    mutually-unorderable member types (e.g. ``{1, "a"}``); equal members produce
-    equal reprs, so the canonical order is stable.
+    is preserved. Both unordered branches sort by ``repr`` rather than by the
+    values themselves so they stay total-ordered even for mixed,
+    mutually-unorderable member or key types (e.g. ``{1, "a"}`` or
+    ``{"a": 1, 0: 2}``); equal members produce equal reprs, so the canonical
+    order is stable.
     """
     if isinstance(v, dict):
-        return tuple(sorted((k, _make_hashable(val)) for k, val in v.items()))
+        return tuple(
+            sorted(((k, _make_hashable(val)) for k, val in v.items()), key=repr),
+        )
     if isinstance(v, (set, frozenset)):
         return tuple(sorted((_make_hashable(item) for item in v), key=repr))
     if isinstance(v, (list, tuple)):
@@ -290,6 +293,10 @@ def get_filterset_class(filterset_class: type[FilterSet] | None, **meta: Any) ->
         equivalent meta into a shared class so two callers with
         equivalent declarations get the same ``__name__`` (preventing
         the BFS factory's duplicate-name collision check from firing).
+        Two callers with **distinct** Meta declarations against the same model
+        will land at the same generated ``__name__`` and so collide through the
+        BFS factory's ``_type_filterset_registry`` collision check; resolve by
+        declaring an explicit ``filterset_class=`` at one of the two call sites.
     """
     if filterset_class is not None:
         return filterset_class

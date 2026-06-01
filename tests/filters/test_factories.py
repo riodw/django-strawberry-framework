@@ -26,6 +26,7 @@ from django_strawberry_framework.filters.factories import (
     FilterArgumentsFactory,
     _dynamic_filterset_cache,
     _make_cache_key,
+    _make_hashable,
     get_filterset_class,
 )
 from django_strawberry_framework.filters.inputs import _field_specs
@@ -317,6 +318,24 @@ def test_make_cache_key_normalizes_list_fields_shape():
 def test_make_cache_key_normalizes_scalar_all_fields_shape():
     key = _make_cache_key({"model": Category, "fields": "__all__"})
     assert key[1] == ("raw", "__all__")
+
+
+def test_make_hashable_dict_branch_supports_mixed_key_types():
+    """A dict with mutually-unorderable key types is normalized without raising.
+
+    The dict branch sorts by ``key=repr`` symmetrically with the
+    ``set`` / ``frozenset`` branch, so mixed key types (e.g. ``str`` + ``int``)
+    no longer trip Python's default tuple comparison. The docstring at
+    ``factories.py::_make_hashable`` advertises the mixed-type defence as a
+    property of the function, not just of the unordered-container branch.
+    """
+    # Default tuple-sort would raise ``TypeError: '<' not supported between
+    # instances of 'int' and 'str'`` on the ``(k, val)`` pairs below.
+    result = _make_hashable({"a": 1, 0: 2})
+    assert isinstance(result, tuple)
+    # Both members are preserved; canonical order is whatever ``repr`` sort
+    # produces, so we assert by set-equality rather than positional order.
+    assert set(result) == {("a", 1), (0, 2)}
 
 
 def test_make_cache_key_distinguishes_extra_meta_keys():

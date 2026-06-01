@@ -361,6 +361,18 @@ def test_related_filter_explicit_queryset_ledger_defaults_false_when_absent():
     assert f._has_explicit_queryset is False
 
 
+def test_related_filter_rejects_lookups_kwarg():
+    """The cookbook-port `lookups=` kwarg is dropped; nothing read it.
+
+    Pinning: passing `lookups=` to `RelatedFilter.__init__` must raise
+    `TypeError` (unexpected keyword argument). Equivalent shape would be to
+    confirm `"lookups"` is absent from `inspect.signature(RelatedFilter)`,
+    but the runtime call is the consumer-facing contract.
+    """
+    with pytest.raises(TypeError):
+        RelatedFilter("ShelfFilter", lookups=["exact", "in"])
+
+
 def test_related_filter_filterset_setter_substitutes_target():
     """The `filterset` setter swaps the resolved target class in place."""
     from tests.filters.fixtures.filtersets import BranchFilter, ShelfFilter

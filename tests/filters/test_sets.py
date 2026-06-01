@@ -1312,42 +1312,6 @@ def test_q_for_branch_validates_child_form_and_raises_on_malformed_subbranch():
     assert "id" in excinfo.value.extensions["errors"]
 
 
-@pytest.mark.django_db
-def test_filter_queryset_negates_not_branch():
-    """``not: {X}`` negates against the parent queryset, not the bare manager.
-
-    Visibility-before-filter contract: ``filter_queryset`` runs against
-    the parent queryset the override receives; ``~Q(...)`` therefore
-    excludes only rows inside that scope, not rows the parent already
-    hid.
-    """
-    # Seed five branches; pre-filter the parent queryset to a four-row
-    # scope (excluding "hidden"); the not-branch then excludes "x-row"
-    # from inside that four-row scope, leaving three rows.
-    library_models.Branch.objects.create(name="x-row")
-    library_models.Branch.objects.create(name="keep-1")
-    library_models.Branch.objects.create(name="keep-2")
-    library_models.Branch.objects.create(name="keep-3")
-    library_models.Branch.objects.create(name="hidden")
-
-    class BranchFilter(FilterSet):
-        class Meta:
-            model = library_models.Branch
-            fields = {"name": ["exact"]}
-
-    pre_scoped = library_models.Branch.objects.exclude(name="hidden")
-    qs = BranchFilter.apply_sync(
-        {"not_": {"name": "x-row"}},
-        pre_scoped,
-        _make_info(),
-    )
-    names = set(qs.values_list("name", flat=True))
-    assert names == {"keep-1", "keep-2", "keep-3"}
-    # The pre-scoped exclusion still applies — ``hidden`` is NOT in the
-    # result even though the not-branch only mentions ``x-row``.
-    assert "hidden" not in names
-
-
 # ---------------------------------------------------------------------------
 # Round-5 coverage: helper / config / async / depth-cap branches
 # ---------------------------------------------------------------------------

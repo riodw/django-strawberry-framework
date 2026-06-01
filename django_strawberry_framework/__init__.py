@@ -23,9 +23,7 @@ from .optimizer.hints import OptimizerHint  # noqa: E402
 from .scalars import BigInt, strawberry_config  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 
-# TODO(spec-028-orders-0_0_8 Slice 5): bump to ``"0.0.8"`` only if the
-# deterministic KANBAN check still shows this is the last ``0.0.8`` card.
-__version__ = "0.0.7"
+__version__ = "0.0.8"
 
 __all__ = (
     "BigInt",

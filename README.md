@@ -42,12 +42,13 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 
 ## Status
 
-<!-- TODO(spec-028-orders-0_0_8 Slice 5): update the public status paragraph for
-0.0.8 after the ordering subsystem and joint-cut version bump land. Pseudo: name
-the newest shipped surface as OrderSet / RelatedOrder / Ordering /
-order_input_type / Meta.orderset_class without widening top-level __all__. -->
+<!-- TODO(spec-028-orders-0_0_8 Slice 5): after the ordering subsystem lands and
+bumps to 0.0.9 per the rolling-patch posture (Revision 5 of the spec), rewrite
+this status paragraph to name OrderSet / RelatedOrder / Ordering /
+order_input_type / Meta.orderset_class as the newest shipped surface without
+widening top-level __all__. -->
 
-**`0.0.7`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening. Newest shipped surface: `DjangoListField` — the non-Relay `list[T]` factory for root Query fields, new in `0.0.7` (default resolver pulls `model._default_manager.all()` and applies `cls.get_queryset(...)` in sync + async contexts).
+**`0.0.8`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening. Newest shipped surface: the filtering subsystem (`0.0.8`) — `FilterSet` declarative filter classes, `RelatedFilter` cross-relation traversal, `Meta.filterset_class` wiring, and the `filter_input_type` consumer helper, all integrated through the finalizer's phase-2.5 binding pass and the optimizer / `get_queryset` visibility hook.
 
 For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`][today]. The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/GLOSSARY.md`][glossary]. Per-card sequencing for both releases lives in [`KANBAN.md`][kanban].
 

@@ -1,10 +1,7 @@
 # https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
 [project]
 name = "django-strawberry-framework"
-# TODO(spec-028-orders-0_0_8 Slice 5): bump to 0.0.8 with
-# django_strawberry_framework.__version__ and tests/base/test_init.py when the
-# ordering card owns the joint 0.0.8 cut.
-version = "0.0.7"
+version = "0.0.8"
 description = "A DRF-inspired Django integration framework for Strawberry GraphQL — filtering, ordering, aggregation, and permissions"
 readme = "README.md"
 license = "MIT"

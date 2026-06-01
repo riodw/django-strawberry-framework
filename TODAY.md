@@ -9,10 +9,12 @@ For the package-wide capability catalog, shipped/planned feature status, optimiz
 Three example apps are wired today:
 
 <!-- TODO(spec-028-orders-0_0_8 Slice 5): extend the library current-state
-paragraph after the order live HTTP tests ship. Pseudo: mention BranchOrder /
-ShelfOrder / BookOrder / LoanOrder / PatronOrder in orders.py, GenreOrder in
-orders_genre.py, resolver order_by arguments via order_input_type, and the 14
-live order tests in examples/fakeshop/test_query/test_library_api.py. -->
+paragraph when the order live HTTP tests ship (which also bumps to 0.0.9 per
+the rolling-patch posture in Revision 5 of the spec). Pseudo: mention
+BranchOrder / ShelfOrder / BookOrder / LoanOrder / PatronOrder in orders.py,
+GenreOrder in orders_genre.py, resolver order_by arguments via
+order_input_type, and the 14 live order tests in
+examples/fakeshop/test_query/test_library_api.py. -->
 
 - `examples/fakeshop/apps/library/schema.py` — the **rich live demonstration** of the shipped surface. Seven `DjangoType` classes exercise, in one place: forward FK, reverse FK, forward OneToOne, reverse OneToOne, forward M2M, reverse M2M, choice-enum generation (`Book.circulation_status`), `Meta.interfaces = (relay.Node,)` on `GenreType`, `Meta.optimizer_hints` on `LoanType` (`OptimizerHint.prefetch_related()` + `OptimizerHint.SKIP`), a consumer-authored relation override on `Branch.shelves`, a consumer-shaped queryset cooperating with the optimizer (`all_library_prefetched_books` uses `select_related("shelf").prefetch_related("genres")`), and definition-order-independent finalization (the type declaration order is intentionally awkward — `LoanType` before `BookType` and `PatronType`, etc.). The live `/graphql/` HTTP tests in `examples/fakeshop/test_query/test_library_api.py` exercise all of these end-to-end, including the Relay GlobalID round trip via `test_library_relay_node_global_id_round_trips`. The `all_library_branches_via_list_field` root field added in `0.0.7` exercises `DjangoListField`'s default-resolver path — added as a sibling, no existing resolver was replaced. `Patron.lifetime_fines_cents` (`BigIntegerField`) added in `0.0.7` exercises the `BigIntegerField → BigInt` converter on a real-domain model, with a live HTTP test pinning the decimal-string wire format past `2**53 - 1`. The new `BranchFilter` / `ShelfFilter` / `BookFilter` / `LoanFilter` / `PatronFilter` declarations at `examples/fakeshop/apps/library/filters.py` (plus `GenreFilter` at `filters_genre.py` for the cross-module absolute-import-path case) and the 14 live `/graphql/` HTTP filter tests at `examples/fakeshop/test_query/test_library_api.py` exercise the `FilterSet` / `RelatedFilter` / `Meta.filterset_class` wiring end-to-end through finalizer phase 2.5.
 - `examples/fakeshop/apps/products/schema.py` — the **minimal "wire up a model app today" demonstration**. A bidirectional list-based graph over `Category` / `Item` / `Property` / `Entry`: four `DjangoType` classes with FK + reverse-FK traversal and four root list resolvers (`all_categories`, `all_items`, `all_properties`, `all_entries`). Non-Relay; intentionally narrower than `library` to show the absolute minimum a consumer needs to type to get a model app queryable through GraphQL today.

@@ -87,12 +87,13 @@ For the current capability snapshot — what the package can actually do in the 
 
 A quick summary:
 
-<!-- TODO(spec-028-orders-0_0_8 Slice 5): update this status summary for the
-joint 0.0.8 cut. Pseudo: move FilterSet / RelatedFilter / filter_input_type and
-OrderSet / RelatedOrder / Ordering / order_input_type / Meta.orderset_class into
-the shipped list, and remove filters/orders from the 0.1.0 beta bullet. -->
+<!-- TODO(spec-028-orders-0_0_8 Slice 5): after the ordering subsystem lands and
+bumps to 0.0.9 per the rolling-patch posture (Revision 5 of the spec), move
+OrderSet / RelatedOrder / Ordering / order_input_type / Meta.orderset_class
+into the shipped list and remove orders from the 0.1.0 beta bullet. The filter
+symbols already moved when DONE-027-0.0.8 landed. -->
 
-**Shipped today** (`0.0.7`):
+**Shipped today** (`0.0.8`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
 - scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, file/image, choice enums)
 - specialized scalar conversions (`BigIntegerField` / `PositiveBigIntegerField` → `BigInt`, `JSONField` → `JSON`, PostgreSQL `ArrayField` → `list[T]`, PostgreSQL `HStoreField` → `JSON`)
@@ -109,11 +110,12 @@ the shipped list, and remove filters/orders from the 0.1.0 beta bullet. -->
 - annotation-only and `strawberry.field` consumer overrides for scalar fields, symmetric with the shipped relation-override contract (consumer overrides bypass `convert_scalar` validations; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time)
 - `Django AppConfig` — `django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` so consumers can list `"django_strawberry_framework"` in `INSTALLED_APPS` and Django's check / signal hooks resolve through it (new in `0.0.7`).
 - `manage.py export_schema` — Django management command that prints or writes the GraphQL SDL for a `strawberry.Schema` symbol (positional dotted path, optional `--path`); migration-parity with `strawberry-django`'s command of the same name. See [`GLOSSARY.md#schema-export-management-command`][glossary-schema-export-management-command].
+- filtering subsystem (new in `0.0.8`) — `FilterSet` declarative filter classes with `Meta.fields` (dict / `"__all__"` shorthand) and the full `django-filter` lookup surface; `RelatedFilter` for cross-relation traversal (class / absolute import path / unqualified-name); `Meta.filterset_class` consumer wiring; the `filter_input_type` resolver-argument helper; finalizer phase-2.5 binding with orphan validation; per-field `check_*_permission` denial gates with active-input-only scope; clean composition with `get_queryset` visibility and the optimizer. See [`GLOSSARY.md#filterset`][glossary-filterset].
 
 
 **Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
 - `DjangoConnectionField` (Relay connection)
-- filters, orders, and permissions / cascade permissions
+- orders and permissions / cascade permissions
 - mutations + auto-generated `Input` types, plus form-based and DRF-serializer-based mutation flavors
 - `Upload` scalar and file-field mapping
 - auth mutations (`login` / `logout` / `register`) and `current_user` query
@@ -257,6 +259,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 <!-- docs/ -->
 [glossary]: GLOSSARY.md
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
+[glossary-filterset]: GLOSSARY.md#filterset
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
 [glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command

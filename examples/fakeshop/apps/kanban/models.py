@@ -86,7 +86,7 @@ class Milestone(LookupBase):
 
 
 class Status(LookupBase):
-    """The card workflow state that drives board placement: ``todo`` / ``wip`` / ``done``."""
+    """The card workflow state that drives board placement."""
 
     class Meta(LookupBase.Meta):
         verbose_name = "status"
@@ -213,9 +213,13 @@ class TargetVersion(TimeStampedModel):
 
 
 class SpecDoc(TimeStampedModel):
-    """A spec file: just a name and a link to it on GitHub."""
+    """A spec file owned by exactly one kanban card."""
 
-    # Unique: the importer upserts a spec by name, and a spec maps to one card.
+    card = models.OneToOneField(
+        "Card",
+        related_name="spec",
+        on_delete=models.CASCADE,
+    )
     name = models.TextField(unique=True)
     url = models.URLField(max_length=500)
 
@@ -285,14 +289,6 @@ class Card(TimeStampedModel):
         on_delete=models.PROTECT,
     )
     planning_note = models.TextField(blank=True, default="")
-
-    spec = models.OneToOneField(
-        SpecDoc,
-        null=True,
-        blank=True,
-        related_name="card",
-        on_delete=models.SET_NULL,
-    )
 
     dependencies = models.ManyToManyField(
         "self",

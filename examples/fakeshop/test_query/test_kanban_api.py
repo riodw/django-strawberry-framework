@@ -99,23 +99,24 @@ def _seed_board():
         label="Reference",
         order=1,
     )
-    spec = models.SpecDoc.objects.create(
-        name="spec-021-filters-0_0_8",
-        url="https://github.com/example/spec-021-filters-0_0_8.md",
-    )
-
     filters_card = models.Card.objects.create(
         title="Filtering subsystem",
         number=21,
-        status=done,
+        status=todo,
         milestone=None,
         target_version=version,
         priority=high,
         severity=major,
         relative_size=xl,
         planning_state=shipped,
-        spec=spec,
     )
+    models.SpecDoc.objects.create(
+        card=filters_card,
+        name="spec-027-filters-0_0_8",
+        url="https://github.com/example/spec-027-filters-0_0_8.md",
+    )
+    filters_card.status = done
+    filters_card.save(update_fields=["status"])
     conn_card = models.Card.objects.create(
         title="DjangoConnectionField",
         number=24,
@@ -422,8 +423,8 @@ def test_select_o2o_spec_uuid_side_table_and_timestamps():
     (card,) = data["allCards"]
     assert card["title"] == "Filtering subsystem"
     assert card["spec"] == {
-        "name": "spec-021-filters-0_0_8",
-        "url": "https://github.com/example/spec-021-filters-0_0_8.md",
+        "name": "spec-027-filters-0_0_8",
+        "url": "https://github.com/example/spec-027-filters-0_0_8.md",
     }
     assert card["createdDate"] is not None
     # The UUID side-table row exists and exposes a UUID scalar (a UUIDField PK).
@@ -815,14 +816,14 @@ def test_relative_size_two_reverse_sets_cards_and_cards_high():
     # A ranged card ("S–M"-style): low bound m, high bound xl.
     xl = models.RelativeSize.objects.get(key="xl")
     size_m = models.RelativeSize.objects.get(key="m")
-    done = models.Status.objects.get(key="done")
+    todo = models.Status.objects.get(key="todo")
     alpha = models.Milestone.objects.get(key="alpha")
     version = models.TargetVersion.objects.get(number="0.0.8")
     planned = models.PlanningState.objects.get(key="planned")
     models.Card.objects.create(
         title="Ordering subsystem",
         number=22,
-        status=done,
+        status=todo,
         milestone=alpha,
         target_version=version,
         relative_size=size_m,

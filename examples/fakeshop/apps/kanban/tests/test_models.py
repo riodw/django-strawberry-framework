@@ -128,8 +128,8 @@ def test_card_milestone_is_required():
 @pytest.mark.django_db
 def test_card_number_is_globally_unique():
     """The NNN sequence cannot be reused across statuses or target versions."""
-    done = models.Status.objects.create(key="done", label="Done")
     todo = models.Status.objects.create(key="todo", label="To Do")
+    wip = models.Status.objects.create(key="wip", label="In Progress")
     alpha = models.Milestone.objects.create(key="alpha", label="Alpha")
     version_1 = models.TargetVersion.objects.create(number="0.0.1", milestone=alpha)
     version_2 = models.TargetVersion.objects.create(number="0.0.2", milestone=alpha)
@@ -139,7 +139,7 @@ def test_card_number_is_globally_unique():
     models.Card.objects.create(
         title="First",
         number=1,
-        status=done,
+        status=todo,
         target_version=version_1,
         relative_size=size,
         planning_state=state,
@@ -149,10 +149,24 @@ def test_card_number_is_globally_unique():
         models.Card.objects.create(
             title="Second",
             number=1,
-            status=todo,
+            status=wip,
             target_version=version_2,
             relative_size=size,
             planning_state=state,
+        )
+
+
+@pytest.mark.django_db
+def test_spec_doc_card_is_required():
+    """A spec doc cannot be stored without the card it belongs to."""
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.SpecDoc.objects.bulk_create(
+            [
+                models.SpecDoc(
+                    name="orphan",
+                    url="https://github.com/example/orphan.md",
+                ),
+            ],
         )
 
 
@@ -161,7 +175,7 @@ def test_board_doc_card_reference_is_fk_backed_and_ordered_per_doc():
     """Board prose card mentions point at cards instead of storing live card ids."""
     kind = models.BoardDocKind.objects.create(key="reference", label="Reference")
     doc = models.BoardDoc.objects.create(key="snapshot", kind=kind, title="Snapshot")
-    status = models.Status.objects.create(key="done", label="Done")
+    status = models.Status.objects.create(key="todo", label="To Do")
     alpha = models.Milestone.objects.create(key="alpha", label="Alpha")
     version = models.TargetVersion.objects.create(number="0.0.1", milestone=alpha)
     size = models.RelativeSize.objects.create(key="m", label="M")

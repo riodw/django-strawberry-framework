@@ -6,6 +6,14 @@ from django.core.exceptions import ValidationError
 from apps.kanban import models
 
 
+def _spec_for(card: models.Card) -> models.SpecDoc:
+    return models.SpecDoc.objects.create(
+        card=card,
+        name=f"spec-{card.number:03d}",
+        url=f"https://github.com/example/spec-{card.number:03d}.md",
+    )
+
+
 def _board_parts():
     statuses = {
         "done": models.Status.objects.create(key="done", label="Done"),
@@ -37,15 +45,23 @@ def _card(
     version: str = "alpha",
     milestone: models.Milestone | None = None,
 ) -> models.Card:
-    return models.Card.objects.create(
+    requested_status = parts["statuses"][status]
+    create_status = parts["statuses"]["todo"] if status == "done" else requested_status
+    card = models.Card.objects.create(
         title=title,
         number=number,
-        status=parts["statuses"][status],
+        status=create_status,
         milestone=milestone,
         target_version=parts[f"version_{version}"],
         relative_size=parts["size"],
         planning_state=parts["states"][state],
     )
+    if status == "done":
+        _spec_for(card)
+        card.status = requested_status
+        card.save(update_fields=["status"])
+        card.refresh_from_db()
+    return card
 
 
 def _reference_kind() -> models.CardReferenceKind:
@@ -80,6 +96,53 @@ def test_card_milestone_follows_target_version():
 
     card.refresh_from_db()
     assert card.milestone == parts["beta"]
+
+
+@pytest.mark.django_db
+def test_done_card_requires_spec_on_save():
+    parts = _board_parts()
+    card = _card(parts, number=1, title="No spec")
+
+    card.status = parts["statuses"]["done"]
+
+    with pytest.raises(ValidationError, match="linked spec doc"):
+        card.save(update_fields=["status"])
+
+
+@pytest.mark.django_db
+def test_done_card_with_spec_can_save():
+    parts = _board_parts()
+    card = _card(parts, number=1, title="Has spec")
+    _spec_for(card)
+
+    card.status = parts["statuses"]["done"]
+    card.save(update_fields=["status"])
+
+    card.refresh_from_db()
+    assert card.status.key == "done"
+    assert card.spec.name == "spec-001"
+
+
+@pytest.mark.django_db
+def test_done_card_spec_cannot_be_deleted():
+    parts = _board_parts()
+    card = _card(parts, number=1, title="Protected spec", status="done")
+
+    with pytest.raises(ValidationError, match="Cannot delete"):
+        card.spec.delete()
+
+
+@pytest.mark.django_db
+def test_done_card_spec_cannot_be_moved_to_another_card():
+    parts = _board_parts()
+    done_card = _card(parts, number=1, title="Done card", status="done")
+    other_card = _card(parts, number=2, title="Other card")
+    spec = done_card.spec
+
+    spec.card = other_card
+
+    with pytest.raises(ValidationError, match="Cannot move"):
+        spec.save(update_fields=["card"])
 
 
 @pytest.mark.django_db
@@ -172,6 +235,7 @@ def test_dependency_reference_does_not_store_or_derive_blocked_badge():
     assert not dependent.labels.filter(key="blocked").exists()
     assert not models.Label.objects.filter(key="blocked").exists()
 
+    _spec_for(dependency)
     dependency.status = parts["statuses"]["done"]
     dependency.save(update_fields=["status"])
 

@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from django.core.exceptions import ValidationError
 from django.db import models as django_models
 from django.db.models import Max
-from django.db.models.signals import m2m_changed, post_delete, post_save, pre_save
+from django.db.models.signals import m2m_changed, post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
 
@@ -17,6 +17,11 @@ DEFAULT_REFERENCE_KIND_KEY = "dependency"
 DEFAULT_REFERENCE_KIND_LABEL = "Dependency"
 DEFAULT_REFERENCE_SOURCE_KEY = "dependencies_section"
 DEFAULT_REFERENCE_SOURCE_LABEL = "Dependencies section"
+DONE_STATUS_KEY = "done"
+DONE_CARD_SPEC_ERROR = "Done kanban cards require a linked spec doc."
+SPEC_CARD_REQUIRED_ERROR = "Kanban spec docs must be linked to a card."
+DONE_CARD_SPEC_REASSIGN_ERROR = "Cannot move a spec doc away from a done kanban card."
+DONE_CARD_SPEC_DELETE_ERROR = "Cannot delete a spec doc linked to a done kanban card."
 DEPENDENCY_REFERENCE_KIND_KEYS = models.DEPENDENCY_REFERENCE_KIND_KEYS
 DEPENDENCY_SYNC_FLAG = "_kanban_syncing_dependency_edges"
 
@@ -59,6 +64,33 @@ def _target_milestone_id(card: models.Card, using: str | None) -> int | None:
         .values_list("milestone_id", flat=True)
         .get()
     )
+
+
+def _status_is_done(status_id: int | None, using: str | None) -> bool:
+    if status_id is None:
+        return False
+    return _manager(models.Status, using).filter(pk=status_id, key=DONE_STATUS_KEY).exists()
+
+
+def _card_is_done(card_id: int | None, using: str | None) -> bool:
+    if card_id is None:
+        return False
+    return _manager(models.Card, using).filter(pk=card_id, status__key=DONE_STATUS_KEY).exists()
+
+
+def _card_has_spec(card: models.Card, using: str | None) -> bool:
+    if card.pk is None:
+        return False
+    return _manager(models.SpecDoc, using).filter(card_id=card.pk).exists()
+
+
+def _validate_done_card_has_spec(card: models.Card, using: str | None) -> None:
+    if _status_is_done(card.status_id, using) and not _card_has_spec(card, using):
+        raise ValidationError(DONE_CARD_SPEC_ERROR)
+
+
+def _delete_origin_is_card(origin) -> bool:
+    return isinstance(origin, models.Card) or getattr(origin, "model", None) is models.Card
 
 
 def _card_identifier(card: models.Card) -> str:
@@ -319,6 +351,41 @@ def _dependency_edges_for_clear(
 @receiver(pre_save, sender=models.Card, dispatch_uid="kanban_prepare_card_save")
 def prepare_card_save(sender, instance: models.Card, using: str | None, **kwargs) -> None:
     instance.milestone_id = _target_milestone_id(instance, using)
+    _validate_done_card_has_spec(instance, using)
+
+
+@receiver(pre_save, sender=models.SpecDoc, dispatch_uid="kanban_validate_spec_doc_card")
+def validate_spec_doc_card(
+    sender,
+    instance: models.SpecDoc,
+    using: str | None,
+    **kwargs,
+) -> None:
+    if instance.card_id is None:
+        raise ValidationError(SPEC_CARD_REQUIRED_ERROR)
+    if instance.pk is None:
+        return
+    old_card_id = (
+        _manager(models.SpecDoc, using)
+        .filter(pk=instance.pk)
+        .values_list("card_id", flat=True)
+        .first()
+    )
+    if old_card_id != instance.card_id and _card_is_done(old_card_id, using):
+        raise ValidationError(DONE_CARD_SPEC_REASSIGN_ERROR)
+
+
+@receiver(pre_delete, sender=models.SpecDoc, dispatch_uid="kanban_protect_done_card_spec")
+def protect_done_card_spec(
+    sender,
+    instance: models.SpecDoc,
+    using: str | None,
+    **kwargs,
+) -> None:
+    if _delete_origin_is_card(kwargs.get("origin")):
+        return
+    if _card_is_done(instance.card_id, using):
+        raise ValidationError(DONE_CARD_SPEC_DELETE_ERROR)
 
 
 @receiver(post_save, sender=models.Card, dispatch_uid="kanban_sync_card_after_save")

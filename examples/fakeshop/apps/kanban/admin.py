@@ -41,8 +41,9 @@ class TargetVersionAdmin(admin.ModelAdmin):
 
 @admin.register(models.SpecDoc)
 class SpecDocAdmin(admin.ModelAdmin):
-    list_display = ("name", "url")
-    search_fields = ("name", "url")
+    list_display = ("name", "card", "url")
+    search_fields = ("name", "url", "card__title")
+    autocomplete_fields = ("card",)
 
 
 class CardItemInline(admin.TabularInline):

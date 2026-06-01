@@ -1,6 +1,6 @@
 """``DjangoListField`` — non-Relay ``list[T]`` field for root Query fields.
 
-Spec: ``docs/spec-016-list_field-0_0_7.md``.
+Spec: ``docs/spec-020-list_field-0_0_7.md``.
 Target release: ``0.0.7``.
 """
 
@@ -85,7 +85,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
 ) -> Any:
     """Factory for a non-Relay ``list[T]`` root Query field bound to a ``DjangoType``.
 
-    See ``docs/spec-016-list_field-0_0_7.md`` Decision 1 (mechanism) and
+    See ``docs/spec-020-list_field-0_0_7.md`` Decision 1 (mechanism) and
     Decision 2 (default-resolver shape) for the design contract.
     """
     # Decision 5 validation guards

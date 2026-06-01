@@ -1,6 +1,6 @@
 # Build: Slice 2 — Factories — `FilterArgumentsFactory` BFS + dynamic-filterset cache
 
-Spec reference: `docs/spec-021-filters-0_0_8.md` (Slice checklist lines 128-132; Decision 3 lines 465-552; Decision 4 lines 554-619 (esp. lines 586-598 converter table); Decision 6 lines 656-692; Decision 9 lines 774-840; Decision 11 lines 862-948; Test plan lines 1023-1024; Implementation plan table Slice-2 row line 976)
+Spec reference: `docs/spec-027-filters-0_0_8.md` (Slice checklist lines 128-132; Decision 3 lines 465-552; Decision 4 lines 554-619 (esp. lines 586-598 converter table); Decision 6 lines 656-692; Decision 9 lines 774-840; Decision 11 lines 862-948; Test plan lines 1023-1024; Implementation plan table Slice-2 row line 976)
 Status: final-accepted
 
 ## Plan (Worker 1)
@@ -183,7 +183,7 @@ These are choices Worker 1 has assessed and decided are at Worker 2's discretion
 
 ### Spec slice checklist (verbatim)
 
-The four sub-bullets are copied verbatim from `docs/spec-021-filters-0_0_8.md` Slice checklist, Slice 2 (spec lines 128-132). Each remains `- [ ]` during planning; Worker 1 ticks each `- [x]` during final verification as the contract lands.
+The four sub-bullets are copied verbatim from `docs/spec-027-filters-0_0_8.md` Slice checklist, Slice 2 (spec lines 128-132). Each remains `- [ ]` during planning; Worker 1 ticks each `- [x]` during final verification as the contract lands.
 
 - [x] Slice 2: Factories — `FilterArgumentsFactory` BFS + dynamic-filterset cache
   - [x] `factories.py` ships `FilterArgumentsFactory` (port from `django_graphene_filters/filter_arguments_factory.py::FilterArgumentsFactory`) — Layer 5 of [Decision 3](#decision-3--six-layer-lazy-resolution-pipeline). BFS walk that builds every reachable `strawberry.input` type; `_build_class_type` emits `@strawberry.input`-decorated classes via `strawberry_django_framework.filters.inputs.build_input_class(name, field_specs)` (the Strawberry-adapted analogue of Graphene's `type(name, (graphene.InputObjectType,), fields)`).
@@ -460,7 +460,7 @@ Slice 2 ships the `FilterArgumentsFactory` BFS port (`factories.py`), the `_dyna
 
 ### Spec changes made (Worker 1 only)
 
-- `docs/spec-021-filters-0_0_8.md` lines 992 (after the `Meta.fields = {"galaxy__name": ...}` bullet) — added a new edge-case bullet declaring the nested-transform multi-level shape (`Meta.fields = {"created": ["date__year"]}`) as a Slice-2 deferral (Medium #2). The bullet pins the Slice-2 flat-grouping scope, names the missing recursive tree-form algorithm (`filterset_to_trees` / `try_add_sequence` / `sequence_to_tree`), confirms `LOOKUP_NAME_MAP`'s vocabulary entries do NOT license multi-level chains in this card, and identifies `DjangoConnectionField` in `0.0.9` (or a follow-up filter card) as the likely surface for the port.
-- `docs/spec-021-filters-0_0_8.md` lines 1004 (after the `Two consumer schemas with two <TypeName>FilterInputType`s of the same string name` bullet) — added a new edge-case bullet declaring `RangeFilter`-derived sub-input class name collisions across two filtersets that share a `field_name` as a Slice-2 deferral (Medium #1). The bullet pins the Slice-2 `f"{PascalCase(field_name)}RangeInputType"` scope, confirms the Range sub-input is NOT subject to Decision 9's `_materialized_names` ledger, names the loud Strawberry duplicate-type-name failure mode, identifies the per-filterset-scoped name shape (`f"{filterset_cls.__name__}{PascalCase(field_name)}RangeInputType"`) as the mechanical fix, and identifies Slice 4 live HTTP coverage as the natural surface where a real-world collision would surface.
+- `docs/spec-027-filters-0_0_8.md` lines 992 (after the `Meta.fields = {"galaxy__name": ...}` bullet) — added a new edge-case bullet declaring the nested-transform multi-level shape (`Meta.fields = {"created": ["date__year"]}`) as a Slice-2 deferral (Medium #2). The bullet pins the Slice-2 flat-grouping scope, names the missing recursive tree-form algorithm (`filterset_to_trees` / `try_add_sequence` / `sequence_to_tree`), confirms `LOOKUP_NAME_MAP`'s vocabulary entries do NOT license multi-level chains in this card, and identifies `DjangoConnectionField` in `0.0.9` (or a follow-up filter card) as the likely surface for the port.
+- `docs/spec-027-filters-0_0_8.md` lines 1004 (after the `Two consumer schemas with two <TypeName>FilterInputType`s of the same string name` bullet) — added a new edge-case bullet declaring `RangeFilter`-derived sub-input class name collisions across two filtersets that share a `field_name` as a Slice-2 deferral (Medium #1). The bullet pins the Slice-2 `f"{PascalCase(field_name)}RangeInputType"` scope, confirms the Range sub-input is NOT subject to Decision 9's `_materialized_names` ledger, names the loud Strawberry duplicate-type-name failure mode, identifies the per-filterset-scoped name shape (`f"{filterset_cls.__name__}{PascalCase(field_name)}RangeInputType"`) as the mechanical fix, and identifies Slice 4 live HTTP coverage as the natural surface where a real-world collision would surface.
 
 Both spec edits are pure scope-clarifying additions (NOT contract-changing edits that would force a Worker 2 re-spawn): they license the Slice-2 surface as it shipped and pin the forward path for the deferral. The Worker-2 implementation already matches the new bullets; no source change needed.

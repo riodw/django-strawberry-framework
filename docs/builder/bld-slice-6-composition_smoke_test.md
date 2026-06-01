@@ -1,6 +1,6 @@
 # Build: Slice 6 — Sibling-card composition smoke tests
 
-Spec reference: `docs/spec-021-filters-0_0_8.md` (Slice checklist sub-bullet at lines 160-161; cross-references at L60 "DoD item 27", L1176 DoD item 27, and L4 status-line trailing sentence)
+Spec reference: `docs/spec-027-filters-0_0_8.md` (Slice checklist sub-bullet at lines 160-161; cross-references at L60 "DoD item 27", L1176 DoD item 27, and L4 status-line trailing sentence)
 
 Status: final-accepted
 
@@ -48,7 +48,7 @@ Not applicable.
 
 ### Spec changes made (Worker 1 only)
 
-- `docs/spec-021-filters-0_0_8.md` L4 (the status header line, two clauses): (a) flipped the bolded trailing clause from `Slice 6 composition smoke tests held until sibling card [WIP-ALPHA-022-0.0.8][kanban] ships` to `Slice 6 composition smoke tests closed as "carried by sibling" per the Slice-checklist conditional clause — this card shipped first, so the composition smoke test lands in [WIP-ALPHA-022-0.0.8][kanban]'s PR`; (b) rewrote the L4 closing sentence from `The cross-card composition smoke tests with [WIP-ALPHA-022-0.0.8][kanban] are still pending per the Slice checklist below.` to `The cross-card composition smoke test with [WIP-ALPHA-022-0.0.8][kanban] is carried by the sibling card per the Slice-checklist conditional clause (docs/builder/bld-slice-6-composition_smoke_test.md records the procedural closure).`. Reason: the prior wording described Slice 6 as pending; the procedural-closeout pass resolved Slice 6 via the spec's own conditional clause, so the status line must record the resolution (which branch of the conditional fired) and forward-reference this artifact as the procedural record. The contract bodies at L161, L60 (rev6 H1's DoD item 27 rationale), and L1176 (DoD item 27) are unchanged — they already document the conditional outcome; the L4 edit is mechanical status-tracking only.
+- `docs/spec-027-filters-0_0_8.md` L4 (the status header line, two clauses): (a) flipped the bolded trailing clause from `Slice 6 composition smoke tests held until sibling card [WIP-ALPHA-022-0.0.8][kanban] ships` to `Slice 6 composition smoke tests closed as "carried by sibling" per the Slice-checklist conditional clause — this card shipped first, so the composition smoke test lands in [WIP-ALPHA-022-0.0.8][kanban]'s PR`; (b) rewrote the L4 closing sentence from `The cross-card composition smoke tests with [WIP-ALPHA-022-0.0.8][kanban] are still pending per the Slice checklist below.` to `The cross-card composition smoke test with [WIP-ALPHA-022-0.0.8][kanban] is carried by the sibling card per the Slice-checklist conditional clause (docs/builder/bld-slice-6-composition_smoke_test.md records the procedural closure).`. Reason: the prior wording described Slice 6 as pending; the procedural-closeout pass resolved Slice 6 via the spec's own conditional clause, so the status line must record the resolution (which branch of the conditional fired) and forward-reference this artifact as the procedural record. The contract bodies at L161, L60 (rev6 H1's DoD item 27 rationale), and L1176 (DoD item 27) are unchanged — they already document the conditional outcome; the L4 edit is mechanical status-tracking only.
 
 ### Summary
 

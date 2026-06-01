@@ -277,7 +277,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 for filter_name, f in related_filters_val.items():
                     expanded = _expand_related_filter(filter_name, f)
                     all_filters.update(expanded)
-            # TODO(spec-021-filters-0_0_8 Meta.search_fields card 0.1.2):
+            # TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2):
             # wire `construct_search(all_filters)` from
             # `django_strawberry_framework.filters.inputs.LOOKUP_PREFIXES` here.
 

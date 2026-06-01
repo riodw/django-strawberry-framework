@@ -865,7 +865,7 @@ def test_same_module_string_forward_reference_annotation_survives_finalization()
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 (spec-014-meta_primary-0_0_6.md) — ambiguity-audit interaction
+# Slice 3 (spec-018-meta_primary-0_0_6.md) — ambiguity-audit interaction
 # with relation resolution. The raise-at-finalize and once-per-build
 # regression tests live in ``tests/test_registry.py``; this file hosts the
 # audit-success paths and the audit-vs-unresolved-target ordering test.

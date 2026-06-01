@@ -19,15 +19,15 @@ on a CLI / file-not-found error.
 Usage::
 
     uv run python scripts/check_spec_glossary.py \
-        --spec docs/spec-014-meta_primary-0_0_6.md \
-        --terms docs/spec-014-meta_primary-0_0_6-terms.csv \
+        --spec docs/spec-018-meta_primary-0_0_6.md \
+        --terms docs/spec-018-meta_primary-0_0_6-terms.csv \
         --glossary docs/GLOSSARY.md \
         --auto-link
 
 Only ``--spec`` is required. ``--terms`` defaults to the spec path with
 ``-terms.csv`` appended to the stem (e.g.
-``docs/spec-014-meta_primary-0_0_6.md`` →
-``docs/spec-014-meta_primary-0_0_6-terms.csv``). ``--glossary``
+``docs/spec-018-meta_primary-0_0_6.md`` →
+``docs/spec-018-meta_primary-0_0_6-terms.csv``). ``--glossary``
 defaults to ``docs/GLOSSARY.md`` and accepts an override for testing or
 for validating against a fork's renamed glossary.
 

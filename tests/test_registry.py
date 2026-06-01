@@ -699,7 +699,7 @@ def test_register_with_definition_rolls_back_register_on_definition_failure(fres
 
 
 # ---------------------------------------------------------------------------
-# Slice 1 (spec-014-meta_primary-0_0_6.md) — multi-type storage + primary
+# Slice 1 (spec-018-meta_primary-0_0_6.md) — multi-type storage + primary
 # tracking. Tests below exercise the new contract through ``register`` /
 # ``register_with_definition`` directly with plain test classes (no
 # ``DjangoType`` subclasses) per spec slice-1 paragraph at ``spec:656``.
@@ -1062,7 +1062,7 @@ def test_models_with_multiple_types_yields_only_models_with_two_or_more(fresh_re
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 (spec-014-meta_primary-0_0_6.md) — finalize-time ambiguity audit.
+# Slice 3 (spec-018-meta_primary-0_0_6.md) — finalize-time ambiguity audit.
 # Tests below cover ``_audit_primary_ambiguity()`` running inside
 # ``finalize_django_types()``. The audit-success and audit-vs-unresolved
 # tests live in ``tests/types/test_definition_order.py``; this file hosts

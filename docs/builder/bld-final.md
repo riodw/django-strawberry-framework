@@ -1,12 +1,12 @@
 # Build: Final test-run gate
 
-Spec reference: `docs/spec-021-filters-0_0_8.md` (whole spec; all six in-scope slices + Slice 4a + cross-slice integration pass already at `final-accepted` in their respective artifacts).
+Spec reference: `docs/spec-027-filters-0_0_8.md` (whole spec; all six in-scope slices + Slice 4a + cross-slice integration pass already at `final-accepted` in their respective artifacts).
 Build plan: `docs/builder/build-021-filters-0_0_8.md`
 Status: final-accepted
 
 ## Spec status-line re-verification
 
-Per `worker-1.md` "Spec status-line re-verification (every Worker 1 spawn)" — re-read `docs/spec-021-filters-0_0_8.md` L4. The Status line already describes the shipped reality of the build: Slices 1-3 (core wiring), Slice 4 (live HTTP coverage), Slice 4a (tree-form logic substrate; `test_library_books_filter_combines_and_or_not` flipped from a strict xfail to a passing test in the same change), Slice 5 (docs / KANBAN / CHANGELOG, joint-cut safe-default path), Slice 6 (carried by sibling per Slice-checklist conditional). The line names the joint-cut deferrals (Decision 10) explicitly. No edit needed in this pass.
+Per `worker-1.md` "Spec status-line re-verification (every Worker 1 spawn)" — re-read `docs/spec-027-filters-0_0_8.md` L4. The Status line already describes the shipped reality of the build: Slices 1-3 (core wiring), Slice 4 (live HTTP coverage), Slice 4a (tree-form logic substrate; `test_library_books_filter_combines_and_or_not` flipped from a strict xfail to a passing test in the same change), Slice 5 (docs / KANBAN / CHANGELOG, joint-cut safe-default path), Slice 6 (carried by sibling per Slice-checklist conditional). The line names the joint-cut deferrals (Decision 10) explicitly. No edit needed in this pass.
 
 ## Gate commands (run in order)
 
@@ -78,7 +78,7 @@ This subsection walks every per-slice + integration artifact's `### Spec changes
 
 ### Slice-5 housekeeping deferral
 
-- **`docs/spec-021-filters-0_0_8-terms.csv` trailing-bytes artifact** — `bld-slice-5-docs_kanban_changelog.md`. Pre-existing trailing-bytes housekeeping noted at Slice 5 but not folded into the Slice-5 diff (out-of-scope for the doc-only slice). The file was modified by Slice 5 for the `filter_input_type` row addition; the trailing-bytes oddity predates this build. Defer to maintainer follow-up.
+- **`docs/spec-027-filters-0_0_8-terms.csv` trailing-bytes artifact** — `bld-slice-5-docs_kanban_changelog.md`. Pre-existing trailing-bytes housekeeping noted at Slice 5 but not folded into the Slice-5 diff (out-of-scope for the doc-only slice). The file was modified by Slice 5 for the `filter_input_type` row addition; the trailing-bytes oddity predates this build. Defer to maintainer follow-up.
 
 ### Slice-6 (Composition smoke test) carry-forward
 

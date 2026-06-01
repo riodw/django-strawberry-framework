@@ -263,7 +263,7 @@ async def _apply_get_queryset_async(cls: type, qs: models.QuerySet, info: Any) -
     return result
 
 
-# TODO(spec-021-filters-0_0_8 Slice 1): Reuse these sync/async visibility
+# TODO(spec-027-filters-0_0_8 Slice 1): Reuse these sync/async visibility
 # helpers from FilterSet's related-branch scoping so parent-row filtering
 # cannot bypass a target DjangoType.get_queryset hook.
 # Pseudocode:

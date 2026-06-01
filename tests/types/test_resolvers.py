@@ -523,7 +523,7 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
 # ---------------------------------------------------------------------------
 #
 # TODO(spec-019 Slice 1, tests/types/test_resolvers.py extension — append-only):
-# pre-staged scaffold per ``docs/spec-019-multi_db-0_0_7.md`` Slice 1. Worker 2
+# pre-staged scaffold per ``docs/spec-023-multi_db-0_0_7.md`` Slice 1. Worker 2
 # replaces the ``raise NotImplementedError`` body in each test below with the
 # pseudocode that follows it.
 #

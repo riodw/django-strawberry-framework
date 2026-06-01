@@ -1,6 +1,6 @@
 # Package build plan: filters / 0.0.8 (021)
 
-Spec source: `docs/spec-021-filters-0_0_8.md`
+Spec source: `docs/spec-027-filters-0_0_8.md`
 Target release: `0.0.8`
 Date created: 2026-05-28
 Build rule: one slice at a time. Plan first, build second, review third, reconcile fourth.

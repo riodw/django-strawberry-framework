@@ -3,7 +3,7 @@
 Target release: `0.0.6`.
 Status: draft (revision 10, post-feedback2 re-review).
 Owner: package maintainer.
-Predecessors: [`docs/GLOSSARY.md`][glossary] (entries [Scalar field conversion][glossary-scalar-field-conversion], [Specialized scalar conversions][glossary-specialized-scalar-conversions], [`BigInt` scalar][glossary-bigint-scalar]), [`KANBAN.md`][kanban] card `DONE-013-0.0.6`.
+Predecessors: [`docs/GLOSSARY.md`][glossary] (entries [Scalar field conversion][glossary-scalar-field-conversion], [Specialized scalar conversions][glossary-specialized-scalar-conversions], [`BigInt` scalar][glossary-bigint-scalar]), [`KANBAN.md`][kanban] card `DONE-017-0.0.6`.
 Card line: ["Add `BigInt` scalar with string serialization and `int` parsing. Add `JSONField` mapping to Strawberry JSON. Add `HStoreField` where available. Add `ArrayField` recursion through `field.base_field`. Use synthetic unmanaged test models where fakeshop does not naturally exercise the fields. Keep coverage at 100%."][kanban]
 
 Revision history (kept inline so the spec is self-contained):
@@ -202,12 +202,12 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
     - [Index][glossary-index] → update status badges for the two flipped entries.
     - [Public exports][glossary-public-exports] → add `BigInt`. Note: the import path is now clean — no Strawberry deprecation warning escapes (the deprecation is suppressed at the definition site in `scalars.py`).
   - [ ] `TODAY.md` — expand the "What fakeshop model fields work today" section with the four new scalars.
-  - [ ] `KANBAN.md` — move `DONE-013-0.0.6` → `DONE-013-0.0.6`. **Drop in the verbatim body below**:
+  - [ ] `KANBAN.md` — move `DONE-017-0.0.6` → `DONE-017-0.0.6`. **Drop in the verbatim body below**:
 
     ```markdown
-    ### DONE-013-0.0.6 — Deferred scalar conversions
+    ### DONE-017-0.0.6 — Deferred scalar conversions
 
-    Slice-by-slice scope (per `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`):
+    Slice-by-slice scope (per `docs/SPECS/spec-017-deferred_scalars-0_0_6.md`):
 
     - Public `BigInt` scalar (`django_strawberry_framework/scalars.py`, `NewType`-based) with the Strawberry class-direct-to-`scalar()` `DeprecationWarning` suppressed at the definition site so consumers see no warning at import time.
     - Strict `BigInt` parser via regex `^(0|-?[1-9][0-9]*)$` — rejects `bool`, `float`, empty / whitespace-padded strings, non-decimal strings, underscores, plus signs, leading zeroes, `-0`, and Unicode digits.
@@ -238,8 +238,8 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
 
     > "See `KANBAN.md` for the current `WIP-ALPHA-020-0.0.7` card body — the verbatim drop-in below was used for the initial card creation in this commit and may be out of date once the follow-up spec evolves the card."
 
-    This prevents the archived spec from drifting against the live `KANBAN.md` card as the follow-up card's body evolves (open design questions resolve, additional context lands). The inline `DONE-013-0.0.6` body above can stay — it's a historical record of what shipped, not a live evolving card.
-  - [ ] Archive this spec to `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`.
+    This prevents the archived spec from drifting against the live `KANBAN.md` card as the follow-up card's body evolves (open design questions resolve, additional context lands). The inline `DONE-017-0.0.6` body above can stay — it's a historical record of what shipped, not a live evolving card.
+  - [ ] Archive this spec to `docs/SPECS/spec-017-deferred_scalars-0_0_6.md`.
 
 ## Problem statement
 
@@ -663,7 +663,7 @@ Single commit; five files: `pyproject.toml`, `django_strawberry_framework/__init
 
 ### Slice 6 — Docs, KANBAN, CHANGELOG, archive
 
-Separate commit. Files: root `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/GLOSSARY.md` (entries beyond the version line), `TODAY.md`, `KANBAN.md` (move + verbatim body), `CHANGELOG.md` (`Added` / `Changed` / `Notes`), `docs/SPECS/spec-013-deferred_scalars-0_0_6.md` (archive this spec).
+Separate commit. Files: root `README.md`, `docs/README.md`, `docs/TREE.md`, `docs/GLOSSARY.md` (entries beyond the version line), `TODAY.md`, `KANBAN.md` (move + verbatim body), `CHANGELOG.md` (`Added` / `Changed` / `Notes`), `docs/SPECS/spec-017-deferred_scalars-0_0_6.md` (archive this spec).
 
 ## Edge cases and constraints
 
@@ -717,7 +717,7 @@ Coverage target: 100%.
 
 ## Doc updates
 
-Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verbatim `DONE-013-0.0.6` KANBAN body are drafted inline in the Slice 6 checklist.
+Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verbatim `DONE-017-0.0.6` KANBAN body are drafted inline in the Slice 6 checklist.
 
 ## Risks and open questions
 
@@ -743,7 +743,7 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 - Multi-dimensional `ArrayField`.
 - Dedicated `HStore` scalar.
 - `BigAutoField` → `BigInt`.
-- Consumer-facing scalar annotation overrides — DONE-015-0.0.6.
+- Consumer-facing scalar annotation overrides — DONE-019-0.0.6.
 - Strawberry-deprecation-free `BigInt` definition (via `StrawberryConfig.scalar_map` + a package-provided config helper) — roadmapped as `WIP-ALPHA-020-0.0.7`.
 - `BigInt64`-bounded variant of `BigInt`.
 
@@ -754,14 +754,14 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 - All TODO comments for deferred scalars removed.
 - `SCALAR_MAP`'s value type annotation widened to `Any`.
 - Atomic version-bump quintet aligned at `0.0.6`.
-- Root `README.md`, `docs/README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`, `KANBAN.md` (with both the verbatim `DONE-013-0.0.6` body AND the new `WIP-ALPHA-020-0.0.7` card body added to To-Do) all reflect shipped state.
+- Root `README.md`, `docs/README.md`, `docs/TREE.md`, `TODAY.md`, `CHANGELOG.md`, `KANBAN.md` (with both the verbatim `DONE-017-0.0.6` body AND the new `WIP-ALPHA-020-0.0.7` card body added to To-Do) all reflect shipped state.
 - `docs/GLOSSARY.md` updated entries: [Specialized scalar conversions][glossary-specialized-scalar-conversions], [`BigInt` scalar][glossary-bigint-scalar], [Scalar field conversion][glossary-scalar-field-conversion], [Index][glossary-index], [Public exports][glossary-public-exports].
 - `BigInt` strict parser **and strict serializer** unit-tested in `tests/test_scalars.py` and exercised at schema-execution level in `tests/types/test_converters.py`.
 - Deprecation-suppression pinned via `test_package_import_does_not_emit_strawberry_deprecation_warning` (subprocess-based).
 - `ArrayField` outer-`choices` rejection tested.
 - `HStoreField` outer-`choices` rejection tested.
 - `BigInt` top-level import smoke-tested (`test_bigint_is_importable_from_top_level`).
-- Spec archived to `docs/SPECS/spec-013-deferred_scalars-0_0_6.md`.
+- Spec archived to `docs/SPECS/spec-017-deferred_scalars-0_0_6.md`.
 - **PyPI publish gate** — do not `uv publish` the `0.0.6` distribution until Slice 6 closes. Published artifacts must not ship with stale `README.md` / `docs/README.md` / `CHANGELOG.md` / `KANBAN.md` (the controlled inconsistency between Slice 5 and Slice 6 stays inside the repo; PyPI sees the consistent end-state).
 
 <!-- LINK DEFINITIONS -->

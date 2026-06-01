@@ -3,7 +3,7 @@
 Target release: `0.0.8` (per [`KANBAN.md`][kanban] card `WIP-ALPHA-021-0.0.8`). The version bump from `0.0.7 → 0.0.8` is owned by the joint `0.0.8` cut, NOT this card — see [Decision 10](#decision-10--joint-008-cut).
 Status: in progress — **core wiring shipped through Slice 3, live HTTP coverage shipped through Slice 4, tree-form logic substrate shipped through Slice 4a (all 14 contracted live HTTP tests pass; the `FilterSet.filter_queryset` instance-method override now evaluates the `and` / `or` / `not` tree carried in `self.data` per Decision 8 step 8 + Definition-of-done item 4(d), and `test_library_books_filter_combines_and_or_not` flipped from a strict xfail to a passing test in the same change), docs / KANBAN / CHANGELOG shipped through Slice 5 (joint-cut safe-default path taken; version bump deferred per [Decision 10](#decision-10--joint-008-cut)); Slice 6 composition smoke tests closed as "carried by sibling" per the Slice-checklist conditional clause — this card shipped first, so the composition smoke test lands in [`WIP-ALPHA-022-0.0.8`][kanban]'s PR**. Slices 1-3 land the `Filter` primitives + `FilterSet` metaclass, the `FilterArgumentsFactory` BFS + dynamic-filterset cache, and the finalizer phase-2.5 binding pass that promotes `Meta.filterset_class` out of `DEFERRED_META_KEYS` and wires the materialized input classes as module globals of [`django_strawberry_framework.filters.inputs`][filters]. Slice 4 wires `Meta.filterset_class` on six library `DjangoType` classes, adds the five `FilterSet` subclasses (`BranchFilter`, `ShelfFilter`, `BookFilter`, `LoanFilter`, `PatronFilter`) in [`examples/fakeshop/apps/library/filters.py`][fakeshop-library] plus `GenreFilter` in [`examples/fakeshop/apps/library/filters_genre.py`][fakeshop-library], exercises the Decision-4 Relay-vs-scalar `FILTER_DEFAULTS` branch end-to-end, ships nested-`RelatedFilter` visibility scoping (via recursive child-filterset apply), and carries the 14 live HTTP tests through `examples/fakeshop/test_query/test_library_api.py`. `Meta.filterset_class` is now reachable end-to-end through `DjangoType.__init_subclass__` → `_validate_meta` → finalizer phase 2.5 (`_bind_filtersets()` umbrella helper with four ordered subpasses — bind owners, expand filtersets, materialize input classes, orphan-validate against the `_helper_referenced_filtersets` set). Original L1-of-rev8 phrasing preserved for historical context: "TODO skeleton present, no public filter behavior shipped yet" was accurate at rev8 sign-off when the maintainer had landed only TODO anchors in [`django_strawberry_framework/filters/`][filters]; Slices 1-3 of the build have since shipped the contracts those anchors named. Slice 4a closed the tree-form-logic substrate gap (the `FilterSet.filter_queryset` override on the runtime apply pipeline; surfaced first by Slice 4's test #6 against the GraphQL-surface `and_` / `or_` / `not_` fields shipped in Slice 2) and re-enabled test #6. Slice 5 shipped the `filter_input_type` GLOSSARY entry + Index row + Browse-by-category bullet, the past-tense `DONE-021-0.0.8` KANBAN move, the `[Unreleased]` `### Added` / `### Changed` CHANGELOG bullets, and the `GOAL.md` migration-narrative rewrite; the `docs/README.md` / `README.md` shipped-symbol move plus the `[Unreleased]` → `[0.0.8]` promotion and the `pyproject.toml` / `__init__.py` / `tests/base/test_init.py` version bump trio remain deferred per [Decision 10](#decision-10--joint-008-cut)'s joint-cut safe-default. The cross-card composition smoke test with [`WIP-ALPHA-022-0.0.8`][kanban] is carried by the sibling card per the Slice-checklist conditional clause (`docs/builder/bld-slice-6-composition_smoke_test.md` records the procedural closure).
 Owner: package maintainer.
-Predecessors: [`docs/SPECS/spec-011-relay_interfaces-0_0_5.md`][spec-011] (Relay-Node wiring at finalizer phase 2.5 — the synchronization point this card reuses); [`docs/SPECS/spec-014-meta_primary-0_0_6.md`][spec-014] (the `Meta.primary` design and the [`TypeRegistry`][registry-typeregistry] keying convention this card respects when answering [Decision 9](#decision-9--input-class-namespace-vs-typeregistry-and-lifecycle)); [`docs/SPECS/spec-016-list_field-0_0_7.md`][spec-016] (Decision 10's "joint cut" precedent this card mirrors); [`docs/GLOSSARY.md`][glossary] entries [`FilterSet`][glossary-filterset], [`RelatedFilter`][glossary-relatedfilter], [`Meta.filterset_class`][glossary-metafilterset_class] (all currently `planned for 0.0.8`); [`KANBAN.md`][kanban] card body's "Recommended architectural direction" block (the six-layer lazy-resolution pipeline summary), preserved as [Decision 3](#decision-3--six-layer-lazy-resolution-pipeline) without re-litigation.
+Predecessors: [`docs/SPECS/spec-015-relay_interfaces-0_0_5.md`][spec-011] (Relay-Node wiring at finalizer phase 2.5 — the synchronization point this card reuses); [`docs/SPECS/spec-018-meta_primary-0_0_6.md`][spec-014] (the `Meta.primary` design and the [`TypeRegistry`][registry-typeregistry] keying convention this card respects when answering [Decision 9](#decision-9--input-class-namespace-vs-typeregistry-and-lifecycle)); [`docs/SPECS/spec-020-list_field-0_0_7.md`][spec-016] (Decision 10's "joint cut" precedent this card mirrors); [`docs/GLOSSARY.md`][glossary] entries [`FilterSet`][glossary-filterset], [`RelatedFilter`][glossary-relatedfilter], [`Meta.filterset_class`][glossary-metafilterset_class] (all currently `planned for 0.0.8`); [`KANBAN.md`][kanban] card body's "Recommended architectural direction" block (the six-layer lazy-resolution pipeline summary), preserved as [Decision 3](#decision-3--six-layer-lazy-resolution-pipeline) without re-litigation.
 
 Revision history (kept inline so the spec is self-contained):
 
@@ -97,7 +97,7 @@ Foundational invariants and cross-cutting surfaces a new dev will hit while read
 
 - [Relation handling][glossary-relation-handling] — the package's existing FK / OneToOne / M2M / reverse-relation traversal that `RelatedFilter` plugs into; without it, the lazy-resolution pipeline would have nothing to bind against.
 - [Relay Node integration][glossary-relay-node-integration] — the 0.0.5 surface (`Meta.interfaces = (relay.Node,)`) that Decision 4's Relay-vs-scalar conditional consults; FK / PK targets implementing `relay.Node` route through `GlobalIDFilter`.
-- [Definition-order independence][glossary-definition-order-independence] — the DONE-009-0.0.4 invariant the six-layer lazy-resolution pipeline preserves so cross-module `RelatedFilter("...")` references work regardless of import order.
+- [Definition-order independence][glossary-definition-order-independence] — the DONE-010-0.0.4 invariant the six-layer lazy-resolution pipeline preserves so cross-module `RelatedFilter("...")` references work regardless of import order.
 - [Cross-subsystem invariants][glossary-cross-subsystem-invariants] — the deferred-Meta-key promotion rule lives here; Decision 7's promotion gate is one instance of the broader invariant applied to every Layer-3 sidecar.
 - [Choice enum generation][glossary-choice-enum-generation] — the existing pipeline `convert_filter_to_input_annotation` consults for `ChoiceFilter` input shape per M5 of rev5; ensures choice-enum filter inputs round-trip through Strawberry enums.
 - [Scalar field conversion][glossary-scalar-field-conversion] — the `SCALAR_MAP` that Decision 4's non-Relay FK / PK conditional reads to derive scalar PK filter shapes.
@@ -154,7 +154,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
   - [ ] [`README.md`][readme]: add `FilterSet` / `RelatedFilter` / `filter_input_type` to the shipped-symbol bullet list (under the `0.0.8` boundary), matching the joint-cut promotion timing (per M2 of [`docs/feedback.md`][feedback]).
   - [ ] [`GOAL.md`][goal]: the astronomy showcase already references `filters.py` and `Meta.filterset_class`. AND rewrite the "Coming from DRF + `django-filter`" migration narrative (currently anchored at [`GOAL.md #"The existing django_filters.FilterSet plugs into Meta.filterset_class directly"`][goal-migration-shape]) — corrected per M1 of [`docs/feedback.md`][feedback]. The literal "plugs in directly" wording is misleading because the spec's validator at `_validate_meta` rejects a plain `django_filters.FilterSet` and the consumer migration is a one-line parent-class swap (`class CategoryFilter(FilterSet):` instead of `class CategoryFilter(django_filters.FilterSet):`). Replacement wording: "Your existing `django_filters.FilterSet` migrates to `Meta.filterset_class` via a one-line parent-class swap to `django_strawberry_framework.filters.FilterSet`; the package's `FilterSet` IS a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive you already use carries over unchanged." Update the diff block in the same section so the `class CategoryFilter(django_filters.FilterSet):` line shows the parent-class swap rather than implying direct reuse.
   - [ ] [`TODAY.md`][today]: extend the "Shipped capabilities" enumeration with `FilterSet` / `Meta.filterset_class` / `RelatedFilter`; extend the fakeshop section to mention the new live `BranchFilter` / `BookFilter` / `LoanFilter` / `PatronFilter` declarations and the filter-input live HTTP tests under [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-library].
-  - [ ] [`KANBAN.md`][kanban]: move `WIP-ALPHA-021-0.0.8` to the Done column with the next available `DONE-NNN-0.0.8` id (renumber per the column-move pass). Past-tense Done body pinned in [Doc updates](#doc-updates). Rewrite the card body's `Definition of done` bullet 1 (`docs/spec-filters.md` → `docs/SPECS/spec-021-filters-0_0_8.md` after the Step-8 archive pass per [Decision 1](#decision-1--spec-filename-and-canonical-naming)).
+  - [ ] [`KANBAN.md`][kanban]: move `WIP-ALPHA-021-0.0.8` to the Done column with the next available `DONE-NNN-0.0.8` id (renumber per the column-move pass). Past-tense Done body pinned in [Doc updates](#doc-updates). Rewrite the card body's `Definition of done` bullet 1 (`docs/spec-filters.md` → `docs/SPECS/spec-027-filters-0_0_8.md` after the Step-8 archive pass per [Decision 1](#decision-1--spec-filename-and-canonical-naming)).
   - [ ] [`CHANGELOG.md`][changelog]: append `### Added` bullets to `[Unreleased]` for `FilterSet`, `RelatedFilter`, `Meta.filterset_class`, the per-module input-class namespace, the `FILTER_DEFAULTS` map, and the cross-relation lazy-resolution surface. Append a `### Changed` bullet noting that `Meta.filterset_class` is no longer in `DEFERRED_META_KEYS`. Per the CHANGELOG-edit-permission rule at [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly instructed", this Slice-5 bullet is the explicit permission for this card.
   - [ ] Version bump: NOT in this card per [Decision 10](#decision-10--joint-008-cut). `[Unreleased]` entries accumulate against an unbumped `__version__ = "0.0.7"` until the last card in the `0.0.8` cohort owns the bump to `0.0.8`.
 - [ ] Slice 6: Sibling-card composition smoke tests (held until after [`WIP-ALPHA-022-0.0.8`][kanban] ships)
@@ -179,7 +179,7 @@ Filtering is the first ⚛️&🍓 parity-required Layer-3 capability for two re
 - [`django_strawberry_framework/types/finalizer.py::finalize_django_types`][finalizer]: runs three phases (1, 2, 2.5, 3); phase 2.5 currently handles only `apply_interfaces` and `install_relay_node_resolvers`. The phase is the seam this card grows a fourth step into per [Decision 6](#decision-6--finalizer-phase-25-binding-seam--materialize-before-schema-ordering).
 - [`docs/GLOSSARY.md`][glossary]: [`FilterSet`][glossary-filterset], [`RelatedFilter`][glossary-relatedfilter], and [`Meta.filterset_class`][glossary-metafilterset_class] all carry `planned for 0.0.8` status today.
 - [`examples/fakeshop/apps/library/schema.py`][fakeshop-library-schema]: exercises forward / reverse FK, forward / reverse OneToOne, forward / reverse M2M, choice-enum generation, `Meta.interfaces = (relay.Node,)` on `GenreType`, [`Meta.optimizer_hints`][glossary-metaoptimizer-hints] on `LoanType`, and consumer-shaped querysets that cooperate with the optimizer. No filter declarations today; the schema is the natural host for the live HTTP filter coverage per [Decision 12](#decision-12--live-http-coverage-strategy).
-- [`docs/SPECS/spec-016-list_field-0_0_7.md`][spec-016]: the most-recently-shipped spec; the canonical voice / depth / section-layout reference for this spec.
+- [`docs/SPECS/spec-020-list_field-0_0_7.md`][spec-016]: the most-recently-shipped spec; the canonical voice / depth / section-layout reference for this spec.
 - Upstream cookbook (working reference per [`START.md`][start]): `~/projects/django-graphene-filters/django_graphene_filters/` — the six-layer pipeline this card ports verbatim through Layers 1–4 and 6, and Strawberry-adapts at Layer 5.
 - Upstream `graphene-django`: `~/projects/django-graphene-filters/.venv/lib/python*/site-packages/graphene_django/filter/` — the parity-floor primitives this card mirrors (per [Decision 4](#decision-4--upstream-primitives-parity-floor)). Note: `graphene_django/filter/utils.py::get_filterset_class` and the cookbook's `filterset_factories.py::get_filterset_class` are different functions with the same name; this card mirrors the cookbook's shape per [Decision 4](#decision-4--upstream-primitives-parity-floor).
 - Upstream `strawberry-graphql-django`: `~/projects/strawberry-django-main/strawberry_django/filters.py` — the single-file decorator-driven implementation. The runtime pipeline (`process_filters`) is conceptually parallel to this card's `FilterSet.apply_sync(...)` / `apply_async(...)` classmethod pair (per the H2 sync/async split in [Decision 8](#decision-8--relation-permission-cascade--get_queryset-cooperation)); the declaration surface (`@strawberry_django.filter_type(Model, lookups=True)` vs `class ItemFilter(FilterSet): class Meta: model = Item`) differs per the package's DRF-shaped positioning.
@@ -187,7 +187,7 @@ Filtering is the first ⚛️&🍓 parity-required Layer-3 capability for two re
 ## Goals
 
 1. Ship `FilterSet` + `RelatedFilter` + per-field `check_*_permission` gates + cross-relation traversal with cycle-safe lazy resolution, mirroring the `django-graphene-filters` six-layer pipeline minus Layer 5's GraphQL-engine substitution.
-2. Promote [`Meta.filterset_class`][glossary-metafilterset_class] out of `DEFERRED_META_KEYS` only when the filter subsystem applies the configured class end-to-end — same gate as [`Meta.interfaces`][glossary-metainterfaces] in `DONE-011-0.0.5`.
+2. Promote [`Meta.filterset_class`][glossary-metafilterset_class] out of `DEFERRED_META_KEYS` only when the filter subsystem applies the configured class end-to-end — same gate as [`Meta.interfaces`][glossary-metainterfaces] in `DONE-015-0.0.5`.
 3. Establish the registration / factory / lazy-resolution pattern the four sibling Layer-3 subsystems ([`OrderSet`][glossary-orderset], [`AggregateSet`][glossary-aggregateset], [`FieldSet`][glossary-fieldset], [Meta.search_fields][glossary-metasearch_fields]) reuse without redesign.
 4. Stay composable with [`DjangoOptimizerExtension`][glossary-djangooptimizerextension]'s [Queryset diffing][glossary-queryset-diffing] / [Plan cache][glossary-plan-cache] / [FK-id elision][glossary-fk-id-elision] / [Strictness mode][glossary-strictness-mode] — a filter clause is just another `.filter(...)` call on the consumer queryset; the optimizer cooperates.
 5. Expose enough introspection (`FilterSet.get_filters()`, `FilterArgumentsFactory(cls).arguments`) for a maintainer to ask "what filter surface does this type support?" from the REPL in one call.
@@ -431,14 +431,14 @@ The `Annotated[...]` MUST wrap the forward-reference string directly (`Annotated
 
 ### Decision 1 — Spec filename and canonical naming
 
-The spec file lives at **`docs/spec-021-filters-0_0_8.md`** (this document), NOT `docs/spec-filters.md` as the [`KANBAN.md`][kanban] card body's `Definition of done` bullet 1 names it.
+The spec file lives at **`docs/spec-027-filters-0_0_8.md`** (this document), NOT `docs/spec-filters.md` as the [`KANBAN.md`][kanban] card body's `Definition of done` bullet 1 names it.
 
 Justification:
 
-- The structured `spec-<NNN>-<topic>-<0_0_X>.md` convention pinned in [`docs/SPECS/NEXT.md`][next] Step 6 and observed by every recent spec ([`docs/SPECS/spec-014-meta_primary-0_0_6.md`][spec-014], [`docs/SPECS/spec-015-consumer_overrides_scalar-0_0_6.md`][spec-015], [`docs/SPECS/spec-016-list_field-0_0_7.md`][spec-016], [`docs/SPECS/spec-017-apps-0_0_7.md`][spec-017], [`docs/SPECS/spec-018-export_schema-0_0_7.md`][spec-018], [`docs/SPECS/spec-019-multi_db-0_0_7.md`][spec-019], [`docs/SPECS/spec-020-scalar_map_helper-0_0_7.md`][spec-020]) bakes the card's NNN and target patch into the filename.
+- The structured `spec-<NNN>-<topic>-<0_0_X>.md` convention pinned in [`docs/SPECS/NEXT.md`][next] Step 6 and observed by every recent spec ([`docs/SPECS/spec-018-meta_primary-0_0_6.md`][spec-014], [`docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md`][spec-015], [`docs/SPECS/spec-020-list_field-0_0_7.md`][spec-016], [`docs/SPECS/spec-021-apps-0_0_7.md`][spec-017], [`docs/SPECS/spec-022-export_schema-0_0_7.md`][spec-018], [`docs/SPECS/spec-023-multi_db-0_0_7.md`][spec-019], [`docs/SPECS/spec-025-scalar_map_helper-0_0_7.md`][spec-020]) bakes the card's NNN and target patch into the filename.
 - The card body's `docs/spec-filters.md` predates that convention.
 - The Slice-5 [`KANBAN.md`][kanban] rewrite updates the card body's stale reference to the canonical name, so the cross-reference resolves after archival per [Step 8 of NEXT.md][next-step-8].
-- Active-vs-archived path lifecycle (mirroring [`docs/SPECS/spec-020-scalar_map_helper-0_0_7.md`][spec-020] Decision 1): references use whichever path the file actually has when the reference is written. While this spec is at `docs/spec-021-filters-0_0_8.md`, references use that path; after a future archive pass moves it under `docs/SPECS/`, references use the archived path.
+- Active-vs-archived path lifecycle (mirroring [`docs/SPECS/spec-025-scalar_map_helper-0_0_7.md`][spec-020] Decision 1): references use whichever path the file actually has when the reference is written. While this spec is at `docs/spec-027-filters-0_0_8.md`, references use that path; after a future archive pass moves it under `docs/SPECS/`, references use the archived path.
 
 Alternatives considered (and rejected):
 
@@ -571,7 +571,7 @@ The package ships parity equivalents for every verified upstream filter primitiv
 
 The `FILTER_DEFAULTS` map is a **class attribute on the package `FilterSet`** (not a factory-side parallel map) so the `django-filter` runtime AND the Strawberry input factory agree on the chosen filter primitive. The mapping is **conditional on the target `DjangoType`'s Relay shape AND owner-aware** — corrected per H1 + H4 in rev3 and per H4 in [`docs/feedback.md`][feedback]:
 
-- FK / PK whose **owning `FilterSet`'s target `DjangoType`** (resolved through the filterset's `_owner_definition`, NOT the model's primary type) implements `relay.Node` (per `Meta.interfaces = (relay.Node,)`, shipped in `DONE-011-0.0.5`) → `GlobalIDFilter` (the Relay-`GlobalID`-aware primitive); the filter input accepts the Strawberry `relay.GlobalID` string shape and the factory decodes it back to the underlying PK before applying the queryset filter.
+- FK / PK whose **owning `FilterSet`'s target `DjangoType`** (resolved through the filterset's `_owner_definition`, NOT the model's primary type) implements `relay.Node` (per `Meta.interfaces = (relay.Node,)`, shipped in `DONE-015-0.0.5`) → `GlobalIDFilter` (the Relay-`GlobalID`-aware primitive); the filter input accepts the Strawberry `relay.GlobalID` string shape and the factory decodes it back to the underlying PK before applying the queryset filter.
 - FK / PK whose owning filterset's target `DjangoType` is **non-Relay** (the default — most `DjangoType`s today, e.g., `ShelfType` in the fakeshop library app) → the scalar PK filter derived from the target PK column's Django scalar conversion (per [`django_strawberry_framework/types/converters.py::SCALAR_MAP`][filters]); the filter input accepts the raw PK value (typically `int`, sometimes `uuid.UUID` or `BigInt`).
 
 **Owner awareness (H4 of rev4 + H2 of rev8).** Under [`Meta.primary`][glossary-metaprimary], a model can have multiple `DjangoType`s — for example, a primary `PublicGenreType` (non-Relay scalar `int` PK) AND a secondary `AdminGenreType` (Relay-Node-shaped via `Meta.interfaces = (relay.Node,)`). If `BookFilter.genres` (bound to `BookType`'s `_owner_definition`) is generated by consulting `registry.get(Genre)` alone, it would resolve to the primary `PublicGenreType` regardless of which type the filter is exposed on — so `AdminBookType.genres` could expose a scalar-`int` filter against a Relay-shaped admin genre type (wire-shape mismatch). The corrected rule: the FK/PK conditional consults `owner_definition.related_target_for(field_name)`, which walks the owning `DjangoType`'s relation map (NOT the global registry) to find the related target type.
@@ -686,7 +686,7 @@ Materialization MUST land before `strawberry.Schema(...)` runs — this is the o
 
 Justification:
 
-- Phase 2.5 is already the synchronization seam for `DONE-011-0.0.5`'s Relay-Node injection; threading the filter binding through the same loop keeps the finalizer's phase ordering coherent.
+- Phase 2.5 is already the synchronization seam for `DONE-015-0.0.5`'s Relay-Node injection; threading the filter binding through the same loop keeps the finalizer's phase ordering coherent.
 - Materializing classes as module globals (not as dict entries in a separate registry) matches Strawberry's actual `LazyType.resolve_type` semantics; H1 in [`docs/feedback.md`][feedback] verified by direct inspection of the installed Strawberry that dict-keyed registries are not reachable through `strawberry.lazy(...)`.
 - The pending-relation registry's record-now-resolve-at-finalization pattern (used for model relations) reuses cleanly for lazy related-filter class references; the `LazyRelatedClassMixin` equivalent reuses the same fail-loud error format ("Cannot finalize ... no registered ...") that the model-relation finalizer already produces.
 - Calling `finalize_django_types()` twice is still a no-op via the existing `registry.is_finalized()` guard; the new filter-binding pass is idempotent because (a) materialization is keyed by `(name, filterset_class)` provenance — re-materializing the same `(name, filterset_class)` pair is a no-op, and (b) re-materializing the same `name` from a DIFFERENT `filterset_class` raises [`ConfigurationError`][glossary-configurationerror] per [Decision 9](#decision-9--input-class-namespace-vs-typeregistry-and-lifecycle).
@@ -696,7 +696,7 @@ Alternatives considered (and rejected):
 
 - **Run filter binding in phase 2 alongside `_attach_relation_resolvers`.** Rejected: filter binding depends on Relay-Node setup (because Relay-aware filters require the `GlobalIDFilter` mapping established in `0.0.5`); phase 2 runs before Relay setup, so binding would land in the wrong order.
 - **Run filter binding in a new phase 2.75.** Rejected: invents an extra phase number for one capability; the existing 2.5 is the right grain.
-- **Run filter binding at `DjangoType.__init_subclass__` instead of at finalization.** Rejected: `RelatedFilter("CelestialBodyFilter")` cannot be resolved at class-creation time because the target filterset's module may not have been imported yet — same definition-order-independence constraint that `DONE-009-0.0.4` solved for model relations.
+- **Run filter binding at `DjangoType.__init_subclass__` instead of at finalization.** Rejected: `RelatedFilter("CelestialBodyFilter")` cannot be resolved at class-creation time because the target filterset's module may not have been imported yet — same definition-order-independence constraint that `DONE-010-0.0.4` solved for model relations.
 - **Inject `filter:` argument into existing root resolvers' Strawberry field metadata after finalize.** Rejected per H2: Strawberry collects field arguments at `@strawberry.type` decoration time; injection-after-collection would require either monkey-patching Strawberry internals or invalidating already-decorated `Query` types. The corrected shape uses `filter_input_type(FilterSet)` on the resolver signature at module-load time (per [Decision 11](#decision-11--filter_input_typefilterset-consumer-helper)) so Strawberry collects the lazy reference naturally.
 
 ### Decision 7 — `Meta.filterset_class` promotion gate
@@ -707,7 +707,7 @@ Alternatives considered (and rejected):
 2. The finalizer-phase-2.5 binding pass is wired (Slice 3).
 3. The promotion to `ALLOWED_META_KEYS` is applied at the same commit as the validator-acceptance test (Slice 3).
 
-Same gate as [`Meta.interfaces`][glossary-metainterfaces] in `DONE-011-0.0.5` — a deferred `Meta` key is accepted only when the subsystem applies it end-to-end. A consumer who declares `Meta.filterset_class = ItemFilter` against a `0.0.8`-installed package gets a working filter surface; against `0.0.7` they get the existing [`ConfigurationError`][glossary-configurationerror] from [`DEFERRED_META_KEYS`][base].
+Same gate as [`Meta.interfaces`][glossary-metainterfaces] in `DONE-015-0.0.5` — a deferred `Meta` key is accepted only when the subsystem applies it end-to-end. A consumer who declares `Meta.filterset_class = ItemFilter` against a `0.0.8`-installed package gets a working filter surface; against `0.0.7` they get the existing [`ConfigurationError`][glossary-configurationerror] from [`DEFERRED_META_KEYS`][base].
 
 Justification:
 
@@ -856,11 +856,11 @@ Justification:
 - Each individual card lands self-contained code, tests, and docs.
 - The version bump is the joint cut-over signal; doing it on each card would cause three overlapping bumps competing for `0.0.8`.
 - The CHANGELOG `[Unreleased]` Added / Changed entries accumulate across the three cards' Slice 5s; the last card to ship promotes `[Unreleased]` to `[0.0.8]` and bumps `pyproject.toml`, `__version__`, and `tests/base/test_init.py`'s pinned version assertion in one atomic commit.
-- Precedent: [`docs/SPECS/spec-016-list_field-0_0_7.md`][spec-016] Decision 10 pinned the same posture for the `0.0.7` five-card cohort, and [`docs/SPECS/spec-020-scalar_map_helper-0_0_7.md`][spec-020] Decision 8 pinned the same posture post-cut.
+- Precedent: [`docs/SPECS/spec-020-list_field-0_0_7.md`][spec-016] Decision 10 pinned the same posture for the `0.0.7` five-card cohort, and [`docs/SPECS/spec-025-scalar_map_helper-0_0_7.md`][spec-020] Decision 8 pinned the same posture post-cut.
 
 The Definition of done item that previously said "version bump in `pyproject.toml`" for this card is REMOVED from this slice and deferred to the last `0.0.8` card to ship.
 
-**Contingency (L5 of [`docs/feedback.md`][feedback] rev5):** If this card (`WIP-ALPHA-021-0.0.8`) IS the last `0.0.8` card to merge — for example, if `WIP-ALPHA-022-0.0.8` (ordering) and `WIP-ALPHA-023-0.0.8` (`DjangoType` consumer-DX cleanup) merge first — then DoD item 24 ("the version bump is NOT in this card") is replaced by **"this card owns the bump"**, and the Slice 5 commit additionally lands: (a) `pyproject.toml`'s `version = "0.0.7"` → `version = "0.0.8"`; (b) `django_strawberry_framework/__init__.py`'s `__version__ = "0.0.7"` → `__version__ = "0.0.8"`; (c) `tests/base/test_init.py`'s pinned version assertion (`"0.0.7"` → `"0.0.8"`); (d) the `[Unreleased]` → `[0.0.8] - YYYY-MM-DD` promotion in `CHANGELOG.md` (with the current date). The Slice 5 author at merge time checks whether sibling `0.0.8` cards have already merged; if so, the version-bump steps land in the same commit. Same precedent as [`docs/SPECS/spec-020-scalar_map_helper-0_0_7.md`][spec-020] Decision 8 (the last `0.0.7` card to ship owned the bump).
+**Contingency (L5 of [`docs/feedback.md`][feedback] rev5):** If this card (`WIP-ALPHA-021-0.0.8`) IS the last `0.0.8` card to merge — for example, if `WIP-ALPHA-022-0.0.8` (ordering) and `WIP-ALPHA-023-0.0.8` (`DjangoType` consumer-DX cleanup) merge first — then DoD item 24 ("the version bump is NOT in this card") is replaced by **"this card owns the bump"**, and the Slice 5 commit additionally lands: (a) `pyproject.toml`'s `version = "0.0.7"` → `version = "0.0.8"`; (b) `django_strawberry_framework/__init__.py`'s `__version__ = "0.0.7"` → `__version__ = "0.0.8"`; (c) `tests/base/test_init.py`'s pinned version assertion (`"0.0.7"` → `"0.0.8"`); (d) the `[Unreleased]` → `[0.0.8] - YYYY-MM-DD` promotion in `CHANGELOG.md` (with the current date). The Slice 5 author at merge time checks whether sibling `0.0.8` cards have already merged; if so, the version-bump steps land in the same commit. Same precedent as [`docs/SPECS/spec-025-scalar_map_helper-0_0_7.md`][spec-020] Decision 8 (the last `0.0.7` card to ship owned the bump).
 
 Alternatives considered (and rejected):
 
@@ -967,7 +967,7 @@ Justification:
 
 - The live HTTP path exercises the most ORM cooperation, optimizer cooperation, and Relay GlobalID round-trip behavior — three properties that an in-process `schema.execute_sync(...)` test would miss without significant setup.
 - The package-internal `tests/filters/` tree catches the edge cases (cycle detection, error shapes, cache behavior) that the live HTTP path cannot reach without authoring filter classes that explicitly fail.
-- The combination matches the precedent set by [`docs/SPECS/spec-016-list_field-0_0_7.md`][spec-016] Decision 9 (live HTTP coverage via sibling root field; package-internal tests for validation surface).
+- The combination matches the precedent set by [`docs/SPECS/spec-020-list_field-0_0_7.md`][spec-016] Decision 9 (live HTTP coverage via sibling root field; package-internal tests for validation surface).
 
 Alternatives considered (and rejected):
 
@@ -1099,8 +1099,8 @@ All 14 new live HTTP tests reuse the existing `_reload_project_schema_for_accept
 - [`KANBAN.md`][kanban] (Slice 5)
   - Move `WIP-ALPHA-021-0.0.8` to the Done column with the next available `DONE-NNN-0.0.8` id (the column-move pass renumbers as usual; the next available id is determined at merge time, not pinned in this spec). Past-tense Done body:
 
-    > "Shipped the filtering subsystem. [`FilterSet`][glossary-filterset], [`RelatedFilter`][glossary-relatedfilter], and [`Meta.filterset_class`][glossary-metafilterset_class] (promoted out of `DEFERRED_META_KEYS`) land at [`django_strawberry_framework/filters/`][filters] across five files (`base.py`, `sets.py`, `factories.py`, `inputs.py`, `__init__.py`); `tests/filters/` mirrors the layout. Six-layer lazy-resolution pipeline borrowed from `django-graphene-filters`: Layers 1–4 and 6 port library-agnostic verbatim on top of the shared `BaseFilterSet` foundation; Layer 5's cycle-safe forward reference adapts from Graphene's `lambda:` to `Annotated[\"TypeName\", strawberry.lazy(\"django_strawberry_framework.filters.inputs\")]` for scalar fields and `list[Annotated[\"TypeName\", strawberry.lazy(...)]]` for `and_` / `or_` list-shaped logical operators; lookup GraphQL names pinned through `LOOKUP_NAME_MAP`. Parity-floor primitives (`ArrayFilter`, `RangeFilter`, `ListFilter`, `TypedFilter`, Strawberry-specific `GlobalIDFilter` validating decoded `type_name`) ship under `base.py`; `FILTER_DEFAULTS` is a class attribute on `FilterSet`; `FilterSet.filter_for_field` / `filter_for_lookup` overrides pick `GlobalIDFilter` when the FK/PK target `DjangoType` (resolved via the filterset's owner-aware `_owner_definition.related_target_for(...)`) implements `relay.Node` and the scalar PK filter when it does not. `DjangoTypeDefinition` grows a `related_target_for(field_name) -> tuple[DjangoTypeDefinition, models.Field] | None` method to feed the owner-aware lookup. `FilterArgumentsFactory` derives Strawberry input field shape from resolved filter instances via the named converter `convert_filter_to_input_annotation(filter_instance, model_field, owner_definition)`. The **resolver-facing API is the classmethod pair `FilterSet.apply_sync(input_value, queryset, info)` and `FilterSet.apply_async(input_value, queryset, info)`** (sync resolvers call the former; async resolvers await the latter), with a thin `apply(...)` dispatcher kept for back-compat; the apply pipeline decomposes into named helpers (`_normalize_input`, `_derive_related_visibility_querysets_sync` / `_async`, `_run_permission_checks`, `_validate_form_or_raise`, `_apply_related_constraints`); the pipeline derives child visibility querysets from each ACTIVE `RelatedFilter` branch's target `DjangoType.get_queryset(...)` so nested filters cannot see through visibility; runs `check_permissions` with **active-input-only scope** (per-field `check_<field>_permission` gates fire only when the consumer's input names the field); extracts the request from `info.context.request` (with an `isinstance(info.context, HttpRequest)` fallback); explicitly calls `filterset.form.is_valid()` and raises `from graphql import GraphQLError; GraphQLError('Invalid filter input', extensions={'code': 'FILTER_INVALID', 'errors': filterset.errors.get_json_data()})` on failure (with the `{field: [{'message': str, 'code': str}, ...]}` payload shape); applies explicit-`queryset=` constraints as a **filter-scope constraint** with active-branch scoping (NOT a security boundary — visibility is `get_queryset`'s job). The new `filter_input_type(BranchFilter)` helper produces the resolver-annotation shape; the finalizer enforces orphan validation by raising `ConfigurationError` for any FilterSet referenced via `filter_input_type` but never wired via `Meta.filterset_class` (tracked via `_helper_referenced_filtersets`). `registry.clear()` co-clears the filter input namespace via `clear_filter_input_namespace()` AND clears `_helper_referenced_filtersets`. Per-package input-class namespace is separate from the model-to-`DjangoType` registry (`Meta.primary` design preserved). `Meta.filterset_class` promotion runs through finalizer phase 2.5; the phase binds `_owner_definition`, validates owner compatibility, materializes each generated input class as a module global of `django_strawberry_framework.filters.inputs` before `strawberry.Schema(...)` runs. [`examples/fakeshop/apps/library/`][fakeshop-library] grows `filters.py` (carrying `BranchFilter` / `ShelfFilter` / `BookFilter` / `LoanFilter` / `PatronFilter`) and `filters_genre.py` (carrying `GenreFilter` — the cross-module fixture for the Layer-2 absolute-import-path test) wired through `Meta.filterset_class`; root resolvers accept `filter:` via `filter_input_type(<Name>Filter)` annotations and call `<OwnerType>.get_queryset(...)` BEFORE `apply_sync(...)`. [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-library] grows exactly 14 live HTTP tests covering scalar / choice-enum / non-Relay-FK scalar PK / Relay-M2M GlobalID / reverse-FK / logical / optimizer cooperation / related-queryset parent-scope (filter-scope, NOT security) constraint via `Shelf.topic` / cross-module absolute-path `RelatedFilter` / nested-`RelatedFilter` visibility scoping / form-validation rejection via `PatronFilter.email_must_have_at_sign` custom `CharFilter` (per H4 of rev8 — the prior enum-coercion shape is unreachable) / GraphQL-enum-coercion-layer error distinct from form validation / root `get_queryset` honoring via `city == "restricted"` (per M1 of rev8) / wrong-`type_name` Relay GlobalID rejection. Spec: `docs/spec-021-filters-0_0_8.md`. The version bump from `0.0.7 → 0.0.8` is owned by the joint `0.0.8` cut (last `0.0.8` card to ship), NOT this card per Decision 10 — UNLESS this card is the last `0.0.8` card to merge, in which case the Decision-10 L5 contingency applies and this card owns the bump."
-  - Update the card body's `Definition of done` bullet 1 (`docs/spec-filters.md` → `docs/SPECS/spec-021-filters-0_0_8.md` after the Step-8 archive pass per [Decision 1](#decision-1--spec-filename-and-canonical-naming)).
+    > "Shipped the filtering subsystem. [`FilterSet`][glossary-filterset], [`RelatedFilter`][glossary-relatedfilter], and [`Meta.filterset_class`][glossary-metafilterset_class] (promoted out of `DEFERRED_META_KEYS`) land at [`django_strawberry_framework/filters/`][filters] across five files (`base.py`, `sets.py`, `factories.py`, `inputs.py`, `__init__.py`); `tests/filters/` mirrors the layout. Six-layer lazy-resolution pipeline borrowed from `django-graphene-filters`: Layers 1–4 and 6 port library-agnostic verbatim on top of the shared `BaseFilterSet` foundation; Layer 5's cycle-safe forward reference adapts from Graphene's `lambda:` to `Annotated[\"TypeName\", strawberry.lazy(\"django_strawberry_framework.filters.inputs\")]` for scalar fields and `list[Annotated[\"TypeName\", strawberry.lazy(...)]]` for `and_` / `or_` list-shaped logical operators; lookup GraphQL names pinned through `LOOKUP_NAME_MAP`. Parity-floor primitives (`ArrayFilter`, `RangeFilter`, `ListFilter`, `TypedFilter`, Strawberry-specific `GlobalIDFilter` validating decoded `type_name`) ship under `base.py`; `FILTER_DEFAULTS` is a class attribute on `FilterSet`; `FilterSet.filter_for_field` / `filter_for_lookup` overrides pick `GlobalIDFilter` when the FK/PK target `DjangoType` (resolved via the filterset's owner-aware `_owner_definition.related_target_for(...)`) implements `relay.Node` and the scalar PK filter when it does not. `DjangoTypeDefinition` grows a `related_target_for(field_name) -> tuple[DjangoTypeDefinition, models.Field] | None` method to feed the owner-aware lookup. `FilterArgumentsFactory` derives Strawberry input field shape from resolved filter instances via the named converter `convert_filter_to_input_annotation(filter_instance, model_field, owner_definition)`. The **resolver-facing API is the classmethod pair `FilterSet.apply_sync(input_value, queryset, info)` and `FilterSet.apply_async(input_value, queryset, info)`** (sync resolvers call the former; async resolvers await the latter), with a thin `apply(...)` dispatcher kept for back-compat; the apply pipeline decomposes into named helpers (`_normalize_input`, `_derive_related_visibility_querysets_sync` / `_async`, `_run_permission_checks`, `_validate_form_or_raise`, `_apply_related_constraints`); the pipeline derives child visibility querysets from each ACTIVE `RelatedFilter` branch's target `DjangoType.get_queryset(...)` so nested filters cannot see through visibility; runs `check_permissions` with **active-input-only scope** (per-field `check_<field>_permission` gates fire only when the consumer's input names the field); extracts the request from `info.context.request` (with an `isinstance(info.context, HttpRequest)` fallback); explicitly calls `filterset.form.is_valid()` and raises `from graphql import GraphQLError; GraphQLError('Invalid filter input', extensions={'code': 'FILTER_INVALID', 'errors': filterset.errors.get_json_data()})` on failure (with the `{field: [{'message': str, 'code': str}, ...]}` payload shape); applies explicit-`queryset=` constraints as a **filter-scope constraint** with active-branch scoping (NOT a security boundary — visibility is `get_queryset`'s job). The new `filter_input_type(BranchFilter)` helper produces the resolver-annotation shape; the finalizer enforces orphan validation by raising `ConfigurationError` for any FilterSet referenced via `filter_input_type` but never wired via `Meta.filterset_class` (tracked via `_helper_referenced_filtersets`). `registry.clear()` co-clears the filter input namespace via `clear_filter_input_namespace()` AND clears `_helper_referenced_filtersets`. Per-package input-class namespace is separate from the model-to-`DjangoType` registry (`Meta.primary` design preserved). `Meta.filterset_class` promotion runs through finalizer phase 2.5; the phase binds `_owner_definition`, validates owner compatibility, materializes each generated input class as a module global of `django_strawberry_framework.filters.inputs` before `strawberry.Schema(...)` runs. [`examples/fakeshop/apps/library/`][fakeshop-library] grows `filters.py` (carrying `BranchFilter` / `ShelfFilter` / `BookFilter` / `LoanFilter` / `PatronFilter`) and `filters_genre.py` (carrying `GenreFilter` — the cross-module fixture for the Layer-2 absolute-import-path test) wired through `Meta.filterset_class`; root resolvers accept `filter:` via `filter_input_type(<Name>Filter)` annotations and call `<OwnerType>.get_queryset(...)` BEFORE `apply_sync(...)`. [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-library] grows exactly 14 live HTTP tests covering scalar / choice-enum / non-Relay-FK scalar PK / Relay-M2M GlobalID / reverse-FK / logical / optimizer cooperation / related-queryset parent-scope (filter-scope, NOT security) constraint via `Shelf.topic` / cross-module absolute-path `RelatedFilter` / nested-`RelatedFilter` visibility scoping / form-validation rejection via `PatronFilter.email_must_have_at_sign` custom `CharFilter` (per H4 of rev8 — the prior enum-coercion shape is unreachable) / GraphQL-enum-coercion-layer error distinct from form validation / root `get_queryset` honoring via `city == "restricted"` (per M1 of rev8) / wrong-`type_name` Relay GlobalID rejection. Spec: `docs/spec-027-filters-0_0_8.md`. The version bump from `0.0.7 → 0.0.8` is owned by the joint `0.0.8` cut (last `0.0.8` card to ship), NOT this card per Decision 10 — UNLESS this card is the last `0.0.8` card to merge, in which case the Decision-10 L5 contingency applies and this card owns the bump."
+  - Update the card body's `Definition of done` bullet 1 (`docs/spec-filters.md` → `docs/SPECS/spec-027-filters-0_0_8.md` after the Step-8 archive pass per [Decision 1](#decision-1--spec-filename-and-canonical-naming)).
   - Update the `### In progress` summary paragraph (anchored at [`KANBAN.md`][kanban] #"### In progress") to remove `WIP-ALPHA-021-0.0.8` from the remaining-cards list once this card moves to Done.
 
 - [`CHANGELOG.md`][changelog] (Slice 5)
@@ -1127,7 +1127,7 @@ Each item names a preferred answer for the current cut and a fallback if impleme
 - **`Meta.fields = "__all__"` performance AND schema-size growth**. Preferred answer: the BFS factory walks every model field; for models with many fields this is O(field_count × lookup_count) at finalize time but the result is cached, so per-request cost is unaffected. Per M9 of [`docs/feedback.md`][feedback] (rev5), the more material concern is **schema-size growth**: the produced input type's SDL grows linearly with `field_count × lookup_count` — a 30-field model × ~8 default lookups = 240 input fields per type, and two such types on a schema = 480 fields. Apollo / GraphiQL introspection responses inflate accordingly; client codegen tooling slows; SDL diff review becomes harder. Consumers using `__all__` on wide models should expect noticeable schema-size growth; the workaround is to declare an explicit `Meta.fields` dict with narrower lookup sets, e.g., `{"name": ["exact", "icontains"], "status": ["exact"]}` instead of `"__all__"`. Fallback: if real-world consumer schemas with very-wide models surface measurable schema-size pain, a follow-up card adds a `Meta.lookup_subset` shorthand or a per-app field-set policy.
 - **`Meta.search_fields` planned for `0.1.2`** but `LOOKUP_PREFIXES` ships in this card. Preferred answer: the `LOOKUP_PREFIXES` map + `construct_search` helper land in `filters/inputs.py` so the future `Meta.search_fields` card consumes them without retrofit; no consumer surface for search lookups exists today. Fallback: if `Meta.search_fields` ships earlier or the cookbook's `search_fields` shape diverges from `LOOKUP_PREFIXES`, that card adjusts; this card's surface is unaffected.
 - **Glossary entry parity.** `LazyRelatedClassMixin`, `FilterArgumentsFactory`, `_dynamic_filterset_cache`, `FILTER_DEFAULTS`, and `LOOKUP_PREFIXES` are internal symbols not currently in [`docs/GLOSSARY.md`][glossary]. Preferred answer: keep them internal — the consumer surface is `FilterSet` / `RelatedFilter` / `filter_input_type` / `Meta.filterset_class`; the internal symbols are documented via this spec's body and via module docstrings, not the glossary. Fallback: if a future card surfaces one (e.g., a public `LOOKUP_PREFIXES` re-export for consumers writing custom search resolvers), the glossary entry lands with that card.
-- **`filter_input_type` CSV row deferral** (M2 of [`docs/feedback.md`][feedback]). [`docs/spec-021-filters-0_0_8-terms.csv`][spec-021-terms] currently lists 32 terms and does NOT include `filter_input_type`, because the corresponding `## filter_input_type` heading does not yet exist in [`docs/GLOSSARY.md`][glossary] — the entry lands during Slice 5 implementation alongside the CSV row (mirroring spec-020's `strawberry_config` pattern). The reviewer correctly noted this hides the new public symbol from the glossary gate during the authoring cycle. Preferred answer: the spec body documents the GLOSSARY entry as a Slice 5 deliverable (Slice 5 GLOSSARY bullet + DoD item 15 + DoD item 16); the CSV row is added in the same Slice 5 commit; the checker exits 0 against the 33-term CSV after Slice 5 lands. Fallback: if a future maintainer prefers the over-zealous discipline (CSV row in spec-author cycle, accepting checker failure until Slice 5), add the row at `filter_input_type,filter_input_type,The consumer helper this card introduces; GLOSSARY entry created in Slice 5.` and document the failure mode in this entry.
+- **`filter_input_type` CSV row deferral** (M2 of [`docs/feedback.md`][feedback]). [`docs/spec-027-filters-0_0_8-terms.csv`][spec-021-terms] currently lists 32 terms and does NOT include `filter_input_type`, because the corresponding `## filter_input_type` heading does not yet exist in [`docs/GLOSSARY.md`][glossary] — the entry lands during Slice 5 implementation alongside the CSV row (mirroring spec-020's `strawberry_config` pattern). The reviewer correctly noted this hides the new public symbol from the glossary gate during the authoring cycle. Preferred answer: the spec body documents the GLOSSARY entry as a Slice 5 deliverable (Slice 5 GLOSSARY bullet + DoD item 15 + DoD item 16); the CSV row is added in the same Slice 5 commit; the checker exits 0 against the 33-term CSV after Slice 5 lands. Fallback: if a future maintainer prefers the over-zealous discipline (CSV row in spec-author cycle, accepting checker failure until Slice 5), add the row at `filter_input_type,filter_input_type,The consumer helper this card introduces; GLOSSARY entry created in Slice 5.` and document the failure mode in this entry.
 
 ## Out of scope (explicitly tracked elsewhere)
 
@@ -1147,7 +1147,7 @@ Each item names a preferred answer for the current cut and a fallback if impleme
 
 The card is complete when all of the following are true:
 
-1. [`docs/spec-021-filters-0_0_8.md`][spec-021] (this document) is at the canonical structured filename per [Decision 1](#decision-1--spec-filename-and-canonical-naming), with companion [`docs/spec-021-filters-0_0_8-terms.csv`][spec-021-terms] anchoring every project-specific term used in the spec body to the matching [`docs/GLOSSARY.md`][glossary] heading (per [`docs/SPECS/NEXT.md`][next] Step 7).
+1. [`docs/spec-027-filters-0_0_8.md`][spec-021] (this document) is at the canonical structured filename per [Decision 1](#decision-1--spec-filename-and-canonical-naming), with companion [`docs/spec-027-filters-0_0_8-terms.csv`][spec-021-terms] anchoring every project-specific term used in the spec body to the matching [`docs/GLOSSARY.md`][glossary] heading (per [`docs/SPECS/NEXT.md`][next] Step 7).
 2. [`django_strawberry_framework/filters/`][filters] ships as a subpackage with `__init__.py`, `base.py`, `sets.py`, `factories.py`, `inputs.py` per [Decision 2](#decision-2--subpackage-layout-and-public-export-surface). The subpackage's `__init__.py` re-exports `FilterSet`, `RelatedFilter` (plus internal primitives for advanced uses); the top-level package's `__all__` is unchanged.
 3. `base.py` ships the parity-floor primitives per [Decision 4](#decision-4--upstream-primitives-parity-floor): `Filter`, `TypedFilter`, `ArrayFilter`, `ArrayFilterMethod`, `RangeFilter`, `RangeField`, `validate_range`, `ListFilter`, `ListFilterMethod`, `GlobalIDFilter`, `GlobalIDMultipleChoiceFilter`, plus `RelatedFilter` and `LazyRelatedClassMixin`.
 4. `sets.py` ships `FilterSetMetaclass` and `FilterSet` per Layers 3 + 4 of [Decision 3](#decision-3--six-layer-lazy-resolution-pipeline). `FilterSet` subclasses `django_filters.filterset.BaseFilterSet` per [Decision 5](#decision-5--django-filter-as-the-foundation) and carries: (a) `FILTER_DEFAULTS` class attribute (Relay-vs-scalar mapping per [Decision 4](#decision-4--upstream-primitives-parity-floor)) + `filter_for_field` / `filter_for_lookup` overrides that apply the **owner-aware** conditional (resolved through the filterset's `_owner_definition.related_target_for(field_name)` per H4 of rev4's feedback), so runtime filter instances and Strawberry input shape stay aligned (per H1 of rev3's feedback); (b) `_owner_definition: DjangoTypeDefinition | None` slot bound at finalizer phase 2.5 per H4 of rev4's feedback; (c) **the resolver-facing classmethod pair `apply_sync(input_value, queryset, info) -> QuerySet` and `apply_async(input_value, queryset, info) -> Awaitable[QuerySet]`** (per the H2 sync/async split in [Decision 8](#decision-8--relation-permission-cascade--get_queryset-cooperation) — sync resolvers call `apply_sync`, async resolvers await `apply_async`; the shared apply pipeline normalizes the Strawberry input dataclass into `django-filter`'s form-data dict consulting `LOOKUP_NAME_MAP` per H3 of rev4, derives child visibility querysets from each ACTIVE `RelatedFilter` branch's target `DjangoType.get_queryset(child_model._default_manager.all(), info)` per H1 of rev4, intersects with explicit `RelatedFilter(queryset=...)` filter-scope constraints under active-branch scoping per M4 of rev3, extracts the request from `info.context.request` with an `isinstance(info.context, HttpRequest)` fallback per M8 of rev5, instantiates `cls(data=data, queryset=queryset, request=request)`, runs `check_permissions` with **active-input-only scope** per M2 of rev5 — gates fire only when the consumer's input names the field, **explicitly calls `filterset.form.is_valid()` and raises `from graphql import GraphQLError; GraphQLError("Invalid filter input", extensions={"code": "FILTER_INVALID", "errors": filterset.errors.get_json_data()})` on failure per M2 of rev3 + M7 / M10 of rev5**, and returns `filterset.qs`); (c.1) thin `apply(...)` dispatcher kept for back-compat that calls `apply_sync(...)` inside a `try / except RuntimeError:` block and re-raises with a clearer message on sync-misuse per M5 of [`docs/feedback.md`][feedback] (rev6); (c.2) five named internal helpers per M1 of rev5 (`_normalize_input`, `_derive_related_visibility_querysets_sync` / `_async`, `_run_permission_checks`, `_validate_form_or_raise`, `_apply_related_constraints`); (d) `filter_queryset(self, queryset)` — the `django-filter` instance-method override for tree-form logic, distinct from `apply_sync` / `apply_async`; (e) `_get_fields` override pinning the `Meta.fields = "__all__"` override per M3 of rev4 (INCLUDE PK / FK columns, EXCLUDE M2M); (f) `Meta.model`, `Meta.fields`, `get_filters`, `check_permissions`, `_apply_related_queryset_constraints` (active-branch only per M4 of rev3) on top of the upstream's `declared_filters` / `base_filters` / `.filters` / `.form` / `.qs` / `Filter.method` machinery.
@@ -1163,7 +1163,7 @@ The card is complete when all of the following are true:
 14. [`examples/fakeshop/apps/library/schema.py`][fakeshop-library-schema] grows `Meta.filterset_class = filters.BranchFilter` (and the matching key on `ShelfType` / `BookType` / `LoanType` / `PatronType` / `GenreType`) on the corresponding `DjangoType` classes; root resolvers annotate `filter:` via `filter_input_type(filters.<Name>Filter)` per [Decision 11](#decision-11--filter_input_typefilterset-consumer-helper) and call the resolved filterset's `apply_sync(filter_value, queryset, info)` classmethod (per H2 of [`docs/feedback.md`][feedback] rev5's sync/async split + [Decision 8](#decision-8--relation-permission-cascade--get_queryset-cooperation)) AFTER calling `<OwnerType>.get_queryset(queryset, info)` per M5 of rev3.
 15. [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-library] grows **exactly 14** live `/graphql/` HTTP tests per the [Test plan](#test-plan) (scalar / choice-enum / non-Relay-FK-scalar / Relay-M2M-GlobalID / reverse-FK / logical / optimizer-cooperation / related-queryset parent-scope boundary via `Shelf.topic` / cross-module-absolute-path-`RelatedFilter` / nested-`RelatedFilter` visibility scoping per H1 of rev4 feedback / `form.is_valid()` rejection via custom `PatronFilter.email_must_have_at_sign` per H4 of [`docs/feedback.md`][feedback] (rev8) / GraphQL-enum-coercion-layer error companion test per H4 of rev8 / root `get_queryset` honoring per M5 of rev4 via `city == "restricted"` per M1 of rev8 / wrong-`type_name` Relay GlobalID rejection per M6 of rev4); count pinned per M3 of rev3's feedback, updated for the four rev4 additions and the rev8 H4 companion test; implementation-plan table corrected per H4 of rev5's feedback. The Relay-vs-scalar split pins [Decision 4](#decision-4--upstream-primitives-parity-floor)'s conditional `FILTER_DEFAULTS` end-to-end; the nested-visibility test pins [Decision 8](#decision-8--relation-permission-cascade--get_queryset-cooperation)'s H1 contract end-to-end.
 16. [`docs/GLOSSARY.md`][glossary] flips [`FilterSet`][glossary-filterset], [`RelatedFilter`][glossary-relatedfilter], and [`Meta.filterset_class`][glossary-metafilterset_class] from `planned for 0.0.8` to `shipped (0.0.8)`; adds a new `## filter_input_type` entry per [Decision 11](#decision-11--filter_input_typefilterset-consumer-helper); updates entry bodies; updates the [Index][glossary-index] table for all four entries; lists `FilterSet` / `RelatedFilter` / `filter_input_type` under the Filtering category of the [Browse by category][glossary] block. The [Public exports][glossary-public-exports] section is NOT updated — it enumerates top-level `django_strawberry_framework` re-exports, and per [Decision 2](#decision-2--subpackage-layout-and-public-export-surface) the filter symbols live at `django_strawberry_framework.filters` (corrected per M3 of rev3's feedback).
-17. [`docs/spec-021-filters-0_0_8-terms.csv`][spec-021-terms] anchors every project-specific term in the spec body to its [`docs/GLOSSARY.md`][glossary] heading; running [`uv run python scripts/check_spec_glossary.py --spec docs/spec-021-filters-0_0_8.md`][check-spec-glossary] reports `OK: <N> terms`.
+17. [`docs/spec-027-filters-0_0_8-terms.csv`][spec-021-terms] anchors every project-specific term in the spec body to its [`docs/GLOSSARY.md`][glossary] heading; running [`uv run python scripts/check_spec_glossary.py --spec docs/spec-027-filters-0_0_8.md`][check-spec-glossary] reports `OK: <N> terms`.
 18. [`docs/TREE.md`][tree] flips the `filters/` subpackage entry from `[alpha]` to on-disk; the mirror `tests/filters/` tree is enumerated; "Test layout going forward" reflects the new tree.
 19. [`docs/README.md`][docs-readme] moves filter symbols from "Coming in `0.1.0`" to "Shipped today" once the joint cut bumps the version.
 20. [`README.md`][readme] adds `FilterSet` / `RelatedFilter` / `filter_input_type` / `Meta.filterset_class` to the shipped-symbol bullet list (per M2 of rev3's feedback).
@@ -1179,111 +1179,111 @@ The card is complete when all of the following are true:
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[changelog]: ../CHANGELOG.md
-[contributing]: ../CONTRIBUTING.md
-[goal]: ../GOAL.md
-[goal-migration-shape]: ../GOAL.md#migration-shape
-[kanban]: ../KANBAN.md
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[changelog]: ../../CHANGELOG.md
+[contributing]: ../../CONTRIBUTING.md
+[goal]: ../../GOAL.md
+[goal-migration-shape]: ../../GOAL.md#migration-shape
+[kanban]: ../../KANBAN.md
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[glossary-aggregateset]: GLOSSARY.md#aggregateset
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-bigint-scalar]: GLOSSARY.md#bigint-scalar
-[glossary-choice-enum-generation]: GLOSSARY.md#choice-enum-generation
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-connection-aware-optimizer-planning]: GLOSSARY.md#connection-aware-optimizer-planning
-[glossary-cross-subsystem-invariants]: GLOSSARY.md#cross-subsystem-invariants
-[glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
-[glossary-djangoconnection]: GLOSSARY.md#djangoconnection
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
-[glossary-djangonodefield]: GLOSSARY.md#djangonodefield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fieldset]: GLOSSARY.md#fieldset
-[glossary-filter_input_type]: GLOSSARY.md#filter_input_type
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-fk-id-elision]: GLOSSARY.md#fk-id-elision
-[glossary-get_child_queryset]: GLOSSARY.md#get_child_queryset
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-index]: GLOSSARY.md#index
-[glossary-input-type-generation]: GLOSSARY.md#input-type-generation
-[glossary-metaaggregate_class]: GLOSSARY.md#metaaggregate_class
-[glossary-metafields]: GLOSSARY.md#metafields
-[glossary-metafields_class]: GLOSSARY.md#metafields_class
-[glossary-metafilterset_class]: GLOSSARY.md#metafilterset_class
-[glossary-metainterfaces]: GLOSSARY.md#metainterfaces
-[glossary-metamodel]: GLOSSARY.md#metamodel
-[glossary-metaoptimizer-hints]: GLOSSARY.md#metaoptimizer_hints
-[glossary-metaorderset_class]: GLOSSARY.md#metaorderset_class
-[glossary-metaprimary]: GLOSSARY.md#metaprimary
-[glossary-metasearch_fields]: GLOSSARY.md#metasearch_fields
-[glossary-only-projection]: GLOSSARY.md#only-projection
-[glossary-optimizerhint]: GLOSSARY.md#optimizerhint
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
-[glossary-plan-cache]: GLOSSARY.md#plan-cache
-[glossary-public-exports]: GLOSSARY.md#public-exports
-[glossary-queryset-diffing]: GLOSSARY.md#queryset-diffing
-[glossary-relatedaggregate]: GLOSSARY.md#relatedaggregate
-[glossary-relatedfilter]: GLOSSARY.md#relatedfilter
-[glossary-relatedorder]: GLOSSARY.md#relatedorder
-[glossary-relation-handling]: GLOSSARY.md#relation-handling
-[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
-[glossary-scalar-field-conversion]: GLOSSARY.md#scalar-field-conversion
-[glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command
-[glossary-specialized-scalar-conversions]: GLOSSARY.md#specialized-scalar-conversions
-[glossary-strawberry-config]: GLOSSARY.md#strawberry_config
-[glossary-strictness-mode]: GLOSSARY.md#strictness-mode
-[glossary]: GLOSSARY.md
-[spec-021-terms]: spec-021-filters-0_0_8-terms.csv
-[spec-021]: spec-021-filters-0_0_8.md
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[glossary-aggregateset]: ../GLOSSARY.md#aggregateset
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-bigint-scalar]: ../GLOSSARY.md#bigint-scalar
+[glossary-choice-enum-generation]: ../GLOSSARY.md#choice-enum-generation
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-cross-subsystem-invariants]: ../GLOSSARY.md#cross-subsystem-invariants
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnection]: ../GLOSSARY.md#djangoconnection
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangolistfield]: ../GLOSSARY.md#djangolistfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-filter_input_type]: ../GLOSSARY.md#filter_input_type
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-get_child_queryset]: ../GLOSSARY.md#get_child_queryset
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-index]: ../GLOSSARY.md#index
+[glossary-input-type-generation]: ../GLOSSARY.md#input-type-generation
+[glossary-metaaggregate_class]: ../GLOSSARY.md#metaaggregate_class
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metafields_class]: ../GLOSSARY.md#metafields_class
+[glossary-metafilterset_class]: ../GLOSSARY.md#metafilterset_class
+[glossary-metainterfaces]: ../GLOSSARY.md#metainterfaces
+[glossary-metamodel]: ../GLOSSARY.md#metamodel
+[glossary-metaoptimizer-hints]: ../GLOSSARY.md#metaoptimizer_hints
+[glossary-metaorderset_class]: ../GLOSSARY.md#metaorderset_class
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-metasearch_fields]: ../GLOSSARY.md#metasearch_fields
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-per-field-permission-hooks]: ../GLOSSARY.md#per-field-permission-hooks
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-public-exports]: ../GLOSSARY.md#public-exports
+[glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
+[glossary-relatedaggregate]: ../GLOSSARY.md#relatedaggregate
+[glossary-relatedfilter]: ../GLOSSARY.md#relatedfilter
+[glossary-relatedorder]: ../GLOSSARY.md#relatedorder
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-scalar-field-conversion]: ../GLOSSARY.md#scalar-field-conversion
+[glossary-schema-export-management-command]: ../GLOSSARY.md#schema-export-management-command
+[glossary-specialized-scalar-conversions]: ../GLOSSARY.md#specialized-scalar-conversions
+[glossary-strawberry-config]: ../GLOSSARY.md#strawberry_config
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[glossary]: ../GLOSSARY.md
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[next-step-8]: SPECS/NEXT.md#step-8--archive-prior-specs-and-update-cross-references
-[spec-011]: SPECS/spec-011-relay_interfaces-0_0_5.md
-[spec-014]: SPECS/spec-014-meta_primary-0_0_6.md
-[spec-015]: SPECS/spec-015-consumer_overrides_scalar-0_0_6.md
-[spec-016]: SPECS/spec-016-list_field-0_0_7.md
-[spec-017]: SPECS/spec-017-apps-0_0_7.md
-[spec-018]: SPECS/spec-018-export_schema-0_0_7.md
-[spec-019]: SPECS/spec-019-multi_db-0_0_7.md
-[spec-020]: SPECS/spec-020-scalar_map_helper-0_0_7.md
+[next]: NEXT.md
+[next-step-8]: NEXT.md#step-8--archive-prior-specs-and-update-cross-references
+[spec-011]: spec-015-relay_interfaces-0_0_5.md
+[spec-014]: spec-018-meta_primary-0_0_6.md
+[spec-015]: spec-019-consumer_overrides_scalar-0_0_6.md
+[spec-016]: spec-020-list_field-0_0_7.md
+[spec-017]: spec-021-apps-0_0_7.md
+[spec-018]: spec-022-export_schema-0_0_7.md
+[spec-019]: spec-023-multi_db-0_0_7.md
+[spec-020]: spec-025-scalar_map_helper-0_0_7.md
+[spec-021-terms]: spec-027-filters-0_0_8-terms.csv
+[spec-021]: spec-027-filters-0_0_8.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[base]: ../django_strawberry_framework/types/base.py
-[definition]: ../django_strawberry_framework/types/definition.py
-[filters]: ../django_strawberry_framework/filters/
-[finalizer]: ../django_strawberry_framework/types/finalizer.py
-[registry]: ../django_strawberry_framework/registry.py
-[registry-typeregistry]: ../django_strawberry_framework/registry.py
-[relay]: ../django_strawberry_framework/types/relay.py
+[base]: ../../django_strawberry_framework/types/base.py
+[definition]: ../../django_strawberry_framework/types/definition.py
+[filters]: ../../django_strawberry_framework/filters/
+[finalizer]: ../../django_strawberry_framework/types/finalizer.py
+[registry]: ../../django_strawberry_framework/registry.py
+[registry-typeregistry]: ../../django_strawberry_framework/registry.py
+[relay]: ../../django_strawberry_framework/types/relay.py
 
 <!-- tests/ -->
-[test-filters]: ../tests/filters/
-[test-filters-composition]: ../tests/filters/test_composition.py
-[test-types]: ../tests/types/
+[test-filters]: ../../tests/filters/
+[test-filters-composition]: ../../tests/filters/test_composition.py
+[test-types]: ../../tests/types/
 
 <!-- examples/ -->
-[fakeshop-library]: ../examples/fakeshop/apps/library/
-[fakeshop-library-models]: ../examples/fakeshop/apps/library/models.py
-[fakeshop-library-schema]: ../examples/fakeshop/apps/library/schema.py
-[fakeshop-test-library]: ../examples/fakeshop/test_query/test_library_api.py
-[fakeshop-test-library-reload]: ../examples/fakeshop/test_query/test_library_api.py
-[fakeshop-test-query-readme]: ../examples/fakeshop/test_query/README.md
+[fakeshop-library]: ../../examples/fakeshop/apps/library/
+[fakeshop-library-models]: ../../examples/fakeshop/apps/library/models.py
+[fakeshop-library-schema]: ../../examples/fakeshop/apps/library/schema.py
+[fakeshop-test-library]: ../../examples/fakeshop/test_query/test_library_api.py
+[fakeshop-test-library-reload]: ../../examples/fakeshop/test_query/test_library_api.py
+[fakeshop-test-query-readme]: ../../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
-[check-spec-glossary]: ../scripts/check_spec_glossary.py
+[check-spec-glossary]: ../../scripts/check_spec_glossary.py
 
 <!-- .venv/ -->
 

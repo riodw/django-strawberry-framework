@@ -1,6 +1,6 @@
 # Build: Slice 4 — Live HTTP coverage in fakeshop
 
-Spec reference: `docs/spec-021-filters-0_0_8.md` (slice checklist lines 138-141; supporting decisions: User-facing API L251-356, Decision 8 L715-773, Decision 11 L862-948, Decision 12 L950-967, Implementation plan row L978, Test plan L1040-1059, DoD items 13/14/15 L1154-1156)
+Spec reference: `docs/spec-027-filters-0_0_8.md` (slice checklist lines 138-141; supporting decisions: User-facing API L251-356, Decision 8 L715-773, Decision 11 L862-948, Decision 12 L950-967, Implementation plan row L978, Test plan L1040-1059, DoD items 13/14/15 L1154-1156)
 Status: final-accepted
 
 ## Plan (Worker 1)
@@ -212,7 +212,7 @@ The spec's nested sub-bullets for Slice 4 from `## Slice checklist` (spec lines 
 - `uv run ruff check --fix .` — pass (`All checks passed!`).
 - `git status --short` reviewed at the end of the pass. Every modified file is either:
   - Slice-4-intended (the eight files listed under `### Files touched`); OR
-  - Worker-1-owned (the spec at `docs/spec-021-filters-0_0_8.md`); OR
+  - Worker-1-owned (the spec at `docs/spec-027-filters-0_0_8.md`); OR
   - Maintainer-owned and pre-existing (`docs/feedback.md`, plus `KANBAN.md` which appeared modified mid-task with a single-line in-progress note from the maintainer per AGENTS.md L33 "Unexpected file modifications... ignore them as out-of-scope"); OR
   - Slice 1/2/3 build artifacts that Worker 0 retains across the build (the other `django_strawberry_framework/` / `tests/` modifications and the `docs/builder/bld-*.md` files).
 - Focused tests run (without `--cov*`):
@@ -311,7 +311,7 @@ Recommended change: at final verification, Worker 1 picks between (a) and (b). I
 
 Test expectation: either the test passes (option b) or the slice artifact records the `xfail` annotation + spec edit (option a).
 
-```docs/spec-021-filters-0_0_8.md:743
+```docs/spec-027-filters-0_0_8.md:743
 8. The instance's `.qs` property runs `cls.filter_queryset(self, queryset)` (the `django-filter` instance-method override; the tree-form-logic application path) and returns the final queryset. The apply pipeline (whichever of `apply_sync` / `apply_async` invoked it) returns `cls(...).qs` to the resolver.
 ```
 
@@ -384,7 +384,7 @@ Not applicable; slice did not modify CHANGELOG.md.
 
 ### Documentation / release sanity
 
-Not applicable; slice did not modify docs/release/KANBAN/archive surfaces. (`KANBAN.md` is dirty per the prompt's out-of-scope note — maintainer's in-progress unrelated bullet; ignored. `docs/feedback.md` was dirty before the build; ignored. `docs/spec-021-filters-0_0_8.md` carries Worker-1's prior-slice edits; out-of-scope.)
+Not applicable; slice did not modify docs/release/KANBAN/archive surfaces. (`KANBAN.md` is dirty per the prompt's out-of-scope note — maintainer's in-progress unrelated bullet; ignored. `docs/feedback.md` was dirty before the build; ignored. `docs/spec-027-filters-0_0_8.md` carries Worker-1's prior-slice edits; out-of-scope.)
 
 ### What looks solid
 
@@ -447,7 +447,7 @@ Plus the new items surfaced by review:
 
 - `uv run ruff format .` — pass. 148 files left unchanged.
 - `uv run ruff check --fix .` — pass. `All checks passed!`.
-- `git status --short` after both ruff invocations — every modified file is either: (a) this pass's intended edits to `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `examples/fakeshop/test_query/test_library_api.py`, and the artifact `docs/builder/bld-slice-4-live_http_coverage.md`; (b) Slice 1/2/3 working-tree changes still uncommitted (final-accepted by Worker 1 but maintainer has not yet committed); (c) Worker-1-owned spec edits on `docs/spec-021-filters-0_0_8.md`; (d) maintainer-owned out-of-scope files (`KANBAN.md` in-progress bullet, `docs/feedback.md`). No tool drift.
+- `git status --short` after both ruff invocations — every modified file is either: (a) this pass's intended edits to `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `examples/fakeshop/test_query/test_library_api.py`, and the artifact `docs/builder/bld-slice-4-live_http_coverage.md`; (b) Slice 1/2/3 working-tree changes still uncommitted (final-accepted by Worker 1 but maintainer has not yet committed); (c) Worker-1-owned spec edits on `docs/spec-027-filters-0_0_8.md`; (d) maintainer-owned out-of-scope files (`KANBAN.md` in-progress bullet, `docs/feedback.md`). No tool drift.
 - Focused tests run (without `--cov*`):
   - `uv run pytest examples/fakeshop/test_query/test_library_api.py --no-cov` — **25 passed, 1 xfailed** (the 14 Slice-4 tests run together with the 12 pre-existing tests). The xfailed test is the substrate-gap test #6.
   - `uv run pytest tests/filters/ --no-cov` — 125 passed. Confirms the `clear_filter_input_namespace()` change does NOT regress the package-internal filter tests (the existing `tests/filters/test_finalizer.py::_isolate_registry` fixture's manual factory-cache clears are now redundant but still safe — they're a no-op on top of the now-comprehensive `clear_filter_input_namespace()` walk via `registry.clear()`).
@@ -734,9 +734,9 @@ The `Patron.email` field add (spec H4-rev8's root-cause fix per the planning art
 
 ### Spec changes made (Worker 1 only)
 
-- **`docs/spec-021-filters-0_0_8.md` L4 (status line).** Rewrote to record Slice 4 shipped (13/14 tests live; 14th strict-xfailed pending substrate), Slice 4a carved (tree-form-logic substrate), and Slice 5 / Slice 6 still pending in their original order. Original phrasing preserved for historical context. Reason: per Worker-1 spec-status-line re-verification rule, the status line must reflect what landed; the new line names the carve so a future reader sees both the shipped state and the substrate gap at a glance.
-- **`docs/spec-021-filters-0_0_8.md` L141 (Slice 4 third sub-bullet).** Appended a one-sentence carry-forward note ("Carved during Slice-4 final-verification reconciliation (Worker 1): test `test_library_books_filter_combines_and_or_not` ships under Slice 4 with `@pytest.mark.xfail(strict=True, ...)` because the tree-form `and` / `or` / `not` runtime evaluator (`FilterSet.filter_queryset` per Decision 8 step 8 + Definition of done item 4(d)) is not yet implemented. The 14-test count is preserved (the test exists; it is xfailed). New Slice 4a (below) lands the substrate and the strict xfail flips to a passing test; Slice 4a is a Slice-1 follow-up contract gap surfaced first by Slice 4's live HTTP test #6.") Reason: makes the deferral / carve explicit at the slice-checklist site so a future Worker-0 reading the spec's slice checklist alone sees the carve without needing the build artifact.
-- **`docs/spec-021-filters-0_0_8.md` between L141 and L142 (new Slice 4a block).** Inserted a four-bullet Slice 4a block:
+- **`docs/spec-027-filters-0_0_8.md` L4 (status line).** Rewrote to record Slice 4 shipped (13/14 tests live; 14th strict-xfailed pending substrate), Slice 4a carved (tree-form-logic substrate), and Slice 5 / Slice 6 still pending in their original order. Original phrasing preserved for historical context. Reason: per Worker-1 spec-status-line re-verification rule, the status line must reflect what landed; the new line names the carve so a future reader sees both the shipped state and the substrate gap at a glance.
+- **`docs/spec-027-filters-0_0_8.md` L141 (Slice 4 third sub-bullet).** Appended a one-sentence carry-forward note ("Carved during Slice-4 final-verification reconciliation (Worker 1): test `test_library_books_filter_combines_and_or_not` ships under Slice 4 with `@pytest.mark.xfail(strict=True, ...)` because the tree-form `and` / `or` / `not` runtime evaluator (`FilterSet.filter_queryset` per Decision 8 step 8 + Definition of done item 4(d)) is not yet implemented. The 14-test count is preserved (the test exists; it is xfailed). New Slice 4a (below) lands the substrate and the strict xfail flips to a passing test; Slice 4a is a Slice-1 follow-up contract gap surfaced first by Slice 4's live HTTP test #6.") Reason: makes the deferral / carve explicit at the slice-checklist site so a future Worker-0 reading the spec's slice checklist alone sees the carve without needing the build artifact.
+- **`docs/spec-027-filters-0_0_8.md` between L141 and L142 (new Slice 4a block).** Inserted a four-bullet Slice 4a block:
   1. `FilterSet.filter_queryset(self, queryset)` instance-method override per Decision 8 step 8 + DoD item 4(d) — `and` intersects via `Q(...) & Q(...)`, `or` unions via `Q(...) | Q(...)`, `not` negates via `~Q(...)`; composes with `_apply_related_constraints` step-4a output; preserves visibility-before-filter ordering.
   2. `test_library_books_filter_combines_and_or_not` flips from strict xfail to passing in the same change (strict xfail self-prompts removal via unexpected-pass report).
   3. Three new package-internal tests under `tests/filters/test_sets.py` pinning the `and` / `or` / `not` branches in isolation.

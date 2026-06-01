@@ -1,6 +1,6 @@
 """Tests for ``django_strawberry_framework.list_field``.
 
-Spec: ``docs/spec-016-list_field-0_0_7.md`` (Test plan section, the
+Spec: ``docs/spec-020-list_field-0_0_7.md`` (Test plan section, the
 ``tests/test_list_field.py (new)`` subsection).
 
 Package tests; system-under-test is ``django_strawberry_framework``
@@ -21,7 +21,7 @@ through ``functools.partial`` natively (3.8+), so the case is correctly
 handled by the first branch of ``_is_async_callable``; the test pins
 the end-to-end behavior and guards against a future Python regression.
 
-The spec's Slice-3 inventory at ``docs/SPECS/spec-016-list_field-0_0_7.md #"Optional ``resolver=`` constructor argument that overrides the default body"`` calls out
+The spec's Slice-3 inventory at ``docs/SPECS/spec-020-list_field-0_0_7.md #"Optional ``resolver=`` constructor argument that overrides the default body"`` calls out
 "``Manager``/``QuerySet``" together for the consumer-resolver returns;
 both arms are load-bearing per rev4 M1 (the field wrapper owns the
 ``Manager → QuerySet`` coercion; the optimizer's downstream coercion is

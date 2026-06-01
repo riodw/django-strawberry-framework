@@ -25,7 +25,7 @@ Scalar field conversion,scalar-field-conversion,The SCALAR_MAP the FK/PK conditi
 Specialized scalar conversions,specialized-scalar-conversions,Decimal / Date / DateTime / Time / UUID conversions the named filter-to-input converter handles per Decision 4 M1.
 BigInt scalar,bigint-scalar,Cited in Decision 4 as a possible scalar PK shape (in addition to int and uuid.UUID).
 Input type generation,input-type-generation,The package's general input-type-generation surface; this card's FilterArgumentsFactory is the filtering-specific instance.
-Definition-order independence,definition-order-independence,The DONE-009-0.0.4 invariant the six-layer lazy-resolution pipeline preserves for cross-module RelatedFilter references.
+Definition-order independence,definition-order-independence,The DONE-010-0.0.4 invariant the six-layer lazy-resolution pipeline preserves for cross-module RelatedFilter references.
 Cross-subsystem invariants,cross-subsystem-invariants,The deferred-Meta-key promotion rule (Decision 7) lives here; same gate pattern across all Layer-3 sidecars.
 strawberry_config,strawberry_config,Spec-020's pattern the `filter_input_type` CSV-deferral mirrors (Risks section).
 OrderSet,orderset,Sibling Layer-3 subsystem (WIP-ALPHA-022-0.0.8); out of scope here but referenced as second consumer of the lazy-resolution architecture.

@@ -1,6 +1,6 @@
 # Build: Cross-slice integration pass — spec-021 filters / 0.0.8
 
-Spec reference: `docs/spec-021-filters-0_0_8.md` (build plan: `docs/builder/build-021-filters-0_0_8.md`)
+Spec reference: `docs/spec-027-filters-0_0_8.md` (build plan: `docs/builder/build-021-filters-0_0_8.md`)
 Status: final-accepted
 
 ## Scope (Worker 1)
@@ -17,7 +17,7 @@ This artifact is the cross-slice DRY scan run after all six slice boxes in `buil
 - `docs/builder/bld-slice-5-docs_kanban_changelog.md` — GLOSSARY / KANBAN / CHANGELOG / README / docs/README / docs/TREE / GOAL / TODAY / CSV.
 - `docs/builder/bld-slice-6-composition_smoke_test.md` — procedural-closure-only ("carried by sibling" per spec L161).
 
-**Spec status-line re-verification.** `docs/spec-021-filters-0_0_8.md` L4 currently reads "core wiring shipped through Slice 3, live HTTP coverage shipped through Slice 4, tree-form logic substrate shipped through Slice 4a, docs / KANBAN / CHANGELOG shipped through Slice 5; Slice 6 composition smoke tests closed as 'carried by sibling' per the Slice-checklist conditional clause." This matches the actual build outcome — every slice ticked `[x]` reflects shipped state. No status-line edit needed in this pass.
+**Spec status-line re-verification.** `docs/spec-027-filters-0_0_8.md` L4 currently reads "core wiring shipped through Slice 3, live HTTP coverage shipped through Slice 4, tree-form logic substrate shipped through Slice 4a, docs / KANBAN / CHANGELOG shipped through Slice 5; Slice 6 composition smoke tests closed as 'carried by sibling' per the Slice-checklist conditional clause." This matches the actual build outcome — every slice ticked `[x]` reflects shipped state. No status-line edit needed in this pass.
 
 ## Static-inspection helper coverage audit
 
@@ -117,7 +117,7 @@ The literal IS the source of truth for the spec L1007 / H6-of-rev2 Python-attr-v
 
 ### M2: `f"{<class>.__name__}InputType"` literal sprawl across five sites (Medium)
 
-Spec Decision 9 (line 785 of `docs/spec-021-filters-0_0_8.md` plus the supporting passages at L1023-L1030) pins the class-derived input-type naming convention: every `FilterSet` subclass `Foo` produces a Strawberry input class named `FooInputType`. The literal `f"{<class>.__name__}InputType"` (with various local bindings for `<class>`) appears at five distinct call sites:
+Spec Decision 9 (line 785 of `docs/spec-027-filters-0_0_8.md` plus the supporting passages at L1023-L1030) pins the class-derived input-type naming convention: every `FilterSet` subclass `Foo` produces a Strawberry input class named `FooInputType`. The literal `f"{<class>.__name__}InputType"` (with various local bindings for `<class>`) appears at five distinct call sites:
 
 | # | Site | Variable | Surface |
 |---|---|---|---|
@@ -234,7 +234,7 @@ After the consolidation loop closes, Worker 0 marks the integration checkbox `- 
 
 - `uv run ruff format .` — pass (148 files unchanged after both passes; idempotent).
 - `uv run ruff check --fix .` — pass (1 auto-fix on first invocation reordering the new `_LOGIC_KEYS` import in `sets.py` to alphabetical order; second invocation reported `All checks passed!`).
-- `git status --short` after both ruff invocations — every modified file classified: the four pass-specific source files (`filters/__init__.py`, `filters/factories.py`, `filters/inputs.py`, `filters/sets.py`) carry only the intentional consolidation edits; every other tracked-but-modified file (`CHANGELOG.md`, `GOAL.md`, `KANBAN.md`, `TODAY.md`, `filters/base.py`, `registry.py`, `types/base.py`, `types/definition.py`, `types/finalizer.py`, `docs/GLOSSARY.md`, `docs/TREE.md`, `docs/spec-021-filters-0_0_8-terms.csv`, `docs/spec-021-filters-0_0_8.md`, `examples/fakeshop/apps/library/models.py`, `examples/fakeshop/apps/library/schema.py`, `examples/fakeshop/test_query/test_library_api.py`, `tests/types/test_base.py`, `tests/types/test_definition_order.py`) is prior-slice work that landed across Slices 1-5 (not drift). The untracked entries (`docs/builder/bld-*.md`, `docs/builder/build-021-*.md`, `examples/fakeshop/apps/library/filters*.py`, `examples/fakeshop/apps/library/migrations/0004_patron_email.py`, `tests/filters/`, `tests/types/fixtures/`, `tests/types/test_definition_relations.py`) are likewise prior-slice deliverables. `docs/feedback.md` and `KANBAN.md` are maintainer in-progress (recorded in the build plan's preamble and the task contract). No tool churn requiring revert.
+- `git status --short` after both ruff invocations — every modified file classified: the four pass-specific source files (`filters/__init__.py`, `filters/factories.py`, `filters/inputs.py`, `filters/sets.py`) carry only the intentional consolidation edits; every other tracked-but-modified file (`CHANGELOG.md`, `GOAL.md`, `KANBAN.md`, `TODAY.md`, `filters/base.py`, `registry.py`, `types/base.py`, `types/definition.py`, `types/finalizer.py`, `docs/GLOSSARY.md`, `docs/TREE.md`, `docs/spec-027-filters-0_0_8-terms.csv`, `docs/spec-027-filters-0_0_8.md`, `examples/fakeshop/apps/library/models.py`, `examples/fakeshop/apps/library/schema.py`, `examples/fakeshop/test_query/test_library_api.py`, `tests/types/test_base.py`, `tests/types/test_definition_order.py`) is prior-slice work that landed across Slices 1-5 (not drift). The untracked entries (`docs/builder/bld-*.md`, `docs/builder/build-021-*.md`, `examples/fakeshop/apps/library/filters*.py`, `examples/fakeshop/apps/library/migrations/0004_patron_email.py`, `tests/filters/`, `tests/types/fixtures/`, `tests/types/test_definition_relations.py`) are likewise prior-slice deliverables. `docs/feedback.md` and `KANBAN.md` are maintainer in-progress (recorded in the build plan's preamble and the task contract). No tool churn requiring revert.
 - `uv run pytest tests/filters/ --no-cov` — pass (128 passed in 0.53s).
 - `uv run pytest examples/fakeshop/test_query/test_library_api.py examples/fakeshop/test_query/test_scalars_api.py --no-cov` — pass (47 passed in 2.41s).
 
@@ -293,7 +293,7 @@ Not applicable; integration consolidation pass did not modify `CHANGELOG.md`. Th
 
 ### Documentation / release sanity
 
-Not applicable; integration consolidation pass did not modify docs / KANBAN / spec archival / release metadata. The doc-file modifications visible in `git status` (`GOAL.md`, `KANBAN.md`, `TODAY.md`, `docs/GLOSSARY.md`, `docs/TREE.md`, `docs/spec-021-filters-0_0_8.md`, `docs/spec-021-filters-0_0_8-terms.csv`) are all Slice 5's already-accepted cumulative diff. Worker 2's build report classifies each as prior-slice work; confirmed by spot-checking that none of the touched files appear in Worker 2's `### Files touched` list.
+Not applicable; integration consolidation pass did not modify docs / KANBAN / spec archival / release metadata. The doc-file modifications visible in `git status` (`GOAL.md`, `KANBAN.md`, `TODAY.md`, `docs/GLOSSARY.md`, `docs/TREE.md`, `docs/spec-027-filters-0_0_8.md`, `docs/spec-027-filters-0_0_8-terms.csv`) are all Slice 5's already-accepted cumulative diff. Worker 2's build report classifies each as prior-slice work; confirmed by spot-checking that none of the touched files appear in Worker 2's `### Files touched` list.
 
 ### What looks solid
 
@@ -340,7 +340,7 @@ For Worker 1 final-verification: the two prior-recorded deferrals remain deferre
 
 ## Final verification (Worker 1)
 
-- **Spec status-line re-verification.** Re-read `docs/spec-021-filters-0_0_8.md:1-7`. The L4 status line already describes the shipped reality (core wiring / live HTTP / tree-form logic / docs all shipped through their respective slices; Slice 6 closed as carried-by-sibling). No edit needed in this pass — the integration consolidation is mechanical and does not change any shipped surface.
+- **Spec status-line re-verification.** Re-read `docs/spec-027-filters-0_0_8.md:1-7`. The L4 status line already describes the shipped reality (core wiring / live HTTP / tree-form logic / docs all shipped through their respective slices; Slice 6 closed as carried-by-sibling). No edit needed in this pass — the integration consolidation is mechanical and does not change any shipped surface.
 - **M1 confirmation — `_LOGIC_KEYS`.** `grep -rn "_LOGIC_KEYS" django_strawberry_framework/ tests/ examples/` returns exactly three hits across the package: definition at `django_strawberry_framework/filters/inputs.py:112`, import at `django_strawberry_framework/filters/sets.py:35` (`from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_value`), use site at `django_strawberry_framework/filters/sets.py:427` (`logic_lookup = dict(_LOGIC_KEYS)`). Zero hits in `tests/` or `examples/`. The pre-pass byte-for-byte duplication between `sets.py:53-57` and `inputs.py:108-112` is gone; single source of truth in `inputs.py`. The fold matches the consolidation shape in the integration plan exactly.
 - **M2 confirmation — `_input_type_name_for`.** `grep -rn "_input_type_name_for\|InputType\"" django_strawberry_framework/` confirms: helper defined at `django_strawberry_framework/filters/inputs.py:163` with body `return f"{filterset_class.__name__}InputType"` at line 173; all five named runtime call sites route through the helper — `__init__.py:71`, `factories.py:79`, `factories.py:110`, `factories.py:133`, `inputs.py:587`. The two structurally distinct literals at `inputs.py:423` (`<Field>RangeInputType` — Slice 2 deferral to maintainer follow-up) and `inputs.py:602` (`<Class><Field>FilterInputType` operator-bag — distinct shape with per-field segment) correctly stay raw. The `factories.py:76` docstring example (`f"{filterset_class.__name__}InputType"`) stays as documentation of the resulting format, not a runtime literal — agrees with Worker 2's `### Implementation notes` justification and Worker 3's `### What looks solid` walk.
 - **No new duplication introduced.** Walked the four touched files (`filters/__init__.py`, `filters/sets.py`, `filters/inputs.py`, `filters/factories.py`) for any incidental near-copies introduced by the fold. None observed: the helper has a single one-line body, the import lines are surgical extensions of existing imports, and the call sites swap a literal for a function call without restructuring surrounding code.

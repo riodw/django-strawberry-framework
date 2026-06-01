@@ -257,6 +257,14 @@ def finalize_django_types() -> None:
             install_relay_node_resolvers(type_cls)
 
     _bind_filtersets()
+    # TODO(spec-028-orders-0_0_8 Slice 3): call ``_bind_ordersets()``
+    # immediately after ``_bind_filtersets()`` and before ``strawberry.type``.
+    # Pseudocode:
+    #   - bind every wired ``OrderSet`` owner first.
+    #   - expand every wired orderset's fields after all owners are bound.
+    #   - validate ``order_input_type`` orphans before materialization.
+    #   - materialize every factory-built input class as a module global of
+    #     ``django_strawberry_framework.orders.inputs``.
 
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
@@ -474,6 +482,22 @@ def _format_orphan_filtersets_error(orphans: list[type]) -> str:
         f"DjangoType:\n{body}\n\n"
         "Add 'filterset_class = <Name>' to the relevant DjangoType's Meta for each."
     )
+
+
+# TODO(spec-028-orders-0_0_8 Slice 3): Add order-side finalizer helpers beside
+# the shipped filter helpers.
+# Pseudocode:
+#   - ``_format_owner_orderset_model_mismatch_error`` names owner type, owner
+#     model, orderset class, and orderset model.
+#   - ``_format_orphan_ordersets_error`` mirrors the helper-referenced
+#     ``filter_input_type`` orphan message with ``order_input_type`` and
+#     ``Meta.orderset_class`` wording.
+#   - ``_bind_orderset_owner`` performs first-bind model compatibility,
+#     related-target agreement for multi-owner reuse, and idempotent re-bind.
+#   - ``_bind_ordersets`` uses local imports from ``orders`` / ``orders.factories``
+#     / ``orders.inputs`` so importing ``types.finalizer`` does not import the
+#     incomplete order subsystem at module load.
+#   - subpass order is bind owners, expand fields, orphan-validate, materialize.
 
 
 def _bind_filtersets() -> None:

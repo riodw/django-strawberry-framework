@@ -42,6 +42,11 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 
 ## Status
 
+<!-- TODO(spec-028-orders-0_0_8 Slice 5): update the public status paragraph for
+0.0.8 after the ordering subsystem and joint-cut version bump land. Pseudo: name
+the newest shipped surface as OrderSet / RelatedOrder / Ordering /
+order_input_type / Meta.orderset_class without widening top-level __all__. -->
+
 **`0.0.7`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening. Newest shipped surface: `DjangoListField` — the non-Relay `list[T]` factory for root Query fields, new in `0.0.7` (default resolver pulls `model._default_manager.all()` and applies `cls.get_queryset(...)` in sync + async contexts).
 
 For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`][today]. The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/GLOSSARY.md`][glossary]. Per-card sequencing for both releases lives in [`KANBAN.md`][kanban].

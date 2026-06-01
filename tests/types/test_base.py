@@ -221,6 +221,16 @@ def test_meta_filterset_class_is_promoted_to_allowed_meta_keys():
     assert "filterset_class" not in DEFERRED_META_KEYS
 
 
+# TODO(spec-028-orders-0_0_8 Slice 3): Add the matching promotion test for
+# ``Meta.orderset_class`` in the same change that wires order binding.
+# Pseudocode:
+#   - assert ``"orderset_class" in ALLOWED_META_KEYS``.
+#   - assert ``"orderset_class" not in DEFERRED_META_KEYS``.
+#   - assert non-``OrderSet`` values raise ``ConfigurationError``.
+#   - assert a real ``OrderSet`` subclass is stored on
+#     ``DjangoTypeDefinition.orderset_class``.
+
+
 def test_interfaces_is_shipped_not_deferred():
     """``interfaces`` is a shipped Meta key (in ``ALLOWED_META_KEYS``), not deferred.
 

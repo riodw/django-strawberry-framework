@@ -1,218 +1,408 @@
-# Review feedback — `docs/spec-028-orders-0_0_8.md` (revision 2)
+# Review feedback - `docs/spec-028-orders-0_0_8.md`
 
-Re-reviewed against the rev2 changeset (rev2 added ~100 lines on top of
-rev1 across the revision-history block + targeted edits in every prior
-finding's home Decision). Verified each rev1 finding's resolution
-against the actual code on disk where applicable. The spec is now
-substantively ready to ship; only one cosmetic finding (R1) and a
-handful of follow-through misses remain.
+Reviewed the current on-disk spec against the shipped filter subsystem, the
+current fakeshop library app, and the local upstream references the spec names.
+`git diff -- docs/spec-028-orders-0_0_8.md` was empty at review time, so this
+review is against the current repository copy of the spec.
 
-Line citations refer to `docs/spec-028-orders-0_0_8.md` revision 2
-unless stated otherwise.
+The spec still needs a contract pass before implementation. Several issues would
+produce the wrong GraphQL surface or break the same reload/finalizer lifecycle
+the filter subsystem already stabilized.
 
----
+## Blocking
 
-## Rev1 findings — resolution audit
+### B1. `order_input_type` still returns one input object, but `orderBy` is specified as a list
 
-Every finding from the rev1 review was addressed in rev2. Spot-checked
-each fix against the spec body and against the codebase where the spec
-claims to cite shipped behavior. Status notation: ✓ resolved cleanly,
-~ resolved with a residual follow-through (broken out in the next
-section), ✗ regressed.
+Locations:
 
-| Rev1 ID | Status | Where in rev2 |
-| --- | --- | --- |
-| B1 — subpass order does not match shipped filter code | ✓ | Decision 6 (lines 559–580); Slice 1 (line 90); DoD item 10 (line 1096). Now reads `bind → expand → orphan → materialize`, with explicit "shipped code is the authoritative shape, NOT spec-027 rev8 H1 as written." Verified against `finalizer.py:495–504` docstring. |
-| B2 — `except ImportError: return` reintroduces M-core-4 footgun | ✓ | Decision 9 code block (lines 706–717). Both new blocks use `pass` + `else:`; inline comment cites M-core-4 by name. |
-| B3 — `_types_by_model` / `_primary_types` are phantom field names | ✓ | Decision 9 code block (lines 671–678). Verbatim copy of `registry.py:43–50`'s actual `_types`, `_primaries`, `_models`, `_enums`, `_definitions`, `_pending`, `_finalized` fields. Inline comment notes this is per B3. |
-| H1 — `apply(...)` dispatcher is dead weight | ✓ | Decision 2 sets.py bullet (line 377); Decision 8 sync/async block (line 624); Implementation plan table row 1 (line 919); DoD item 4 (line 1090); KANBAN past-tense body (line 1036). Dropped consistently across the spec. |
-| H2 — optimizer projection claim unverified | ✓ | Glossary refs (line 64) carries the retraction with the `grep`-verified citation; Decision 8 step 8 (line 618) restates as "selection-tree-derived only, does not inspect `queryset.query.order_by`"; the `test_library_books_order_preserves_optimizer_cooperation` narrative (line 993) names what the test actually pins. |
-| H3 — `__all__` cookbook parity unverified | ✓ | Decision 3 (line 419) carries the verifying citation to `~/projects/django-graphene-filters/django_graphene_filters/orderset.py:271`. The reviewer's claim of divergence is now explicitly named as incorrect — keeps the rev1 disagreement transparent in the audit trail. |
-| H4 — position-side-channel leak unnamed | ✓ | Decision 8 step 4 (line 614) names the leak explicitly, argues acceptance for `0.0.8`, points to the `check_*_permission` gate as consumer defense, and defers leak-closing to `0.0.9`. Slice 5 GLOSSARY bullets carry the warning forward. |
-| M1 — "7-step pipeline" off-by-one | ~ | Decision 8 body (line 609) corrected to "8-step." Justification list at line 635 still says "The seven-step pipeline reflects this simplification." See R1 below. |
-| M2 — flat-shorthand path no live test | ✓ | `test_library_books_order_by_flat_shorthand_path` added (line 998). |
-| M3 — `INPUTS_MODULE_PATH` constant + `_input_type_name_for` helper missing | ✓ | Decision 2 inputs.py bullet (line 379) hoists both symbols with citations to the filter side's `filters/inputs.py:53,183`. |
-| M4 — `Ordering.resolve()` example missing `OrderBy` import | ✓ | Spec example body (lines 509–526) adds the local `from django.db.models.expressions import OrderBy` import + a multi-line comment explaining `None` vs `True` sentinel semantics. |
-| M5 — reverse-FK fixture seeding fragile | ✓ | `test_library_branches_order_by_reverse_fk_relation` rewritten (line 990) to assert the denormalized multiplicity explicitly — multi-shelf Branch seeded; `RelatedOrder` GLOSSARY entry will carry the warning per Slice 5. |
-| M6 — permission test single-named, not split | ✓ | Split into `test_order_check_permission_denies_for_active_field` (line 995) and `test_order_check_permission_quiet_for_inactive_field` (line 996). |
-| M7 — empty-list / null-direction no-op cases untested | ✓ | `test_order_empty_list_passes_through` (line 999) and `test_order_null_direction_skips_field` (line 1000). |
-| M8 — off-Meta-fields ordering intentional but untested | ✓ | `test_order_accepts_field_not_in_djangotype_meta_fields` (line 964) added under `tests/orders/test_sets.py`. |
-| M9 — `_helper_referenced_ordersets` location ambiguous | ✓ | Decision 2 (line 380) pins it to `orders/__init__.py` with explicit rationale; Decision 9 (line 697–717) confirms two separate clear blocks per registry-clear. |
-| M10 — duplicated KANBAN / CHANGELOG narrative | ✓ | CHANGELOG bullet (line 1043) now reads "see the KANBAN past-tense body above" with a one-line headline. |
-| N1 — stale spec link slugs | ✓ | Renumbered: `[spec-027]`, `[spec-020]`, `[spec-018]`, `[spec-015]`, `[spec-025]`, `[spec-028]`. Link defs updated. |
-| N2 — `Verified in upstream` block unquoted | ✓ | Decision 4 (lines 443–452) inlines the verbatim strawberry-django ordering symbols. |
-| N3 — `_validate_orderset_class` import-cycle requirement | ✓ | DoD item 9 (line 1095) spells out the local in-function `from ..orders.sets import OrderSet` requirement with cycle-explanation. |
-| N4 — `tests/orders/` file count inconsistent | ✓ | Decision 2 (line 388) and Decision 13 (line 900) both say "7 files total"; DoD item 11 (line 1097) consistent. |
-| N5 — literal `YYYY-MM-DD` placeholder | ✓ | `<DATE>` used throughout Slice 5, Decision 10, DoD item 24. |
-| N6 — L5 contingency check as honor-system | ✓ | Decision 10 (line 760–762) names `grep -E 'WIP-ALPHA-[0-9]+-0\.0\.8' KANBAN.md`. |
-| N7 — `apply_async` blocking-hook caveat unstated | ✓ | Decision 8 (line 626) carries the mirrored caveat plus a recommended pattern. |
-| N8 — proxy / MTI `__all__` semantics unstated | ✓ | Decision 3 (lines 421–425) covers proxy, MTI child, and abstract-model cases. |
-| N9 — `noqa: A002` future-convention note | ✓ | Spec body (line 284) carries the convention note explicitly for `aggregate:` / `order:` / `search:` / `input:` future arguments. |
-| O1 — `Meta.distinct` shape preview | ✓ | Decision 12 (line 891). |
-| O2 — Layer 6 escape-hatch preview | ✓ | Decision 12 (line 892). Explicitly names "the `0.0.8` shape does not foreclose the factory path." |
+- Decision 5, GraphQL argument shape.
+- Decision 11, `order_input_type(OrderSet)`.
+- User-facing resolver examples under "Exposing the `orderBy:` argument" and
+  "Composing with the shipped Filtering subsystem".
+- DoD item 7 and the `test_order_input_type_returns_forwardref_in_annotation_args`
+  test-plan bullet.
 
-All 27 rev1 findings closed cleanly except M1 (residual line 635 — see
-R1 below). No regressions.
+Decision 5 and every GraphQL query example require:
 
----
+```graphql
+orderBy: [<TypeName>OrderInputType!]
+```
 
-## Outstanding follow-throughs
+But Decision 11 still returns:
 
-These are small misses from the rev2 sweep. Each is a one- or two-word
-edit; none affect the architecture or the implementation plan, but they
-will leave the spec internally inconsistent if left.
+```python
+Annotated["GalaxyOrderInputType", strawberry.lazy("django_strawberry_framework.orders.inputs")]
+```
 
-### R1. M1's "seven-step pipeline" reference at line 635 was missed
+and the resolver examples use:
 
-Decision 8 body (line 609) correctly says "The 8-step pipeline" after
-M1's fix. But the Justification list ten lines later (line 635) still
-reads:
+```python
+order_by: order_input_type(GalaxyOrder) | None = None
+```
 
-> "no related-queryset filter-scope constraint (no `RelatedOrder(queryset=...)`
-> parameter — the cookbook's `RelatedOrder` accepts only `orderset` and
-> `field_name`). **The seven-step pipeline reflects this simplification.**"
+That annotation yields a nullable single input object, not a nullable list. The
+documented queries such as `orderBy: [{ name: ASC }]` would fail GraphQL input
+coercion before `OrderSet.apply_sync(...)` ever runs.
 
-Change to "The eight-step pipeline" so the count matches the numbered
-list immediately above it. Same Decision, same sentence, one word.
+Root-cause fix: make the helper own the actual resolver argument type:
 
-### R2. "Exactly 10 new live HTTP tests" header at line 985 should read 13
+```python
+list[Annotated["GalaxyOrderInputType", strawberry.lazy(INPUTS_MODULE_PATH)]]
+```
 
-The Test plan's `### examples/fakeshop/test_query/test_library_api.py
-(extend)` subsection header at line 985 still reads:
+Then `order_by: order_input_type(GalaxyOrder) | None = None` matches the SDL.
+If the intended helper contract is only "return the element type", then every
+resolver example and test must say `list[order_input_type(GalaxyOrder)] | None`
+and Decision 11 must stop calling the helper itself the resolver-argument shape.
 
-> "Coverage MUST be earned here per the `docs/TREE.md` coverage-priority
-> rule. **Exactly 10 new live HTTP tests**:"
+### B2. The order input namespace clear lifecycle still diverges from the shipped filter lifecycle
 
-Then the body lists 13 tests, line 1002 says "All 13 new live HTTP
-tests," DoD item 15 says "exactly 13," the Slice-4 narrative at line 94
-says "exactly 13," and the KANBAN past-tense body at line 1036 says
-"exactly 13." Update the section header to "**Exactly 13 new live HTTP
-tests**" so the count is consistent across the spec.
+Locations:
 
-### R3. Implementation plan table row 4 still says `10` for the Slice 4 new-test count
+- Decision 9 lifecycle contract.
+- Slice 3 checklist and DoD item 10.
+- `tests/orders/test_inputs.py` and `tests/orders/test_finalizer.py` test-plan
+  bullets around `clear_order_input_namespace`.
+- Shipped reference: `django_strawberry_framework/filters/inputs.py::clear_filter_input_namespace`.
 
-The Implementation plan table at line 922 has:
+The spec says the order side mirrors the filter lifecycle, but it still narrows
+the clear behavior to `_materialized_names`, `_helper_referenced_ordersets`, and
+removing materialized module globals. That is not the filter side's actual
+contract.
 
-| Slice | … | New tests | … |
-| --- | --- | --- | --- |
-| 4 — Live HTTP coverage in fakeshop | … | **10** (scalar ASC / scalar DESC_NULLS_LAST / forward-FK relation / reverse-FK relation / M2M absolute-import-path RelatedOrder / filter + order composition / optimizer cooperation under `assertNumQueries` / root `get_queryset` honoring / `check_<field>_permission` denial / multi-field priority via list-element ordering) | … |
+The filter clear path also clears factory caches and per-class binding/expansion
+state, and it intentionally leaves materialized input classes parked in the
+module namespace. Parking is load-bearing: existing `strawberry.lazy(...)`
+references held by modules that were not reloaded continue to resolve until the
+next successful finalize overwrites them.
 
-The count is `10` and the inline test-name enumeration is the rev1 set
-of 10. Should be `13` with the inline list extended to include the
-three new tests:
+If the order side follows the current spec:
 
-- flat-shorthand path (`shelfCode`),
-- split-pair active-input-only permission (`denies_for_active_field` +
-  `quiet_for_inactive_field` — two tests),
-- empty-list + null-direction no-op (`empty_list_passes_through` +
-  `null_direction_skips_field` — two tests).
+- `OrderArgumentsFactory.input_object_types` can keep stale input classes after
+  `registry.clear()`, so `_ensure_built()` may skip rebuilding against a fresh
+  registry.
+- `OrderSet` subclasses can retain `_owner_definition`, `_expanded_fields`, and
+  `_is_expanding_fields` across reloads.
+- Deleting module globals can break lazy annotations captured by resolver modules
+  that were not reloaded.
 
-(Note that the split-pair counts as one entry in the rev1 capability
-list but as two tests in the count; same for empty/null. 10 + 1 split
-+ 1 path + 1 doubled no-op group = 13.)
+Root-cause fix: define `clear_order_input_namespace()` as the order analogue of
+`clear_filter_input_namespace()`:
 
-### R4. Decision 13's high-level capability list at line 898 still enumerates the rev1 10
+- Clear `_materialized_names` and the order field-spec/provenance map.
+- Clear `OrderArgumentsFactory.input_object_types` and its type-to-orderset
+  collision registry.
+- Reset every live `OrderSet` subclass's directly-set `_owner_definition`,
+  `_expanded_fields`, and `_is_expanding_fields`.
+- Leave already-materialized module globals parked.
+- Keep `_helper_referenced_ordersets.clear()` as a separate `registry.clear()`
+  block.
 
-Decision 13 (line 898):
+The test plan should assert those resets and should stop expecting
+`clear_order_input_namespace()` to remove module globals.
 
-> "Live HTTP tests (Slice 4) land in `examples/fakeshop/test_query/test_library_api.py`
-> and cover: scalar-field ascending order, scalar-field descending order
-> with NULLS positioning, forward-FK relation order, reverse-FK relation
-> order, M2M relation order through the absolute-import-path `RelatedOrder`
-> resolution, composition with the shipped Filtering subsystem,
-> composition with the optimizer (…), root `get_queryset` honoring,
-> `check_*_permission` denial gate, and multi-field priority ordering."
+### B3. The NULLS-positioning live test targets fields that cannot satisfy it
 
-Add three to the capability list to match the 13 live tests Slice 4
-ships: flat-shorthand path, split-pair active-input-only permission
-(denies-for-active / quiet-for-inactive), and the two no-op cases
-(empty list / null direction). Decision 13 is the conceptual summary of
-the live-HTTP test plan; readers cross-referencing it should see the
-same shape they'll find in Slice 4 and the Test plan.
+Locations:
 
----
+- Slice 4 checklist, live HTTP coverage bullet.
+- Decision 13 live HTTP coverage summary.
+- `examples/fakeshop/test_query/test_library_api.py` test-plan subsection.
+- Current model reference: `examples/fakeshop/apps/library/models.py::Book`.
 
-## New observations introduced by rev2
+The spec uses two incompatible fields for the NULLS-positioning test:
 
-These are observations on content rev2 *added*, not residuals of rev1
-findings. None are blocking; the first two are worth a one-sentence
-edit; the third is a YAGNI flag on a forward statement.
+- Slice 4 names `description: DESC_NULLS_LAST`.
+- The test plan names `title: DESC_NULLS_LAST` and expects `title=NULL` rows.
 
-### N-new-1. Decision 8 step 4's leak-closing deferral binds two orthogonal 0.0.9 items
+Current `Book` has no `description` field, and `Book.title` is non-null. The
+current nullable text field is `subtitle`.
 
-The expanded step 4 (line 614) concludes:
+Root-cause fix: use `subtitle` consistently:
 
-> "**Closing this side channel** would require re-deriving every nested
-> `RelatedOrder` branch's child visibility queryset and rewriting the
-> parent JOIN's `ORDER BY` to operate only on the visibility-scoped
-> subset… That work is **deferred** — likely to land alongside the same
-> `0.0.9` cohort that ships connection-aware optimizer planning."
+- `BookOrder.Meta.fields` includes `subtitle`.
+- The query is `orderBy: [{ subtitle: DESC_NULLS_LAST }]`.
+- The fixture seeds at least one `subtitle=None` row and one non-null subtitle
+  row.
+- Assertions verify nulls last against `subtitle`.
 
-The two work items — (a) re-deriving child visibility querysets for
-nested `RelatedOrder` ORDER BY, and (b) connection-aware optimizer
-planning (per [Out of scope][] line 1075) — are orthogonal. Pinning them
-to the same cohort risks future readers thinking the deferral is
-already scheduled when it isn't. Recommend rephrasing as "deferred —
-likely to a sibling `0.0.9` ordering-permissions card; the connection-
-field cohort is the natural integration point but the leak-closing work
-is independent of connection-field design."
+### B4. `"__all__"` still claims cookbook parity while excluding forward relation columns
 
-### N-new-2. Decision 2's rationale for `_helper_referenced_ordersets` placement is slightly hand-wavy
+Locations:
 
-Decision 2 (line 380) explains why the orphan-tracking ledger lives in
-`orders/__init__.py` rather than `orders/inputs.py`:
+- Decision 3, "`Meta.fields = "__all__"` scope".
+- Edge cases, "`Meta.fields = "__all__"`".
+- Upstream reference: `django_graphene_filters/mixins.py::get_concrete_field_names`.
 
-> "placing the ledger in `inputs.py` would force `__init__.py` to import
-> from `inputs.py` to mutate it, adding an unnecessary import dependency
-> between the two modules."
+The spec says `"__all__"` expands to concrete fields and that "relations are NOT
+included." The cookbook helper it cites returns fields with a `column` attribute.
+That excludes reverse relations and M2M managers, but it includes forward FK and
+forward OneToOne columns. For current fakeshop, `Book.shelf` is column-backed and
+would be included by cookbook parity.
 
-`orders/__init__.py` already imports `INPUTS_MODULE_PATH` and
-`_input_type_name_for` from `orders/inputs.py` per Decision 2's own
-inputs.py bullet (line 379) — the import dependency exists either way.
-The real reason for the placement is that the *writer* of the ledger
-(`order_input_type`) lives in `__init__.py`, so co-locating the ledger
-with its writer is a locality argument, not an import-dependency
-argument. Recommend rephrasing as "co-located with its only writer
-(`order_input_type`) in `__init__.py`, matching the filter side's
-arrangement at `filters/__init__.py:48`." Same outcome, cleaner
-rationale.
+This affects the generated input shape. With cookbook parity,
+`BookOrder.Meta.fields = "__all__"` exposes a leaf `shelf: Ordering` unless an
+explicit `RelatedOrder` overrides the same name. If the package wants to exclude
+all relation fields, that is a deliberate divergence and needs different prose
+and tests.
 
-### N-new-3. Decision 12 forward-compat O1 claim about `DEFERRED_META_KEYS` could go stale
+Root-cause fix: choose one rule. Given the spec repeatedly says "cookbook
+parity", the cleaner rule is:
 
-Decision 12's forward-compat preview O1 (line 891) says:
+- `"__all__"` means every column-backed model field, including forward FK/O2O
+  columns, excluding reverse relations and M2M managers.
+- An explicit same-name `RelatedOrder` overrides the column leaf when the
+  consumer wants nested traversal.
+- Package tests pin both the forward-FK leaf and the explicit override case.
 
-> "neither is in `DEFERRED_META_KEYS` today, and the validator's typo
-> guard at `_validate_meta` time would reject either as an unknown key
-> — that rejection is fine for `0.0.8`."
+## High
 
-True today (`base.py:48-55` carries only `orderset_class`,
-`aggregate_class`, `fields_class`, `search_fields` in
-`DEFERRED_META_KEYS`). But if a future maintainer adds `distinct` or
-`distinct_class` to `DEFERRED_META_KEYS` as a no-op pre-promotion step
-between rev2's writing and the actual `0.0.9` DISTINCT-ON design, this
-statement goes stale silently. Worth a one-line caveat — "this state is
-accurate as of `0.0.8`; the `0.0.9` design may add either key to
-`DEFERRED_META_KEYS` before its corresponding subsystem ships, per the
-deferred-key promotion-gate convention" — so a future reader cross-
-checking against the live `DEFERRED_META_KEYS` value sees the disclaimer
-before they panic.
+### H1. The shared mixin import path is stale
 
----
+Locations:
+
+- Decision 2, `base.py` bullet and rejected alternative.
+- Decision 3 Layer 2.
+- KANBAN past-tense body in Doc updates.
+- Current code reference: `django_strawberry_framework/sets_mixins.py::LazyRelatedClassMixin`.
+
+The spec still says the shared `LazyRelatedClassMixin` lives at
+`django_strawberry_framework/filters/base.py` and that `orders/base.py` should
+import it from the filter package. In the current codebase, the neutral shared
+home is already `django_strawberry_framework/sets_mixins.py`, which also carries
+`ClassBasedTypeNameMixin` for the future set family.
+
+Importing through `filters.base` would load the filter subsystem just to build
+orders and would re-couple sibling Layer-3 packages after the codebase already
+created a neutral module.
+
+Root-cause fix:
+
+- `orders.base` imports `LazyRelatedClassMixin` from
+  `django_strawberry_framework.sets_mixins`.
+- `orders.sets.OrderSet` inherits `ClassBasedTypeNameMixin`.
+- `orders.inputs._input_type_name_for()` delegates to
+  `orderset_class.type_name_for()`, matching the filter side.
+- The rejected-alternative prose should be rewritten because the move is already
+  done.
+
+### H2. Owner/model mismatch validation is still underspecified for ordersets
+
+Locations:
+
+- Decision 6 subpass 1.
+- Risks, "Multi-`DjangoType`-per-model orderset binding".
+- `tests/orders/test_finalizer.py` test-plan paragraph.
+- Shipped reference: `django_strawberry_framework/types/finalizer.py::_bind_filterset_owner`.
+
+Decision 6 says owner binding runs "own-PK + related-target validation", then
+narrows the owner-sensitive order question to related-target agreement. It does
+not clearly require first-bind model compatibility: the `OrderSet.Meta.model`
+must match, or be a base of, the owning `DjangoType` model.
+
+That check is still necessary. A `BookOrder` wired onto `BranchType` can build a
+valid-looking order input from `Book` fields and then apply those field paths to
+a `Branch` queryset, surfacing as a late Django `FieldError` instead of a
+finalize-time `ConfigurationError`.
+
+Root-cause fix: add an order-side `_bind_orderset_owner()` with the first-bind
+model compatibility check from `_bind_filterset_owner()`:
+
+- `definition.model` must be the orderset `Meta.model` or derive from it.
+- Otherwise raise `ConfigurationError` naming the owner type, owner model,
+  orderset class, and orderset model.
+- Add a finalizer test for this mismatch.
+
+The order side can omit the filter side's Relay own-PK identity check, but model
+compatibility is not optional.
+
+### H3. Relation-level permission gates are named as the security defense but not specified or tested
+
+Locations:
+
+- Decision 8 step 4, `check_shelves_permission(request)` example.
+- Decision 8 step 6, `check_permissions`.
+- `tests/orders/test_sets.py` and live permission test-plan bullets.
+- Shipped reference: `django_strawberry_framework/filters/sets.py::FilterSet._run_permission_checks`.
+
+The spec accepts the hidden-related-order position side channel for `0.0.8` and
+says the consumer defense is a parent relation gate such as
+`check_shelves_permission(request)`. But the algorithm text and tests only pin
+scalar active/inactive gates like `check_name_permission`.
+
+Following the cookbook flat-path permission logic would tend to fire
+`check_shelves_code_permission` on the parent and `check_code_permission` on the
+child for `orderBy: [{ shelves: { code: ASC } }]`; it does not necessarily fire
+`check_shelves_permission`. That would make the documented defense ineffective.
+
+Root-cause fix:
+
+- Define order permission dispatch as the filter side's active-branch
+  double-dispatch adapted to order inputs.
+- For an active `RelatedOrder` branch, fire the parent
+  `check_<branch>_permission(request)` once and recurse into the child orderset
+  to fire child field gates.
+- Deduplicate per `(OrderSet class, method name)` across list elements.
+- Add package tests for parent relation gate denial, child field gate denial,
+  inactive relation branch quiet behavior, and repeated-list-entry dedup.
+- Add or retarget one live HTTP permission test to exercise an active
+  `RelatedOrder` gate, not only a scalar field gate.
+
+### H4. One filter+order live query uses the wrong enum literal casing for the current schema
+
+Location:
+
+- `examples/fakeshop/test_query/test_library_api.py` test-plan subsection,
+  `test_library_books_filter_and_order_compose`.
+- Current acceptance reference:
+  `examples/fakeshop/test_query/test_library_api.py::test_library_books_filter_by_choice_enum`.
+
+The spec's composition test uses:
+
+```graphql
+circulationStatus: { exact: AVAILABLE }
+```
+
+The current live fakeshop tests use lower-case enum values such as `available`
+and `checked_out` for `BookTypeCirculationStatusEnum`. Implementing the spec as
+written would make this live test fail at GraphQL enum coercion before the order
+path is exercised.
+
+Root-cause fix: use the current enum literal:
+
+```graphql
+circulationStatus: { exact: available }
+```
+
+Also update the assertion prose to say "available books" instead of implying the
+wire enum value is `AVAILABLE`.
+
+## Medium
+
+### M1. The materialization ledger is typed as `name -> OrderSet`, but the materializer receives an input class
+
+Locations:
+
+- Decision 9 lifecycle contract.
+- Decision 6 materialization subpass.
+- DoD item 6.
+
+The spec says `_materialized_names` is `dict[str, type[OrderSet]]` and that
+`materialize_input_class(name, cls)` is idempotent for `(name, orderset_class)`.
+But the two-argument materializer receives the generated input class as `cls`,
+not the source `OrderSet`. The shipped filter side stores the materialized input
+class in the materialization ledger and leaves source-class collision detection
+to the factory.
+
+Root-cause fix: mirror the filter split:
+
+- `OrderArgumentsFactory` owns `input type name -> OrderSet class` collision
+  detection.
+- `orders.inputs._materialized_names` owns `input type name -> input class`
+  idempotent materialization.
+- `materialize_input_class(name, input_cls)` checks the `(name, input_cls)` pair.
+
+If the order side wants materialization to validate the source orderset, change
+the signature to include `orderset_class`; do not keep a two-argument signature
+that cannot populate the documented ledger.
+
+### M2. The duplicate-field ordering edge case claims a live HTTP test that is not in the exact-13 plan
+
+Location:
+
+- Edge cases, `orderBy: [{ name: ASC }, { name: DESC }]`.
+
+The edge-case bullet says a live HTTP test pins duplicate/conflicting field
+ordering behavior. The exact-13 live test list does not include that test.
+
+Root-cause fix: either add the test and update every count, or reword the edge
+case as documented behavior covered by package-level parsing/queryset tests only.
+
+### M3. Slice-5 doc-update symbol lists are inconsistent
+
+Locations:
+
+- Slice 5 checklist.
+- Doc updates.
+- DoD items 16, 19, 20, and 21.
+
+Some doc-update bullets include `Ordering`; others list only `OrderSet`,
+`RelatedOrder`, `order_input_type`, and `Meta.orderset_class`. Decision 2 makes
+`Ordering` part of the public subpackage surface, so the shipped-symbol sweeps
+should include it consistently unless a document intentionally omits enum
+entries.
+
+Root-cause fix: sync the Slice 5 checklist, Doc updates, and DoD lists. At
+minimum, `README.md`, `docs/README.md`, and `TODAY.md` should all include
+`Ordering` alongside `order_input_type`.
+
+### M4. Standing-spec source references still use raw line numbers
+
+Locations:
+
+- Revision history entries for B1/B3/H3/M3/M9/N3/R1-R4/N-new-2/N-new-3.
+- Decision 3, Decision 6, Decision 8, Decision 9, Decision 12, and DoD item 9.
+
+The standing-doc rule in `AGENTS.md` says raw `path:NN` references are allowed
+only in per-cycle scratchpad artifacts. This spec is a standing design doc, so
+references like `finalizer.py:478-600`, `registry.py:43-50`,
+`filters/inputs.py:53,183`, and prose such as "line 635" should be replaced
+with symbol-qualified references or unique-substring references.
+
+Root-cause fix: use forms like:
+
+- `django_strawberry_framework/types/finalizer.py::_bind_filtersets`
+- `django_strawberry_framework/registry.py::TypeRegistry.clear`
+- `django_strawberry_framework/filters/inputs.py::INPUTS_MODULE_PATH`
+- `django_strawberry_framework/filters/__init__.py::_helper_referenced_filtersets`
+
+For revision-history bookkeeping, finding IDs and section names are more stable
+than stale line numbers.
+
+### M5. The abstract-model edge case relies on a validator the current code does not have
+
+Location:
+
+- Decision 3, "Proxy / multi-table-inheritance semantics".
+
+The spec says abstract models are irrelevant because
+`DjangoType.Meta.model` rejects abstract models at `_validate_meta` time. Current
+`django_strawberry_framework/types/base.py::_validate_meta` checks that
+`Meta.model` is a Django model class, but it does not reject
+`model._meta.abstract`.
+
+Root-cause fix: either add an explicit abstract-model validator and test as part
+of this card, or remove the claim and mark abstract-model `OrderSet` targets as
+out of scope/undefined for this card. Do not leave the spec relying on a
+nonexistent existing guard.
+
+## Nit
+
+### N1. `GraphQLError` links to the `ConfigurationError` glossary anchor
+
+Location:
+
+- Decision 8 step 4, the sentence about `check_shelves_permission(request)`.
+
+The text says a gate raises `GraphQLError` but links through
+`glossary-configurationerror`. Leave `GraphQLError` unlinked or add the correct
+glossary entry if one is intended.
+
+### N2. `apply_async` return annotation prose is imprecise
+
+Locations:
+
+- Decision 2, `sets.py` bullet.
+- DoD item 4.
+
+The spec writes `apply_async(...) -> Awaitable[QuerySet]`. If the implementation
+is an `async def`, the function annotation should be `-> QuerySet`; the call
+expression is awaitable. The filter side uses `async def apply_async(...) -> models.QuerySet`.
 
 ## Summary
 
-Rev2 closes every rev1 finding — including the three Blocking ones
-(B1–B3), where the spec is now consistent with the *shipped* filter
-binding at `finalizer.py:495–504` rather than spec-027 rev8's H1
-prescription. The Decision-history narrative at the top of the spec
-(lines 11–35) gives a clear changelog with line citations so a reader
-auditing each finding can verify in one pass.
-
-Remaining work is sweep-residual only: R1–R4 (one-word edits to bring
-the "8-step pipeline" and "13 live tests" counts consistent across the
-spec) and three observations (N-new-1, N-new-2, N-new-3) that are
-phrasing tweaks rather than substantive design concerns. None of them
-block implementation.
-
-The spec is ready to ship after R1–R4 are applied. The three N-new
-observations can fold into a future review pass or stay as-is.
+The highest-priority fixes are the list-shaped `order_input_type` contract, the
+order namespace clear lifecycle, the impossible NULLS-positioning test, and the
+`"__all__"` concrete-field semantics. The next tier is tightening owner/model
+validation and relation-level permission dispatch so the order subsystem matches
+the shipped filter subsystem's finalizer and security quality.

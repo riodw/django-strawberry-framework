@@ -10,6 +10,16 @@ from apps.library import filters, filters_genre, models
 from django_strawberry_framework import DjangoListField, DjangoType, OptimizerHint
 from django_strawberry_framework.filters import filter_input_type
 
+# TODO(spec-028-orders-0_0_8 Slice 4): Import ``orders`` / ``orders_genre`` and
+# ``order_input_type`` once the order subsystem ships.
+# Pseudocode:
+#   - wire each ``DjangoType.Meta`` to the matching ``Meta.orderset_class``:
+#     LoanType -> LoanOrder, BookType -> BookOrder, ShelfType -> ShelfOrder,
+#     GenreType -> GenreOrder, BranchType -> BranchOrder, PatronType -> PatronOrder.
+#   - keep ``MembershipCardType`` unwired unless a live order test needs it.
+#   - root resolvers call ``get_queryset`` first, optional ``Filter.apply_sync``
+#     second, and optional ``Order.apply_sync`` third.
+
 # Consumer ``resolver=`` helper exercising the ``_post_process_consumer_sync``
 # ``Manager`` coercion line at
 # ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"result = result.all()"``.
@@ -168,6 +178,14 @@ class PatronType(DjangoType):
 @strawberry.type
 class Query:
     """Library acceptance root fields."""
+
+    # TODO(spec-028-orders-0_0_8 Slice 4): Add ``order_by`` arguments to the
+    # live root resolvers that participate in the 14 order acceptance tests.
+    # Pseudocode:
+    #   - annotate as ``order_by: list[order_input_type(orders.<Name>Order)] | None``.
+    #   - preserve the existing ``filter: filter_input_type(...) | None`` argument.
+    #   - apply in order: ``Type.get_queryset(...)``, optional filter, optional order.
+    #   - leave ``DjangoListField`` ordering integration deferred to ``0.0.9``.
 
     all_library_branches_via_list_field: list[BranchType] = DjangoListField(
         BranchType,

@@ -1,9 +1,12 @@
 term,anchor,notes
 OrderSet,orderset,The declarative ordering class this card ships; the primary consumer-facing symbol.
+Ordering,ordering,The public direction enum used as the leaf value in generated order input types.
+order_input_type,order_input_type,The consumer helper that returns the order input element annotation for resolver arguments.
 RelatedOrder,relatedorder,Cross-relation ordering traversal accepting class / absolute path / unqualified name.
 Meta.orderset_class,metaorderset_class,The Meta key this card promotes out of DEFERRED_META_KEYS.
 DjangoType,djangotype,The model-backed Strawberry type this card extends with an ordering sidecar.
 Meta.model,metamodel,The required Meta key on every OrderSet declaration; new devs need it to write their first OrderSet.
+Meta.fields,metafields,The Meta key whose list / "__all__" shorthand defines which model fields are orderable.
 Meta.optimizer_hints,metaoptimizer_hints,Cited as the hint surface order clauses compose with at queryset-translation time.
 Meta.interfaces,metainterfaces,Shipped 0.0.5 surface; same promotion gate pattern this card uses per Decision 7.
 Meta.primary,metaprimary,The multi-DjangoType-per-model design whose TypeRegistry keying convention this card respects per Decision 9.

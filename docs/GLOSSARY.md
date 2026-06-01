@@ -94,7 +94,9 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Multi-database cooperation](#multi-database-cooperation) | shipped (`0.0.7`) |
 | [`only()` projection](#only-projection) | shipped (`0.0.2`) |
 | [`OptimizerHint`](#optimizerhint) | shipped (`0.0.3`) |
+| [`Ordering`](#ordering) | planned for `0.0.8` |
 | [`OrderSet`](#orderset) | planned for `0.0.8` |
+| [`order_input_type`](#order_input_type) | planned for `0.0.8` |
 | [Per-field permission hooks](#per-field-permission-hooks) | planned for `0.0.10` |
 | [Plan cache](#plan-cache) | shipped (`0.0.3`) |
 | [Queryset diffing](#queryset-diffing) | shipped (`0.0.3`) |
@@ -125,7 +127,7 @@ For readers exploring rather than looking up a specific term:
 - **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.choice_enum_names`](#metachoice_enum_names).
 - **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 - **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`Meta.filterset_class`](#metafilterset_class).
-- **Ordering:** [`OrderSet`](#orderset) · [`RelatedOrder`](#relatedorder) · [`Meta.orderset_class`](#metaorderset_class).
+- **Ordering:** [`OrderSet`](#orderset) · [`RelatedOrder`](#relatedorder) · [`Ordering`](#ordering) · [`order_input_type`](#order_input_type) · [`Meta.orderset_class`](#metaorderset_class).
 - **Aggregation:** [`AggregateSet`](#aggregateset) · [`RelatedAggregate`](#relatedaggregate) · [`Meta.aggregate_class`](#metaaggregate_class) · [`get_child_queryset`](#get_child_queryset).
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
@@ -691,6 +693,13 @@ References an [`OrderSet`](#orderset) subclass that defines ordering input for t
 
 **See also:** [`OrderSet`](#orderset).
 
+<!-- TODO(spec-028-orders-0_0_8 Slice 5): Flip Meta.orderset_class, Ordering,
+OrderSet, order_input_type, and RelatedOrder to shipped (0.0.8) together.
+Pseudo: update the Index rows, the Ordering browse category, and each entry body
+with the shipped list-shaped orderBy contract, active-input-only permission
+gates, active RelatedOrder branch gate, parked input-class namespace lifecycle,
+and NULLS-positioning Ordering.resolve behavior. -->
+
 ## `Meta.primary`
 
 **Status:** shipped (`0.0.6`).
@@ -756,13 +765,29 @@ Supported modes:
 
 **See also:** [`Meta.optimizer_hints`](#metaoptimizer_hints) · [`DjangoOptimizerExtension`](#djangooptimizerextension).
 
+## `Ordering`
+
+**Status:** planned for `0.0.8`.
+
+Direction enum used as the leaf value in generated order input types. Members: `ASC`, `DESC`, `ASC_NULLS_FIRST`, `ASC_NULLS_LAST`, `DESC_NULLS_FIRST`, `DESC_NULLS_LAST`. Its `resolve(field_path)` helper returns the Django `OrderBy` expression used by [`OrderSet`](#orderset) when applying queryset ordering.
+
+**See also:** [`OrderSet`](#orderset) · [`order_input_type`](#order_input_type).
+
 ## `OrderSet`
 
 **Status:** planned for `0.0.8`.
 
 Declarative ordering with `Meta.fields` (list form `["name", "created_date"]` or `"__all__"` shorthand), [`RelatedOrder`](#relatedorder) for cross-relation traversal, `check_*_permission` gates. Reuses the filtering subsystem's lazy-resolution architecture verbatim with `OrderSet` substituted for `FilterSet`.
 
-**See also:** [`Meta.orderset_class`](#metaorderset_class) · [`RelatedOrder`](#relatedorder) · [`FilterSet`](#filterset).
+**See also:** [`Meta.orderset_class`](#metaorderset_class) · [`RelatedOrder`](#relatedorder) · [`Ordering`](#ordering) · [`order_input_type`](#order_input_type) · [`FilterSet`](#filterset).
+
+## `order_input_type`
+
+**Status:** planned for `0.0.8`.
+
+Consumer helper from `django_strawberry_framework.orders` that returns the element annotation for resolver arguments: `Annotated["<Name>OrderInputType", strawberry.lazy("django_strawberry_framework.orders.inputs")]`. Consumers wrap that element type as `list[order_input_type(MyOrder)] | None` so the GraphQL surface exposes the list-shaped `orderBy: [<T>OrderInputType!]` argument. The helper validates its `OrderSet` argument eagerly and lets finalization catch helper-referenced order sets that were never wired through [`Meta.orderset_class`](#metaorderset_class).
+
+**See also:** [`OrderSet`](#orderset) · [`Ordering`](#ordering) · [`Meta.orderset_class`](#metaorderset_class).
 
 ## Per-field permission hooks
 

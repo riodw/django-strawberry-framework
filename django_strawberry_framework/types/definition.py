@@ -54,6 +54,11 @@ class DjangoTypeDefinition:
           ``DjangoTypeDefinition`` on the FilterSet and to materialize
           the generated Strawberry input class as a module global of
           ``django_strawberry_framework.filters.inputs``.
+        - ``orderset_class`` lands in spec-028 Slice 3 as the ordering
+          sidecar mirror of ``filterset_class``. It stays absent until the
+          finalizer can apply ``Meta.orderset_class`` end to end; adding the
+          slot without the binding pass would violate the deferred-Meta-key
+          promotion gate.
         - ``related_target_for(field_name)`` resolves the
           ``(target_definition, model_field)`` pair the Decision-4
           owner-aware FK/PK conditional consults; the lookup walks
@@ -84,6 +89,13 @@ class DjangoTypeDefinition:
     # ``finalize_django_types()`` as the finalizer's source of truth for
     # base injection.
     filterset_class: type | None = None
+    # TODO(spec-028-orders-0_0_8 Slice 3): add
+    # ``orderset_class: type | None = None`` beside ``filterset_class``.
+    # Pseudocode:
+    #   - populate it from ``DjangoType.__init_subclass__`` after
+    #     ``Meta.orderset_class`` promotion.
+    #   - consume it only from ``types.finalizer._bind_ordersets``.
+    #   - do not read it from the optimizer or relation resolver paths.
     finalized: bool = False
     # Per-instance memoization of ``related_target_for(field_name)``
     # results. Sentinel key ``"__missing__"`` is unused; we cache the

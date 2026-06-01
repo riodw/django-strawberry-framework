@@ -111,6 +111,22 @@ def _input_field_names(type_name: str) -> set[str]:
     return {field["name"] for field in type_info["inputFields"]}
 
 
+# TODO(spec-028-orders-0_0_8 Slice 4): Add exactly 14 live ``/graphql/`` order
+# acceptance tests here.
+# Pseudocode:
+#   - scalar ASC on branches by name.
+#   - ``DESC_NULLS_LAST`` on ``Book.subtitle`` with explicit ``None`` and non-null
+#     rows.
+#   - forward FK, reverse FK with multiplicity asserted, M2M absolute-import-path,
+#     and flat shorthand ``shelfCode`` ordering.
+#   - filter + order composition and optimizer cooperation under query-count
+#     assertion.
+#   - root ``get_queryset`` visibility before ordering.
+#   - active-input-only scalar permission denial / quiet pair.
+#   - active ``RelatedOrder`` branch permission denial / quiet pair.
+#   - multi-field priority, empty-list no-op, and null-direction no-op.
+
+
 @pytest.mark.django_db
 def test_library_branch_shelf_book_loan_graph_over_http():
     _seed_library_graph()

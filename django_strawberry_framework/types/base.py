@@ -68,6 +68,17 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
     },
 )
 
+# TODO(spec-028-orders-0_0_8 Slice 3): Promote ``Meta.orderset_class`` only in
+# the same change that wires order binding end to end.
+# Pseudocode:
+#   - move ``"orderset_class"`` from ``DEFERRED_META_KEYS`` to
+#     ``ALLOWED_META_KEYS``.
+#   - add ``_validate_orderset_class`` next to ``_validate_filterset_class``.
+#   - thread the validated class through ``_ValidatedMeta`` and
+#     ``DjangoTypeDefinition``.
+#   - keep a local in-function ``from ..orders.sets import OrderSet`` import to
+#     avoid the ``types -> orders -> types`` module-load cycle.
+
 
 def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
     """Validate ``Meta.filterset_class`` is a package-``FilterSet`` subclass.
@@ -93,6 +104,16 @@ def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
             f"got {filterset_class!r}",
         )
     return filterset_class
+
+
+# TODO(spec-028-orders-0_0_8 Slice 3): Mirror ``_validate_filterset_class`` for
+# ``Meta.orderset_class`` after ``orders.sets.OrderSet`` exists.
+# Pseudocode:
+#   - return ``None`` when the Meta key is absent.
+#   - import ``OrderSet`` locally inside the helper.
+#   - require ``isinstance(orderset_class, type)`` and ``issubclass(..., OrderSet)``.
+#   - raise ``ConfigurationError`` naming ``Meta.orderset_class`` and the bad
+#     value for every non-``OrderSet`` declaration.
 
 
 _NODEID_STRING_RE = re.compile(r"(?:^|\.)NodeID\[")
@@ -276,6 +297,9 @@ class DjangoType:
             interfaces=validated.interfaces,
             primary=validated.primary,
             filterset_class=validated.filterset_class,
+            # TODO(spec-028-orders-0_0_8 Slice 3): pass
+            # ``orderset_class=validated.orderset_class`` here once the
+            # definition dataclass and meta validator grow that slot.
         )
         registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
         for pending_relation in pending:
@@ -560,6 +584,10 @@ class _ValidatedMeta(NamedTuple):
     fields_spec: tuple[str, ...] | str | None
     exclude_spec: tuple[str, ...] | None
     filterset_class: type | None
+    # TODO(spec-028-orders-0_0_8 Slice 3): add
+    # ``orderset_class: type | None`` immediately after ``filterset_class`` so
+    # finalizer phase 2.5 can bind ordering sidecars from the collected
+    # definition snapshot.
 
 
 def _validate_meta(meta: type) -> _ValidatedMeta:
@@ -635,6 +663,9 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
     optimizer_hints = _meta_optimizer_hints(meta)
     interfaces = _validate_interfaces(meta)
     filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
+    # TODO(spec-028-orders-0_0_8 Slice 3): validate
+    # ``getattr(meta, "orderset_class", None)`` through the local-import
+    # ``_validate_orderset_class`` helper and include it in ``_ValidatedMeta``.
 
     return _ValidatedMeta(
         interfaces=interfaces,
@@ -643,6 +674,8 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
         fields_spec=fields_spec,
         exclude_spec=exclude_spec,
         filterset_class=filterset_class,
+        # TODO(spec-028-orders-0_0_8 Slice 3): include
+        # ``orderset_class=orderset_class`` after promotion.
     )
 
 

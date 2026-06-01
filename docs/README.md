@@ -87,6 +87,11 @@ For the current capability snapshot — what the package can actually do in the 
 
 A quick summary:
 
+<!-- TODO(spec-028-orders-0_0_8 Slice 5): update this status summary for the
+joint 0.0.8 cut. Pseudo: move FilterSet / RelatedFilter / filter_input_type and
+OrderSet / RelatedOrder / Ordering / order_input_type / Meta.orderset_class into
+the shipped list, and remove filters/orders from the 0.1.0 beta bullet. -->
+
 **Shipped today** (`0.0.7`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
 - scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, file/image, choice enums)

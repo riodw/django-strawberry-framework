@@ -8,6 +8,9 @@ from django_strawberry_framework.optimizer import logger as optimizer_logger
 
 
 def test_version():
+    # TODO(spec-028-orders-0_0_8 Slice 5): bump this assertion to ``"0.0.8"``
+    # in the same commit that updates ``pyproject.toml`` and
+    # ``django_strawberry_framework.__version__``.
     assert __version__ == "0.0.7"
 
 

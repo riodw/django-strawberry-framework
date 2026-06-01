@@ -1,365 +1,218 @@
-# Pre-merge review — `build-021-filters-0_0_8` → `main`
+# Review feedback — `docs/spec-028-orders-0_0_8.md` (revision 2)
 
-Reviewed: 110 `.py` files (~16K insertions), HEAD + uncommitted working-tree edits to
-`filters/inputs.py`, `filters/sets.py`, `types/converters.py`,
-`examples/fakeshop/apps/kanban/models.py`, three `test_query/*.py`, and
-`tests/filters/test_sets.py`.
+Re-reviewed against the rev2 changeset (rev2 added ~100 lines on top of
+rev1 across the revision-history block + targeted edits in every prior
+finding's home Decision). Verified each rev1 finding's resolution
+against the actual code on disk where applicable. The spec is now
+substantively ready to ship; only one cosmetic finding (R1) and a
+handful of follow-through misses remain.
 
-The branch is large but well-staged. The filters subsystem is the headline change
-(~3K lines) and is where the review effort concentrated. The framework-core diff
-(types / optimizer / registry) is mostly disciplined refactor plus one significant
-finalizer expansion. Example apps and tests are additive and contain one shipped
-broken module plus a handful of test-hygiene issues.
-
-There is **one confirmed BLOCKER** (B1) that should not merge as-is, and a small
-number of HIGH-severity findings that are worth fixing or pinning with a
-regression test before the merge.
+Line citations refer to `docs/spec-028-orders-0_0_8.md` revision 2
+unless stated otherwise.
 
 ---
 
-## TL;DR — what to fix before merging
+## Rev1 findings — resolution audit
 
-1. **B1** — Nested `and`/`or`/`not` branches drop `RelatedFilter` constraints
-   silently. ([filters / sets.py:1213-1218](django_strawberry_framework/filters/sets.py))
-2. **H-core-3** — `_bind_filterset_owner` doesn't reject a `Meta.filterset_class`
-   whose `Meta.model` differs from the owner-type's model. First binding passes
-   through; the failure surfaces at query time, far from the cause.
-   ([types/finalizer.py:270-358](django_strawberry_framework/types/finalizer.py))
-3. **H-examples** — `examples/fakeshop/apps/products/aggregates.py` imports
-   symbols the framework doesn't export (`RelatedAggregate`, `aggregates.AdvancedAggregateSet`).
-   Currently dead but shipped. Delete or comment-fence.
-4. **H-scripts** — `scripts/check_trailing_commas.py:147` skips every construct
-   whose closing bracket sits at column 0 (the common ruff-formatted shape).
-   The collapse pass is a silent no-op on most real targets.
-5. **H-filters-1** — `getattr(settings, "HIDE_FLAT_FILTERS", False)` only catches
-   `AttributeError`; the project's `Settings.__getattr__` raises
-   `ConfigurationError` for malformed config, leaking it from finalize.
-   ([filters/inputs.py:667](django_strawberry_framework/filters/inputs.py))
+Every finding from the rev1 review was addressed in rev2. Spot-checked
+each fix against the spec body and against the codebase where the spec
+claims to cite shipped behavior. Status notation: ✓ resolved cleanly,
+~ resolved with a residual follow-through (broken out in the next
+section), ✗ regressed.
 
-Everything else is HIGH-suspicion / MEDIUM / LOW and can land with a follow-up.
+| Rev1 ID | Status | Where in rev2 |
+| --- | --- | --- |
+| B1 — subpass order does not match shipped filter code | ✓ | Decision 6 (lines 559–580); Slice 1 (line 90); DoD item 10 (line 1096). Now reads `bind → expand → orphan → materialize`, with explicit "shipped code is the authoritative shape, NOT spec-027 rev8 H1 as written." Verified against `finalizer.py:495–504` docstring. |
+| B2 — `except ImportError: return` reintroduces M-core-4 footgun | ✓ | Decision 9 code block (lines 706–717). Both new blocks use `pass` + `else:`; inline comment cites M-core-4 by name. |
+| B3 — `_types_by_model` / `_primary_types` are phantom field names | ✓ | Decision 9 code block (lines 671–678). Verbatim copy of `registry.py:43–50`'s actual `_types`, `_primaries`, `_models`, `_enums`, `_definitions`, `_pending`, `_finalized` fields. Inline comment notes this is per B3. |
+| H1 — `apply(...)` dispatcher is dead weight | ✓ | Decision 2 sets.py bullet (line 377); Decision 8 sync/async block (line 624); Implementation plan table row 1 (line 919); DoD item 4 (line 1090); KANBAN past-tense body (line 1036). Dropped consistently across the spec. |
+| H2 — optimizer projection claim unverified | ✓ | Glossary refs (line 64) carries the retraction with the `grep`-verified citation; Decision 8 step 8 (line 618) restates as "selection-tree-derived only, does not inspect `queryset.query.order_by`"; the `test_library_books_order_preserves_optimizer_cooperation` narrative (line 993) names what the test actually pins. |
+| H3 — `__all__` cookbook parity unverified | ✓ | Decision 3 (line 419) carries the verifying citation to `~/projects/django-graphene-filters/django_graphene_filters/orderset.py:271`. The reviewer's claim of divergence is now explicitly named as incorrect — keeps the rev1 disagreement transparent in the audit trail. |
+| H4 — position-side-channel leak unnamed | ✓ | Decision 8 step 4 (line 614) names the leak explicitly, argues acceptance for `0.0.8`, points to the `check_*_permission` gate as consumer defense, and defers leak-closing to `0.0.9`. Slice 5 GLOSSARY bullets carry the warning forward. |
+| M1 — "7-step pipeline" off-by-one | ~ | Decision 8 body (line 609) corrected to "8-step." Justification list at line 635 still says "The seven-step pipeline reflects this simplification." See R1 below. |
+| M2 — flat-shorthand path no live test | ✓ | `test_library_books_order_by_flat_shorthand_path` added (line 998). |
+| M3 — `INPUTS_MODULE_PATH` constant + `_input_type_name_for` helper missing | ✓ | Decision 2 inputs.py bullet (line 379) hoists both symbols with citations to the filter side's `filters/inputs.py:53,183`. |
+| M4 — `Ordering.resolve()` example missing `OrderBy` import | ✓ | Spec example body (lines 509–526) adds the local `from django.db.models.expressions import OrderBy` import + a multi-line comment explaining `None` vs `True` sentinel semantics. |
+| M5 — reverse-FK fixture seeding fragile | ✓ | `test_library_branches_order_by_reverse_fk_relation` rewritten (line 990) to assert the denormalized multiplicity explicitly — multi-shelf Branch seeded; `RelatedOrder` GLOSSARY entry will carry the warning per Slice 5. |
+| M6 — permission test single-named, not split | ✓ | Split into `test_order_check_permission_denies_for_active_field` (line 995) and `test_order_check_permission_quiet_for_inactive_field` (line 996). |
+| M7 — empty-list / null-direction no-op cases untested | ✓ | `test_order_empty_list_passes_through` (line 999) and `test_order_null_direction_skips_field` (line 1000). |
+| M8 — off-Meta-fields ordering intentional but untested | ✓ | `test_order_accepts_field_not_in_djangotype_meta_fields` (line 964) added under `tests/orders/test_sets.py`. |
+| M9 — `_helper_referenced_ordersets` location ambiguous | ✓ | Decision 2 (line 380) pins it to `orders/__init__.py` with explicit rationale; Decision 9 (line 697–717) confirms two separate clear blocks per registry-clear. |
+| M10 — duplicated KANBAN / CHANGELOG narrative | ✓ | CHANGELOG bullet (line 1043) now reads "see the KANBAN past-tense body above" with a one-line headline. |
+| N1 — stale spec link slugs | ✓ | Renumbered: `[spec-027]`, `[spec-020]`, `[spec-018]`, `[spec-015]`, `[spec-025]`, `[spec-028]`. Link defs updated. |
+| N2 — `Verified in upstream` block unquoted | ✓ | Decision 4 (lines 443–452) inlines the verbatim strawberry-django ordering symbols. |
+| N3 — `_validate_orderset_class` import-cycle requirement | ✓ | DoD item 9 (line 1095) spells out the local in-function `from ..orders.sets import OrderSet` requirement with cycle-explanation. |
+| N4 — `tests/orders/` file count inconsistent | ✓ | Decision 2 (line 388) and Decision 13 (line 900) both say "7 files total"; DoD item 11 (line 1097) consistent. |
+| N5 — literal `YYYY-MM-DD` placeholder | ✓ | `<DATE>` used throughout Slice 5, Decision 10, DoD item 24. |
+| N6 — L5 contingency check as honor-system | ✓ | Decision 10 (line 760–762) names `grep -E 'WIP-ALPHA-[0-9]+-0\.0\.8' KANBAN.md`. |
+| N7 — `apply_async` blocking-hook caveat unstated | ✓ | Decision 8 (line 626) carries the mirrored caveat plus a recommended pattern. |
+| N8 — proxy / MTI `__all__` semantics unstated | ✓ | Decision 3 (lines 421–425) covers proxy, MTI child, and abstract-model cases. |
+| N9 — `noqa: A002` future-convention note | ✓ | Spec body (line 284) carries the convention note explicitly for `aggregate:` / `order:` / `search:` / `input:` future arguments. |
+| O1 — `Meta.distinct` shape preview | ✓ | Decision 12 (line 891). |
+| O2 — Layer 6 escape-hatch preview | ✓ | Decision 12 (line 892). Explicitly names "the `0.0.8` shape does not foreclose the factory path." |
 
----
-
-## BLOCKER
-
-### B1 — Nested logic branches silently widen on `RelatedFilter` children
-
-[`django_strawberry_framework/filters/sets.py:1213-1218`](django_strawberry_framework/filters/sets.py)
-
-`_q_for_branch` normalizes `child_input` via `_normalize_input`, which strips
-related-branch keys (sets.py:573-574, 589-592), then instantiates a sibling
-`cls(data=child_data, queryset=queryset, ...)` and reads `.qs`. It never calls
-`_apply_related_constraints` for the child branch. Practical effect: a query
-shaped like
-
-```graphql
-filters: { or: [{ shelves: { code: { iContains: "A" } } }] }
-```
-
-produces a `child_data` dict with the `shelves` key removed, so the resulting
-`pk__in=child_qs.values("pk")` is the un-constrained parent queryset — every
-row passes. Any nested logical clause that references a related branch is
-silently widened.
-
-**Confirmed** via tracing `_normalize_input`'s strip path against
-`_q_for_branch`'s reconstruction.
-
-**Fix direction**: thread the original (un-normalized) `child_input` through
-`_q_for_branch`, recompute `child_qs_by_branch =
-cls._derive_related_visibility_querysets_*(child_input, info)` for the branch,
-and call `_apply_related_constraints(child_input, queryset, child_qs_by_branch)`
-before instantiation. This requires threading `info` (not just `request`)
-through `_q_for_branch` — see M-filters-1.
-
-**Regression test to add**: pin `or: [{shelves: {code: {iContains: "X"}}}]`
-against a fixture that has shelves with non-matching codes; assert only matching
-rows are returned, not the full set.
+All 27 rev1 findings closed cleanly except M1 (residual line 635 — see
+R1 below). No regressions.
 
 ---
 
-## HIGH
+## Outstanding follow-throughs
 
-### H-filters-1 — `HIDE_FLAT_FILTERS` read can surface `ConfigurationError`
+These are small misses from the rev2 sweep. Each is a one- or two-word
+edit; none affect the architecture or the implementation plan, but they
+will leave the spec internally inconsistent if left.
 
-[`django_strawberry_framework/filters/inputs.py:667`](django_strawberry_framework/filters/inputs.py)
+### R1. M1's "seven-step pipeline" reference at line 635 was missed
 
-```python
-hide_flat_filters = bool(getattr(settings, "HIDE_FLAT_FILTERS", False))
-```
+Decision 8 body (line 609) correctly says "The 8-step pipeline" after
+M1's fix. But the Justification list ten lines later (line 635) still
+reads:
 
-The 3-arg `getattr` only catches `AttributeError`. The project's
-`Settings.__getattr__` raises `ConfigurationError` when
-`DJANGO_STRAWBERRY_FRAMEWORK` is a malformed shape, so this access at finalize
-time will propagate from a setting unrelated to filters.
+> "no related-queryset filter-scope constraint (no `RelatedOrder(queryset=...)`
+> parameter — the cookbook's `RelatedOrder` accepts only `orderset` and
+> `field_name`). **The seven-step pipeline reflects this simplification.**"
 
-**Fix**: either catch `ConfigurationError` explicitly or document that
-`HIDE_FLAT_FILTERS` requires a valid (or absent) settings mapping.
+Change to "The eight-step pipeline" so the count matches the numbered
+list immediately above it. Same Decision, same sentence, one word.
 
-### H-filters-2 — `apply_async` does not wrap user hooks in `sync_to_async`
+### R2. "Exactly 10 new live HTTP tests" header at line 985 should read 13
 
-[`django_strawberry_framework/filters/sets.py:1324-1332`](django_strawberry_framework/filters/sets.py)
+The Test plan's `### examples/fakeshop/test_query/test_library_api.py
+(extend)` subsection header at line 985 still reads:
 
-`apply_async` constructs the filterset and reads `.qs` directly. Today this
-is safe — chained `.filter()` calls and `.values("pk")` subqueries do no I/O.
-But: nothing prevents a consumer-supplied `check_*_permission` or a custom
-`method=` filter from doing a synchronous ORM hit, which would block the
-event loop without raising.
+> "Coverage MUST be earned here per the `docs/TREE.md` coverage-priority
+> rule. **Exactly 10 new live HTTP tests**:"
 
-**Fix**: at minimum, docstring note that `apply_async` does not wrap user
-hooks; ideally `sync_to_async` the `.qs` read or document the contract loudly.
+Then the body lists 13 tests, line 1002 says "All 13 new live HTTP
+tests," DoD item 15 says "exactly 13," the Slice-4 narrative at line 94
+says "exactly 13," and the KANBAN past-tense body at line 1036 says
+"exactly 13." Update the section header to "**Exactly 13 new live HTTP
+tests**" so the count is consistent across the spec.
 
-### H-filters-3 — `FilterArgumentsFactory` mutable class-attribute caches shared by subclasses
+### R3. Implementation plan table row 4 still says `10` for the Slice 4 new-test count
 
-[`django_strawberry_framework/filters/factories.py:75-80`](django_strawberry_framework/filters/factories.py)
+The Implementation plan table at line 922 has:
 
-`input_object_types` and `_type_filterset_registry` are class-level dicts.
-The docstring says don't subclass, but the class is public and Python won't
-stop a consumer. State will leak silently across subclasses.
+| Slice | … | New tests | … |
+| --- | --- | --- | --- |
+| 4 — Live HTTP coverage in fakeshop | … | **10** (scalar ASC / scalar DESC_NULLS_LAST / forward-FK relation / reverse-FK relation / M2M absolute-import-path RelatedOrder / filter + order composition / optimizer cooperation under `assertNumQueries` / root `get_queryset` honoring / `check_<field>_permission` denial / multi-field priority via list-element ordering) | … |
 
-**Fix**: move both to `__init_subclass__` or detect subclassing and raise.
+The count is `10` and the inline test-name enumeration is the rev1 set
+of 10. Should be `13` with the inline list extended to include the
+three new tests:
 
-### H-filters-4 — `filter_for_lookup` Relay-PK guard only fires post-finalize
+- flat-shorthand path (`shelfCode`),
+- split-pair active-input-only permission (`denies_for_active_field` +
+  `quiet_for_inactive_field` — two tests),
+- empty-list + null-direction no-op (`empty_list_passes_through` +
+  `null_direction_skips_field` — two tests).
 
-[`django_strawberry_framework/filters/sets.py:438-443`](django_strawberry_framework/filters/sets.py)
+(Note that the split-pair counts as one entry in the rev1 capability
+list but as two tests in the count; same for empty/null. 10 + 1 split
++ 1 path + 1 doubled no-op group = 13.)
 
-`_is_own_pk_under_relay_owner` requires `cls._owner_definition` to be bound,
-which doesn't happen until phase-2.5. The docstring at line 432 calls it
-"authoritative" but during class creation `_owner_definition` is `None`, the
-check returns `False`, and the error never fires. Only during finalize's
-`get_filters()` call does the error materialize.
+### R4. Decision 13's high-level capability list at line 898 still enumerates the rev1 10
 
-**Fix**: update the docstring (it's authoritative post-finalize) or move the
-Relay-aware check earlier in the metaclass pipeline.
+Decision 13 (line 898):
 
-### H-filters-5 — `BaseCSVFilter` element type uses `str` for custom-method CSV filters with int columns
+> "Live HTTP tests (Slice 4) land in `examples/fakeshop/test_query/test_library_api.py`
+> and cover: scalar-field ascending order, scalar-field descending order
+> with NULLS positioning, forward-FK relation order, reverse-FK relation
+> order, M2M relation order through the absolute-import-path `RelatedOrder`
+> resolution, composition with the shipped Filtering subsystem,
+> composition with the optimizer (…), root `get_queryset` honoring,
+> `check_*_permission` denial gate, and multi-field priority ordering."
 
-[`django_strawberry_framework/filters/inputs.py:359`](django_strawberry_framework/filters/inputs.py)
-
-The new `_element_annotation` helper handles model-field-driven scalar
-inference correctly when `model_field` is supplied. Custom-method CSV filters
-(`method=` shape) have `model_field=None`, fall through to
-`_scalar_from_form_field`, and pick up `forms.CharField` from the CSV widget
-wrapper — yielding `list[str]` even when the underlying column is `int`.
-
-**Confirmed** but rare. Suggest documenting the contract or auto-inferring
-from the resolver-method name when possible.
-
-### H-filters-6 — `_field_specs` can carry stale entries across registry rebuilds (test-isolation risk)
-
-[`django_strawberry_framework/filters/inputs.py:139, 878`](django_strawberry_framework/filters/inputs.py)
-
-`clear_filter_input_namespace` is called via `registry.clear()`. Test suites
-that reload model modules without going through `registry.clear()` will retain
-stale `_field_specs` entries from the prior build. The
-`_isolate_registry` autouse fixture in the filter test files compensates by
-clearing several global ledgers explicitly — but consumer test suites won't.
-
-**Fix**: either document the cleanup contract or hook the model-module reload
-path.
-
-### H-filters-7 — `_q_for_branch` does not invoke `_run_permission_checks` for child input
-
-[`django_strawberry_framework/filters/sets.py:1213-1218`](django_strawberry_framework/filters/sets.py)
-
-Today this is safe because `apply_sync` / `apply_async` walk the original
-input through `_run_permission_checks` upfront (sets.py:966-994), which
-recurses into nested branches. If a future caller bypasses `apply_*` and
-reaches `filter_queryset` directly, permissions won't fire for nested
-branches.
-
-**Fix**: add a regression test pinning that `apply_*` is the only legal entry
-point for permission-aware filtering, OR move the check into `_q_for_branch`.
-
-### H-core-1 — Finalize-time exception rewrap loses original error class
-
-[`django_strawberry_framework/types/finalizer.py:516`](django_strawberry_framework/types/finalizer.py)
-
-```python
-except Exception as exc:
-    ...
-    raise ConfigurationError("...expansion failed...")
-```
-
-`ConfigurationError` is re-raised cleanly (two lines above), but every other
-exception type — `AttributeError` from a typo in a `RelatedFilter` field
-name, `ImportError` from a bad module path — is rewrapped into a generic
-"raised during expansion" message. The `__cause__` chain preserves the
-detail; the top-of-screen consumer-visible message does not.
-
-**Fix**: narrow the rewrap to a documented allowlist (`ImportError`,
-`AttributeError`, `TypeError`), include `repr(exc)` in the message, and rely
-on the existing `__cause__` chain.
-
-### H-core-2 — `_resolve_field_map` dual-contract (FieldMeta vs raw Django field)
-
-[`django_strawberry_framework/optimizer/walker.py:107-114`](django_strawberry_framework/optimizer/walker.py)
-
-When a relation target has no registered DjangoType, the walker falls back to
-raw Django field objects. `getattr`-everywhere makes this work in practice,
-but the dual contract is undocumented in the walker module. The same
-divergence already exists in `_field_meta_for_resolver`
-([resolvers.py:182-212](django_strawberry_framework/optimizer/resolvers.py))
-where it picked up a defensive fallback.
-
-**Fix**: either build a `FieldMeta`-shaped map in the fallback branch (one
-extra build per request for unregistered models, unified contract), or
-document the dual contract loudly at the function returning the map.
-
-### H-core-3 — `_bind_filterset_owner` doesn't reject obviously-wrong owners on first bind
-
-[`django_strawberry_framework/types/finalizer.py:270-358`](django_strawberry_framework/types/finalizer.py)
-
-The mismatch validation only triggers on a *second* owner binding. A consumer
-who wires `Meta.filterset_class = ItemFilterSet` on a `CategoryType` (entirely
-different model) gets through `types/base.py` validation (only checks
-`issubclass(filterset_class, FilterSet)`) and through subpass 1 unimpeded.
-The first symptom is at query time — wrong model, opaque traceback.
-
-**Fix**: in `_bind_filterset_owner`, when `previous is None`, also assert
-`definition.model is filterset_cls._meta.model` (or a subclass relationship)
-and raise `ConfigurationError` with both model names. This is the single most
-common Phase-2.5 user-error and would surface it loudly at finalize.
-
-### H-examples — `apps/products/aggregates.py` is broken-on-import dead code
-
-[`examples/fakeshop/apps/products/aggregates.py`](examples/fakeshop/apps/products/aggregates.py)
-
-`from django_strawberry_framework import RelatedAggregate` raises `ImportError`;
-the symbol does not exist. Also references `aggregates.AdvancedAggregateSet`
-which is not defined anywhere. The file is currently unreferenced, but
-`apps/products/schema.py:58` contains a commented hint to enable it — a user
-following the hint hits an import error before reaching any feature-not-ready
-signal. Additionally, line 18 uses `super(type(self), self)` (the classic
-infinite-recursion-under-subclassing anti-pattern), so even if the imports
-landed, the class would be misleading reference material.
-
-**Fix**: delete the file or wrap its body in `if TYPE_CHECKING:` with a
-TODO-BETA-040 comment.
-
-### H-scripts — `check_trailing_commas.py` skips column-0 closers
-
-[`scripts/check_trailing_commas.py:147`](scripts/check_trailing_commas.py)
-
-The self-verify guard reads `not (0 < close_byte <= len(close_bytes))`. For
-a top-level multi-line literal whose `]` lands at column 0 (the standard
-ruff-formatted shape), `close_byte == 0`, the strict `0 <` rejects it, and
-the construct is silently dropped. The collapse direction is a no-op on the
-majority of real targets.
-
-**Fix**: change to `0 <= close_byte < len(close_bytes)` (two-character fix).
+Add three to the capability list to match the 13 live tests Slice 4
+ships: flat-shorthand path, split-pair active-input-only permission
+(denies-for-active / quiet-for-inactive), and the two no-op cases
+(empty list / null direction). Decision 13 is the conceptual summary of
+the live-HTTP test plan; readers cross-referencing it should see the
+same shape they'll find in Slice 4 and the Test plan.
 
 ---
 
-## MEDIUM
+## New observations introduced by rev2
 
-### filters subsystem
+These are observations on content rev2 *added*, not residuals of rev1
+findings. None are blocking; the first two are worth a one-sentence
+edit; the third is a YAGNI flag on a forward statement.
 
-- **M-filters-1** [`sets.py:1189-1218`](django_strawberry_framework/filters/sets.py) — `_q_for_branch` accepts `request` but not `info`. Signature mismatch with `apply_sync` is a latent footgun if `check_*_permission` or related-target hooks start consulting `info`.
-- **M-filters-2** [`sets.py:395-408`](django_strawberry_framework/filters/sets.py) — `filter_for_field` passes `**default.extra` blindly to `own_pk_filter_class`. `GlobalIDMultipleChoiceFilter` extends `MultipleChoiceFilter` which requires `queryset` or `choices`. SUSPICION; depends on how `default.extra` is populated.
-- **M-filters-3** [`sets.py:593`](django_strawberry_framework/filters/sets.py) — `_normalize_input` keys `_field_specs` on `(cls, python_attr)`. A FilterSet subclass that inherits without rebuilding misses the related-branch source paths. SUSPICION — depends on whether subclassing is supported per design.
-- **M-filters-4** [`factories.py:39`](django_strawberry_framework/filters/factories.py) — `_dynamic_filterset_cache` has no clear hook. After `registry.clear()`, dynamic FilterSets built against reloaded model classes leak.
-- **M-filters-5** [`base.py:335-354`](django_strawberry_framework/filters/base.py) — `RelatedFilter.bind_filterset` silently no-ops on re-bind. If a single `RelatedFilter` instance is shared between subclasses through inheritance, the first owner sticks and subclasses get the wrong `bound_class.__module__` for unqualified string targets. SUSPICION.
-- **M-filters-6** [`sets.py:1215`](django_strawberry_framework/filters/sets.py) — `_q_for_branch` deep-copies `base_filters` per branch (upstream `BaseFilterSet.__init__`). Perf scales with branches × filters. Performance suspicion, not correctness.
+### N-new-1. Decision 8 step 4's leak-closing deferral binds two orthogonal 0.0.9 items
 
-### framework core
+The expanded step 4 (line 614) concludes:
 
-- **M-core-1** [`base.py:598`](django_strawberry_framework/types/base.py) — Typo-guard `declared = {k for k in meta.__dict__ ...}` correctly uses `meta.__dict__`, but mutual-exclusion uses `getattr` which walks MRO. Asymmetry is intentional per the comment; document for posterity so future validators don't silently treat inherited keys as declared.
-- **M-core-2** [`finalizer.py:367-368`](django_strawberry_framework/types/finalizer.py) — `_format_owner_mismatch_error` type-hints `prev_target` as `object`; should be `models.Field`. Type-hint-only, harmless at runtime.
-- **M-core-3** [`finalizer.py:531-537`](django_strawberry_framework/types/finalizer.py) — `_helper_referenced_filtersets` may carry stale entries from pre-reload module classes, producing spurious orphan errors. Document the test-isolation dependency or hook the reload path.
-- **M-core-4** [`filters/inputs.py:897-909`](django_strawberry_framework/filters/inputs.py) — `clear_filter_input_namespace` early-returns on `ImportError` from `filters.sets`, skipping the FilterSet-subclass attribute wipe. Defense-in-depth that may never fire in practice; split the two cleanup phases so neither blocks the other.
+> "**Closing this side channel** would require re-deriving every nested
+> `RelatedOrder` branch's child visibility queryset and rewriting the
+> parent JOIN's `ORDER BY` to operate only on the visibility-scoped
+> subset… That work is **deferred** — likely to land alongside the same
+> `0.0.9` cohort that ships connection-aware optimizer planning."
 
-### example apps
+The two work items — (a) re-deriving child visibility querysets for
+nested `RelatedOrder` ORDER BY, and (b) connection-aware optimizer
+planning (per [Out of scope][] line 1075) — are orthogonal. Pinning them
+to the same cohort risks future readers thinking the deferral is
+already scheduled when it isn't. Recommend rephrasing as "deferred —
+likely to a sibling `0.0.9` ordering-permissions card; the connection-
+field cohort is the natural integration point but the leak-closing work
+is independent of connection-field design."
 
-- **M-examples-1** [`config/settings.py`](examples/fakeshop/config/settings.py) — No `DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}` set. With per-field `"__all__"` everywhere and ~10 `RelatedFilter` declarations on `CardFilter` alone, the GraphiQL introspection surface shows the doubled-up flat-traversal form. The framework tests cover both toggle positions; the dogfooding schema does not demonstrate the cleaner shape.
+### N-new-2. Decision 2's rationale for `_helper_referenced_ordersets` placement is slightly hand-wavy
 
-### tests
+Decision 2 (line 380) explains why the orphan-tracking ledger lives in
+`orders/__init__.py` rather than `orders/inputs.py`:
 
-- **M-tests-1** [`tests/filters/test_base.py:210-227`](tests/filters/test_base.py) — Monkey-patches `GlobalIDMultipleChoiceFilter.__mro__[1].filter` directly, writing through to the upstream `django_filters.MultipleChoiceFilter`. Try/finally restores, but: (a) race-prone under `pytest-xdist --dist loadscope`, (b) silently restores onto a different class if MRO changes. Switch to `monkeypatch.setattr(GlobalIDMultipleChoiceFilter.__mro__[1], "filter", spy)`.
+> "placing the ledger in `inputs.py` would force `__init__.py` to import
+> from `inputs.py` to mutate it, adding an unnecessary import dependency
+> between the two modules."
 
-### scripts
+`orders/__init__.py` already imports `INPUTS_MODULE_PATH` and
+`_input_type_name_for` from `orders/inputs.py` per Decision 2's own
+inputs.py bullet (line 379) — the import dependency exists either way.
+The real reason for the placement is that the *writer* of the ledger
+(`order_input_type`) lives in `__init__.py`, so co-locating the ledger
+with its writer is a locality argument, not an import-dependency
+argument. Recommend rephrasing as "co-located with its only writer
+(`order_input_type`) in `__init__.py`, matching the filter side's
+arrangement at `filters/__init__.py:48`." Same outcome, cleaner
+rationale.
 
-- **M-scripts-1** [`check_trailing_commas.py:_tokenize_info`](scripts/check_trailing_commas.py) — Counts positional-only `/` and keyword-only `*` markers as parameters. `def m(self, /)` reports 2 params; under the `models.py` threshold of 2, the fixer explodes a 1-arg method to `def m(self, /,):`. Syntactically legal, semantically wrong. Skip depth-1 tokens whose string is `/` or `*` (where `*` is not followed by an identifier).
-- **M-scripts-2** [`check_trailing_commas.py:288`](scripts/check_trailing_commas.py) — Nested-trailing-comma guard regex `,\s*[)\]}]` can false-positive on single-line string literals containing those byte sequences. Rare; degraded behavior, not correctness.
-- **M-scripts-3** [`check_trailing_commas.py:_run_ruff_format`](scripts/check_trailing_commas.py) — `subprocess.run(..., check=False)` swallows non-zero ruff exit. Surface the exit code on stderr.
+### N-new-3. Decision 12 forward-compat O1 claim about `DEFERRED_META_KEYS` could go stale
 
----
+Decision 12's forward-compat preview O1 (line 891) says:
 
-## LOW / NIT (representative; full list in source review)
+> "neither is in `DEFERRED_META_KEYS` today, and the validator's typo
+> guard at `_validate_meta` time would reject either as an unknown key
+> — that rejection is fine for `0.0.8`."
 
-- `filters/__init__.py` re-exports `django_filters.Filter` under the package namespace. Shadow with a thin subclass or document.
-- `filters/inputs.py:75-102` `LOOKUP_NAME_MAP` reverse walk in `_form_key_for_python_attr` is O(n) per call. Build the reverse map once at module scope.
-- `filters/sets.py:205` class-level `_logic_depth: int = 0` annotation-with-default — drop the `= 0` for a pure annotation or document intent.
-- `finalizer.py:546` bare expression statement `factory.arguments` for side effects. `_ = factory.arguments` reads cleaner.
-- `finalizer.py:414` single-orphan format uses `cls.__name__`; multi-orphan uses `cls.__module__.{cls.__qualname__}`. Match formats.
-- `test_finalizer.py:680` subprocess test uses `sys.path.insert(0, 'examples/fakeshop')` — relative path assumes pytest cwd. Use `__file__`-derived absolute path.
-- `test_sets.py:1419-1438` direct attribute assignment (`BookFilter._owner_definition = object()`) breaks silently if those attrs become descriptors.
-- `examples/fakeshop/db.sqlite3` is committed and grows 5x to 1.6MB. Seed on demand rather than tracking.
-- `examples/fakeshop/test_query/test_products_api.py:102,114,134` interpolates Faker `category.name` raw into a GraphQL string. `json.dumps` would harden.
-- `scripts/build_kanban_dashboard.py:387` raises `KeyError` for malformed GraphQL responses lacking both `errors` and `data`. One-line `.get` guard for legibility.
-- `scripts/build_kanban_dashboard.py:362-367` mutates `sys.path` / `os.environ` and never undoes them. Fine for a top-level script; document if it ever becomes importable.
-
----
-
-## Strengths
-
-### filters subsystem
-- Pipeline ordering in `apply_sync`/`apply_async` (visibility → constraints → permission → form validate → qs) is correct and commented; ordering rationale preserved.
-- `_element_annotation` is a clean factor-out of three previously-divergent scalar/choice-enum branches.
-- Dual `_is_own_pk_under_relay_owner` guard in both `get_fields` and `filter_for_lookup` mirrors spec-021 H1's intent.
-- `_make_cache_key` / `_make_hashable` carefully handle dict-as-unordered vs list-as-ordered semantics with explicit fallback notes.
-- GlobalID validation through `_expected_global_id_type_name` + `_decode_and_validate_global_id` surfaces type-name mismatches at filter time with the offending element index.
-- Recursion-depth guard exposed as `ClassVar` so consumers can override without monkey-patching.
-- `clear_filter_input_namespace` is thoughtful about what it does NOT do; the rationale for leaving module-globals parked is documented.
-
-### framework core
-- Failure-atomic Phase 1 in `finalizer.py` — unresolved-target audit completes before any class mutation, so retries don't leak partially-finalized state.
-- Per-instance `_related_target_cache` keys cacheability on `registry.is_finalized()` — avoids locking in transient `None` lookups.
-- `SyncMisuseError` multiply-inherits `ConfigurationError` + `RuntimeError` so both `except` paths work.
-- `scalar_for_field` extraction cleanly de-duplicates the MRO walk between full DjangoType conversion and the filter-input converter.
-- Plan-cache origin-keying carry-through (walker → extension → cache key) keeps the spec-014 regression closed.
-
-### example apps
-- Kanban app exercises filter paths nothing else in the example tree reaches: self-referential M2M (`dependencies`), through-model (`ParityClaim`), reverse-FK (`outgoing_references`), and a deliberately-non-Relay sibling type (`CardItemType`). Strong dogfooding.
-- UUIDModel one-hot DB constraint + the three accept-one/reject-zero/reject-multi tests are a useful teaching pattern.
-- Working-tree regression tests in three `test_query/*_api.py` files lock real coercion bugs found on this branch (isNull-on-Relay-PK, enum-in-list, BigInt-in-list).
-
-### tests
-- `tests/filters/test_sets.py` (74 tests, 1796 lines) covers the whole apply pipeline including a spy-`__init__` test pinning constrained-queryset ordering without depending on internal state.
-- `tests/filters/test_finalizer.py` covers all four phase-2.5 subpasses including a subprocess test for the cycle-safe `registry.clear()` contract.
-- `tests/filters/test_inputs.py:74` pins LOOKUP_NAME_MAP verbatim — defends against accidental camelCase drift.
-
-### scripts
-- All `subprocess.run` calls are list-form (no shell-injection vectors).
-- `check_trailing_commas.py` re-parses every fixed file with `ast.parse` before writing.
-- `check_trailing_commas.py` reads `line-length` from `pyproject.toml` — fixer can't drift from formatter target.
-- `build_kanban_dashboard.py:396` escapes `</` → `<\/` in embedded JSON. XSS hygiene that's easy to forget.
-- The diff helper / snapshot helper refactor eliminates ~100 lines of duplicated git/subprocess plumbing.
+True today (`base.py:48-55` carries only `orderset_class`,
+`aggregate_class`, `fields_class`, `search_fields` in
+`DEFERRED_META_KEYS`). But if a future maintainer adds `distinct` or
+`distinct_class` to `DEFERRED_META_KEYS` as a no-op pre-promotion step
+between rev2's writing and the actual `0.0.9` DISTINCT-ON design, this
+statement goes stale silently. Worth a one-line caveat — "this state is
+accurate as of `0.0.8`; the `0.0.9` design may add either key to
+`DEFERRED_META_KEYS` before its corresponding subsystem ships, per the
+deferred-key promotion-gate convention" — so a future reader cross-
+checking against the live `DEFERRED_META_KEYS` value sees the disclaimer
+before they panic.
 
 ---
 
-## Files reviewed
+## Summary
 
-**Framework** — `django_strawberry_framework/filters/{__init__,base,factories,inputs,sets}.py`,
-`django_strawberry_framework/sets_mixins.py`, `django_strawberry_framework/types/*.py`,
-`django_strawberry_framework/optimizer/*.py`, `django_strawberry_framework/registry.py`,
-`django_strawberry_framework/conf.py`, `django_strawberry_framework/__init__.py`,
-`django_strawberry_framework/utils/relations.py`.
+Rev2 closes every rev1 finding — including the three Blocking ones
+(B1–B3), where the spec is now consistent with the *shipped* filter
+binding at `finalizer.py:495–504` rather than spec-027 rev8's H1
+prescription. The Decision-history narrative at the top of the spec
+(lines 11–35) gives a clear changelog with line citations so a reader
+auditing each finding can verify in one pass.
 
-**Examples** — `examples/fakeshop/apps/{kanban,library,products,scalars}/**/*.py`,
-`examples/fakeshop/config/{schema,settings}.py`, `examples/fakeshop/test_query/*.py`.
+Remaining work is sweep-residual only: R1–R4 (one-word edits to bring
+the "8-step pipeline" and "13 live tests" counts consistent across the
+spec) and three observations (N-new-1, N-new-2, N-new-3) that are
+phrasing tweaks rather than substantive design concerns. None of them
+block implementation.
 
-**Tests** — `tests/filters/*.py` (new), `tests/types/*.py`, `tests/optimizer/*.py`,
-`tests/utils/*.py`, `tests/test_*.py`, `tests/base/*.py`.
-
-**Scripts** — `scripts/*.py`, `line_count.py`.
-
----
-
-## Recommendation
-
-Hold the merge until B1 is fixed (with a regression test pinning the
-nested-`or` + `RelatedFilter` shape). The four other HIGH items (H-core-3,
-H-examples, H-scripts, H-filters-1) can either be fixed in the same prep
-or land as immediate follow-ups; H-core-3 in particular is cheap and prevents
-a category of opaque finalize-time bugs. Everything else can roll forward
-through normal grooming.
+The spec is ready to ship after R1–R4 are applied. The three N-new
+observations can fold into a future review pass or stay as-is.

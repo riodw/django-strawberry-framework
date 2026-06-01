@@ -5,13 +5,14 @@ This script intentionally targets only known generated paths:
 - contents of ``docs/shadow/`` (recursive) — every per-script folder
   (``current/`` snapshot, ``old/`` ``new/`` ``diff/`` diff sides) plus any
   static-helper / bug-hunt byproducts written to the root
+- contents of ``docs/review/temp-tests/``
+- contents of ``docs/review/worker-memory/``
 - ``rev-*.py`` and case-sensitive ``review-*.py`` files directly under ``docs/review/``
 - contents of ``docs/builder/temp-tests/``
+- contents of ``docs/builder/worker-memory/``
+- ``bld-*.md`` files directly under ``docs/builder/``
 - ``bld-*.py`` and case-sensitive ``review-*.py`` files directly under ``docs/builder/``
-- ``docs/bug_hunt/dicta.md``
 - ``docs/bug_hunt/bug_hunt.*.md``
-
-It does not touch ``docs/review/worker-memory/`` or ``docs/builder/worker-memory/``.
 """
 
 from __future__ import annotations
@@ -22,6 +23,21 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CLEAR_DIRECTORIES = (
+    "docs/shadow",
+    "docs/review/temp-tests",
+    "docs/review/worker-memory",
+    "docs/builder/temp-tests",
+    "docs/builder/worker-memory",
+)
+FILE_GLOBS = (
+    ("docs/review", "rev-*.py"),
+    ("docs/review", "review-*.py"),
+    ("docs/builder", "bld-*.md"),
+    ("docs/builder", "bld-*.py"),
+    ("docs/builder", "review-*.py"),
+    ("docs/bug_hunt", "bug_hunt.*.md"),
+)
 
 
 def _repo_path(relative_path: str) -> Path:
@@ -74,28 +90,12 @@ def clean_up() -> list[Path]:
     """Delete all configured generated artifacts and return deleted paths."""
     deleted: list[Path] = []
 
-    deleted.extend(_clear_directory(_repo_path("docs/shadow")))
-    for path in _glob_files(_repo_path("docs/review"), "rev-*.py"):
-        if _delete_file(path):
-            deleted.append(path)
-    for path in _glob_files(_repo_path("docs/review"), "review-*.py"):
-        if _delete_file(path):
-            deleted.append(path)
-
-    deleted.extend(_clear_directory(_repo_path("docs/builder/temp-tests")))
-    for path in _glob_files(_repo_path("docs/builder"), "bld-*.py"):
-        if _delete_file(path):
-            deleted.append(path)
-    for path in _glob_files(_repo_path("docs/builder"), "review-*.py"):
-        if _delete_file(path):
-            deleted.append(path)
-
-    dicta = _repo_path("docs/bug_hunt/dicta.md")
-    if _delete_file(dicta):
-        deleted.append(dicta)
-    for path in _glob_files(_repo_path("docs/bug_hunt"), "bug_hunt.*.md"):
-        if _delete_file(path):
-            deleted.append(path)
+    for directory in CLEAR_DIRECTORIES:
+        deleted.extend(_clear_directory(_repo_path(directory)))
+    for directory, pattern in FILE_GLOBS:
+        for path in _glob_files(_repo_path(directory), pattern):
+            if _delete_file(path):
+                deleted.append(path)
 
     return deleted
 

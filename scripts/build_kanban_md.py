@@ -13,9 +13,10 @@ from build_kanban_html import configure_django, fetch_dashboard_data
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"
 KANBAN_PAGE_URL = "https://riodw.github.io/django-strawberry-framework/"
+GITHUB_BLOB_URL = "https://github.com/riodw/django-strawberry-framework/blob/main"
 CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
 CARD_ID_RE = re.compile(
-    r"\b(?:TODO|WIP|BLOCKED|DONE)(?:-[A-Z]+)?-\d{3}-\d+\.\d+\.\d+\b",
+    r"\b(?:TODO|WIP|BACKLOG|BLOCKED|DONE)(?:-[A-Z]+)?-\d{3}-\d+\.\d+\.\d+\b",
 )
 LINK_DEFINITIONS_KEY = "link-definitions"
 COLUMN_DOC_KEYS = {
@@ -53,6 +54,28 @@ def card_key(card: dict[str, Any]) -> str:
 def card_url(card: dict[str, Any]) -> str:
     """Return the published dashboard URL for ``card``."""
     return f"{KANBAN_PAGE_URL}#{card['slug']}"
+
+
+def spec_path_from_url(url: str) -> str:
+    """Return the repo path from a GitHub ``blob/main`` URL."""
+    prefix = f"{GITHUB_BLOB_URL}/"
+    if not url.startswith(prefix):
+        return ""
+    return url.removeprefix(prefix)
+
+
+def spec_paths_for_card(card: dict[str, Any]) -> list[str]:
+    """Return the DB-backed spec path for ``card``, when it has one."""
+    spec = card.get("spec")
+    if not spec:
+        return []
+    db_path = spec_path_from_url(spec.get("url", ""))
+    return [db_path] if db_path else []
+
+
+def spec_link(path: str) -> str:
+    """Return a Markdown link to a repository spec path."""
+    return f"[{Path(path).name}]({GITHUB_BLOB_URL}/{path})"
 
 
 def card_column_key(card: dict[str, Any]) -> str:
@@ -192,6 +215,30 @@ def render_doc(doc: dict[str, Any]) -> list[str]:
     return lines
 
 
+def render_spec_map(dashboard_data: dict[str, Any]) -> list[str]:
+    """Render the WIP/DONE card-to-spec map."""
+    cards = [card for card in dashboard_data["cards"] if card["status"]["key"] in {"wip", "done"}]
+    cards = sorted(
+        cards,
+        key=lambda card: (
+            0 if card["status"]["key"] == "wip" else 1,
+            -int(card["number"]) if card["status"]["key"] == "done" else int(card["number"]),
+        ),
+    )
+    lines = [
+        "## WIP / DONE spec map",
+        "",
+        "| Card | Spec file |",
+        "| --- | --- |",
+    ]
+    for card in cards:
+        specs = spec_paths_for_card(card)
+        spec_text = "<br>".join(spec_link(path) for path in specs) if specs else "No dedicated spec"
+        lines.append(f"| `{card_key(card)}` — {card['title']} | {spec_text} |")
+    lines.append("")
+    return lines
+
+
 def render_card(card: dict[str, Any]) -> list[str]:
     """Render a kanban card with its lookup metadata and child rows."""
     text_replacements, token_replacements = card_reference_replacements(card)
@@ -224,8 +271,10 @@ def render_card(card: dict[str, Any]) -> list[str]:
     labels = sorted(card.get("labels", []), key=lambda label: label["key"])
     if labels:
         lines.append("- Labels: " + ", ".join(f"`{label['key']}`" for label in labels))
-    if card.get("spec"):
-        lines.append(f"- Spec: [{card['spec']['name']}]({card['spec']['url']})")
+    specs = spec_paths_for_card(card)
+    if specs:
+        label = "Spec" if len(specs) == 1 else "Specs"
+        lines.append(f"- {label}: " + ", ".join(spec_link(path) for path in specs))
     lines.append("")
 
     planning_note = card.get("planningNote") or ""
@@ -323,21 +372,12 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
         if doc["kind"]["key"] == "column" and doc["key"] not in COLUMN_DOC_KEYS:
             continue
         rendered.extend(render_doc(doc))
+        if doc["key"] == "board-columns":
+            rendered.extend(render_spec_map(dashboard_data))
         if doc["key"] in COLUMN_DOC_KEYS:
             for card in sorted_column_cards(doc["key"], cards_by_column.get(doc["key"], [])):
                 rendered.extend(render_card(card))
                 rendered_card_ids.add(card["id"])
-
-    remaining_cards = [
-        card
-        for cards in cards_by_column.values()
-        for card in cards
-        if card["id"] not in rendered_card_ids
-    ]
-    if remaining_cards:
-        rendered.extend(["## Backlog", ""])
-        for card in sorted_column_cards("backlog", remaining_cards):
-            rendered.extend(render_card(card))
 
     if link_definitions is not None:
         rendered.extend(render_doc(link_definitions))
@@ -353,9 +393,14 @@ def main() -> None:
     dashboard_data = fetch_dashboard_data()
     markdown = render_markdown(dashboard_data)
     args.md.write_text(markdown, encoding="utf-8")
+    exported_card_count = sum(
+        1 for card in dashboard_data["cards"] if card_column_key(card) != "backlog"
+    )
+    excluded_card_count = len(dashboard_data["cards"]) - exported_card_count
     print(
         "Wrote "
-        f"{len(dashboard_data['cards'])} cards and "
+        f"{exported_card_count} cards "
+        f"(excluded {excluded_card_count} backlog cards) and "
         f"{len(dashboard_data['boardDocs'])} board docs to {args.md}",
     )
 

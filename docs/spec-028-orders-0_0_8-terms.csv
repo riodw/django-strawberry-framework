@@ -1,0 +1,42 @@
+term,anchor,notes
+OrderSet,orderset,The declarative ordering class this card ships; the primary consumer-facing symbol.
+RelatedOrder,relatedorder,Cross-relation ordering traversal accepting class / absolute path / unqualified name.
+Meta.orderset_class,metaorderset_class,The Meta key this card promotes out of DEFERRED_META_KEYS.
+DjangoType,djangotype,The model-backed Strawberry type this card extends with an ordering sidecar.
+Meta.model,metamodel,The required Meta key on every OrderSet declaration; new devs need it to write their first OrderSet.
+Meta.optimizer_hints,metaoptimizer_hints,Cited as the hint surface order clauses compose with at queryset-translation time.
+Meta.interfaces,metainterfaces,Shipped 0.0.5 surface; same promotion gate pattern this card uses per Decision 7.
+Meta.primary,metaprimary,The multi-DjangoType-per-model design whose TypeRegistry keying convention this card respects per Decision 9.
+finalize_django_types,finalize_django_types,The synchronization point that runs the phase-2.5 order-binding pass.
+DjangoOptimizerExtension,djangooptimizerextension,Cited because order clauses must compose with the optimizer's queryset diffing.
+Queryset diffing,queryset-diffing,Optimizer cooperation property order clauses must preserve.
+OptimizerHint,optimizerhint,The hint primitive whose Meta.optimizer_hints declarations interact with this card's order clauses.
+only() projection,only-projection,Optimizer projection contract; order clauses compose with .only(...) projections.
+get_queryset visibility hook,get_queryset-visibility-hook,Pre-order visibility scoping; composes with check_*_permission gates per Decision 8.
+Relay Node integration,relay-node-integration,Cited because ordering does NOT consult Relay shape (no Relay-vs-scalar branch).
+Relation handling,relation-handling,FK / OneToOne / M2M / reverse-relation traversal the package already supports; RelatedOrder binds onto this same shape.
+ConfigurationError,configurationerror,Raised at type-creation/finalization for invalid order declarations.
+Choice enum generation,choice-enum-generation,Cited because the ordering side does not need to consult choice enums (ORDER BY status orders by stored DB value).
+Scalar field conversion,scalar-field-conversion,The SCALAR_MAP the order field discovery consults to confirm a column is a real model field.
+FilterSet,filterset,Sibling Layer-3 subsystem shipped in DONE-027-0.0.8; the order side mirrors its architecture via class substitution.
+RelatedFilter,relatedfilter,Sibling Layer-1 surface; RelatedOrder ports the same shape with the orderset substitution.
+filter_input_type,filter_input_type,Sibling consumer helper from DONE-027-0.0.8 that order_input_type mirrors per Decision 11.
+Meta.filterset_class,metafilterset_class,Sibling Meta key shipped in DONE-027-0.0.8; promoted via the same gate Decision 7 uses for orderset_class.
+DjangoConnectionField,djangoconnectionfield,0.0.9 consumer of this card's factory machinery; out of scope here.
+DjangoNodeField,djangonodefield,0.0.9 root single-node field; out of scope.
+DjangoConnection,djangoconnection,0.0.9 return-type alias; out of scope.
+Connection-aware optimizer planning,connection-aware-optimizer-planning,Future 0.0.9 optimizer feature; out of scope.
+DjangoListField,djangolistfield,Shipped 0.0.7 surface; argument injection deferred to 0.0.9 per Non-goals.
+Schema export management command,schema-export-management-command,Shipped 0.0.7 surface cited in Problem statement.
+AggregateSet,aggregateset,Future 0.1.3 Layer-3 sidecar; cited as forward composition surface.
+RelatedAggregate,relatedaggregate,Future 0.1.3 aggregate-relation symbol; out of scope.
+Meta.aggregate_class,metaaggregate_class,Future 0.1.3 Meta key; out of scope.
+get_child_queryset,get_child_queryset,Future cascade hook on AggregateSet; cited in Out of scope.
+apply_cascade_permissions,apply_cascade_permissions,Future 0.0.10 permissions hook; cited as forward composition target.
+Per-field permission hooks,per-field-permission-hooks,Future 0.0.10 hooks that compose with check_*_permission gates.
+FieldSet,fieldset,Future 0.1.1 Layer-3 sidecar; out of scope.
+Meta.fields_class,metafields_class,Future 0.1.1 Meta key; out of scope.
+Meta.search_fields,metasearch_fields,Future 0.1.2 surface; out of scope here.
+Multi-database cooperation,multi-database-cooperation,Shipped 0.0.7 contract order clauses preserve without retrofit.
+Definition-order independence,definition-order-independence,The DONE-010-0.0.4 invariant the lazy-resolution pipeline preserves for cross-module RelatedOrder references.
+Cross-subsystem invariants,cross-subsystem-invariants,The deferred-Meta-key promotion rule (Decision 7) lives here; same gate pattern across all Layer-3 sidecars.

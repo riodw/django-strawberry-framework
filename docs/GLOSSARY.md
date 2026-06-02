@@ -88,21 +88,21 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Meta.model`](#metamodel) | shipped |
 | [`Meta.name`](#metaname) | shipped |
 | [`Meta.optimizer_hints`](#metaoptimizer_hints) | shipped (`0.0.3`) |
-| [`Meta.orderset_class`](#metaorderset_class) | planned for `0.0.8` |
+| [`Meta.orderset_class`](#metaorderset_class) | shipped (`0.0.8`) |
 | [`Meta.primary`](#metaprimary) | shipped (`0.0.6`) |
 | [`Meta.search_fields`](#metasearch_fields) | planned for `0.1.2` |
 | [Multi-database cooperation](#multi-database-cooperation) | shipped (`0.0.7`) |
 | [`only()` projection](#only-projection) | shipped (`0.0.2`) |
 | [`OptimizerHint`](#optimizerhint) | shipped (`0.0.3`) |
-| [`Ordering`](#ordering) | planned for `0.0.8` |
-| [`OrderSet`](#orderset) | planned for `0.0.8` |
-| [`order_input_type`](#order_input_type) | planned for `0.0.8` |
+| [`Ordering`](#ordering) | shipped (`0.0.8`) |
+| [`OrderSet`](#orderset) | shipped (`0.0.8`) |
+| [`order_input_type`](#order_input_type) | shipped (`0.0.8`) |
 | [Per-field permission hooks](#per-field-permission-hooks) | planned for `0.0.10` |
 | [Plan cache](#plan-cache) | shipped (`0.0.3`) |
 | [Queryset diffing](#queryset-diffing) | shipped (`0.0.3`) |
 | [`RelatedAggregate`](#relatedaggregate) | planned for `0.1.3` |
 | [`RelatedFilter`](#relatedfilter) | shipped (`0.0.8`) |
-| [`RelatedOrder`](#relatedorder) | planned for `0.0.8` |
+| [`RelatedOrder`](#relatedorder) | shipped (`0.0.8`) |
 | [Relation handling](#relation-handling) | shipped (`0.0.1`+) |
 | [Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
 | [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.12` |
@@ -696,20 +696,15 @@ Validation: hint field names must exist on the model; hint values must be `Optim
 
 ## `Meta.orderset_class`
 
-**Status:** planned for `0.0.8`.
+**Status:** shipped (`0.0.8`).
 
-References an [`OrderSet`](#orderset) subclass that defines ordering input for this `DjangoType`. Surfaces as the `orderBy:` argument on [`DjangoConnectionField`](#djangoconnectionfield).
+References an [`OrderSet`](#orderset) subclass that defines ordering input for this `DjangoType`. Describes the consumer-facing wiring and the promotion-from-`DEFERRED_META_KEYS` gate.
 
-**See also:** [`OrderSet`](#orderset).
+Consumer wiring: declaring `Meta.orderset_class = MyOrder` surfaces an `orderBy: [<T>OrderInputType!]` argument on plain `@strawberry.field` resolvers that opt in via `order_by: list[order_input_type(MyOrder)] | None = None` (and on [`DjangoConnectionField`](#djangoconnectionfield) once it ships in `0.0.9`). The argument is list-shaped — list-element order is the multi-field tie-breaker mechanism.
 
-<!-- TODO(spec-028-orders-0_0_8 Slice 5): Flip Meta.orderset_class, Ordering,
-OrderSet, order_input_type, and RelatedOrder to shipped (0.0.8) together. Do
-not touch package version fields unless the maintainer explicitly gives the
-version-bump command. Pseudo: update the Index rows, the Ordering browse
-category, and each entry body with the shipped list-shaped orderBy contract,
-active-input-only permission gates, active RelatedOrder branch gate, parked
-input-class namespace lifecycle, and NULLS-positioning Ordering.resolve
-behavior. -->
+Promotion gate: no longer in `DEFERRED_META_KEYS` since `0.0.8`. Declaring the key against `0.0.7` raised a [`ConfigurationError`](#configurationerror); against `0.0.8` it produces a working order surface. Finalizer phase 2.5 owns the binding via `_bind_ordersets()`: each declared `Meta.orderset_class` value has its `_owner_definition` wired to the owning [`DjangoType`](#djangotype), its `get_fields()` resolved after all owners are bound, and the generated input class materialized as a module global of `django_strawberry_framework.orders.inputs` before `strawberry.Schema(...)` runs.
+
+**See also:** [`OrderSet`](#orderset) · [`RelatedOrder`](#relatedorder) · [`order_input_type`](#order_input_type) · [`Ordering`](#ordering) · [`finalize_django_types`](#finalize_django_types).
 
 ## `Meta.primary`
 
@@ -789,25 +784,29 @@ is rejected before the hint can reach `Meta.optimizer_hints`.
 
 ## `Ordering`
 
-**Status:** planned for `0.0.8`.
+**Status:** shipped (`0.0.8`).
 
-Direction enum used as the leaf value in generated order input types. Members: `ASC`, `DESC`, `ASC_NULLS_FIRST`, `ASC_NULLS_LAST`, `DESC_NULLS_FIRST`, `DESC_NULLS_LAST`. Its `resolve(field_path)` helper returns the Django `OrderBy` expression used by [`OrderSet`](#orderset) when applying queryset ordering.
+Direction enum used as the leaf value in generated order input types. Six members: `ASC`, `DESC`, `ASC_NULLS_FIRST`, `ASC_NULLS_LAST`, `DESC_NULLS_FIRST`, `DESC_NULLS_LAST`. The `resolve(field_path)` method returns Django `OrderBy` expressions: `ASC` / `DESC` map to `F(field_path).asc()` / `F(field_path).desc()` (no NULLS positioning); the four NULLS-positioning members map to `F(field_path).asc(nulls_first=True)` / `F(field_path).asc(nulls_last=True)` / `F(field_path).desc(nulls_first=True)` / `F(field_path).desc(nulls_last=True)` respectively. [`OrderSet`](#orderset) calls `Ordering.resolve(...)` for every active input field and passes the resulting `OrderBy` expressions to `queryset.order_by(...)` in list-element order.
 
 **See also:** [`OrderSet`](#orderset) · [`order_input_type`](#order_input_type).
 
 ## `OrderSet`
 
-**Status:** planned for `0.0.8`.
+**Status:** shipped (`0.0.8`).
 
-Declarative ordering with `Meta.fields` (list form `["name", "created_date"]` or `"__all__"` shorthand), [`RelatedOrder`](#relatedorder) for cross-relation traversal, `check_*_permission` gates. Reuses the filtering subsystem's lazy-resolution architecture verbatim with `OrderSet` substituted for `FilterSet`.
+Declarative `Meta.model` / `Meta.fields` (list form or `"__all__"` shorthand for every column-backed model field — includes forward FK / OneToOne columns; excludes reverse relations and M2M managers); [`RelatedOrder`](#relatedorder) for cross-relation traversal; `check_*_permission` denial gates with **active-input-only scope** plus active-branch double-dispatch for `RelatedOrder` branches (parent's `check_<branch>_permission` fires alongside child orderset's field gates, deduped per `(OrderSet class, method name)`); list-shaped `orderBy:` argument with list-element-order tie-breaker mechanism; six-member [`Ordering`](#ordering) enum with NULLS positioning; cycle-safe lazy resolution via the five-layer port + Layer 6 deferred to `0.0.9`.
+
+The resolver-facing API is the classmethod pair `OrderSet.apply_sync(input_value, queryset, info)` and `OrderSet.apply_async(input_value, queryset, info)` (sync resolvers call the former; async resolvers await the latter), mirroring the shipped filter subsystem's shape.
 
 **See also:** [`Meta.orderset_class`](#metaorderset_class) · [`RelatedOrder`](#relatedorder) · [`Ordering`](#ordering) · [`order_input_type`](#order_input_type) · [`FilterSet`](#filterset).
 
 ## `order_input_type`
 
-**Status:** planned for `0.0.8`.
+**Status:** shipped (`0.0.8`).
 
-Consumer helper from `django_strawberry_framework.orders` that returns the element annotation for resolver arguments: `Annotated["<Name>OrderInputType", strawberry.lazy("django_strawberry_framework.orders.inputs")]`. Consumers wrap that element type as `list[order_input_type(MyOrder)] | None` so the GraphQL surface exposes the list-shaped `orderBy: [<T>OrderInputType!]` argument. The helper validates its `OrderSet` argument eagerly and lets finalization catch helper-referenced order sets that were never wired through [`Meta.orderset_class`](#metaorderset_class).
+Factory returning the **element type** `Annotated["<Name>OrderInputType", strawberry.lazy("django_strawberry_framework.orders.inputs")]` for resolver-argument annotations; eager validation; consumer usage `order_by: list[order_input_type(BranchOrder)] | None = None` (the list wrap matches the `orderBy: [<T>OrderInputType!]` list-shaped GraphQL argument); orphan validation at finalize.
+
+The helper validates its [`OrderSet`](#orderset) argument eagerly so a typo at the resolver signature site fails loud at module import. Finalize-time orphan validation catches helper-referenced order sets that were never wired through [`Meta.orderset_class`](#metaorderset_class) — tracked via a `_helper_referenced_ordersets` ledger that `registry.clear()` co-clears.
 
 **See also:** [`OrderSet`](#orderset) · [`Ordering`](#ordering) · [`Meta.orderset_class`](#metaorderset_class).
 
@@ -879,9 +878,11 @@ An explicit `queryset=` argument is a **filter-scope constraint** intersected wi
 
 ## `RelatedOrder`
 
-**Status:** planned for `0.0.8`.
+**Status:** shipped (`0.0.8`).
 
-Field declaration on an [`OrderSet`](#orderset) for cross-relation ordering traversal. Same lazy-resolution semantics as [`RelatedFilter`](#relatedfilter).
+Field declaration on an [`OrderSet`](#orderset) for cross-relation ordering traversal. Accepts a target `OrderSet` class, an absolute import path (`"apps.library.orders_genre.GenreOrder"`), or an unqualified name (`"BookOrder"`) for same-module circular references. The shared Layer-2 module-fallback resolution is a sibling import from `sets_mixins.LazyRelatedClassMixin` — the neutral shared module per the package's set-family discipline, not `filters.base` as named in earlier revisions; the unqualified-name form is resolved lazily — try as an absolute import path first, fall back to prepending the binding `OrderSet`'s `__module__`, fail loud with a [`ConfigurationError`](#configurationerror) naming both attempts if neither resolves.
+
+Position-side-channel note: ordering by a hidden related column changes the *position* of visible parent rows based on data the user cannot read. The consumer-side defense is the parent-side `check_<branch>_permission` gate on the active `RelatedOrder` branch — the apply pipeline fires the parent's branch gate alongside the child orderset's field gates (active-branch double-dispatch) so the parent can deny ordering through a sensitive relation.
 
 **See also:** [`OrderSet`](#orderset) · [`RelatedFilter`](#relatedfilter).
 

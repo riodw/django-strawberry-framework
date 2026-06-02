@@ -187,7 +187,7 @@ django_graphene_filters/
 
 ## django_strawberry_framework (current on-disk layout)
 
-The shared infrastructure plus model/type, optimizer, filters, testing, and utility subpackages are on disk: `types/`, `optimizer/`, `filters/`, `testing/`, and `utils/`. Every other module shown in the target package layout below — the remaining query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the full test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
+The shared infrastructure plus model/type, optimizer, filters, orders, testing, and utility subpackages are on disk: `types/`, `optimizer/`, `filters/`, `orders/`, `testing/`, and `utils/`. Every other module shown in the target package layout below — the remaining query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the full test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
 The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`, `apps.scalars`, `apps.kanban`, `apps.glossary`). `apps.products` is the catalog example (Category / Item / Property / Entry); `apps.library` is the deeper relation example (Branch / Shelf / Book / Patron / Loan, with `Patron.lifetime_fines_cents` as a real-domain `BigIntegerField → BigInt` proof); `apps.scalars` is a test substrate carrying the paired `ScalarSpecimen` (every scalar non-null + self-FK) / `NullableScalarSpecimen` (every scalar nullable + cross-model FK to `ScalarSpecimen` with `on_delete=SET_NULL`) layout that pins every non-trivial converter row in both shapes via live `/graphql/` tests; `apps.kanban` is the relational source for the exported root `KANBAN.md` and owns the shared `BoardDoc` prose-section table; `apps.glossary` is the relational source for glossary terms and spec-term audit rows, while its generic prose sections share `BoardDoc` under `namespace="glossary"`. `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
 
 ```text
@@ -211,7 +211,7 @@ django_strawberry_framework/
 ├── types/                   # DjangoType subsystem (Layer 2) — shipped
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
-│   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
+│   ├── converters.py        # convert_scalar, convert_choices_to_enum, resolved_relation_annotation
 │   ├── definition.py        # DjangoTypeDefinition (canonical per-type metadata with Meta.primary flag and forward-reserved Layer-3 slots)
 │   ├── finalizer.py         # finalize_django_types(): _audit_primary_ambiguity + Phase 1 unresolved-target detection + Phase 2 resolver attachment + Phase 2.5 interfaces/Relay + Phase 3 strawberry.type decoration
 │   ├── relations.py         # PendingRelationAnnotation sentinel + metaclass
@@ -231,6 +231,12 @@ django_strawberry_framework/
 │   ├── sets.py              # FilterSet + FilterSetMetaclass + apply_sync / apply_async + filter_queryset tree-form override
 │   ├── factories.py         # FilterArgumentsFactory BFS + _dynamic_filterset_cache
 │   └── inputs.py            # input-class module-globals namespace + LOOKUP_NAME_MAP / LOOKUP_PREFIXES / convert_filter_to_input_annotation / normalize_input_value / construct_search
+├── orders/                  # Ordering subsystem (Layer 3 read-side) — shipped 0.0.8
+│   ├── __init__.py          # OrderSet, RelatedOrder, Ordering, order_input_type re-exports + _helper_referenced_ordersets ledger
+│   ├── base.py              # RelatedOrder primitive; LazyRelatedClassMixin re-imported from ..sets_mixins
+│   ├── sets.py              # OrderSet + OrderSetMetaclass + apply_sync / apply_async + check_permissions active-input-only scope
+│   ├── factories.py         # OrderArgumentsFactory BFS + _type_orderset_registry (Layer 6 deferred to 0.0.9)
+│   └── inputs.py            # input-class module-globals namespace + Ordering enum + materialize_input_class + clear_order_input_namespace + normalize_input_value
 └── utils/                   # cross-cutting helpers
     ├── __init__.py
     ├── relations.py         # relation_kind / RelationKind / is_many_side_relation_kind
@@ -261,7 +267,7 @@ django_strawberry_framework/
 ├── types/                   # DjangoType subsystem (Layer 2)
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
-│   ├── converters.py        # convert_scalar, convert_choices_to_enum, convert_relation
+│   ├── converters.py        # convert_scalar, convert_choices_to_enum, resolved_relation_annotation
 │   ├── definition.py        # DjangoTypeDefinition (canonical per-type metadata)
 │   ├── finalizer.py         # finalize_django_types() three-phase finalizer
 │   ├── relations.py         # PendingRelationAnnotation sentinel + metaclass
@@ -275,12 +281,6 @@ django_strawberry_framework/
 │   ├── plans.py             # OptimizationPlan, Prefetch chain helpers
 │   ├── hints.py             # OptimizerHint typed wrapper
 │   └── field_meta.py        # FieldMeta precomputed field metadata
-├── orders/                  # [alpha] Ordering subsystem (Layer 3 read-side)
-│   ├── __init__.py
-│   ├── base.py              # Order classes
-│   ├── sets.py              # OrderSet
-│   ├── factories.py         # GraphQL-arguments factory
-│   └── inputs.py            # TODO(spec-028-orders-0_0_8 Slice 5): flip orders/ to current on-disk layout with mirrored tests/orders tree; do not touch package version fields unless explicitly commanded
 ├── aggregates/              # [beta] Aggregation subsystem (Layer 3)
 │   ├── __init__.py
 │   ├── base.py              # Sum/Count/Avg/Min/Max/GroupBy result types
@@ -354,7 +354,7 @@ tests/                       # Package-internal tests (current state)
 ├── types/                   # mirrors django_strawberry_framework/types/
 │   ├── __init__.py
 │   ├── test_base.py         # ← DjangoType + Meta validation + scalar/relation synthesis
-│   ├── test_converters.py   # ← convert_scalar / convert_relation / convert_choices_to_enum
+│   ├── test_converters.py   # ← convert_scalar / resolved_relation_annotation / convert_choices_to_enum
 │   ├── test_definition_order.py        # ← consumer override contract (four-corner matrix) + definition-order-independent relation finalization
 │   ├── test_definition_order_schema.py # ← schema-build / strawberry.type decoration interactions
 │   ├── test_generic_foreign_key.py     # ← GenericForeignKey rejection contract
@@ -376,6 +376,14 @@ tests/                       # Package-internal tests (current state)
 │   ├── test_factories.py    # ← FilterArgumentsFactory BFS + _dynamic_filterset_cache
 │   ├── test_inputs.py       # ← input-class module-globals namespace + LOOKUP_NAME_MAP / convert_filter_to_input_annotation / normalize_input_value
 │   └── test_finalizer.py    # ← finalizer phase 2.5 binding + owner-aware materialization + filter_input_type orphan validation
+├── orders/                  # mirrors django_strawberry_framework/orders/
+│   ├── __init__.py
+│   ├── test_base.py         # ← RelatedOrder + LazyRelatedClassMixin sibling-import behaviour
+│   ├── test_sets.py         # ← OrderSet + OrderSetMetaclass + apply_sync / apply_async + active-input-only check_permissions
+│   ├── test_factories.py    # ← OrderArgumentsFactory BFS + per-module input-class namespace
+│   ├── test_inputs.py       # ← Ordering enum + materialize_input_class + clear_order_input_namespace + normalize_input_value + order_input_type
+│   ├── test_finalizer.py    # ← finalizer phase 2.5 binding + Meta.orderset_class promotion + orphan validation
+│   └── test_composition.py  # ← filter + order composition smoke (Slice 6)
 └── utils/                   # mirrors django_strawberry_framework/utils/
     ├── __init__.py
     ├── test_relations.py    # ← relation_kind / is_many_side_relation_kind
@@ -458,10 +466,6 @@ tests/                       # Package-internal tests (target as Layer-3 subsyst
 │   ├── test_sets.py
 │   ├── test_factories.py
 │   └── test_inputs.py
-├── orders/
-│   ├── test_base.py
-│   ├── test_sets.py
-│   └── test_factories.py
 ├── aggregates/
 │   ├── test_base.py
 │   ├── test_sets.py

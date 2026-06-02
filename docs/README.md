@@ -87,13 +87,6 @@ For the current capability snapshot — what the package can actually do in the 
 
 A quick summary:
 
-<!-- TODO(spec-028-orders-0_0_8 Slice 5): after the ordering subsystem lands and
-ships in 0.0.8, move OrderSet / RelatedOrder / Ordering / order_input_type /
-Meta.orderset_class into the shipped list and remove orders from the 0.1.0
-beta bullet. The filter symbols already moved when DONE-027-0.0.8 landed. Do
-not touch package version fields unless the maintainer explicitly gives the
-version-bump command. -->
-
 **Shipped today** (`0.0.8`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
 - scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, file/image, choice enums)
@@ -112,11 +105,12 @@ version-bump command. -->
 - `Django AppConfig` — `django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` so consumers can list `"django_strawberry_framework"` in `INSTALLED_APPS` and Django's check / signal hooks resolve through it (new in `0.0.7`).
 - `manage.py export_schema` — Django management command that prints or writes the GraphQL SDL for a `strawberry.Schema` symbol (positional dotted path, optional `--path`); migration-parity with `strawberry-django`'s command of the same name. See [`GLOSSARY.md#schema-export-management-command`][glossary-schema-export-management-command].
 - filtering subsystem (new in `0.0.8`) — `FilterSet` declarative filter classes with `Meta.fields` (dict / `"__all__"` shorthand) and the full `django-filter` lookup surface; `RelatedFilter` for cross-relation traversal (class / absolute import path / unqualified-name); `Meta.filterset_class` consumer wiring; the `filter_input_type` resolver-argument helper; finalizer phase-2.5 binding with orphan validation; per-field `check_*_permission` denial gates with active-input-only scope; clean composition with `get_queryset` visibility and the optimizer. See [`GLOSSARY.md#filterset`][glossary-filterset].
+- ordering subsystem (new in `0.0.8`) — `OrderSet` declarative ordering classes with `Meta.fields` (list form or `"__all__"` shorthand for every column-backed model field); `RelatedOrder` cross-relation ordering traversal (class / absolute import path / unqualified-name); `Meta.orderset_class` consumer wiring (promoted out of `DEFERRED_META_KEYS`); the public `Ordering` enum (six members with NULLS positioning); the `order_input_type` resolver-argument helper; finalizer phase-2.5 binding with orphan validation; per-field `check_*_permission` denial gates with active-input-only scope plus active-branch dispatch on `RelatedOrder` branches; clean composition with the shipped filter subsystem and the optimizer. See [`GLOSSARY.md#orderset`][glossary-orderset].
 
 
 **Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
 - `DjangoConnectionField` (Relay connection)
-- orders and permissions / cascade permissions
+- permissions / cascade permissions
 - mutations + auto-generated `Input` types, plus form-based and DRF-serializer-based mutation flavors
 - `Upload` scalar and file-field mapping
 - auth mutations (`login` / `logout` / `register`) and `current_user` query
@@ -262,6 +256,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
 [glossary-filterset]: GLOSSARY.md#filterset
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
+[glossary-orderset]: GLOSSARY.md#orderset
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
 [glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command
 

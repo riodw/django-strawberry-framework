@@ -6,12 +6,16 @@ on:
     paths:
       - ".github/workflows/kanban-pages.yml"
       - "django_strawberry_framework/**"
+      - "docs/GLOSSARY.md"
+      - "docs/GLOSSARY2.md"
       - "examples/fakeshop/apps/kanban/**"
+      - "examples/fakeshop/apps/glossary/**"
       - "examples/fakeshop/config/**"
       - "examples/fakeshop/db.sqlite3"
       - "KANBAN.html"
       - "KANBAN.md"
       - "pyproject.toml"
+      - "scripts/build_glossary_md.py"
       - "scripts/build_kanban_html.py"
       - "scripts/build_kanban_md.py"
       - "uv.lock"
@@ -50,6 +54,7 @@ jobs:
           cp KANBAN.html _site/index.html
           uv run python scripts/build_kanban_html.py --html _site/index.html
           uv run python scripts/build_kanban_md.py --md _site/KANBAN.md
+          uv run python scripts/build_glossary_md.py --md _site/GLOSSARY2.md
           touch _site/.nojekyll
 
       - name: Upload GitHub Pages artifact

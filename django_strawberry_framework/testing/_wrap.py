@@ -78,16 +78,14 @@ def safe_wrap_connection_method(
     same isinstance check at its own wrap site. See
     <https://github.com/django-commons/django-debug-toolbar/blob/main/debug_toolbar/panels/sql/tracking.py>.
 
-    Restoration semantics
-    ---------------------
-
-    This helper handles only the wrap step. Consumers who need to
-    restore the original method in ``tearDown`` are responsible for
-    saving it beforehand:
+    **Restoration semantics.** This helper handles only the wrap step.
+    Consumers who need to restore the original method in ``tearDown``
+    are responsible for saving it beforehand:
 
     .. code-block:: python
 
         from django.db import connections
+        from django.test import TransactionTestCase
         from django_strawberry_framework.testing import safe_wrap_connection_method
 
 

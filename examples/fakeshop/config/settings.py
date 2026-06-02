@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "apps.products.apps.ProductsConfig",
     "apps.scalars.apps.ScalarsConfig",
     "apps.kanban.apps.KanbanConfig",
+    "apps.glossary.apps.GlossaryConfig",
 ]
 
 MIDDLEWARE = [

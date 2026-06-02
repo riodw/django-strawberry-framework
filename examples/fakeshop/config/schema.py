@@ -10,6 +10,7 @@ and is left out for now.
 """
 
 import strawberry
+from apps.glossary.schema import Query as GlossaryQuery
 from apps.kanban.schema import Query as KanbanQuery
 from apps.library.schema import Query as LibraryQuery
 from apps.products.schema import Query as ProductsQuery
@@ -23,7 +24,7 @@ from django_strawberry_framework import (
 
 
 @strawberry.type
-class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery):
+class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuery):
     """Top-level Query — extends each app's Query."""
 
 

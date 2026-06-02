@@ -3,8 +3,9 @@
 Pins Decision 7 (spec #"Decision 7: optimizer and projection invariants"): when a Relay-declared type selects
 ``id`` the optimizer's ``only()`` projection must still include the
 concrete pk attname; ``_resolve_id_default`` must read from the loaded
-``__dict__`` cache without triggering a lazy load; and relation traversal
-across Relay-declared targets must remain unchanged.
+``__dict__`` cache without triggering a lazy load. Ordinary relation traversal
+across Relay-declared fakeshop targets is pinned through live HTTP in
+``examples/fakeshop/test_query/test_products_api.py``.
 """
 
 from types import SimpleNamespace
@@ -12,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 import strawberry
 from apps.products import services
-from apps.products.models import Category, Item
+from apps.products.models import Category
 from django.db import connection, models
 from django.test.utils import CaptureQueriesContext
 from strawberry import relay
@@ -80,42 +81,6 @@ def test_relay_id_does_not_trigger_lazy_load():
     )
     result = schema.execute_sync("{ allCategories { id name } }")
     assert result.errors is None
-
-
-@pytest.mark.django_db
-def test_relay_target_relation_planning_unchanged(django_assert_num_queries):
-    """Forward FK traversal whose target is a Relay-declared type still plans ``select_related``."""
-    services.seed_data(1)
-
-    class CategoryNode(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-            interfaces = (relay.Node,)
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "category")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-    ctx = SimpleNamespace()
-    with django_assert_num_queries(1):
-        result = schema.execute_sync(
-            "{ allItems { name category { name } } }",
-            context_value=ctx,
-        )
-    assert result.errors is None
-    plan = ctx.dst_optimizer_plan
-    # ``select_related`` plans the forward FK even though the target is Relay-declared.
-    assert "category" in plan.select_related
 
 
 @pytest.mark.django_db

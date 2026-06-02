@@ -1599,11 +1599,7 @@ def test_apply_hint_prefetch_obj_misconfigured_lookup_leaves_plan_clean():
             return False
 
     plan = OptimizationPlan()
-    baseline = (
-        list(plan.only_fields),
-        list(plan.planned_resolver_keys),
-        plan.cacheable,
-    )
+    baseline = (list(plan.only_fields), list(plan.planned_resolver_keys), plan.cacheable)
 
     explicit = Prefetch("unrelated_relation", queryset=Entry.objects.all())
     hint = OptimizerHint.prefetch(explicit)
@@ -1629,11 +1625,7 @@ def test_apply_hint_prefetch_obj_misconfigured_lookup_leaves_plan_clean():
             resolver_identities=("ItemType.category@category",),
         )
 
-    assert (
-        list(plan.only_fields),
-        list(plan.planned_resolver_keys),
-        plan.cacheable,
-    ) == baseline
+    assert (list(plan.only_fields), list(plan.planned_resolver_keys), plan.cacheable) == baseline
 
 
 def test_ensure_connector_only_fields_adds_reverse_o2o_connector():

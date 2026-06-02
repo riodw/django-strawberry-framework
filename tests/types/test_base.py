@@ -198,11 +198,7 @@ def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance():
 
 @pytest.mark.parametrize(
     "deferred_key",
-    [
-        "aggregate_class",
-        "fields_class",
-        "search_fields",
-    ],
+    ["aggregate_class", "fields_class", "search_fields"],
 )
 def test_meta_rejects_each_deferred_key(deferred_key):
     """Every key in DEFERRED_META_KEYS must raise until the spec that owns it ships."""

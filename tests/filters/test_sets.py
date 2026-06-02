@@ -2106,10 +2106,7 @@ def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms():
 def test_iter_input_items_returns_pairs_for_plain_dict():
     """Dict input walks to ``list(input.items())`` verbatim."""
 
-    assert FilterSet._iter_input_items({"name": "x", "id": 1}) == [
-        ("name", "x"),
-        ("id", 1),
-    ]
+    assert FilterSet._iter_input_items({"name": "x", "id": 1}) == [("name", "x"), ("id", 1)]
 
 
 def test_iter_input_items_returns_empty_list_for_empty_dict():

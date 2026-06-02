@@ -115,7 +115,13 @@ class BookOrder(OrderSet):
 
     class Meta:
         model = models.Book
-        fields = ["id", "title", "subtitle", "circulation_status", "shelf__code"]
+        fields = [
+            "id",
+            "title",
+            "subtitle",
+            "circulation_status",
+            "shelf__code",
+        ]
 
 
 class LoanOrder(OrderSet):

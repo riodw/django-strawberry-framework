@@ -1,8 +1,10 @@
-"""Live GraphQL HTTP tests for the products app filter surface.
+"""Live GraphQL HTTP tests for the products app API surface.
 
-Mirrors ``test_library_api.py``'s harness. Exercises the products
-filtersets wired in ``apps.products.schema`` end to end:
+Mirrors ``test_library_api.py``'s harness. Exercises the products schema
+wired in ``apps.products.schema`` end to end:
 
+* optimizer SQL-shape contracts that are reachable through the real
+  products GraphQL API;
 * the per-field ``check_name_permission`` gate on ``CategoryFilter`` (a
   ``DONE-021-0.0.8`` filter permission hook) -- including the regression
   guard that the gate now fires for NON-``exact`` lookups (``iContains``),
@@ -28,7 +30,9 @@ import pytest
 from apps.products import models
 from apps.products.services import create_users, seed_data
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches
 from strawberry import relay
 
@@ -87,6 +91,121 @@ def _staff_client() -> Client:
     client = Client()
     client.force_login(get_user_model().objects.get(username="staff_1"))
     return client
+
+
+def _global_id(type_name: str, pk: int) -> str:
+    return str(relay.GlobalID(type_name=type_name, node_id=str(pk)))
+
+
+@pytest.mark.django_db
+def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
+    seed_data(1)
+    expected = [
+        {"name": item.name, "category": {"name": item.category.name}}
+        for item in models.Item.objects.select_related("category").order_by("id")
+    ]
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allItems { name }
+              allItems { category { name } }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"] == {"allItems": expected}
+    assert len(captured) == 1, [query["sql"] for query in captured]
+    sql = captured[0]["sql"].lower()
+    assert "products_item" in sql
+    assert "join" in sql
+    assert "products_category" in sql
+
+
+@pytest.mark.django_db
+def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
+    seed_data(1)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allCategories {
+                name
+                items {
+                  name
+                  entries { value }
+                }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    categories = payload["data"]["allCategories"]
+    items = [item for category in categories for item in category["items"]]
+    entries = [entry for item in items for entry in item["entries"]]
+    assert len(categories) == models.Category.objects.count()
+    assert len(items) == models.Item.objects.count()
+    assert len(entries) == models.Entry.objects.count()
+    assert len(captured) == 3, [query["sql"] for query in captured]
+    assert "products_category" in captured[0]["sql"]
+    assert "products_item" in captured[1]["sql"]
+    assert "products_entry" in captured[2]["sql"]
+
+
+@pytest.mark.django_db
+def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
+    seed_data(1)
+    expected = [
+        {
+            "id": _global_id("EntryType", entry.pk),
+            "value": entry.value,
+            "item": {
+                "id": _global_id("ItemType", entry.item_id),
+                "name": entry.item.name,
+                "category": {
+                    "id": _global_id("CategoryType", entry.item.category_id),
+                    "name": entry.item.category.name,
+                },
+            },
+        }
+        for entry in models.Entry.objects.select_related("item__category").order_by("id")
+    ]
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allEntries {
+                id
+                value
+                item {
+                  id
+                  name
+                  category { id name }
+                }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"] == {"allEntries": expected}
+    assert len(captured) == 1, [query["sql"] for query in captured]
+    sql = captured[0]["sql"].lower()
+    assert "products_entry" in sql
+    assert "products_item" in sql
+    assert "products_category" in sql
+    assert "join" in sql
 
 
 @pytest.mark.django_db

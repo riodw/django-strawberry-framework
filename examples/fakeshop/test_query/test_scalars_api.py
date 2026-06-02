@@ -837,6 +837,55 @@ def test_scalars_optimizer_fk_id_elision_for_each_alias_in_http_query():
 
 
 @pytest.mark.django_db
+def test_scalars_optimizer_fk_id_elision_does_not_leak_to_sibling_root_in_http_query():
+    """FK-id elision on one root branch does not poison a sibling branch.
+
+    The first root selects ``ScalarSpecimen.parent { id }`` and should use
+    the FK-id elision path: one root SELECT, no JOIN, ``parent_id`` projected.
+    The sibling root selects ``NullableScalarSpecimen.partner { label }`` and
+    therefore needs the real related row. This pins the same B2/O4 branch
+    isolation contract through the real fakeshop `/graphql/` request path.
+    """
+    root = _seed_specimen(label="root")
+    _seed_specimen(label="child", parent=root)
+    _seed_nullable_specimen(label="linked", partner=root)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allScalarSpecimens {
+                label
+                parent { id }
+              }
+              allNullableScalarSpecimens {
+                label
+                partner { label }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    specimens = {row["label"]: row for row in body["data"]["allScalarSpecimens"]}
+    nullable = {row["label"]: row for row in body["data"]["allNullableScalarSpecimens"]}
+    assert specimens["root"]["parent"] is None
+    assert specimens["child"]["parent"] == {"id": root.id}
+    assert nullable["linked"]["partner"] == {"label": "root"}
+
+    assert len(captured) == 2, [q["sql"] for q in captured]
+    specimen_sql = captured[0]["sql"]
+    nullable_sql = captured[1]["sql"]
+    assert "JOIN" not in specimen_sql.upper(), specimen_sql
+    assert "parent_id" in specimen_sql, specimen_sql
+    assert "JOIN" in nullable_sql.upper(), nullable_sql
+    assert "scalars_nullablescalarspecimen" in nullable_sql.lower(), nullable_sql
+    assert "scalars_scalarspecimen" in nullable_sql.lower(), nullable_sql
+
+
+@pytest.mark.django_db
 def test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_http_query():
     """O6 / B2: forward FK to a target with custom ``get_queryset`` downgrades to ``Prefetch``.
 

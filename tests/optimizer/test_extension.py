@@ -130,8 +130,14 @@ def test_optimize_coerces_manager_through_all_records_cache_miss():
 
 
 @pytest.mark.django_db
-def test_optimizer_plans_merged_duplicate_root_field_nodes(django_assert_num_queries):
-    """Merged duplicate root fields contribute all child selections to one plan."""
+def test_optimizer_plans_merged_duplicate_root_field_nodes_plan_shape():
+    """Merged duplicate root fields contribute all child selections to one plan.
+
+    The behavioral half is pinned end-to-end by
+    ``examples/fakeshop/test_query/test_products_api.py::test_products_optimizer_merges_duplicate_root_field_nodes_over_http``.
+    This package test keeps the plan-state assertion that the merged
+    selection contributes ``category`` to the stashed optimizer plan.
+    """
     services.seed_data(1)
 
     class CategoryType(DjangoType):
@@ -156,15 +162,12 @@ def test_optimizer_plans_merged_duplicate_root_field_nodes(django_assert_num_que
     schema = strawberry.Schema(query=Query, extensions=[ext])
     ctx = SimpleNamespace()
 
-    with django_assert_num_queries(1):
-        result = schema.execute_sync(
-            "{ allItems { name } allItems { category { name } } }",
-            context_value=ctx,
-        )
+    result = schema.execute_sync(
+        "{ allItems { name } allItems { category { name } } }",
+        context_value=ctx,
+    )
 
     assert result.errors is None
-    assert result.data["allItems"][0]["name"]
-    assert result.data["allItems"][0]["category"]["name"]
     assert ctx.dst_optimizer_plan.select_related == ("category",)
     assert "ItemType.category@allItems.category" in ctx.dst_optimizer_planned
 
@@ -1550,74 +1553,6 @@ def test_strictness_warn_planned_alias_no_warning(caplog):
 
 
 @pytest.mark.django_db
-def test_optimizer_prefetches_nested_reverse_fk_depth_2(django_assert_num_queries):
-    """O4: nested reverse-FK traversal is optimized from the root queryset."""
-    services.seed_data(1)
-
-    class EntryType(DjangoType):
-        class Meta:
-            model = Entry
-            fields = ("id", "value")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "entries")
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-
-    with django_assert_num_queries(3):
-        result = schema.execute_sync("{ allCategories { items { entries { value } } } }")
-    assert result.errors is None
-
-
-@pytest.mark.django_db
-def test_optimizer_selects_nested_forward_fk_depth_2(django_assert_num_queries):
-    """O4: nested forward-FK traversal stays in a single joined query."""
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "category")
-
-    class EntryType(DjangoType):
-        class Meta:
-            model = Entry
-            fields = ("id", "item")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_entries(self) -> list[EntryType]:
-            return Entry.objects.all()
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-
-    with django_assert_num_queries(1):
-        result = schema.execute_sync("{ allEntries { item { category { name } } } }")
-    assert result.errors is None
-
-
-@pytest.mark.django_db
 def test_optimizer_strictness_accepts_nested_planned_relation():
     """O4+B3: strictness accepts resolver keys from nested plans."""
     services.seed_data(1)
@@ -1653,50 +1588,6 @@ def test_optimizer_strictness_accepts_nested_planned_relation():
     )
     assert result.errors is None
     assert "ItemType.entries@allCategories.items.entries" in ctx.dst_optimizer_planned
-
-
-@pytest.mark.django_db
-def test_optimizer_nested_fk_id_elision_does_not_leak_to_sibling_branch(django_assert_num_queries):
-    """O4+B2: FK-id elision on one root branch does not leak to another."""
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "category")
-
-    class PropertyType(DjangoType):
-        class Meta:
-            model = Property
-            fields = ("id", "category")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_items(self) -> list[ItemType]:
-            return Item.objects.all()
-
-        @strawberry.field
-        def all_properties(self) -> list[PropertyType]:
-            return Property.objects.all()
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
-    ctx = SimpleNamespace()
-
-    with django_assert_num_queries(2):
-        result = schema.execute_sync(
-            "{ allItems { category { id } } allProperties { category { name } } }",
-            context_value=ctx,
-        )
-    assert result.errors is None
-    assert result.data["allItems"][0]["category"]["id"]
-    assert result.data["allProperties"][0]["category"]["name"]
 
 
 @pytest.mark.django_db

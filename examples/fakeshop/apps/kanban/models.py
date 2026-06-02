@@ -463,7 +463,12 @@ class CardGlossaryTerm(TimeStampedModel):
         ]
         indexes = [
             models.Index(fields=["term"]),
-            models.Index(fields=["card", "order"]),
+            models.Index(
+                fields=[
+                    "card",
+                    "order",
+                ],
+            ),
         ]
 
     def __str__(self):
@@ -570,7 +575,10 @@ class BoardDoc(TimeStampedModel):
     include_heading = models.BooleanField(default=True)
 
     class Meta:
-        ordering = ["namespace", "order"]
+        ordering = [
+            "namespace",
+            "order",
+        ]
         verbose_name = "board doc"
         verbose_name_plural = "board docs"
         constraints = [

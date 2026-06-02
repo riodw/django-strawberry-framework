@@ -1,0 +1,45 @@
+{
+  "cards": [
+    {
+      "title": "EXAMPLE — replace this card",
+      "target_version": "0.1.2",
+      "relative_size": "m",
+      "relative_size_high": null,
+      "status": "todo",
+      "priority": "medium",
+      "severity": "medium",
+      "planning_state": "planned",
+      "planning_note": "One-paragraph summary of the card. Mention any gating cards by their stable title or id, e.g. depends on `DONE-027-0.0.8`.",
+      "labels": ["filters", "public-api"],
+      "parity": [
+        {"upstream": "graphene_django", "level": "required"}
+      ],
+      "after": "`Meta.search_fields` support",
+      "dependencies": [
+        {"card": "Filtering subsystem", "note": "`DONE-027-0.0.8` (Filtering subsystem) -- the shared machinery this card builds on."}
+      ],
+      "sections": {
+        "scope": [
+          "First scope bullet.",
+          "Second scope bullet."
+        ],
+        "definition_of_done": [
+          "A plain done-bullet renders as an unchecked checkbox.",
+          {"text": "An already-finished item.", "done": true}
+        ],
+        "files_touched": [
+          "`django_strawberry_framework/...` (what changes)"
+        ],
+        "why_it_matters": [
+          "Why this card exists."
+        ],
+        "other": [
+          "Anything that does not fit the sections above."
+        ]
+      },
+      "references": [
+        {"target": "Filtering subsystem", "kind": "related", "source": "card_item", "text": "Optional extra cross-reference for token rewriting."}
+      ]
+    }
+  ]
+}

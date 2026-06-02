@@ -147,10 +147,7 @@ def test_filter_glossary_terms_by_status_key():
         """,
     ) == {
         "allGlossaryTerms": [
-            {
-                "title": "`FilterSet`",
-                "status": {"key": "shipped"},
-            },
+            {"title": "`FilterSet`", "status": {"key": "shipped"}},
         ],
     }
 
@@ -188,16 +185,10 @@ def test_filter_glossary_terms_by_spec_mention_and_select_edges():
                 "title": "`OrderSet`",
                 "categories": [{"label": "Ordering"}],
                 "outgoingLinks": [
-                    {
-                        "rawLabel": "`FilterSet`",
-                        "targetTerm": {"title": "`FilterSet`"},
-                    },
+                    {"rawLabel": "`FilterSet`", "targetTerm": {"title": "`FilterSet`"}},
                 ],
                 "specMentions": [
-                    {
-                        "specName": "spec-028-orders-0_0_8.md",
-                        "notes": "Primary ordering sidecar.",
-                    },
+                    {"specName": "spec-028-orders-0_0_8.md", "notes": "Primary ordering sidecar."},
                 ],
             },
         ],

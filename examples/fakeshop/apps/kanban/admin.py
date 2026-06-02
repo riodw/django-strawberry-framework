@@ -100,7 +100,12 @@ class CardAdmin(admin.ModelAdmin):
         "severity",
     )
     filter_horizontal = ("dependencies", "labels")
-    inlines = [CardItemInline, ParityClaimInline, CardReferenceInline, CardGlossaryTermInline]
+    inlines = [
+        CardItemInline,
+        ParityClaimInline,
+        CardReferenceInline,
+        CardGlossaryTermInline,
+    ]
 
 
 @admin.register(models.CardReference)

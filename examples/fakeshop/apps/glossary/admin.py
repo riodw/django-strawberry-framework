@@ -58,7 +58,13 @@ class GlossaryTermAdmin(admin.ModelAdmin):
         "index_order",
     )
     list_filter = ("status", "categories")
-    search_fields = ("title", "title_sort", "anchor", "status_text", "body")
+    search_fields = (
+        "title",
+        "title_sort",
+        "anchor",
+        "status_text",
+        "body",
+    )
     autocomplete_fields = ("status",)
     inlines = [
         GlossaryAliasInline,
@@ -100,15 +106,36 @@ class GlossaryCategoryMembershipAdmin(admin.ModelAdmin):
 
 @admin.register(models.GlossarySpecMention)
 class GlossarySpecMentionAdmin(admin.ModelAdmin):
-    list_display = ("spec_path", "term", "term_text", "order")
+    list_display = (
+        "spec_path",
+        "term",
+        "term_text",
+        "order",
+    )
     list_filter = ("spec_path",)
-    search_fields = ("spec_path", "term_text", "notes", "term__title")
+    search_fields = (
+        "spec_path",
+        "term_text",
+        "notes",
+        "term__title",
+    )
     autocomplete_fields = ("term",)
 
 
 @admin.register(models.GlossarySourceLink)
 class GlossarySourceLinkAdmin(admin.ModelAdmin):
-    list_display = ("term", "label", "target", "kind", "order")
+    list_display = (
+        "term",
+        "label",
+        "target",
+        "kind",
+        "order",
+    )
     list_filter = ("kind",)
-    search_fields = ("term__title", "label", "target", "kind")
+    search_fields = (
+        "term__title",
+        "label",
+        "target",
+        "kind",
+    )
     autocomplete_fields = ("term",)

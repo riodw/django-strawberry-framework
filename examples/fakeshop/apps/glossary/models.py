@@ -33,7 +33,10 @@ class LookupBase(TimeStampedModel):
 
     class Meta:
         abstract = True
-        ordering = ["order", "label"]
+        ordering = [
+            "order",
+            "label",
+        ]
 
     def __str__(self):
         return self.label
@@ -85,7 +88,10 @@ class GlossaryTerm(TimeStampedModel):
     )
 
     class Meta:
-        ordering = ["entry_order", "title_sort"]
+        ordering = [
+            "entry_order",
+            "title_sort",
+        ]
         verbose_name = "glossary term"
         verbose_name_plural = "glossary terms"
         constraints = [
@@ -108,7 +114,12 @@ class GlossaryTerm(TimeStampedModel):
         ]
         indexes = [
             models.Index(fields=["title_sort"]),
-            models.Index(fields=["status", "entry_order"]),
+            models.Index(
+                fields=[
+                    "status",
+                    "entry_order",
+                ],
+            ),
         ]
 
     def __str__(self):
@@ -127,12 +138,18 @@ class GlossaryAlias(TimeStampedModel):
     normalized = models.TextField()
 
     class Meta:
-        ordering = ["term", "label"]
+        ordering = [
+            "term",
+            "label",
+        ]
         verbose_name = "glossary alias"
         verbose_name_plural = "glossary aliases"
         constraints = [
             models.UniqueConstraint(
-                fields=["term", "normalized"],
+                fields=[
+                    "term",
+                    "normalized",
+                ],
                 name="unique_glossary_alias_per_term",
             ),
             models.CheckConstraint(
@@ -180,18 +197,36 @@ class GlossaryTermLink(TimeStampedModel):
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
-        ordering = ["source_term", "kind", "order"]
+        ordering = [
+            "source_term",
+            "kind",
+            "order",
+        ]
         verbose_name = "glossary term link"
         verbose_name_plural = "glossary term links"
         constraints = [
             models.UniqueConstraint(
-                fields=["source_term", "kind", "order"],
+                fields=[
+                    "source_term",
+                    "kind",
+                    "order",
+                ],
                 name="unique_glossary_term_link_position",
             ),
         ]
         indexes = [
-            models.Index(fields=["target_term", "kind"]),
-            models.Index(fields=["source_term", "kind"]),
+            models.Index(
+                fields=[
+                    "target_term",
+                    "kind",
+                ],
+            ),
+            models.Index(
+                fields=[
+                    "source_term",
+                    "kind",
+                ],
+            ),
         ]
 
     def __str__(self):
@@ -214,16 +249,25 @@ class GlossaryCategoryMembership(TimeStampedModel):
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
-        ordering = ["category", "order"]
+        ordering = [
+            "category",
+            "order",
+        ]
         verbose_name = "glossary category membership"
         verbose_name_plural = "glossary category memberships"
         constraints = [
             models.UniqueConstraint(
-                fields=["category", "term"],
+                fields=[
+                    "category",
+                    "term",
+                ],
                 name="unique_glossary_term_per_category",
             ),
             models.UniqueConstraint(
-                fields=["category", "order"],
+                fields=[
+                    "category",
+                    "order",
+                ],
                 name="unique_glossary_category_position",
             ),
         ]
@@ -246,12 +290,18 @@ class GlossarySpecMention(TimeStampedModel):
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
-        ordering = ["spec_path", "order"]
+        ordering = [
+            "spec_path",
+            "order",
+        ]
         verbose_name = "glossary spec mention"
         verbose_name_plural = "glossary spec mentions"
         constraints = [
             models.UniqueConstraint(
-                fields=["spec_path", "term"],
+                fields=[
+                    "spec_path",
+                    "term",
+                ],
                 name="unique_glossary_term_per_spec",
             ),
             models.CheckConstraint(
@@ -288,12 +338,18 @@ class GlossarySourceLink(TimeStampedModel):
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
-        ordering = ["term", "order"]
+        ordering = [
+            "term",
+            "order",
+        ]
         verbose_name = "glossary source link"
         verbose_name_plural = "glossary source links"
         constraints = [
             models.UniqueConstraint(
-                fields=["term", "order"],
+                fields=[
+                    "term",
+                    "order",
+                ],
                 name="unique_glossary_source_link_position",
             ),
             models.CheckConstraint(

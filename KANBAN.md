@@ -11,7 +11,7 @@ Editing this board: `KANBAN.md` is a rendered artifact, not a source. The source
 Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 
 - `<STATUS>` — the card workflow state: `BACKLOG` (unscheduled investigation / strategic-differentiation candidate), `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), or `DONE` (shipped). Updated when the card moves between workflow states. Blocking is not part of the workflow status; blocked cards render a derived `blocked` badge from unfinished `blocked_by` references and stay in their normal planning column.
-- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-043-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-053-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
+- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-043-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-054-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is being tracked (everything else; scheduled cards are ordered by planned ship version, and backlog cards sort after the scheduled board). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
 - `X.Y.Z` — the package version the card shipped in (`DONE` cards), is planned to ship in (scheduled cards), or is provisionally bucketed under (`BACKLOG` cards). Alpha cards span `0.0.6` through `0.0.12` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Backlog cards may use post-`1.0.0` buckets as ordering placeholders; they stay unscheduled until promoted to `TODO`.
 
@@ -327,7 +327,7 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 - Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
 - Six schema-validation diagnostics from Goal 6 raise `ConfigurationError` with the documented messages.
 - `django_strawberry_framework.test.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
-- The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-049-0.1.5`.
+- The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-050-0.1.5`.
 - 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
 - `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-ALPHA-030-0.0.9`)
 - `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
@@ -355,7 +355,7 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 - Related via Card item: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` — Ordering subsystem
 - Related via Card item: `TODO-ALPHA-032-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `TODO-ALPHA-032-0.0.9` — Connection-aware optimizer planning
 - Related via Card item: `TODO-ALPHA-033-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `TODO-ALPHA-033-0.0.10` — Permissions subsystem
-- Related via Card item: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-049-0.1.5`. -> `TODO-BETA-049-0.1.5` — Fakeshop GraphQL schema activation
+- Related via Card item: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-050-0.1.5`. -> `TODO-BETA-050-0.1.5` — Fakeshop GraphQL schema activation
 - Related via Card item: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-ALPHA-030-0.0.9`) -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="connection_aware_optimizer_planning"></a>
@@ -763,7 +763,7 @@ planned
 - [ ] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
 - [ ] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
 - [ ] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
-- [ ] Migration guide (`TODO-BETA-051-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+- [ ] Migration guide (`TODO-BETA-052-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
 
 #### Verified in upstream
 
@@ -772,7 +772,7 @@ planned
 #### Architectural posture
 
 - The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
-- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-051-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-052-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
 
 #### Why it matters
 
@@ -787,8 +787,8 @@ planned
 
 #### Card references
 
-- Related via Card item: Migration guide (`TODO-BETA-051-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-051-0.1.6` — Migration and adoption guides
-- Related via Card item: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-051-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-051-0.1.6` — Migration and adoption guides
+- Related via Card item: Migration guide (`TODO-BETA-052-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-052-0.1.6` — Migration and adoption guides
+- Related via Card item: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-052-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-052-0.1.6` — Migration and adoption guides
 
 <a id="debug_toolbar_middleware"></a>
 ### [TODO-ALPHA-040-0.0.12 — Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
@@ -1102,7 +1102,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 - [ ] Add `docs/spec-search_fields.md`.
 - [ ] Search-fields argument generation lives in `django_strawberry_framework/filters/` and reuses the same DRF-style Meta surface and argument-factory machinery as `filterset_class`.
 - [ ] Single `search: String` argument surfaces on `DjangoConnectionField` consumers and produces an OR'd `icontains` queryset filter across every declared field path.
-- [ ] Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-047-0.1.3`).
+- [ ] Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-048-0.1.3`).
 - [ ] Tests under `tests/filters/test_search_fields.py` covering single-field, relation-path, and combined-with-filterset cases.
 - [ ] Live HTTP coverage under `examples/fakeshop/test_query/` exercising a search across at least one relation path.
 
@@ -1116,7 +1116,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 #### Why it matters
 
 - `Meta.search_fields` is one of the five django-graphene-filters Layer-3 Meta keys explicitly listed in [`GOAL.md`][goal] alongside `filterset_class`, `orderset_class`, `aggregate_class`, and `fields_class`. Without it the package cannot claim full DGF parity at 1.0.0.
-- Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-049-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap.
+- Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-050-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap.
 
 #### Dependencies
 
@@ -1134,12 +1134,79 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 - Dependency via Dependencies section: `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
 - Dependency via Planning note: planned; gated on `DONE-027-0.0.8` (Filtering) and `TODO-ALPHA-030-0.0.9` (DjangoConnectionField) -> `DONE-027-0.0.8` — Filtering subsystem
 - Dependency via Planning note: planned; gated on `DONE-027-0.0.8` (Filtering) and `TODO-ALPHA-030-0.0.9` (DjangoConnectionField) -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
-- Related via Card item: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-047-0.1.3`). -> `TODO-BETA-047-0.1.3` — Layer 3 Meta key promotion
-- Related via Card item: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-049-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-049-0.1.5` — Fakeshop GraphQL schema activation
+- Related via Card item: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-048-0.1.3`). -> `TODO-BETA-048-0.1.3` — Layer 3 Meta key promotion
+- Related via Card item: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-050-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-050-0.1.5` — Fakeshop GraphQL schema activation
 - Related via Card item: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` — Filtering subsystem
 
+<a id="postgres_full_text_search_filter_primitives"></a>
+### [TODO-BETA-046-0.1.2 — Postgres full-text search filter primitives](KANBAN.html#postgres_full_text_search_filter_primitives)
+
+- Priority: Medium
+- Severity: Medium
+- Status: Planned
+- Relative size: M
+- Labels: `filters`, `public-api`, `search`
+
+#### Planning note
+
+Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-045-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery.
+
+#### Dependencies
+
+- `DONE-027-0.0.8` — Filtering subsystem
+- `TODO-BETA-045-0.1.2` — `Meta.search_fields` support
+
+#### Scope
+
+- Cookbook anchor: `django_graphene_filters/filters.py` ships `AnnotatedFilter` -> `SearchQueryFilter` / `SearchRankFilter` / `TrigramFilter`; `django_graphene_filters/input_types.py` ships the paired `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType`. Port the four filter classes plus their input shapes onto the Strawberry side.
+- `AnnotatedFilter` base: annotate the queryset with a computed column (`SearchVector` / `SearchRank` / `TrigramSimilarity`) under a generated alias, then filter on that alias. The Strawberry-side annotation derives at materialization via the existing `convert_filter_to_input_annotation` path rather than a Graphene `input_type` constructor arg.
+- `SearchQueryFilter`: `SearchVector` + `SearchQuery` full-text match with configurable search config, vector weights, and `search_type` (plain / phrase / raw / websearch).
+- `SearchRankFilter`: `SearchRank` weighting with `weights` / `cover_density` / `normalization` options.
+- `TrigramFilter`: `pg_trgm` `TrigramSimilarity` / `TrigramWordSimilarity` with a `kind` selector and a similarity threshold.
+- Postgres-only: degrade with a clear `ConfigurationError` (or skip the filter) on non-Postgres backends; never emit a malformed query on SQLite.
+
+#### Definition of done
+
+- [ ] Add `docs/spec-pg_full_text_search.md`.
+- [ ] `AnnotatedFilter` + `SearchQueryFilter` / `SearchRankFilter` / `TrigramFilter` ship in `django_strawberry_framework/filters/` and reuse the shared DRF-style Meta surface + argument-factory machinery from `DONE-027-0.0.8`.
+- [ ] Paired input types (`SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType`) generate with stable class-derived names.
+- [ ] Backend guard: a clear typed error on non-Postgres backends rather than a malformed query.
+- [ ] Tests under `tests/filters/test_pg_full_text.py` covering each filter, the weight/config options, and the non-Postgres guard.
+- [ ] Live HTTP coverage under `examples/fakeshop/test_query/` against a Postgres-backed model (gated on a Postgres test backend; skipped under the default SQLite run).
+
+#### Files likely touched
+
+- `django_strawberry_framework/filters/base.py` (new filter classes)
+- `django_strawberry_framework/filters/inputs.py` (new input types)
+- `tests/filters/test_pg_full_text.py` (new)
+- `examples/fakeshop/test_query/` (Postgres-gated HTTP coverage)
+
+#### Why it matters
+
+- The Postgres full-text family is part of django-graphene-filters' shipped filter surface; recreating it is in scope for cookbook parity (`GOAL.md` "Working reference").
+- `Meta.search_fields` (`TODO-BETA-045-0.1.2`) only covers OR'd `icontains`; ranked / weighted / similarity search is a distinct capability the cookbook ships and basic search does not.
+
+#### Dependencies
+
+- `TODO-BETA-045-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface.
+- `DONE-027-0.0.8` (Filtering subsystem) -- the filter-argument-factory machinery is shared.
+
+#### Other
+
+- Postgres-only filter family (`SearchQuery` / `SearchRank` / `Trigram`) layered on `django.contrib.postgres.search`; cookbook port of `django_graphene_filters` `filters.py` + `input_types.py`. Spec + tests + Postgres-gated HTTP coverage.
+- The only cookbook filter-surface gap found in the 0.0.7 DRY-cycle kwarg-parity audit; every other `django_graphene_filters` filter primitive is already shipped in `DONE-027-0.0.8`.
+
+#### Card references
+
+- Dependency via Dependencies section: `TODO-BETA-045-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface. -> `TODO-BETA-045-0.1.2` — `Meta.search_fields` support
+- Dependency via Dependencies section: `DONE-027-0.0.8` (Filtering subsystem) -- the filter-argument-factory machinery is shared. -> `DONE-027-0.0.8` — Filtering subsystem
+- Dependency via Planning note: Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-045-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery. -> `TODO-BETA-045-0.1.2` — `Meta.search_fields` support
+- Dependency via Planning note: Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-045-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery. -> `DONE-027-0.0.8` — Filtering subsystem
+- Related via Card item: `Meta.search_fields` (`TODO-BETA-045-0.1.2`) only covers OR'd `icontains`; ranked / weighted / similarity search is a distinct capability the cookbook ships and basic search does not. -> `TODO-BETA-045-0.1.2` — `Meta.search_fields` support
+- Related via Card item: The only cookbook filter-surface gap found in the 0.0.7 DRY-cycle kwarg-parity audit; every other `django_graphene_filters` filter primitive is already shipped in `DONE-027-0.0.8`. -> `DONE-027-0.0.8` — Filtering subsystem
+
 <a id="aggregation_subsystem"></a>
-### [TODO-BETA-046-0.1.3 — Aggregation subsystem](KANBAN.html#aggregation_subsystem)
+### [TODO-BETA-047-0.1.3 — Aggregation subsystem](KANBAN.html#aggregation_subsystem)
 
 - Priority: Medium-high
 - Severity: Major
@@ -1194,7 +1261,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - Related via Card item: full subsystem, parallel to Ordering: reuses `DONE-027-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-aggregates.md` + tests. -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="layer_3_meta_key_promotion"></a>
-### [TODO-BETA-047-0.1.3 — Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
+### [TODO-BETA-048-0.1.3 — Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
 
 - Priority: Low
 - Severity: Low
@@ -1214,7 +1281,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - mechanical bookkeeping: move keys from `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` as each subsystem lands end-to-end. The real work lives in the subsystem cards, not here.
 
 <a id="stable_choice_enum_naming_override"></a>
-### [TODO-BETA-048-0.1.4 — Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
+### [TODO-BETA-049-0.1.4 — Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
 
 - Priority: Low-medium
 - Severity: Medium
@@ -1251,7 +1318,7 @@ planned
 - Preserve enum reuse by `(model, field_name)` while making the published schema name explicit when consumers need it.
 
 <a id="fakeshop_graphql_schema_activation"></a>
-### [TODO-BETA-049-0.1.5 — Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
+### [TODO-BETA-050-0.1.5 — Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
 
 - Priority: Medium
 - Severity: Medium
@@ -1261,12 +1328,12 @@ planned
 
 #### Planning note
 
-blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-047-0.1.3` (Layer 3 Meta key promotion).
+blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (Layer 3 Meta key promotion).
 
 #### Dependencies
 
 - `TODO-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation)
-- `TODO-BETA-047-0.1.3` — Layer 3 Meta key promotion
+- `TODO-BETA-048-0.1.3` — Layer 3 Meta key promotion
 
 #### Definition of done
 
@@ -1284,11 +1351,11 @@ blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-047-0.1.3` (L
 
 #### Card references
 
-- Blocked by via Planning note: blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-047-0.1.3` (Layer 3 Meta key promotion). -> `TODO-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation)
-- Blocked by via Planning note: blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-047-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-047-0.1.3` — Layer 3 Meta key promotion
+- Blocked by via Planning note: blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (Layer 3 Meta key promotion). -> `TODO-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation)
+- Blocked by via Planning note: blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-048-0.1.3` — Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
-### [TODO-BETA-050-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
+### [TODO-BETA-051-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
 
 - Priority: Medium
 - Severity: Medium
@@ -1306,7 +1373,7 @@ blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-047-0.1.3` (L
 - bounded test suite: live `/graphql/` acceptance tests for the activated product-catalog schema, reusing the library app's placement + schema-reload pattern.
 
 <a id="migration_and_adoption_guides"></a>
-### [TODO-BETA-051-0.1.6 — Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
+### [TODO-BETA-052-0.1.6 — Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
 - Severity: Medium
@@ -1341,7 +1408,7 @@ planned
 - Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
 
 <a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
-### [TODO-BETA-052-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
+### [TODO-BETA-053-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
 - Severity: Medium
@@ -1384,7 +1451,7 @@ planned
 - Related via Card item: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
-### [TODO-STABLE-053-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
+### [TODO-STABLE-054-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
 - Severity: Major
@@ -1398,7 +1465,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Definition of done
 
-- [ ] Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-051-0.1.6` plus `TODO-BETA-047-0.1.3` and `TODO-BETA-050-0.1.5`) is in `DONE`.
+- [ ] Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-052-0.1.6` plus `TODO-BETA-048-0.1.3` and `TODO-BETA-051-0.1.5`) is in `DONE`.
 - [ ] API surface audit: top-level `__all__` confirmed stable; every public symbol documented; no `# experimental` markers in shipped code; no `_private` symbols accidentally referenced from docs.
 - [ ] SemVer policy committed in CHANGELOG header: every release after `1.0.0` follows MAJOR / MINOR / PATCH rules strictly; pre-`0.1.0` deprecation shims removed entirely.
 - [ ] Full async + sync coverage matrix validated; no `sync_to_async` workarounds remain on any resolver path.
@@ -1429,10 +1496,10 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Card references
 
-- Related via Card item: Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-051-0.1.6` plus `TODO-BETA-047-0.1.3` and `TODO-BETA-050-0.1.5`) is in `DONE`. -> `TODO-BETA-044-0.1.1` — `FieldSet`
-- Related via Card item: Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-051-0.1.6` plus `TODO-BETA-047-0.1.3` and `TODO-BETA-050-0.1.5`) is in `DONE`. -> `TODO-BETA-051-0.1.6` — Migration and adoption guides
-- Related via Card item: Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-051-0.1.6` plus `TODO-BETA-047-0.1.3` and `TODO-BETA-050-0.1.5`) is in `DONE`. -> `TODO-BETA-047-0.1.3` — Layer 3 Meta key promotion
-- Related via Card item: Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-051-0.1.6` plus `TODO-BETA-047-0.1.3` and `TODO-BETA-050-0.1.5`) is in `DONE`. -> `TODO-BETA-050-0.1.5` — Product-catalog Layer 3 HTTP GraphQL tests
+- Related via Card item: Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-052-0.1.6` plus `TODO-BETA-048-0.1.3` and `TODO-BETA-051-0.1.5`) is in `DONE`. -> `TODO-BETA-044-0.1.1` — `FieldSet`
+- Related via Card item: Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-052-0.1.6` plus `TODO-BETA-048-0.1.3` and `TODO-BETA-051-0.1.5`) is in `DONE`. -> `TODO-BETA-052-0.1.6` — Migration and adoption guides
+- Related via Card item: Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-052-0.1.6` plus `TODO-BETA-048-0.1.3` and `TODO-BETA-051-0.1.5`) is in `DONE`. -> `TODO-BETA-048-0.1.3` — Layer 3 Meta key promotion
+- Related via Card item: Every other Beta card (`TODO-BETA-044-0.1.1` through `TODO-BETA-052-0.1.6` plus `TODO-BETA-048-0.1.3` and `TODO-BETA-051-0.1.5`) is in `DONE`. -> `TODO-BETA-051-0.1.5` — Product-catalog Layer 3 HTTP GraphQL tests
 
 ## Done
 

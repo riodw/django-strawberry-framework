@@ -80,9 +80,9 @@ Build-wide context flags:
 
 - [x] Slice 1: Foundation — module layout + `Order` / `RelatedOrder` primitives + `OrderSet` metaclass -> `docs/builder/bld-slice-1-foundation.md`
 - [x] Slice 2: Factories — `OrderArgumentsFactory` BFS + inputs adapters -> `docs/builder/bld-slice-2-factories.md`
-- [ ] Slice 3: Wiring — `Meta.orderset_class` promotion + finalizer phase 2.5 binding -> `docs/builder/bld-slice-3-wiring.md`
-- [ ] Slice 4: Live HTTP coverage in fakeshop (exactly 14 new `/graphql/` tests) -> `docs/builder/bld-slice-4-live_http.md`
-- [ ] Slice 5: Docs + KANBAN + CHANGELOG status updates (no version bump) -> `docs/builder/bld-slice-5-docs_kanban_changelog.md`
-- [ ] Slice 6: Cross-card composition smoke test with shipped Filtering subsystem -> `docs/builder/bld-slice-6-composition_smoke.md`
-- [ ] Cross-slice integration pass -> `docs/builder/bld-integration.md`
-- [ ] Final test-run gate -> `docs/builder/bld-final.md`
+- [x] Slice 3: Wiring — `Meta.orderset_class` promotion + finalizer phase 2.5 binding -> `docs/builder/bld-slice-3-wiring.md`
+- [x] Slice 4: Live HTTP coverage in fakeshop (exactly 14 new `/graphql/` tests) -> `docs/builder/bld-slice-4-live_http.md`
+- [x] Slice 5: Docs + KANBAN + CHANGELOG status updates (no version bump) -> `docs/builder/bld-slice-5-docs_kanban_changelog.md`
+- [x] Slice 6: Cross-card composition smoke test with shipped Filtering subsystem -> `docs/builder/bld-slice-6-composition_smoke.md`
+- [x] Cross-slice integration pass -> `docs/builder/bld-integration.md`
+- [x] Final test-run gate -> `docs/builder/bld-final.md`

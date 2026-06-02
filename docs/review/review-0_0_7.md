@@ -30,8 +30,8 @@ DRY rule: every `rev-*.md` artifact must include a `## DRY analysis` section bef
 - `docs/review/rev-optimizer__plans.md`
 - `docs/review/rev-optimizer__walker.md`
 - `docs/review/rev-optimizer.md`
-- `docs/review/rev-test___wrap.md`
-- `docs/review/rev-test.md`
+- `docs/review/rev-testing___wrap.md`
+- `docs/review/rev-testing.md`
 - `docs/review/rev-types__base.md`
 - `docs/review/rev-types__converters.md`
 - `docs/review/rev-types__definition.md`
@@ -52,7 +52,7 @@ DRY rule: every `rev-*.md` artifact must include a `## DRY analysis` section bef
 - `django_strawberry_framework/`
   - [x] `django_strawberry_framework/_django_patches.py` -> `docs/review/rev-_django_patches.md`
   - [x] `django_strawberry_framework/apps.py` -> `docs/review/rev-apps.md`
-  - [ ] `django_strawberry_framework/conf.py` -> `docs/review/rev-conf.md`
+  - [x] `django_strawberry_framework/conf.py` -> `docs/review/rev-conf.md`
   - [x] `django_strawberry_framework/exceptions.py` -> `docs/review/rev-exceptions.md`
   - [x] `django_strawberry_framework/list_field.py` -> `docs/review/rev-list_field.md`
   - [x] `django_strawberry_framework/registry.py` -> `docs/review/rev-registry.md`
@@ -61,8 +61,8 @@ DRY rule: every `rev-*.md` artifact must include a `## DRY analysis` section bef
   - `django_strawberry_framework/filters/`
     - [x] `django_strawberry_framework/filters/base.py` -> `docs/review/rev-filters__base.md`
     - [x] `django_strawberry_framework/filters/factories.py` -> `docs/review/rev-filters__factories.md`
-    - [ ] `django_strawberry_framework/filters/inputs.py` -> `docs/review/rev-filters__inputs.md`
-    - [ ] `django_strawberry_framework/filters/sets.py` -> `docs/review/rev-filters__sets.md`
+    - [x] `django_strawberry_framework/filters/inputs.py` -> `docs/review/rev-filters__inputs.md`
+    - [x] `django_strawberry_framework/filters/sets.py` -> `docs/review/rev-filters__sets.md`
     - [ ] folder pass: `django_strawberry_framework/filters/` -> `docs/review/rev-filters.md`
   - `django_strawberry_framework/management/`
     - `django_strawberry_framework/management/commands/`
@@ -77,9 +77,9 @@ DRY rule: every `rev-*.md` artifact must include a `## DRY analysis` section bef
     - [ ] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
     - [ ] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
     - [ ] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
-  - `django_strawberry_framework/test/`
-    - [ ] `django_strawberry_framework/test/_wrap.py` -> `docs/review/rev-test___wrap.md`
-    - [ ] folder pass: `django_strawberry_framework/test/` -> `docs/review/rev-test.md`
+  - `django_strawberry_framework/testing/`
+    - [ ] `django_strawberry_framework/testing/_wrap.py` -> `docs/review/rev-testing___wrap.md`
+    - [ ] folder pass: `django_strawberry_framework/testing/` -> `docs/review/rev-testing.md`
   - `django_strawberry_framework/types/`
     - [ ] `django_strawberry_framework/types/base.py` -> `docs/review/rev-types__base.md`
     - [ ] `django_strawberry_framework/types/converters.py` -> `docs/review/rev-types__converters.md`

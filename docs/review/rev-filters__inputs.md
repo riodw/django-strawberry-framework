@@ -1,6 +1,6 @@
 # Review: `django_strawberry_framework/filters/inputs.py`
 
-Status: fix-implemented (awaiting comment pass)
+Status: verified
 
 ## DRY analysis
 
@@ -190,20 +190,155 @@ A 951-line filter-input scaffolding + converter module (Slice 1 + Slice 2 + Slic
 
 ### Logic verification outcome
 
+- **Medium #1 (`type_name_for` no-word-character guard).** Confirmed hoisted to `django_strawberry_framework/sets_mixins.py::ClassBasedTypeNameMixin.type_name_for` lines 61-84: the classmethod now joins `pascal_case(part)` segments and raises `ConfigurationError` when the joined result is empty, with the message citing both `cls.__name__` and `repr(field_path)`. The new docstring at lines 65-72 explicitly names the protected callers (`_build_input_fields` operator-bag naming + future `OrderSet` / `AggregateSet` per-field naming). This is the artifact's recommended option (a) — the canonical "fix the guard once and protect all callers" path. `_pascal_case`'s own guard in `inputs.py` remains in place for the direct `_build_range_input_class` consumer per Worker 2's note (two guards covering two distinct call paths, not redundant).
+- **Medium #2 (`_normalize_range_value` drops None axes).** Confirmed at `django_strawberry_framework/filters/inputs.py:542-554`: the function now builds a `patch: dict[str, Any] = {}` and conditionally inserts `{base}_0` / `{base}_1` only when `start is not None` / `end is not None`. The comment block at 542-548 mirrors `normalize_input_value`'s `is None or is UNSET` rigor exactly as the artifact recommended. Both-axes path unchanged; partial-range / neither-axis paths now match the form-data convention.
+- **Low #6 (`_model_field_for_filter` narrowed catch).** Confirmed at `django_strawberry_framework/filters/inputs.py:777` (local `from django.core.exceptions import FieldDoesNotExist`) and `inputs.py:795` (`except FieldDoesNotExist:` replacing the prior broad `except Exception:  # pragma: no cover`). Comment block at 796-800 documents the contract (Django's documented exception class for unknown names; anything else surfaces loudly). The `# pragma: no cover` is dropped; the path is now earned by the new regression test.
+- **Regression tests verified present and passing.** All three claimed test names grep-confirmed at the expected lines:
+  - `test_type_name_for_raises_for_no_word_character_field_path` at `tests/filters/test_inputs.py:679` — parametrized over `""`, `"_"`, `"__"`, `"___"`; instantiates a bare `_Probe(ClassBasedTypeNameMixin)` subclass and asserts `ConfigurationError` with `repr(bad)` in the message. Pins Medium #1.
+  - `test_normalize_input_value_range_filter_drops_none_axes_partial_range` at `tests/filters/test_inputs.py:450` — pins all four partial-range shapes (only-start, only-end, both, neither). Pins Medium #2.
+  - `test_model_field_for_filter_returns_none_for_unknown_field_name` at `tests/filters/test_inputs.py:840` — pins typo-field-name through the real `ShelfFilter` fixture. Earns the coverage line the prior `# pragma: no cover` masked.
+- **Focused pytest result.** `uv run pytest tests/filters/test_inputs.py -x -k "type_name_for or range_filter or model_field_for_filter"` — 10 passed, 0 failed (coverage gate FAIL is expected under focused-`-k`, not attributable to this cycle). Full-file run `uv run pytest tests/filters/test_inputs.py` — 62 passed, 0 failed (no sibling regressions).
+- **Medium #1 placement rationale accepted.** Worker 2 chose option (a) over (b) per `AGENTS.md` rule 4 ("recommend the highest-quality fix even when it costs more engineering time"); hoisting the guard into the shared mixin protects every future `OrderSet` / `AggregateSet` per-field caller, not just the one inputs.py call site. The regression test pins at the mixin level (bare `ClassBasedTypeNameMixin` subclass) rather than through a contrived `FilterSet` declaration named `"__"`, which is the cleaner contract per the docstring's scope. Accepted as recorded.
+- **Pre-existing dirty `types/base.py` parse error.** Worker 2's Notes-for-Worker-3 flagged a pre-existing `types/base.py:247` syntax error blocking repo-wide `ruff`. Spot-confirmed `git status --short` shows no `types/base.py` modification at verification time (it was scoped to `docs/review/review-0_0_7.md`); the maintainer's `5b2788f` cohort included the file in the consolidated framework polish so the dirty path Worker 2 saw is now committed clean. File-scoped ruff on `sets_mixins.py` + `inputs.py` + `test_inputs.py` passes per Worker 2's report — no in-cycle ruff issue.
+
 ### DRY findings disposition
+
+All four `Defer-with-trigger` DRY bullets carry forward unchanged — Worker 2 did not introduce a refactor that would advance the trigger condition for any of them. The `_normalize_range_value` dict/object accessor pair (DRY bullet 1) was edited in this cycle to add the None-axis drop logic but the dual `isinstance(raw_value, dict)` discriminator pattern at lines 534-541 is unchanged; the helper-promotion trigger ("third positional-key Range axis OR second filter primitive with the same dataclass-or-dict pattern") still gates the consolidation.
 
 ### Temp test verification
 
+No temp test files needed. The three permanent regression tests in `tests/filters/test_inputs.py` (cited above) are sufficient proof that each fix exercises its intended branch; verifying-by-rerun under the runner is the canonical check.
+
 ### Verification outcome
+
+`logic accepted; awaiting comment pass` — top-level `Status:` flipped to `logic-accepted`. Both Mediums and Low #6 land cleanly with regression tests; no false-premise rejections to spot-check; no sibling regressions in `tests/filters/test_inputs.py`. Comment pass should visit Lows #1 (forwarded — no-op), #2 (Slice tense-rot), #3 (`_pascal_case` error-message direct-vs-indirect calibration), #4 (`_unwrap_enum_member` one-level unwrap depth doc), and #5 (GLOSSARY forward — no-op).
 
 ---
 
 ## Comment/docstring pass
 
+### Files touched
+
+- `django_strawberry_framework/filters/inputs.py:2-16` — module docstring: dropped Slice 1 / 2 / 3 in-flight framing in favor of the present module composition (constants + converter pair + dataclass builder + per-filterset operator-bag helpers + module-global materialization / namespace-clear pair). All those subsystems shipped at 0.0.7; the prior "Slice 1 landed ..., Slice 2 adds ..., Slice 3 lands ..." sequencing read as audit-trail rather than module description and rotted out of tense.
+- `django_strawberry_framework/filters/inputs.py:66-73` — `LOOKUP_NAME_MAP` comment: dropped "Slice 1 consumes ... / Slice 2 consumes ..." per-slice attribution, replaced with concrete consumer-site references (`FilterSet._normalize_input`, `_build_input_fields`, `normalize_input_value`). Same rewording per the artifact's Low #2 recommendation.
+- `django_strawberry_framework/filters/inputs.py:121-126` — `FieldSpec` docstring: stripped "(Slice 3's)" qualifier from the `materialize_input_class` reference. The helper has shipped; the parenthetical no longer disambiguates.
+- `django_strawberry_framework/filters/inputs.py:144-150` — `_materialized_names` comment: dropped "Slice 3's" prefix on the `materialize_input_class` write contract; rest of the cleanup-contract description unchanged.
+- `django_strawberry_framework/filters/inputs.py:811-816` — `construct_search` docstring: softened "Spec sub-bullet 4 for Slice 2 lands the helper now" to "Landed now even though the `Meta.search_fields` card is deferred to `0.1.2`" since Slice 2 no longer disambiguates against any future slice; the deferred-companion-card framing carries forward.
+- `django_strawberry_framework/filters/inputs.py:428` — `normalize_input_value` docstring: "Per the Implementation discretion item (Slice 2 plan step 2)" rewritten to "Per the spec-021 Implementation-discretion item" (Slice 2 plan step 2 no longer disambiguates against any future plan).
+- `django_strawberry_framework/filters/inputs.py:162-180` — `_pascal_case` docstring + error message tightened per Low #3 direct-vs-indirect caller precision. Added a paragraph naming the one direct consumer today (`_build_range_input_class`) and the indirect callers that route through `sets_mixins.py::ClassBasedTypeNameMixin.type_name_for` and trip its sibling no-word-character guard (the Medium #1 hoist from the logic pass). Error-message wording narrowed from "rename the filter / field" to "rename the RangeFilter's `field_name=`" so the error surfaces the specific surfacing path. The existing pinning test `test_pascal_case_raises_for_no_word_character_input` asserts only `repr(bad) in str(excinfo.value)` (not the prose) and continues to pass.
+- `django_strawberry_framework/filters/inputs.py:482-501` — `_unwrap_enum_member` docstring extended with the Low #4 one-level-unwrap depth note: the helper does NOT recurse into nested-list / nested-dict shapes; no current Django-converter-pipeline consumer produces such inputs, but a future nested-shape `ListFilter` would need its own per-level walk.
+- `django_strawberry_framework/filters/inputs.py:524-543` — `_normalize_range_value` docstring extended to describe the Medium #2 partial-range emission contract: returns `{<name>_0}` for start-only inputs, `{<name>_1}` for end-only, `{}` for neither. The both-axes return shape is unchanged; the doc-string now describes the four shapes the function can legitimately return so any caller walking `patch.keys()` sees the "axis supplied" semantics the Medium #2 fix preserves.
+
+### Per-finding dispositions
+
+- Medium 1 (`type_name_for` no-word-character guard hoisted to `sets_mixins.py`): logic-pass change carried no docstring drift; the existing `_input_type_name_for` docstring already says the spec-021 naming rule lives on the mixin. No additional comment-pass edit beyond Low #3 below.
+- Medium 2 (`_normalize_range_value` drops `None`-valued axes): docstring extended at `inputs.py:524-543` to describe the four return shapes (`{}` / `{<name>_0}` / `{<name>_1}` / both). The new comment block at lines 542-548 (added in the logic pass) already documents the in-source rationale; this is the docstring-side complement.
+- Low 1 (spec-021 → spec-027 citation drift): forwarded to folder pass per the dispatch — NO in-cycle edit here. 13 sites unchanged in this file.
+- Low 2 (Slice 1 / 2 / 3 tense-rot): five sites touched per the Files-touched list above. The `_pascal_case` docstring's pre-existing `(round-4 fix)` framing was left intact (test-tag pin, not a Slice label).
+- Low 3 (`_pascal_case` direct-vs-indirect caller precision): docstring paragraph added at `inputs.py:170-176`; error message tightened to name the RangeFilter `field_name=` consumer. Both deltas in one edit; existing test continues to pass.
+- Low 4 (`_unwrap_enum_member` one-level unwrap depth): docstring paragraph added at `inputs.py:497-501`. No code change.
+- Low 5 (GLOSSARY coverage gap): forwarded to project pass per the dispatch — NO in-cycle edit here.
+- Low 6 (`_model_field_for_filter` broad-`except` + pragma-no-cover): logic-pass change already shipped narrowed `FieldDoesNotExist` catch + dropped pragma with the new comment block at `inputs.py:796-800`; the prior docstring at line 776 ("Resolve the Django model field a filter targets (or `None`).") still accurately describes the contract — `None` for unknown / missing field, raise for any other failure. No further comment-pass edit needed.
+
+### Validation run
+
+- `uv run ruff format django_strawberry_framework/filters/inputs.py` — pass, no changes.
+- `uv run ruff check --fix django_strawberry_framework/filters/inputs.py` — pass, no fixes.
+- Repo-wide `uv run ruff format .` — pass, 198 files left unchanged (the `types/base.py` parse error Worker 2 saw at logic-pass dispatch was committed clean in the maintainer's `5b2788f` cohort per Worker 3's verification note; the repo-wide format now succeeds).
+- Repo-wide `uv run ruff check --fix .` — pass, all checks passed.
+- `uv.lock` unchanged.
+
+### Notes for Worker 3
+
+- **Existing `_pascal_case` test pin survives the error-message rewording.** `tests/filters/test_inputs.py:658-662` asserts only `repr(bad) in str(excinfo.value)` (not the prose), and the new wording still embeds the `repr(bad)` token through the f-string. No test edit required.
+- **Slice tense-rot sweep scope.** Seven sites touched (module docstring, LOOKUP_NAME_MAP comment, FieldSpec docstring, _materialized_names comment, `normalize_input_value` docstring, `construct_search` docstring, plus the one-line removal of "(Slice 3's)" from `FieldSpec`). All Slice tokens removed from prose; the pinning test commentary `(round-4 fix)` left in place per its review-tag function. `grep "Slice " django_strawberry_framework/filters/inputs.py` returns zero hits after this pass.
+- **Forwarded Lows untouched.** Low 1 (spec-021 → spec-027 drift, 13 sites in this file) and Low 5 (GLOSSARY coverage gap for 13 backticked symbols) are both forwarded to higher-scope passes per the dispatch — staying out of scope per the worker-2.md "no unrelated cleanup" rule.
+
 ---
 
 ## Changelog disposition
 
+### State
+
+`Warranted but deferred to maintainer`.
+
+### Reason
+
+Two consumer-visible behavior changes landed this cycle, both arriving on the same `filters/` subsystem cohort that the maintainer is staging for the `0.0.8` joint-cut (per `spec-027` Decision 10's joint-cut deferral pattern already applied to `filters/base.py::RelatedFilter` earlier this release):
+
+- **Medium #1 — `ClassBasedTypeNameMixin.type_name_for` typed-error contract change.** The mixin lives in `django_strawberry_framework/sets_mixins.py` and its `type_name_for` classmethod is the shared public derivation point that consumers of `FilterSet` (and the forthcoming `OrderSet` / `AggregateSet` per the mixin's docstring) inherit. Hoisting the no-word-character guard from `_pascal_case` (a private helper in `filters/inputs.py`) into the shared mixin promotes the `ConfigurationError` from an inputs.py-local raise into a typed-error contract on every future consumer of the mixin. This is a public-API typed-error contract change. The existing `[Unreleased] ### Changed` bullet for `_pascal_case` (CHANGELOG.md:26) covers only the inputs.py-local guard; the new `type_name_for` guard is a distinct, broader surface and warrants its own entry. **Mirrors the `filters/base.py::RelatedFilter` `TypeError` precedent** from earlier this cycle (recorded in `worker-memory/worker-2.md` under `## filters/base.py`).
+- **Medium #2 — `_normalize_range_value` partial-range axis-drop.** The helper itself is private (leading underscore in `filters/inputs.py`) but its return shape is the form-data patch that `FilterSet._normalize_input` merges into the `django-filter` form-data dict. The behavior change is observable through `RangeFilter`'s partial-input handling: where a `start=5, end=None` input previously surfaced both `{base}_0` and `{base}_1` keys (the second with `None`), it now surfaces only `{base}_0`. This is a strict bug-fix that aligns implementation with the docstring's "positional form-data patch" framing (the patch now matches what `django-filter` actually expects for partial ranges per `RangeWidget.value_from_datadict`'s "field not supplied" convention). Worth recording so any consumer who happened to introspect the patch's keys (logging, audit, debug) sees the contract pinned.
+
+Low #6 (`FieldDoesNotExist` tightening on `_model_field_for_filter`) is an internal-only error-type narrowing in a private helper that no consumer reaches; not warranted on its own.
+
+The active plan (`docs/review/review-0_0_7.md`) does NOT authorize a `CHANGELOG.md` edit for this cycle. Per `AGENTS.md` rule 21 ("Do not update `CHANGELOG.md` unless explicitly instructed") and the pre-alpha maintainer-owned CHANGELOG cadence, the entries below are preserved verbatim under `### Suggested CHANGELOG entry` so the maintainer can lift them into `[Unreleased]` at the `0.0.8` cut without re-derivation.
+
+### What was done
+
+No `CHANGELOG.md` edit. The suggested entry text below is preserved verbatim for the maintainer.
+
+### Suggested CHANGELOG entry
+
+To be added under `[Unreleased] ### Changed` (the same joint-cut cohort as the existing `RelatedFilter` `TypeError` and `_pascal_case` `ConfigurationError` bullets, all part of the `0.0.8` filtering-subsystem ship):
+
+```
+- `ClassBasedTypeNameMixin.type_name_for` (the shared mixin classmethod inherited by [`FilterSet`][glossary-filterset] and the forthcoming `OrderSet` / `AggregateSet`) now raises [`ConfigurationError`][glossary-configurationerror] when every `LOOKUP_SEP`-split segment of `field_path` pascal-cases to the empty string (e.g. `field_path="_"`, `"__"`, `"___"`). The pre-fix code silently produced `f"{cls.__name__}InputType"`, colliding with the root input type's own name. The error message names both `cls.__name__` and the offending `repr(field_path)` so the consumer sees an actionable site. Companion to the `_pascal_case` `ConfigurationError` already recorded above — the inputs.py-local helper guards the `_build_range_input_class` direct-consumer path; this mixin-level guard protects every future caller of `type_name_for`. Only relevant for synthetic test fixtures or single-underscore module-private classes — no real-world consumer FilterSet, OrderSet, or AggregateSet name should be affected.
+- `RangeFilter` partial-range inputs now produce a positional form-data patch that contains only the supplied axes. Previously `_normalize_range_value` (the private helper consumed by `FilterSet._normalize_input` for `django-filter`'s `RangeWidget.value_from_datadict` contract) always returned both `{base}_0` and `{base}_1` keys with `None` for missing axes; it now returns `{base}_0` for start-only, `{base}_1` for end-only, both for fully-supplied, and `{}` for neither. The behavior change aligns the helper's return shape with the docstring's "positional form-data patch" framing — `django-filter` already short-circuited on the `None`-valued keys at the form-data layer, so the consumer-visible filter behavior is unchanged; the observable difference is in any caller that inspects `patch.keys()` (logging, audit, debug) which now sees true "axis supplied" semantics instead of the prior "always both, possibly with `None`".
+```
+
+### Validation run
+
+- `uv run ruff format .` — pass, 198 files left unchanged.
+- `uv run ruff check --fix .` — pass, all checks passed.
+
 ---
 
 ## Iteration log
+
+## Verification (Worker 3, pass 2 — comment-verify)
+
+### Comment verification outcome
+
+- **Slice tense-rot scrub (Low #2).** `grep -c "Slice " django_strawberry_framework/filters/inputs.py` returns `0`. All seven sites Worker 2's report enumerated (module docstring at 2-16, `LOOKUP_NAME_MAP` comment at 66-73, `FieldSpec` docstring at 121-126, `_materialized_names` comment at 144-150, `normalize_input_value` docstring at 428, `_pascal_case` docstring untouched re: Slice — only the `(round-4 fix)` review tag left intact per the note, and the `construct_search` docstring at 811-816) verified in the unstaged diff. The `(round-4 fix)` survival is correct — it is a review-tag pin, not a Slice label, and would not grep-match the audit. The module docstring rewrite reads as composition-narrative (constants + converter pair + dataclass builder + per-filterset helpers + module-global pair) rather than Slice sequencing — exactly the tense-correct framing the artifact recommended.
+- **`_pascal_case` error message + direct-vs-indirect caller note (Low #3).** Confirmed at `django_strawberry_framework/filters/inputs.py:162-184`. The docstring now opens with the empty-token rationale, then closes with a dedicated "Direct caller today: `_build_range_input_class` only. Indirect callers ... route through `sets_mixins.py::ClassBasedTypeNameMixin.type_name_for` and trip its sibling no-word-character guard rather than this one" paragraph. The error string narrowed from `"rename the filter / field"` to `"rename the RangeFilter's \`field_name=\`"` — names the immediate surfacing consumer. The pre-existing test `test_pascal_case_raises_for_no_word_character_input` at `tests/filters/test_inputs.py:658-662` asserts only `repr(bad) in str(excinfo.value)`, so the rewording does not break the pin (the `f"_pascal_case received {name!r}..."` still embeds `repr(bad)`).
+- **`_unwrap_enum_member` one-level depth note (Low #4).** Confirmed at `django_strawberry_framework/filters/inputs.py:497-502`. The docstring extension reads "Single-level unwrap — nested-list / nested-dict inputs are not recursively unwrapped. No current consumer produces such shapes (the Django converter pipeline yields flat scalars / lists from the django-filter form-field hierarchy); a future nested-shape `ListFilter` would need its own per-level walk." Matches the artifact's recommended phrasing exactly — flags the depth limit and names the future-spec scenario where a per-level walk would become necessary.
+- **`_normalize_range_value` four return shapes documented (Medium #2 doc complement).** Confirmed at `django_strawberry_framework/filters/inputs.py:535-548`. The pre-existing prose at 535-542 describes the both-axes `{<name>_0, <name>_1}` return shape and the form-data field-name derivation. The new paragraph at 544-548 enumerates the three remaining shapes (`{<name>_0}` start-only, `{<name>_1}` end-only, `{}` neither) and explains the "axis not supplied" form-data convention preservation. All four legitimate return shapes from the function are now docstring-described — any caller walking `data.keys()` sees the documented contract.
+- **Forwarded Lows untouched (Lows #1 + #5).** Confirmed by diff inspection: zero `spec-021` → `spec-027` rewrites in the unstaged diff for `inputs.py`, zero GLOSSARY additions for the 13 backticked symbols. Worker 2's Notes-for-Worker-3 explicitly recorded the deferral; the folder-pass and project-pass artifacts are the right scope per the dispatch.
+
+### DRY findings disposition
+
+No DRY changes in this pass (comment-pass scope). The four `Defer-with-trigger` bullets remain unchanged — no helper-promotion trigger advanced.
+
+### Temp test verification
+
+None needed. Existing `test_pascal_case_raises_for_no_word_character_input` continues to pin the `_pascal_case` error path through the rewording (the `repr(bad)` token survives the narrower message); the three logic-pass regression tests (cited in `## Verification (Worker 3)` pass 1 above) cover all three real-source edits from the prior pass.
+
+### Validation run
+
+- `git diff django_strawberry_framework/filters/inputs.py | wc -l` = `150` lines — diff scope confined to seven docstring sites + one `LOOKUP_NAME_MAP` comment + one `_materialized_names` comment + the `_pascal_case` error-string narrowing. No logic changes.
+- `grep -c "Slice " django_strawberry_framework/filters/inputs.py` = `0`. Tense-rot fully scrubbed.
+- `git diff -- CHANGELOG.md` empty (expected for "awaiting changelog disposition" status).
+- Repo-wide ruff (per Worker 2's report): `uv run ruff format .` passes (198 files left unchanged); `uv run ruff check --fix .` passes (all checks). The pre-existing `types/base.py` parse error Worker 2 saw at logic-pass dispatch was committed clean in the maintainer's `5b2788f` cohort per pass-1 verification.
+
+### Verification outcome
+
+`comments accepted; awaiting changelog disposition` — top-level `Status:` flipped to `comments-accepted`. All five comment-pass deliverables landed cleanly (Slice tense scrub, `_pascal_case` calibration, `_unwrap_enum_member` depth doc, `_normalize_range_value` four-shape doc, forwarded Lows untouched). Worker 2 should now author the changelog disposition (one of three states) and dispatch the terminal-verify pass.
+
+## Verification (Worker 3, pass 3 — terminal-verify)
+
+### Terminal verification outcome
+
+- **Changelog diff empty.** `git diff -- CHANGELOG.md` returns no output — matches the "Warranted but deferred to maintainer" disposition.
+- **Verbatim maintainer-ready entry present.** Fenced `### Suggested CHANGELOG entry` block at artifact lines 284-287 contains two bullets covering (1) the `ClassBasedTypeNameMixin.type_name_for` typed-error contract change with both `cls.__name__` and `field_path` surfacing, and (2) the `RangeFilter` partial-range axis-drop with the four observable return shapes. Both bullets are lift-ready under `[Unreleased] ### Changed` at the `0.0.8` joint-cut, naming the existing `RelatedFilter` `TypeError` + `_pascal_case` `ConfigurationError` cohort siblings for placement.
+- **"Real consumer-visible change" framing honest.** `ClassBasedTypeNameMixin` is exported via `django_strawberry_framework/sets_mixins.py::__all__` line 127 and inherited by the public `FilterSet` at `django_strawberry_framework/filters/sets.py:172` (`class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=FilterSetMetaclass)`). The forthcoming `OrderSet` is already wired to the same mixin per `orders/inputs.py:15-16` comments. The hoisted `ConfigurationError` on `type_name_for` is therefore a genuine public-API typed-error contract change on an inheritance surface every set subclass shares — not internal-only. The deferral state matches the precedent set by `filters/base.py::RelatedFilter`'s `TypeError` contract change earlier this release.
+- **Logic + comment passes already accepted.** Passes 1 (logic) and 2 (comment) acceptances stand; spot-confirmed source state at verification time: `sets_mixins.py:78-83` (`ConfigurationError` raise), `filters/inputs.py:566-571` (`patch: dict[str, Any]` build with `is not None` guards), `filters/inputs.py:777` (`from django.core.exceptions import FieldDoesNotExist`) + `:795` (`except FieldDoesNotExist:` no pragma). `grep "Slice " django_strawberry_framework/filters/inputs.py` returns 0 hits — tense-rot scrub holds.
+- **Ruff outcomes recorded.** Comment-pass validation block (artifact lines 245-249) recorded `uv run ruff format .` pass (198 files unchanged) and `uv run ruff check --fix .` pass (all checks). The prior `types/base.py:247` parse error Worker 2 flagged at logic-pass dispatch was landed clean in maintainer's `5b2788f` cohort per pass-1 verification.
+
+### Validation run
+
+- `git diff -- CHANGELOG.md` empty (terminal-verify required).
+- `git status` confirms only `filters/inputs.py`, `docs/review/rev-filters__inputs.md`, and `docs/review/review-0_0_7.md` modified (the rev artifact + the checklist mark this pass writes; the inputs.py edits from the prior passes).
+
+### Verification outcome
+
+`cycle accepted; verified` — top-level `Status:` flipped to `verified`. Marking the `django_strawberry_framework/filters/inputs.py` checkbox in `docs/review/review-0_0_7.md` and appending the memory entry.

@@ -1,14 +1,13 @@
-"""Filter primitives + `RelatedFilter` (Slice 1).
+"""Filter primitives + `RelatedFilter`.
 
-Layers 1 and 2 of the six-layer pipeline (spec-021 Decision 3) plus the
-five parity-floor primitives (spec-021 Decision 4):
+Layers 1 and 2 of the six-layer pipeline (spec-027 Decision 3) plus the
+five parity-floor primitives (spec-027 Decision 4):
 
 - `Filter` re-exported from `django_filters` for surface continuity.
 - `TypedFilter` -> `ArrayFilter` / `RangeFilter` / `ListFilter`: ports of
   the matching `graphene_django/filter/filters/*.py` primitive minus the
   Graphene `_input_type` constructor argument (the Strawberry-side
-  annotation is derived later by `convert_filter_to_input_annotation` in
-  Slice 2).
+  annotation is derived later by `convert_filter_to_input_annotation`).
 - `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter`: ports of the matching
   Graphene primitive with the decode step substituted to
   `strawberry.relay.GlobalID.from_id(value)` per Decision 4 M6.
@@ -19,7 +18,7 @@ five parity-floor primitives (spec-021 Decision 4):
 - `RelatedFilter`: collapsed port of the cookbook's
   `BaseRelatedFilter` + `RelatedFilter(BaseRelatedFilter, ModelChoiceFilter)`
   pair into a single consumer-facing class so the public surface matches
-  the spec's single-symbol promise (spec-021 Decision 2).
+  the spec's single-symbol promise (spec-027 Decision 2).
 """
 
 from __future__ import annotations
@@ -47,8 +46,8 @@ class TypedFilter(Filter):
     Port of `graphene_django/filter/filters/typed_filter.py::TypedFilter`
     with the Graphene-only `_input_type` constructor argument dropped.
     The Strawberry-side annotation derives from the resolved filter
-    instance at materialization time via `convert_filter_to_input_annotation`
-    (Slice 2); there is no Graphene-style `input_type` property.
+    instance at materialization time via `convert_filter_to_input_annotation`;
+    there is no Graphene-style `input_type` property.
     """
 
 
@@ -171,7 +170,7 @@ def _expected_global_id_type_name(filter_instance: Filter) -> str | None:
     """Resolve the expected GraphQL type name for a GlobalID-aware filter.
 
     Walks the runtime ``parent.<filterset>._owner_definition`` binding that
-    Slice 3's finalizer phase 2.5 wires per spec-021 L566-567 + L603 +
+    the finalizer's phase 2.5 wires per spec-027 L566-567 + L603 +
     L1057. Two routing branches:
 
     1. **Own-PK branch.** When ``filter_instance.field_name`` matches the
@@ -182,12 +181,12 @@ def _expected_global_id_type_name(filter_instance: Filter) -> str | None:
        ``owner_definition.related_target_for(<base_field>)`` — where
        ``<base_field>`` is the parent-relation prefix in expanded child
        filter names like ``"genres__id"`` (the ``RelatedFilter`` expansion
-       contract per spec-021 L988); the expected type name is the target
+       contract per spec-027 L988); the expected type name is the target
        ``DjangoType``'s ``graphql_type_name``.
 
     Returns ``None`` when no owner is bound (Slice-1 + Slice-2 unit-test
     contexts) or when the lookup cannot resolve a target; the filter then
-    decodes the GlobalID without type-name validation per spec-021 L1057.
+    decodes the GlobalID without type-name validation per spec-027 L1057.
     """
     parent = getattr(filter_instance, "parent", None)
     owner = getattr(parent, "_owner_definition", None) if parent is not None else None
@@ -214,7 +213,7 @@ def _decode_and_validate_global_id(
     """Decode `value` to a node id and validate its `type_name`.
 
     Accepts both raw `str` and `strawberry.relay.GlobalID` objects per
-    spec-021 L602. Raises `GraphQLError("GlobalID type mismatch: filter
+    spec-027 L602. Raises `GraphQLError("GlobalID type mismatch: filter
     expects <expected> but received <actual>")` when the decoded
     `type_name` does not match the expected type for the filter (spec
     L603). `GlobalIDMultipleChoiceFilter` passes `index` so the
@@ -235,16 +234,16 @@ class GlobalIDFilter(Filter):
 
     Port of `graphene_django/filter/filters/global_id_filter.py::GlobalIDFilter`
     with the decode substituted to `strawberry.relay.GlobalID.from_id(value)`
-    per spec-021 Decision 4 M6. The Graphene-only
+    per spec-027 Decision 4 M6. The Graphene-only
     `GlobalIDFormField` / `GlobalIDMultipleChoiceField` dependencies drop
     away; the default `forms.CharField` (inherited via `Filter.field_class`)
     is used.
 
     Accepts both raw `str` and `strawberry.relay.GlobalID` objects per
-    spec-021 L602. Validates the decoded `type_name` against the expected
+    spec-027 L602. Validates the decoded `type_name` against the expected
     target GraphQL type (resolved through the parent filterset's
     `_owner_definition.related_target_for(field_name)`, or the owner
-    itself when the filter targets the own PK) per spec-021 L603; a
+    itself when the filter targets the own PK) per spec-027 L603; a
     mismatch raises `GraphQLError("GlobalID type mismatch...")` before
     any queryset clause runs.
     """
@@ -266,7 +265,7 @@ class _GlobalIDMultipleChoiceField(MultipleChoiceField):
     stock field rejected EVERY GlobalID at form-clean time before the
     filter's own decode/validate could run. GlobalID list elements are
     decoded and type-checked in `GlobalIDMultipleChoiceFilter.filter`
-    (per spec-021 L605), not against a fixed set, so this field accepts
+    (per spec-027 L605), not against a fixed set, so this field accepts
     any submitted value and defers validation to the filter. Mirrors
     graphene-django's `GlobalIDMultipleChoiceField`.
     """
@@ -279,7 +278,7 @@ class _GlobalIDMultipleChoiceField(MultipleChoiceField):
 class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
     """Multi-value sibling of `GlobalIDFilter`.
 
-    Validates every list element independently per spec-021 L605; a
+    Validates every list element independently per spec-027 L605; a
     single wrong-type element rejects the whole input with the offending
     index named in the error message.
 
@@ -306,7 +305,7 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
 
     Collapsed port of `django_graphene_filters/filters.py::BaseRelatedFilter`
     + `django_graphene_filters/filters.py::RelatedFilter` into a single
-    consumer-facing class per spec-021 Decision 2 (single-symbol public
+    consumer-facing class per spec-027 Decision 2 (single-symbol public
     surface). The lazy-resolution logic (`bind_filterset`, `.filterset`
     property, target-model-derived queryset) carries over from the
     cookbook unchanged.

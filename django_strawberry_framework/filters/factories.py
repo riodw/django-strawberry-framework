@@ -1,6 +1,6 @@
 """BFS factory + dynamic-FilterSet cache (Slice 2).
 
-Layer 5 of the spec-021 six-layer pipeline (the BFS that builds every
+Layer 5 of the spec-027 six-layer pipeline (the BFS that builds every
 reachable Strawberry input class via the named converter
 ``convert_filter_to_input_annotation``) plus Layer 6 (the dynamic-class
 cache keyed by ``(model, fields, extra_meta)`` for connection fields
@@ -9,7 +9,7 @@ that target the same model without an explicit ``filterset_class``).
 The BFS factory consumes resolved ``django-filter`` filter instances --
 NOT a parallel ``FILTER_DEFAULTS`` map -- so the runtime filter shape
 and the GraphQL input shape stay downstream of one decision site
-(Decision 4 H1 / spec-021 lines 579-584). The finalizer materializes the
+(Decision 4 H1 / spec-027 lines 579-584). The finalizer materializes the
 built classes as module globals at finalize time; this module owns
 build-only.
 """
@@ -96,7 +96,7 @@ class FilterArgumentsFactory:
         dicts SHARED with the base: a subclass inherits the same instances
         rather than isolating its own, so its builds would silently
         cross-contaminate the base's. Subclassing is therefore an
-        unsupported design path (spec-021 review M-filters-3 / H-filters-3);
+        unsupported design path (spec-027 review M-filters-3 / H-filters-3);
         extend by composition (wrap an instance), not inheritance.
         """
         raise TypeError(

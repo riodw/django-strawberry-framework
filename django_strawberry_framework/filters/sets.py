@@ -1,15 +1,15 @@
-"""`FilterSetMetaclass` and `FilterSet` foundation (Slice 1).
+"""`FilterSetMetaclass` and `FilterSet` foundation.
 
-Layers 3 and 4 of the spec-021 six-layer pipeline plus the
+Layers 3 and 4 of the spec-027 six-layer pipeline plus the
 Decision-8 / M1-of-rev5 named-helper decomposition of `apply_sync` /
 `apply_async` / `apply`. The metaclass is a verbatim port of
 `django_graphene_filters/filterset.py::FilterSetMetaclass`; `FilterSet`
 mixes the cookbook's cycle-safe `get_filters` into a
-`django_filters.filterset.BaseFilterSet` subclass per spec-021 Decision 5.
+`django_filters.filterset.BaseFilterSet` subclass per spec-027 Decision 5.
 
 The Decision-4 owner-aware Relay-vs-scalar conditional lives only inside
 `filter_for_field` / `filter_for_lookup` to keep the runtime override as
-the single source of truth (Slice 2's factory derives shape from the
+the single source of truth (the factory derives shape from the
 resolved filter instances, not from a parallel map).
 """
 
@@ -19,6 +19,7 @@ import copy
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, ClassVar
 
+from asgiref.sync import sync_to_async
 from django.db import models
 from django.http import HttpRequest
 from django_filters import filterset
@@ -60,6 +61,18 @@ _FORM_KEY_BY_PYTHON_ATTR: dict[str, str] = {
     python_attr: django_lookup
     for django_lookup, (python_attr, _) in reversed(LOOKUP_NAME_MAP.items())
 }
+
+
+def _read_qs(filterset_instance: Any) -> models.QuerySet:
+    """Return ``filterset_instance.qs`` (helper for ``sync_to_async``).
+
+    ``BaseFilterSet.qs`` is a cached property whose evaluation triggers
+    ``filter_queryset`` (sync) and may iterate leaf-clause ORM. ``apply_async``
+    routes the read through ``sync_to_async(thread_sensitive=True)`` to keep
+    the synchronous ORM work off the event-loop thread; this tiny wrapper
+    exists because ``sync_to_async`` wants a callable, not an attribute read.
+    """
+    return filterset_instance.qs
 
 
 def _lookups_for_field(model_field: models.Field | None) -> list[str]:
@@ -173,7 +186,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     """Consumer-facing `FilterSet` foundation.
 
     Subclasses `django_filters.filterset.BaseFilterSet` directly per
-    spec-021 Decision 5; the cookbook's lazy-resolution Layers 3 and 4
+    spec-027 Decision 5; the cookbook's lazy-resolution Layers 3 and 4
     are folded in via `FilterSetMetaclass` and `get_filters`. The
     Decision-8 / M1-of-rev5 named helpers decompose `apply_sync` and
     `apply_async` so each step can be exercised in isolation; `apply`
@@ -181,14 +194,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     `SyncMisuseError` from `_apply_get_queryset_sync` into a
     `RuntimeError` consumers can match on.
 
-    `_owner_definition` is the seam Slice 3 binds at finalizer phase 2.5
-    per H4 of rev4. Slice 1 ships the slot declared `None` and the
-    fallback branch in `filter_for_field` / `filter_for_lookup` that
-    consults `registry.primary_for(...)` so package-internal tests can
-    exercise the Relay-vs-scalar conditional before owner binding lands.
+    `_owner_definition` is the binding seam populated by
+    `finalize_django_types` phase 2.5 per H4 of rev4; the slot declared
+    `None` and the fallback branch in `filter_for_field` /
+    `filter_for_lookup` that consults `registry.primary_for(...)` keeps
+    package-internal tests able to exercise the Relay-vs-scalar
+    conditional before owner binding lands.
     """
 
-    # Slice-3 binding seam — populated by `finalize_django_types` phase 2.5.
+    # Binding seam — populated by `finalize_django_types` phase 2.5.
     _owner_definition: DjangoTypeDefinition | None = None
 
     # Cache for fully-resolved filters per Layer 4 of Decision 3.
@@ -221,6 +235,16 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     # `.qs` boundary. `None` for instances built outside the apply pipeline
     # (they carry no related branches to re-derive).
     _apply_info: Any = None
+
+    # Pre-derived nested-branch visibility map. Populated by ``apply_async``
+    # via ``_collect_nested_visibility_querysets_async``, which walks every
+    # ``and`` / ``or`` / ``not`` arm BEFORE the top-level ``.qs`` read and
+    # awaits each branch's target ``get_queryset``. ``_q_for_branch`` then
+    # looks up by ``id(child_input)`` instead of calling the sync derive,
+    # which would raise ``SyncMisuseError`` mid-``.qs`` if the target type's
+    # ``get_queryset`` is async-only. ``None`` for instances built by
+    # ``apply_sync`` or outside the apply pipeline (sync path stays sync).
+    _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet]] | None = None
 
     # ``ClassBasedTypeNameMixin`` naming suffixes. The root input type keeps
     # the mixin's default ``"InputType"`` (``FooFilter`` -> ``FooFilterInputType``);
@@ -337,7 +361,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                         # Ordering and pattern lookups (``range`` / ``gt`` /
                         # ``contains`` / ...) have no GlobalID semantics and are
                         # dropped from the generated surface rather than emitted
-                        # as corrupt ``String`` inputs (spec-021 H1).
+                        # as corrupt ``String`` inputs (spec-027 H1).
                         lookups = [lk for lk in lookups if lk in ("exact", "in", "isnull")]
                     fields[field_name] = lookups
 
@@ -390,7 +414,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         OneToOne); non-Relay targets and non-relation fields defer to the
         upstream default unchanged.
 
-        Own-PK branch (spec-021 L566-567 + L607): when ``field`` is the
+        Own-PK branch (spec-027 L566-567 + L607): when ``field`` is the
         owning model's primary key AND the owning ``DjangoType`` itself
         implements ``relay.Node``, the field becomes ``GlobalIDFilter`` —
         the OWNER is the Relay node so its PK column is a GlobalID over
@@ -404,7 +428,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # Without this split ``id: {in: [...]}`` collapsed to a single
             # ``GlobalIDFilter`` and silently dropped to a scalar input.
             # ``isnull`` is a Boolean predicate, not a GlobalID, so pass the
-            # upstream filter through unchanged (spec-021 H1).
+            # upstream filter through unchanged (spec-027 H1).
             if default.lookup_expr == "isnull":
                 return default
             own_pk_filter_class = (
@@ -440,7 +464,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
         Non-relation fields defer to the upstream pair-return shape unless
         the field is the owner's own PK and the owner is Relay-Node-shaped
-        (own-PK branch per spec-021 L566-567). For relation fields a
+        (own-PK branch per spec-027 L566-567). For relation fields a
         Relay-Node-shaped target maps to a ``(GlobalIDFilter, params)``
         pair (or ``GlobalIDMultipleChoiceFilter`` for multi-valued
         relations); otherwise the upstream return is passed through.
@@ -459,7 +483,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # ``get_fields`` ``"__all__"`` narrowing). An explicit
             # ``Meta.fields`` list that names an unsupported lookup is rejected
             # here so it cannot silently generate a corrupt GlobalID-shaped
-            # input (spec-021 H1).
+            # input (spec-027 H1).
             if lookup_type == "in":
                 return GlobalIDMultipleChoiceFilter, params
             if lookup_type == "isnull":
@@ -483,13 +507,13 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _is_own_pk_under_relay_owner(cls, field: Any) -> bool:
         """Return True iff ``field`` is the owning model's PK and owner is Relay.
 
-        Own-PK branch per spec-021 L566-567 + L607: when a ``FilterSet``
+        Own-PK branch per spec-027 L566-567 + L607: when a ``FilterSet``
         whose owning ``DjangoType`` implements ``relay.Node`` filters on
         its own primary key, the wire shape is a Relay GlobalID — so the
         filter for that PK is ``GlobalIDFilter`` rather than the scalar
         upstream default. Resolves only when ``_owner_definition`` is
-        bound (Slice 3 phase-2.5 binding) so package-internal tests that
-        run pre-binding keep the upstream shape.
+        bound (finalizer phase-2.5 binding) so package-internal tests
+        that run pre-binding keep the upstream shape.
         """
         owner = cls._owner_definition
         if owner is None:
@@ -528,7 +552,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """Look up the registered target `DjangoType` for a relation field.
 
         Consults `_owner_definition.related_target_for(...)` when the
-        Slice-3 binding has landed; otherwise falls back to
+        finalizer phase-2.5 binding has landed; otherwise falls back to
         `registry.primary_for(field.related_model)`. Non-relation fields
         return `None`.
         """
@@ -536,8 +560,8 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             return None
         owner = cls._owner_definition
         if owner is not None and field_name is not None:
-            # Owner-aware path (Slice-3 binding has landed): resolve the
-            # target `DjangoType` through `owner.related_target_for(...)`.
+            # Owner-aware path (finalizer phase-2.5 binding has landed): resolve
+            # the target `DjangoType` through `owner.related_target_for(...)`.
             # The pair's first member is a `DjangoTypeDefinition`, whose
             # registered `DjangoType` class is its `.origin` attribute --
             # NOT `.type` / `.type_cls`, which the definition never
@@ -567,11 +591,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _normalize_input(cls, input_value: Any) -> dict[str, Any]:
         """Translate a Strawberry input dataclass into `django-filter` form data.
 
-        Slice 2 completes the per-primitive value normalization: each
-        scalar attr passes through ``normalize_input_value`` so
-        ``relay.GlobalID`` -> ``node_id``, Strawberry enum -> ``.value``,
-        and ``RangeFilter`` -> positional ``{name}_0`` / ``{name}_1``
-        keys all land in ``data`` correctly. Related-branch keys (the
+        Per-primitive value normalization: each scalar attr passes
+        through ``normalize_input_value`` so ``relay.GlobalID`` ->
+        ``node_id``, Strawberry enum -> ``.value``, and
+        ``filters.base.RangeFilter`` -> positional ``{name}_0`` /
+        ``{name}_1`` keys all land in ``data`` correctly (``RangeFilter``
+        is not imported here -- the symbol lives in ``filters.base`` and
+        is referenced for shape-documentation; the actual range patch
+        comes back from ``inputs.py::_normalize_range_value``). Related-
+        branch keys (the
         ``shelves`` / ``books`` / etc. names declared via
         ``RelatedFilter``) are STRIPPED from the form-data dict before
         the parent's form sees it -- ``django-filter``'s form only owns
@@ -623,7 +651,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 continue
             spec = _field_specs.get((cls, python_attr))
             django_source_path = spec.django_source_path if spec is not None else None
-            # Per spec-021 L518-605 (Slice 2's per-field operator bag), top-
+            # Per spec-027 L518-605 (per-field operator bag), top-
             # level scalar fields wrap a nested ``<Field>FilterInputType``
             # dataclass whose attrs map to ``django-filter`` lookups
             # (``exact`` / ``i_contains`` / ``in_`` / ...). Iterate the bag
@@ -681,9 +709,17 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _operator_bag_items(raw_value: Any) -> list[tuple[str, Any]] | None:
         """Return the ``(lookup_attr, value)`` pairs of a per-field operator bag.
 
-        Slice 2's ``_build_input_fields`` wraps each scalar field's
-        lookups in a nested ``<Field>FilterInputType`` dataclass. The
-        normalizer detects that shape via ``__dataclass_fields__``;
+        ``_build_input_fields`` wraps each scalar field's lookups in a
+        nested ``<Field>FilterInputType`` dataclass. The normalizer
+        detects that shape via ``__dataclass_fields__`` (the same sniff
+        used at the three call sites that walk Strawberry input dataclasses:
+        ``_normalize_input``, ``_operator_bag_items``, and
+        ``_active_permission_field_paths``); we sniff
+        ``__dataclass_fields__`` instead of testing ``isinstance(..., dataclass)``
+        because Strawberry's ``@strawberry.input`` decorator stamps real
+        ``dataclass`` machinery on the class -- ``dataclasses.is_dataclass``
+        would also match, but the attribute sniff is faster and matches
+        the shape upstream uses to introspect input classes.
         ``RelatedFilter`` boundary values are handled separately via
         ``_apply_related_constraints`` so this helper does NOT see them.
         Returns ``None`` for scalar inputs that are not operator bags.
@@ -766,6 +802,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         (visibility derivation, constraint application, permission
         recursion) so an empty filter does not pre-constrain the parent
         queryset.
+
+        Both ``strawberry.UNSET`` (the Strawberry input-dataclass default
+        for unsupplied fields) and ``None`` collapse to "branch not
+        supplied" via ``_extract_branch_value``; only the consumer-
+        supplied branches reach the caller. Future refactors that
+        bypass ``_extract_branch_value`` (e.g. inlining the ``getattr``
+        for speed) must replicate the UNSET-collapse explicitly or the
+        active-branch derivation silently widens.
         """
         related_filters = getattr(cls, "related_filters", {})
         if not related_filters:
@@ -818,7 +862,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         ``apply_sync`` is invoked against the visibility-scoped queryset
         so nested input clauses (e.g. ``shelves: { code: { iContains:
         "A" } }``) narrow the child queryset BEFORE the parent's
-        ``<rel>__in=<intersected>`` clause is computed (spec-021 L668-678).
+        ``<rel>__in=<intersected>`` clause is computed (spec-027 L668-678).
         """
         result: dict[str, models.QuerySet] = {}
         for field_name, related_filter, child_input in cls._iter_active_related_branches(
@@ -853,6 +897,80 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             child_base = child_model._default_manager.all()
             scoped = await _apply_get_queryset_async(target_type, child_base, info)
             result[field_name] = await child_filterset.apply_async(child_input, scoped, info)
+        return result
+
+    @classmethod
+    async def _collect_nested_visibility_querysets_async(
+        cls,
+        input_value: Any,
+        info: Any,
+        *,
+        _depth: int = 0,
+    ) -> dict[int, dict[str, models.QuerySet]]:
+        """Pre-walk logical branches and derive each branch's visibility map.
+
+        Returns a map keyed by ``id(child_input)`` -- the same Python object
+        identity ``_q_for_branch`` will later receive from
+        ``_evaluate_logic_tree`` (preserved by ``_normalize_input``, which
+        copies the child dicts verbatim into ``self.data``). ``apply_async``
+        calls this BEFORE the top-level ``.qs`` read; ``_q_for_branch``
+        consults the stash via the sibling instance's
+        ``_nested_qs_by_branch_id`` and skips the sync derive that would
+        otherwise raise ``SyncMisuseError`` mid-``.qs`` when a nested
+        branch's target ``get_queryset`` is async-only.
+
+        Both the Strawberry-side keys (``and_`` / ``or_`` / ``not_``) and
+        the normalized wire-side keys (``and`` / ``or`` / ``not``) are
+        walked via ``_extract_branch_value`` so a consumer who hands a
+        pre-normalized dict still gets pre-derived maps; the walker
+        recurses so deeper nesting (``or: [{or: [...]}]``) also lands in
+        the stash before the sync ``_q_for_branch`` ever runs.
+
+        Logical-branch nesting under ``apply_async`` is capped by the same
+        ``_MAX_LOGIC_DEPTH`` guard ``_evaluate_logic_tree`` enforces -- a
+        pre-walk that exceeds the cap signals the same consumer-side
+        misuse and surfaces the same typed ``ConfigurationError`` here
+        rather than waiting for the sync recursion to discover it.
+        """
+        result: dict[int, dict[str, models.QuerySet]] = {}
+        if input_value is None or input_value is UNSET:
+            return result
+        if _depth > cls._MAX_LOGIC_DEPTH:
+            raise ConfigurationError(
+                f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
+                f"_MAX_LOGIC_DEPTH={cls._MAX_LOGIC_DEPTH}. Flatten the filter input "
+                "or split into multiple queries.",
+            )
+        # Walk each logical sub-branch (``and_`` / ``or_`` / ``not_`` on the
+        # Strawberry side; the dict-side input may already carry the
+        # normalized ``and`` / ``or`` / ``not`` keys when a consumer hands a
+        # raw dict). Each child_input gets its OWN visibility derive plus a
+        # recursive walk so deeply-nested branches all carry pre-derived
+        # maps before the sync ``_q_for_branch`` ever runs.
+        for _python_attr, _wire_key in _LOGIC_KEYS:
+            branch_value = cls._extract_branch_value(input_value, _python_attr)
+            if branch_value is None:
+                branch_value = cls._extract_branch_value(input_value, _wire_key)
+            if branch_value is None:
+                continue
+            children = (
+                [branch_value] if _wire_key == "not" else list(branch_value) if branch_value else []
+            )
+            for child_input in children:
+                if child_input is None or child_input is UNSET:
+                    continue
+                result[id(child_input)] = await cls._derive_related_visibility_querysets_async(
+                    child_input,
+                    info,
+                )
+                # Recurse so deeper nesting (``or: [{or: [...]}]``) also
+                # lands in the stash.
+                nested = await cls._collect_nested_visibility_querysets_async(
+                    child_input,
+                    info,
+                    _depth=_depth + 1,
+                )
+                result.update(nested)
         return result
 
     @staticmethod
@@ -1124,6 +1242,16 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         falls through to `filter_queryset` when the form has errors, so
         the explicit `is_valid()` call here is what turns a malformed
         input into a structured GraphQL response.
+
+        Classmethod-with-self-instance shape: ``apply_sync`` /
+        ``apply_async`` / ``_q_for_branch`` all reach this validator via
+        ``cls._validate_form_or_raise(filterset_instance)``. The method
+        is declared a classmethod so subclasses can override the
+        validation policy (e.g. inject custom GraphQL-error metadata)
+        without rebinding the instance method on every sibling filterset
+        a recursive branch builds; the instance is passed explicitly so
+        the override sees both the policy-owning class (``cls``) and the
+        actual filterset whose form to validate.
         """
         if filterset_instance.form.is_valid():
             return
@@ -1136,7 +1264,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         )
 
     # ------------------------------------------------------------------
-    # Slice 4a — tree-form logic substrate (`filter_queryset` override).
+    # Tree-form logic substrate (`filter_queryset` override).
     # ------------------------------------------------------------------
 
     def filter_queryset(self, queryset: models.QuerySet) -> models.QuerySet:
@@ -1169,15 +1297,22 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # branches can re-derive their ``RelatedFilter`` visibility +
         # constraints (B1 of the pre-merge review); it is ``None`` for
         # instances built outside the apply pipeline, which carry no
-        # related branches to re-derive.
+        # related branches to re-derive. ``_nested_qs_by_branch_id`` is
+        # populated only under ``apply_async``; when present, every nested
+        # ``child_input`` already carries an awaited visibility map keyed by
+        # ``id(child_input)`` so ``_q_for_branch`` can skip the sync derive
+        # that would otherwise raise ``SyncMisuseError`` on an async-only
+        # target ``get_queryset``.
         depth = getattr(self, "_logic_depth", 0)
         info = getattr(self, "_apply_info", None)
+        nested_map = getattr(self, "_nested_qs_by_branch_id", None)
         q = type(self)._evaluate_logic_tree(
             qs,
             self.data or {},
             request=self.request,
             info=info,
             _depth=depth,
+            _nested_qs_by_branch_id=nested_map,
         )
         return qs.filter(q)
 
@@ -1190,6 +1325,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         info: Any = None,
         *,
         _depth: int = 0,
+        _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet]] | None = None,
     ) -> models.Q:
         """Build the ``Q`` expression for the ``and`` / ``or`` / ``not`` branches.
 
@@ -1198,6 +1334,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         ``qs.filter(...)`` and the no-op for an empty sub-branch list.
         ``_depth`` is the recursion-cap counter shared with
         ``_q_for_branch``; both helpers cap at ``cls._MAX_LOGIC_DEPTH``.
+        ``_nested_qs_by_branch_id`` carries the pre-derived async
+        visibility maps produced by ``_collect_nested_visibility_querysets_async``
+        (None on the sync path).
         """
         q = models.Q()
         if not isinstance(tree_data, dict) or not tree_data:
@@ -1217,6 +1356,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 request=request,
                 info=info,
                 _depth=_depth + 1,
+                _nested_qs_by_branch_id=_nested_qs_by_branch_id,
             )
 
         or_branches = tree_data.get("or") or []
@@ -1229,6 +1369,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                     request=request,
                     info=info,
                     _depth=_depth + 1,
+                    _nested_qs_by_branch_id=_nested_qs_by_branch_id,
                 )
             q &= or_q
 
@@ -1240,6 +1381,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 request=request,
                 info=info,
                 _depth=_depth + 1,
+                _nested_qs_by_branch_id=_nested_qs_by_branch_id,
             )
 
         return q
@@ -1253,6 +1395,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         info: Any = None,
         *,
         _depth: int = 0,
+        _nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet]] | None = None,
     ) -> models.Q:
         """Materialize one nested-branch input into a ``pk__in`` ``Q``.
 
@@ -1270,10 +1413,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         and applying them here a related branch nested inside a logical
         clause -- ``or: [{shelves: {code: {iContains: "X"}}}]`` -- would
         silently widen to the whole parent queryset (B1 of the pre-merge
-        review). Derivation is sync because ``.qs`` is read synchronously
-        even under ``apply_async``; a nested related target whose
-        ``get_queryset`` is async-only raises the usual ``SyncMisuseError``
-        rather than leaking rows.
+        review). Under ``apply_async`` the nested visibility map is
+        pre-derived via ``_collect_nested_visibility_querysets_async`` and
+        threaded through ``_nested_qs_by_branch_id`` keyed by
+        ``id(child_input)``; that stash is consumed by ``.get(id(...))``
+        here so an async-only target ``get_queryset`` no longer raises
+        ``SyncMisuseError`` mid-``.qs``. Under ``apply_sync`` the stash is
+        ``None`` and the helper falls back to the sync derive, which keeps
+        the documented sync-misuse error on the pure-sync path.
 
         ``_depth`` and ``_apply_info`` are stashed on the sibling instance
         so ``filter_queryset`` can carry the recursion counter and the
@@ -1283,7 +1430,10 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         would lose the ``info`` needed to re-derive their related
         visibility (the recursion path crosses through django-filter's
         ``BaseFilterSet`` which we do not own and cannot pass kwargs
-        through).
+        through). ``_nested_qs_by_branch_id`` is stashed on the sibling
+        too so a deeper ``_q_for_branch`` call (via the sibling's own
+        ``filter_queryset`` -> ``_evaluate_logic_tree``) can keep
+        consulting the pre-derived map.
 
         Perf note (M-filters-6 review, accepted as-is): constructing the
         sibling ``cls(...)`` per branch triggers django-filter's
@@ -1293,12 +1443,26 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         means reaching into upstream's per-instance copy semantics. Profile
         before optimizing if a deeply-nested query ever shows up hot.
         """
-        child_qs_by_branch = cls._derive_related_visibility_querysets_sync(child_input, info)
+        if _nested_qs_by_branch_id is not None:
+            child_qs_by_branch = _nested_qs_by_branch_id.get(id(child_input))
+            if child_qs_by_branch is None:
+                # Defensive fallback: the pre-pass walks every reachable
+                # logical branch, but a consumer who short-circuits past
+                # the walker (e.g. by calling ``_q_for_branch`` directly)
+                # still gets a correct result via the sync derive. Apply
+                # the same async/sync caveat the docstring names.
+                child_qs_by_branch = cls._derive_related_visibility_querysets_sync(
+                    child_input,
+                    info,
+                )
+        else:
+            child_qs_by_branch = cls._derive_related_visibility_querysets_sync(child_input, info)
         constrained = cls._apply_related_constraints(child_input, queryset, child_qs_by_branch)
         child_data = cls._normalize_input(child_input)
         child_set = cls(data=child_data, queryset=constrained, request=request)
         child_set._logic_depth = _depth
         child_set._apply_info = info
+        child_set._nested_qs_by_branch_id = _nested_qs_by_branch_id
         cls._validate_form_or_raise(child_set)
         return models.Q(pk__in=child_set.qs.values("pk"))
 
@@ -1407,27 +1571,52 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         queryset: models.QuerySet,
         info: Any,
     ) -> models.QuerySet:
-        """Async sibling of `apply_sync` awaiting the visibility step.
+        """Async sibling of `apply_sync` awaiting every blocking step.
 
-        Contract caveat: only the visibility-derivation step is awaited.
-        ``apply_async`` does NOT wrap consumer hooks -- ``check_*_permission``
-        gates or a custom ``method=`` filter's body -- in ``sync_to_async``,
-        and reads ``.qs`` synchronously (which is also where nested logical
-        branches re-derive their related visibility, see ``_q_for_branch``).
-        The built-in pipeline does no synchronous I/O on that path, but a
-        consumer hook that issues a blocking ORM call would block the event
-        loop without raising. Keep such hooks non-blocking, or do the I/O in
-        the awaited ``get_queryset`` visibility step.
+        Steps:
+            1. Normalize the input (pure-Python).
+            2. Await the top-level ``_derive_related_visibility_querysets_async``
+               so every active ``RelatedFilter`` branch's target
+               ``get_queryset`` runs on the async path.
+            3. Pre-walk every ``and`` / ``or`` / ``not`` arm via
+               ``_collect_nested_visibility_querysets_async`` so nested
+               branches whose target type's ``get_queryset`` is async-only
+               get their visibility maps awaited BEFORE the sync ``.qs``
+               read fans into ``_q_for_branch``. Without this step,
+               ``_q_for_branch``'s sync derive would raise
+               ``SyncMisuseError`` mid-``.qs``.
+            4. Resolve the request, apply related constraints, construct
+               the filterset.
+            5. Route ``_run_permission_checks`` and ``_validate_form_or_raise``
+               through ``sync_to_async(thread_sensitive=True)`` so a
+               consumer's ``check_*_permission`` hook that performs a
+               blocking ORM read does not block the event loop. The
+               thread-sensitive shape mirrors how Django wraps consumer
+               sync hooks on its own async paths.
+            6. Read ``.qs`` inside ``sync_to_async`` for the same reason --
+               ``.qs`` triggers ``BaseFilterSet.filter_queryset`` which
+               recurses through ``_q_for_branch`` (sync) and may evaluate
+               a custom ``method=`` filter's body or run leaf-clause ORM.
         """
         data = cls._normalize_input(input_value)
         child_qs_by_branch = await cls._derive_related_visibility_querysets_async(input_value, info)
+        nested_qs_by_branch_id = await cls._collect_nested_visibility_querysets_async(
+            input_value,
+            info,
+        )
         request = cls._request_from_info(info)
         constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
         filterset_instance = cls(data=data, queryset=constrained, request=request)
         filterset_instance._apply_info = info
-        cls._run_permission_checks(input_value, request)
-        cls._validate_form_or_raise(filterset_instance)
-        return filterset_instance.qs
+        filterset_instance._nested_qs_by_branch_id = nested_qs_by_branch_id
+        await sync_to_async(cls._run_permission_checks, thread_sensitive=True)(
+            input_value,
+            request,
+        )
+        await sync_to_async(cls._validate_form_or_raise, thread_sensitive=True)(
+            filterset_instance,
+        )
+        return await sync_to_async(_read_qs, thread_sensitive=True)(filterset_instance)
 
     @classmethod
     def apply(
@@ -1447,6 +1636,10 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         try:
             return cls.apply_sync(input_value, queryset, info)
         except SyncMisuseError as exc:
+            # ``from exc`` already records the original ``SyncMisuseError``
+            # on ``__cause__``; standard traceback machinery surfaces it.
+            # Avoid duplicating the cause's ``str()`` in the message here
+            # (the cause prints once via the chain, twice if both included).
             raise RuntimeError(
-                f"FilterSet.apply called against async get_queryset; use apply_async instead. ({exc})",
+                "FilterSet.apply called against async get_queryset; use apply_async instead.",
             ) from exc

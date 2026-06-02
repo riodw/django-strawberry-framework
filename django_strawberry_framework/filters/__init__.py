@@ -2,10 +2,9 @@
 
 Re-exports the foundational primitives from `base.py`, the `FilterSet`
 + `FilterSetMetaclass` pair from `sets.py`, and the Decision-11
-consumer helper `filter_input_type` (Slice 2). Slice 3 will wire the
-finalizer-phase-2.5 orphan check that compares
-`_helper_referenced_filtersets` against the set of `Meta.filterset_class`-
-wired filtersets.
+consumer helper `filter_input_type`. The finalizer's phase 2.5 wires
+the orphan check that compares `_helper_referenced_filtersets` against
+the set of `Meta.filterset_class`-wired filtersets.
 
 Note: `Filter` re-exported here IS `django_filters.Filter` itself (a
 plain re-export, not a subclass), surfaced under this package's namespace
@@ -41,8 +40,8 @@ from .sets import FilterSet, FilterSetMetaclass
 
 # Ledger of `FilterSet`s referenced through the Decision-11
 # `filter_input_type(...)` consumer helper. `registry.clear()` clears
-# this set via a cycle-safe local import per spec-021 Decision 9.
-# Slice 3's finalizer phase 2.5 subpass 4 compares this set against the
+# this set via a cycle-safe local import per spec-027 Decision 9.
+# The finalizer's phase 2.5 subpass 4 compares this set against the
 # set of `Meta.filterset_class`-wired filtersets and raises
 # `ConfigurationError` for orphans.
 _helper_referenced_filtersets: set[type[FilterSet]] = set()
@@ -58,8 +57,8 @@ def filter_input_type(filterset_class: type[FilterSet]) -> object:
     argument; Strawberry collects the annotation at ``@strawberry.type``
     decoration time, defers resolution, and resolves it via
     ``LazyType.resolve_type`` at schema-build time -- by which point
-    ``finalize_django_types()`` (Slice 3) has materialized the input
-    class as a module global of ``django_strawberry_framework.filters.inputs``.
+    ``finalize_django_types()`` has materialized the input class as a
+    module global of ``django_strawberry_framework.filters.inputs``.
 
     Args:
         filterset_class: A ``FilterSet`` subclass. Validated eagerly --
@@ -80,7 +79,7 @@ def filter_input_type(filterset_class: type[FilterSet]) -> object:
     # as a `typing.ForwardRef` in the first `__args__` position; the
     # test plan pins this against future Python typing regressions
     # (`test_filter_input_type_returns_forwardref_in_annotation_args`,
-    # spec-021 L7 of rev5). Do NOT refactor this into a literal-string
+    # spec-027 L7 of rev5). Do NOT refactor this into a literal-string
     # interpolation outside the Annotated call -- Strawberry's
     # `LazyType.resolve_type` requires the ForwardRef-wrapped form to
     # resolve via `module.__dict__` at schema build.

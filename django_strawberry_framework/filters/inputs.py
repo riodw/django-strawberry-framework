@@ -3,16 +3,17 @@
 
 Generated input classes MUST become real globals of this module because
 ``strawberry.lazy("django_strawberry_framework.filters.inputs")`` resolves
-through ``module.__dict__`` (spec-021 Decision 9). Slice 1 landed the
+through ``module.__dict__`` (spec-027 Decision 9). The module pairs the
 constants (``LOOKUP_PREFIXES`` / ``LOOKUP_NAME_MAP`` / ``FieldSpec`` /
-``_field_specs`` / ``_materialized_names``); Slice 2 adds the
+``_field_specs`` / ``_materialized_names``) with the
 filter-instance -> Strawberry-annotation converter pair
 (``convert_filter_to_input_annotation`` /
 ``normalize_input_value``), the dataclass builder
-(``build_input_class``), and the per-filterset operator-bag helpers
+(``build_input_class``), the per-filterset operator-bag helpers
 (``_build_input_fields`` / ``_build_logic_fields`` /
-``construct_search``). Slice 3 lands ``materialize_input_class`` and
-``clear_filter_input_namespace`` on top.
+``construct_search``), and the module-global materialization /
+namespace-clear pair (``materialize_input_class`` /
+``clear_filter_input_namespace``).
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ INPUTS_MODULE_PATH: str = "django_strawberry_framework.filters.inputs"
 
 
 # Search-prefix vocabulary for the future `Meta.search_fields` card per
-# spec-021 Decision 3 Layer 5; consumed by `construct_search` below.
+# spec-027 Decision 3 Layer 5; consumed by `construct_search` below.
 LOOKUP_PREFIXES: dict[str, str] = {
     "^": "istartswith",
     "=": "iexact",
@@ -63,15 +64,14 @@ LOOKUP_PREFIXES: dict[str, str] = {
 }
 
 
-# `django-filter` lookup -> (python_attr, graphql_name) pair per spec-021
+# `django-filter` lookup -> (python_attr, graphql_name) pair per spec-027
 # Decision 3 Layer 5 / H3 of rev4 feedback. Strawberry's auto-camel-case
 # cannot transform `icontains` to `iContains` (no underscore to split on),
 # and the Python keyword `in` cannot be a dataclass field — both are pinned
-# here. Slice 1 consumes this map via `FilterSet._normalize_input` to map
-# Strawberry-input dataclass attrs back to `django-filter`'s form-data keys;
-# Slice 2 consumes it via `_build_input_fields` (for
-# `strawberry.field(name=...)` emission) and `normalize_input_value` (for
-# the runtime symmetric).
+# here. Consumed by `FilterSet._normalize_input` (mapping Strawberry-input
+# dataclass attrs back to `django-filter`'s form-data keys),
+# `_build_input_fields` (for `strawberry.field(name=...)` emission), and
+# `normalize_input_value` (for the runtime symmetric).
 LOOKUP_NAME_MAP: dict[str, tuple[str, str]] = {
     "exact": ("exact", "exact"),
     "iexact": ("i_exact", "iExact"),
@@ -118,10 +118,10 @@ _LOGIC_KEYS: tuple[tuple[str, str], ...] = (("and_", "and"), ("or_", "or"), ("no
 class FieldSpec:
     """Per-generated-input-field metadata.
 
-    Carries the three names ``normalize_input_value`` and (Slice 3's)
+    Carries the three names ``normalize_input_value`` and
     ``materialize_input_class`` need to map between the Strawberry input
     dataclass field, the GraphQL wire-format name, and the
-    `django-filter` lookup path on the Django ORM (per spec-021 M5 of
+    `django-filter` lookup path on the Django ORM (per spec-027 M5 of
     rev8).
     """
 
@@ -141,13 +141,13 @@ class FieldSpec:
 _field_specs: dict[tuple[type[FilterSet], str], FieldSpec] = {}
 
 
-# Ledger of materialized input class names per spec-021 Decision 9.
-# Slice 3's ``materialize_input_class`` writes a ``name -> input_class``
-# entry; ``clear_filter_input_namespace`` walks the snapshot keys to
-# ``delattr`` the matching module global and reset the ledger. The
-# stored value is the materialized input class (NOT the FilterSet) so
-# the clear path can call ``delattr`` against the module's global by
-# the same name without an extra lookup.
+# Ledger of materialized input class names per spec-027 Decision 9.
+# ``materialize_input_class`` writes a ``name -> input_class`` entry;
+# ``clear_filter_input_namespace`` walks the snapshot keys to ``delattr``
+# the matching module global and reset the ledger. The stored value is
+# the materialized input class (NOT the FilterSet) so the clear path can
+# call ``delattr`` against the module's global by the same name without
+# an extra lookup.
 _materialized_names: dict[str, type] = {}
 
 
@@ -165,17 +165,22 @@ def _pascal_case(name: str) -> str:
     Raises ``ConfigurationError`` for inputs that contain no
     word-character tokens (e.g. ``"_"``, ``""``, ``"__"``); the result
     would otherwise be an empty string and silently collide on the
-    downstream ``f"{bag_name}{...}FilterInputType"`` naming, producing
-    a generic ``"FilterInputType"`` that the BFS factory's collision
-    check would then flag indirectly. Raising here surfaces the real
-    cause at the call site.
+    downstream ``RangeInputType`` naming. Raising here surfaces the
+    real cause at the call site.
+
+    Direct caller today: ``_build_range_input_class`` only. Indirect
+    callers (``_input_type_name_for``, ``_build_input_fields``'s
+    operator-bag class naming) route through
+    ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for`` and trip
+    its sibling no-word-character guard rather than this one — so the
+    error message below names the ``RangeFilter`` consumer specifically.
     """
     parts = [part.capitalize() for part in name.replace("__", "_").split("_") if part]
     if not parts:
         raise ConfigurationError(
             f"_pascal_case received {name!r} which contains no word "
-            "characters; rename the filter / field so its name has at "
-            "least one alphanumeric token.",
+            "characters; rename the RangeFilter's `field_name=` so its "
+            "name has at least one alphanumeric token.",
         )
     return "".join(parts)
 
@@ -189,7 +194,7 @@ def _input_type_name_for(filterset_class: type[FilterSet]) -> str:
     helper so its callers -- ``filter_input_type`` (``__init__.py``),
     ``FilterArgumentsFactory`` (``factories.py``), and ``_build_input_fields``
     (this module) -- stay pinned to one derivation site even though the
-    spec-021 Decision 9 (lines 1023-1030) naming rule now lives on the mixin
+    spec-027 Decision 9 (lines 1023-1030) naming rule now lives on the mixin
     (shared with the future order / aggregate sets).
     """
     return filterset_class.type_name_for()
@@ -233,7 +238,7 @@ def _scalar_from_form_field(form_field: Any) -> type:
         return uuid.UUID
     # Both ``CharField`` and the catch-all map to ``str``. The explicit
     # ``CharField`` branch is kept for documentation: the conversion
-    # table at spec-021 Decision 4 M1 lists CharField as a recognized
+    # table at spec-027 Decision 4 M1 lists CharField as a recognized
     # shape, and a future reader who inspects this function should see
     # that the mapping is intentional, not an accidental fallthrough.
     if isinstance(form_field, forms.CharField):
@@ -267,7 +272,7 @@ def _choice_enum_from_filter(
 ) -> Any:
     """Derive a Strawberry enum from a ``ChoiceFilter``'s underlying choice source.
 
-    Per spec-021 Decision 4 M5 (line 591), a ``ChoiceFilter`` whose source
+    Per spec-027 Decision 4 M5 (line 591), a ``ChoiceFilter`` whose source
     is not a Django ``Choices``-derived enum raises ``ConfigurationError``
     (the consumer is expected to wrap the choices through the existing
     converter pipeline). When the underlying model field is available
@@ -379,7 +384,7 @@ def convert_filter_to_input_annotation(
     else:
         # Catch-all scalar branch. ``Filter(method=...)`` filters land
         # here when their ``field_class`` is a recognized form field; an
-        # unknown form-field shape raises per spec-021 line 595.
+        # unknown form-field shape raises per spec-027 line 595.
         form_field = getattr(filter_instance, "field", None)
         method = getattr(filter_instance, "method", None)
         if method is not None and form_field is None:
@@ -420,7 +425,7 @@ def normalize_input_value(
       dict when the filter consumes more than one positional form-data
       key (``RangeFilter`` -> ``{<field>_0, <field>_1}``).
 
-    Per the Implementation discretion item (Slice 2 plan step 2), the
+    Per the spec-027 Implementation-discretion item, the
     multi-key return shape lets the ``_normalize_input`` caller merge
     the patch without inventing a sentinel-pair object.
     """
@@ -464,7 +469,7 @@ def _encode_global_id_input(value: Any) -> Any:
     ``apply_sync`` / ``apply_async`` caller passes) MUST keep its
     ``type_name`` so ``GlobalIDFilter.filter`` /
     ``GlobalIDMultipleChoiceFilter.filter`` can validate it against the
-    target GraphQL type (spec-021 L603) before any queryset clause runs.
+    target GraphQL type (spec-027 L603) before any queryset clause runs.
     The previous implementation eagerly decoded the object down to its
     bare ``node_id`` here -- stripping the ``type_name`` *before*
     validation, so a wrong-type GlobalID object silently passed the gate.
@@ -489,6 +494,12 @@ def _unwrap_enum_member(value: Any) -> Any:
     ``None`` (the prior value-truthiness guard returned such a member
     un-unwrapped), and it never misfires on plain objects that merely expose a
     ``.value`` attribute (e.g. ``decimal.Decimal``).
+
+    Single-level unwrap — nested-list / nested-dict inputs are not
+    recursively unwrapped. No current consumer produces such shapes (the
+    Django converter pipeline yields flat scalars / lists from the
+    `django-filter` form-field hierarchy); a future nested-shape
+    ``ListFilter`` would need its own per-level walk.
     """
     if isinstance(value, enum.Enum):
         return value.value
@@ -523,12 +534,18 @@ def _normalize_range_value(
 ) -> dict[str, Any]:
     """Return the positional form-data patch ``{<name>_0, <name>_1}`` for a RangeFilter.
 
-    Per spec-021 Decision 4 line 594: Django's ``RangeWidget.value_from_datadict``
+    Per spec-027 Decision 4 line 594: Django's ``RangeWidget.value_from_datadict``
     reads positional keys ``name_0`` / ``name_1`` (NOT named ``_from`` /
     ``_to`` keys). The patch's key prefix is the form-data field name
     (``filter_instance.field_name`` for direct filters; the caller may
     override via ``field_name`` for the dataclass-attribute case where
     the Strawberry attr differs from the django-filter form-key).
+
+    Partial-range inputs surface only the supplied positional key
+    (``{<name>_0}`` for start-only, ``{<name>_1}`` for end-only, ``{}``
+    for neither). Omitting ``None``-valued axes preserves the form-data
+    "axis not supplied" convention ``django-filter`` consumes and keeps
+    the patch keys load-bearing for any caller walking ``data.keys()``.
     """
     base = field_name or filter_instance.field_name or "range"
     start = (
@@ -810,10 +827,10 @@ def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Fil
 def construct_search(all_filters: dict[str, Any]) -> dict[str, str]:
     """Translate ``LOOKUP_PREFIXES``-vocabulary keys into a ``{name: lookup}`` map.
 
-    Spec sub-bullet 4 for Slice 2 lands the helper now even though the
-    ``Meta.search_fields`` card is ``0.1.2`` -- the prefix vocabulary
-    constant ``LOOKUP_PREFIXES`` would otherwise be dead code. Slice 2's
-    tests exercise the prefix translation directly.
+    Landed now even though the ``Meta.search_fields`` card is deferred to
+    ``0.1.2`` -- the prefix vocabulary constant ``LOOKUP_PREFIXES`` would
+    otherwise be dead code. The prefix-translation tests in
+    ``tests/filters/test_inputs.py`` exercise the helper directly.
     """
     result: dict[str, str] = {}
     for filter_name in all_filters:
@@ -824,7 +841,7 @@ def construct_search(all_filters: dict[str, Any]) -> dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
-# Module-global materialization (spec-021 Decision 9)
+# Module-global materialization (spec-027 Decision 9)
 # ---------------------------------------------------------------------------
 
 
@@ -835,7 +852,7 @@ def materialize_input_class(name: str, cls: type) -> None:
     ``sys.modules[<module>].__dict__[name]`` to materialize an
     ``Annotated[<name>, strawberry.lazy(<module>)]`` reference; this
     helper is the single entry point that pins ``cls`` at the matching
-    ``__dict__`` slot per spec-021 Decision 9.
+    ``__dict__`` slot per spec-027 Decision 9.
 
     Idempotent on the ``(name, cls)`` pair: re-materializing the same
     class under the same name is a no-op (Decision 9 lifecycle clause —

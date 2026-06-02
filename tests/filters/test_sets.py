@@ -1765,6 +1765,148 @@ def test_derive_related_visibility_querysets_async_skips_unregistered_target():
     assert result == {}
 
 
+@pytest.mark.django_db
+def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_sync_misuse():
+    """``apply_async`` pre-derives nested visibility so an async-only ``get_queryset`` hook
+    does not raise ``SyncMisuseError`` mid-``.qs`` from a nested ``or_`` branch.
+
+    Before the Medium-#2 fix, ``_q_for_branch`` called
+    ``_derive_related_visibility_querysets_sync`` unconditionally, which
+    invokes ``_apply_get_queryset_sync`` on the target type. A target whose
+    ``get_queryset`` is ``async def`` returns a coroutine that
+    ``_apply_get_queryset_sync`` flags as ``SyncMisuseError``. The pre-walk
+    in ``apply_async`` (``_collect_nested_visibility_querysets_async``)
+    now awaits every nested branch's visibility BEFORE the ``.qs`` read,
+    and ``_q_for_branch`` consults the stash keyed by ``id(child_input)``
+    instead of re-deriving sync.
+    """
+    import asyncio
+
+    from asgiref.sync import sync_to_async
+
+    alpha = library_models.Branch.objects.create(name="alpha")
+    library_models.Shelf.objects.create(branch=alpha, code="match")
+    beta = library_models.Branch.objects.create(name="beta")
+    library_models.Shelf.objects.create(branch=beta, code="other")
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+        @classmethod
+        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+            # Async-only hook: pre-merge ``_q_for_branch`` would raise
+            # ``SyncMisuseError`` when its sync derive walked into this.
+            return await sync_to_async(lambda: queryset)()
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    qs = asyncio.run(
+        BranchFilter.apply_async(
+            {"or_": [{"shelves": {"code": "match"}}]},
+            library_models.Branch.objects.all(),
+            _make_info(),
+        ),
+    )
+    # The async-only ``get_queryset`` ran, the nested branch constrained
+    # the parent, and only ``alpha`` (which owns the matching shelf) leaks
+    # through. Before the fix, ``.qs`` would raise ``SyncMisuseError``
+    # before this assertion could run.
+    assert list(qs.values_list("name", flat=True)) == ["alpha"]
+
+
+@pytest.mark.django_db
+def test_apply_async_runs_permission_checks_off_event_loop_thread():
+    """``apply_async`` routes ``_run_permission_checks`` through ``sync_to_async``
+    so a blocking ``check_*_permission`` hook does not block the event loop.
+
+    Asserts the permission method observed a thread ident DIFFERENT from
+    the event-loop thread ident -- which is what
+    ``sync_to_async(thread_sensitive=True)`` guarantees. Before the
+    Medium-#1 fix, ``_run_permission_checks`` ran inline on the event-loop
+    thread, so the two ident reads would have matched.
+    """
+    import asyncio
+    import threading
+
+    captured: dict[str, int] = {}
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+        def check_name_permission(self, request):  # noqa: ARG002
+            captured["permission_thread"] = threading.get_ident()
+
+    async def _run() -> int:
+        captured["event_loop_thread"] = threading.get_ident()
+        await CategoryFilter.apply_async(
+            {"name": "alpha"},
+            Category.objects.all(),
+            _make_info(),
+        )
+        return captured["event_loop_thread"]
+
+    event_loop_thread = asyncio.run(_run())
+    assert captured["permission_thread"] != event_loop_thread
+
+
+@pytest.mark.django_db
+def test_apply_async_collect_nested_visibility_querysets_pre_derives_or_branch():
+    """``_collect_nested_visibility_querysets_async`` keys the awaited map on
+    ``id(child_input)`` for every nested ``or`` arm.
+
+    Unit-level pin on the new helper -- given an ``or_`` input shape with
+    one inner branch carrying an active ``RelatedFilter``, the helper
+    returns a map whose only key is ``id`` of that nested child dict, and
+    whose value carries the ``shelves`` queryset derived via the async
+    path.
+    """
+    import asyncio
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    inner = {"shelves": {"code": "A"}}
+    result = asyncio.run(
+        BranchFilter._collect_nested_visibility_querysets_async(
+            {"or_": [inner]},
+            _make_info(),
+        ),
+    )
+    assert id(inner) in result
+    assert "shelves" in result[id(inner)]
+    assert result[id(inner)]["shelves"].model is library_models.Shelf
+    # Silence the unused ShelfType registration (registry isolation handles it).
+    assert ShelfType is not None
+
+
 # ---------------------------------------------------------------------------
 # Permission gate dispatch keys on the field, not the lookup (H2)
 # ---------------------------------------------------------------------------

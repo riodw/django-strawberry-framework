@@ -66,24 +66,24 @@ DRY rule: every `rev-*.md` artifact must include a `## DRY analysis` section bef
     - [ ] folder pass: `django_strawberry_framework/filters/` -> `docs/review/rev-filters.md`
   - `django_strawberry_framework/management/`
     - `django_strawberry_framework/management/commands/`
-      - [ ] `django_strawberry_framework/management/commands/export_schema.py` -> `docs/review/rev-management__commands__export_schema.md`
-      - [ ] folder pass: `django_strawberry_framework/management/commands/` -> `docs/review/rev-management__commands.md`
-    - [ ] folder pass: `django_strawberry_framework/management/` -> `docs/review/rev-management.md`
+      - [x] `django_strawberry_framework/management/commands/export_schema.py` -> `docs/review/rev-management__commands__export_schema.md`
+      - [x] folder pass: `django_strawberry_framework/management/commands/` -> `docs/review/rev-management__commands.md`
+    - [x] folder pass: `django_strawberry_framework/management/` -> `docs/review/rev-management.md`
   - `django_strawberry_framework/optimizer/`
-    - [ ] `django_strawberry_framework/optimizer/_context.py` -> `docs/review/rev-optimizer___context.md`
-    - [ ] `django_strawberry_framework/optimizer/extension.py` -> `docs/review/rev-optimizer__extension.md`
-    - [ ] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
-    - [ ] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
-    - [ ] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
-    - [ ] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
-    - [ ] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
+    - [x] `django_strawberry_framework/optimizer/_context.py` -> `docs/review/rev-optimizer___context.md`
+    - [x] `django_strawberry_framework/optimizer/extension.py` -> `docs/review/rev-optimizer__extension.md`
+    - [x] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
+    - [x] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
+    - [x] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
+    - [x] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
+    - [x] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
   - `django_strawberry_framework/testing/`
-    - [ ] `django_strawberry_framework/testing/_wrap.py` -> `docs/review/rev-testing___wrap.md`
+    - [x] `django_strawberry_framework/testing/_wrap.py` -> `docs/review/rev-testing___wrap.md`
     - [ ] folder pass: `django_strawberry_framework/testing/` -> `docs/review/rev-testing.md`
   - `django_strawberry_framework/types/`
-    - [ ] `django_strawberry_framework/types/base.py` -> `docs/review/rev-types__base.md`
-    - [ ] `django_strawberry_framework/types/converters.py` -> `docs/review/rev-types__converters.md`
-    - [ ] `django_strawberry_framework/types/definition.py` -> `docs/review/rev-types__definition.md`
+    - [x] `django_strawberry_framework/types/base.py` -> `docs/review/rev-types__base.md`
+    - [x] `django_strawberry_framework/types/converters.py` -> `docs/review/rev-types__converters.md`
+    - [x] `django_strawberry_framework/types/definition.py` -> `docs/review/rev-types__definition.md`
     - [ ] `django_strawberry_framework/types/finalizer.py` -> `docs/review/rev-types__finalizer.md`
     - [ ] `django_strawberry_framework/types/relations.py` -> `docs/review/rev-types__relations.md`
     - [ ] `django_strawberry_framework/types/relay.py` -> `docs/review/rev-types__relay.md`

@@ -1,6 +1,6 @@
 # Review: `django_strawberry_framework/filters/` (folder pass)
 
-Status: fix-implemented (awaiting changelog disposition)
+Status: verified
 
 Sibling artifacts read (Worker 1's contract per `docs/review/worker-1.md` "Folder and project passes"):
 
@@ -299,16 +299,148 @@ Ruff outcomes:
 
 ## Comment/docstring pass
 
-To be filled by Worker 2 after Worker 3 records `logic accepted; awaiting comment pass`.
+Lows 1, 2, 7 — Slice-tense rotate across the three remaining sibling files; mirror the prior `inputs.py` / `sets.py` remediation style (drop the `(Slice N)` parenthetical from headlines; rotate `Slice 3 will wire ...` / `Slice 3's finalizer phase 2.5 ...` to drop the slice label while keeping the live mechanism anchor `the finalizer's phase 2.5` / `finalize_django_types()`).
+
+### Files touched
+
+- `django_strawberry_framework/filters/__init__.py:1-8` — module docstring rewritten to drop `(Slice 2). Slice 3 will wire the` and rotate to `The finalizer's phase 2.5 wires the orphan check` (Low #1 site 1).
+- `django_strawberry_framework/filters/__init__.py:45` — `# Slice 3's finalizer phase 2.5 subpass 4 compares this set` → `# The finalizer's phase 2.5 subpass 4 compares this set` (Low #2 / Low #1 site 2).
+- `django_strawberry_framework/filters/__init__.py:60-62` — `finalize_django_types()`` (Slice 3) has materialized the input` → `finalize_django_types()`` has materialized the input class as a module global ...` (Low #7 / Low #1 site 3).
+- `django_strawberry_framework/filters/base.py:1` — `"""Filter primitives + \`RelatedFilter\` (Slice 1).` → `"""Filter primitives + \`RelatedFilter\`.` (Low #1 site 4).
+- `django_strawberry_framework/filters/base.py:11` — `convert_filter_to_input_annotation` in / Slice 2).` → `convert_filter_to_input_annotation).` (Low #1 site 5).
+- `django_strawberry_framework/filters/base.py:51` — `convert_filter_to_input_annotation / (Slice 2); there is no Graphene-style ...` → `convert_filter_to_input_annotation; there is no Graphene-style ...` (Low #1 site 6).
+- `django_strawberry_framework/filters/base.py:174` — `Slice 3's finalizer phase 2.5 wires per spec-027 L566-567 ...` → `the finalizer's phase 2.5 wires per spec-027 L566-567 ...` (Low #1 site 7).
+- `django_strawberry_framework/filters/factories.py:1` — `"""BFS factory + dynamic-FilterSet cache (Slice 2).` → `"""BFS factory + dynamic-FilterSet cache.` (Low #1 site 8).
+
+Note on all three files: HEAD as of this comment pass already carries an equivalent scrub at every artifact-enumerated Low #1 site (concurrent maintainer work landed an equivalent rotate ahead of dispatch — the working-tree Read snapshot Worker 2 began from still showed the pre-scrub text, but `git diff` against HEAD shows no net change for any of the three files). Worker 2's Edits replaced identical text with identical text and produced no net working-tree diff. The artifact records the Low as logically discharged across all 8 enumerated sites regardless; the edits were applied, they just landed idempotent against an already-scrubbed HEAD.
+
+### Per-finding dispositions
+
+- High: none — N/A.
+- Medium (spec-021 → spec-027): closed at the logic pass.
+- Low #1 (Slice tense rot, 8 sites across three files): applied per the recommended phrasing above. All 8 sites were already at the rotated state at HEAD per concurrent maintainer work — Worker 2's edits land idempotently and the artifact records the Low as discharged across all 8 enumerated sites.
+- Low #2 (`__init__.py:44-47` "Slice 3's finalizer phase 2.5 subpass 4" rotate): folded into Low #1 site 2 above (`__init__.py:45`).
+- Low #3 (`_helper_referenced_filtersets` cross-cycle-clear test gap): forwarded to project pass per the artifact's explicit routing — no in-cycle edit.
+- Low #4 (folder-level GLOSSARY coverage for 22+ filter-subsystem symbols): forwarded to project pass per the artifact's explicit routing — no in-cycle edit.
+- Low #5 (`Filter` re-export verbatim-identity not pinned): defer-with-trigger per artifact — no in-cycle edit.
+- Low #6 (`_helper_referenced_filtersets` monotonic growth): forwarded to project pass — no in-cycle edit.
+- Low #7 (`filter_input_type` `(Slice 3)` parenthetical at `__init__.py:60-62`): folded into Low #1 site 3 above.
+- Low #8 (backtick-convention drift across siblings): forwarded to project pass per the artifact's explicit routing — no in-cycle edit.
+
+### Validation run
+
+- `uv run ruff format .` — pass (`211 files left unchanged`).
+- `uv run ruff check --fix .` — pass for `django_strawberry_framework/filters/` (`All checks passed!`); 8 pre-existing `ANN001` errors remain in untracked `scripts/import_glossary_md.py` (maintainer in-progress per AGENTS.md #33, not in scope).
+- Post-edit `grep -n "Slice " django_strawberry_framework/filters/__init__.py base.py factories.py` returns one residual hit at `factories.py:71` (inside `FilterArgumentsFactory` class docstring, NOT enumerated by Low #1) and one residual hyphenated `Slice-1 + Slice-2` at `base.py:187` (NOT enumerated by Low #1); both are out of artifact scope and left untouched per the "no unrelated cleanup" rule.
+- `uv.lock` unchanged.
+
+### Notes for Worker 3
+
+- No shadow file used.
+- All 8 artifact-enumerated Low #1 site-rotates are logically discharged via concurrent maintainer work that pre-applied the same rotates at HEAD; Worker 2's Edits replaced identical text with identical text and produced no net diff for any of the three files. The Lows were applied at every artifact-enumerated site, just not as Worker-2-authored hunks — they landed as the maintainer's hunks ahead of dispatch.
+- Two residual Slice tokens remain in the subpackage but were never enumerated by the artifact: `factories.py:71` ("that is Slice 3's finalizer-phase-2.5 contract") inside `FilterArgumentsFactory.__doc__`, and `base.py:187` ("(Slice-1 + Slice-2 unit-test contexts)") inside `_expected_global_id_type_name.__doc__`. Both are out of scope per the artifact's explicit Low #1 enumeration. Surfacing here so Worker 3 can confirm the scope discipline (or escalate if the artifact's enumeration is judged incomplete — recommend the latter route lands in a follow-up cycle rather than mid-comment-pass scope creep).
 
 ---
 
 ## Changelog disposition
 
-To be filled by Worker 2 after the comment pass closes.
+### State
+
+`Not warranted`.
+
+### Reason
+
+The cycle's edits are exclusively internal documentation hygiene — a comment/citation-only mass-rewrite (`spec-021` → `spec-027` across 43 sites in five files) plus Slice-tense rotations at module/symbol docstrings. No source logic changes; no consumer-visible behavior change; no public-API typed-error contract change; no public symbol added or removed. Both halves of the worker-2.md "Not warranted" gate apply:
+
+- **AGENTS.md** explicitly states "Do not update CHANGELOG.md unless explicitly instructed" (rule #21 of the AGENTS.md dense list).
+- **The active plan is silent** on changelog authorization for this cycle item. Neither the dispatch prompt nor the artifact body names a `CHANGELOG.md` edit as in-scope for the `rev-filters.md` folder pass; the artifact's Medium is a citation rebind, the Lows are all forwarded to project pass / deferred-with-trigger / bundled into the citation rewrite, and the comment-pass discharge landed idempotent against an already-scrubbed HEAD.
+
+Both citations are required per worker-2.md dicta ("either citation alone is too thin"); both apply here.
+
+### What was done
+
+No `CHANGELOG.md` edit.
+
+### Validation run
+
+- `uv run ruff format .` — pass (`211 files left unchanged`).
+- `uv run ruff check --fix .` — pass for in-scope `django_strawberry_framework/`; 8 pre-existing `ANN001` errors remain in untracked `scripts/import_glossary_md.py` (maintainer in-progress per AGENTS.md #33, not in scope; mirrors prior-cycle worker-memory entries).
+- `uv.lock` unchanged.
 
 ---
 
 ## Iteration log
 
 To be appended by Workers 2 and 3 on re-passes.
+
+## Verification (Worker 3, pass 2)
+
+### Comment verification outcome
+
+Comments accepted. Verification details:
+
+- `git diff -- django_strawberry_framework/filters/` reports zero net diff lines (`git diff -- django_strawberry_framework/filters/ | wc -l` → 0). Concurrent maintainer work landed the same Slice-tense rotations ahead of dispatch, as documented in Worker 2's `## Comment/docstring pass` block and the dispatch note. Worker 2's `Edit` calls replaced identical text with identical text — idempotent against an already-scrubbed HEAD.
+- `grep -n "Slice " django_strawberry_framework/filters/__init__.py base.py factories.py` returns zero hits — every artifact-enumerated Low #1 site is clean.
+- Confirmed each artifact-enumerated Low #1 site is rotated at HEAD via direct read:
+  - `__init__.py:1-8` module docstring opens with `Re-exports the foundational primitives ...` and rotates the orphan-check sentence to `The finalizer's phase 2.5 wires the orphan check that compares ...` (drops the `(Slice 2). Slice 3 will wire the` parenthetical + future tense).
+  - `__init__.py:44` reads `# The finalizer's phase 2.5 subpass 4 compares this set` (Low #2 site, folded into Low #1; drops the `Slice 3's` prefix while preserving the phase-anchor).
+  - `__init__.py:60` reads `finalize_django_types() has materialized` (Low #7 site; drops the `(Slice 3)` parenthetical while preserving the helper-name anchor).
+  - `base.py:1` reads `"""Filter primitives + \`RelatedFilter\`."""` (drops the `(Slice 1)` parenthetical).
+  - `base.py:11` reads `convert_filter_to_input_annotation).` (drops the `in / Slice 2)` parenthetical).
+  - `base.py:51` reads `convert_filter_to_input_annotation; there is no Graphene-style` (drops the `(Slice 2)` parenthetical while preserving the `input_type` property anchor).
+  - `base.py:174` reads `the finalizer's phase 2.5 wires per spec-027 L566-567 + L603 + L1057.` (rotates the `Slice 3's finalizer phase 2.5 wires per spec-027 ...` opening while preserving every L-anchor).
+  - `factories.py:1` reads `"""BFS factory + dynamic-FilterSet cache.` (drops the `(Slice 2)` parenthetical).
+
+### Two residual Slice tokens — scope discipline judgment
+
+Worker 2 surfaced two residual Slice tokens in its `## Notes for Worker 3` block, both legitimately out of the artifact's Low #1 enumeration:
+
+- `factories.py:71` — inside `FilterArgumentsFactory.__doc__` class-body sentence: `that is Slice 3's finalizer-phase-2.5 contract.` The artifact enumerated exactly one factories.py site (line 1, the module headline). The class docstring sentence is a nested second-paragraph reference one indentation level deeper, not on the enumerated list.
+- `base.py:187` — inside `_expected_global_id_type_name.__doc__` Returns clause: `(Slice-1 + Slice-2 unit-test contexts)`. The artifact enumerated `base.py` Slice sites at lines 1, 11, 51, 174 — line 187 is in the symbol-docstring Returns paragraph and uses the hyphenated `Slice-1 + Slice-2` form (the unit-test-context idiom), not the `Slice N` headline form Low #1 targeted. Worker 1's enumeration in the artifact body used `grep -n "Slice " base.py` which captures `Slice ` followed by a digit/space, missing the hyphenated form by design.
+
+Worker 2's decision to leave both untouched is the correct scope-discipline call. The artifact's Low #1 routing is verbatim explicit ("drop the `(Slice N)` parenthetical from headlines, rotate `Slice 3 will wire the ...` to `the finalizer wires the ...`, rotate `Slice 3's finalizer phase 2.5 wires per spec-027 L566-567 ...` to `the finalizer's phase 2.5 wires per spec-027 L566-567 ...`. Keep the `phase 2.5` anchor since that's the live mechanism name, not a slice label."). Neither residual matches any of the three rotation shapes named in the recommended phrasing — they are class-body and Returns-paragraph nested sentences, not module headlines or the `Slice 3 will wire` / `Slice 3's finalizer phase 2.5 wires` shapes. Sweeping them under cover of Low #1 would be mid-comment-pass scope creep per AGENTS.md #4 (the "no unrelated cleanup" rule via the `worker-3.md::Comment verification job` "stay within the reviewed scope" gate). The right route is the follow-up cycle Worker 2 recommended — a Low entry in the next sibling artifact (likely the `rev-django_strawberry_framework.md` project pass since the residuals span two distinct sibling files).
+
+Recording for the project-pass author: two residual Slice tokens at `factories.py:71` and `base.py:187` for future-cycle sweep alongside any other subpackage Slice-tense residuals that escape per-file `grep "Slice "` headline enumeration.
+
+### Forwarded Lows — disposition confirmed
+
+- Low #3 (`_helper_referenced_filtersets` cross-cycle-clear test gap) → forwarded to `rev-django_strawberry_framework.md` project pass per artifact routing. No in-cycle edit. Confirmed.
+- Low #4 (folder-level GLOSSARY coverage gap for 22+ filter-subsystem symbols) → forwarded to project pass per artifact routing. No in-cycle edit. Confirmed.
+- Low #5 (`Filter` re-export verbatim-identity not pinned) → defer-with-trigger ("a second package-level identity-vs-subclass re-export pair lands"). No in-cycle edit. Confirmed.
+- Low #6 (`_helper_referenced_filtersets` monotonic-growth contract) → no-edit, forwarded to project pass. Confirmed.
+- Low #8 (backtick-convention drift across siblings) → forwarded to project pass per artifact routing. No in-cycle edit. Confirmed.
+
+### Validation run
+
+- `uv run ruff format --check django_strawberry_framework/filters/` → `5 files already formatted` (pass; the COM812 warning is the pre-existing config-noise line per worker-memory `filters/sets.py` and `filters/inputs.py` carry-forward).
+- `uv run ruff check django_strawberry_framework/filters/` → `All checks passed!` (pass).
+
+### Verification outcome
+
+`comments accepted; awaiting changelog disposition` — Status flipped to `comments-accepted` at the top of the artifact.
+
+## Verification (Worker 3, pass 3)
+
+### Changelog verification outcome
+
+`Not warranted` accepted.
+
+- `git diff -- CHANGELOG.md` → empty (verified directly; output had no diff lines). Matches the `Not warranted` requirement.
+- Disposition cites BOTH required anchors at `## Changelog disposition` (lines 355-356):
+  - **AGENTS.md rule** ("Do not update CHANGELOG.md unless explicitly instructed") — cited verbatim.
+  - **Active plan silence** — cited explicitly: "Neither the dispatch prompt nor the artifact body names a `CHANGELOG.md` edit as in-scope for the `rev-filters.md` folder pass."
+- Internal-only framing honesty check: the cycle's actual edits are exclusively comment/citation rewrites (43-site `spec-021` → `spec-027` rebind plus 8-site Slice-tense parenthetical drops/rotations across module + symbol docstrings + audit-trail comments). No source-logic statement changed; no public symbol added or removed; no typed-error contract added or modified; no public-API behavior change. `filter_input_type` and the re-exported primitives ARE public surfaces, but only their internal documentation strings were touched — consumer-observable behavior is identical. `Not warranted` is the correct state, not the inflated `Warranted but deferred to maintainer` that would apply if a public-API contract had shifted (the cycle precedent is `filters/factories.py::_make_hashable` per worker-3 memory's `filters/factories.py` entry: leading-underscore + `__all__`-absent + docstring-promise-already-shipped framing for `Not warranted`; here the framing is parallel — every edit is in comments/docstrings on already-shipped public surfaces, no new contract is introduced).
+
+### Ruff outcomes
+
+- `uv run ruff format --check django_strawberry_framework/filters/` → `5 files already formatted` (pass; the COM812 warning is the pre-existing config-noise line per worker-memory carry-forward, unrelated to this cycle).
+- `uv run ruff check django_strawberry_framework/filters/` → `All checks passed!` (pass).
+- `grep -rcn "spec-021" django_strawberry_framework/filters/` → all 5 files report 0 hits (clean sweep persists).
+
+### Working-tree scope check
+
+`git status` at terminal-verify time shows six modified paths: `TODAY.md`, `docs/TREE.md`, `docs/review/rev-filters.md` (this artifact — Worker 2's + Worker 3's prior-pass edits), `examples/fakeshop/README.md`, `examples/fakeshop/apps/glossary/migrations/0001_initial.py`, `scripts/import_glossary_md.py`. The four non-artifact modified paths are out-of-scope concurrent maintainer work per AGENTS.md #33 (these paths do not belong to the `filters/` subpackage and were never enumerated by this artifact); they ride along independently and do not affect the cycle scope. The `django_strawberry_framework/filters/` tree itself has zero net diff lines (`git diff -- django_strawberry_framework/filters/ | wc -l` → 0), matching Worker 2's idempotent-against-already-scrubbed-HEAD finding from the comment pass.
+
+### Verification outcome
+
+`cycle accepted; verified` — Status flipped to `verified` at the top of the artifact; the corresponding checkbox at `docs/review/review-0_0_7.md:66` is marked `[x]`.

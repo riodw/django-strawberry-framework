@@ -51,6 +51,15 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
       (``ForeignKey``, forward ``OneToOneField`` — i.e.,
       ``auto_created=False``).
 
+    Any ``one_to_many=True`` shape without ``auto_created`` falls back to
+    ``"many"`` as a defensive mapping; stock Django relation descriptors
+    never produce that combination (``ManyToManyField`` sets
+    ``many_to_many=True``; reverse FK/M2M descriptors always set
+    ``auto_created=True``; forward FK and forward ``OneToOneField`` set
+    ``one_to_many=False``). The branch is test-pinned at
+    ``tests/utils/test_relations.py::test_relation_kind_classifies_one_to_many_as_many``
+    so the fallback semantics cannot drift.
+
     Examples:
         ``ManyToManyField``-like -> ``"many"``;
         ``ManyToOneRel``-like -> ``"reverse_many_to_one"``;

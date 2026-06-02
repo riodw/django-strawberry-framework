@@ -30,7 +30,11 @@ from strawberry.types import Info
 from ..exceptions import OptimizerError
 
 # Share the optimizer subpackage's logger so consumers configuring
-# "django_strawberry_framework" see N+1 warnings.
+# "django_strawberry_framework" see N+1 warnings. The optimizer subpackage
+# owns the canonical N+1-warning logger; this module re-exports it under a
+# "_resolver_logger" alias so the surfacing site reads explicitly as
+# "_resolver_logger.warning(...)" rather than as "logger.warning(...)"
+# (which would mask the cross-subpackage origin).
 from ..optimizer import logger as _resolver_logger
 from ..optimizer._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
@@ -43,7 +47,7 @@ from ..optimizer._context import (
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..registry import registry
-from ..utils.relations import is_many_side_relation_kind, relation_kind
+from ..utils.relations import is_many_side_relation_kind
 
 # Module-level immutable sentinel for the "no elisions registered" branch so
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
@@ -129,10 +133,10 @@ def _check_n1(
     ``kind`` is required (keyword-only) and accepts the ``relation_kind``
     of the field being resolved. ``"many"`` and ``"reverse_many_to_one"``
     use the many-side cache check; every other known relation shape uses
-    the single-valued cache check. Pass ``kind=None`` only when you
-    explicitly want the legacy single-valued check — the absence of
-    ``kind`` in a new caller is a programming error, since production
-    ``_make_relation_resolver`` always supplies the relation kind.
+    the single-valued cache check. Production ``_make_relation_resolver``
+    always supplies the relation kind; the ``kind=None`` fallback is
+    reserved for test-double direct callers that exercise the
+    single-valued cache check (see ``tests/types/test_resolvers.py::test_check_n1_*``).
     """
     context = getattr(info, "context", None)
     planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
@@ -170,8 +174,10 @@ def _name_resolver(resolver: Callable[..., Any], field_name: str) -> Callable[..
 def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
     """Return registered ``FieldMeta`` for ``field`` when the parent type exposes it.
 
-    The ``None`` default exists for test-double direct calls; production calls always
-    supply ``parent_type=cls``.
+    Production callers MUST pass ``parent_type=cls`` so the branch-sensitive
+    resolver key matches what the optimizer walker emitted; the ``None`` default
+    ONLY supports test-double direct callers exercising the single-valued /
+    many-side code paths without a registered ``DjangoType``.
     """
     if parent_type is not None:
         definition = registry.get_definition(parent_type)
@@ -180,44 +186,25 @@ def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
             if meta is not None:
                 return meta
     if not hasattr(field, "is_relation"):
-        # Mirror the cardinality-gated nullable rule + target-column reads
-        # from ``FieldMeta.from_django_field`` (``optimizer/field_meta.py::FieldMeta.from_django_field``)
-        # so the test-double fallback advertises the same shape the canonical
-        # builder would. Many-side cardinalities short-circuit to
-        # ``nullable=False`` (manager/queryset is never ``None``); reverse
-        # OneToOne short-circuits to ``True``; every other single-relation
-        # shape follows ``field.null`` via ``getattr`` default ``False``.
-        is_m2m = bool(getattr(field, "many_to_many", False))
-        is_o2m = bool(getattr(field, "one_to_many", False))
-        target_field = getattr(field, "target_field", None)
-        if is_m2m or is_o2m:
-            nullable = False
-        else:
-            nullable = relation_kind(field) == "reverse_one_to_one" or bool(
-                getattr(field, "null", False),
-            )
-        return FieldMeta(
-            name=field.name,
-            is_relation=True,
-            many_to_many=is_m2m,
-            one_to_many=is_o2m,
-            one_to_one=bool(getattr(field, "one_to_one", False)),
-            nullable=nullable,
-            related_model=getattr(field, "related_model", None),
-            attname=getattr(field, "attname", None),
-            target_field_name=getattr(target_field, "name", None),
-            target_field_attname=getattr(target_field, "attname", None),
-            reverse_connector_attname=getattr(getattr(field, "field", None), "attname", None),
-            auto_created=bool(getattr(field, "auto_created", False)),
-        )
+        # Test-double fallback. The canonical builder
+        # ``FieldMeta.from_django_field`` requires ``field.is_relation``;
+        # test doubles like ``SimpleNamespace(name=..., many_to_many=...)``
+        # lack it. Delegating to the shared shape helper keeps the
+        # observable ``FieldMeta`` identical to what the canonical
+        # builder would produce on the same descriptor, with
+        # ``is_relation=True`` hard-coded because the caller is by
+        # definition asking about a relation field.
+        return FieldMeta._from_field_shape(field, is_relation=True)
     return FieldMeta.from_django_field(field)
 
 
 def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     """Generate a resolver for a Django relation field.
 
-    The ``None`` default exists for test-double direct calls; production calls always
-    supply ``parent_type=cls``.
+    Production callers MUST pass ``parent_type=cls`` so the branch-sensitive
+    resolver key matches what the optimizer walker emitted; the ``None`` default
+    ONLY supports test-double direct callers exercising the single-valued /
+    many-side code paths without a registered ``DjangoType``.
 
     Cardinality-specific shapes:
 

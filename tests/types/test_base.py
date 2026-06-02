@@ -350,7 +350,7 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
     the consumer's optimization intent is silently dead because the
     walker never visits an excluded field.
     """
-    with pytest.raises(ConfigurationError, match="not selected relations"):
+    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
 
         class T(DjangoType):
             class Meta:
@@ -360,7 +360,7 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
 
 
 def test_meta_optimizer_hints_for_selected_scalar_field_raises():
-    with pytest.raises(ConfigurationError, match="not selected relations"):
+    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
 
         class T(DjangoType):
             class Meta:
@@ -378,7 +378,7 @@ def test_meta_optimizer_hints_with_empty_field_selection_raises_configuration_er
     typed error. The fix threads ``meta.model`` through explicitly so the
     selected-relation gate fires with a normal ``ConfigurationError``.
     """
-    with pytest.raises(ConfigurationError, match="not selected relations"):
+    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
 
         class T(DjangoType):
             class Meta:

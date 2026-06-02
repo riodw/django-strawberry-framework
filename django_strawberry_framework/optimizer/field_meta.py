@@ -20,7 +20,7 @@ eliminating per-request Django introspection overhead.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from ..exceptions import OptimizerError
 from ..utils.relations import is_many_side_relation_kind, relation_kind
@@ -136,6 +136,31 @@ class FieldMeta:
                 f"FieldMeta.from_django_field expected a Django field descriptor "
                 f"exposing 'name' and 'is_relation'; got {field!r}",
             )
+        return cls._from_field_shape(field, is_relation=bool(field.is_relation))
+
+    @classmethod
+    def _from_field_shape(cls, field: Any, *, is_relation: bool) -> FieldMeta:
+        """Build a ``FieldMeta`` from a guard-cleared field-shaped descriptor.
+
+        Internal helper shared by the canonical ``from_django_field``
+        entry point and ``types/resolvers.py::_field_meta_for_resolver``'s
+        test-double fallback. Both call sites have already established
+        that the input exposes the field-shaped attribute surface
+        (``name`` plus the ``getattr``-defaulted cardinality / target /
+        related-model attributes); they differ only in how
+        ``is_relation`` is determined — ``from_django_field`` reads
+        ``bool(field.is_relation)``, the resolver-side fallback fires
+        only when the field lacks the ``is_relation`` attribute and the
+        caller is by definition asking about a relation (``True``).
+
+        The cardinality-gated nullable rule (many-side → ``False``;
+        reverse OneToOne → ``True``; otherwise ``field.null``) and the
+        nine ``getattr``-defaulted reads (``one_to_one``,
+        ``related_model``, ``attname``, ``target_field_name`` /
+        ``target_field_attname`` from a single ``target_field`` read,
+        ``reverse_connector_attname``, ``auto_created``) live here so
+        the two call sites cannot drift.
+        """
         # Read ``target_field`` once — it is consulted twice below to
         # extract both ``name`` and ``attname``.
         target_field = getattr(field, "target_field", None)
@@ -150,7 +175,7 @@ class FieldMeta:
             )
         return cls(
             name=field.name,
-            is_relation=bool(field.is_relation),
+            is_relation=is_relation,
             many_to_many=is_m2m,
             one_to_many=is_o2m,
             one_to_one=bool(getattr(field, "one_to_one", False)),

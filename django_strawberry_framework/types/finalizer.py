@@ -22,7 +22,7 @@ decoration touches a consumer-facing class:
   primary keys and receive the four ``resolve_*`` defaults Strawberry's
   Relay interface expects. ``_bind_filtersets`` then runs four ordered
   subpasses (bind owners, expand filtersets, materialize input classes,
-  reject orphan ``filter_input_type`` references) per spec-021 Decision 6
+  reject orphan ``filter_input_type`` references) per spec-027 Decision 6
   / H1 of rev8 — every subpass MUST complete across all wired types
   before the next subpass starts so cross-filterset references resolve
   against bound owners regardless of registration order. Runs before
@@ -99,8 +99,8 @@ def _format_ambiguity_error(offenders: list[tuple[type[models.Model], tuple[type
     at the top of this module so the finalize-time error strings stay
     grep-stable for tests and consumer error matching. The fix sentence
     (``Declare Meta.primary = True...``) is the actionable guidance the
-    audit's tests pin against (spec-014 #"with the fix sentence",
-    spec-014 #"test_finalize_ambiguity_error_message_contains_actionable_fix").
+    audit's tests pin against (spec-018 #"with the fix sentence",
+    spec-018 #"test_finalize_ambiguity_error_message_contains_actionable_fix").
     """
     parts = [
         f"  {model.__name__}: {', '.join(t.__name__ for t in types)}" for model, types in offenders
@@ -247,9 +247,7 @@ def finalize_django_types() -> None:
         # ``Meta.interfaces`` tuple. The Relay-node gate and resolver injection
         # are keyed off the resolved MRO (``implements_relay_node``) so they
         # also catch consumers who wrote ``class Foo(DjangoType, relay.Node)``
-        # directly without ``Meta.interfaces`` (review feedback
-        # ``feedback.md`` § High "Direct relay.Node inheritance bypasses Relay
-        # finalization").
+        # directly without ``Meta.interfaces``.
         if definition.interfaces:
             apply_interfaces(type_cls, definition)
         if implements_relay_node(type_cls):
@@ -273,8 +271,8 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
 
     First binding writes ``filterset_cls._owner_definition = definition``
     and returns. Re-binding the same ``(filterset_cls, definition)``
-    pair is idempotent (supports partial-finalize recovery per spec-021
-    Decision 6 lines 683-685). A second, distinct owner triggers the
+    pair is idempotent (supports partial-finalize recovery per spec-027
+    Decision 6 #"Partial-finalize lifecycle"). A second, distinct owner triggers the
     H2-rev8 strict-equality check across the two owner-dependent axes:
 
     1. **Own-PK Relay identity.** A filterset's own primary key resolves
@@ -293,7 +291,7 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
 
     Any divergence raises ``ConfigurationError`` naming both owners (and,
     for the relation axis, the offending field and both resolved target
-    type names) per spec-021 line 574.
+    type names) per spec-027 #"owning `FilterSet`'s target `DjangoType`".
 
     Scope note: ``related_target_for`` resolves a relation's target via the
     process-global ``registry.primary_for(target_model)`` lookup keyed on
@@ -391,8 +389,8 @@ def _format_owner_mismatch_error(
     ``_format_ambiguity_error`` above; all three formatters live at the
     top of this module so consumer error matching stays grep-stable.
     Names both owners' qualified names, the offending FilterSet, the
-    offending field, and both resolved target type names per spec-021
-    line 574.
+    offending field, and both resolved target type names per spec-027
+    #"owning `FilterSet`'s target `DjangoType`".
     """
     prev_name = prev_target[0].origin.__qualname__ if prev_target is not None else "<unresolved>"
     new_name = new_target[0].origin.__qualname__ if new_target is not None else "<unresolved>"
@@ -401,7 +399,7 @@ def _format_owner_mismatch_error(
         f"diverging targets: {previous.origin.__qualname__} resolves "
         f"{field_name!r} to {prev_name}, but {new.origin.__qualname__} resolves it "
         f"to {new_name}. Declare separate FilterSet subclasses for the diverging "
-        "owners (per spec-021 H2 of rev8)."
+        "owners (per spec-027 H2 of rev8)."
     )
 
 
@@ -426,7 +424,7 @@ def _format_owner_pk_mismatch_error(
         f"type_name={new.graphql_type_name!r}). The filterset's own `id` filter "
         "resolves to a GlobalID typed to its owner, so owners diverging on "
         "Relay-node-ness or GraphQL type name cannot share one FilterSet. Declare "
-        "separate FilterSet subclasses for the diverging owners (per spec-021 H2 of rev8)."
+        "separate FilterSet subclasses for the diverging owners (per spec-027 H2 of rev8)."
     )
 
 
@@ -458,8 +456,8 @@ def _format_orphan_filtersets_error(orphans: list[type]) -> str:
     Sorted by qualified name for deterministic output. When more than
     one orphan is present, the message uses the multi-orphan lead-in
     mirroring ``_format_unresolved_targets_error``'s shape; the single-
-    orphan branch uses the spec-pinned actionable message from spec-021
-    line 673.
+    orphan branch uses the spec-pinned actionable message from spec-027
+    #"Bind the owner.".
     """
     if len(orphans) == 1:
         cls = orphans[0]
@@ -757,7 +755,7 @@ def _bind_filtersets() -> None:
     Subpass 3 — orphan validation. Compares the FilterSets passed to
     ``filter_input_type(...)`` (per Decision 11) against the set of
     FilterSets wired via ``Meta.filterset_class``. Orphans raise
-    ``ConfigurationError`` per spec-021 line 673 with the actionable
+    ``ConfigurationError`` per spec-027 #"Bind the owner." with the actionable
     suggestion to add the missing ``filterset_class = <Name>``. Runs
     BEFORE materialization so an orphan failure leaves no partial
     state in ``_materialized_names`` /
@@ -797,9 +795,10 @@ def _bind_filtersets() -> None:
     # Subpass 2: expand every filterset; cross-references now resolve.
     # ``LazyRelatedClassMixin.resolve_lazy_class`` (Slice 1) raises
     # ``ImportError`` when a string-form ``RelatedFilter("Name")`` cannot
-    # be resolved. Re-wrap as ``ConfigurationError`` per spec-021 lines
-    # 416 + 1030 and the package's "finalize-time errors are
-    # ConfigurationError" convention (sibling formatters
+    # be resolved. Re-wrap as ``ConfigurationError`` per spec-027
+    # #"lazy-related-filter targets unresolved at finalize raise" and the
+    # package's "finalize-time errors are ConfigurationError" convention
+    # (sibling formatters
     # ``_format_unresolved_targets_error`` / ``_format_ambiguity_error``
     # / ``_format_owner_mismatch_error`` / ``_format_orphan_filtersets_error``
     # all raise ``ConfigurationError`` at finalize time); the original

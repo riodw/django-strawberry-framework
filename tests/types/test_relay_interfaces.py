@@ -70,7 +70,7 @@ def test_meta_interfaces_accepted():
         (relay.Node,),
         # Missing-comma spec spelling: Python evaluates ``(relay.Node)`` to
         # the bare class identity (not a tuple), so this case is identical
-        # to the first; included verbatim per spec-011 #"canonical spelling. For user ergonomics".
+        # to the first; included verbatim per spec-015 #"canonical spelling. For user ergonomics".
         (relay.Node),
     ],
 )
@@ -219,7 +219,7 @@ def test_relay_node_with_composite_pk_raises(monkeypatch):
     The fakeshop apps do not ship a composite-pk model, so the test
     monkey-patches ``Category._meta.pk`` to a ``CompositePrimaryKey``
     instance for the duration of the test. Detection in Phase 2.5 is via
-    ``isinstance(model._meta.pk, CompositePrimaryKey)`` per spec-011 #"Composite primary keys (Django 5.2+) are explicitly out of scope".
+    ``isinstance(model._meta.pk, CompositePrimaryKey)`` per spec-015 #"Composite primary keys (Django 5.2+) are explicitly out of scope".
     The error message names the model and proposes the two remediation
     paths (declare ``id: relay.NodeID[...]`` or remove ``relay.Node``).
     """
@@ -264,7 +264,7 @@ def test_composite_pk_with_explicit_node_id_annotation_is_accepted(monkeypatch):
 def test_is_type_of_injected_for_all_djangotypes():
     """``is_type_of`` is installed on every concrete ``DjangoType`` subclass.
 
-    Decision 6 (spec-011 #"injection (Decision-1 borrow) is added unconditionally") is that injection is unconditional — it
+    Decision 6 (spec-015 #"injection (Decision-1 borrow) is added unconditionally") is that injection is unconditional — it
     happens for every ``DjangoType`` subclass with a ``Meta`` regardless
     of whether ``Meta.interfaces`` is declared. The non-Relay
     ``DjangoType`` here exercises that unconditional path.
@@ -298,7 +298,7 @@ def test_is_type_of_injected_for_all_djangotypes():
 def test_consumer_declared_is_type_of_is_preserved():
     """A consumer-declared ``is_type_of`` on the class survives ``__init_subclass__``.
 
-    Decision 6 (spec-011 #"If the consumer declares their own"): "If the consumer declares their own
+    Decision 6 (spec-015 #"If the consumer declares their own"): "If the consumer declares their own
     ``is_type_of``, we do not overwrite it." The discriminator is
     ``cls.__dict__`` membership, matching ``strawberry_django/type.py::_process_type #"if "is_type_of" not in cls.__dict__"``.
     The sentinel return value proves the consumer's callable is the one
@@ -329,11 +329,11 @@ def test_consumer_declared_is_type_of_is_preserved():
 def test_relay_node_strips_django_id_annotation():
     """``relay.Node`` in ``interfaces`` drops the synthesized pk annotation.
 
-    Spec Decision 2 (spec-011 #"is removed from synthesized scalar annotations"): when ``relay.Node`` is declared the
+    Spec Decision 2 (spec-015 #"is removed from synthesized scalar annotations"): when ``relay.Node`` is declared the
     synthesized scalar ``id`` annotation must not shadow Strawberry's
     interface-supplied ``id: GlobalID!``. The field stays in ``fields`` so
     ``DjangoTypeDefinition.field_map`` and the optimizer still see the pk
-    as a connector column (Decision 7, spec-011 #"keeps every selected Django field including the primary key").
+    as a connector column (Decision 7, spec-015 #"keeps every selected Django field including the primary key").
 
     The unit-level test calls ``_build_annotations`` directly with a
     synthetic host class to keep the boundary tight. End-to-end
@@ -509,7 +509,7 @@ def test_resolve_id_falls_back_to_getattr():
     Real Django model instances always cache the pk in ``__dict__``; the
     fallback branch only fires on synthetic ``root`` objects that mimic
     the ``__class__._meta.pk.attname`` contract. The synthetic shape is
-    faithful to the spec contract at spec-011 #"id_attr = cls.resolve_id_attr" (``try ... __dict__ ...
+    faithful to the spec contract at spec-015 #"id_attr = cls.resolve_id_attr" (``try ... __dict__ ...
     except KeyError: return str(getattr(root, id_attr))``).
     """
 
@@ -759,7 +759,7 @@ async def test_resolve_nodes_async_context_no_ids_returns_queryset():
     Async-branch contract (post-async-``get_queryset`` fix): the call
     returns a coroutine that yields the queryset once ``get_queryset``
     has been awaited. The caller awaits the resolver call to obtain the
-    queryset, then iterates with ``async for``. Pins the spec-011
+    queryset, then iterates with ``async for``. Pins the spec-015
     #"same for ``_resolve_nodes_default``" "node_ids=None" branch of
     Decision 9 under the corrected awaitable contract described in
     ``feedback.md`` § High.
@@ -1099,8 +1099,8 @@ def test_apply_interfaces_skips_already_present_bases():
     Direct unit-boundary test against the ``apply_interfaces`` helper:
     constructs a host class whose MRO already contains ``relay.Node``,
     invokes the helper, and asserts ``__bases__`` is unchanged. Pins the
-    structural-no-op contract from spec-011 #"A class that already inherits from one of the listed",
-    spec-011 #"only those not already present in", and spec-011 #"Inherited interfaces via parent".
+    structural-no-op contract from spec-015 #"A class that already inherits from one of the listed",
+    spec-015 #"only those not already present in", and spec-015 #"Inherited interfaces via parent".
     """
 
     class _Host(DjangoType, relay.Node):
@@ -1123,7 +1123,7 @@ def test_apply_interfaces_wraps_typeerror_as_configuration_error():
     rejects with a "Cannot create a consistent MRO" ``TypeError`` because
     ``_BadInterface`` already inherits from ``object`` through a different
     metaclass path. The helper surfaces that as ``ConfigurationError`` naming
-    the interface, per spec-011 #"surface any `TypeError` as a `ConfigurationError`".
+    the interface, per spec-015 #"surface any `TypeError` as a `ConfigurationError`".
     """
 
     @strawberry.interface

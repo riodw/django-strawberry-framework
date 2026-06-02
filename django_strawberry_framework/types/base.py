@@ -740,10 +740,12 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], mo
     excluded_hint_fields = sorted(set(hints) - selected_relation_names)
     if excluded_hint_fields:
         raise ConfigurationError(
-            f"{model.__name__}.Meta.optimizer_hints names fields that are not selected "
-            f"relations: {excluded_hint_fields}. Available selected relations: "
-            f"{sorted(selected_relation_names)}. (Hints only fire on relation branches; "
-            f"excluded fields and selected scalar fields are unreachable.)",
+            _format_unknown_fields_error(
+                model=model,
+                attr="optimizer_hints",
+                unknown=excluded_hint_fields,
+                available=selected_relation_names,
+            ),
         )
     bad_values = sorted(k for k, v in hints.items() if not isinstance(v, OptimizerHint))
     if bad_values:
@@ -890,9 +892,7 @@ def _build_annotations(
     # Without these branches a Strawberry-native consumer would land in
     # Phase 3 ``strawberry.type(...)`` decoration with both the synthesized
     # ``id: int`` and the interface-supplied ``id: GlobalID!`` and the schema
-    # build would blow up with ``NodeIDAnnotationError`` (review feedback
-    # ``feedback.md`` § High "Direct relay.Node inheritance bypasses Relay
-    # finalization" and § "Extended Node interfaces").
+    # build would blow up with ``NodeIDAnnotationError``.
     #
     # The interfaces tuple is checked with ``issubclass`` per entry rather
     # than an exact ``relay.Node in interfaces`` membership test:

@@ -5,10 +5,10 @@ addressed by spec-014 H1: ``PendingRelation`` (a frozen dataclass capturing a
 relation field whose target ``DjangoType`` was not yet registered at collection
 time) and ``PendingRelationAnnotation`` (the sentinel installed in
 ``cls.__annotations__`` until the target type registers). The producer is
-``_build_annotations`` (``types/base.py:_build_annotations``), which records a
+``_build_annotations`` (``types/base.py::_build_annotations``), which records a
 ``PendingRelation`` and installs the sentinel for every auto-synthesized
 relation. The consumer is ``finalize_django_types``
-(``types/finalizer.py:finalize_django_types``), which rewrites the sentinel via
+(``types/finalizer.py::finalize_django_types``), which rewrites the sentinel via
 ``resolved_relation_annotation`` and hands the original ``PendingRelation``
 record instance back to ``TypeRegistry.discard_pending()``. ``discard_pending``
 uses identity (``id()``) rather than equality or hash, so callers may pass back
@@ -28,9 +28,9 @@ from ..utils.relations import RelationKind
 class PendingRelation:
     """Relation field whose target ``DjangoType`` was not registered during collection.
 
-    Constructed by ``_build_annotations`` (``types/base.py:_build_annotations``)
+    Constructed by ``_build_annotations`` (``types/base.py::_build_annotations``)
     when a relation target type is not yet registered; resolved by
-    ``finalize_django_types`` (``types/finalizer.py:finalize_django_types``)
+    ``finalize_django_types`` (``types/finalizer.py::finalize_django_types``)
     after every ``DjangoType`` has registered.
 
     Finalization passes the original record instances back to

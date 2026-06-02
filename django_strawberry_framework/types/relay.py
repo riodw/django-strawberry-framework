@@ -82,7 +82,7 @@ def install_is_type_of(type_cls: type) -> None:
     for a returned ORM instance. Without this borrow, an interface field
     that returns a Django model can fail Strawberry's isinstance check
     and surface as "Cannot determine type for object of model X" at
-    runtime (spec-011 Decision 6 #"injection (Decision-1 borrow) is added unconditionally").
+    runtime (spec-015 Decision 6 #"injection (Decision-1 borrow) is added unconditionally").
 
     Preserves a consumer-declared ``is_type_of`` via the ``cls.__dict__``
     membership check (the same discriminator strawberry-django uses); a
@@ -113,16 +113,16 @@ def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
     already inherits a listed interface directly (e.g. consumer wrote
     ``class Foo(DjangoType, relay.Node): class Meta: interfaces =
     (relay.Node,)``) sees no double-injection
-    (spec-011 #"A class that already inherits from one of the listed",
-    spec-011 #"only those not already present in",
-    spec-011 #"Inherited interfaces via parent").
+    (spec-015 #"A class that already inherits from one of the listed",
+    spec-015 #"only those not already present in",
+    spec-015 #"Inherited interfaces via parent").
 
     Raises:
         ConfigurationError: a ``TypeError`` from ``cls.__bases__``
             assignment is wrapped with the offending interface named in
             the message so consumers see "cannot add interface X" rather
             than a raw layout TypeError
-            (spec-011 Risk note #"surface any `TypeError` as a `ConfigurationError`").
+            (spec-015 Risk note #"surface any `TypeError` as a `ConfigurationError`").
     """
     additions = tuple(iface for iface in definition.interfaces if iface not in type_cls.__mro__)
     if not additions:
@@ -142,7 +142,7 @@ def apply_interfaces(type_cls: type, definition: DjangoTypeDefinition) -> None:
 def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     """Raise ``ConfigurationError`` when a Relay-declared type has a composite pk.
 
-    Decision 2 (spec-011 #"Composite primary keys (Django 5.2+) are explicitly out of scope"):
+    Decision 2 (spec-015 #"Composite primary keys (Django 5.2+) are explicitly out of scope"):
     combining ``relay.Node`` with a composite-primary-key model is explicitly out of scope for
     ``0.0.5``. Detection uses ``isinstance(model._meta.pk,
     CompositePrimaryKey)`` so the gate aligns with Django 5.2+'s
@@ -197,7 +197,7 @@ def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:
     ``classmethod`` binding: ``(cls, root, *, info)``. ``info`` is
     keyword-only so Strawberry's Relay machinery, which calls
     ``cls.resolve_id(root, info=info)``, lands at the right slot without
-    a positional collision (review feedback ``feedback.md`` § High).
+    a positional collision.
 
     Calls ``cls.resolve_id_attr()`` to derive the column name (handles
     consumer ``relay.NodeID[...]`` overrides and the ``"pk"`` fallback),
@@ -205,7 +205,7 @@ def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:
     so the dict-cache lookup keys on the real column, then reads from
     ``root.__dict__`` first (avoids an extra ORM hit when the optimizer
     already loaded the row) and falls back to ``getattr(root, id_attr)``
-    (spec-011 #"id_attr = cls.resolve_id_attr" / Decision 7's "no
+    (spec-015 #"id_attr = cls.resolve_id_attr" / Decision 7's "no
     avoidable lazy loads on ``resolve_id``").
 
     Keying on ``root.__class__._meta.pk.attname`` is deliberate: the
@@ -230,10 +230,9 @@ def _apply_get_queryset_sync(cls: type, qs: models.QuerySet, info: Any) -> model
     hook safely (event-loop edge cases dominate the bridge). On the sync
     path we therefore close the unawaited coroutine to silence the
     "coroutine was never awaited" warning and raise a named
-    ``ConfigurationError`` that points the consumer at the async resolver
-    path or a sync ``get_queryset`` rewrite (review feedback
-    ``feedback.md`` § High "Async ``get_queryset`` is not awaited in
-    Relay node defaults").
+    ``SyncMisuseError`` (a ``ConfigurationError`` subclass that also
+    inherits ``RuntimeError``) that points the consumer at the async
+    resolver path or a sync ``get_queryset`` rewrite.
     """
     result = cls.get_queryset(qs, info)
     if inspect.iscoroutine(result):
@@ -271,6 +270,8 @@ async def _apply_get_queryset_async(cls: type, qs: models.QuerySet, info: Any) -
 #   child_qs = _apply_get_queryset_sync(target_type, child_base, info)  # noqa: ERA001
 #   child_qs = child_qs & related_filter.queryset if constraint exists
 #   parent_qs = parent_qs.filter(**{f"{relation_name}__in": child_qs})  # noqa: ERA001
+
+
 def _coerce_node_id(node_id: Any) -> Any:
     return node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
 
@@ -376,7 +377,7 @@ def _resolve_node_default(
     (``cls.resolve_node(node_id, info=info, required=...)``) lands
     correctly. An earlier draft used ``(cls, info, node_id, ...)`` which
     Strawberry's machinery turned into ``TypeError: got multiple values
-    for argument 'info'`` (review feedback ``feedback.md`` § High).
+    for argument 'info'``.
 
     Returns the single matching row (``qs.get()`` when ``required``,
     ``qs.first()`` otherwise). Async detection uses
@@ -384,10 +385,10 @@ def _resolve_node_default(
     the returned coroutine awaits ``get_queryset`` (so async
     ``get_queryset`` hooks are honored), applies the id filter, and
     awaits ``aget``/``afirst``. On the sync branch a coroutine returned
-    from ``get_queryset`` is rejected with ``ConfigurationError`` rather
-    than silently producing ``AttributeError: 'coroutine' object has no
-    attribute 'filter'`` (review feedback ``feedback.md`` § High "Async
-    ``get_queryset`` is not awaited in Relay node defaults").
+    from ``get_queryset`` is rejected with ``SyncMisuseError`` (a
+    ``ConfigurationError`` subclass that also inherits ``RuntimeError``)
+    rather than silently producing ``AttributeError: 'coroutine'
+    object has no attribute 'filter'``.
     """
     id_attr = cls.resolve_id_attr()
     if in_async_context():
@@ -446,8 +447,9 @@ def _resolve_nodes_default(
     async branch the caller must ``await`` the call to obtain either
     the queryset (``node_ids=None``) or the order-preserving list
     (``node_ids`` provided). Sync resolver contexts cannot await an
-    async ``get_queryset`` hook and surface ``ConfigurationError``
-    instead (review feedback ``feedback.md`` § High).
+    async ``get_queryset`` hook and surface ``SyncMisuseError`` (a
+    ``ConfigurationError`` subclass that also inherits ``RuntimeError``)
+    instead.
     """
     id_attr = cls.resolve_id_attr()
     if in_async_context():

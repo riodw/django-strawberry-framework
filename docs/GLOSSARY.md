@@ -937,6 +937,7 @@ Shipped behavior:
 - When `relay.Node` is in `Meta.interfaces`, the synthesized Django `id: int!` annotation is suppressed and the Relay-supplied `id: GlobalID!` from the interface is used instead. The Django primary key remains selected as a connector column for the optimizer.
 - Both sync and async paths for `resolve_node` and `resolve_nodes`; `resolve_id_attr` and `resolve_id` are sync.
 - `is_type_of` injection is unconditional for every `DjangoType` (Relay-declared or not); consumer-declared `is_type_of` is preserved.
+- The framework rejects the "async `get_queryset` invoked from a sync resolver context" misuse with [`SyncMisuseError`](#syncmisuseerror) — a typed marker that multiple-inherits `ConfigurationError` AND `RuntimeError` so consumers may catch either base class while future code can match `SyncMisuseError` directly without depending on substring-of-message checks. Raised by `resolve_node` / `resolve_nodes` on the sync branch when `cls.get_queryset` returns a coroutine; the unawaited coroutine is closed before the raise so Python does not emit `RuntimeWarning: coroutine was never awaited`.
 - Models whose primary key is a Django 5.2+ `CompositePrimaryKey` raise [`ConfigurationError`](#configurationerror) at finalization; declare an explicit `id: relay.NodeID[...]` annotation or remove `relay.Node` from `Meta.interfaces` to remediate.
 - Non-Relay Strawberry interfaces (`@strawberry.interface`-decorated classes) are accepted without Relay-specific wiring.
 
@@ -1102,13 +1103,25 @@ The keyword-only `extra_scalar_map=` and the `**config_kwargs` passthrough compo
 
 - `"off"` — silent production default.
 - `"warn"` — logged warning per occurrence.
-- `"raise"` — fail-fast `RuntimeError` for tests / dev checks.
+- `"raise"` — fail-fast `OptimizerError` for tests / dev checks.
 
 Warnings and errors fire only when the relation access actually causes a lazy load — false positives from unhit prefetches do not trigger.
 
 Planned resolver keys and lookup paths are stashed on `info.context` for introspection during strictness incidents.
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Schema audit](#schema-audit).
+
+## `SyncMisuseError`
+
+**Status:** shipped (`0.0.5`).
+
+Typed marker for the "async `get_queryset` hook invoked from a sync resolver context" misuse. Multiple-inherits [`ConfigurationError`](#configurationerror) AND `RuntimeError` so existing handlers continue to match while future code can match the subclass directly.
+
+- Raised by [Relay Node integration](#relay-node-integration)'s default `resolve_node` / `resolve_nodes` on the sync branch when `cls.get_queryset` returns a coroutine.
+- Caught and rewrapped by [`FilterSet.apply`](#filterset)'s sync dispatcher so the package's two `async get_queryset` misuse surfaces emit a single typed exception.
+- Exported through `django_strawberry_framework` so consumers can import it without reaching into private `types.relay`.
+
+**See also:** [Relay Node integration](#relay-node-integration) · [`ConfigurationError`](#configurationerror) · [`FilterSet`](#filterset).
 
 ## `TestClient`
 

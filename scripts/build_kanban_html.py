@@ -115,6 +115,22 @@ query StaticKanbanDashboard {
       createdDate
       updatedDate
     }
+    glossaryLinks {
+      id
+      uuid {
+        id
+      }
+      rawText
+      order
+      createdDate
+      updatedDate
+      term {
+        id
+        title
+        anchor
+        statusText
+      }
+    }
   }
   allKanbanBoardDocs {
     id

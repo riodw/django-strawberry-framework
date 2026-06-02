@@ -71,7 +71,7 @@ demoted to a bullet under its label.
 ### In progress
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
-- `0.0.8` is the active patch. `WIP-ALPHA-028-0.0.8` (Ordering subsystem) is the only card currently in progress for this patch; the Filtering subsystem shipped as `DONE-027-0.0.8`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-020-list_field-0_0_7.md`.
+- `0.0.8` is the active patch and both planned subsystems have shipped: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`. No active WIP cards. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-020-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -98,110 +98,45 @@ demoted to a bullet under its label.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-028-orders-0_0_8.md) |
-| `DONE-027-0.0.8` — Filtering subsystem | [spec-027-filters-0_0_8.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-027-filters-0_0_8.md) |
-| `DONE-026-0.0.7` — Scalar conversion end-to-end coverage in the fakeshop example | [spec-026-scalar_conversion_fakeshop-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md) |
-| `DONE-025-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map` | [spec-025-scalar_map_helper-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-025-scalar_map_helper-0_0_7.md) |
-| `DONE-024-0.0.7` — Django Trac #37064 hardening + `safe_wrap_connection_method` | [spec-024-django_trac_37064_hardening-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-024-django_trac_37064_hardening-0_0_7.md) |
-| `DONE-023-0.0.7` — Multi-database cooperation contract | [spec-023-multi_db-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-023-multi_db-0_0_7.md) |
-| `DONE-022-0.0.7` — Schema export management command | [spec-022-export_schema-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-022-export_schema-0_0_7.md) |
-| `DONE-021-0.0.7` — `apps.py` and Django app config | [spec-021-apps-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-021-apps-0_0_7.md) |
-| `DONE-020-0.0.7` — `DjangoListField` (non-Relay list) | [spec-020-list_field-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-020-list_field-0_0_7.md) |
-| `DONE-019-0.0.6` — Consumer override semantics (scalar fields) | [spec-019-consumer_overrides_scalar-0_0_6.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md) |
-| `DONE-018-0.0.6` — Multiple DjangoTypes per model with `Meta.primary` | [spec-018-meta_primary-0_0_6.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-018-meta_primary-0_0_6.md) |
-| `DONE-017-0.0.6` — Deferred scalar conversions | [spec-017-deferred_scalars-0_0_6.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-017-deferred_scalars-0_0_6.md) |
-| `DONE-016-0.0.6` — `FieldMeta` single-source-of-truth consolidation and mirror retirement | [spec-016-fieldmeta_consolidation-0_0_6.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md) |
-| `DONE-015-0.0.5` — 0.0.5 Relay interfaces and Node foundation | [spec-015-relay_interfaces-0_0_5.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-015-relay_interfaces-0_0_5.md) |
-| `DONE-014-0.0.4` — Move test fixture out of example settings | [spec-014-testing_shift-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-014-testing_shift-0_0_4.md) |
-| `DONE-013-0.0.4` — Real M2M coverage | [spec-013-real_m2m_coverage-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-013-real_m2m_coverage-0_0_4.md) |
-| `DONE-012-0.0.4` — 0.0.4 version and release alignment | [spec-012-version_release_alignment-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-012-version_release_alignment-0_0_4.md) |
-| `DONE-011-0.0.4` — Stale placeholder cleanup | [spec-011-stale_placeholder_cleanup-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md) |
-| `DONE-010-0.0.4` — 0.0.4 foundation slice (definition-order independence) | [spec-010-foundation-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-010-foundation-0_0_4.md) |
-| `DONE-009-0.0.4` — Rich schema architecture | [spec-009-rich_schema_architecture-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md) |
-| `DONE-008-0.0.4` — Definition-order independence design | [spec-008-definition_order_independence-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-008-definition_order_independence-0_0_4.md) |
-| `DONE-007-0.0.4` — 0.0.4 onboarding docs and spec consolidation | [spec-007-onboarding_docs_spec_consolidation-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-007-onboarding_docs_spec_consolidation-0_0_4.md) |
-| `DONE-006-0.0.3` — Documentation/status positioning for shipped Layer 2 | [spec-006-public_surface-0_0_3.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-006-public_surface-0_0_3.md) |
-| `DONE-005-0.0.3` — DjangoType contract and boundary | [spec-005-django_type_contract-0_0_3.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-005-django_type_contract-0_0_3.md) |
-| `DONE-004-0.0.3` — Optimizer beyond slices B1-B8 | [spec-004-optimizer_beyond-0_0_3.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-004-optimizer_beyond-0_0_3.md) |
-| `DONE-003-0.0.2` — Optimizer O4 nested prefetch chains | [spec-003-optimizer_nested_prefetch_chains-0_0_2.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md) |
-| `DONE-002-0.0.2` — Optimizer O1-O6 foundation | [spec-002-optimizer-0_0_2.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-002-optimizer-0_0_2.md) |
-| `DONE-001-0.0.1` — DjangoType core foundation | [spec-001-django_types-0_0_1.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-001-django_types-0_0_1.md) |
+| `DONE-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md) |
+| `DONE-027-0.0.8` — Filtering subsystem | [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md) |
+| `DONE-026-0.0.7` — Scalar conversion end-to-end coverage in the fakeshop example | [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md) |
+| `DONE-025-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map` | [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md) |
+| `DONE-024-0.0.7` — Django Trac #37064 hardening + `safe_wrap_connection_method` | [spec-024-django_trac_37064_hardening-0_0_7.md](docs/SPECS/spec-024-django_trac_37064_hardening-0_0_7.md) |
+| `DONE-023-0.0.7` — Multi-database cooperation contract | [spec-023-multi_db-0_0_7.md](docs/SPECS/spec-023-multi_db-0_0_7.md) |
+| `DONE-022-0.0.7` — Schema export management command | [spec-022-export_schema-0_0_7.md](docs/SPECS/spec-022-export_schema-0_0_7.md) |
+| `DONE-021-0.0.7` — `apps.py` and Django app config | [spec-021-apps-0_0_7.md](docs/SPECS/spec-021-apps-0_0_7.md) |
+| `DONE-020-0.0.7` — `DjangoListField` (non-Relay list) | [spec-020-list_field-0_0_7.md](docs/SPECS/spec-020-list_field-0_0_7.md) |
+| `DONE-019-0.0.6` — Consumer override semantics (scalar fields) | [spec-019-consumer_overrides_scalar-0_0_6.md](docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md) |
+| `DONE-018-0.0.6` — Multiple DjangoTypes per model with `Meta.primary` | [spec-018-meta_primary-0_0_6.md](docs/SPECS/spec-018-meta_primary-0_0_6.md) |
+| `DONE-017-0.0.6` — Deferred scalar conversions | [spec-017-deferred_scalars-0_0_6.md](docs/SPECS/spec-017-deferred_scalars-0_0_6.md) |
+| `DONE-016-0.0.6` — `FieldMeta` single-source-of-truth consolidation and mirror retirement | [spec-016-fieldmeta_consolidation-0_0_6.md](docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md) |
+| `DONE-015-0.0.5` — 0.0.5 Relay interfaces and Node foundation | [spec-015-relay_interfaces-0_0_5.md](docs/SPECS/spec-015-relay_interfaces-0_0_5.md) |
+| `DONE-014-0.0.4` — Move test fixture out of example settings | [spec-014-testing_shift-0_0_4.md](docs/SPECS/spec-014-testing_shift-0_0_4.md) |
+| `DONE-013-0.0.4` — Real M2M coverage | [spec-013-real_m2m_coverage-0_0_4.md](docs/SPECS/spec-013-real_m2m_coverage-0_0_4.md) |
+| `DONE-012-0.0.4` — 0.0.4 version and release alignment | [spec-012-version_release_alignment-0_0_4.md](docs/SPECS/spec-012-version_release_alignment-0_0_4.md) |
+| `DONE-011-0.0.4` — Stale placeholder cleanup | [spec-011-stale_placeholder_cleanup-0_0_4.md](docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md) |
+| `DONE-010-0.0.4` — 0.0.4 foundation slice (definition-order independence) | [spec-010-foundation-0_0_4.md](docs/SPECS/spec-010-foundation-0_0_4.md) |
+| `DONE-009-0.0.4` — Rich schema architecture | [spec-009-rich_schema_architecture-0_0_4.md](docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md) |
+| `DONE-008-0.0.4` — Definition-order independence design | [spec-008-definition_order_independence-0_0_4.md](docs/SPECS/spec-008-definition_order_independence-0_0_4.md) |
+| `DONE-007-0.0.4` — 0.0.4 onboarding docs and spec consolidation | [spec-007-onboarding_docs_spec_consolidation-0_0_4.md](docs/SPECS/spec-007-onboarding_docs_spec_consolidation-0_0_4.md) |
+| `DONE-006-0.0.3` — Documentation/status positioning for shipped Layer 2 | [spec-006-public_surface-0_0_3.md](docs/SPECS/spec-006-public_surface-0_0_3.md) |
+| `DONE-005-0.0.3` — DjangoType contract and boundary | [spec-005-django_type_contract-0_0_3.md](docs/SPECS/spec-005-django_type_contract-0_0_3.md) |
+| `DONE-004-0.0.3` — Optimizer beyond slices B1-B8 | [spec-004-optimizer_beyond-0_0_3.md](docs/SPECS/spec-004-optimizer_beyond-0_0_3.md) |
+| `DONE-003-0.0.2` — Optimizer O4 nested prefetch chains | [spec-003-optimizer_nested_prefetch_chains-0_0_2.md](docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md) |
+| `DONE-002-0.0.2` — Optimizer O1-O6 foundation | [spec-002-optimizer-0_0_2.md](docs/SPECS/spec-002-optimizer-0_0_2.md) |
+| `DONE-001-0.0.1` — DjangoType core foundation | [spec-001-django_types-0_0_1.md](docs/SPECS/spec-001-django_types-0_0_1.md) |
 
 ## In progress
 
-The only active WIP card is `WIP-ALPHA-028-0.0.8 — Ordering subsystem`, and it is in the `0.0.8` patch. The Filtering subsystem shipped as `DONE-027-0.0.8`; blocked cards stay in their normal planning column with a derived `blocked` badge, and future cards stay outside the in-progress column.
-
-<a id="ordering_subsystem"></a>
-### [WIP-ALPHA-028-0.0.8 — Ordering subsystem](https://riodw.github.io/django-strawberry-framework/#ordering_subsystem)
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Major
-- Status: In progress
-- Relative size: L
-- Labels: `filters`, `graphql-api`, `layer-3`, `ordering`, `public-api`
-- Spec: [spec-028-orders-0_0_8.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-028-orders-0_0_8.md)
-
-#### Planning note
-
-planned
-
-#### Scope
-
-- `Order`
-- `OrderSet`
-- GraphQL argument factory
-- `Meta.orderset_class` promotion
-
-#### Definition of done
-
-- [ ] Add `docs/spec-orders.md`.
-- [ ] Add `django_strawberry_framework/orders/`.
-- [ ] Add mirrored `tests/orders/`.
-- [ ] Promote `Meta.orderset_class` only when ordering is applied end-to-end.
-- [ ] Support simple fields and relation paths.
-- [ ] Define interaction with filters and connection field.
-- [ ] Keep ordering declarations introspectable from the owning type/query surface.
-
-#### Foundation-slice seam
-
-- `DjangoTypeDefinition.orderset_class` is the populated slot.
-- Lazy related-order class references reuse the same record-now-resolve-at-finalization pattern as model relations (`PendingRelation` → analogous `PendingRelatedClass` shape).
-
-#### Verified in upstream
-
-- `ordering.py::Ordering` — public `Ordering` enum: `ASC`, `DESC`, `ASC_NULLS_FIRST`, `ASC_NULLS_LAST`, `DESC_NULLS_FIRST`, `DESC_NULLS_LAST`.
-- `ordering.py::OrderSequence` — per-field sequence descriptor used to order ties when multiple fields participate.
-- `ordering.py::process_order` / `::process_ordering` / `::process_ordering_default` / `::apply_ordering` — the runtime pipeline that compiles an order-input value into queryset `order_by()` arguments and applies them.
-- `ordering.py::StrawberryDjangoFieldOrdering` — field-base subclass that injects the `order: <T>OrderInput` and `ordering: list[<T>OrderInput]` arguments on a Django-backed field.
-- `ordering.py::order_type` — current consumer-facing `@strawberry_django.order_type(Model)` decorator (public API).
-- `ordering.py::order` — legacy decorator alias marked `@deprecated("strawberry_django.order is deprecated in favor of strawberry_django.order_type.")`; do not claim parity with this symbol.
-- `ordering.py::ORDER_ARG` (`= "order"`) and `ordering.py::ORDERING_ARG` (`= "ordering"`) — module-level constants for the singular one-of and list GraphQL argument names.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField #"order_by"` — connection field accepts an `order_by` argument that composes through `django_filters.OrderingFilter` declared on the FilterSet. Graphene has no separate ordering primitive; ⚛️ parity is met by the filter subsystem (`DONE-027-0.0.8`) rather than this card.
-
-#### Other
-
-- second-largest `0.0.8` card. A leaner mirror of `DONE-027-0.0.8`: five of the six lazy-resolution layers carry over, no operator-bag/lookup surface, 🍓-only parity. New `orders/` subpackage + `docs/spec-orders.md` + mirrored tests. Layer 6 (dynamic OrderSet generation) has no cookbook counterpart — the one genuinely fresh design decision.
-- **Layers 1-2** (lazy class refs + module-fallback resolution): port from `mixins.py::LazyRelatedClassMixin` and `orders.py::BaseRelatedOrder`. Same shape as the filter side; `RelatedOrder` substituted for `RelatedFilter`.
-- **Layer 3** (metaclass discovery, deferred expansion): port from `orderset.py::OrderSetMetaclass`. Leaner than the filter side's `FilterSetMetaclass`; the discover-and-bind pattern is the same.
-- **Layer 4** (cycle-safe expansion + cache): the cookbook's orderset uses `orderset.py::AdvancedOrderSet.get_fields` (and `::get_flat_orders` for the prefix-walked output) — **not** `get_filters()` or `get_orders()`. Earlier card revisions referenced a `get_orders()` method that does not exist in the cookbook. The cycle-safe expansion pattern carries over but the method names and cache-key shape are spelled differently from the filter side.
-- **Layer 5** (BFS schema build with deferred references — Strawberry-adapted): port from `order_arguments_factory.py::OrderArgumentsFactory._ensure_built`. Graphene's `lambda tn=...: input_object_types[tn]` forward references become `strawberry.lazy("django_strawberry_framework.orders._registry.{TargetOrderSet}InputType")` (or `Annotated[..., strawberry.lazy(...)]`).
-- **Layer 6** (memoized dynamic OrderSet generation): **no cookbook counterpart**. The cookbook ships no `orderset_factories.py` and no `_dynamic_orderset_cache` — only the filter side has the dynamic-factory mechanism. Our ordering subsystem must either design Layer 6 fresh (mirroring the filter side's `filterset_factories.py::_dynamic_filterset_cache`) or skip the dynamic-ordering-for-connection-field case and require explicit `orderset_class` declarations on every consumer. **Pin this decision in the spec.**
-- `orders.py::BaseRelatedOrder`, `orders.py::RelatedOrder`
-- `orderset.py::OrderSetMetaclass`, `orderset.py::AdvancedOrderSet` (with `::get_fields`, `::get_flat_orders`, `::apply_distinct`, `::check_permissions`, `::_apply_distinct_postgres`, `::_apply_distinct_emulated`)
-- `order_arguments_factory.py::OrderArgumentsFactory`, `order_arguments_factory.py::OrderDirection`
-
-#### Card references
-
-- Related via Card item: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField #"order_by"` — connection field accepts an `order_by` argument that composes through `django_filters.OrderingFilter` declared on the FilterSet. Graphene has no separate ordering primitive; ⚛️ parity is met by the filter subsystem (`DONE-027-0.0.8`) rather than this card. -> `DONE-027-0.0.8` — Filtering subsystem
-- Related via Card item: second-largest `0.0.8` card. A leaner mirror of `DONE-027-0.0.8`: five of the six lazy-resolution layers carry over, no operator-bag/lookup surface, 🍓-only parity. New `orders/` subpackage + `docs/spec-orders.md` + mirrored tests. Layer 6 (dynamic OrderSet generation) has no cookbook counterpart — the one genuinely fresh design decision. -> `DONE-027-0.0.8` — Filtering subsystem
+No active WIP cards.
 
 ## To Do - Alpha (0.1.0)
 
 Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="djangotype_consumer_dx_cleanup_pass"></a>
-### [TODO-ALPHA-029-0.0.9 — `DjangoType` consumer-DX cleanup pass](https://riodw.github.io/django-strawberry-framework/#djangotype_consumer_dx_cleanup_pass)
+### [TODO-ALPHA-029-0.0.9 — `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -252,7 +187,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Dependency via Dependencies section: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `TODO-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="djangoconnectionfield"></a>
-### [TODO-ALPHA-030-0.0.9 — `DjangoConnectionField`](https://riodw.github.io/django-strawberry-framework/#djangoconnectionfield)
+### [TODO-ALPHA-030-0.0.9 — `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -263,12 +198,12 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Planning note
 
-Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Wires the shipped Layer-3 sidecars into a Relay-shaped connection: accepts `filter:` from `Meta.filterset_class` (`DONE-027-0.0.8`), `orderBy:` from `Meta.orderset_class` (`WIP-ALPHA-028-0.0.8`), plus `first`/`after`/`last`/`before` cursor pagination and opt-in `totalCount`. The `search:` arg activates when `TODO-BETA-045-0.1.2` lands; `FieldSet` selection composition is layered in by `TODO-BETA-044-0.1.1`. Central read-side primitive — every Layer-3 argument composes through this field.
+Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Wires the shipped Layer-3 sidecars into a Relay-shaped connection: accepts `filter:` from `Meta.filterset_class` (`DONE-027-0.0.8`), `orderBy:` from `Meta.orderset_class` (`DONE-028-0.0.8`), plus `first`/`after`/`last`/`before` cursor pagination and opt-in `totalCount`. The `search:` arg activates when `TODO-BETA-045-0.1.2` lands; `FieldSet` selection composition is layered in by `TODO-BETA-044-0.1.1`. Central read-side primitive — every Layer-3 argument composes through this field.
 
 #### Dependencies
 
 - `DONE-027-0.0.8` — Filtering subsystem
-- `WIP-ALPHA-028-0.0.8` — Ordering subsystem
+- `DONE-028-0.0.8` — Ordering subsystem
 - `TODO-BETA-044-0.1.1` — `FieldSet`
 
 #### Scope
@@ -277,7 +212,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - composition of filtering, ordering, aggregation, field selection, and optimizer behavior
 - Cookbook anchor: Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Each `DjangoConnectionField(SomeType)` exposes the type's declared sidecars as connection arguments plus the standard Relay pagination args. The graphene cookbook line `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` becomes `all_object_types: DjangoConnection[ObjectTypeNode] = DjangoConnectionField(ObjectTypeNode)` on the Strawberry side; the per-type `Meta.filterset_class` / `Meta.orderset_class` declarations drive argument generation identically.
 - `filter: <Type>FilterInput` — auto-derived from `Meta.filterset_class` (`DONE-027-0.0.8`); absent when the type declares no filterset. Active-input gating and `check_*_permission` propagation carry over from the filter subsystem unchanged.
-- `orderBy: [<Type>OrderInput!]` — auto-derived from `Meta.orderset_class` (`WIP-ALPHA-028-0.0.8`); absent when the type declares no orderset. List-shaped per the order spec's Decision 5.
+- `orderBy: [<Type>OrderInput!]` — auto-derived from `Meta.orderset_class` (`DONE-028-0.0.8`); absent when the type declares no orderset. List-shaped per the order spec's Decision 5.
 - `first` / `after` / `last` / `before` — Relay cursor args; forward AND backward pagination per the Relay spec. Mutually-exclusive guard (`first` + `last` in one query) rejected as a typed error.
 - `totalCount` — opt-in via `Meta.connection = {"total_count": True}`; runs `qs.count()` on the unpaginated post-filter queryset so paginated UIs can show "N of M" without a second round-trip.
 - Composition order on the resolved queryset: `get_queryset(qs, info)` first (visibility), then `filter` (active-input gates), then `orderBy` (per-field gates), then cursor slice. The pre-pagination shape is what the optimizer plans against; the cursor slice runs last so totals stay correct.
@@ -304,7 +239,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 #### Dependencies
 
 - `FilterSet` (`DONE-027-0.0.8`)
-- `OrderSet` (`WIP-ALPHA-028-0.0.8`)
+- `OrderSet` (`DONE-028-0.0.8`)
 - Relay/interface decisions
 - `FieldSet` — **deferred to `TODO-BETA-044-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker.
 
@@ -318,13 +253,13 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 #### Card references
 
 - Dependency via Dependencies section: `FilterSet` (`DONE-027-0.0.8`) -> `DONE-027-0.0.8` — Filtering subsystem
-- Dependency via Dependencies section: `OrderSet` (`WIP-ALPHA-028-0.0.8`) -> `WIP-ALPHA-028-0.0.8` — Ordering subsystem
+- Dependency via Dependencies section: `OrderSet` (`DONE-028-0.0.8`) -> `DONE-028-0.0.8` — Ordering subsystem
 - Dependency via Dependencies section: `FieldSet` — **deferred to `TODO-BETA-044-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker. -> `TODO-BETA-044-0.1.1` — `FieldSet`
 - Related via Card item: Connection-aware optimizer planning is its own follow-up slice (`TODO-ALPHA-032-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `TODO-ALPHA-032-0.0.9` — Connection-aware optimizer planning
 - Related via Card item: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-044-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-044-0.1.1` — `FieldSet`
 
 <a id="full_relay_story_node_connection_root_validation"></a>
-### [TODO-ALPHA-031-0.0.9 — Full Relay story (Node + Connection + Root + validation)](https://riodw.github.io/django-strawberry-framework/#full_relay_story_node_connection_root_validation)
+### [TODO-ALPHA-031-0.0.9 — Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -359,7 +294,7 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 - **Edge cases**: `first: 0` returns empty edges + `pageInfo`. `first: N` with N > remaining rows returns the actual remainder. `after` cursor for a row that no longer exists falls through to the next existing row (no error). Both `first` and `last` in the same query is rejected with a typed error.
 - **`totalCount`**: an opt-in field on every Connection (`Meta.connection = {"total_count": True}`). When selected, runs `qs.count()` on the *unpaginated* queryset (post-filter, pre-slice). Documented as the canonical Relay-compatible total-count surface.
 - `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`)
-- `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `WIP-ALPHA-028-0.0.8`)
+- `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`)
 - `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-045-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent)
 - decode the GlobalID server-side (never trust the client's claim of which type the ID belongs to)
 - dispatch to the resolved type's `resolve_node` (which honors `cls.get_queryset(qs, info)`)
@@ -380,7 +315,7 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 - Permission-aware cursor decoding (cursor decode re-runs `get_queryset` so privileged cursors don't leak)
 - `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands.
 - `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
-- `WIP-ALPHA-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
+- `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
 - `TODO-ALPHA-032-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
 - `TODO-ALPHA-033-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands.
 - New spec: `docs/spec-relay_connection.md` covering all eight goals above with worked examples and decision rationale.
@@ -413,18 +348,18 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 
 - Blocked by via Planning note: blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
 - Related via Card item: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` — Filtering subsystem
-- Related via Card item: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `WIP-ALPHA-028-0.0.8`) -> `WIP-ALPHA-028-0.0.8` — Ordering subsystem
+- Related via Card item: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` — Ordering subsystem
 - Related via Card item: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-045-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-045-0.1.2` — `Meta.search_fields` support
 - Related via Card item: `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
 - Related via Card item: `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections. -> `DONE-027-0.0.8` — Filtering subsystem
-- Related via Card item: `WIP-ALPHA-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `WIP-ALPHA-028-0.0.8` — Ordering subsystem
+- Related via Card item: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` — Ordering subsystem
 - Related via Card item: `TODO-ALPHA-032-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `TODO-ALPHA-032-0.0.9` — Connection-aware optimizer planning
 - Related via Card item: `TODO-ALPHA-033-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `TODO-ALPHA-033-0.0.10` — Permissions subsystem
 - Related via Card item: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-049-0.1.5`. -> `TODO-BETA-049-0.1.5` — Fakeshop GraphQL schema activation
 - Related via Card item: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-ALPHA-030-0.0.9`) -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="connection_aware_optimizer_planning"></a>
-### [TODO-ALPHA-032-0.0.9 — Connection-aware optimizer planning](https://riodw.github.io/django-strawberry-framework/#connection_aware_optimizer_planning)
+### [TODO-ALPHA-032-0.0.9 — Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -470,7 +405,7 @@ planned
 - Related via Card item: gated on `TODO-ALPHA-030-0.0.9` / Relay decisions. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="permissions_subsystem"></a>
-### [TODO-ALPHA-033-0.0.10 — Permissions subsystem](https://riodw.github.io/django-strawberry-framework/#permissions_subsystem)
+### [TODO-ALPHA-033-0.0.10 — Permissions subsystem](KANBAN.html#permissions_subsystem)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -541,7 +476,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - Dependency via Dependencies section: future `DjangoConnectionField` -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="mutations_auto_generated_input_types"></a>
-### [TODO-ALPHA-034-0.0.11 — Mutations + auto-generated Input types](https://riodw.github.io/django-strawberry-framework/#mutations_auto_generated_input_types)
+### [TODO-ALPHA-034-0.0.11 — Mutations + auto-generated Input types](KANBAN.html#mutations_auto_generated_input_types)
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -606,7 +541,7 @@ needs spec
 - Related via Card item: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 031 / 032 / 033. -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="upload_scalar_and_file_image_field_mapping"></a>
-### [TODO-ALPHA-035-0.0.11 — Upload scalar and file / image field mapping](https://riodw.github.io/django-strawberry-framework/#upload_scalar_and_file_image_field_mapping)
+### [TODO-ALPHA-035-0.0.11 — Upload scalar and file / image field mapping](KANBAN.html#upload_scalar_and_file_image_field_mapping)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -652,7 +587,7 @@ planned
 - Related via Card item: pairs with `TODO-ALPHA-034-0.0.11` for the write side. -> `TODO-ALPHA-034-0.0.11` — Mutations + auto-generated Input types
 
 <a id="form_based_mutations_django_forms_modelforms"></a>
-### [TODO-ALPHA-036-0.0.11 — Form-based mutations (Django Forms / ModelForms)](https://riodw.github.io/django-strawberry-framework/#form_based_mutations_django_forms_modelforms)
+### [TODO-ALPHA-036-0.0.11 — Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -712,7 +647,7 @@ needs spec
 - Related via Card item: Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `TODO-ALPHA-034-0.0.11`. -> `TODO-ALPHA-034-0.0.11` — Mutations + auto-generated Input types
 
 <a id="drf_serializer_mutations_serializermutation"></a>
-### [TODO-ALPHA-037-0.0.11 — DRF serializer mutations (`SerializerMutation`)](https://riodw.github.io/django-strawberry-framework/#drf_serializer_mutations_serializermutation)
+### [TODO-ALPHA-037-0.0.11 — DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -772,7 +707,7 @@ needs spec
 - Related via Card item: Validation errors surface through the shared `errors: list[FieldError]` envelope from `TODO-ALPHA-034-0.0.11`, populated from `serializer.errors`. -> `TODO-ALPHA-034-0.0.11` — Mutations + auto-generated Input types
 
 <a id="auth_mutations_login_logout_register"></a>
-### [TODO-ALPHA-038-0.0.11 — Auth mutations (login / logout / register)](https://riodw.github.io/django-strawberry-framework/#auth_mutations_login_logout_register)
+### [TODO-ALPHA-038-0.0.11 — Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -810,7 +745,7 @@ planned
 - Related via Card item: depends on `TODO-ALPHA-034-0.0.11`. -> `TODO-ALPHA-034-0.0.11` — Mutations + auto-generated Input types
 
 <a id="channels_asgi_router_migration_aid"></a>
-### [TODO-ALPHA-039-0.0.12 — Channels ASGI router (migration aid)](https://riodw.github.io/django-strawberry-framework/#channels_asgi_router_migration_aid)
+### [TODO-ALPHA-039-0.0.12 — Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -856,7 +791,7 @@ planned
 - Related via Card item: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-051-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-051-0.1.6` — Migration and adoption guides
 
 <a id="debug_toolbar_middleware"></a>
-### [TODO-ALPHA-040-0.0.12 — Debug-toolbar middleware](https://riodw.github.io/django-strawberry-framework/#debug_toolbar_middleware)
+### [TODO-ALPHA-040-0.0.12 — Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -903,7 +838,7 @@ planned
 - subclass django-debug-toolbar's middleware with two injection paths (GraphiQL HTML + `/graphql/` JSON), a template asset, introspection-skip behavior, and a soft dependency. Single module + tests.
 
 <a id="test_client_helper"></a>
-### [TODO-ALPHA-041-0.0.12 — Test client helper](https://riodw.github.io/django-strawberry-framework/#test_client_helper)
+### [TODO-ALPHA-041-0.0.12 — Test client helper](KANBAN.html#test_client_helper)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -967,7 +902,7 @@ planned
 - Related via Card item: **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `TODO-ALPHA-035-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls. -> `TODO-ALPHA-035-0.0.11` — Upload scalar and file / image field mapping
 
 <a id="response_extensions_debug_middleware"></a>
-### [TODO-ALPHA-042-0.0.12 — Response-extensions debug middleware](https://riodw.github.io/django-strawberry-framework/#response_extensions_debug_middleware)
+### [TODO-ALPHA-042-0.0.12 — Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
@@ -1041,7 +976,7 @@ planned
 Cards that complete the django-graphene-filters Layer-3 richness on top of parity (`fields_class`, `aggregate_class`, `search_fields`, plus pre-stable cleanup). Each card targets its own `0.1.x` patch within the road to **1.0.0**. The final card in this column is the `1.0.0` release itself (API freeze, cleanup, verification, beta → stable cut-over). Cards in NNN order = planned ship order.
 
 <a id="beta_release_cleanup_verification_alpha_beta"></a>
-### [TODO-BETA-043-0.1.0 — Beta release (cleanup, verification, alpha → beta)](https://riodw.github.io/django-strawberry-framework/#beta_release_cleanup_verification_alpha_beta)
+### [TODO-BETA-043-0.1.0 — Beta release (cleanup, verification, alpha → beta)](KANBAN.html#beta_release_cleanup_verification_alpha_beta)
 
 - Priority: High
 - Severity: Major
@@ -1087,7 +1022,7 @@ planned
 - release / verification card, no new subsystem: full `(Python, Django, Strawberry)` matrix pass, 100% coverage, version bump to `0.1.0`, CHANGELOG promotion, doc status cross-check, parity audit, tag + publish.
 
 <a id="fieldset"></a>
-### [TODO-BETA-044-0.1.1 — `FieldSet`](https://riodw.github.io/django-strawberry-framework/#fieldset)
+### [TODO-BETA-044-0.1.1 — `FieldSet`](KANBAN.html#fieldset)
 
 - Priority: High
 - Severity: Medium
@@ -1138,7 +1073,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - the smallest Layer-3 subsystem: `fieldset.py` + `docs/spec-fieldset.md` + tests; defines field-selection semantics the connection field consumes. Meta-driven.
 
 <a id="metasearch_fields_support"></a>
-### [TODO-BETA-045-0.1.2 — `Meta.search_fields` support](https://riodw.github.io/django-strawberry-framework/#metasearch_fields_support)
+### [TODO-BETA-045-0.1.2 — `Meta.search_fields` support](KANBAN.html#metasearch_fields_support)
 
 - Priority: High
 - Severity: Medium
@@ -1204,7 +1139,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 - Related via Card item: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="aggregation_subsystem"></a>
-### [TODO-BETA-046-0.1.3 — Aggregation subsystem](https://riodw.github.io/django-strawberry-framework/#aggregation_subsystem)
+### [TODO-BETA-046-0.1.3 — Aggregation subsystem](KANBAN.html#aggregation_subsystem)
 
 - Priority: Medium-high
 - Severity: Major
@@ -1259,7 +1194,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - Related via Card item: full subsystem, parallel to Ordering: reuses `DONE-027-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-aggregates.md` + tests. -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="layer_3_meta_key_promotion"></a>
-### [TODO-BETA-047-0.1.3 — Layer 3 Meta key promotion](https://riodw.github.io/django-strawberry-framework/#layer_3_meta_key_promotion)
+### [TODO-BETA-047-0.1.3 — Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
 
 - Priority: Low
 - Severity: Low
@@ -1279,7 +1214,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - mechanical bookkeeping: move keys from `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` as each subsystem lands end-to-end. The real work lives in the subsystem cards, not here.
 
 <a id="stable_choice_enum_naming_override"></a>
-### [TODO-BETA-048-0.1.4 — Stable choice enum naming override](https://riodw.github.io/django-strawberry-framework/#stable_choice_enum_naming_override)
+### [TODO-BETA-048-0.1.4 — Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
 
 - Priority: Low-medium
 - Severity: Medium
@@ -1316,7 +1251,7 @@ planned
 - Preserve enum reuse by `(model, field_name)` while making the published schema name explicit when consumers need it.
 
 <a id="fakeshop_graphql_schema_activation"></a>
-### [TODO-BETA-049-0.1.5 — Fakeshop GraphQL schema activation](https://riodw.github.io/django-strawberry-framework/#fakeshop_graphql_schema_activation)
+### [TODO-BETA-049-0.1.5 — Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
 
 - Priority: Medium
 - Severity: Medium
@@ -1353,7 +1288,7 @@ blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-047-0.1.3` (L
 - Blocked by via Planning note: blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-047-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-047-0.1.3` — Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
-### [TODO-BETA-050-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests](https://riodw.github.io/django-strawberry-framework/#product_catalog_layer_3_http_graphql_tests)
+### [TODO-BETA-050-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
 
 - Priority: Medium
 - Severity: Medium
@@ -1371,7 +1306,7 @@ blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-047-0.1.3` (L
 - bounded test suite: live `/graphql/` acceptance tests for the activated product-catalog schema, reusing the library app's placement + schema-reload pattern.
 
 <a id="migration_and_adoption_guides"></a>
-### [TODO-BETA-051-0.1.6 — Migration and adoption guides](https://riodw.github.io/django-strawberry-framework/#migration_and_adoption_guides)
+### [TODO-BETA-051-0.1.6 — Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
 - Severity: Medium
@@ -1406,7 +1341,7 @@ planned
 - Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
 
 <a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
-### [TODO-BETA-052-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)](https://riodw.github.io/django-strawberry-framework/#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
+### [TODO-BETA-052-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
 - Severity: Medium
@@ -1449,7 +1384,7 @@ planned
 - Related via Card item: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
-### [TODO-STABLE-053-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)](https://riodw.github.io/django-strawberry-framework/#stable_release_api_freeze_cleanup_verification_beta_stable)
+### [TODO-STABLE-053-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
 - Severity: Major
@@ -1501,8 +1436,90 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 ## Done
 
+<a id="ordering_subsystem"></a>
+### [DONE-028-0.0.8 — Ordering subsystem](KANBAN.html#ordering_subsystem)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
+- Severity: Major
+- Status: Shipped
+- Relative size: L
+- Labels: `filters`, `graphql-api`, `layer-3`, `ordering`, `public-api`
+- Spec: [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`Ordering`](docs/GLOSSARY.md#ordering) | shipped (`0.0.8`) |
+| [`order_input_type`](docs/GLOSSARY.md#order_input_type) | shipped (`0.0.8`) |
+| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
+| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
+| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
+| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
+| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
+| [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
+| [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
+| [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
+| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+
+#### Planning note
+
+shipped
+
+#### Definition of done
+
+- [x] Add `docs/spec-028-orders-0_0_8.md`.
+- [x] Add `django_strawberry_framework/orders/`.
+- [x] Add mirrored `tests/orders/`.
+- [x] Promote `Meta.orderset_class` only when ordering is applied end-to-end.
+- [x] Support simple fields and relation paths.
+- [x] Define interaction with filters and connection field.
+- [x] Keep ordering declarations introspectable from the owning type/query surface.
+
+#### Other
+
+- Shipped the ordering subsystem in `0.0.8`. [`OrderSet`][glossary-orderset], [`RelatedOrder`][glossary-relatedorder], and [`Meta.orderset_class`][glossary-metaorderset_class] (promoted out of `DEFERRED_META_KEYS`) land at [`django_strawberry_framework/orders/`][orders] across five files (`base.py`, `sets.py`, `factories.py`, `inputs.py`, `__init__.py`); `tests/orders/` mirrors the layout. Five-layer lazy-resolution pipeline borrowed from `django-graphene-filters` with the same Strawberry-adapted Layer 5 the Filtering subsystem just shipped (`Annotated[\"TypeName\", strawberry.lazy(\"django_strawberry_framework.orders.inputs\")]` over module globals); the shared `LazyRelatedClassMixin` is reused from the neutral `sets_mixins` module via sibling import (per H1 of `docs/feedback.md` rev3 — `sets_mixins.py` carries both `LazyRelatedClassMixin` and `ClassBasedTypeNameMixin` for the set family). Layer 6 (dynamic OrderSet generation) deferred to `0.0.9` alongside `DjangoConnectionField` per Decision 12 of `docs/spec-028-orders-0_0_8.md`. The public `Ordering` enum borrowed verbatim from `strawberry-django` (six members: ASC / DESC / ASC_NULLS_FIRST / ASC_NULLS_LAST / DESC_NULLS_FIRST / DESC_NULLS_LAST) — NULLS positioning honored via Django `F(value).asc/desc(nulls_first=...)` expressions. The list-shaped `orderBy: [<T>OrderInputType!]` argument's element order IS the tie-breaker mechanism. The **resolver-facing API is the classmethod pair `OrderSet.apply_sync(input_value, queryset, info)` and `OrderSet.apply_async(input_value, queryset, info)`** (sync resolvers call the former; async resolvers await the latter), mirroring the shipped filter subsystem's shape. The apply pipeline runs `check_permissions` with **active-input-only scope** (per-field `check_<field>_permission` gates fire only when the consumer's input names the field); extracts the request from `info.context.request` (with an `isinstance(info.context, HttpRequest)` fallback); applies `queryset.order_by(*OrderBy_expressions)` after visibility scoping (`<OwnerType>.get_queryset`) and after optional filter narrowing (`<TypeName>Filter.apply_*`). The new `order_input_type(BranchOrder)` helper produces the resolver-annotation shape; the finalizer enforces orphan validation by raising `ConfigurationError` for any OrderSet referenced via `order_input_type` but never wired via `Meta.orderset_class` (tracked via `_helper_referenced_ordersets`). `registry.clear()` co-clears the order input namespace via `clear_order_input_namespace()` AND clears `_helper_referenced_ordersets` — alongside the already-shipped filter clears. Per-package input-class namespace is separate from the model-to-`DjangoType` registry AND from the filter-input namespace (`Meta.primary` design preserved). `Meta.orderset_class` promotion runs through finalizer phase 2.5 via `_bind_ordersets()` with four ordered subpasses mirroring the filter side's discipline; the phase binds `_owner_definition`, calls `get_fields()` only after all owners are bound, materializes each generated input class as a module global of `django_strawberry_framework.orders.inputs` before `strawberry.Schema(...)` runs. [`examples/fakeshop/apps/library/`][fakeshop-library] grows `orders.py` (carrying `BranchOrder` / `ShelfOrder` / `BookOrder` / `LoanOrder` / `PatronOrder`) and `orders_genre.py` (carrying `GenreOrder` — cross-module fixture for the Layer-2 absolute-import-path test) wired through `Meta.orderset_class`; root resolvers accept `order_by:` via `order_input_type(<Name>Order)` annotations and call `<OwnerType>.get_queryset(...)` then optionally `<TypeName>Filter.apply_*` then `OrderSet.apply_*`. [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-library] grows exactly 14 live HTTP tests covering scalar ASC / scalar DESC_NULLS_LAST on `Book.subtitle` (per B3 of rev3) / forward-FK / reverse-FK with denormalized-multiplicity-pinned / M2M absolute-import-path RelatedOrder / flat-shorthand path (`shelf__code` → `shelfCode`) / filter + order composition / optimizer cooperation / root `get_queryset` honoring / split-pair active-input-only scalar `check_<field>_permission` (denies-for-active + quiet-for-inactive) / active-branch relation-level permission gate (`check_shelves_permission` per H3 of rev3) / multi-field priority via list-element ordering / empty-list no-op / null-direction no-op. Spec: `docs/spec-028-orders-0_0_8.md`. After this card moves to Done, `0.0.9` follow-up cards can start; no version files change here unless the maintainer explicitly gives the version-bump command.
+
+#### Card references
+
+- Related via Card item: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField #"order_by"` — connection field accepts an `order_by` argument that composes through `django_filters.OrderingFilter` declared on the FilterSet. Graphene has no separate ordering primitive; ⚛️ parity is met by the filter subsystem (`DONE-027-0.0.8`) rather than this card. -> `DONE-027-0.0.8` — Filtering subsystem
+- Related via Card item: second-largest `0.0.8` card. A leaner mirror of `DONE-027-0.0.8`: five of the six lazy-resolution layers carry over, no operator-bag/lookup surface, 🍓-only parity. New `orders/` subpackage + `docs/spec-028-orders-0_0_8.md` + mirrored tests. Layer 6 (dynamic OrderSet generation) has no cookbook counterpart — the one genuinely fresh design decision. -> `DONE-027-0.0.8` — Filtering subsystem
+
 <a id="filtering_subsystem"></a>
-### [DONE-027-0.0.8 — Filtering subsystem](https://riodw.github.io/django-strawberry-framework/#filtering_subsystem)
+### [DONE-027-0.0.8 — Filtering subsystem](KANBAN.html#filtering_subsystem)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1510,7 +1527,59 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 - Status: Shipped
 - Relative size: XL
 - Labels: `example-app`, `filters`, `graphql-api`, `public-api`
-- Spec: [spec-027-filters-0_0_8.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-027-filters-0_0_8.md)
+- Spec: [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
+| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [Input type generation](docs/GLOSSARY.md#input-type-generation) | planned for `0.0.11` |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
+| [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
+| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
+| [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
+| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
+| [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
+| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
 
 #### Planning note
 
@@ -1522,7 +1591,7 @@ shipped
 - the milestone anchor: six-layer lazy-resolution filtering pipeline, `FilterSet` / `RelatedFilter` / `Meta.filterset_class`, parity-floor filter primitives, finalizer phase-2.5 wiring, 14 live HTTP tests.
 
 <a id="scalar_conversion_end_to_end_coverage_in_the_fakeshop_example"></a>
-### [DONE-026-0.0.7 — Scalar conversion end-to-end coverage in the fakeshop example](https://riodw.github.io/django-strawberry-framework/#scalar_conversion_end_to_end_coverage_in_the_fakeshop_example)
+### [DONE-026-0.0.7 — Scalar conversion end-to-end coverage in the fakeshop example](KANBAN.html#scalar_conversion_end_to_end_coverage_in_the_fakeshop_example)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1530,7 +1599,7 @@ shipped
 - Status: Shipped
 - Relative size: M
 - Labels: `example-app`, `graphql-api`, `scalars`, `tests`
-- Spec: [spec-026-scalar_conversion_fakeshop-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md)
+- Spec: [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md)
 
 #### Planning note
 
@@ -1554,14 +1623,36 @@ shipped
 - Self-FK `parent` / `children` traversal
 
 <a id="warning_free_scalar_registration_via_strawberryconfigscalar_map"></a>
-### [DONE-025-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`](https://riodw.github.io/django-strawberry-framework/#warning_free_scalar_registration_via_strawberryconfigscalar_map)
+### [DONE-025-0.0.7 — Warning-free scalar registration via `StrawberryConfig.scalar_map`](KANBAN.html#warning_free_scalar_registration_via_strawberryconfigscalar_map)
 
 - Priority: Medium
 - Severity: Medium
 - Status: Shipped
 - Relative size: S
 - Labels: `config`, `public-api`, `scalar-map`, `scalars`
-- Spec: [spec-025-scalar_map_helper-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-025-scalar_map_helper-0_0_7.md)
+- Spec: [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | planned for `0.0.11` |
+| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | planned for `0.0.11` |
+| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | planned for `0.0.11` |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
 
 #### Planning note
 
@@ -1573,14 +1664,14 @@ shipped
 - `strawberry_config()` factory registering `BigInt` via `scalar_map` and removing the deprecation-suppression block; a documented breaking change in alpha.
 
 <a id="django_trac_37064_hardening_safe_wrap_connection_method"></a>
-### [DONE-024-0.0.7 — Django Trac #37064 hardening + `safe_wrap_connection_method`](https://riodw.github.io/django-strawberry-framework/#django_trac_37064_hardening_safe_wrap_connection_method)
+### [DONE-024-0.0.7 — Django Trac #37064 hardening + `safe_wrap_connection_method`](KANBAN.html#django_trac_37064_hardening_safe_wrap_connection_method)
 
 - Priority: Low
 - Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `django-integration`, `hardening`
-- Spec: [spec-024-django_trac_37064_hardening-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-024-django_trac_37064_hardening-0_0_7.md)
+- Spec: [spec-024-django_trac_37064_hardening-0_0_7.md](docs/SPECS/spec-024-django_trac_37064_hardening-0_0_7.md)
 
 #### Planning note
 
@@ -1592,14 +1683,37 @@ shipped
 - two-half defense for Trac #37064: a package-level unwrap patch (auto-applied at app-load) plus the cooperative `safe_wrap_connection_method` helper + tests.
 
 <a id="multi_database_cooperation_contract"></a>
-### [DONE-023-0.0.7 — Multi-database cooperation contract](https://riodw.github.io/django-strawberry-framework/#multi_database_cooperation_contract)
+### [DONE-023-0.0.7 — Multi-database cooperation contract](KANBAN.html#multi_database_cooperation_contract)
 
 - Priority: Low
 - Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `multi-db`, `optimizer`, `tests`
-- Spec: [spec-023-multi_db-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-023-multi_db-0_0_7.md)
+- Spec: [spec-023-multi_db-0_0_7.md](docs/SPECS/spec-023-multi_db-0_0_7.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
+| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -1611,7 +1725,7 @@ shipped
 - pin the multi-DB cooperation contract (router-aware FK-id stubs, `.using()` preservation, `Prefetch` `_db` round-trip) + tests; zero production-code change.
 
 <a id="schema_export_management_command"></a>
-### [DONE-022-0.0.7 — Schema export management command](https://riodw.github.io/django-strawberry-framework/#schema_export_management_command)
+### [DONE-022-0.0.7 — Schema export management command](KANBAN.html#schema_export_management_command)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -1619,7 +1733,25 @@ shipped
 - Status: Shipped
 - Relative size: S
 - Labels: `management-command`, `public-api`, `schema`
-- Spec: [spec-022-export_schema-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-022-export_schema-0_0_7.md)
+- Spec: [spec-022-export_schema-0_0_7.md](docs/SPECS/spec-022-export_schema-0_0_7.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
+| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.12` |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.12` |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.12` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.12` |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.12` |
 
 #### Planning note
 
@@ -1631,7 +1763,7 @@ shipped
 - one management command (positional `schema`, `--path`, SDL via `print_schema`, `CommandError` paths) + tests.
 
 <a id="appspy_and_django_app_config"></a>
-### [DONE-021-0.0.7 — `apps.py` and Django app config](https://riodw.github.io/django-strawberry-framework/#appspy_and_django_app_config)
+### [DONE-021-0.0.7 — `apps.py` and Django app config](KANBAN.html#appspy_and_django_app_config)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1639,7 +1771,24 @@ shipped
 - Status: Shipped
 - Relative size: XS
 - Labels: `django-app`, `packaging`
-- Spec: [spec-021-apps-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-021-apps-0_0_7.md)
+- Spec: [spec-021-apps-0_0_7.md](docs/SPECS/spec-021-apps-0_0_7.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.12` |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.12` |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.12` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.12` |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.12` |
 
 #### Planning note
 
@@ -1651,7 +1800,7 @@ shipped
 - tiny `AppConfig` (two class attributes, no `ready()` body in 0.0.7) + tests.
 
 <a id="djangolistfield_non_relay_list"></a>
-### [DONE-020-0.0.7 — `DjangoListField` (non-Relay list)](https://riodw.github.io/django-strawberry-framework/#djangolistfield_non_relay_list)
+### [DONE-020-0.0.7 — `DjangoListField` (non-Relay list)](KANBAN.html#djangolistfield_non_relay_list)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -1659,7 +1808,7 @@ shipped
 - Status: Shipped
 - Relative size: M
 - Labels: `graphql-api`, `list-field`, `optimizer`, `public-api`
-- Spec: [spec-020-list_field-0_0_7.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-020-list_field-0_0_7.md)
+- Spec: [spec-020-list_field-0_0_7.md](docs/SPECS/spec-020-list_field-0_0_7.md)
 
 #### Planning note
 
@@ -1671,7 +1820,7 @@ shipped
 - `DjangoListField` factory: default + consumer resolver, `Manager → QuerySet` coercion, sync/async `get_queryset`, outer-list nullability, root-gated optimizer cooperation.
 
 <a id="consumer_override_semantics_scalar_fields"></a>
-### [DONE-019-0.0.6 — Consumer override semantics (scalar fields)](https://riodw.github.io/django-strawberry-framework/#consumer_override_semantics_scalar_fields)
+### [DONE-019-0.0.6 — Consumer override semantics (scalar fields)](KANBAN.html#consumer_override_semantics_scalar_fields)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1679,7 +1828,7 @@ shipped
 - Status: Shipped
 - Relative size: L
 - Labels: `public-api`, `relay`, `scalars`, `types`
-- Spec: [spec-019-consumer_overrides_scalar-0_0_6.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md)
+- Spec: [spec-019-consumer_overrides_scalar-0_0_6.md](docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md)
 
 #### Planning note
 
@@ -1702,14 +1851,14 @@ shipped
 - Type-annotation overrides are the consumer's responsibility for runtime
 
 <a id="multiple_djangotypes_per_model_with_metaprimary"></a>
-### [DONE-018-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`](https://riodw.github.io/django-strawberry-framework/#multiple_djangotypes_per_model_with_metaprimary)
+### [DONE-018-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`](KANBAN.html#multiple_djangotypes_per_model_with_metaprimary)
 
 - Priority: Medium
 - Severity: Medium
 - Status: Shipped
 - Relative size: L
 - Labels: `optimizer`, `public-api`, `registry`, `types`
-- Spec: [spec-018-meta_primary-0_0_6.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-018-meta_primary-0_0_6.md)
+- Spec: [spec-018-meta_primary-0_0_6.md](docs/SPECS/spec-018-meta_primary-0_0_6.md)
 
 #### Planning note
 
@@ -1737,7 +1886,7 @@ shipped
 - Already-shipped consumer relation overrides (direct annotation
 
 <a id="deferred_scalar_conversions"></a>
-### [DONE-017-0.0.6 — Deferred scalar conversions](https://riodw.github.io/django-strawberry-framework/#deferred_scalar_conversions)
+### [DONE-017-0.0.6 — Deferred scalar conversions](KANBAN.html#deferred_scalar_conversions)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1745,7 +1894,7 @@ shipped
 - Status: Shipped
 - Relative size: M
 - Labels: `converters`, `public-api`, `scalars`
-- Spec: [spec-017-deferred_scalars-0_0_6.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-017-deferred_scalars-0_0_6.md)
+- Spec: [spec-017-deferred_scalars-0_0_6.md](docs/SPECS/spec-017-deferred_scalars-0_0_6.md)
 
 #### Planning note
 
@@ -1775,14 +1924,14 @@ shipped
 - Related via Card item: The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `DONE-025-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor. -> `DONE-025-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map`
 
 <a id="fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement"></a>
-### [DONE-016-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement](https://riodw.github.io/django-strawberry-framework/#fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement)
+### [DONE-016-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement](KANBAN.html#fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement)
 
 - Priority: Medium
 - Severity: Medium
 - Status: Shipped
 - Relative size: M
 - Labels: `cleanup`, `field-meta`, `metadata`, `optimizer`, `types`
-- Spec: [spec-016-fieldmeta_consolidation-0_0_6.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md)
+- Spec: [spec-016-fieldmeta_consolidation-0_0_6.md](docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md)
 
 #### Planning note
 
@@ -1823,7 +1972,7 @@ shipped
 - Internal refactor only; no `Meta` key changes, no public surface changes, no consumer-visible behavior changes. Existing tests pass without modification.
 
 <a id="005_relay_interfaces_and_node_foundation"></a>
-### [DONE-015-0.0.5 — 0.0.5 Relay interfaces and Node foundation](https://riodw.github.io/django-strawberry-framework/#005_relay_interfaces_and_node_foundation)
+### [DONE-015-0.0.5 — 0.0.5 Relay interfaces and Node foundation](KANBAN.html#005_relay_interfaces_and_node_foundation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -1831,7 +1980,7 @@ shipped
 - Status: Shipped
 - Relative size: L
 - Labels: `public-api`, `relay`, `types`
-- Spec: [spec-015-relay_interfaces-0_0_5.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-015-relay_interfaces-0_0_5.md)
+- Spec: [spec-015-relay_interfaces-0_0_5.md](docs/SPECS/spec-015-relay_interfaces-0_0_5.md)
 
 #### Planning note
 
@@ -1873,14 +2022,14 @@ shipped
 - `Meta.interfaces` is the first `0.0.4`-reserved `DjangoTypeDefinition` slot that ships end-to-end through finalizer phase 2.5; subsequent Layer 3 subsystems plug into the same architectural seam.
 
 <a id="move_test_fixture_out_of_example_settings"></a>
-### [DONE-014-0.0.4 — Move test fixture out of example settings](https://riodw.github.io/django-strawberry-framework/#move_test_fixture_out_of_example_settings)
+### [DONE-014-0.0.4 — Move test fixture out of example settings](KANBAN.html#move_test_fixture_out_of_example_settings)
 
 - Priority: Low
 - Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `cleanup`, `example-app`, `tests`
-- Spec: [spec-014-testing_shift-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-014-testing_shift-0_0_4.md)
+- Spec: [spec-014-testing_shift-0_0_4.md](docs/SPECS/spec-014-testing_shift-0_0_4.md)
 
 #### Planning note
 
@@ -1903,14 +2052,14 @@ shipped
 - `docs/TREE.md`
 
 <a id="real_m2m_coverage"></a>
-### [DONE-013-0.0.4 — Real M2M coverage](https://riodw.github.io/django-strawberry-framework/#real_m2m_coverage)
+### [DONE-013-0.0.4 — Real M2M coverage](KANBAN.html#real_m2m_coverage)
 
 - Priority: Medium
 - Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `example-app`, `m2m`, `tests`
-- Spec: [spec-013-real_m2m_coverage-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-013-real_m2m_coverage-0_0_4.md)
+- Spec: [spec-013-real_m2m_coverage-0_0_4.md](docs/SPECS/spec-013-real_m2m_coverage-0_0_4.md)
 
 #### Planning note
 
@@ -1931,14 +2080,14 @@ shipped
 - `tests/optimizer/test_definition_order.py`
 
 <a id="004_version_and_release_alignment"></a>
-### [DONE-012-0.0.4 — 0.0.4 version and release alignment](https://riodw.github.io/django-strawberry-framework/#004_version_and_release_alignment)
+### [DONE-012-0.0.4 — 0.0.4 version and release alignment](KANBAN.html#004_version_and_release_alignment)
 
 - Priority: Low
 - Severity: Low
 - Status: Shipped
 - Relative size: XS
 - Labels: `release`, `versioning`
-- Spec: [spec-012-version_release_alignment-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-012-version_release_alignment-0_0_4.md)
+- Spec: [spec-012-version_release_alignment-0_0_4.md](docs/SPECS/spec-012-version_release_alignment-0_0_4.md)
 
 #### Planning note
 
@@ -1960,14 +2109,14 @@ shipped
 - `CHANGELOG.md`
 
 <a id="stale_placeholder_cleanup"></a>
-### [DONE-011-0.0.4 — Stale placeholder cleanup](https://riodw.github.io/django-strawberry-framework/#stale_placeholder_cleanup)
+### [DONE-011-0.0.4 — Stale placeholder cleanup](KANBAN.html#stale_placeholder_cleanup)
 
 - Priority: Low
 - Severity: Low
 - Status: Shipped
 - Relative size: XS
 - Labels: `cleanup`, `docs`, `tests`
-- Spec: [spec-011-stale_placeholder_cleanup-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md)
+- Spec: [spec-011-stale_placeholder_cleanup-0_0_4.md](docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md)
 
 #### Planning note
 
@@ -1992,14 +2141,14 @@ shipped
 - Related via Card item: Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-019-0.0.6`. -> `DONE-019-0.0.6` — Consumer override semantics (scalar fields)
 
 <a id="004_foundation_slice_definition_order_independence"></a>
-### [DONE-010-0.0.4 — 0.0.4 foundation slice (definition-order independence)](https://riodw.github.io/django-strawberry-framework/#004_foundation_slice_definition_order_independence)
+### [DONE-010-0.0.4 — 0.0.4 foundation slice (definition-order independence)](KANBAN.html#004_foundation_slice_definition_order_independence)
 
 - Priority: High
 - Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `finalizer`, `registry`, `relations`, `types`
-- Spec: [spec-010-foundation-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-010-foundation-0_0_4.md)
+- Spec: [spec-010-foundation-0_0_4.md](docs/SPECS/spec-010-foundation-0_0_4.md)
 
 #### Planning note
 
@@ -2045,14 +2194,14 @@ shipped
 - The previous foundation-slice in-progress cards have been retired; this card is their successor in Done.
 
 <a id="rich_schema_architecture"></a>
-### [DONE-009-0.0.4 — Rich schema architecture](https://riodw.github.io/django-strawberry-framework/#rich_schema_architecture)
+### [DONE-009-0.0.4 — Rich schema architecture](KANBAN.html#rich_schema_architecture)
 
 - Priority: High
 - Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `layer-3`, `public-api`, `relations`, `types`
-- Spec: [spec-009-rich_schema_architecture-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md)
+- Spec: [spec-009-rich_schema_architecture-0_0_4.md](docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md)
 
 #### Planning note
 
@@ -2069,14 +2218,14 @@ shipped
 - Architecture design record paired with the narrower 0.0.4 foundation implementation spec.
 
 <a id="definition_order_independence_design"></a>
-### [DONE-008-0.0.4 — Definition-order independence design](https://riodw.github.io/django-strawberry-framework/#definition_order_independence_design)
+### [DONE-008-0.0.4 — Definition-order independence design](KANBAN.html#definition_order_independence_design)
 
 - Priority: High
 - Severity: Major
 - Status: Shipped
 - Relative size: M
 - Labels: `finalizer`, `registry`, `relations`, `types`
-- Spec: [spec-008-definition_order_independence-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-008-definition_order_independence-0_0_4.md)
+- Spec: [spec-008-definition_order_independence-0_0_4.md](docs/SPECS/spec-008-definition_order_independence-0_0_4.md)
 
 #### Planning note
 
@@ -2093,14 +2242,14 @@ shipped
 - Problem-space design record for definition-order independence.
 
 <a id="004_onboarding_docs_and_spec_consolidation"></a>
-### [DONE-007-0.0.4 — 0.0.4 onboarding docs and spec consolidation](https://riodw.github.io/django-strawberry-framework/#004_onboarding_docs_and_spec_consolidation)
+### [DONE-007-0.0.4 — 0.0.4 onboarding docs and spec consolidation](KANBAN.html#004_onboarding_docs_and_spec_consolidation)
 
 - Priority: Medium
 - Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `docs`, `release`
-- Spec: [spec-007-onboarding_docs_spec_consolidation-0_0_4.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-007-onboarding_docs_spec_consolidation-0_0_4.md)
+- Spec: [spec-007-onboarding_docs_spec_consolidation-0_0_4.md](docs/SPECS/spec-007-onboarding_docs_spec_consolidation-0_0_4.md)
 
 #### Planning note
 
@@ -2127,14 +2276,14 @@ shipped
 - Future in-flight design docs use the `docs/spec-<NNN>-<topic>-<0_0_X>.md` convention (NNN matches the KANBAN card number; see `docs/builder/BUILD.md` "Spec filename pattern"), then get folded into durable docs when shipped.
 
 <a id="documentationstatus_positioning_for_shipped_layer_2"></a>
-### [DONE-006-0.0.3 — Documentation/status positioning for shipped Layer 2](https://riodw.github.io/django-strawberry-framework/#documentationstatus_positioning_for_shipped_layer_2)
+### [DONE-006-0.0.3 — Documentation/status positioning for shipped Layer 2](KANBAN.html#documentationstatus_positioning_for_shipped_layer_2)
 
 - Priority: Medium
 - Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `docs`
-- Spec: [spec-006-public_surface-0_0_3.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-006-public_surface-0_0_3.md)
+- Spec: [spec-006-public_surface-0_0_3.md](docs/SPECS/spec-006-public_surface-0_0_3.md)
 
 #### Planning note
 
@@ -2156,14 +2305,14 @@ shipped
 - User-facing docs avoid internal slice shorthand; maintainer docs can still use it where useful.
 
 <a id="djangotype_contract_and_boundary"></a>
-### [DONE-005-0.0.3 — DjangoType contract and boundary](https://riodw.github.io/django-strawberry-framework/#djangotype_contract_and_boundary)
+### [DONE-005-0.0.3 — DjangoType contract and boundary](KANBAN.html#djangotype_contract_and_boundary)
 
 - Priority: High
 - Severity: Major
 - Status: Shipped
 - Relative size: M
 - Labels: `docs`, `public-api`, `registry`, `types`
-- Spec: [spec-005-django_type_contract-0_0_3.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-005-django_type_contract-0_0_3.md)
+- Spec: [spec-005-django_type_contract-0_0_3.md](docs/SPECS/spec-005-django_type_contract-0_0_3.md)
 
 #### Planning note
 
@@ -2180,7 +2329,7 @@ shipped
 - Contract companion to the 0.0.3 public-surface documentation pass.
 
 <a id="optimizer_beyond_slices_b1_b8"></a>
-### [DONE-004-0.0.3 — Optimizer beyond slices B1-B8](https://riodw.github.io/django-strawberry-framework/#optimizer_beyond_slices_b1_b8)
+### [DONE-004-0.0.3 — Optimizer beyond slices B1-B8](KANBAN.html#optimizer_beyond_slices_b1_b8)
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -2188,7 +2337,7 @@ shipped
 - Status: Shipped
 - Relative size: L
 - Labels: `optimizer`, `performance`, `query-planning`, `schema-audit`
-- Spec: [spec-004-optimizer_beyond-0_0_3.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-004-optimizer_beyond-0_0_3.md)
+- Spec: [spec-004-optimizer_beyond-0_0_3.md](docs/SPECS/spec-004-optimizer_beyond-0_0_3.md)
 
 #### Planning note
 
@@ -2221,14 +2370,14 @@ shipped
 - Fragment-spread directive and multi-operation cache-key bugs have been fixed in source; the old `alpha-review-feedback.md` entries are now historical.
 
 <a id="optimizer_o4_nested_prefetch_chains"></a>
-### [DONE-003-0.0.2 — Optimizer O4 nested prefetch chains](https://riodw.github.io/django-strawberry-framework/#optimizer_o4_nested_prefetch_chains)
+### [DONE-003-0.0.2 — Optimizer O4 nested prefetch chains](KANBAN.html#optimizer_o4_nested_prefetch_chains)
 
 - Priority: High
 - Severity: Major
 - Status: Shipped
 - Relative size: M
 - Labels: `optimizer`, `performance`, `query-planning`, `relations`
-- Spec: [spec-003-optimizer_nested_prefetch_chains-0_0_2.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md)
+- Spec: [spec-003-optimizer_nested_prefetch_chains-0_0_2.md](docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md)
 
 #### Planning note
 
@@ -2245,7 +2394,7 @@ shipped
 - Design record for the O4 slice split out from the broader optimizer foundation.
 
 <a id="optimizer_o1_o6_foundation"></a>
-### [DONE-002-0.0.2 — Optimizer O1-O6 foundation](https://riodw.github.io/django-strawberry-framework/#optimizer_o1_o6_foundation)
+### [DONE-002-0.0.2 — Optimizer O1-O6 foundation](KANBAN.html#optimizer_o1_o6_foundation)
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -2253,7 +2402,7 @@ shipped
 - Status: Shipped
 - Relative size: L
 - Labels: `optimizer`, `performance`, `query-planning`, `relations`
-- Spec: [spec-002-optimizer-0_0_2.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-002-optimizer-0_0_2.md)
+- Spec: [spec-002-optimizer-0_0_2.md](docs/SPECS/spec-002-optimizer-0_0_2.md)
 
 #### Planning note
 
@@ -2282,7 +2431,7 @@ shipped
 - Shipped behavior is consolidated into `docs/GLOSSARY.md`; source/tests are the truth for optimizer behavior.
 
 <a id="djangotype_core_foundation"></a>
-### [DONE-001-0.0.1 — DjangoType core foundation](https://riodw.github.io/django-strawberry-framework/#djangotype_core_foundation)
+### [DONE-001-0.0.1 — DjangoType core foundation](KANBAN.html#djangotype_core_foundation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -2290,7 +2439,7 @@ shipped
 - Status: Shipped
 - Relative size: L
 - Labels: `public-api`, `registry`, `relations`, `scalars`, `types`
-- Spec: [spec-001-django_types-0_0_1.md](https://github.com/riodw/django-strawberry-framework/blob/main/docs/SPECS/spec-001-django_types-0_0_1.md)
+- Spec: [spec-001-django_types-0_0_1.md](docs/SPECS/spec-001-django_types-0_0_1.md)
 
 #### Planning note
 

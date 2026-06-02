@@ -312,6 +312,7 @@ class CardType(DjangoType):
             "incoming_references",
             "parity",
             "labels",
+            "glossary_links",
         )
         interfaces = (relay.Node,)
         filterset_class = filters.CardFilter
@@ -321,6 +322,7 @@ class CardType(DjangoType):
             "dependencies": OptimizerHint.prefetch_related(),
             "outgoing_references": OptimizerHint.prefetch_related(),
             "incoming_references": OptimizerHint.prefetch_related(),
+            "glossary_links": OptimizerHint.prefetch_related(),
         }
 
 
@@ -340,6 +342,22 @@ class CardReferenceType(DjangoType):
             "uuid",
         )
         filterset_class = filters.CardReferenceFilter
+
+
+class CardGlossaryTermType(DjangoType):
+    class Meta:
+        model = models.CardGlossaryTerm
+        fields = (
+            "id",
+            "card",
+            "term",
+            "raw_text",
+            "order",
+            "created_date",
+            "updated_date",
+            "uuid",
+        )
+        filterset_class = filters.CardGlossaryTermFilter
 
 
 class ParityClaimType(DjangoType):
@@ -457,6 +475,17 @@ class Query:
         queryset = models.CardItem.objects.order_by("id")
         if filter is not None:
             queryset = filters.CardItemFilter.apply_sync(filter, queryset, info)
+        return queryset
+
+    @strawberry.field
+    def all_kanban_card_glossary_terms(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.CardGlossaryTermFilter) | None = None,  # noqa: A002
+    ) -> list[CardGlossaryTermType]:
+        queryset = models.CardGlossaryTerm.objects.order_by("card__number", "order")
+        if filter is not None:
+            queryset = filters.CardGlossaryTermFilter.apply_sync(filter, queryset, info)
         return queryset
 
     @strawberry.field

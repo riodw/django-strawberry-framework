@@ -142,6 +142,14 @@ class CardReferenceFilter(FilterSet):
         fields = {"id": "__all__", "raw_text": "__all__", "order": "__all__"}
 
 
+class CardGlossaryTermFilter(FilterSet):
+    term = RelatedFilter("apps.glossary.filters.GlossaryTermFilter", field_name="term")
+
+    class Meta:
+        model = models.CardGlossaryTerm
+        fields = {"id": "__all__", "raw_text": "__all__", "order": "__all__"}
+
+
 class BoardDocCardReferenceFilter(FilterSet):
     class Meta:
         model = models.BoardDocCardReference
@@ -186,6 +194,7 @@ class CardFilter(FilterSet):
     dependencies = RelatedFilter("apps.kanban.filters.CardFilter", field_name="dependencies")
     outgoing_references = RelatedFilter(CardReferenceFilter, field_name="outgoing_references")
     incoming_references = RelatedFilter(CardReferenceFilter, field_name="incoming_references")
+    glossary_links = RelatedFilter(CardGlossaryTermFilter, field_name="glossary_links")
 
     class Meta:
         model = models.Card
@@ -212,6 +221,7 @@ __all__ = (
     "LabelFilter",
     "CardItemFilter",
     "CardReferenceFilter",
+    "CardGlossaryTermFilter",
     "BoardDocCardReferenceFilter",
     "BoardDocFilter",
     "CardFilter",

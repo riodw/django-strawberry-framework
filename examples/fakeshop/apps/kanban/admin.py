@@ -65,6 +65,13 @@ class CardReferenceInline(admin.TabularInline):
     autocomplete_fields = ("target_card", "kind", "source")
 
 
+class CardGlossaryTermInline(admin.TabularInline):
+    model = models.CardGlossaryTerm
+    extra = 0
+    show_change_link = True
+    autocomplete_fields = ("term",)
+
+
 @admin.register(models.Card)
 class CardAdmin(admin.ModelAdmin):
     list_display = (
@@ -93,7 +100,7 @@ class CardAdmin(admin.ModelAdmin):
         "severity",
     )
     filter_horizontal = ("dependencies", "labels")
-    inlines = [CardItemInline, ParityClaimInline, CardReferenceInline]
+    inlines = [CardItemInline, ParityClaimInline, CardReferenceInline, CardGlossaryTermInline]
 
 
 @admin.register(models.CardReference)
@@ -113,6 +120,18 @@ class CardReferenceAdmin(admin.ModelAdmin):
         "kind",
         "source",
     )
+
+
+@admin.register(models.CardGlossaryTerm)
+class CardGlossaryTermAdmin(admin.ModelAdmin):
+    list_display = (
+        "card",
+        "term",
+        "order",
+        "raw_text",
+    )
+    search_fields = ("card__title", "term__title", "raw_text")
+    autocomplete_fields = ("card", "term")
 
 
 @admin.register(models.CardItem)

@@ -43,6 +43,7 @@ UUID_LINKED_MODELS = (
     models.SpecDoc,
     models.Card,
     models.CardReference,
+    models.CardGlossaryTerm,
     models.ParityClaim,
     models.CardItem,
     models.Label,

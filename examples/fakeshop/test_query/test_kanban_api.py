@@ -21,6 +21,7 @@ import importlib
 import sys
 
 import pytest
+from apps.glossary import models as glossary_models
 from apps.kanban import models
 from django.test import Client
 from django.urls import clear_url_caches
@@ -99,6 +100,31 @@ def _seed_board():
         label="Reference",
         order=1,
     )
+    glossary_status = glossary_models.GlossaryStatus.objects.create(
+        key="shipped",
+        label="Shipped",
+        order=0,
+    )
+    filterset_term = glossary_models.GlossaryTerm.objects.create(
+        title="`FilterSet`",
+        title_sort="filterset",
+        anchor="filterset",
+        status=glossary_status,
+        status_text="shipped (`0.0.8`)",
+        body="Declarative filtering sidecar.",
+        entry_order=1,
+        index_order=1,
+    )
+    related_filter_term = glossary_models.GlossaryTerm.objects.create(
+        title="`RelatedFilter`",
+        title_sort="relatedfilter",
+        anchor="relatedfilter",
+        status=glossary_status,
+        status_text="shipped (`0.0.8`)",
+        body="Cross-relation filter helper.",
+        entry_order=2,
+        index_order=2,
+    )
     filters_card = models.Card.objects.create(
         title="Filtering subsystem",
         number=21,
@@ -135,6 +161,18 @@ def _seed_board():
         source=planning_note,
         raw_text="planned; gated on `DONE-021-0.0.8`",
         order=0,
+    )
+    glossary_link = models.CardGlossaryTerm.objects.create(
+        card=filters_card,
+        term=filterset_term,
+        raw_text="FilterSet",
+        order=0,
+    )
+    related_glossary_link = models.CardGlossaryTerm.objects.create(
+        card=filters_card,
+        term=related_filter_term,
+        raw_text="RelatedFilter",
+        order=1,
     )
 
     models.ParityClaim.objects.create(card=filters_card, upstream=graphene, level=required)
@@ -174,6 +212,8 @@ def _seed_board():
         "item_filters": item_filters,
         "item_conn": item_conn,
         "reference": reference,
+        "glossary_link": glossary_link,
+        "related_glossary_link": related_glossary_link,
         "board_doc": board_doc,
         "board_doc_reference": board_doc_reference,
     }
@@ -243,6 +283,66 @@ def test_filter_non_relay_card_items_by_plain_integer_id_in():
         }}
         """,
         {"allKanbanCardItems": [{"text": "FilterSet"}, {"text": "Relay connection field"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_select_card_glossary_terms_and_filter_by_term_anchor():
+    """Kanban cards expose ordered glossary-term links through the live API."""
+    seed = _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(
+            filter: {
+              glossaryLinks: {
+                term: { anchor: { exact: "filterset" } }
+              }
+            }
+          ) {
+            title
+            glossaryLinks {
+              uuid { id }
+              rawText
+              order
+              term {
+                title
+                anchor
+                statusText
+              }
+            }
+          }
+        }
+        """,
+        {
+            "allCards": [
+                {
+                    "title": "Filtering subsystem",
+                    "glossaryLinks": [
+                        {
+                            "uuid": {"id": str(seed["glossary_link"].uuid.id)},
+                            "rawText": "FilterSet",
+                            "order": 0,
+                            "term": {
+                                "title": "`FilterSet`",
+                                "anchor": "filterset",
+                                "statusText": "shipped (`0.0.8`)",
+                            },
+                        },
+                        {
+                            "uuid": {"id": str(seed["related_glossary_link"].uuid.id)},
+                            "rawText": "RelatedFilter",
+                            "order": 1,
+                            "term": {
+                                "title": "`RelatedFilter`",
+                                "anchor": "relatedfilter",
+                                "statusText": "shipped (`0.0.8`)",
+                            },
+                        },
+                    ],
+                },
+            ],
+        },
     )
 
 

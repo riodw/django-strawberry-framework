@@ -9,6 +9,7 @@ import uuid as uuid_module
 import pytest
 from django.db import IntegrityError, transaction
 
+from apps.glossary import models as glossary_models
 from apps.kanban import models
 
 
@@ -25,6 +26,20 @@ def _card_required_parts():
         "relative_size": size,
         "planning_state": state,
     }
+
+
+def _glossary_term(anchor: str):
+    status, _created = glossary_models.GlossaryStatus.objects.get_or_create(
+        key="shipped",
+        defaults={"label": "Shipped"},
+    )
+    return glossary_models.GlossaryTerm.objects.create(
+        title=f"`{anchor}`",
+        title_sort=anchor,
+        anchor=anchor,
+        status=status,
+        status_text="shipped (`0.0.8`)",
+    )
 
 
 @pytest.mark.django_db
@@ -202,5 +217,40 @@ def test_board_doc_card_reference_is_fk_backed_and_ordered_per_doc():
             doc=doc,
             card=card,
             raw_text="DONE-001-0.0.1",
+            order=0,
+        )
+
+
+@pytest.mark.django_db
+def test_card_glossary_terms_are_fk_backed_and_ordered_per_card():
+    """Kanban cards link to canonical glossary terms with stable UUID rows."""
+    card = models.Card.objects.create(
+        title="Glossary linked card",
+        number=1,
+        **_card_required_parts(),
+    )
+    filterset = _glossary_term("filterset")
+    orderset = _glossary_term("orderset")
+
+    link = models.CardGlossaryTerm.objects.create(
+        card=card,
+        term=filterset,
+        raw_text="FilterSet",
+        order=0,
+    )
+
+    assert link.uuid.cardglossaryterm == link
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.CardGlossaryTerm.objects.create(
+            card=card,
+            term=filterset,
+            raw_text="FilterSet duplicate",
+            order=1,
+        )
+    with pytest.raises(IntegrityError), transaction.atomic():
+        models.CardGlossaryTerm.objects.create(
+            card=card,
+            term=orderset,
+            raw_text="OrderSet",
             order=0,
         )

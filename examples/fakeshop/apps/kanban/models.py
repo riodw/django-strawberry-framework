@@ -307,6 +307,12 @@ class Card(TimeStampedModel):
         related_name="cards",
         blank=True,
     )
+    glossary_terms = models.ManyToManyField(
+        "glossary.GlossaryTerm",
+        through="CardGlossaryTerm",
+        related_name="kanban_cards",
+        blank=True,
+    )
 
     class Meta:
         ordering = ["number"]
@@ -414,6 +420,54 @@ class CardReference(TimeStampedModel):
 
     def __str__(self):
         return f"{self.source_card.title} -> {self.target_card.title} ({self.kind.key})"
+
+
+class CardGlossaryTerm(TimeStampedModel):
+    """A kanban card's ordered link to a canonical glossary term."""
+
+    card = models.ForeignKey(
+        Card,
+        related_name="glossary_links",
+        on_delete=models.CASCADE,
+    )
+    term = models.ForeignKey(
+        "glossary.GlossaryTerm",
+        related_name="kanban_card_links",
+        on_delete=models.CASCADE,
+    )
+    raw_text = models.TextField(blank=True, default="")
+    order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = [
+            "card",
+            "order",
+        ]
+        verbose_name = "card glossary term"
+        verbose_name_plural = "card glossary terms"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "card",
+                    "term",
+                ],
+                name="unique_glossary_term_per_card",
+            ),
+            models.UniqueConstraint(
+                fields=[
+                    "card",
+                    "order",
+                ],
+                name="unique_card_glossary_term_position",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["term"]),
+            models.Index(fields=["card", "order"]),
+        ]
+
+    def __str__(self):
+        return f"{self.card.title} -> {self.term.title}"
 
 
 class ParityClaim(TimeStampedModel):
@@ -603,6 +657,7 @@ _UUID_LINK_NAMES = (
     "specdoc",
     "card",
     "cardreference",
+    "cardglossaryterm",
     "parityclaim",
     "carditem",
     "label",
@@ -756,6 +811,13 @@ class UUIDModel(TimeStampedModel):
     )
     cardreference = models.OneToOneField(
         "CardReference",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    cardglossaryterm = models.OneToOneField(
+        "CardGlossaryTerm",
         null=True,
         blank=True,
         on_delete=models.CASCADE,

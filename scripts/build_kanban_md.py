@@ -12,7 +12,7 @@ from build_kanban_html import configure_django, fetch_dashboard_data
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"
-KANBAN_PAGE_URL = "https://riodw.github.io/django-strawberry-framework/"
+KANBAN_HTML_PATH = "KANBAN.html"
 GITHUB_BLOB_URL = "https://github.com/riodw/django-strawberry-framework/blob/main"
 CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
 CARD_ID_RE = re.compile(
@@ -58,8 +58,8 @@ def card_key(card: dict[str, Any]) -> str:
 
 
 def card_url(card: dict[str, Any]) -> str:
-    """Return the published dashboard URL for ``card``."""
-    return f"{KANBAN_PAGE_URL}#{card['slug']}"
+    """Return the relative dashboard URL for ``card``."""
+    return f"{KANBAN_HTML_PATH}#{card['slug']}"
 
 
 def spec_path_from_url(url: str) -> str:
@@ -81,7 +81,12 @@ def spec_paths_for_card(card: dict[str, Any]) -> list[str]:
 
 def spec_link(path: str) -> str:
     """Return a Markdown link to a repository spec path."""
-    return f"[{Path(path).name}]({GITHUB_BLOB_URL}/{path})"
+    return f"[{Path(path).name}]({path})"
+
+
+def glossary_term_link(term: dict[str, Any]) -> str:
+    """Return a Markdown link to a glossary term anchor."""
+    return f"[{term['title']}](docs/GLOSSARY.md#{term['anchor']})"
 
 
 def card_column_key(card: dict[str, Any]) -> str:
@@ -245,6 +250,28 @@ def render_spec_map(dashboard_data: dict[str, Any]) -> list[str]:
     return lines
 
 
+def render_glossary_terms(card: dict[str, Any]) -> list[str]:
+    """Render the card-to-glossary term table."""
+    glossary_links = sorted(
+        card.get("glossaryLinks", []),
+        key=lambda link: link["order"],
+    )
+    if not glossary_links:
+        return []
+
+    lines = [
+        "#### Glossary terms",
+        "",
+        "| Term | Status |",
+        "| --- | --- |",
+    ]
+    for glossary_link in glossary_links:
+        term = glossary_link["term"]
+        lines.append(f"| {glossary_term_link(term)} | {term['statusText']} |")
+    lines.append("")
+    return lines
+
+
 def render_card(card: dict[str, Any]) -> list[str]:
     """Render a kanban card with its lookup metadata and child rows."""
     text_replacements, token_replacements = card_reference_replacements(card)
@@ -282,6 +309,8 @@ def render_card(card: dict[str, Any]) -> list[str]:
         label = "Spec" if len(specs) == 1 else "Specs"
         lines.append(f"- {label}: " + ", ".join(spec_link(path) for path in specs))
     lines.append("")
+
+    lines.extend(render_glossary_terms(card))
 
     planning_note = card.get("planningNote") or ""
     if planning_note:

@@ -1,6 +1,6 @@
 # Review: `django_strawberry_framework/filters/` (folder pass)
 
-Status: logic-accepted
+Status: fix-implemented (awaiting changelog disposition)
 
 Sibling artifacts read (Worker 1's contract per `docs/review/worker-1.md` "Folder and project passes"):
 

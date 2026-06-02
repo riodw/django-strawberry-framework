@@ -165,7 +165,10 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
         field: A bound Django model field.
         type_name: The consumer-facing ``DjangoType`` class name. Threaded
             through so the choice-enum path can build a stable
-            ``<TypeName><FieldName>Enum`` GraphQL name.
+            ``<TypeName><FieldName>Enum`` GraphQL name. Also threaded into
+            the recursive ``base_field`` call on ``ArrayField``, so an
+            inner choice-bearing element resolves under the outer field's
+            name.
 
     Raises:
         ConfigurationError: triggered by any of the following:
@@ -243,6 +246,16 @@ def _sanitize_member_name(value: Any) -> str:
     names are also prefixed so Strawberry can build the schema.
     Sanitization is a function of the raw value, not the label, so schema
     member names stay stable when consumers edit human-readable labels.
+
+    Rules apply in this order: (1) ASCII non-identifier characters
+    rewritten to ``_``; (2) leading-digit or empty result prefixed with
+    ``MEMBER_``; (3) Python-keyword result prefixed with ``_``;
+    (4) GraphQL-reserved (``true`` / ``false`` / ``null``) or
+    ``__``-prefixed result prefixed with ``MEMBER_``. The order is
+    load-bearing because the keyword-and-reserved rewrites in steps 3 and
+    4 cannot collapse into a single condition without changing how
+    downstream collision detection (see ``convert_choices_to_enum``)
+    categorises ambiguous values.
     """
     sanitized = _NON_IDENT.sub("_", str(value))
     if not sanitized or sanitized[0].isdigit():
@@ -257,23 +270,31 @@ def _sanitize_member_name(value: Any) -> str:
 def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
     """Generate (or fetch from registry) a Strawberry ``Enum`` for ``field.choices``.
 
-    1. Reject Django's grouped-choices form.
-    2. Cache check on ``(field.model, field.name)``.
-    3. Compute enum name ``f"{type_name}{PascalCase(field.name)}Enum"``.
-    4. Sanitize member names from choice *values* (not labels) so a label
-       edit doesn't churn the GraphQL schema. Integer or hyphenated
-       values produce ``MEMBER_<digit>`` / underscore-mangled names.
-    5. Build the ``Enum`` and decorate with ``strawberry.enum``.
-    6. Cache via ``registry.register_enum``.
-    7. Return the enum class.
+    1. Coerce ``field.choices`` to a list and reject if empty.
+    2. Reject Django's grouped-choices form.
+    3. Cache check on ``(field.model, field.name)``; return cached on hit.
+    4. Compute enum name ``f"{type_name}{PascalCase(field.name)}Enum"``.
+    5. Sanitize member names from choice *values* (not labels) so a label
+       edit doesn't churn the GraphQL schema; reject if two values
+       sanitize to the same identifier.
+    6. Build the ``Enum`` and decorate with ``strawberry.enum``.
+    7. Cache via ``registry.register_enum`` and return the enum class.
 
     The first ``DjangoType`` to read a given ``(model, field_name)`` wins
     the enum's GraphQL name; sibling types pointing at the same column
     receive the cached enum unchanged.
 
     Raises:
-        ConfigurationError: ``field.choices`` contains nested tuples
-            (Django's grouped-choices form) or is empty.
+        ConfigurationError: triggered by any of the following:
+
+            - ``field.choices`` is empty — declared but the sequence is
+              empty.
+            - ``field.choices`` contains nested tuples (Django's
+              grouped-choices form). Only the flat ``(value, label)``
+              form is supported.
+            - two or more choice values sanitize to the same enum member
+              (e.g. ``"a-b"`` and ``"a_b"`` both collapse to ``"a_b"``);
+              rename one side or split into separate fields.
     """
     choices = list(field.choices or [])
     if not choices:

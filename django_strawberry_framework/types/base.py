@@ -46,11 +46,7 @@ from .relations import PendingRelation, PendingRelationAnnotation
 from .relay import install_is_type_of
 
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
-    {
-        "aggregate_class",
-        "fields_class",
-        "search_fields",
-    },
+    {"aggregate_class", "fields_class", "search_fields"},
 )
 
 ALLOWED_META_KEYS: frozenset[str] = frozenset(

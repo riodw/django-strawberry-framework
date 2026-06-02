@@ -403,10 +403,7 @@ def test_orderset_apply_sync_returns_unmodified_queryset_for_all_null_directions
 def test_orderset_apply_sync_emits_multi_field_priority():
     """List-element order is the tie-breaker mechanism per Spec Decision 5."""
     BookOrder, BookInput = _book_order_with_factory()
-    input_value = [
-        BookInput(title=Ordering.ASC),
-        BookInput(subtitle=Ordering.DESC_NULLS_LAST),
-    ]
+    input_value = [BookInput(title=Ordering.ASC), BookInput(subtitle=Ordering.DESC_NULLS_LAST)]
     info = _make_info()
     queryset = Book.objects.all()
     result = BookOrder.apply_sync(input_value, queryset, info)
@@ -730,6 +727,168 @@ def test_orderset_check_permissions_instance_tolerates_no_input_value():
     instance = object.__new__(NoInputOrder)
     request = HttpRequest()
     instance.check_permissions(request)  # no input value -> early return
+
+
+# ---------------------------------------------------------------------------
+# Pass-2 B1 coverage closure -- sets.py uncovered lines
+# ---------------------------------------------------------------------------
+
+
+def test_orderset_expand_meta_fields_returns_empty_when_meta_has_no_fields_attr():
+    """Closes ``sets.py:184`` -- ``if meta_fields is None: return fields``.
+
+    Declaring ``Meta`` without a ``fields`` attribute -> ``getattr(meta,
+    "fields", None)`` returns ``None``; the helper early-returns an
+    empty ``OrderedDict``.
+    """
+
+    class NoFieldsOrder(OrderSet):
+        class Meta:
+            model = Book
+
+    result = NoFieldsOrder._expand_meta_fields()
+    assert isinstance(result, OrderedDict)
+    assert result == OrderedDict()
+
+
+def test_orderset_extract_branch_value_returns_none_for_none_input():
+    """Closes ``sets.py:269`` -- ``if input_value is None: return None``."""
+    assert OrderSet._extract_branch_value(None, "anything") is None
+
+
+def test_orderset_extract_branch_value_reads_dict_field():
+    """Closes ``sets.py:270-271`` -- ``isinstance(input_value, dict)`` branch.
+
+    Dict-shaped inputs read via ``.get(field_name)`` so a missing key
+    collapses to ``None`` rather than raising ``KeyError``.
+    """
+    assert OrderSet._extract_branch_value({"shelf": "value"}, "shelf") == "value"
+    assert OrderSet._extract_branch_value({"shelf": "value"}, "missing") is None
+
+
+def test_orderset_active_permission_field_paths_returns_empty_for_none_input():
+    """Closes ``sets.py:317-318`` -- ``if input_value is None: return []``."""
+    assert OrderSet._active_permission_field_paths(None) == []
+
+
+def test_orderset_active_permission_field_paths_returns_empty_for_non_dataclass_non_dict_input():
+    """Closes ``sets.py:327-329`` -- non-dataclass / non-dict guard returns ``[]``.
+
+    A plain object (no ``__dataclass_fields__``, not a ``dict``) yields
+    an empty list -- the active-input walker has nothing to iterate.
+    """
+    assert OrderSet._active_permission_field_paths(object()) == []
+
+
+def test_orderset_active_permission_field_paths_walks_dict_items():
+    """Closes ``sets.py:330-331`` -- ``isinstance(input_value, dict)`` items list.
+
+    Dict-shaped inputs are walked by ``list(input_value.items())`` so
+    the active-input walker treats a dict like a dataclass.
+    """
+
+    class DictInputOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    # Populate ``_field_specs`` so the spec lookup at line 341-348 returns
+    # a real ``django_source_path`` rather than the python attr fallback.
+    OrderArgumentsFactory(DictInputOrder).arguments
+
+    paths = DictInputOrder._active_permission_field_paths({"title": Ordering.ASC})
+    assert paths == ["title"]
+
+
+def test_orderset_active_permission_field_paths_falls_back_to_python_attr_when_no_field_spec_entry():
+    """Closes ``sets.py:342-346`` -- defensive ``paths.append(python_attr)`` fallback.
+
+    When ``_field_specs`` has no entry for ``(cls, python_attr)`` (e.g.
+    a permission check fired outside the apply pipeline before
+    ``_build_input_fields`` ran), the walker falls back to the
+    python-attr token rather than dropping the field.
+    """
+
+    class NoSpecsActiveOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    # Do NOT call ``_build_input_fields`` -- the ``_field_specs`` ledger
+    # has no entry for ``(NoSpecsActiveOrder, "title")``. The autouse
+    # ``_isolate_orderset_state`` fixture clears it at entry.
+    paths = NoSpecsActiveOrder._active_permission_field_paths({"title": Ordering.ASC})
+    assert paths == ["title"]
+
+
+@pytest.mark.django_db
+def test_orderset_apply_sync_returns_queryset_when_all_directions_filter_to_empty_expressions():
+    """Closes ``sets.py:534-535`` -- empty ``expressions`` post-filter early return.
+
+    A subclass overrides ``_normalize_input`` to emit
+    ``[("title", None)]`` -- non-empty ``data`` (skipping line 526) but
+    the ``direction is not None`` filter at line 532 drops it to an
+    empty ``expressions`` list. Hits the ``if not expressions: return
+    queryset`` early return at line 535.
+    """
+
+    class _NoneDirectionSyncOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return [("title", None)]
+
+    info = _make_info()
+    queryset = Book.objects.all()
+    result = _NoneDirectionSyncOrder.apply_sync(None, queryset, info)
+    assert result is queryset
+
+
+@pytest.mark.django_db
+def test_orderset_apply_async_returns_queryset_when_data_is_empty():
+    """Closes ``sets.py:570-571`` -- async-side ``if not data: return queryset``.
+
+    Calling ``apply_async`` with an empty list yields an empty
+    normalized data list, hitting the early return at line 571 before
+    any ``order_by(...)`` clause is built.
+    """
+
+    class _EmptyAsyncOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    info = _make_info()
+    queryset = Book.objects.all()
+    result = asyncio.run(_EmptyAsyncOrder.apply_async([], queryset, info))
+    assert result is queryset
+
+
+@pytest.mark.django_db
+def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_empty_expressions():
+    """Closes ``sets.py:578-579`` -- async-side empty-expressions early return.
+
+    Symmetric of the sync-side coverage closure: a subclass overrides
+    ``_normalize_input`` to emit ``[("title", None)]``; the async path
+    hits ``if not expressions: return queryset`` at line 579.
+    """
+
+    class _NoneDirectionAsyncOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+        @classmethod
+        def _normalize_input(cls, input_value):
+            return [("title", None)]
+
+    info = _make_info()
+    queryset = Book.objects.all()
+    result = asyncio.run(_NoneDirectionAsyncOrder.apply_async(None, queryset, info))
+    assert result is queryset
 
 
 # Keep imports active so ruff doesn't flag the F-expression / Genre import.

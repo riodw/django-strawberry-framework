@@ -731,3 +731,194 @@ def test_registry_clear_works_without_orders_imported():
     assert result.returncode == 0, (
         f"subprocess failed: stdout={result.stdout!r}, stderr={result.stderr!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Pass-2 B1 coverage closure -- inputs.py uncovered lines
+# ---------------------------------------------------------------------------
+
+
+def test_camel_case_returns_input_when_split_yields_no_parts():
+    """Closes ``inputs.py:168`` -- ``if not parts: return name`` early return.
+
+    ``_camel_case`` splits on ``"_"`` and filters empty strings; inputs
+    that collapse to an empty parts list (``""`` / ``"_"`` / ``"__"``)
+    return ``name`` unchanged.
+    """
+    from django_strawberry_framework.orders.inputs import _camel_case
+
+    assert _camel_case("") == ""
+    assert _camel_case("_") == "_"
+    assert _camel_case("__") == "__"
+
+
+def test_build_input_class_threads_description_through_strawberry_field():
+    """Closes ``inputs.py:222`` -- ``description`` kwarg threads through ``strawberry.field``.
+
+    ``build_input_class`` pops ``description`` from the field kwargs and
+    forwards it to ``strawberry.field(description=...)`` so the GraphQL
+    SDL carries the description.
+    """
+    from django_strawberry_framework.orders.inputs import build_input_class
+
+    cls = build_input_class(
+        "DescribedOrderInputType",
+        [("foo", Ordering | None, {"description": "the foo direction"})],
+    )
+    fields = {f.python_name: f for f in cls.__strawberry_definition__.fields}
+    assert fields["foo"].description == "the foo direction"
+
+
+def test_normalize_input_value_returns_empty_for_non_dataclass_non_list_non_none_input():
+    """Closes ``inputs.py:336`` -- ``if dataclass_fields is None: return []``.
+
+    A non-list, non-None object that lacks ``__dataclass_fields__``
+    short-circuits to an empty list. The orderset class is not consulted
+    for this guard, so any existing ``OrderSet`` subclass works.
+    """
+    from django_strawberry_framework.orders.inputs import normalize_input_value
+
+    class _NormalizeNoDataclassOrder(OrderSet):
+        pass
+
+    # Plain object -- no ``__dataclass_fields__``.
+    assert normalize_input_value(_NormalizeNoDataclassOrder, object()) == []
+
+
+def test_normalize_input_value_skips_attrs_with_no_field_spec_entry():
+    """Closes ``inputs.py:344`` -- ``if spec is None: continue`` defensive skip.
+
+    When the dataclass input carries an attribute that has no
+    corresponding ``_field_specs`` entry for the orderset class, the
+    walker skips it silently.
+    """
+    import dataclasses
+
+    from django_strawberry_framework.orders.inputs import normalize_input_value
+
+    class _NoSpecsOrder(OrderSet):
+        class Meta:
+            model = None
+            fields = ["title"]
+
+    @dataclasses.dataclass
+    class _StubInput:
+        title: Ordering | None = None
+
+    # ``_field_specs`` is empty for ``(_NoSpecsOrder, "title")`` because
+    # ``_build_input_fields`` was never called for it. The walker hits
+    # the ``if spec is None: continue`` guard and emits no tuples.
+    result = normalize_input_value(_NoSpecsOrder, _StubInput(title=Ordering.ASC))
+    assert result == []
+
+
+def test_normalize_input_value_skips_related_branch_when_child_orderset_is_none(
+    _namespace_cleanup,
+):
+    """Closes ``inputs.py:352`` -- ``if child_orderset is None: continue`` skip.
+
+    When a ``RelatedOrder`` resolves to ``None`` (placeholder shape),
+    the walker skips the branch silently rather than recursing into it.
+    """
+    import dataclasses
+
+    from apps.library.models import Book
+
+    from django_strawberry_framework.orders import OrderSet, RelatedOrder
+    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
+    from django_strawberry_framework.orders.inputs import normalize_input_value
+
+    class _TargetNoneChildOrder(OrderSet):
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    class _ParentNoneChildOrder(OrderSet):
+        shelf = RelatedOrder(_TargetNoneChildOrder, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    # Populate ``_field_specs`` for both ordersets.
+    OrderArgumentsFactory(_ParentNoneChildOrder).arguments
+
+    # Force the related order's target to ``None`` so the
+    # ``child_orderset is None`` guard fires.
+    _ParentNoneChildOrder.related_orders["shelf"]._orderset = None
+
+    @dataclasses.dataclass
+    class _ChildStub:
+        title: Ordering | None = None
+
+    @dataclasses.dataclass
+    class _ParentStub:
+        title: Ordering | None = None
+        shelf: object = None
+
+    parent = _ParentStub(shelf=_ChildStub(title=Ordering.ASC))
+    result = normalize_input_value(_ParentNoneChildOrder, parent)
+    # The shelf branch is skipped (child orderset is None); only the
+    # leaf entry (title=None) would emit, and it's skipped by the value-
+    # is-None guard above the spec check.
+    assert all(not path.startswith("shelf") for path, _ in result)
+
+
+def test_iter_orderset_subclasses_dedupes_diamond_inheritance():
+    """Closes ``inputs.py:410`` -- ``if cls in seen: continue`` diamond dedup.
+
+    Mirror of
+    ``tests/filters/test_inputs.py::test_iter_filterset_subclasses_dedupes_diamond_inheritance``
+    (lines 1036-1056). A diamond inheritance hierarchy
+    (``B(A)``, ``C(A)``, ``D(B, C)``) walks ``D`` twice through
+    ``__subclasses__()`` -- once via ``B`` and once via ``C`` -- and the
+    dedup guard collapses both visits to one entry in the returned list.
+    """
+    from django_strawberry_framework.orders.inputs import _iter_orderset_subclasses
+
+    class _DiamondA(OrderSet):
+        class Meta:
+            model = None
+            fields = ["code"]
+
+    class _DiamondB(_DiamondA):
+        pass
+
+    class _DiamondC(_DiamondA):
+        pass
+
+    class _DiamondD(_DiamondB, _DiamondC):
+        pass
+
+    found = _iter_orderset_subclasses(_DiamondA)
+    assert found.count(_DiamondD) == 1
+    assert {_DiamondB, _DiamondC, _DiamondD}.issubset(set(found))
+
+
+def test_clear_order_input_namespace_tolerates_unimportable_submodules():
+    """Closes ``inputs.py:461-462`` and ``inputs.py:476-477`` in ONE test.
+
+    Mirror of
+    ``tests/filters/test_inputs.py::test_clear_filter_input_namespace_tolerates_unimportable_submodules``
+    (lines 1009-1028). Setting ``sys.modules[name] = None`` makes
+    ``from ... import ...`` raise ``ImportError``, exercising BOTH
+    ``except ImportError: pass`` guards in ``clear_order_input_namespace``.
+    """
+    from django_strawberry_framework.orders.inputs import clear_order_input_namespace
+
+    factories_name = "django_strawberry_framework.orders.factories"
+    sets_name = "django_strawberry_framework.orders.sets"
+    saved = {name: sys.modules.get(name) for name in (factories_name, sets_name)}
+    try:
+        # Setting the module entry to ``None`` makes ``from ... import ...``
+        # raise ImportError, exercising both ``except ImportError`` guards.
+        sys.modules[factories_name] = None
+        sys.modules[sets_name] = None
+        # Must not raise even though neither submodule can be imported.
+        clear_order_input_namespace()
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module

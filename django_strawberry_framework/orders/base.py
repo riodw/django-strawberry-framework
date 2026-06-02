@@ -45,11 +45,7 @@ class RelatedOrder(LazyRelatedClassMixin):
       file).
     """
 
-    def __init__(
-        self,
-        orderset: str | type,
-        field_name: str | None = None,
-    ) -> None:
+    def __init__(self, orderset: str | type, field_name: str | None = None) -> None:
         """Store the (possibly-lazy) target orderset and the ORM field name."""
         super().__init__()
         self._orderset = orderset

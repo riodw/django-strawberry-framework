@@ -175,3 +175,22 @@ def test_validate_orderset_class_uses_local_import():
     assert "OrderSet" not in vars(base_mod)
     src = inspect.getsource(base_mod._validate_orderset_class)
     assert "from ..orders.sets import OrderSet" in src
+
+
+# ---------------------------------------------------------------------------
+# Pass-2 B1 coverage closure -- RelatedOrder.orderset setter
+# ---------------------------------------------------------------------------
+
+
+def test_related_order_orderset_setter_assigns_underscore_orderset():
+    """Closes ``orders/base.py:82`` -- ``@orderset.setter`` body.
+
+    The setter mutates ``self._orderset``. Re-assignment via the property
+    setter is the cookbook contract that lets a caller substitute the
+    target after construction (e.g., the lazy-resolution cache write at
+    ``RelatedOrder.orderset.fget`` re-stores the resolved class through
+    this setter).
+    """
+    related = RelatedOrder(AOrder, field_name="a")
+    related.orderset = BOrder
+    assert related._orderset is BOrder

@@ -248,6 +248,48 @@ def test_factory_skips_related_order_with_none_target():
     assert "BookOrderNoneInputType" in OrderArgumentsFactory.input_object_types
 
 
+# ---------------------------------------------------------------------------
+# Pass-2 B1 coverage closure -- pop-time ``if os_class in seen: continue`` guard
+# ---------------------------------------------------------------------------
+
+
+def test_factory_dedupes_double_enqueued_target_via_seen_check():
+    """Closes ``orders/factories.py:138`` -- pop-time ``if os_class in seen: continue``.
+
+    The existing ``test_factory_handles_cycles_via_seen_set`` pins the
+    enqueue-time ``target not in seen`` gate (line 159); this test pins
+    the pop-time gate (line 138). To force a double-enqueue, declare an
+    orderset with TWO ``RelatedOrder`` instances pointing to the SAME
+    target -- both walk the ``related_orders.values()`` loop while the
+    target is not yet in ``seen`` (the parent class is still in flight),
+    so both enqueue. The first pop processes the target; the second pop
+    hits the ``if os_class in seen: continue`` guard.
+    """
+
+    class ChildOrderDedup(OrderSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = ["code"]
+
+    class ParentOrderDedup(OrderSet):
+        # Two RelatedOrders pointing to the SAME target -- the BFS walks
+        # both at the same outer iteration, enqueueing ChildOrderDedup
+        # twice before either is popped.
+        child_a = RelatedOrder(ChildOrderDedup, field_name="shelf")
+        child_b = RelatedOrder(ChildOrderDedup, field_name="shelf")
+
+        class Meta:
+            model = library_models.Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(ParentOrderDedup)
+    factory.arguments  # must not raise; the pop-time guard fires.
+    # The target was built exactly once (the registry has one entry).
+    assert (
+        OrderArgumentsFactory._type_orderset_registry["ChildOrderDedupInputType"] is ChildOrderDedup
+    )
+
+
 # Keep ``strawberry`` import alive for re-exported lazy types under
 # the Annotated forward-references.
 assert strawberry is not None

@@ -1,7 +1,7 @@
 # Build: Final test-run gate
 
 Spec reference: `docs/spec-028-orders-0_0_8.md` (whole spec — the final gate verifies the entire build end-to-end; no single spec line range)
-Status: final-accepted
+Status: revision-needed (corrected 2026-06-02 after maintainer review — see "## Correction (2026-06-02 maintainer review)" at the bottom)
 
 ## Plan (Worker 1)
 
@@ -114,3 +114,28 @@ Per `docs/builder/BUILD.md` "Final test-run gate": the catalog "must also includ
 ### Spec changes made (Worker 1 only)
 
 - `docs/spec-028-orders-0_0_8.md` line 4 — status header rolled forward from `Status: in-progress — Slices 1-6 shipped (2026-06-02); cross-slice integration pass + final test-run gate pending` to `Status: shipped (2026-06-02); all six slices, cross-slice integration pass, and final test-run gate closed; awaiting maintainer commit`. Per the "Spec status-line re-verification (every Worker 1 spawn)" rule, the header must describe the current state of the build at the closing artifact's spawn time; the integration pass closed and the final gate is now `final-accepted`, so the line is updated to reflect reality. Single edit, no spec body changes.
+
+---
+
+## Correction (2026-06-02 maintainer review)
+
+The `### Final status: final-accepted` above was **wrong** and is superseded. The maintainer ran `uv run pytest` (full suite, with coverage) manually and produced `docs/feedback.md`, which proved the gate was red on two counts the prior Worker 1 pass missed by scoping its measurement to the spec-028 intended paths instead of running the full coverage gate. Coverage is the maintainer's gate (BUILD.md), so the worker pass never observed the `fail_under = 100` shortfall.
+
+### What was actually wrong
+
+- **B1 (card-owned, now FIXED).** The 100% coverage gate was red at 99.11%; all 31 uncovered lines were in `orders/*`. Closed on 2026-06-02 by adding 19 focused unit tests to `tests/orders/` (`test_base.py` +1, `test_factories.py` +1 BFS cycle guard, `test_inputs.py` +7, `test_sets.py` +10). No source edits, no `# pragma: no cover`. Verified directly: `uv run pytest tests/orders/ examples/fakeshop/test_query/test_library_api.py examples/fakeshop/apps/library/ --cov=django_strawberry_framework.orders` reports **all five `orders/*` modules at 100%** (`__init__` 15/15, `base` 18/18, `factories` 42/42, `inputs` 150/150, `sets` 183/183).
+- **B2 (NOT card-owned).** Three `test_glossary_api.py` tests fail with `IntegrityError: UNIQUE constraint failed: kanban_boarddockind.key` — a `BoardDocKind` double-seed in the maintainer's independent uncommitted kanban/glossary workstream. Spawned as a sibling task. The ordering card touches nothing under `apps/kanban/` or `apps/glossary/`.
+- **9 non-orders lines transitively uncovered by B2.** At the current HEAD (`da0f833`, kanban glossary_terms M2M, committed *after* the feedback was written), the 3 failing glossary tests are the **sole coverers** of `filters/sets.py:76,992,1012,1493`, `registry.py:443-444,450-451`, and `types/finalizer.py:709`. Proven by stashing the pass-2 changes and re-running: those 9 lines are uncovered with OR without the pass-2 tests, so they are not the ordering card's doing. When B2 lands and the 3 glossary tests pass, those 9 paths are exercised again and the full-suite gate returns to 100%.
+
+### Corrected final status
+
+`revision-needed` → the card-owned blocker (B1) is now resolved, but `uv run pytest` does not yet exit 0 because of B2 (sibling task) and its 9-line coverage shadow. **This card's work is complete and correct**; the green-suite + commit step is gated on the sibling kanban `BoardDocKind` fix. The build-plan's final-gate checkbox stays unticked until the full suite is green.
+
+### M1 (status header) — FIXED
+
+`docs/spec-028-orders-0_0_8.md` line 4 status header rewritten from the overstated "final test-run gate closed … awaiting maintainer commit" to an honest account of B1-closed / B2-pending / 9-line-shadow. 
+
+### N1 / N2 — left for the maintainer (as the review directs)
+
+- **N1** (`KANBAN.md` snapshot paragraph still names the retired joint-cut convention): KANBAN.md is rendered from the kanban-app SQLite source and there is a heavy in-flight kanban workstream in the working tree; editing it now risks colliding with that work. Left for the maintainer per the review ("otherwise leave for the maintainer").
+- **N2** (`CHANGELOG.md [Unreleased]` not promoted to `## [0.0.8]` despite version files at 0.0.8): the review states this promotion "is the maintainer's to make, not this card's" (Decision 10 / DoD item 23 gate it on the explicit version-bump command). Left for the maintainer.

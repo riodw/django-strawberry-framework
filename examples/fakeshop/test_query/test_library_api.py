@@ -720,10 +720,7 @@ def test_library_branches_empty_filter_input_is_noop_over_http():
           }
         }
         """,
-        {
-            "unfiltered": [{"name": "Visible"}],
-            "filtered": [{"name": "Visible"}],
-        },
+        {"unfiltered": [{"name": "Visible"}], "filtered": [{"name": "Visible"}]},
     )
 
 
@@ -1456,7 +1453,12 @@ def test_library_branches_order_by_reverse_fk_relation():
     payload = response.json()
     assert "errors" not in payload, payload
     names = [row["name"] for row in payload["data"]["allLibraryBranches"]]
-    assert names == ["Alpha", "Beta", "Alpha", "Alpha"]
+    assert names == [
+        "Alpha",
+        "Beta",
+        "Alpha",
+        "Alpha",
+    ]
 
 
 @pytest.mark.django_db

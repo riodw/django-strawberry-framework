@@ -1,7 +1,7 @@
 # Build: Slice 2 — Factories — OrderArgumentsFactory BFS + inputs adapters + apply_sync/async
 
 Spec reference: `docs/spec-028-orders-0_0_8.md` (Slice 2 checklist at the spec's `## Slice checklist` section, the two bullets immediately under `- [ ] Slice 2: Factories — OrderArgumentsFactory BFS + inputs adapters` — spec lines 117-119)
-Status: final-accepted
+Status: review-accepted
 
 ## Plan (Worker 1)
 
@@ -666,6 +666,365 @@ Slice 2 shipped the Layer-5 BFS factory + the adapter quartet + the resolver-fac
 - `order_input_type(OrderSet)` returns the **element type** (not list type). Slice 4 resolvers must wrap as `order_by: list[order_input_type(MyOrder)] | None = None` to expose `orderBy: [<T>OrderInputType!]` in the SDL.
 - `OrderArgumentsFactory` is module-importable from `orders.factories` but NOT in `orders/__init__.py::__all__` (Worker 2 chose this per Implementation discretion item 6, matching the filter-side precedent). Slice 5's docs surface should mirror this — list `OrderArgumentsFactory` as an "advanced use" symbol, not in the public-export bullet list alongside `OrderSet` / `RelatedOrder` / `Ordering` / `order_input_type`.
 - The `_is_expanding_fields` slot stays in `orders/sets.py` for defensive purposes (the explicit reentry-branch TEST was removed in Slice 2 as dead code). If Slice 3's finalizer-phase-2.5 wiring introduces any recursive `get_fields()` call path, the slot is already in place to support a re-introduced guard test without re-introducing it speculatively now.
+
+---
+
+## Plan (Worker 1, pass 2 — B1 coverage closure)
+
+### Context
+
+The maintainer's `docs/feedback.md` review identified the 100% coverage gate as RED at 99.11%, with all 31 uncovered lines in `orders/*`. This pass-2 cycle closes the gap to 100%. Source: `docs/feedback.md` Blocking section "B1. The 100% coverage gate is RED — 99.11%, and the orders subsystem is the sole cause" (lines 84-140).
+
+Per `BUILD.md` "Final test-run gate" → "If failures appear, re-loop through whichever slice owns the failing behavior", the bulk of the 31 lines live in Slice 2's surface (`orders/factories.py`, `orders/inputs.py`, `orders/sets.py`); this artifact is the natural pass-2 landing site. The remaining one line is `orders/base.py::RelatedOrder.orderset` setter body (line 82) — Slice 1's surface. **Folded in here** because (a) it's a single trivial line, (b) co-locating the closure under one artifact keeps the pass-2 review tractable, (c) the test landing site (`tests/orders/test_base.py`) is the same workflow as the other pass-2 test additions, (d) `bld-final.md` will be re-opened separately to roll its `final-accepted` decision back to `revision-needed` after this plan lands (Worker 0's responsibility).
+
+Pass-2 is test-only — NO source-file edits. The 31 uncovered lines stay exactly as shipped; pass-2 ships new tests that exercise them. Source-file modifications would re-open Workers 2 + 3 of the slice; the maintainer's review explicitly classifies all 31 lines as coverable by additional tests, not as requiring refactors.
+
+### Required-reading verification
+
+Read every uncovered line in source before pinning closures (per the task contract). Verifications (read at planning time 2026-06-02):
+
+- `django_strawberry_framework/orders/base.py::RelatedOrder` lines 80-82 — `@orderset.setter` body is one line: `self._orderset = value`. **Reachable** via `instance.orderset = SomeClass` assignment.
+- `django_strawberry_framework/orders/factories.py::OrderArgumentsFactory._ensure_built` lines 135-160 — line 137-138 is `if os_class in seen: continue`. **Reachable** only when the same orderset class is enqueued multiple times before being popped. The existing `test_factory_handles_cycles_via_seen_set` does NOT hit it because the enqueue-time guard at line 159 (`target not in seen`) prevents re-enqueue once a class has been popped (added to `seen`). To force a double-enqueue, declare an orderset with TWO `RelatedOrder` instances pointing to the SAME target — both walk the `related_orders.values()` loop while the target is not yet in `seen`, so both enqueue → second pop hits line 138.
+- `django_strawberry_framework/orders/inputs.py::_camel_case` line 168 — `if not parts: return name`. **Reachable** via `_camel_case("")` or `_camel_case("_")` (the `[part for part in name.split("_") if part]` filter produces empty list).
+- `django_strawberry_framework/orders/inputs.py::build_input_class` line 222 — `if "description" in kwargs: strawberry_field_kwargs["description"] = kwargs.pop("description")`. **Reachable** via passing `field_kwargs={"description": "..."}` in a triple.
+- `django_strawberry_framework/orders/inputs.py::normalize_input_value` lines 334-336 — `dataclass_fields = getattr(input_value, "__dataclass_fields__", None); if dataclass_fields is None: return []`. **Reachable** via passing a non-list, non-None object without `__dataclass_fields__` (e.g., a plain `object()` or `SimpleNamespace`).
+- `django_strawberry_framework/orders/inputs.py::normalize_input_value` lines 342-344 — `spec = _field_specs.get(...); if spec is None: continue`. **Reachable** via a dataclass input whose attribute name has no `_field_specs` entry for the orderset class.
+- `django_strawberry_framework/orders/inputs.py::normalize_input_value` lines 350-352 — `child_orderset = related_orders[python_attr].orderset; if child_orderset is None: continue`. **Reachable** via declaring a `RelatedOrder` whose `_orderset` attribute is set to `None` after binding (so `.orderset` returns None via the lazy mixin's resolution).
+- `django_strawberry_framework/orders/inputs.py::_iter_orderset_subclasses` lines 407-414 — line 410 is `if cls in seen: continue`. **Reachable** via diamond inheritance (`A -> B, A -> C, B -> D, C -> D` walks `D` twice).
+- `django_strawberry_framework/orders/inputs.py::clear_order_input_namespace` lines 459-462 — `try: from .factories import OrderArgumentsFactory; except ImportError: pass`. **Reachable** via `sys.modules["django_strawberry_framework.orders.factories"] = None` (makes the `from ... import` raise `ImportError`); the filter side's `test_clear_filter_input_namespace_tolerates_unimportable_submodules` at `tests/filters/test_inputs.py::test_clear_filter_input_namespace_tolerates_unimportable_submodules` (lines 1009-1028) is the exact precedent and uses the `sys.modules[name] = None` trick.
+- `django_strawberry_framework/orders/inputs.py::clear_order_input_namespace` lines 474-477 — symmetric `try: from .sets import OrderSet; except ImportError: pass`. **Reachable** via the same `sys.modules` trick (set both module entries to None to exercise both guards in a single test, as the filter side does).
+- `django_strawberry_framework/orders/sets.py::OrderSet._expand_meta_fields` line 184 — `if meta_fields is None: return fields`. **Reachable** via declaring an `OrderSet` with `Meta` but no `fields` attribute (`getattr(meta, "fields", None)` returns `None`).
+- `django_strawberry_framework/orders/sets.py::OrderSet._extract_branch_value` lines 268-269 — `if input_value is None: return None`. **Reachable** via `OrderSet._extract_branch_value(None, "x")` direct call.
+- `django_strawberry_framework/orders/sets.py::OrderSet._extract_branch_value` lines 270-271 — `if isinstance(input_value, dict): value = input_value.get(field_name)`. **Reachable** via `OrderSet._extract_branch_value({"x": 1}, "x")` direct call.
+- `django_strawberry_framework/orders/sets.py::OrderSet._active_permission_field_paths` lines 317-318 — `if input_value is None: return []`. **Reachable** via `OrderSet._active_permission_field_paths(None)` direct call.
+- `django_strawberry_framework/orders/sets.py::OrderSet._active_permission_field_paths` lines 327-329 — `if dataclass_fields is None and not isinstance(input_value, dict): return []`. **Reachable** via passing a plain object (no `__dataclass_fields__`, not dict).
+- `django_strawberry_framework/orders/sets.py::OrderSet._active_permission_field_paths` lines 330-331 — `if isinstance(input_value, dict): items = list(input_value.items())`. **Reachable** via passing a dict input value.
+- `django_strawberry_framework/orders/sets.py::OrderSet._active_permission_field_paths` lines 342-346 — `spec = _field_specs.get(...); if spec is None: paths.append(python_attr)`. **Reachable** via a dict input with an attribute name that is NOT registered in `_field_specs` for the orderset class.
+- `django_strawberry_framework/orders/sets.py::OrderSet.apply_sync` lines 534-535 — `if not expressions: return queryset`. **Reachable** through a subclass that overrides `_normalize_input` (or `get_flat_orders`) to emit at least one `(field_path, None)` tuple — `data` is non-empty (skipping the line-526 early return), but the `direction is not None` filter at line 532 drops it to an empty `expressions` list. The override is a 3-line test affordance; no source change.
+- `django_strawberry_framework/orders/sets.py::OrderSet.apply_async` line 571 — `if not data: return queryset`. **Reachable** via `apply_async([], qs, info)` (empty list normalizes to empty data); identical to the sync-side line-526 case.
+- `django_strawberry_framework/orders/sets.py::OrderSet.apply_async` line 579 — `if not expressions: return queryset`. **Reachable** via the same subclass-override pattern as line 535, called via `asyncio.run(SubclassOrder.apply_async(input_value, qs, info))`.
+
+**No genuinely-unreachable lines flagged.** Every one of the 31 lines is reachable through a focused unit test; no source refactor is required, and no `# pragma: no cover` is justified (per AGENTS.md line 4 + line 12 "pragma no cover is only for branches genuinely unreachable under the test runner").
+
+### DRY analysis
+
+Per the maintainer's review, the filter subsystem reaches 100% with structurally-identical defensive guards. Pin every closure to the filter-side precedent (or, for order-side-unique guards like the `None`-direction filter, the existing order-side test fixtures). Avoid bespoke test invention when an existing pattern fits.
+
+**Existing patterns reused (cite filter side):**
+
+- `tests/filters/test_inputs.py::test_clear_filter_input_namespace_tolerates_unimportable_submodules` (lines 1009-1028) — the `sys.modules[name] = None` trick that forces both `except ImportError: pass` guards to fire in a single test. The order-side test mirrors this verbatim with `factories_name = "django_strawberry_framework.orders.factories"` and `sets_name = "django_strawberry_framework.orders.sets"`. Closes BOTH `inputs.py:461-462` AND `inputs.py:476-477` in ONE test.
+- `tests/filters/test_inputs.py::test_iter_filterset_subclasses_dedupes_diamond_inheritance` (lines 1036-1056) — the diamond-inheritance shape (`B(A)`, `C(A)`, `D(B, C)` — `D` reachable via both paths). Order-side test mirrors verbatim with `OrderSet` in place of `FilterSet`.
+- `tests/filters/test_finalizer.py::test_registry_clear_works_without_filters_imported` (lines 681-707) — subprocess approach, but the in-process `sys.modules[name] = None` approach above is cheaper and tighter; use it instead. Recorded for completeness.
+
+**Existing patterns reused (order side):**
+
+- `tests/orders/test_inputs.py::_namespace_cleanup` (the existing `@pytest.fixture` at line 470) — the cleanup pattern for `_materialized_names` / `_field_specs` / `OrderArgumentsFactory.*` / `OrderSet` subclass binding-state resets. New tests that monkeypatch `_field_specs` or declare ephemeral `OrderSet` subclasses should reuse it.
+- `tests/orders/test_sets.py::_isolate_orderset_state` (the existing autouse fixture at line 304-305) — autouse-applied to every test in `test_sets.py`. New `test_sets.py` tests inherit isolation automatically.
+- `tests/orders/test_factories.py::_isolate_state` (the existing autouse fixture at line 29-30) — same for `test_factories.py`.
+
+**New helpers justified:** **None.** Every closure uses an existing fixture or an existing filter-side test pattern. The cycle test in `test_factories.py` is a new test body but uses no new helper.
+
+**Duplication risk avoided:** the cycle test (`test_factory_dedupes_double_enqueued_target_via_seen_check`) MUST NOT overlap with the existing `test_factory_handles_cycles_via_seen_set` (which pins the `target not in seen` enqueue-time guard at line 159, NOT the `if os_class in seen: continue` pop-time guard at line 138). The two tests pin different defensive lines in the same BFS; both stay.
+
+### Test additions (file by file)
+
+Pin closure paths line-by-line. Read each uncovered source line before pinning the test (verifications above).
+
+#### `tests/orders/test_base.py` — 1 new test (closes `orders/base.py:82`)
+
+- **`test_related_order_orderset_setter_assigns_underscore_orderset`** (closes `orders/base.py:82`). Setup: `class FooOrder(OrderSet): class Meta: model = library_models.Book; fields = ["title"]`; `related = RelatedOrder(FooOrder, field_name="foo")`. Call: `related.orderset = FooOrder` (re-assign via the setter). Assertion: `related._orderset is FooOrder`. One-line test, asserts the setter body fires (mutates `self._orderset`).
+
+#### `tests/orders/test_factories.py` — 1 new test (closes `orders/factories.py:138`)
+
+- **`test_factory_dedupes_double_enqueued_target_via_seen_check`** (closes `orders/factories.py:138` — the pop-time `if os_class in seen: continue` guard). Setup: declare an `OrderSet` with TWO `RelatedOrder` instances pointing to the SAME target — e.g.
+
+  ```
+  class ChildOrder(OrderSet):
+      class Meta:
+          model = library_models.Shelf
+          fields = ["code"]
+
+  class ParentOrder(OrderSet):
+      child_a = RelatedOrder(ChildOrder, field_name="shelf")
+      child_b = RelatedOrder(ChildOrder, field_name="shelf")
+
+      class Meta:
+          model = library_models.Book
+          fields = ["title"]
+  ```
+
+  Call: `OrderArgumentsFactory(ParentOrder).arguments`. Assertion: build completes without raising AND `ChildOrder` is built exactly once (`OrderArgumentsFactory._type_orderset_registry["ChildOrderInputType"] is ChildOrder` AND not double-counted). The double-enqueue happens at line 155-160: both `child_a` and `child_b` iterate the `related_orders.values()` loop while `ChildOrder` is not yet in `seen` (parent hasn't been processed yet — wait, this scenario actually walks INSIDE the `os_class == ParentOrder` iteration, after `seen.add(ParentOrder)`). Re-checking: pending=[ParentOrder]; pop → seen={ParentOrder}; walk related — child_a.orderset = ChildOrder, not in seen → enqueue; child_b.orderset = ChildOrder, still not in seen → enqueue. pending=[ChildOrder, ChildOrder]. Pop first: not in seen → process. Pop second: IS in seen → line 138 fires. **Confirmed reachable.**
+
+  Notes for Worker 2: the `field_name="shelf"` on both `child_a` and `child_b` is fine — `field_name` is per-`RelatedOrder` ORM-path metadata, not a uniqueness key on the target. The test pins the BFS dedup; the dual-`RelatedOrder` shape is artificial-but-legal (similar to the maintainer's review's example of an orderset declaring two paths to the same target).
+
+#### `tests/orders/test_inputs.py` — 8 new tests (closes inputs.py lines 168, 222, 336, 344, 352, 410, 461-462, 476-477)
+
+- **`test_camel_case_returns_input_when_split_yields_no_parts`** (closes `inputs.py:168`). Setup: trivial. Call: `_camel_case("")` AND `_camel_case("_")` AND `_camel_case("__")`. Assertion: each returns the input string unchanged (the `if not parts: return name` early return). Worker 2: either parametrize or three separate asserts in one test.
+- **`test_build_input_class_threads_description_through_strawberry_field`** (closes `inputs.py:222`). Setup: trivial. Call: `cls = build_input_class("FooInputType", [("foo", int | None, {"description": "test description"})])`. Assertion: `cls`'s strawberry field for `foo` carries the description metadata. Worker 2: introspection path is via `cls.__strawberry_definition__.fields[<idx>].description` or equivalent; verify against actual Strawberry version in use.
+- **`test_normalize_input_value_returns_empty_for_non_dataclass_non_list_non_none_input`** (closes `inputs.py:336`). Setup: trivial. Call: `normalize_input_value(SomeOrderSet, object())` (plain object — no `__dataclass_fields__`, not list, not None). Assertion: `[]`. Closes the `if dataclass_fields is None: return []` guard. Worker 2 picks the `SomeOrderSet` (any existing `OrderSet` subclass works; the orderset isn't consulted for this guard).
+- **`test_normalize_input_value_skips_attrs_with_no_field_spec_entry`** (closes `inputs.py:344`). Setup: declare `class FooOrder(OrderSet): class Meta: model = library_models.Book; fields = ["title"]`; do NOT call `_build_input_fields(FooOrder)` (so `_field_specs` has no `(FooOrder, "title")` entry); manually construct a dataclass-shaped input with a `title` attribute. Call: `normalize_input_value(FooOrder, input_obj)`. Assertion: `[]` (the `if spec is None: continue` skip drops the entry). Use `@dataclasses.dataclass class _StubInput: title: Ordering | None = None` to satisfy `__dataclass_fields__`; instantiate as `_StubInput(title=Ordering.ASC)`.
+- **`test_normalize_input_value_skips_related_branch_when_child_orderset_is_none`** (closes `inputs.py:352`). Setup: declare `BookOrder` with `RelatedOrder(<some target>, field_name="shelf")` so `_field_specs[(BookOrder, "shelf")]` is populated; then set the related order's resolved `_orderset` to `None` (the `bound_orderset` reset path — direct attribute write `book_order_instance.related_orders["shelf"]._orderset = None`); construct an input where the `shelf` branch carries a child input value. Call: `normalize_input_value(BookOrder, input_obj)`. Assertion: the result list excludes any `shelf__*` entries (the `if child_orderset is None: continue` skip drops the branch). Use the `_namespace_cleanup` fixture so the `_field_specs` mutation doesn't leak.
+- **`test_iter_orderset_subclasses_dedupes_diamond_inheritance`** (closes `inputs.py:410`). Mirror of `tests/filters/test_inputs.py::test_iter_filterset_subclasses_dedupes_diamond_inheritance` (lines 1036-1056). Setup: declare diamond `class A(OrderSet); class B(A); class C(A); class D(B, C)`. Call: `_iter_orderset_subclasses(A)`. Assertion: `found.count(D) == 1` AND `{B, C, D}.issubset(set(found))`. Pins the `if cls in seen: continue` dedup branch at line 410.
+- **`test_clear_order_input_namespace_tolerates_unimportable_submodules`** (closes `inputs.py:461-462` AND `inputs.py:476-477` in ONE test). Direct mirror of `tests/filters/test_inputs.py::test_clear_filter_input_namespace_tolerates_unimportable_submodules` (lines 1009-1028) with `filters` → `orders`. Setup: save `sys.modules` entries for `django_strawberry_framework.orders.factories` and `django_strawberry_framework.orders.sets`; set both to `None`. Call: `clear_order_input_namespace()`. Assertion: no `ImportError` raises (the test PASSES the call). Teardown: restore the original `sys.modules` entries in a `finally` block.
+
+#### `tests/orders/test_sets.py` — 9 new tests (closes sets.py lines 184, 269, 271, 318, 329, 331, 346, 535, 571, 579)
+
+- **`test_orderset_expand_meta_fields_returns_empty_when_meta_has_no_fields_attr`** (closes `sets.py:184`). Setup: `class FooOrder(OrderSet): class Meta: model = library_models.Book` (NO `fields` attribute). Call: `FooOrder._expand_meta_fields()`. Assertion: returns an empty `OrderedDict()` (the `if meta_fields is None: return fields` early return). NOTE: Worker 2 may also use this test to assert `FooOrder.get_fields()` returns `OrderedDict()` (covers the same path via the higher-level entry point).
+- **`test_orderset_extract_branch_value_returns_none_for_none_input`** (closes `sets.py:269`). Setup: trivial. Call: `OrderSet._extract_branch_value(None, "anything")`. Assertion: returns `None`. One-line test.
+- **`test_orderset_extract_branch_value_reads_dict_field`** (closes `sets.py:270-271`). Setup: trivial. Call: `OrderSet._extract_branch_value({"shelf": "value"}, "shelf")` AND `OrderSet._extract_branch_value({"shelf": "value"}, "missing")`. Assertion: returns `"value"` for the existing key AND `None` for the missing key (the `.get(field_name)` default-None behavior). Pins the dict-input branch.
+- **`test_orderset_active_permission_field_paths_returns_empty_for_none_input`** (closes `sets.py:317-318`). Setup: trivial. Call: `OrderSet._active_permission_field_paths(None)`. Assertion: returns `[]`. One-line test.
+- **`test_orderset_active_permission_field_paths_returns_empty_for_non_dataclass_non_dict_input`** (closes `sets.py:327-329`). Setup: trivial. Call: `OrderSet._active_permission_field_paths(object())`. Assertion: returns `[]` (the `if dataclass_fields is None and not isinstance(input_value, dict): return []` guard). One-line test.
+- **`test_orderset_active_permission_field_paths_walks_dict_items`** (closes `sets.py:330-331`). Setup: declare a `BookOrder` whose `_field_specs` is populated for `title`. Call: `BookOrder._active_permission_field_paths({"title": Ordering.ASC})`. Assertion: returns `["title"]` (one entry — the django_source_path). Pins the dict-input branch at line 331.
+- **`test_orderset_active_permission_field_paths_falls_back_to_python_attr_when_no_field_spec_entry`** (closes `sets.py:342-346`). Setup: declare a `BookOrder` whose `_field_specs` is NOT populated for `title` (skip `_build_input_fields`); use the `_namespace_cleanup`-shaped isolation. Call: `BookOrder._active_permission_field_paths({"title": Ordering.ASC})`. Assertion: returns `["title"]` (the defensive `paths.append(python_attr)` fallback at line 346 — note this path is unconditionally hit because spec is None when `_field_specs` is empty).
+- **`test_orderset_apply_sync_returns_queryset_when_all_directions_filter_to_empty_expressions`** (closes `sets.py:534-535`). Setup: define a subclass of `OrderSet` that overrides `_normalize_input` to emit `[("title", None)]` (a non-empty data list with a None direction):
+
+  ```
+  class _NoneDirectionOrder(OrderSet):
+      class Meta:
+          model = library_models.Book
+          fields = ["title"]
+
+      @classmethod
+      def _normalize_input(cls, input_value):
+          return [("title", None)]
+  ```
+
+  Build a stub `info` with `info.context.request = HttpRequest()`. Call: `_NoneDirectionOrder.apply_sync(<any input>, Book.objects.all(), info)`. Assertion: returns the queryset unchanged (`list(returned.query.order_by) == []`). The override produces a non-empty `data` (skipping the line-526 guard), but the `direction is not None` filter at line 532 drops it to an empty `expressions` list, hitting line 535.
+- **`test_orderset_apply_async_returns_queryset_when_data_is_empty`** (closes `sets.py:570-571`). Setup: stub `info` as above. Call: `asyncio.run(OrderSet.apply_async([], Book.objects.all(), info))` against any existing `OrderSet` subclass (e.g., `BookOrder` if it exists in the test module, otherwise declare locally). Assertion: returns the queryset unchanged (empty list normalizes to empty `data`, hits line 571).
+- **`test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_empty_expressions`** (closes `sets.py:578-579`). Setup: same `_NoneDirectionOrder` subclass as the sync test (or a separate `_NoneDirectionAsyncOrder` to avoid cross-test leak). Call: `asyncio.run(_NoneDirectionOrder.apply_async(<any input>, Book.objects.all(), info))`. Assertion: returns the queryset unchanged. Pins the async-side symmetric of line 535.
+
+**Test count:** 1 + 1 + 8 + 10 = **20 new tests across 4 files**. Each test pinpoints exactly one uncovered line (or pair, in the case of the `clear_order_input_namespace` ImportError-guard test); each uses ONLY existing fixtures and existing import surfaces (no new module-scope adds).
+
+### Implementation discretion items
+
+Items where Worker 2 has flexibility. Worker 1 has assessed each and decided the choice belongs to Worker 2:
+
+1. **Test-helper consolidation vs inline setup.** Several tests can either share a small `_make_dummy_orderset(model, fields)` helper at the top of the test module OR re-declare inline per test. Recommended: inline declarations — keeps each test self-contained and minimizes risk of cross-test leak through a shared helper's defaults. Worker 2 picks; either is acceptable.
+2. **Async test entry point — `asyncio.run` vs `pytest.mark.asyncio`.** The existing `tests/orders/test_sets.py::test_orderset_apply_async_via_asyncio_run` (line 442) uses `asyncio.run(...)`. Mirror that pattern (no new pytest-asyncio markers introduced). Recommended: `asyncio.run`.
+3. **Stub `info` construction.** The existing `tests/orders/test_sets.py` async/sync apply tests use `SimpleNamespace(context=SimpleNamespace(request=HttpRequest()))`. Reuse that exact shape — do NOT invent a new stub-info factory.
+4. **`_NoneDirectionOrder` placement.** Declare it INSIDE the test function body (not at module scope) so the autouse `_isolate_orderset_state` fixture cleans up after it. Same pattern as `test_orderset_check_permission_active_relatedorder_branch_fires_parent_gate` (line 520).
+5. **`_iter_orderset_subclasses` diamond test — model field choices.** The diamond's `class A(OrderSet)` needs ONE `Meta` (so it's a valid orderset declaration without raising at class-creation time). Pick any existing model + field; `Shelf` + `["code"]` is the lowest-overhead choice. The subclasses `B`, `C`, `D` can `pass` (inherit Meta from A).
+6. **`description` introspection in `test_build_input_class_threads_description_through_strawberry_field`.** Worker 2 picks the introspection path against the installed Strawberry version; recommended: walk `cls.__strawberry_definition__.fields` (or `cls._type_definition.fields` depending on Strawberry version) and assert one field carries `description == "test description"`. If the introspection path is fragile, the test may instead assert the namespace contains a `strawberry.field(...)` whose `description` keyword was set — but that defeats the purpose; prefer the introspection.
+
+### Out of scope for this pass
+
+- **B2 (kanban+glossary failures)** — explicit scope-out per the task contract. Worker 0 will spawn a sibling task to address the `IntegrityError: UNIQUE constraint failed: kanban_boarddockind.key` and the `apps/kanban/admin.py` four-vs-three-inlines drift. This card does NOT touch `apps/kanban/`, `apps/glossary/`, or any of their tests. Verifies the maintainer's `docs/feedback.md` rev "B2" classification ("not the ordering card's doing").
+- **M1 (status header overstatement)** — Worker 1 will fix in the final-verification pass on `bld-final.md` AFTER pass-2's tests land and the gate goes green. The spec line 4 header rolls back to a more honest "Slices 1-6 + integration shipped; final gate currently re-looping to close B1 coverage" wording during this pass-2 cycle; once the final gate re-runs and exits 0, the header rolls forward to its true completion state. This is owned by Worker 1's final-verification dispatch on the re-opened `bld-final.md`, NOT this artifact.
+- **N1/N2 (KANBAN snapshot paragraph + CHANGELOG `[Unreleased]` heading not promoted)** — maintainer cleanups per `docs/feedback.md` N1/N2 classification. Not card work.
+- **`_is_expanding_fields` defensive slot** — stays as-is. Slice 1's planning-pass restructure removed the explicit reentry-branch test; the slot itself stays for future use. No pass-2 test fires it (the line that was removed in Slice 2 is no longer in the source, so there's no uncovered line to close).
+- **Source refactors of any of the 31 lines.** Maintainer review explicitly classifies all 31 as test-closable. Pass-2 ships test-only changes.
+
+### Required helper runs
+
+Pass-2 is test-only. The helper triggers (per `BUILD.md` "When to run the helper during build") fire on ≥30 lines of new logic in any `django_strawberry_framework/` file; since pass-2 modifies no source under `django_strawberry_framework/`, **the helper does not fire at planning**. Recorded skip with reason:
+
+> **Helper skipped at pass-2 planning.** Pass-2 closure adds tests only; no source-file logic changes under `django_strawberry_framework/`. Per `BUILD.md` "Worker 1 must run the helper during planning when: ... The plan adds logic to any existing `.py` file with at least 150 source lines" — no source file is touched, the trigger does not apply.
+
+Worker 3's review-time triggers may still fire if pass-2's new tests add ≥50 lines of logic to any test file outside `django_strawberry_framework/` (per `BUILD.md` "Worker 3 must run the helper during review when: ... The slice adds 50 or more lines of new logic to any file outside `django_strawberry_framework/`"). Given the test counts (20 new tests, average ~10 lines each → ~200 lines distributed across 4 files), `test_sets.py` and `test_inputs.py` will likely cross the 50-line threshold. Worker 3 runs `scripts/review_inspect.py` on the post-pass-2 files at review time.
+
+### Spec slice checklist (verbatim)
+
+No new spec sub-bullets — this is a pass-2 closure cycle, not a new slice. Worker 0 already ticked Slice 2's checkboxes at the original final-accepted close (build plan line 82 — `- [x] Slice 2: Factories ...`). This pass-2 closes the maintainer-surfaced B1 coverage gap; success criterion is the maintainer's `uv run pytest` exits 0 (full sweep, with the auto-applied `--cov` running and exceeding `fail_under = 100`).
+
+Pass-2 completion criteria (Worker 1 ticks at final-verification of the pass-2 cycle):
+
+- [ ] All 31 uncovered lines closed by new tests (1 in `base.py`, 1 in `factories.py`, 9 in `inputs.py`, 10 in `sets.py` — total 21 unique lines; the inputs.py 461-462 + 476-477 pairs collapse to 2 line ranges = 9 unique line entries, and the sets.py uncovered set has 10 entries).
+- [ ] No source edits to `django_strawberry_framework/orders/*.py`.
+- [ ] No `# pragma: no cover` introduced.
+- [ ] `uv run pytest` (maintainer-run) exits 0 with full-sweep coverage at 100%.
+- [ ] `bld-final.md` re-runs the final-test-run gate and reaches `final-accepted` with a green coverage gate.
+
+### Notes for Worker 2 (apply-changes pass-2)
+
+- The pass-2 plan ships across FOUR test files: `tests/orders/test_base.py` (1 test), `tests/orders/test_factories.py` (1 test), `tests/orders/test_inputs.py` (8 tests), `tests/orders/test_sets.py` (10 tests). Append-only to each file — do NOT rewrite existing test bodies.
+- The maintainer's `docs/feedback.md` review is the contract. If implementation surfaces a line you cannot close with the planned shape, escalate via `### Notes for Worker 1 (spec reconciliation)` rather than reaching for `# pragma: no cover` (AGENTS.md line 4 + line 12).
+- Use `from apps.library.models import Book, Shelf, Genre` for model fixtures (the existing test files already import from this module — no new imports beyond what's already in scope).
+- The `_isolate_orderset_state` autouse fixture in `test_sets.py` and the `_isolate_state` autouse fixture in `test_factories.py` already exist and apply to every new test in their respective files. No new fixtures needed.
+- The `_namespace_cleanup` fixture in `test_inputs.py` (line 470) is opt-in (not autouse). Tests that mutate `_field_specs` or declare `OrderSet` subclasses with binding state should request it; the diamond-inheritance test for `_iter_orderset_subclasses` and the `sys.modules` trick test do not need it.
+
+### Notes for Worker 3 (review pass-2)
+
+- The 31 uncovered lines enumerated by the maintainer in `docs/feedback.md` table (lines 99-102) is the contract; verify each line is closed by at least one new test by walking the table against the new test bodies. The table:
+
+  | Module | Cov | Uncovered lines |
+  | --- | --- | --- |
+  | `orders/base.py` | 94% | 82 |
+  | `orders/factories.py` | 98% | 138 |
+  | `orders/inputs.py` | 93% | 168, 222, 336, 344, 352, 410, 461-462, 476-477 |
+  | `orders/sets.py` | 95% | 184, 269, 271, 318, 329, 331, 346, 535, 571, 579 |
+
+- The two ImportError-guard tests (`inputs.py:461-462` and `inputs.py:476-477`) should consolidate into ONE test using the filter-side precedent (`sys.modules[name] = None`). Reject any approach that uses `# pragma: no cover` for these lines — the filter side ships covered.
+- Re-run `scripts/review_inspect.py` against `tests/orders/test_sets.py` and `tests/orders/test_inputs.py` post-pass-2 if either crosses the ≥50-line-new-logic threshold per `BUILD.md`. Record shadow output paths under `docs/shadow/`.
+- Coverage is the maintainer's gate; do NOT run `pytest --cov*` to verify (per `BUILD.md` "Coverage is the maintainer's gate, not a worker's tool"). Verify by reading the new test bodies against the source lines they claim to close.
+
+---
+
+## Build report (Worker 2, pass 2 — B1 coverage closure)
+
+### Files touched
+
+- `tests/orders/test_base.py` — APPEND-ONLY; added 1 test (`test_related_order_orderset_setter_assigns_underscore_orderset`) under a new "Pass-2 B1 coverage closure -- RelatedOrder.orderset setter" section header. Closes `django_strawberry_framework/orders/base.py:82` (the `@orderset.setter` body).
+- `tests/orders/test_factories.py` — APPEND-ONLY; added 1 test (`test_factory_dedupes_double_enqueued_target_via_seen_check`) under a new "Pass-2 B1 coverage closure -- pop-time ``if os_class in seen: continue`` guard" section header. Closes `django_strawberry_framework/orders/factories.py:138` (the pop-time `if os_class in seen: continue` BFS dedup guard).
+- `tests/orders/test_inputs.py` — APPEND-ONLY; added 7 tests under a new "Pass-2 B1 coverage closure -- inputs.py uncovered lines" section header. Closes 9 source line entries in `django_strawberry_framework/orders/inputs.py` (lines 168, 222, 336, 344, 352, 410, 461-462, 476-477). The two ImportError-guard tests collapse to a single `test_clear_order_input_namespace_tolerates_unimportable_submodules` mirroring the filter side's pattern.
+- `tests/orders/test_sets.py` — APPEND-ONLY; added 10 tests under a new "Pass-2 B1 coverage closure -- sets.py uncovered lines" section header. Closes 10 source line entries in `django_strawberry_framework/orders/sets.py` (lines 184, 269, 271, 318, 329, 331, 346, 535, 571, 579).
+- `docs/builder/bld-slice-2-factories.md` — status header updated from `planned` to `built` for this pass; this build report appended at top level.
+
+**NO source edits.** `django_strawberry_framework/orders/*.py` is untouched in this pass. The two source-file paths showing `M` in `git status --short` (`django_strawberry_framework/orders/base.py` and `django_strawberry_framework/orders/sets.py`) are baseline-dirty from prior cycles per the pre-task `git status` snapshot in the prompt — confirmed unchanged by this Worker 2 pass.
+
+### Tests added or updated
+
+Pass-2 is append-only across four files. Test counts per file:
+
+- `tests/orders/test_base.py` — **1** new test:
+  - `test_related_order_orderset_setter_assigns_underscore_orderset` — closes `base.py:82` (setter body). Constructs `RelatedOrder(AOrder, field_name="a")`, re-assigns `related.orderset = BOrder`, asserts `related._orderset is BOrder`.
+
+- `tests/orders/test_factories.py` — **1** new test:
+  - `test_factory_dedupes_double_enqueued_target_via_seen_check` — closes `factories.py:138` (pop-time `if os_class in seen: continue`). Declares `ParentOrderDedup` with TWO `RelatedOrder(ChildOrderDedup, ...)` instances pointing to the SAME target; both walk the `related_orders.values()` loop before either is popped, so both enqueue. First pop processes; second pop fires the guard. Asserts the build completes without raising AND `ChildOrderDedup` is built exactly once.
+
+- `tests/orders/test_inputs.py` — **7** new tests covering 9 line entries:
+  - `test_camel_case_returns_input_when_split_yields_no_parts` — closes `inputs.py:168` via `_camel_case("")` / `_camel_case("_")` / `_camel_case("__")`.
+  - `test_build_input_class_threads_description_through_strawberry_field` — closes `inputs.py:222` via `build_input_class(..., [("foo", Ordering | None, {"description": "the foo direction"})])`; asserts `cls.__strawberry_definition__.fields["foo"].description == "the foo direction"`.
+  - `test_normalize_input_value_returns_empty_for_non_dataclass_non_list_non_none_input` — closes `inputs.py:336` via `normalize_input_value(<OrderSet>, object())`; asserts `[]`.
+  - `test_normalize_input_value_skips_attrs_with_no_field_spec_entry` — closes `inputs.py:344` via a `@dataclasses.dataclass` stub whose attr has no `_field_specs` entry; asserts `[]`.
+  - `test_normalize_input_value_skips_related_branch_when_child_orderset_is_none` — closes `inputs.py:352` via direct `_orderset = None` write on a populated `RelatedOrder`; asserts no `shelf__*` entries emit.
+  - `test_iter_orderset_subclasses_dedupes_diamond_inheritance` — closes `inputs.py:410` via the diamond `B(A)`, `C(A)`, `D(B, C)` hierarchy; asserts `found.count(_DiamondD) == 1`.
+  - `test_clear_order_input_namespace_tolerates_unimportable_submodules` — closes BOTH `inputs.py:461-462` AND `inputs.py:476-477` in one test via `sys.modules[name] = None` for both submodule paths; asserts `clear_order_input_namespace()` does not raise.
+
+- `tests/orders/test_sets.py` — **10** new tests covering 10 line entries:
+  - `test_orderset_expand_meta_fields_returns_empty_when_meta_has_no_fields_attr` — closes `sets.py:184` via `class NoFieldsOrder(OrderSet): class Meta: model = Book` (no `fields` attribute).
+  - `test_orderset_extract_branch_value_returns_none_for_none_input` — closes `sets.py:269` via direct `OrderSet._extract_branch_value(None, "anything")`.
+  - `test_orderset_extract_branch_value_reads_dict_field` — closes `sets.py:270-271` via `OrderSet._extract_branch_value({"shelf": "value"}, "shelf")` and the missing-key case.
+  - `test_orderset_active_permission_field_paths_returns_empty_for_none_input` — closes `sets.py:317-318` via `OrderSet._active_permission_field_paths(None)`.
+  - `test_orderset_active_permission_field_paths_returns_empty_for_non_dataclass_non_dict_input` — closes `sets.py:327-329` via `object()` input.
+  - `test_orderset_active_permission_field_paths_walks_dict_items` — closes `sets.py:330-331` via `{"title": Ordering.ASC}` against a populated `_field_specs`.
+  - `test_orderset_active_permission_field_paths_falls_back_to_python_attr_when_no_field_spec_entry` — closes `sets.py:342-346` via a dict input with no `_field_specs` entry; asserts the fallback `paths.append(python_attr)` returns `["title"]`.
+  - `test_orderset_apply_sync_returns_queryset_when_all_directions_filter_to_empty_expressions` — closes `sets.py:534-535` via a `_NoneDirectionSyncOrder` subclass that overrides `_normalize_input` to emit `[("title", None)]` (non-empty data, all-None directions filter to empty expressions).
+  - `test_orderset_apply_async_returns_queryset_when_data_is_empty` — closes `sets.py:570-571` via `asyncio.run(_EmptyAsyncOrder.apply_async([], queryset, info))`.
+  - `test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_empty_expressions` — closes `sets.py:578-579` symmetric to the sync test via `_NoneDirectionAsyncOrder` subclass + `asyncio.run`.
+
+**Pass-2 test count: 1 + 1 + 7 + 10 = 19 new tests across 4 files** (the plan's 8-test count for `test_inputs.py` collapses to 7 because the two `inputs.py:461-462` and `inputs.py:476-477` line ranges close via ONE consolidated test per the plan's explicit guidance). All 31 uncovered source lines are addressed.
+
+### Validation run
+
+- `uv run ruff format .` — pass; 1 file reformatted (`tests/orders/test_factories.py` — formatter wrapped one long assertion across two lines); 220 files left unchanged.
+- `uv run ruff check --fix .` — pass; `All checks passed!` (no autofixes applied).
+- `git status --short` — classification:
+  - **Pass-2-intended (in this diff):**
+    - `M docs/builder/bld-slice-2-factories.md`
+    - `M tests/orders/test_base.py`
+    - `M tests/orders/test_factories.py`
+    - `M tests/orders/test_inputs.py`
+    - `M tests/orders/test_sets.py`
+    - `M docs/builder/worker-memory/worker-2.md` (memory entry per task contract)
+  - **Baseline-dirty (untouched by Worker 2 this pass; pre-existing in the initial `git status` snapshot):** `M .github/workflows/kanban-pages.yml`, `M KANBAN.html`, `M KANBAN.md`, `M django_strawberry_framework/orders/base.py`, `M django_strawberry_framework/orders/sets.py`, `M django_strawberry_framework/types/base.py`, `M docs/GLOSSARY.md`, `D docs/GLOSSARY2.md`, `M docs/builder/build-028-orders-0_0_8.md`, `M docs/feedback.md`, `M docs/review/worker-1.md`, `M docs/review/worker-2.md`, `M docs/review/worker-3.md`, `M examples/fakeshop/apps/glossary/admin.py`, `M examples/fakeshop/apps/glossary/models.py`, `M examples/fakeshop/apps/glossary/tests/test_models.py`, `M examples/fakeshop/apps/kanban/admin.py`, `M examples/fakeshop/apps/kanban/models.py`, `M examples/fakeshop/apps/kanban/tests/test_admin.py`, `M examples/fakeshop/apps/kanban/tests/test_models.py`, `M examples/fakeshop/apps/kanban/tests/test_signals.py`, `M examples/fakeshop/apps/library/orders.py`, `M examples/fakeshop/db.sqlite3`, `M examples/fakeshop/test_query/test_glossary_api.py`, `M examples/fakeshop/test_query/test_library_api.py`, `M scripts/build_glossary_md.py`, `M scripts/build_kanban_html.py`, `M tests/filters/test_sets.py`, `M tests/optimizer/test_walker.py`, `M tests/orders/test_finalizer.py`, `M tests/types/test_base.py`, plus untracked `?? examples/fakeshop/apps/glossary/factories.py`, `?? examples/fakeshop/apps/glossary/tests/test_factories.py`, `?? examples/fakeshop/apps/kanban/card_import.example.json`, `?? examples/fakeshop/apps/kanban/factories.py`, `?? examples/fakeshop/apps/kanban/management/`, `?? examples/fakeshop/apps/kanban/tests/test_factories.py`, `?? examples/fakeshop/apps/kanban/tests/test_import_cards.py`.
+  - **No tool-induced drift to revert.** Only the four pass-2 test files + this artifact + the worker-2 memory file are pass-2-intended modifications.
+- Focused test run (sanity only, no `--cov*` per BUILD.md): `uv run pytest tests/orders/ --no-cov -q` → **136 passed in 1.06s**. The pre-pass `tests/orders/` surface was 116 tests (per W1's pass-2 plan walk-through); the pass-2 additions land 19 net new tests + 1 already-present `test_factories.py` shape (the formatter-only run did not change test count, the +20 vs 116 is 19 new + the existing count of 117 prior to my edit; rechecking — 136 - 19 = 117 pre-pass, which aligns with the existing 89 in `test_sets.py` + the prior cycle's test_factories/test_inputs/test_base/test_composition/test_finalizer surface). All new tests pass.
+
+### Implementation notes
+
+- **`_camel_case("")` returns `""`, not the original sentinel-stripped form.** The plan's expected returns `("", "_", "__")` are preserved verbatim — the function returns whatever was passed in when the parts list is empty. Confirmed against the source at `orders/inputs.py:166-170` (the `name` parameter is returned unchanged).
+- **`test_normalize_input_value_skips_related_branch_when_child_orderset_is_none` requires `_namespace_cleanup`.** The test directly mutates `_ParentNoneChildOrder.related_orders["shelf"]._orderset = None` after `OrderArgumentsFactory(...).arguments` populates `_field_specs`. The `_namespace_cleanup` fixture (defined at `tests/orders/test_inputs.py:470-491`) clears `_field_specs` and the factory caches between tests so the mutation does not leak. The fixture is opt-in (not autouse), so the test explicitly requests it via the parameter.
+- **`_NoneDirectionSyncOrder` / `_NoneDirectionAsyncOrder` declared inside the test function bodies.** Per Worker 1's Implementation discretion item 4 — keeps the autouse `_isolate_orderset_state` fixture cleanup at the natural scope. Matches the existing pattern at `tests/orders/test_sets.py::test_orderset_check_permission_active_relatedorder_branch_fires_parent_gate`.
+- **`asyncio.run` (not `pytest.mark.asyncio`) for async tests.** Per Worker 1's Implementation discretion item 2 — mirror the existing `tests/orders/test_sets.py::test_orderset_apply_async_via_asyncio_run` (line 442+) entry-point pattern. No new pytest-asyncio markers introduced.
+- **Inline orderset declarations (no `_make_dummy_orderset` helper).** Per Worker 1's Implementation discretion item 1 — keeps each test self-contained. The autouse `_isolate_orderset_state` / `_isolate_state` fixtures handle cleanup at the natural scope.
+- **`test_iter_orderset_subclasses_dedupes_diamond_inheritance` declares `class _DiamondA(OrderSet): class Meta: model = None; fields = ["code"]`.** Per Worker 1's Implementation discretion item 5 — the `_iter_orderset_subclasses` walk doesn't consult `Meta.model`, so any valid `OrderSet` declaration works; `model = None` is the lowest-overhead choice and the subclass walk doesn't trigger `get_fields()` (which would raise).
+- **Subclass-overrides `_normalize_input` rather than `get_flat_orders` for the empty-expressions-after-filter tests.** Per the W1 plan — overriding `_normalize_input` is the simplest affordance: it pre-empts the line-526 `if not data: return queryset` guard with a non-empty list, then the `direction is not None` filter at line 532 drops the entry to an empty `expressions` list, hitting line 535 / 579. The alternative (overriding `get_flat_orders`) would require the same shape; subclass-override is more targeted to the lines being closed.
+
+### Notes for Worker 3
+
+- **All 31 uncovered lines closed via 19 new tests across 4 files (no source edits, no `# pragma: no cover`).** The line-to-test mapping is recorded in `### Tests added or updated` above. Verify by walking the maintainer's `docs/feedback.md` B1 table against the new test bodies.
+- **The 4 test files cross the ≥50-line-new-logic threshold per `BUILD.md` "Worker 3 must run the helper during review when ... the slice adds 50 or more lines of new logic to any file outside `django_strawberry_framework/`".** `test_inputs.py` and `test_sets.py` cross the threshold cleanly (~150-200 lines added across the two); `test_base.py` and `test_factories.py` add ~30-50 lines each. Worker 3 should run `scripts/review_inspect.py` against `tests/orders/test_inputs.py` and `tests/orders/test_sets.py` at review time and record shadow output paths under `docs/shadow/`.
+- **The plan claimed 20 tests; actual count is 19.** The plan's `test_clear_order_input_namespace_tolerates_unimportable_submodules` was scoped to close TWO line ranges in ONE test (per the plan's explicit "Closes BOTH `inputs.py:461-462` AND `inputs.py:476-477` in ONE test" language); Worker 2's 19-test landing matches this contract. The 20-vs-19 count delta is the single consolidated test, not a missing closure.
+- **`_namespace_cleanup` fixture is opt-in.** Only `test_normalize_input_value_skips_related_branch_when_child_orderset_is_none` requests it in this pass (the only test that mutates `_field_specs` after a factory call). The `test_iter_orderset_subclasses_dedupes_diamond_inheritance` test does NOT mutate the ledger — it only declares classes — so the existing fixture surface remains correct.
+- **Diamond inheritance test class names use a leading underscore (`_DiamondA` / `_DiamondB` / `_DiamondC` / `_DiamondD`).** Per `tests/filters/test_inputs.py::test_iter_filterset_subclasses_dedupes_diamond_inheritance` convention (line 1036-1056); however, the filter-side test uses bare `A` / `B` / `C` / `D` names. Worker 2 chose the `_Diamond*` prefix to keep the names test-local and avoid any cross-module collision risk with the existing `tests/orders/test_base.py::AOrder` / `BOrder` declarations. Acceptable stylistic divergence; not a blocking finding.
+- **Coverage is the maintainer's gate.** Worker 2 did NOT run `pytest --cov*` (per the task contract). Confirmation that all 31 lines close to 100% is the maintainer's `uv run pytest` (full-sweep with `--cov` auto-applied) and the green coverage gate.
+
+### Notes for Worker 1 (spec reconciliation)
+
+- **No spec edits needed.** Pass-2 is test-only; no spec contract changes. The maintainer's `docs/feedback.md` B1 closure is the entire scope.
+- **`bld-final.md` rollback.** Per the task prompt: "`bld-final.md` will be re-opened separately to roll its `final-accepted` decision back to `revision-needed` after this plan lands (Worker 0's responsibility)". Worker 2 did NOT touch `bld-final.md`. Worker 1's final-verification pass on `bld-final.md` will re-run the gate against the post-pass-2 test surface.
+- **M1 status-header update is Worker 1's domain.** Per the task prompt's "Out of scope" — M1 (status header overstatement at `docs/spec-028-orders-0_0_8.md` line 4) rolls forward after the coverage gate goes green. Worker 2 did NOT touch the spec.
+
+---
+
+## Review (Worker 3, pass 2 — B1 coverage closure)
+
+### High:
+
+None.
+
+### Medium:
+
+None.
+
+### Low:
+
+None.
+
+### DRY findings
+
+- The 31-line closure relies on filter-side test patterns verbatim, which is exactly the contract per Worker 1's plan + Worker 2's build report. Two patterns mirror cleanly:
+  - `tests/orders/test_inputs.py::test_clear_order_input_namespace_tolerates_unimportable_submodules` (lines 898-924) is a one-for-one structural mirror of `tests/filters/test_inputs.py::test_clear_filter_input_namespace_tolerates_unimportable_submodules` (lines 1009-1028) — same `sys.modules[name] = None` trick, same try/finally restore, same dual-submodule shape. No drift.
+  - `tests/orders/test_inputs.py::test_iter_orderset_subclasses_dedupes_diamond_inheritance` (lines 867-895) mirrors `tests/filters/test_inputs.py::test_iter_filterset_subclasses_dedupes_diamond_inheritance` (lines 1036-1056). Order-side uses `_Diamond*` prefixed names (filter side uses bare `A`/`B`/`C`/`D`); harmless stylistic divergence Worker 2 surfaced in Notes-for-Worker-3 — keeps the class names test-local without colliding with the existing `tests/orders/test_base.py::AOrder` declaration.
+- The pop-time `if os_class in seen: continue` test in `tests/orders/test_factories.py` (lines 256-290) is genuinely complementary to the existing `test_factory_handles_cycles_via_seen_set` — the latter pins the enqueue-time `target not in seen` gate at `orders/factories.py:159`, the former pins the pop-time guard at `orders/factories.py:138`. No DRY redundancy; both stay.
+- No new shared helpers introduced. Every new test is self-contained and reuses the existing autouse fixtures (`_isolate_orderset_state` in `test_sets.py`, `_isolate_state` in `test_factories.py`, opt-in `_namespace_cleanup` in `test_inputs.py`). Plan + build alignment is clean.
+
+### Public-surface check
+
+`git diff -- django_strawberry_framework/__init__.py` is empty. `__all__` and the re-export list are unchanged. Pass-2 is test-only — no public-surface deltas.
+
+### CHANGELOG sanity
+
+Not applicable; pass-2 closure is test-only.
+
+### Documentation / release sanity
+
+Not applicable; pass-2 closure is test-only.
+
+### What looks solid
+
+- **All 31 uncovered lines mapped to focused tests.** Walked the maintainer's `docs/feedback.md` B1 table (lines 99-102) against each new test body; every entry has a test that exercises the targeted branch:
+  - `base.py:82` — `test_related_order_orderset_setter_assigns_underscore_orderset` re-assigns `related.orderset = BOrder` and asserts `related._orderset is BOrder`.
+  - `factories.py:138` — `test_factory_dedupes_double_enqueued_target_via_seen_check` declares `ParentOrderDedup` with TWO `RelatedOrder(ChildOrderDedup, ...)` instances; both enqueue ChildOrderDedup at parent-processing time, and the second pop fires the `if os_class in seen: continue` guard. Traced the BFS by hand to confirm: `pending=[Parent]` → pop Parent (not in seen, build, walk related: child_a enqueues Child, child_b enqueues Child) → pending=[Child, Child] → pop Child (not in seen, build) → pop Child (in seen → line 138). Correct.
+  - `inputs.py:168` — `test_camel_case_returns_input_when_split_yields_no_parts` covers `""`, `"_"`, `"__"` (all collapse to empty parts list).
+  - `inputs.py:222` — `test_build_input_class_threads_description_through_strawberry_field` passes `{"description": "the foo direction"}` and asserts via `cls.__strawberry_definition__.fields["foo"].description`.
+  - `inputs.py:336` — `test_normalize_input_value_returns_empty_for_non_dataclass_non_list_non_none_input` passes a plain `object()`.
+  - `inputs.py:344` — `test_normalize_input_value_skips_attrs_with_no_field_spec_entry` uses a `@dataclasses.dataclass _StubInput` with no `_field_specs` entry.
+  - `inputs.py:352` — `test_normalize_input_value_skips_related_branch_when_child_orderset_is_none` calls `OrderArgumentsFactory(_ParentNoneChildOrder).arguments` to populate `_field_specs`, then writes `_ParentNoneChildOrder.related_orders["shelf"]._orderset = None` to force the child-orderset-is-None branch. Uses `_namespace_cleanup` to prevent leak.
+  - `inputs.py:410` — `test_iter_orderset_subclasses_dedupes_diamond_inheritance` exercises the diamond `D(B, C)` reachable through both `B(A)` and `C(A)`.
+  - `inputs.py:461-462` AND `inputs.py:476-477` — `test_clear_order_input_namespace_tolerates_unimportable_submodules` sets both `sys.modules` entries to `None` so both `from .factories import OrderArgumentsFactory` AND `from .sets import OrderSet` raise ImportError, hitting both `pass` lines.
+  - `sets.py:184` — `test_orderset_expand_meta_fields_returns_empty_when_meta_has_no_fields_attr` declares `Meta` without a `fields` attribute.
+  - `sets.py:269` — `test_orderset_extract_branch_value_returns_none_for_none_input` direct call with `None`.
+  - `sets.py:271` — `test_orderset_extract_branch_value_reads_dict_field` direct call with `{"shelf": "value"}`.
+  - `sets.py:318` — `test_orderset_active_permission_field_paths_returns_empty_for_none_input` direct call with `None`.
+  - `sets.py:329` — `test_orderset_active_permission_field_paths_returns_empty_for_non_dataclass_non_dict_input` passes `object()`.
+  - `sets.py:331` — `test_orderset_active_permission_field_paths_walks_dict_items` passes `{"title": Ordering.ASC}` against a `_field_specs`-populated `DictInputOrder` (built via `OrderArgumentsFactory(DictInputOrder).arguments`).
+  - `sets.py:346` — `test_orderset_active_permission_field_paths_falls_back_to_python_attr_when_no_field_spec_entry` passes `{"title": Ordering.ASC}` to a `NoSpecsActiveOrder` whose `_field_specs` is empty, hitting the `paths.append(python_attr)` fallback.
+  - `sets.py:535` — `test_orderset_apply_sync_returns_queryset_when_all_directions_filter_to_empty_expressions` declares a `_NoneDirectionSyncOrder` whose `_normalize_input` override returns `[("title", None)]` — non-empty `data` (skips line 526), but the `direction is not None` filter at line 532 drops it, hitting the empty-expressions early return at line 535. The subclass-override-`_normalize_input` affordance is exactly the shape Worker 1's plan called for (the production normalizer doesn't emit None directions in practice).
+  - `sets.py:571` — `test_orderset_apply_async_returns_queryset_when_data_is_empty` calls `asyncio.run(_EmptyAsyncOrder.apply_async([], queryset, info))` — empty list normalizes to empty data, hits the line-571 early return.
+  - `sets.py:579` — `test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_empty_expressions` uses the same subclass-override pattern as the sync test, called via `asyncio.run`.
+- **No source-code edits.** `git diff -- django_strawberry_framework/orders/` shows only two pre-existing formatter signature collapses (`orders/base.py::RelatedOrder.__init__` and `orders/sets.py::OrderSet._iter_active_related_branches`) that were already dirty at task start per the prompt's initial `git status` snapshot. Worker 2 explicitly classified them as baseline-dirty in the build report. Per `AGENTS.md` line 33, these are presumptively maintainer/concurrent-dev formatter churn — not pass-2 work and not Worker 2's to revert. The diff hunks are pure signature reflows; no logic changes.
+- **No `# pragma: no cover` introduced.** `grep -nE "pragma:.*no cover" django_strawberry_framework/orders/ tests/orders/` returns only the three pre-existing `if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports` lines in `orders/factories.py`, `orders/inputs.py`, `orders/sets.py`. `git diff -- django_strawberry_framework/orders/ | grep pragma` returns 0 hits — zero new pragma directives.
+- **No `--cov*` flags.** Worker 2 ran `uv run pytest tests/orders/ --no-cov -q` per the BUILD.md "Coverage is the maintainer's gate, not a worker's tool" discipline. Build report records 136 passed in 1.06s; I re-ran the same focused command and confirmed 136 passed in 1.01s.
+- **No spec / CHANGELOG / version-file / KANBAN edits attributable to pass-2.** `git diff docs/spec-028-orders-0_0_8.md` is empty. KANBAN.md / CHANGELOG.md / examples/fakeshop modifications are all in the prompt's initial baseline-dirty `git status` snapshot — Worker 2 did not author them.
+- **Filter-side parity preserved.** The two filter-side reference tests (`test_clear_filter_input_namespace_tolerates_unimportable_submodules` and `test_iter_filterset_subclasses_dedupes_diamond_inheritance`) ship structurally-identical order-side mirrors. The maintainer's `docs/feedback.md` B1 closure direction ("the shipped filter side's `clear_filter_input_namespace` has the structurally-identical guards … so these are coverable, not inherently unreachable. Mirror whatever the filter side does") is honored verbatim.
+- **`pytest tests/orders/ --no-cov` exits 0 with 136 passed.** Worker 2's claim verified directly. The 19 new tests (1 + 1 + 7 + 10) close the maintainer's 31-line gap; the plan called for 20 tests but the inputs.py ImportError-guard pair consolidates to ONE test per the maintainer's explicit guidance, so 19 is the correct landing count.
+- **Helper output captured.** Ran `scripts/review_inspect.py` on `tests/orders/test_inputs.py` and `tests/orders/test_sets.py` (both crossed the ≥50-line-new-logic threshold per `BUILD.md`). Outputs at `docs/shadow/tests__orders__test_inputs.{overview.md,stripped.py}` and `docs/shadow/tests__orders__test_sets.{overview.md,stripped.py}`. One control-flow hotspot surfaced (`test_normalize_input_value_skips_related_branch_when_child_orderset_is_none` at 50 lines, 0 branches — pure setup + assertion, not a complexity concern). No repeated string literals exceed the existing baseline.
+
+### Temp test verification
+
+No temp tests created during this review pass. The 19 new permanent tests Worker 2 added under the four pass-2 test files are self-verifying — each test name pins exactly the source line it claims to close, and each assertion exercises the targeted branch. Walking the source line, then walking the test body, then walking the diff shape gave sufficient evidence without needing a separate harness.
+
+### Notes for Worker 1 (spec reconciliation)
+
+- **`bld-final.md` rollback owed to Worker 0.** Per the task prompt, the previously-`final-accepted` `bld-final.md` needs to be rolled back to `revision-needed` after this pass-2 review lands, so Worker 1 can re-run the final test-run gate against the post-pass-2 test surface. Worker 3 did not touch `bld-final.md`; Worker 0 dispatches.
+- **M1 (spec line 4 status-header overstatement) still owed.** Per `docs/feedback.md` M1, `docs/spec-028-orders-0_0_8.md` line 4 still asserts "cross-slice integration pass and final test-run gate closed (2026-06-02)" — that claim was false at the feedback-review timestamp and remains false until the final gate re-runs green. Worker 1's final-verification on the re-opened `bld-final.md` owns the spec edit. Worker 2 correctly did NOT touch the spec in this pass-2 cycle (test-only contract).
+- **B2 (kanban+glossary failures) explicit scope-out.** `docs/feedback.md` B2 catalogs three failing tests in `examples/fakeshop/test_query/test_glossary_api.py` that are not the orders card's fault. Worker 0 owns spawning a sibling task for that closure. The orders pass-2 review is independent — `tests/orders/` runs green at 136/136.
+- **No new spec or plan reconciliation needed.** The maintainer's `docs/feedback.md` review is the contract; the pass-2 plan + build + review match it line-for-line. No spec ambiguity surfaced.
+
+### Review outcome
+
+`review-accepted`. The pass-2 closure delivers exactly what `docs/feedback.md` B1 demands: 31 uncovered lines in `orders/*` closed by 19 focused tests across four files, zero source edits, zero `# pragma: no cover` introductions, filter-side patterns honored verbatim, autouse fixtures reused without bespoke helpers. The maintainer's full-suite `uv run pytest` (with the auto-applied `--cov`) is the next gate; coverage being the maintainer's tool, this review certifies that the test bodies are well-formed and the targeted lines are genuinely covered. Sets the artifact's top-level `Status:` to `review-accepted`.
 
 ---
 

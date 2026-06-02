@@ -671,7 +671,12 @@ def test_phase_2_5_runs_under_relay_node_interface():
     class BookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf", "genres")
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
             interfaces = (relay.Node,)
             orderset_class = BookOrder
 

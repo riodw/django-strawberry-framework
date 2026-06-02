@@ -1,408 +1,231 @@
-# Review feedback - `docs/spec-028-orders-0_0_8.md`
+# Implementation review — `docs/spec-028-orders-0_0_8.md` (Ordering subsystem)
 
-Reviewed the current on-disk spec against the shipped filter subsystem, the
-current fakeshop library app, and the local upstream references the spec names.
-`git diff -- docs/spec-028-orders-0_0_8.md` was empty at review time, so this
-review is against the current repository copy of the spec.
+Reviewed the **shipped implementation** against the spec, against the
+shipped filter subsystem it mirrors, and against the live test suite.
+The spec status header (line 4) claims "shipped (2026-06-02) … cross-slice
+integration pass and final test-run gate closed (2026-06-02); awaiting
+maintainer commit."
 
-The spec still needs a contract pass before implementation. Several issues would
-produce the wrong GraphQL surface or break the same reload/finalizer lifecycle
-the filter subsystem already stabilized.
+**The architecture is implemented faithfully and the design is sound. But
+the "final test-run gate closed" claim is not true: the full suite is red
+on two counts — a 99.11% coverage gate (target 100%) and 3 failing tests.**
+The coverage shortfall is entirely attributable to this card; the 3
+failures are not.
+
+Verification was run from a clean read of every on-disk source file the
+spec names, plus `uv run pytest` (full suite), `uv run ruff check/format`,
+and `scripts/check_spec_glossary.py`.
+
+---
+
+## What matches the spec (verified, no action needed)
+
+Confirmed against the actual source, not just the spec's self-description:
+
+- **Subpackage layout** — `django_strawberry_framework/orders/` ships all
+  five files (`__init__.py`, `base.py`, `sets.py`, `factories.py`,
+  `inputs.py`); `tests/orders/` carries all seven
+  (`__init__.py` + 4 mirror + `test_finalizer.py` + `test_composition.py`).
+- **B1 (list-shape helper)** — `orders/__init__.py::order_input_type`
+  returns the element type `Annotated[name, strawberry.lazy(INPUTS_MODULE_PATH)]`;
+  fakeshop resolvers wrap as `list[order_input_type(...)] | None`
+  (`schema.py` lines 193, 207, 221, 239). Matches Decision 11.
+- **B2 (clear lifecycle)** — `clear_order_input_namespace` clears
+  `_materialized_names` + `_field_specs` + `OrderArgumentsFactory.input_object_types`
+  + `_type_orderset_registry` + every `OrderSet` subclass's
+  `_owner_definition` / `_expanded_fields` / `_is_expanding_fields`, and
+  **leaves materialized module globals parked** (no `delattr`). `registry.clear()`
+  carries two separate order-side blocks (`clear_order_input_namespace`
+  then `_helper_referenced_ordersets.clear()`), both `except ImportError: pass`
+  + `else:`. Matches Decision 9.
+- **B4 (M2M exclusion — the rev3 ground-truth fix)** —
+  `inputs.py::_get_concrete_field_names_for_order` is
+  `[f.name for f in model._meta.get_fields() if hasattr(f, "column") and not getattr(f, "many_to_many", False)]`.
+  The `not f.many_to_many` clause that the rev3 review proved necessary on
+  Django 6.0.5 (where `ManyToManyField.column is None` makes
+  `hasattr(f, "column")` True) is present. `genres` is correctly excluded.
+- **H1 (shared mixin home)** — `orders/base.py` imports
+  `LazyRelatedClassMixin` from `..sets_mixins` (not `filters.base`);
+  `orders/sets.py::OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass)`
+  inherits the name mixin from the same neutral module.
+- **H2 (owner/model validation)** — `finalizer.py::_bind_orderset_owner`
+  ships the first-bind model-compat check.
+- **H3 (relation-level permission dispatch)** —
+  `test_order_check_permission_denies_active_related_branch` is present in
+  the live suite (14 tests total, confirmed by name).
+- **No `apply()` dispatcher** (H1 of rev1) — `sets.py` ships only
+  `apply_sync` / `apply_async`; the bare-`apply` grep returns nothing.
+- **Decision 6 subpass order + the load-bearing `.orderset` walk** —
+  `_bind_ordersets` runs bind → expand → orphan-validate → materialize, and
+  subpass 2 explicitly reads `related.orderset` (finalizer.py ~line 703) to
+  force Layer-2 resolution at the subpass-2 boundary, exactly as the spec's
+  Decision 6 step 2 prescribes.
+- **`Ordering.resolve()`** — the True-or-None NULLS sentinel semantics
+  (Decision 5 / M4) are implemented verbatim.
+- **Promotion gate** — `DEFERRED_META_KEYS` now holds only
+  `{aggregate_class, fields_class, search_fields}`; `orderset_class` is in
+  `ALLOWED_META_KEYS`; `_validate_orderset_class` uses the local in-function
+  `from ..orders.sets import OrderSet` import (N3).
+- **Decision 10 (version-bump boundary)** — `pyproject.toml`,
+  `__version__`, and `tests/base/test_init.py` are at `0.0.8`, but that came
+  from a **separate maintainer release commit** (`171a9bc release: bump to
+  0.0.8, retire joint-cut convention`), NOT from this card's Slice 5. This
+  is exactly what Decision 10 prescribes; no violation.
+- **Docs** — GLOSSARY Index flips all five ordering symbols to
+  `shipped (0.0.8)`; `docs/TREE.md` lists `orders/` on-disk; KANBAN records
+  `DONE-028-0.0.8` with the past-tense body.
+- `ruff check` / `ruff format --check` pass on all order sources.
+- `scripts/check_spec_glossary.py` reports `OK: 44 terms`.
+
+---
 
 ## Blocking
 
-### B1. `order_input_type` still returns one input object, but `orderBy` is specified as a list
+### B1. The 100% coverage gate is RED — 99.11%, and the orders subsystem is the sole cause
 
-Locations:
+`uv run pytest` (full suite) ends with:
 
-- Decision 5, GraphQL argument shape.
-- Decision 11, `order_input_type(OrderSet)`.
-- User-facing resolver examples under "Exposing the `orderBy:` argument" and
-  "Composing with the shipped Filtering subsystem".
-- DoD item 7 and the `test_order_input_type_returns_forwardref_in_annotation_args`
-  test-plan bullet.
-
-Decision 5 and every GraphQL query example require:
-
-```graphql
-orderBy: [<TypeName>OrderInputType!]
+```
+TOTAL                                          3484     31    99%
+FAIL Required test coverage of 100.0% not reached. Total coverage: 99.11%
 ```
 
-But Decision 11 still returns:
+All 31 uncovered lines are in `orders/*` — every other package module
+(including the filter subsystem this card mirrors) hits 100% in the full
+run. Per-module:
 
-```python
-Annotated["GalaxyOrderInputType", strawberry.lazy("django_strawberry_framework.orders.inputs")]
+| Module | Cov | Uncovered lines |
+| --- | --- | --- |
+| `orders/base.py` | 94% | 82 (`orderset.setter` body) |
+| `orders/factories.py` | 98% | 138 (`if os_class in seen: continue` — BFS cycle guard) |
+| `orders/inputs.py` | 93% | 168, 222, 336, 344, 352, 410, 461-462, 476-477 |
+| `orders/sets.py` | 95% | 184, 269, 271, 318, 329, 331, 346, 535, 571, 579 |
+
+This directly contradicts (a) the spec status header's "final test-run gate
+closed (2026-06-02)" claim and (b) DoD item 26 ("Package coverage stays at
+100% … verified by CI's `fail_under = 100` gate"). The gate is the
+acceptance criterion; it is not met.
+
+The uncovered lines fall into three buckets, each with a clear close:
+
+1. **Defensive `except ImportError: pass` partial-load guards**
+   (`inputs.py:461-462, 476-477`). The shipped filter side's
+   `clear_filter_input_namespace` has the structurally-identical guards and
+   `filters/inputs.py` reaches **100%** in the full suite — so these are
+   coverable, not inherently unreachable. Mirror whatever the filter side
+   does (a `test_*_clear_works_without_*_imported`-style subprocess test, or
+   a monkeypatched-`sys.modules` unit test). Do NOT reach for
+   `# pragma: no cover` until you confirm the filter side needed it; it
+   didn't.
+2. **No-op / early-return fast paths** (`sets.py:318, 329, 535, 571, 579`;
+   `inputs.py:336`). These are the empty-input / `None`-direction / empty-list
+   branches. The live suite has `test_library_branches_order_empty_list_and_null_direction_no_op`,
+   but it evidently does not drive every one of these early returns at the
+   unit level. Add focused `tests/orders/test_sets.py` /
+   `test_inputs.py` cases that hit each branch directly.
+3. **Defensive `continue` / `return` inside the parse + BFS**
+   (`factories.py:138`; `sets.py:269, 271, 331, 346`; `inputs.py:344, 352,
+   410`). `factories.py:138` is the BFS already-seen cycle guard —
+   `test_factories.py` should construct an `A → B → A` orderset cycle and
+   assert the factory terminates (the spec's Edge-cases "Circular
+   `RelatedOrder` cycles" bullet promises this is tested). The others are
+   per-branch coverage in `get_flat_orders` / `normalize_input_value`.
+
+`base.py:82` (the `orderset.setter`) and `inputs.py:168, 222` are trivially
+coverable with a one-line assignment / kwarg-pass test each.
+
+**Root-cause fix:** the orders modules must reach 100% the same way the
+filter modules do — through `tests/orders/` unit coverage plus the live
+HTTP suite — before the card is done. The status header should not say
+"final test-run gate closed" until `uv run pytest` exits 0.
+
+### B2. Three tests fail in the working tree (not caused by orders, but the gate is still red)
+
+```
+FAILED examples/fakeshop/test_query/test_glossary_api.py::test_filter_glossary_terms_by_status_key
+FAILED examples/fakeshop/test_query/test_glossary_api.py::test_filter_glossary_terms_by_spec_mention_and_select_edges
+FAILED examples/fakeshop/test_query/test_glossary_api.py::test_glossary_documents_are_shared_board_docs_scoped_to_glossary_namespace
 ```
 
-and the resolver examples use:
+All three raise `IntegrityError: UNIQUE constraint failed:
+kanban_boarddockind.key` and reproduce when `test_glossary_api.py` is run
+**in isolation** (3 failed in 2.06s), so this is not a test-ordering flake —
+it is a genuine fixture/seeding defect in the kanban `BoardDocKind` setup.
 
-```python
-order_by: order_input_type(GalaxyOrder) | None = None
-```
+This is **not** the ordering card's doing: the order subsystem touches
+nothing under `apps/kanban/` or `test_glossary_api.py`, and `git status`
+shows an independent, uncommitted kanban workstream
+(`apps/kanban/{admin,models}.py`, `apps/kanban/tests/*`) as the likely
+source. I'm flagging it because:
 
-That annotation yields a nullable single input object, not a nullable list. The
-documented queries such as `orderBy: [{ name: ASC }]` would fail GraphQL input
-coercion before `OrderSet.apply_sync(...)` ever runs.
+- the spec status header claims the "final test-run gate closed," which is
+  false while these fail; and
+- whoever commits this card should not do so on a red suite. Resolve the
+  kanban `BoardDocKind` double-seed separately (looks like a
+  `get_or_create` / unique-key collision in a kanban test fixture or
+  migration-data step) before the ordering commit lands on a green tree, or
+  explicitly scope it to a sibling task.
 
-Root-cause fix: make the helper own the actual resolver argument type:
-
-```python
-list[Annotated["GalaxyOrderInputType", strawberry.lazy(INPUTS_MODULE_PATH)]]
-```
-
-Then `order_by: order_input_type(GalaxyOrder) | None = None` matches the SDL.
-If the intended helper contract is only "return the element type", then every
-resolver example and test must say `list[order_input_type(GalaxyOrder)] | None`
-and Decision 11 must stop calling the helper itself the resolver-argument shape.
-
-### B2. The order input namespace clear lifecycle still diverges from the shipped filter lifecycle
-
-Locations:
-
-- Decision 9 lifecycle contract.
-- Slice 3 checklist and DoD item 10.
-- `tests/orders/test_inputs.py` and `tests/orders/test_finalizer.py` test-plan
-  bullets around `clear_order_input_namespace`.
-- Shipped reference: `django_strawberry_framework/filters/inputs.py::clear_filter_input_namespace`.
-
-The spec says the order side mirrors the filter lifecycle, but it still narrows
-the clear behavior to `_materialized_names`, `_helper_referenced_ordersets`, and
-removing materialized module globals. That is not the filter side's actual
-contract.
-
-The filter clear path also clears factory caches and per-class binding/expansion
-state, and it intentionally leaves materialized input classes parked in the
-module namespace. Parking is load-bearing: existing `strawberry.lazy(...)`
-references held by modules that were not reloaded continue to resolve until the
-next successful finalize overwrites them.
-
-If the order side follows the current spec:
-
-- `OrderArgumentsFactory.input_object_types` can keep stale input classes after
-  `registry.clear()`, so `_ensure_built()` may skip rebuilding against a fresh
-  registry.
-- `OrderSet` subclasses can retain `_owner_definition`, `_expanded_fields`, and
-  `_is_expanding_fields` across reloads.
-- Deleting module globals can break lazy annotations captured by resolver modules
-  that were not reloaded.
-
-Root-cause fix: define `clear_order_input_namespace()` as the order analogue of
-`clear_filter_input_namespace()`:
-
-- Clear `_materialized_names` and the order field-spec/provenance map.
-- Clear `OrderArgumentsFactory.input_object_types` and its type-to-orderset
-  collision registry.
-- Reset every live `OrderSet` subclass's directly-set `_owner_definition`,
-  `_expanded_fields`, and `_is_expanding_fields`.
-- Leave already-materialized module globals parked.
-- Keep `_helper_referenced_ordersets.clear()` as a separate `registry.clear()`
-  block.
-
-The test plan should assert those resets and should stop expecting
-`clear_order_input_namespace()` to remove module globals.
-
-### B3. The NULLS-positioning live test targets fields that cannot satisfy it
-
-Locations:
-
-- Slice 4 checklist, live HTTP coverage bullet.
-- Decision 13 live HTTP coverage summary.
-- `examples/fakeshop/test_query/test_library_api.py` test-plan subsection.
-- Current model reference: `examples/fakeshop/apps/library/models.py::Book`.
-
-The spec uses two incompatible fields for the NULLS-positioning test:
-
-- Slice 4 names `description: DESC_NULLS_LAST`.
-- The test plan names `title: DESC_NULLS_LAST` and expects `title=NULL` rows.
-
-Current `Book` has no `description` field, and `Book.title` is non-null. The
-current nullable text field is `subtitle`.
-
-Root-cause fix: use `subtitle` consistently:
-
-- `BookOrder.Meta.fields` includes `subtitle`.
-- The query is `orderBy: [{ subtitle: DESC_NULLS_LAST }]`.
-- The fixture seeds at least one `subtitle=None` row and one non-null subtitle
-  row.
-- Assertions verify nulls last against `subtitle`.
-
-### B4. `"__all__"` still claims cookbook parity while excluding forward relation columns
-
-Locations:
-
-- Decision 3, "`Meta.fields = "__all__"` scope".
-- Edge cases, "`Meta.fields = "__all__"`".
-- Upstream reference: `django_graphene_filters/mixins.py::get_concrete_field_names`.
-
-The spec says `"__all__"` expands to concrete fields and that "relations are NOT
-included." The cookbook helper it cites returns fields with a `column` attribute.
-That excludes reverse relations and M2M managers, but it includes forward FK and
-forward OneToOne columns. For current fakeshop, `Book.shelf` is column-backed and
-would be included by cookbook parity.
-
-This affects the generated input shape. With cookbook parity,
-`BookOrder.Meta.fields = "__all__"` exposes a leaf `shelf: Ordering` unless an
-explicit `RelatedOrder` overrides the same name. If the package wants to exclude
-all relation fields, that is a deliberate divergence and needs different prose
-and tests.
-
-Root-cause fix: choose one rule. Given the spec repeatedly says "cookbook
-parity", the cleaner rule is:
-
-- `"__all__"` means every column-backed model field, including forward FK/O2O
-  columns, excluding reverse relations and M2M managers.
-- An explicit same-name `RelatedOrder` overrides the column leaf when the
-  consumer wants nested traversal.
-- Package tests pin both the forward-FK leaf and the explicit override case.
-
-## High
-
-### H1. The shared mixin import path is stale
-
-Locations:
-
-- Decision 2, `base.py` bullet and rejected alternative.
-- Decision 3 Layer 2.
-- KANBAN past-tense body in Doc updates.
-- Current code reference: `django_strawberry_framework/sets_mixins.py::LazyRelatedClassMixin`.
-
-The spec still says the shared `LazyRelatedClassMixin` lives at
-`django_strawberry_framework/filters/base.py` and that `orders/base.py` should
-import it from the filter package. In the current codebase, the neutral shared
-home is already `django_strawberry_framework/sets_mixins.py`, which also carries
-`ClassBasedTypeNameMixin` for the future set family.
-
-Importing through `filters.base` would load the filter subsystem just to build
-orders and would re-couple sibling Layer-3 packages after the codebase already
-created a neutral module.
-
-Root-cause fix:
-
-- `orders.base` imports `LazyRelatedClassMixin` from
-  `django_strawberry_framework.sets_mixins`.
-- `orders.sets.OrderSet` inherits `ClassBasedTypeNameMixin`.
-- `orders.inputs._input_type_name_for()` delegates to
-  `orderset_class.type_name_for()`, matching the filter side.
-- The rejected-alternative prose should be rewritten because the move is already
-  done.
-
-### H2. Owner/model mismatch validation is still underspecified for ordersets
-
-Locations:
-
-- Decision 6 subpass 1.
-- Risks, "Multi-`DjangoType`-per-model orderset binding".
-- `tests/orders/test_finalizer.py` test-plan paragraph.
-- Shipped reference: `django_strawberry_framework/types/finalizer.py::_bind_filterset_owner`.
-
-Decision 6 says owner binding runs "own-PK + related-target validation", then
-narrows the owner-sensitive order question to related-target agreement. It does
-not clearly require first-bind model compatibility: the `OrderSet.Meta.model`
-must match, or be a base of, the owning `DjangoType` model.
-
-That check is still necessary. A `BookOrder` wired onto `BranchType` can build a
-valid-looking order input from `Book` fields and then apply those field paths to
-a `Branch` queryset, surfacing as a late Django `FieldError` instead of a
-finalize-time `ConfigurationError`.
-
-Root-cause fix: add an order-side `_bind_orderset_owner()` with the first-bind
-model compatibility check from `_bind_filterset_owner()`:
-
-- `definition.model` must be the orderset `Meta.model` or derive from it.
-- Otherwise raise `ConfigurationError` naming the owner type, owner model,
-  orderset class, and orderset model.
-- Add a finalizer test for this mismatch.
-
-The order side can omit the filter side's Relay own-PK identity check, but model
-compatibility is not optional.
-
-### H3. Relation-level permission gates are named as the security defense but not specified or tested
-
-Locations:
-
-- Decision 8 step 4, `check_shelves_permission(request)` example.
-- Decision 8 step 6, `check_permissions`.
-- `tests/orders/test_sets.py` and live permission test-plan bullets.
-- Shipped reference: `django_strawberry_framework/filters/sets.py::FilterSet._run_permission_checks`.
-
-The spec accepts the hidden-related-order position side channel for `0.0.8` and
-says the consumer defense is a parent relation gate such as
-`check_shelves_permission(request)`. But the algorithm text and tests only pin
-scalar active/inactive gates like `check_name_permission`.
-
-Following the cookbook flat-path permission logic would tend to fire
-`check_shelves_code_permission` on the parent and `check_code_permission` on the
-child for `orderBy: [{ shelves: { code: ASC } }]`; it does not necessarily fire
-`check_shelves_permission`. That would make the documented defense ineffective.
-
-Root-cause fix:
-
-- Define order permission dispatch as the filter side's active-branch
-  double-dispatch adapted to order inputs.
-- For an active `RelatedOrder` branch, fire the parent
-  `check_<branch>_permission(request)` once and recurse into the child orderset
-  to fire child field gates.
-- Deduplicate per `(OrderSet class, method name)` across list elements.
-- Add package tests for parent relation gate denial, child field gate denial,
-  inactive relation branch quiet behavior, and repeated-list-entry dedup.
-- Add or retarget one live HTTP permission test to exercise an active
-  `RelatedOrder` gate, not only a scalar field gate.
-
-### H4. One filter+order live query uses the wrong enum literal casing for the current schema
-
-Location:
-
-- `examples/fakeshop/test_query/test_library_api.py` test-plan subsection,
-  `test_library_books_filter_and_order_compose`.
-- Current acceptance reference:
-  `examples/fakeshop/test_query/test_library_api.py::test_library_books_filter_by_choice_enum`.
-
-The spec's composition test uses:
-
-```graphql
-circulationStatus: { exact: AVAILABLE }
-```
-
-The current live fakeshop tests use lower-case enum values such as `available`
-and `checked_out` for `BookTypeCirculationStatusEnum`. Implementing the spec as
-written would make this live test fail at GraphQL enum coercion before the order
-path is exercised.
-
-Root-cause fix: use the current enum literal:
-
-```graphql
-circulationStatus: { exact: available }
-```
-
-Also update the assertion prose to say "available books" instead of implying the
-wire enum value is `AVAILABLE`.
+---
 
 ## Medium
 
-### M1. The materialization ledger is typed as `name -> OrderSet`, but the materializer receives an input class
+### M1. Status header overstates the gate state
 
-Locations:
+Line 4 asserts "cross-slice integration pass and final test-run gate closed
+(2026-06-02)." Given B1 (coverage red) and B2 (3 failures), this sentence is
+inaccurate. Once B1 is fixed and B2 is resolved/scoped-out, restate it
+precisely — e.g. "all `tests/orders/` + 14 live order tests pass; full-suite
+coverage gate green" — or, if committing before the kanban failures are
+fixed, say so explicitly rather than claiming a closed gate.
 
-- Decision 9 lifecycle contract.
-- Decision 6 materialization subpass.
-- DoD item 6.
-
-The spec says `_materialized_names` is `dict[str, type[OrderSet]]` and that
-`materialize_input_class(name, cls)` is idempotent for `(name, orderset_class)`.
-But the two-argument materializer receives the generated input class as `cls`,
-not the source `OrderSet`. The shipped filter side stores the materialized input
-class in the materialization ledger and leaves source-class collision detection
-to the factory.
-
-Root-cause fix: mirror the filter split:
-
-- `OrderArgumentsFactory` owns `input type name -> OrderSet class` collision
-  detection.
-- `orders.inputs._materialized_names` owns `input type name -> input class`
-  idempotent materialization.
-- `materialize_input_class(name, input_cls)` checks the `(name, input_cls)` pair.
-
-If the order side wants materialization to validate the source orderset, change
-the signature to include `orderset_class`; do not keep a two-argument signature
-that cannot populate the documented ledger.
-
-### M2. The duplicate-field ordering edge case claims a live HTTP test that is not in the exact-13 plan
-
-Location:
-
-- Edge cases, `orderBy: [{ name: ASC }, { name: DESC }]`.
-
-The edge-case bullet says a live HTTP test pins duplicate/conflicting field
-ordering behavior. The exact-13 live test list does not include that test.
-
-Root-cause fix: either add the test and update every count, or reword the edge
-case as documented behavior covered by package-level parsing/queryset tests only.
-
-### M3. Slice-5 doc-update symbol lists are inconsistent
-
-Locations:
-
-- Slice 5 checklist.
-- Doc updates.
-- DoD items 16, 19, 20, and 21.
-
-Some doc-update bullets include `Ordering`; others list only `OrderSet`,
-`RelatedOrder`, `order_input_type`, and `Meta.orderset_class`. Decision 2 makes
-`Ordering` part of the public subpackage surface, so the shipped-symbol sweeps
-should include it consistently unless a document intentionally omits enum
-entries.
-
-Root-cause fix: sync the Slice 5 checklist, Doc updates, and DoD lists. At
-minimum, `README.md`, `docs/README.md`, and `TODAY.md` should all include
-`Ordering` alongside `order_input_type`.
-
-### M4. Standing-spec source references still use raw line numbers
-
-Locations:
-
-- Revision history entries for B1/B3/H3/M3/M9/N3/R1-R4/N-new-2/N-new-3.
-- Decision 3, Decision 6, Decision 8, Decision 9, Decision 12, and DoD item 9.
-
-The standing-doc rule in `AGENTS.md` says raw `path:NN` references are allowed
-only in per-cycle scratchpad artifacts. This spec is a standing design doc, so
-references like `finalizer.py:478-600`, `registry.py:43-50`,
-`filters/inputs.py:53,183`, and prose such as "line 635" should be replaced
-with symbol-qualified references or unique-substring references.
-
-Root-cause fix: use forms like:
-
-- `django_strawberry_framework/types/finalizer.py::_bind_filtersets`
-- `django_strawberry_framework/registry.py::TypeRegistry.clear`
-- `django_strawberry_framework/filters/inputs.py::INPUTS_MODULE_PATH`
-- `django_strawberry_framework/filters/__init__.py::_helper_referenced_filtersets`
-
-For revision-history bookkeeping, finding IDs and section names are more stable
-than stale line numbers.
-
-### M5. The abstract-model edge case relies on a validator the current code does not have
-
-Location:
-
-- Decision 3, "Proxy / multi-table-inheritance semantics".
-
-The spec says abstract models are irrelevant because
-`DjangoType.Meta.model` rejects abstract models at `_validate_meta` time. Current
-`django_strawberry_framework/types/base.py::_validate_meta` checks that
-`Meta.model` is a Django model class, but it does not reject
-`model._meta.abstract`.
-
-Root-cause fix: either add an explicit abstract-model validator and test as part
-of this card, or remove the claim and mark abstract-model `OrderSet` targets as
-out of scope/undefined for this card. Do not leave the spec relying on a
-nonexistent existing guard.
+---
 
 ## Nit
 
-### N1. `GraphQLError` links to the `ConfigurationError` glossary anchor
+### N1. KANBAN snapshot paragraph still carries the retired joint-cut convention
 
-Location:
+`KANBAN.md` line 74 reads: "The last `0.0.8` card to ship owns the version
+bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-020-list_field-0_0_7.md`."
+That is the **old joint-cut convention** that this spec's Revision 5
+explicitly retired (Decision 10 is now "version bumps are
+maintainer-commanded"). The version was in fact bumped by a standalone
+maintainer release commit, consistent with the new convention — so the
+snapshot sentence describes a policy that no longer governs. Minor
+doc-consistency drift; the card's own KANBAN edits (the `DONE-028-0.0.8`
+move + Done body) are correct. Worth a one-line update to the snapshot
+paragraph if KANBAN edits are in scope, otherwise leave for the maintainer.
 
-- Decision 8 step 4, the sentence about `check_shelves_permission(request)`.
+### N2. CHANGELOG `[Unreleased]` heading not promoted despite version files at 0.0.8
 
-The text says a gate raises `GraphQLError` but links through
-`glossary-configurationerror`. Leave `GraphQLError` unlinked or add the correct
-glossary entry if one is intended.
+`pyproject.toml` / `__version__` are at `0.0.8`, but `CHANGELOG.md` still
+heads the section `## [Unreleased]` (no `## [0.0.8]`), with both the
+Filtering and Ordering bullets under it. This card **correctly** does not
+promote the heading (Decision 10 / DoD item 23 gate that on the explicit
+version-bump command). Flagging only so the maintainer closes the loop —
+the standalone release commit that bumped `pyproject.toml` should have also
+promoted the CHANGELOG heading; that promotion is the maintainer's to make,
+not this card's.
 
-### N2. `apply_async` return annotation prose is imprecise
-
-Locations:
-
-- Decision 2, `sets.py` bullet.
-- DoD item 4.
-
-The spec writes `apply_async(...) -> Awaitable[QuerySet]`. If the implementation
-is an `async def`, the function annotation should be `-> QuerySet`; the call
-expression is awaitable. The filter side uses `async def apply_async(...) -> models.QuerySet`.
+---
 
 ## Summary
 
-The highest-priority fixes are the list-shaped `order_input_type` contract, the
-order namespace clear lifecycle, the impossible NULLS-positioning test, and the
-`"__all__"` concrete-field semantics. The next tier is tightening owner/model
-validation and relation-level permission dispatch so the order subsystem matches
-the shipped filter subsystem's finalizer and security quality.
+The implementation is a clean, faithful port: every Blocking/High finding
+from the four prior spec-review rounds (B1 list-shape, B2 clear lifecycle,
+B3 NULLS test field, B4 M2M exclusion, H1 sets_mixins home, H2 owner/model
+check, H3 relation-permission dispatch, H4 enum casing) is present and
+correct in the shipped code, the subpass order and the load-bearing
+subpass-2 `.orderset` walk match Decision 6, ruff is clean, and the glossary
+checker is green.
+
+The one card-owned blocker is **B1: the 100% coverage gate is not met
+(99.11%, all 31 missing lines in `orders/*`)** — the filter subsystem the
+card mirrors reaches 100%, so the bar is achievable and the gap is closable
+with targeted `tests/orders/` cases (plus, if the filter side did, a
+partial-load guard test). **B2** (3 kanban-seeding test failures) is not the
+card's fault but blocks a green commit and falsifies the "test-run gate
+closed" status line. Fix B1, resolve or explicitly scope B2, and correct the
+status header (M1); N1/N2 are doc-consistency cleanups for the maintainer.
+
+The card is **not done** until `uv run pytest` exits 0.

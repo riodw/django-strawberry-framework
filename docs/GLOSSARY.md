@@ -17,7 +17,7 @@ Companion files:
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
 - `post-1.0.0` — strategic differentiation tracked in [`../BACKLOG.md`][backlog], not on the roadmap to `1.0.0`.
 
-Current package version: `0.0.7`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
+Current package version: `0.0.8`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
 ## Public exports
 
@@ -28,6 +28,7 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`DjangoType`](#djangotype) — model-backed Strawberry type base class.
 - [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
+- [`SyncMisuseError`](#syncmisuseerror) — typed marker for sync resolver paths that receive an async `get_queryset` coroutine.
 - [`finalize_django_types`](#finalize_django_types) — synchronization point that resolves pending relations and applies `strawberry.type` decoration.
 - [`strawberry_config`](#strawberry_config) — factory returning a `StrawberryConfig` pre-populated with the package's `scalar_map`.
 - `auto` — re-export from Strawberry for `auto`-typed field annotations inside this package's import surface.
@@ -115,6 +116,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [strawberry_config](#strawberry_config) | shipped (`0.0.7`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
+| [`SyncMisuseError`](#syncmisuseerror) | shipped (`0.0.5`) |
 | [`TestClient`](#testclient) | planned for `0.0.12` |
 | [Django Trac #37064 hardening](#django-trac-37064-hardening) | shipped (`0.0.7`) |
 | [`Upload` scalar](#upload-scalar) | planned for `0.0.11` |
@@ -132,7 +134,7 @@ For readers exploring rather than looking up a specific term:
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
 - **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [Per-field permission hooks](#per-field-permission-hooks).
-- **Relay:** [Relay Node integration](#relay-node-integration) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
+- **Relay:** [Relay Node integration](#relay-node-integration) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).

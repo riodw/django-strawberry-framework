@@ -502,11 +502,7 @@ LOOKUP_FIELDS = {
 }
 
 
-def fetch_graphql_data(
-    query: str,
-    *,
-    required_lists: tuple[str, ...],
-) -> dict[str, Any]:
+def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[str, Any]:
     """Fetch a GraphQL payload and validate required top-level list fields."""
     from django.test import Client
 

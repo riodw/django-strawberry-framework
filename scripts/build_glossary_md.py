@@ -1,4 +1,4 @@
-"""Build ``docs/GLOSSARY2.md`` from the glossary app's GraphQL payload."""
+"""Build ``docs/GLOSSARY.md`` from the glossary app's GraphQL payload."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from build_kanban_html import configure_django, fetch_graphql_data
 from build_kanban_md import finalize_markdown
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MD_PATH = REPO_ROOT / "docs" / "GLOSSARY2.md"
+DEFAULT_MD_PATH = REPO_ROOT / "docs" / "GLOSSARY.md"
 
 STATIC_GLOSSARY_QUERY = """
 query StaticGlossary {
@@ -96,13 +96,13 @@ query StaticGlossary {
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
-        description="Render docs/GLOSSARY2.md from the glossary GraphQL payload.",
+        description="Render docs/GLOSSARY.md from the glossary GraphQL payload.",
     )
     parser.add_argument(
         "--md",
         type=Path,
         default=DEFAULT_MD_PATH,
-        help="Markdown file to write. Defaults to docs/GLOSSARY2.md.",
+        help="Markdown file to write. Defaults to docs/GLOSSARY.md.",
     )
     return parser.parse_args()
 
@@ -167,10 +167,7 @@ def render_browse(
         category = membership["category"]
         bucket = grouped.setdefault(
             category["key"],
-            {
-                "category": category,
-                "memberships": [],
-            },
+            {"category": category, "memberships": []},
         )
         bucket["memberships"].append(membership)
 
@@ -235,7 +232,12 @@ def render_markdown(glossary_data: dict[str, Any]) -> str:
     rendered.extend(render_terms(terms))
 
     for doc in sorted(docs.values(), key=lambda value: value["order"]):
-        if doc["key"] in {"preamble", "status-legend", "public-exports", "link-definitions"}:
+        if doc["key"] in {
+            "preamble",
+            "status-legend",
+            "public-exports",
+            "link-definitions",
+        }:
             continue
         rendered.extend(render_document(doc))
 

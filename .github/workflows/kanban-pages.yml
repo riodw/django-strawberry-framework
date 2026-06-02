@@ -7,7 +7,6 @@ on:
       - ".github/workflows/kanban-pages.yml"
       - "django_strawberry_framework/**"
       - "docs/GLOSSARY.md"
-      - "docs/GLOSSARY2.md"
       - "examples/fakeshop/apps/kanban/**"
       - "examples/fakeshop/apps/glossary/**"
       - "examples/fakeshop/config/**"
@@ -50,11 +49,11 @@ jobs:
 
       - name: Prepare static site
         run: |
-          mkdir -p _site
+          mkdir -p _site/docs
           cp KANBAN.html _site/index.html
           uv run python scripts/build_kanban_html.py --html _site/index.html
           uv run python scripts/build_kanban_md.py --md _site/KANBAN.md
-          uv run python scripts/build_glossary_md.py --md _site/GLOSSARY2.md
+          uv run python scripts/build_glossary_md.py --md _site/docs/GLOSSARY.md
           touch _site/.nojekyll
 
       - name: Upload GitHub Pages artifact

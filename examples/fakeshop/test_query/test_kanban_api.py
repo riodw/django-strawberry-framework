@@ -40,6 +40,15 @@ def _reload_project_schema_for_acceptance_tests():
     from django_strawberry_framework.registry import registry
 
     registry.clear()
+    # Glossary must reload BEFORE kanban: CardGlossaryTermType.term is a FK to
+    # glossary.GlossaryTerm, and finalize_django_types() will reject the kanban
+    # registration if GlossaryTermType is not already in the registry.
+    glossary_schema = sys.modules.get("apps.glossary.schema")
+    if glossary_schema is None:
+        importlib.import_module("apps.glossary.schema")
+    else:
+        importlib.reload(glossary_schema)
+
     kanban_schema = sys.modules.get("apps.kanban.schema")
     if kanban_schema is None:
         importlib.import_module("apps.kanban.schema")

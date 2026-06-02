@@ -32,4 +32,4 @@ def test_kanban_models_registered_in_admin():
 def test_card_admin_exposes_list_display_and_inlines():
     card_admin = admin.site.get_model_admin(models.Card)
     assert {"number", "title", "status"} <= set(card_admin.list_display)
-    assert len(card_admin.inlines) == 3
+    assert len(card_admin.inlines) == 4

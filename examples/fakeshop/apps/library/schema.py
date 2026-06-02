@@ -6,19 +6,10 @@ import strawberry
 from strawberry import relay
 from strawberry.types import Info
 
-from apps.library import filters, filters_genre, models
+from apps.library import filters, filters_genre, models, orders, orders_genre
 from django_strawberry_framework import DjangoListField, DjangoType, OptimizerHint
 from django_strawberry_framework.filters import filter_input_type
-
-# TODO(spec-028-orders-0_0_8 Slice 4): Import ``orders`` / ``orders_genre`` and
-# ``order_input_type`` once the order subsystem ships.
-# Pseudocode:
-#   - wire each ``DjangoType.Meta`` to the matching ``Meta.orderset_class``:
-#     LoanType -> LoanOrder, BookType -> BookOrder, ShelfType -> ShelfOrder,
-#     GenreType -> GenreOrder, BranchType -> BranchOrder, PatronType -> PatronOrder.
-#   - keep ``MembershipCardType`` unwired unless a live order test needs it.
-#   - root resolvers call ``get_queryset`` first, optional ``Filter.apply_sync``
-#     second, and optional ``Order.apply_sync`` third.
+from django_strawberry_framework.orders import order_input_type
 
 # Consumer ``resolver=`` helper exercising the ``_post_process_consumer_sync``
 # ``Manager`` coercion line at
@@ -57,6 +48,7 @@ class LoanType(DjangoType):
             "patron",
         )
         filterset_class = filters.LoanFilter
+        orderset_class = orders.LoanOrder
         optimizer_hints = {"book": OptimizerHint.prefetch_related(), "patron": OptimizerHint.SKIP}
 
 
@@ -75,6 +67,7 @@ class BookType(DjangoType):
             "loans",
         )
         filterset_class = filters.BookFilter
+        orderset_class = orders.BookOrder
 
 
 class ShelfType(DjangoType):
@@ -106,6 +99,7 @@ class ShelfType(DjangoType):
             "books",
         )
         filterset_class = filters.ShelfFilter
+        orderset_class = orders.ShelfOrder
 
 
 class MembershipCardType(DjangoType):
@@ -124,6 +118,7 @@ class GenreType(DjangoType):
         fields = ("id", "name", "books")
         interfaces = (relay.Node,)
         filterset_class = filters_genre.GenreFilter
+        orderset_class = orders_genre.GenreOrder
 
 
 class BranchType(DjangoType):
@@ -158,6 +153,7 @@ class BranchType(DjangoType):
             "shelves",
         )
         filterset_class = filters.BranchFilter
+        orderset_class = orders.BranchOrder
 
 
 class PatronType(DjangoType):
@@ -173,19 +169,12 @@ class PatronType(DjangoType):
             "loans",
         )
         filterset_class = filters.PatronFilter
+        orderset_class = orders.PatronOrder
 
 
 @strawberry.type
 class Query:
     """Library acceptance root fields."""
-
-    # TODO(spec-028-orders-0_0_8 Slice 4): Add ``order_by`` arguments to the
-    # live root resolvers that participate in the 14 order acceptance tests.
-    # Pseudocode:
-    #   - annotate as ``order_by: list[order_input_type(orders.<Name>Order)] | None``.
-    #   - preserve the existing ``filter: filter_input_type(...) | None`` argument.
-    #   - apply in order: ``Type.get_queryset(...)``, optional filter, optional order.
-    #   - leave ``DjangoListField`` ordering integration deferred to ``0.0.9``.
 
     all_library_branches_via_list_field: list[BranchType] = DjangoListField(
         BranchType,
@@ -201,10 +190,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters.BranchFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.BranchOrder)] | None = None,
     ) -> list[BranchType]:
         queryset = BranchType.get_queryset(models.Branch.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.BranchFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.BranchOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -212,10 +204,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters.ShelfFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.ShelfOrder)] | None = None,
     ) -> list[ShelfType]:
         queryset = ShelfType.get_queryset(models.Shelf.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.ShelfFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.ShelfOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -223,10 +218,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters.BookFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.BookOrder)] | None = None,
     ) -> list[BookType]:
         queryset = BookType.get_queryset(models.Book.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.BookFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.BookOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -238,10 +236,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters_genre.GenreFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders_genre.GenreOrder)] | None = None,
     ) -> list[GenreType]:
         queryset = GenreType.get_queryset(models.Genre.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters_genre.GenreFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders_genre.GenreOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -249,10 +250,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters.PatronFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.PatronOrder)] | None = None,
     ) -> list[PatronType]:
         queryset = PatronType.get_queryset(models.Patron.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.PatronFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.PatronOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -264,10 +268,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters.LoanFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.LoanOrder)] | None = None,
     ) -> list[LoanType]:
         queryset = LoanType.get_queryset(models.Loan.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.LoanFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.LoanOrder.apply_sync(order_by, queryset, info)
         return queryset
 
 

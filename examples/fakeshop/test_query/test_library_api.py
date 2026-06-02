@@ -111,22 +111,6 @@ def _input_field_names(type_name: str) -> set[str]:
     return {field["name"] for field in type_info["inputFields"]}
 
 
-# TODO(spec-028-orders-0_0_8 Slice 4): Add exactly 14 live ``/graphql/`` order
-# acceptance tests here.
-# Pseudocode:
-#   - scalar ASC on branches by name.
-#   - ``DESC_NULLS_LAST`` on ``Book.subtitle`` with explicit ``None`` and non-null
-#     rows.
-#   - forward FK, reverse FK with multiplicity asserted, M2M absolute-import-path,
-#     and flat shorthand ``shelfCode`` ordering.
-#   - filter + order composition and optimizer cooperation under query-count
-#     assertion.
-#   - root ``get_queryset`` visibility before ordering.
-#   - active-input-only scalar permission denial / quiet pair.
-#   - active ``RelatedOrder`` branch permission denial / quiet pair.
-#   - multi-field priority, empty-list no-op, and null-direction no-op.
-
-
 @pytest.mark.django_db
 def test_library_branch_shelf_book_loan_graph_over_http():
     _seed_library_graph()
@@ -1307,3 +1291,592 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
     right_payload = right_response.json()
     assert "errors" not in right_payload, right_payload
     assert [row["title"] for row in right_payload["data"]["allLibraryBooks"]] == ["Hyperion"]
+
+
+# ---------------------------------------------------------------------------
+# Slice 4 — live HTTP order coverage (spec-028 Slice 4 — 14 acceptance tests).
+# ---------------------------------------------------------------------------
+
+
+def _seed_branches_with_varying_shelves():
+    """Seed Alpha (shelves A, C, E) + Beta (shelf B), both ``city="Boston"``.
+
+    Load-bearing for the reverse-FK multiplicity contract per spec-028
+    Slice 4 Test 4 (M5-rev1): a Branch with N shelves appears N times
+    in the response, each instance ordered by its individual shelf's
+    code.
+    """
+    alpha = models.Branch.objects.create(name="Alpha", city="Boston")
+    beta = models.Branch.objects.create(name="Beta", city="Boston")
+    models.Shelf.objects.create(code="A", topic="general", branch=alpha)
+    models.Shelf.objects.create(code="C", topic="general", branch=alpha)
+    models.Shelf.objects.create(code="E", topic="general", branch=alpha)
+    models.Shelf.objects.create(code="B", topic="general", branch=beta)
+
+
+def _seed_books_with_nullable_subtitles():
+    """Seed one nullable-subtitle book + one non-null-subtitle book.
+
+    Load-bearing for the ``DESC_NULLS_LAST`` contract per spec-028
+    Slice 4 Test 2 (B3-rev3): the non-null subtitle row must appear
+    BEFORE the ``subtitle=None`` row under ``DESC_NULLS_LAST``.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    models.Book.objects.create(title="Null Title", subtitle=None, shelf=shelf)
+    models.Book.objects.create(
+        title="Non-null Title",
+        subtitle="A Short Subtitle",
+        shelf=shelf,
+    )
+
+
+@pytest.mark.django_db
+def test_library_branches_order_by_name_asc():
+    """Spec-028 Slice 4 Test 1: scalar ASC on ``Branch.name``.
+
+    Uses staff context because ``BranchOrder.check_name_permission``
+    (declared in ``apps.library.orders``) denies anonymous requests
+    that order by ``name``; the gate is load-bearing for Test 9, and
+    the spec's intent for Test 1 is to assert the ASC ordering
+    contract -- the bypass-on-staff path is the canonical way to
+    exercise the contract while leaving the gate intact.
+    """
+    models.Branch.objects.create(name="Bravo", city="Boston")
+    models.Branch.objects.create(name="Alpha", city="Boston")
+    models.Branch.objects.create(name="Charlie", city="Boston")
+
+    response = _post_graphql_as_staff(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ name: ASC }]) {
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["allLibraryBranches"]]
+    assert names == ["Alpha", "Bravo", "Charlie"]
+
+
+@pytest.mark.django_db
+def test_library_books_order_by_subtitle_desc_nulls_last():
+    """Spec-028 Slice 4 Test 2 (B3-rev3): ``DESC_NULLS_LAST`` on ``Book.subtitle``.
+
+    The non-null subtitle row appears BEFORE the ``subtitle=None`` row;
+    NULLS-last positioning is verified explicitly.
+    """
+    _seed_books_with_nullable_subtitles()
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBooks(orderBy: [{ subtitle: DESC_NULLS_LAST }]) {
+            title
+            subtitle
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    rows = payload["data"]["allLibraryBooks"]
+    assert len(rows) == 2
+    assert rows[0]["subtitle"] == "A Short Subtitle"
+    assert rows[-1]["subtitle"] is None
+
+
+@pytest.mark.django_db
+def test_library_books_order_by_forward_fk_relation():
+    """Spec-028 Slice 4 Test 3: forward-FK nested ``shelf: { code: ASC }``.
+
+    Exercises the same-module ``RelatedOrder("ShelfOrder")``
+    declaration on ``BookOrder.shelf``.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf_c = models.Shelf.objects.create(code="C", topic="general", branch=branch)
+    shelf_a = models.Shelf.objects.create(code="A", topic="general", branch=branch)
+    shelf_b = models.Shelf.objects.create(code="B", topic="general", branch=branch)
+    models.Book.objects.create(title="Book on C", shelf=shelf_c)
+    models.Book.objects.create(title="Book on A", shelf=shelf_a)
+    models.Book.objects.create(title="Book on B", shelf=shelf_b)
+
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryBooks(orderBy: [{ shelf: { code: ASC } }]) {
+            shelf { code }
+          }
+        }
+        """,
+        {
+            "allLibraryBooks": [
+                {"shelf": {"code": "A"}},
+                {"shelf": {"code": "B"}},
+                {"shelf": {"code": "C"}},
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_library_branches_order_by_reverse_fk_relation():
+    """Spec-028 Slice 4 Test 4 (M5-rev1): reverse-FK multiplicity asserted explicitly.
+
+    Alpha branch has shelves A, C, E -> Alpha appears 3 times. Beta
+    branch has shelf B -> Beta appears once. Ordering by ``shelves:
+    { code: ASC }`` interleaves them alphabetically by shelf code:
+    A (Alpha), B (Beta), C (Alpha), E (Alpha).
+
+    The denormalized JOIN+ORDER multiplicity is the SQL contract --
+    rather than dodging it via DISTINCT, the test pins it explicitly.
+
+    Uses staff context because ``BranchOrder.check_shelves_permission``
+    (declared in ``apps.library.orders``) denies anonymous requests
+    that order by the ``shelves`` RelatedOrder branch; the gate is
+    load-bearing for Test 11, and the spec's intent for Test 4 is to
+    pin the multiplicity contract.
+    """
+    _seed_branches_with_varying_shelves()
+
+    response = _post_graphql_as_staff(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ shelves: { code: ASC } }]) {
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["allLibraryBranches"]]
+    assert names == ["Alpha", "Beta", "Alpha", "Alpha"]
+
+
+@pytest.mark.django_db
+def test_library_books_order_by_m2m_absolute_import_path():
+    """Spec-028 Slice 4 Test 5: M2M order via Layer-2 absolute-import-path.
+
+    ``BookOrder.genres = RelatedOrder("apps.library.orders_genre.GenreOrder")``
+    exercises the ``import_string`` first-attempt branch -- the
+    absolute-import-path Layer-2 lazy-resolution path.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    mystery = models.Genre.objects.create(name="Mystery")
+    fantasy = models.Genre.objects.create(name="Fantasy")
+    sci_fi = models.Genre.objects.create(name="SciFi")
+    book_m = models.Book.objects.create(title="Mystery Book", shelf=shelf)
+    book_m.genres.add(mystery)
+    book_f = models.Book.objects.create(title="Fantasy Book", shelf=shelf)
+    book_f.genres.add(fantasy)
+    book_s = models.Book.objects.create(title="SciFi Book", shelf=shelf)
+    book_s.genres.add(sci_fi)
+
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryBooks(orderBy: [{ genres: { name: ASC } }]) {
+            title
+          }
+        }
+        """,
+        {
+            "allLibraryBooks": [
+                {"title": "Fantasy Book"},
+                {"title": "Mystery Book"},
+                {"title": "SciFi Book"},
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_library_books_filter_and_order_compose():
+    """Spec-028 Slice 4 Test 6: filter + order compose cleanly.
+
+    ``{ circulationStatus: { exact: available } }`` narrows the rows;
+    ``orderBy: [{ title: ASC }]`` arranges the survivors.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    models.Book.objects.create(
+        title="Beta Title",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.AVAILABLE,
+    )
+    models.Book.objects.create(
+        title="Alpha Title",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.AVAILABLE,
+    )
+    models.Book.objects.create(
+        title="Gamma Title",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.CHECKED_OUT,
+    )
+
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryBooks(
+            filter: { circulationStatus: { exact: available } }
+            orderBy: [{ title: ASC }]
+          ) {
+            title
+            circulationStatus
+          }
+        }
+        """,
+        {
+            "allLibraryBooks": [
+                {"title": "Alpha Title", "circulationStatus": "available"},
+                {"title": "Beta Title", "circulationStatus": "available"},
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_library_books_order_preserves_optimizer_cooperation():
+    """Spec-028 Slice 4 Test 7 (H2-rev1): ``order_by(...)`` survives the optimizer plan.
+
+    ``select_related("shelf")`` + ``prefetch_related("genres")`` survive
+    ``.order_by(...)``; the query count is identical to the shipped
+    filter-only test (3 queries: root SELECT + ``select_related("shelf")``
+    JOIN + ``prefetch_related("genres")`` SELECT).
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    sci_fi = models.Genre.objects.create(name="SciFi")
+    available = models.Book.objects.create(
+        title="Foundation",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.AVAILABLE,
+    )
+    available.genres.add(sci_fi)
+    checked_out = models.Book.objects.create(
+        title="Kindred",
+        shelf=shelf,
+        circulation_status=models.Book.CirculationStatus.CHECKED_OUT,
+    )
+    checked_out.genres.add(sci_fi)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryBooks(
+                filter: { circulationStatus: { exact: available } }
+                orderBy: [{ title: ASC }]
+              ) {
+                title
+                shelf { code }
+                genres { name }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    rows = payload["data"]["allLibraryBooks"]
+    assert [row["title"] for row in rows] == ["Foundation"]
+    assert rows[0]["shelf"] == {"code": "A-1"}
+    assert rows[0]["genres"] == [{"name": "SciFi"}]
+    # Optimizer cooperation: ``.order_by(...)`` does NOT add to the
+    # query count; the plan stays at root SELECT + shelf JOIN +
+    # genres prefetch.
+    assert len(captured) == 3
+
+
+@pytest.mark.django_db
+def test_root_get_queryset_runs_before_order_apply():
+    """Spec-028 Slice 4 Test 8: root ``get_queryset`` runs before ``apply_sync``.
+
+    ``BranchType.get_queryset`` strips ``city="restricted"`` for
+    anonymous users so the DESC order clause sees only the visible
+    rows. Staff bypass the gate and see all rows ordered.
+
+    Spec line 1038 names ``name: DESC`` as the order field, but
+    ``BranchOrder.check_name_permission`` (declared per spec line
+    1039) denies anonymous queries on ``name`` -- the gate fires
+    before ``get_queryset`` returns rows would matter. To pin the
+    Test 8 contract (visibility scope BEFORE order arrangement)
+    without colliding with the Test 9 gate, this test orders by
+    ``city: DESC`` (an unguarded scalar). The same Branch+city
+    fixture pinned by the spec proves the contract: the
+    ``city="restricted"`` row is hidden by ``get_queryset`` and so
+    does NOT appear at the head of the descending order list. Same
+    spec-reconciliation flag Worker 1 raised for Test 11's quiet
+    half (substitute ``city`` for ``name`` when the ``name`` gate
+    would denial-trigger).
+    """
+    models.Branch.objects.create(name="Alpha", city="Boston")
+    models.Branch.objects.create(name="Zeta", city="restricted")
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ city: DESC }]) {
+            name
+            city
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    rows = payload["data"]["allLibraryBranches"]
+    # The hidden ``Zeta`` (``city="restricted"``) does NOT appear at
+    # the head of the DESC list; the visibility scope ran BEFORE the
+    # order clause.
+    assert [row["name"] for row in rows] == ["Alpha"]
+    assert rows[0]["city"] == "Boston"
+
+    staff_response = _post_graphql_as_staff(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ city: DESC }]) {
+            name
+            city
+          }
+        }
+        """,
+    )
+    assert staff_response.status_code == 200
+    staff_payload = staff_response.json()
+    assert "errors" not in staff_payload, staff_payload
+    staff_rows = staff_payload["data"]["allLibraryBranches"]
+    # Staff bypasses the visibility hook so both rows order
+    # descending: "restricted" > "Boston" lexically.
+    assert [row["name"] for row in staff_rows] == ["Zeta", "Alpha"]
+
+
+@pytest.mark.django_db
+def test_order_check_permission_denies_for_active_field():
+    """Spec-028 Slice 4 Test 9 (M6-rev1): scalar gate fires for active field.
+
+    ``BranchOrder.check_name_permission`` fires for anonymous request
+    because ``name`` is active in the input; the gate raises
+    ``GraphQLError`` with ``code="ORDER_PERMISSION_DENIED"``.
+    """
+    models.Branch.objects.create(name="Alpha", city="Boston")
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ name: ASC }]) {
+            id
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert payload["errors"][0]["extensions"]["code"] == "ORDER_PERMISSION_DENIED"
+
+
+@pytest.mark.django_db
+def test_order_check_permission_quiet_for_inactive_field():
+    """Spec-028 Slice 4 Test 10 (M6-rev1): scalar gate quiet for inactive field.
+
+    ``BranchOrder.check_name_permission`` does NOT fire because
+    ``name`` is absent from the input; the only active field is
+    ``city`` (unguarded), so the query succeeds and rows order by
+    city ascending.
+    """
+    models.Branch.objects.create(name="Alpha", city="Boston")
+    models.Branch.objects.create(name="Beta", city="Cambridge")
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ city: ASC }]) {
+            city
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    cities = [row["city"] for row in payload["data"]["allLibraryBranches"]]
+    assert cities == ["Boston", "Cambridge"]
+
+
+@pytest.mark.django_db
+def test_order_check_permission_denies_active_related_branch():
+    """Spec-028 Slice 4 Test 11 (H3-rev3): active-branch relation-level gate.
+
+    ``BranchOrder.check_shelves_permission`` fires when the ``shelves``
+    RelatedOrder branch is active in the input; quiet when the branch
+    is absent. The quiet half uses ``city`` (unguarded scalar) per
+    Worker 1's spec-reconciliation note -- ``name`` collides with the
+    Test 9 / 10 gate, so the quiet half routes around it.
+    """
+    branch = models.Branch.objects.create(name="Alpha", city="Boston")
+    models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+
+    denial_response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ shelves: { code: ASC } }]) {
+            id
+          }
+        }
+        """,
+    )
+    assert denial_response.status_code == 200
+    denial_payload = denial_response.json()
+    assert "errors" in denial_payload, denial_payload
+    assert denial_payload["errors"][0]["extensions"]["code"] == "ORDER_PERMISSION_DENIED"
+
+    quiet_response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ city: ASC }]) {
+            city
+          }
+        }
+        """,
+    )
+    assert quiet_response.status_code == 200
+    quiet_payload = quiet_response.json()
+    assert "errors" not in quiet_payload, quiet_payload
+    assert [row["city"] for row in quiet_payload["data"]["allLibraryBranches"]] == [
+        "Boston",
+    ]
+
+
+@pytest.mark.django_db
+def test_library_books_order_by_multi_field_priority():
+    """Spec-028 Slice 4 Test 12: multi-field priority via list-element ordering.
+
+    ``orderBy: [{ shelf: { code: ASC } }, { title: DESC }]`` -- shelf
+    code dominates (ASC); title is the secondary tie-breaker (DESC,
+    so ``Foo`` before ``Bar``).
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf_a = models.Shelf.objects.create(code="A", topic="general", branch=branch)
+    shelf_b = models.Shelf.objects.create(code="B", topic="general", branch=branch)
+    models.Book.objects.create(title="Foo", shelf=shelf_a)
+    models.Book.objects.create(title="Bar", shelf=shelf_a)
+    models.Book.objects.create(title="Foo", shelf=shelf_b)
+    models.Book.objects.create(title="Bar", shelf=shelf_b)
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBooks(
+            orderBy: [{ shelf: { code: ASC } }, { title: DESC }]
+          ) {
+            title
+            shelf { code }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    rows = payload["data"]["allLibraryBooks"]
+    assert [(row["shelf"]["code"], row["title"]) for row in rows] == [
+        ("A", "Foo"),
+        ("A", "Bar"),
+        ("B", "Foo"),
+        ("B", "Bar"),
+    ]
+
+
+@pytest.mark.django_db
+def test_library_books_order_by_flat_shorthand_path():
+    """Spec-028 Slice 4 Test 13 (M2-rev1): flat-shorthand ``shelfCode: ASC``.
+
+    ``BookOrder.Meta.fields = [..., "shelf__code"]`` renders as
+    ``shelfCode: Ordering`` on the GraphQL input type; the runtime
+    normalizer reconstructs the Django ORM path as ``shelf__code``.
+    Row-order assertion pins the contract.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf_c = models.Shelf.objects.create(code="C", topic="general", branch=branch)
+    shelf_a = models.Shelf.objects.create(code="A", topic="general", branch=branch)
+    shelf_b = models.Shelf.objects.create(code="B", topic="general", branch=branch)
+    models.Book.objects.create(title="Book on C", shelf=shelf_c)
+    models.Book.objects.create(title="Book on A", shelf=shelf_a)
+    models.Book.objects.create(title="Book on B", shelf=shelf_b)
+
+    _assert_graphql_data(
+        """
+        query {
+          allLibraryBooks(orderBy: [{ shelfCode: ASC }]) {
+            title
+          }
+        }
+        """,
+        {
+            "allLibraryBooks": [
+                {"title": "Book on A"},
+                {"title": "Book on B"},
+                {"title": "Book on C"},
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_library_branches_order_empty_list_and_null_direction_no_op():
+    """Spec-028 Slice 4 Test 14 (M7-rev1): combined empty-list + null-direction no-op.
+
+    Both halves return the queryset in its default resolver-level
+    order (``models.Branch.objects.order_by("id")``) without raising.
+
+    - Empty-list half: ``orderBy: []`` -- ``_normalize_input`` returns
+      an empty list and ``apply_sync`` returns the queryset unchanged.
+    - Null-direction half: ``orderBy: [{ name: null }]`` -- the null
+      direction decodes to ``None`` in the Strawberry input and the
+      apply pipeline filters ``None`` directions before
+      ``queryset.order_by(...)``.
+    """
+    models.Branch.objects.create(name="Bravo", city="Boston")
+    models.Branch.objects.create(name="Alpha", city="Boston")
+    models.Branch.objects.create(name="Charlie", city="Boston")
+
+    empty_response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(orderBy: []) {
+            name
+          }
+        }
+        """,
+    )
+    assert empty_response.status_code == 200
+    empty_payload = empty_response.json()
+    assert "errors" not in empty_payload, empty_payload
+    empty_names = [row["name"] for row in empty_payload["data"]["allLibraryBranches"]]
+    assert empty_names == ["Bravo", "Alpha", "Charlie"]
+
+    null_response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ name: null }]) {
+            name
+          }
+        }
+        """,
+    )
+    assert null_response.status_code == 200
+    null_payload = null_response.json()
+    assert "errors" not in null_payload, null_payload
+    null_names = [row["name"] for row in null_payload["data"]["allLibraryBranches"]]
+    assert null_names == ["Bravo", "Alpha", "Charlie"]

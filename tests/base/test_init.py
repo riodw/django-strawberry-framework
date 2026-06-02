@@ -30,8 +30,8 @@ def test_optimizer_subpackage_reexports_top_level_logger():
 def test_public_api_surface_is_pinned():
     # Pin ``__all__`` so silent surface widening (e.g., accidental
     # re-export of an internal name) shows up at test time. New public
-    # names only land when a future spec adds them; routine slices
-    # bump ``__version__`` without widening the surface.
+    # names only land when a future spec adds them; version changes are
+    # maintainer-commanded and do not imply public-surface widening.
     assert django_strawberry_framework.__all__ == (
         "BigInt",
         "DjangoListField",

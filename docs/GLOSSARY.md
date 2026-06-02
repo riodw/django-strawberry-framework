@@ -694,9 +694,9 @@ References an [`OrderSet`](#orderset) subclass that defines ordering input for t
 **See also:** [`OrderSet`](#orderset).
 
 <!-- TODO(spec-028-orders-0_0_8 Slice 5): Flip Meta.orderset_class, Ordering,
-OrderSet, order_input_type, and RelatedOrder to shipped (0.0.9) together
-(rolling-patch posture per Revision 5 of the spec — this card bumps to 0.0.9,
-not a joint cut at 0.0.8). Pseudo: update the Index rows, the Ordering browse
+OrderSet, order_input_type, and RelatedOrder to shipped (0.0.8) together. Do
+not touch package version fields unless the maintainer explicitly gives the
+version-bump command. Pseudo: update the Index rows, the Ordering browse
 category, and each entry body with the shipped list-shaped orderBy contract,
 active-input-only permission gates, active RelatedOrder branch gate, parked
 input-class namespace lifecycle, and NULLS-positioning Ordering.resolve

@@ -43,10 +43,11 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 ## Status
 
 <!-- TODO(spec-028-orders-0_0_8 Slice 5): after the ordering subsystem lands and
-bumps to 0.0.9 per the rolling-patch posture (Revision 5 of the spec), rewrite
-this status paragraph to name OrderSet / RelatedOrder / Ordering /
-order_input_type / Meta.orderset_class as the newest shipped surface without
-widening top-level __all__. -->
+ships in 0.0.8, rewrite this status paragraph to name OrderSet /
+RelatedOrder / Ordering / order_input_type / Meta.orderset_class as the newest
+shipped surface without widening top-level __all__. Do not touch package
+version fields unless the maintainer explicitly gives the version-bump command.
+-->
 
 **`0.0.8`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening. Newest shipped surface: the filtering subsystem (`0.0.8`) — `FilterSet` declarative filter classes, `RelatedFilter` cross-relation traversal, `Meta.filterset_class` wiring, and the `filter_input_type` consumer helper, all integrated through the finalizer's phase-2.5 binding pass and the optimizer / `get_queryset` visibility hook.
 

@@ -280,7 +280,7 @@ django_strawberry_framework/
 │   ├── base.py              # Order classes
 │   ├── sets.py              # OrderSet
 │   ├── factories.py         # GraphQL-arguments factory
-│   └── inputs.py            # TODO(spec-028-orders-0_0_8 Slice 5): flip orders/ to current on-disk layout with mirrored tests/orders tree (bumps to 0.0.9 per rolling-patch posture)
+│   └── inputs.py            # TODO(spec-028-orders-0_0_8 Slice 5): flip orders/ to current on-disk layout with mirrored tests/orders tree; do not touch package version fields unless explicitly commanded
 ├── aggregates/              # [beta] Aggregation subsystem (Layer 3)
 │   ├── __init__.py
 │   ├── base.py              # Sum/Count/Avg/Min/Max/GroupBy result types

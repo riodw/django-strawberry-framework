@@ -88,10 +88,11 @@ For the current capability snapshot — what the package can actually do in the 
 A quick summary:
 
 <!-- TODO(spec-028-orders-0_0_8 Slice 5): after the ordering subsystem lands and
-bumps to 0.0.9 per the rolling-patch posture (Revision 5 of the spec), move
-OrderSet / RelatedOrder / Ordering / order_input_type / Meta.orderset_class
-into the shipped list and remove orders from the 0.1.0 beta bullet. The filter
-symbols already moved when DONE-027-0.0.8 landed. -->
+ships in 0.0.8, move OrderSet / RelatedOrder / Ordering / order_input_type /
+Meta.orderset_class into the shipped list and remove orders from the 0.1.0
+beta bullet. The filter symbols already moved when DONE-027-0.0.8 landed. Do
+not touch package version fields unless the maintainer explicitly gives the
+version-bump command. -->
 
 **Shipped today** (`0.0.8`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`

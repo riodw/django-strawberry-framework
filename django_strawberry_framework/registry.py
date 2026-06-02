@@ -431,15 +431,26 @@ class TypeRegistry:
         else:
             _helper_referenced_filtersets.clear()
 
-        # TODO(spec-028-orders-0_0_8 Slice 3): add order-side namespace clears
-        # after the filter clear blocks, using the same ``pass`` + ``else``
-        # shape so a partial-load import failure never skips later cleanup.
-        # Pseudocode:
-        #   - locally import ``clear_order_input_namespace`` from
-        #     ``.orders.inputs`` and call it when available.
-        #   - locally import ``_helper_referenced_ordersets`` from ``.orders``
-        #     and clear it when available.
-        #   - do not ``return`` from either ``except ImportError`` branch.
+        # Order-input namespace clear (cycle-safe local import per
+        # spec-028 Decision 9). Two independent try/except blocks --
+        # one per cleared cache -- so a partial-rollback build state
+        # where one cache is reachable and the other is not still
+        # clears whatever IS reachable. Both blocks follow the
+        # ``pass`` + ``else`` shape (NOT ``return``) so a future fifth
+        # phase, e.g. aggregates 0.1.3, is never silently skipped.
+        try:
+            from .orders.inputs import clear_order_input_namespace
+        except ImportError:
+            pass
+        else:
+            clear_order_input_namespace()
+
+        try:
+            from .orders import _helper_referenced_ordersets
+        except ImportError:
+            pass
+        else:
+            _helper_referenced_ordersets.clear()
 
 
 registry = TypeRegistry()

@@ -199,7 +199,6 @@ def test_meta_fields_and_exclude_mutually_exclusive_via_inheritance():
 @pytest.mark.parametrize(
     "deferred_key",
     [
-        "orderset_class",
         "aggregate_class",
         "fields_class",
         "search_fields",
@@ -221,14 +220,12 @@ def test_meta_filterset_class_is_promoted_to_allowed_meta_keys():
     assert "filterset_class" not in DEFERRED_META_KEYS
 
 
-# TODO(spec-028-orders-0_0_8 Slice 3): Add the matching promotion test for
-# ``Meta.orderset_class`` in the same change that wires order binding.
-# Pseudocode:
-#   - assert ``"orderset_class" in ALLOWED_META_KEYS``.
-#   - assert ``"orderset_class" not in DEFERRED_META_KEYS``.
-#   - assert non-``OrderSet`` values raise ``ConfigurationError``.
-#   - assert a real ``OrderSet`` subclass is stored on
-#     ``DjangoTypeDefinition.orderset_class``.
+def test_meta_orderset_class_is_promoted_to_allowed_meta_keys():
+    """``Meta.orderset_class`` ships in spec-028 Slice 3 (Decision-7 promotion gate)."""
+    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
+
+    assert "orderset_class" in ALLOWED_META_KEYS
+    assert "orderset_class" not in DEFERRED_META_KEYS
 
 
 def test_interfaces_is_shipped_not_deferred():
@@ -353,7 +350,7 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
     the consumer's optimization intent is silently dead because the
     walker never visits an excluded field.
     """
-    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
+    with pytest.raises(ConfigurationError, match="not selected relations"):
 
         class T(DjangoType):
             class Meta:
@@ -363,7 +360,7 @@ def test_meta_optimizer_hints_for_excluded_field_raises():
 
 
 def test_meta_optimizer_hints_for_selected_scalar_field_raises():
-    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
+    with pytest.raises(ConfigurationError, match="not selected relations"):
 
         class T(DjangoType):
             class Meta:
@@ -381,7 +378,7 @@ def test_meta_optimizer_hints_with_empty_field_selection_raises_configuration_er
     typed error. The fix threads ``meta.model`` through explicitly so the
     selected-relation gate fires with a normal ``ConfigurationError``.
     """
-    with pytest.raises(ConfigurationError, match="optimizer_hints names unknown fields"):
+    with pytest.raises(ConfigurationError, match="not selected relations"):
 
         class T(DjangoType):
             class Meta:

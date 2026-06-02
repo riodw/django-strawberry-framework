@@ -48,17 +48,18 @@ class DjangoTypeDefinition:
           may read ``definition.primary`` for introspection only.
         - ``filterset_class`` is the per-owner ``FilterSet`` sidecar
           populated by ``DjangoType.__init_subclass__`` from
-          ``Meta.filterset_class`` once promoted out of
-          ``DEFERRED_META_KEYS``; consumed by
+          ``Meta.filterset_class``; consumed by
           ``finalize_django_types()`` phase 2.5 to bind the owning
           ``DjangoTypeDefinition`` on the FilterSet and to materialize
           the generated Strawberry input class as a module global of
           ``django_strawberry_framework.filters.inputs``.
-        - ``orderset_class`` lands in spec-028 Slice 3 as the ordering
-          sidecar mirror of ``filterset_class``. It stays absent until the
-          finalizer can apply ``Meta.orderset_class`` end to end; adding the
-          slot without the binding pass would violate the deferred-Meta-key
-          promotion gate.
+        - ``orderset_class`` is the per-owner ``OrderSet`` sidecar
+          populated by ``DjangoType.__init_subclass__`` from
+          ``Meta.orderset_class``; consumed by
+          ``finalize_django_types()`` phase 2.5 to bind the owning
+          ``DjangoTypeDefinition`` on the OrderSet and to materialize
+          the generated Strawberry input class as a module global of
+          ``django_strawberry_framework.orders.inputs``.
         - ``related_target_for(field_name)`` resolves the
           ``(target_definition, model_field)`` pair the Decision-4
           owner-aware FK/PK conditional consults; the lookup walks
@@ -89,18 +90,13 @@ class DjangoTypeDefinition:
     # ``finalize_django_types()`` as the finalizer's source of truth for
     # base injection.
     filterset_class: type | None = None
-    # TODO(spec-028-orders-0_0_8 Slice 3): add
-    # ``orderset_class: type | None = None`` beside ``filterset_class``.
-    # Pseudocode:
-    #   - populate it from ``DjangoType.__init_subclass__`` after
-    #     ``Meta.orderset_class`` promotion.
-    #   - consume it only from ``types.finalizer._bind_ordersets``.
-    #   - do not read it from the optimizer or relation resolver paths.
+    orderset_class: type | None = None
     finalized: bool = False
     # Per-instance memoization of ``related_target_for(field_name)``
-    # results. Sentinel key ``"__missing__"`` is unused; we cache the
-    # full ``(target_definition, model_field) | None`` tuple keyed by
-    # field name. Populated lazily on first call. Definitions are
+    # results. Cache stores the full
+    # ``(target_definition, model_field) | None`` tuple keyed by field
+    # name (a ``None`` value IS a valid cached result; no in-band
+    # sentinel is required). Populated lazily on first call. Definitions are
     # created fresh by ``DjangoType.__init_subclass__`` after every
     # ``registry.clear()`` so stale-cache contamination is bounded to
     # consumer code holding references to discarded definitions —
@@ -139,11 +135,6 @@ class DjangoTypeDefinition:
         declarations without losing the single-type-no-primary fallback.
         Returns ``None`` when no ``DjangoType`` is registered for the
         target model.
-
-        Local imports for ``registry`` and ``FieldDoesNotExist`` keep
-        ``types/definition.py`` free of module-load cycles back through
-        ``registry`` (which imports ``DjangoTypeDefinition`` lazily
-        under ``TYPE_CHECKING``).
         """
         # In-function imports: dodge the `definition -> registry -> definition`
         # module-load cycle (registry imports DjangoTypeDefinition lazily under

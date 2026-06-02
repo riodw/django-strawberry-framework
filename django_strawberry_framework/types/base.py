@@ -47,7 +47,6 @@ from .relay import install_is_type_of
 
 DEFERRED_META_KEYS: frozenset[str] = frozenset(
     {
-        "orderset_class",
         "aggregate_class",
         "fields_class",
         "search_fields",
@@ -64,20 +63,10 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "model",
         "name",
         "optimizer_hints",
+        "orderset_class",
         "primary",
     },
 )
-
-# TODO(spec-028-orders-0_0_8 Slice 3): Promote ``Meta.orderset_class`` only in
-# the same change that wires order binding end to end.
-# Pseudocode:
-#   - move ``"orderset_class"`` from ``DEFERRED_META_KEYS`` to
-#     ``ALLOWED_META_KEYS``.
-#   - add ``_validate_orderset_class`` next to ``_validate_filterset_class``.
-#   - thread the validated class through ``_ValidatedMeta`` and
-#     ``DjangoTypeDefinition``.
-#   - keep a local in-function ``from ..orders.sets import OrderSet`` import to
-#     avoid the ``types -> orders -> types`` module-load cycle.
 
 
 def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
@@ -106,16 +95,41 @@ def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
     return filterset_class
 
 
-# TODO(spec-028-orders-0_0_8 Slice 3): Mirror ``_validate_filterset_class`` for
-# ``Meta.orderset_class`` after ``orders.sets.OrderSet`` exists.
-# Pseudocode:
-#   - return ``None`` when the Meta key is absent.
-#   - import ``OrderSet`` locally inside the helper.
-#   - require ``isinstance(orderset_class, type)`` and ``issubclass(..., OrderSet)``.
-#   - raise ``ConfigurationError`` naming ``Meta.orderset_class`` and the bad
-#     value for every non-``OrderSet`` declaration.
+def _validate_orderset_class(meta: type, orderset_class: Any) -> type | None:
+    """Validate ``Meta.orderset_class`` is a package-``OrderSet`` subclass.
+
+    Local import of ``OrderSet`` at function scope keeps ``types/base.py``
+    free of a module-load cycle through ``orders.sets`` (which imports
+    ``..types.definition`` under ``TYPE_CHECKING`` and would close the
+    cycle at module-load time if the import were hoisted to module
+    scope). Validation runs at ``_validate_meta`` time -- well after
+    both modules have completed module load -- so the local import
+    resolves cheaply.
+
+    Returns ``None`` when the meta does not declare ``orderset_class``;
+    raises ``ConfigurationError`` for non-``OrderSet`` values.
+    """
+    if orderset_class is None:
+        return None
+    # In-function import: dodges the `types -> orders -> types` module-load
+    # cycle. Do NOT hoist to module top.
+    from ..orders.sets import OrderSet
+
+    if not (isinstance(orderset_class, type) and issubclass(orderset_class, OrderSet)):
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.orderset_class must be an OrderSet subclass; "
+            f"got {orderset_class!r}",
+        )
+    return orderset_class
 
 
+# Token-shaped NodeID matcher used by the string-form arm of
+# ``_id_annotation_is_relay_node_id``. The ``(?:^|\.)`` anchor accepts both the
+# qualified (``relay.NodeID[int]``) and unqualified (``NodeID[int]``) spellings
+# while rejecting prefixed-substring lookalikes (``NotNodeID[int]``,
+# ``MyNodeID[int]``). See ``_id_annotation_is_relay_node_id`` for the full
+# string-vs-resolved rationale; the regex lives at module scope so the compile
+# happens once at import time.
 _NODEID_STRING_RE = re.compile(r"(?:^|\.)NodeID\[")
 
 
@@ -140,11 +154,13 @@ def _id_annotation_is_relay_node_id(cls: type) -> bool:
     Reads ``cls.__annotations__`` directly — no ``typing.get_type_hints``
     call. The result does not depend on whether other annotations on the
     class resolve (an unrelated forward reference on a sibling attribute
-    cannot mask the ``id`` annotation), and the function's behavior is
-    identical on every supported Python version (``typing.get_type_hints``
-    handles nested forward references differently across 3.10 vs 3.11+,
-    which previously left a code branch reachable only on the newer
-    interpreter — that divergence is gone).
+    cannot mask the ``id`` annotation; pinned by
+    ``tests/types/test_definition_order.py::test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is_accepted``),
+    and the function's behavior is identical on every supported Python
+    version (``typing.get_type_hints`` handles nested forward references
+    differently across 3.10 vs 3.11+, which previously left a code branch
+    reachable only on the newer interpreter — the no-``get_type_hints``
+    rewrite eliminated the divergence).
 
     Two annotation forms are accepted:
 
@@ -236,6 +252,11 @@ class DjangoType:
                 fields,
             )
         )
+        # Four-corner consumer-override contract: relation/scalar × annotation/
+        # assignment. Full enumeration of the contract lives on the
+        # ``_consumer_assigned_fields`` docstring; this union is the single
+        # short-circuit input read by ``_build_annotations`` to skip
+        # auto-synthesis for any consumer-authored name on either branch.
         consumer_authored_fields = frozenset(
             {
                 *consumer_annotated_relation_fields,
@@ -297,9 +318,7 @@ class DjangoType:
             interfaces=validated.interfaces,
             primary=validated.primary,
             filterset_class=validated.filterset_class,
-            # TODO(spec-028-orders-0_0_8 Slice 3): pass
-            # ``orderset_class=validated.orderset_class`` here once the
-            # definition dataclass and meta validator grow that slot.
+            orderset_class=validated.orderset_class,
         )
         registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
         for pending_relation in pending:
@@ -584,10 +603,7 @@ class _ValidatedMeta(NamedTuple):
     fields_spec: tuple[str, ...] | str | None
     exclude_spec: tuple[str, ...] | None
     filterset_class: type | None
-    # TODO(spec-028-orders-0_0_8 Slice 3): add
-    # ``orderset_class: type | None`` immediately after ``filterset_class`` so
-    # finalizer phase 2.5 can bind ordering sidecars from the collected
-    # definition snapshot.
+    orderset_class: type | None
 
 
 def _validate_meta(meta: type) -> _ValidatedMeta:
@@ -604,7 +620,7 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
        declaration shapes before field selection or hint validation uses
        them.
     6. If ``Meta.interfaces`` is declared, validate it per
-       ``_validate_interfaces`` (Decision 4).
+       ``_validate_interfaces`` (spec-011 Decision 4).
 
     Returns:
         A ``_ValidatedMeta`` snapshot bundling the validated interfaces
@@ -663,9 +679,7 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
     optimizer_hints = _meta_optimizer_hints(meta)
     interfaces = _validate_interfaces(meta)
     filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
-    # TODO(spec-028-orders-0_0_8 Slice 3): validate
-    # ``getattr(meta, "orderset_class", None)`` through the local-import
-    # ``_validate_orderset_class`` helper and include it in ``_ValidatedMeta``.
+    orderset_class = _validate_orderset_class(meta, getattr(meta, "orderset_class", None))
 
     return _ValidatedMeta(
         interfaces=interfaces,
@@ -674,8 +688,7 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
         fields_spec=fields_spec,
         exclude_spec=exclude_spec,
         filterset_class=filterset_class,
-        # TODO(spec-028-orders-0_0_8 Slice 3): include
-        # ``orderset_class=orderset_class`` after promotion.
+        orderset_class=orderset_class,
     )
 
 
@@ -727,12 +740,10 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], mo
     excluded_hint_fields = sorted(set(hints) - selected_relation_names)
     if excluded_hint_fields:
         raise ConfigurationError(
-            _format_unknown_fields_error(
-                model=model,
-                attr="optimizer_hints",
-                unknown=excluded_hint_fields,
-                available=selected_relation_names,
-            ),
+            f"{model.__name__}.Meta.optimizer_hints names fields that are not selected "
+            f"relations: {excluded_hint_fields}. Available selected relations: "
+            f"{sorted(selected_relation_names)}. (Hints only fire on relation branches; "
+            f"excluded fields and selected scalar fields are unreachable.)",
         )
     bad_values = sorted(k for k, v in hints.items() if not isinstance(v, OptimizerHint))
     if bad_values:

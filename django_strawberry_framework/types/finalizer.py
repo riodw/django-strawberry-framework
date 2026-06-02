@@ -257,14 +257,7 @@ def finalize_django_types() -> None:
             install_relay_node_resolvers(type_cls)
 
     _bind_filtersets()
-    # TODO(spec-028-orders-0_0_8 Slice 3): call ``_bind_ordersets()``
-    # immediately after ``_bind_filtersets()`` and before ``strawberry.type``.
-    # Pseudocode:
-    #   - bind every wired ``OrderSet`` owner first.
-    #   - expand every wired orderset's fields after all owners are bound.
-    #   - validate ``order_input_type`` orphans before materialization.
-    #   - materialize every factory-built input class as a module global of
-    #     ``django_strawberry_framework.orders.inputs``.
+    _bind_ordersets()
 
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:
@@ -484,20 +477,265 @@ def _format_orphan_filtersets_error(orphans: list[type]) -> str:
     )
 
 
-# TODO(spec-028-orders-0_0_8 Slice 3): Add order-side finalizer helpers beside
-# the shipped filter helpers.
-# Pseudocode:
-#   - ``_format_owner_orderset_model_mismatch_error`` names owner type, owner
-#     model, orderset class, and orderset model.
-#   - ``_format_orphan_ordersets_error`` mirrors the helper-referenced
-#     ``filter_input_type`` orphan message with ``order_input_type`` and
-#     ``Meta.orderset_class`` wording.
-#   - ``_bind_orderset_owner`` performs first-bind model compatibility,
-#     related-target agreement for multi-owner reuse, and idempotent re-bind.
-#   - ``_bind_ordersets`` uses local imports from ``orders`` / ``orders.factories``
-#     / ``orders.inputs`` so importing ``types.finalizer`` does not import the
-#     incomplete order subsystem at module load.
-#   - subpass order is bind owners, expand fields, orphan-validate, materialize.
+def _bind_orderset_owner(orderset_cls: type, definition: DjangoTypeDefinition) -> None:
+    """Bind ``orderset_cls._owner_definition`` with first-bind / related / idempotency checks.
+
+    First binding writes ``orderset_cls._owner_definition = definition``
+    and returns. Re-binding the same ``(orderset_cls, definition)``
+    pair is idempotent (supports partial-finalize recovery per
+    spec-028 Decision 6). A second, distinct owner triggers the
+    related-target-agreement check across every declared
+    ``RelatedOrder``.
+
+    Per spec-028 Decision 6 second-paragraph rationale, the order
+    side does NOT enforce the filter side's own-PK Relay-identity
+    check -- ``ORDER BY id`` against any model uses the column, not
+    the GraphQL ID type, so own-PK identity is not an
+    owner-dependent axis here.
+    """
+    previous: DjangoTypeDefinition | None = getattr(orderset_cls, "_owner_definition", None)
+    if previous is None:
+        # First binding -- reject an ``Meta.orderset_class`` whose own
+        # ``Meta.model`` is unrelated to this owner's model BEFORE storing
+        # it. ``definition.model`` must BE the orderset's model or derive
+        # from it (proxy / multi-table-inheritance owners carry every field
+        # the orderset's lookups reference); otherwise the orderset's
+        # ``order_by(...)`` calls would run against a queryset of the wrong
+        # model.
+        orderset_model = getattr(getattr(orderset_cls, "Meta", None), "model", None)
+        if (
+            orderset_model is not None
+            and definition.model is not None
+            and not issubclass(definition.model, orderset_model)
+        ):
+            raise ConfigurationError(
+                _format_owner_orderset_model_mismatch_error(orderset_cls, definition),
+            )
+        orderset_cls._owner_definition = definition
+        return
+    if previous is definition:
+        return
+    # Declared related-order targets must agree across owners.
+    related_orders = getattr(orderset_cls, "related_orders", {}) or {}
+    for field_name in related_orders:
+        prev_target = previous.related_target_for(field_name)
+        new_target = definition.related_target_for(field_name)
+        if prev_target is None and new_target is None:
+            continue
+        if prev_target is None or new_target is None:
+            raise ConfigurationError(
+                _format_owner_ordersets_mismatch_error(
+                    orderset_cls,
+                    previous,
+                    definition,
+                    field_name,
+                    prev_target,
+                    new_target,
+                ),
+            )
+        prev_definition, _ = prev_target
+        new_definition, _ = new_target
+        if (
+            prev_definition is not new_definition
+            or prev_definition.graphql_type_name != new_definition.graphql_type_name
+        ):
+            raise ConfigurationError(
+                _format_owner_ordersets_mismatch_error(
+                    orderset_cls,
+                    previous,
+                    definition,
+                    field_name,
+                    prev_target,
+                    new_target,
+                ),
+            )
+
+
+def _format_owner_ordersets_mismatch_error(
+    orderset_cls: type,
+    previous: DjangoTypeDefinition,
+    new: DjangoTypeDefinition,
+    field_name: str,
+    prev_target: tuple[DjangoTypeDefinition, models.Field] | None,
+    new_target: tuple[DjangoTypeDefinition, models.Field] | None,
+) -> str:
+    """Return the canonical multi-owner-mismatch message for ordersets.
+
+    Sibling of ``_format_owner_mismatch_error`` (filter side); the wording
+    names ``OrderSet`` / ``Meta.orderset_class`` so the consumer error
+    surface tells the maintainer which sidecar is broken. Grep-stable
+    alongside the other ``_format_*`` finalize-error helpers.
+    """
+    prev_name = prev_target[0].origin.__qualname__ if prev_target is not None else "<unresolved>"
+    new_name = new_target[0].origin.__qualname__ if new_target is not None else "<unresolved>"
+    return (
+        f"OrderSet {orderset_cls.__qualname__} cannot bind to multiple owners with "
+        f"diverging targets: {previous.origin.__qualname__} resolves "
+        f"{field_name!r} to {prev_name}, but {new.origin.__qualname__} resolves it "
+        f"to {new_name}. Declare separate OrderSet subclasses for the diverging "
+        "owners (per spec-028 Decision 6)."
+    )
+
+
+def _format_owner_orderset_model_mismatch_error(
+    orderset_cls: type,
+    owner: DjangoTypeDefinition,
+) -> str:
+    """Return the first-bind owner/orderset model-mismatch message.
+
+    Fires on the FIRST owner binding when a ``Meta.orderset_class`` is
+    keyed on a model unrelated to its owner type's model. Names all four
+    entities (owner type, owner model, orderset class, orderset model)
+    per spec-028 Revision 4 H2 / Decision 6 so the consumer can realign
+    the wiring at finalize time rather than seeing an opaque query-time
+    ``FieldError`` once an ``order_by(...)`` lookup runs against the wrong
+    model's queryset. Grep-stable alongside the other ``_format_*``
+    finalize-error helpers.
+    """
+    orderset_model = getattr(getattr(orderset_cls, "Meta", None), "model", None)
+    orderset_model_name = orderset_model.__name__ if orderset_model is not None else "<unset>"
+    return (
+        f"OrderSet {orderset_cls.__qualname__} is declared as the orderset_class "
+        f"of {owner.origin.__qualname__} (model {owner.model.__name__}), but its own "
+        f"Meta.model is {orderset_model_name}. An orderset's Meta.model must be its "
+        f"owner's model -- or a base the owner derives from -- so the orderset's "
+        f"order_by(...) lookups resolve against the owner's queryset. Key "
+        f"{orderset_cls.__qualname__} on {owner.model.__name__}, or attach it to a "
+        f"{orderset_model_name} type."
+    )
+
+
+def _format_orphan_ordersets_error(orphans: list[type]) -> str:
+    """Return the canonical orphan-``order_input_type`` error message.
+
+    Sorted by qualified name for deterministic output. When more than
+    one orphan is present, the message uses the multi-orphan lead-in
+    mirroring ``_format_orphan_filtersets_error``'s shape; the single-
+    orphan branch uses the spec-028 actionable message.
+    """
+    if len(orphans) == 1:
+        cls = orphans[0]
+        return (
+            f"OrderSet '{cls.__name__}' is referenced via order_input_type(...) but "
+            f"never assigned to a DjangoType via Meta.orderset_class. Add "
+            f"'orderset_class = {cls.__name__}' to the relevant DjangoType's Meta."
+        )
+    lines = [f"  - {cls.__module__}.{cls.__qualname__}" for cls in orphans]
+    body = "\n".join(lines)
+    return (
+        "OrderSets referenced via order_input_type(...) but not wired to any "
+        f"DjangoType:\n{body}\n\n"
+        "Add 'orderset_class = <Name>' to the relevant DjangoType's Meta for each."
+    )
+
+
+def _bind_ordersets() -> None:
+    """Run the four ordered phase-2.5 subpasses for orderset binding.
+
+    Subpass 1 -- bind every owner. Walks every wired definition and
+    binds ``orderset_cls._owner_definition`` via
+    ``_bind_orderset_owner``. The first-bind model-compat check and
+    the related-target-agreement check reject mis-wired orderset_class
+    assignments before any subsequent subpass runs.
+
+    Subpass 2 -- expand every orderset. Calls
+    ``orderset_cls.get_fields()`` so Layer-4 expansion resolves lazy
+    ``RelatedOrder`` refs and cycle guards apply uniformly.
+    ``ImportError`` from
+    ``LazyRelatedClassMixin.resolve_lazy_class`` is rewrapped as
+    ``ConfigurationError`` with ``__cause__`` preserving the
+    original. Any other exception rewraps as ``ConfigurationError``
+    with ``repr(exc)`` keeping the original class + args in the
+    consumer-visible message (uniform finalize-time error shape).
+
+    Subpass 3 -- orphan validation. Compares the OrderSets passed to
+    ``order_input_type(...)`` (per Decision 11) against the set of
+    OrderSets wired via ``Meta.orderset_class``. Orphans raise
+    ``ConfigurationError`` with the actionable suggestion to add the
+    missing ``orderset_class = <Name>``. Runs BEFORE materialization
+    so an orphan failure leaves no partial state in
+    ``_materialized_names`` /
+    ``OrderArgumentsFactory.input_object_types``; otherwise a re-run
+    of ``finalize_django_types()`` after fixing the orphan would see
+    stale ledger entries from the prior failed attempt (mirrors the
+    **shipped** filter side's authoritative ordering).
+
+    Subpass 4 -- materialize input classes. Reads
+    ``OrderArgumentsFactory(orderset_cls).arguments`` to trigger the
+    BFS build (idempotent through the factory's class-level cache),
+    then materializes EVERY built class from the factory's
+    ``input_object_types`` ledger as a real module global of
+    ``orders.inputs`` via ``materialize_input_class(name, cls)``.
+    """
+    # Local imports: keep ``types/finalizer.py`` independent of the
+    # orders package's module-load order. The phase-2.5 binding only
+    # runs when a definition declares ``orderset_class``, which only
+    # works when the orders subsystem has been imported by the
+    # consumer.
+    from ..orders import _helper_referenced_ordersets
+    from ..orders.factories import OrderArgumentsFactory
+    from ..orders.inputs import materialize_input_class
+
+    # Subpass 1: bind every owner before any expansion runs.
+    wired: list[type] = []
+    for _type_cls, definition in registry.iter_definitions():
+        if definition.finalized:
+            continue
+        orderset_cls = definition.orderset_class
+        if orderset_cls is None:
+            continue
+        _bind_orderset_owner(orderset_cls, definition)
+        wired.append(orderset_cls)
+
+    # Subpass 2: expand every orderset; cross-references now resolve.
+    # ``OrderSet.get_fields()`` stores ``RelatedOrder`` instances without
+    # eagerly resolving their lazy class refs (unlike the filter side's
+    # ``get_filters()`` which calls ``_expand_related_filter`` that reads
+    # ``f.filterset``). So this subpass also explicitly reads
+    # ``related.orderset`` to force Layer-2 resolution at the spec-named
+    # subpass-2 boundary -- matching the spec contract that "ImportError
+    # from unresolved RelatedOrder('...') rewraps as ConfigurationError
+    # with __cause__ preserved" lands in subpass 2.
+    for orderset_cls in wired:
+        try:
+            orderset_cls.get_fields()
+            for related in getattr(orderset_cls, "related_orders", {}).values():
+                _ = related.orderset
+        except ImportError as exc:
+            raise ConfigurationError(
+                f"Cannot finalize Django types: orderset "
+                f"{orderset_cls.__qualname__} references an unresolved "
+                f"related-order target. {exc}",
+            ) from exc
+        except ConfigurationError:
+            raise
+        except Exception as exc:
+            raise ConfigurationError(
+                f"Cannot finalize Django types: orderset "
+                f"{orderset_cls.__qualname__} raised during expansion. {exc!r}",
+            ) from exc
+
+    # Subpass 3: orphan validation against the helper-tracked set. Runs
+    # BEFORE materialization so a failure here doesn't leave half-
+    # materialized input classes in the inputs-module namespace.
+    wired_set = set(wired)
+    orphans = sorted(
+        _helper_referenced_ordersets - wired_set,
+        key=lambda cls: f"{cls.__module__}.{cls.__qualname__}",
+    )
+    if orphans:
+        raise ConfigurationError(_format_orphan_ordersets_error(orphans))
+
+    # Subpass 4: materialize every built input class as a module global.
+    for orderset_cls in wired:
+        factory = OrderArgumentsFactory(orderset_cls)
+        # Touch ``.arguments`` to drive ``_ensure_built`` (idempotent
+        # through the factory's class-level cache); the cache is shared
+        # across instances so dependent input classes built by one
+        # factory are visible to a sibling factory's materialize loop.
+        _ = factory.arguments
+        for name, input_cls in factory.input_object_types.items():
+            materialize_input_class(name, input_cls)
 
 
 def _bind_filtersets() -> None:

@@ -59,11 +59,20 @@ Missing parenthetical on a non-bare `fix-implemented` is a Worker 2 protocol err
 
 Terminal-verify with these additional checks (baseline SHA in dispatch prompt):
 
-1. `git diff --stat "$CYCLE_BASELINE" -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` is empty.
+1. `git diff --stat "$CYCLE_BASELINE" -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` is empty for paths this cycle owns. Hunks owned by a CLOSED sibling cycle (per-file `rev-*.md` with `Status: verified` AND `[x]` in the active plan) are NOT a rejection trigger — fold into folder-pass and project-pass cycles below.
 2. Each Worker 2 section starts with `Filled by Worker 1 per no-source-edit cycle pattern.`
 3. Every Low has verbatim trigger phrasing OR is forwarded. GLOSSARY-only fixes are disqualifying — reject if present.
 4. Changelog `Not warranted` with both citations.
 5. Ruff format-check + check pass.
+
+**Sibling-cycle attribution (folder-pass / project-pass).** For each dirty path in the diff stat:
+
+1. Locate the owning per-file `rev-*.md` artifact.
+2. Confirm `Status: verified` and `[x]` in `docs/review/review-<X>.md`.
+3. Record in `## Verification (Worker 3)`: `Dirty hunks at <paths> attribute to closed sibling cycle <rev-*.md> (verified, [x] at review-<X>.md:<line>).`
+4. Confirm the cycle's own "Files touched: None" claim holds.
+
+Hunks owned by NO planned cycle item are AGENTS.md #33 concurrent-maintainer work — leave untouched, note in the verification.
 
 Rejection re-spawns Worker 1.
 

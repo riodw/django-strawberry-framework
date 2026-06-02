@@ -115,6 +115,8 @@ When qualifying, Worker 1 fills the Worker 2 sections inline and sets bare `Stat
 - `### Notes for Worker 3`: per-Low dispositions; explicit "No GLOSSARY-only fix in scope."
 - `## Changelog disposition`: `Not warranted` with both citations (AGENTS.md + active plan silence).
 
+Before stopping, flip the top-level `Status:` line to bare `fix-implemented`. Shape #5 with `Status: under-review` is undispatchable — Worker 0 dispatches off the bare `Status:` value per the legend table.
+
 Rejection re-spawns Worker 1 (Worker 2 was never invoked). When in doubt, use the standard three-spawn shape.
 
 ## Static helper use

@@ -263,6 +263,10 @@ Either citation alone is too thin. No `CHANGELOG.md` edit.
 
 Only when the active plan or the maintainer has **explicitly authorised** a `CHANGELOG.md` edit for this cycle (the dispatch prompt or the artifact must name the authorisation). Add the entry to `CHANGELOG.md` in the correct release section. Record what was added and where.
 
+**Project-pass carve-out.** A project-pass artifact's M-severity finding that recommends a `CHANGELOG.md` rename or drift sweep IS the AGENTS.md #21 authorisation — no dispatch-prompt scaffolding required. Cite the M-finding by section anchor as the authorisation: `Authorized by rev-django_strawberry_framework.md::M2 (test → testing rename, 2 sites).`
+
+Per-file and folder-pass cycles MUST forward `CHANGELOG.md` drift to the project pass; they are NEVER the authorising scope.
+
 ### Warranted but deferred to maintainer
 
 The cycle fixes a real consumer-visible change (typed-error contract change, public symbol removal, behavioural fix at a public API surface, additive substring-compatible warning text that still merits a release note) but the plan does not authorize the edit and the package is pre-alpha so the maintainer owns CHANGELOG cadence.

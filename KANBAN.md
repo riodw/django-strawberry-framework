@@ -4,6 +4,8 @@ Last refreshed: 2026-05-28
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
+Editing this board: `KANBAN.md` is a rendered artifact, not a source. The source of truth is the `kanban` Django app under [`examples/fakeshop/apps/kanban/`][kanban-app] — `BoardDoc` rows hold the prose sections (this preamble, the snapshot, the column intros, the footers), `Card` rows hold each card's identity / status / priority / dependencies, and `CardItem` / `CardReference` / `ParityClaim` rows hold the per-card bulleted body, blocking-or-related links between cards, and the parity claims against upstream packages. To change anything on the board, edit the relevant row(s) in the SQLite database at `examples/fakeshop/db.sqlite3` (Django admin or `manage.py shell`), then run `uv run python scripts/build_kanban_md.py` and `uv run python scripts/build_kanban_html.py` to regenerate `KANBAN.md` and `KANBAN.html`. Direct edits to `KANBAN.md` are overwritten on the next rebuild.
+
 ## Card ID format
 
 Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
@@ -69,7 +71,7 @@ demoted to a bullet under its label.
 ### In progress
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
-- `0.0.8` is the active patch and is rolling — the version field bumps when each substantive card lands rather than waiting for a joint cut. `DONE-027-0.0.8` (Filtering subsystem) shipped and owned the `0.0.7 → 0.0.8` bump in `pyproject.toml`, `django_strawberry_framework.__version__`, and `tests/base/test_init.py`. `WIP-ALPHA-028-0.0.8` (Ordering subsystem) is the only card currently in progress; when it ships it will bump to `0.0.9`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column. (The earlier joint-cut convention from Decision 10 of `docs/SPECS/spec-020-list_field-0_0_7.md` and the matching L5 contingency in `docs/SPECS/spec-027-filters-0_0_8.md` are superseded by the rolling-patch posture; the convention is retired and no future card should reach for it.)
+- `0.0.8` is the active patch. `WIP-ALPHA-028-0.0.8` (Ordering subsystem) is the only card currently in progress for this patch; the Filtering subsystem shipped as `DONE-027-0.0.8`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-020-list_field-0_0_7.md`.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -261,7 +263,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Planning note
 
-planned
+Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Wires the shipped Layer-3 sidecars into a Relay-shaped connection: accepts `filter:` from `Meta.filterset_class` (`DONE-027-0.0.8`), `orderBy:` from `Meta.orderset_class` (`WIP-ALPHA-028-0.0.8`), plus `first`/`after`/`last`/`before` cursor pagination and opt-in `totalCount`. The `search:` arg activates when `TODO-BETA-045-0.1.2` lands; `FieldSet` selection composition is layered in by `TODO-BETA-044-0.1.1`. Central read-side primitive — every Layer-3 argument composes through this field.
 
 #### Dependencies
 
@@ -273,6 +275,12 @@ planned
 
 - Relay-style connection field
 - composition of filtering, ordering, aggregation, field selection, and optimizer behavior
+- Cookbook anchor: Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Each `DjangoConnectionField(SomeType)` exposes the type's declared sidecars as connection arguments plus the standard Relay pagination args. The graphene cookbook line `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` becomes `all_object_types: DjangoConnection[ObjectTypeNode] = DjangoConnectionField(ObjectTypeNode)` on the Strawberry side; the per-type `Meta.filterset_class` / `Meta.orderset_class` declarations drive argument generation identically.
+- `filter: <Type>FilterInput` — auto-derived from `Meta.filterset_class` (`DONE-027-0.0.8`); absent when the type declares no filterset. Active-input gating and `check_*_permission` propagation carry over from the filter subsystem unchanged.
+- `orderBy: [<Type>OrderInput!]` — auto-derived from `Meta.orderset_class` (`WIP-ALPHA-028-0.0.8`); absent when the type declares no orderset. List-shaped per the order spec's Decision 5.
+- `first` / `after` / `last` / `before` — Relay cursor args; forward AND backward pagination per the Relay spec. Mutually-exclusive guard (`first` + `last` in one query) rejected as a typed error.
+- `totalCount` — opt-in via `Meta.connection = {"total_count": True}`; runs `qs.count()` on the unpaginated post-filter queryset so paginated UIs can show "N of M" without a second round-trip.
+- Composition order on the resolved queryset: `get_queryset(qs, info)` first (visibility), then `filter` (active-input gates), then `orderBy` (per-field gates), then cursor slice. The pre-pagination shape is what the optimizer plans against; the cursor slice runs last so totals stay correct.
 
 #### Definition of done
 
@@ -281,6 +289,11 @@ planned
 - [ ] Add `tests/test_connection.py`.
 - [ ] Decide whether full Relay support belongs here or a separate `relay/` subpackage.
 - [ ] Promote `DjangoConnectionField` only when end-to-end schema usage is tested.
+- [ ] When the wrapped type declares `Meta.filterset_class`, the connection field exposes `filter: <Type>FilterInput` and routes input values through the filterset's `apply_sync` / `apply_async` pair.
+- [ ] When the wrapped type declares `Meta.orderset_class`, the connection field exposes `orderBy: [<Type>OrderInput!]` and routes through the orderset's `apply_sync` / `apply_async` pair.
+- [ ] Connection field composes with `cls.get_queryset(queryset, info)` — visibility scoping runs before any filter / order / cursor work.
+- [ ] Optimizer cooperation: the connection-aware planner (`TODO-ALPHA-032-0.0.9`) layers on without retrofit; this card ships against the existing flat-selection walker and the connection-aware walker takes over when 032 lands.
+- [ ] Live HTTP coverage in `examples/fakeshop/test_query/` exercises a real round-trip with filter + orderBy + cursor + totalCount on a Relay-Node-shaped type.
 
 #### Foundation-slice seam
 
@@ -297,7 +310,7 @@ planned
 
 #### Other
 
-- once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-044-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands.
+- Filtering and Ordering ship before this card lands, so `DjangoConnectionField` consumes the existing filter and order argument factories on day one. `FieldSet` selection composition is layered in by `TODO-BETA-044-0.1.1`; the `search:` arg activates when `TODO-BETA-045-0.1.2` lands.
 - both upstreams ship Relay-shaped connection fields.
 - the central read-side primitive — the Relay surface and all Layer-3 arguments compose through it.
 - central Relay-shaped connection field plus cursor-pagination math; the integration point that filters / orders / aggregation / field-selection / optimizer all compose through. New `connection.py` + `docs/spec-connection.md` + tests.
@@ -378,14 +391,14 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 - Filter / order arguments accepted on Connection fields when the corresponding `*_class` is declared on the type.
 - Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
 - Six schema-validation diagnostics from Goal 6 raise `ConfigurationError` with the documented messages.
-- `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
+- `django_strawberry_framework.test.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
 - The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-049-0.1.5`.
 - 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
 - `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-ALPHA-030-0.0.9`)
 - `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
 - `django_strawberry_framework/types/base.py` — `Meta.connection` / `Meta.relation_shapes` validation
 - `django_strawberry_framework/types/finalizer.py` — auto-upgrade reverse-FK / M2M to Connection
-- `django_strawberry_framework/testing/relay.py` (new) — test helpers
+- `django_strawberry_framework/test/relay.py` (new) — test helpers
 - `tests/test_relay_node_field.py`, `tests/test_relay_connection.py` (new)
 - `examples/fakeshop/test_query/test_library_api.py` — Relay-shape HTTP tests
 - `examples/fakeshop/apps/products/schema.py` — Relay surface activation (lit up at fakeshop activation time)
@@ -468,7 +481,7 @@ planned
 
 #### Planning note
 
-planned
+Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Ships alongside per-field permission hooks declared via `Meta` (resolved by the field-level gate's owning `FieldSet`) and integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe.
 
 #### Dependencies
 
@@ -478,8 +491,14 @@ planned
 
 - `apply_cascade_permissions`
 - per-field permission hooks declared via `Meta`
-- integration with optimizer `Prefetch` downgrade
+- Optimizer cooperation: cascaded relations downgrade to `Prefetch(queryset=...)` so visibility filters survive the join (carries the existing `get_queryset` → `Prefetch` downgrade contract across the cascade walk).
 - composable permission rules that remain visible from the owning type/query surface
+- Public callable surface: `apply_cascade_permissions(cls, queryset, info, fields=None)` returns a queryset; optional `fields=` argument scopes the cascade to specific FK names. Both sync and async variants ship; async variant uses `sync_to_async` around the cascade walker to stay event-loop-safe.
+- Walks the model graph via `registry.iter_definitions()` (shipped 0.0.4) — for each FK / OneToOne whose target type has a `get_queryset`, build a subquery from that type's visibility and intersect into the caller's queryset.
+- Cycle detection via a `ContextVar` "seen" set so self-referential or mutually-referential type graphs do not recurse infinitely; cycle break returns the partially-narrowed queryset without raising.
+- Single-column FK / O2O scope only: relations without a single-column `column` attribute (composite FKs, generic relations) are skipped explicitly. M2M and reverse-FK visibility are out of scope for this card and tracked as deferred follow-ups.
+- Nullable FK rows preserved — a `NULL` FK does not reference a hidden target so the parent row is not dropped from the result.
+- Multi-DB / sharding safety: the per-edge target visibility subquery is pinned to the caller's database alias via `.using(qs._db)` so shard-aware querysets do not accidentally cross databases.
 
 #### Definition of done
 
@@ -489,6 +508,11 @@ planned
 - [ ] Define the `Meta` surface for per-field permissions and promote keys only when applied end-to-end.
 - [ ] Use real fakeshop permission users through `services.create_users(1)` in example tests where the system-under-test is the example project.
 - [ ] Check all permission-related ORM paths for N+1 behavior.
+- [ ] `apply_cascade_permissions` exported from the public surface (`from django_strawberry_framework import apply_cascade_permissions`). Both sync and async-aware variants ship together.
+- [ ] The four upstream invariants are each pinned by a dedicated test: ContextVar cycle guard; single-column FK/O2O scope; multi-DB pinning to the caller's alias; nullable-FK rows preserved.
+- [ ] Reconcile open question: how the existing per-field FILTER-denial gate (`check_<field>_permission` on `FilterSet` / `OrderSet`) composes with the new cascade visibility. Decision recorded in `docs/spec-permissions.md` before the implementation pass starts; tests pin both shapes.
+- [ ] Cascade composes with `DjangoConnectionField` (`TODO-ALPHA-030-0.0.9`): a connection field whose wrapped type's `get_queryset` calls `apply_cascade_permissions` produces a Relay connection where every edge's nested relations respect the same cascade rule.
+- [ ] Live HTTP coverage in `examples/fakeshop/test_query/` exercises real fakeshop permission users (via `services.create_users(1)`) across a 2-deep FK cascade. Real users, not mocked `info.context.user`.
 
 #### Foundation-slice seam
 
@@ -507,38 +531,10 @@ planned
 - django-graphene-filters ships rich cascade + per-field permissions; strawberry-graphql-django's per-field story is weaker (🍓 parity-adjacent).
 - permissions/visibility is security-relevant and blocks the fakeshop real-usage story.
 - full subsystem: `apply_cascade_permissions`, per-field `Meta` permission hooks, and optimizer `Prefetch`-downgrade integration. New `permissions.py` (or package) + `docs/spec-permissions.md` + tests.
-- Each node type writes visibility ONCE in `get_queryset`
-- `apply_cascade_permissions(node_class, queryset, info, fields=None)`
-- **Cycle detection** via a `ContextVar` "seen" set (`:16`, `:61-69`) — correct for
-- **Single-column FK / O2O only**: skip relations without a `column` attribute, so
-- **Multi-DB / sharding**: the target visibility subquery is pinned to the caller's
-- **Nullable FK rows preserved** (a NULL FK references no hidden target) (`:103-105`).
-- Optional `fields=` to cascade only specific FK names (`:82-84`).
-- The contract is proven across depth in
-- `test_permissions_nested.py::test_not_authenticated_cascade_permissions` — an
-- `test_permissions.py` — root cascade counts (`cascade_public_count` = public rows
-- `test_permissions_nested.py::test_view_object_user_object_type_id_consistency` —
-- `test_permissions_async.py`, `test_permissions_combos.py`,
-- Upstream's `check_<field>_permission(info)` lives on `AdvancedFieldSet`
-- `AggregateSet` carries its own `check_<field>_permission` /
-- A per-field **filter-denial** gate (raise to block *filtering by* a field) exists in
-- EXISTS: per-active-`RelatedFilter`-branch `get_queryset` scoping
-- EXISTS (registry seam): walk owner types via `registry.iter_definitions()` to find
-- MISSING: the parent-queryset FK cascade itself — a framework
-- RECONCILE: the framework currently ships a per-field FILTER-denial gate
-- `apply_cascade_permissions(cls, queryset, info)` with sync AND async variants
-- Port the four upstream invariants verbatim with a test each: ContextVar cycle guard;
-- Hidden-FK semantics reached via selection: upstream sentinels with a real id —
-- Per-field permission hooks via `Meta` (Scope) — pin whether they live on the FieldSet
-- Optimizer `Prefetch`-downgrade integration (Scope): a cascaded relation must downgrade
-- Composability: permission rules stay visible from the owning type/query surface (Scope).
-- **Double-fire + ordering of related-branch gates** (Medium). `apply_sync` /
-- **`check_permissions` back-compat shim regresses the per-lookup gate-name bug**
-- **`_normalize_input` recomputed 3x per `apply`** (Low / perf).
-- Does `check_<field>_permission(self, request)` (filter-denial) survive, deprecate, or
-- Hidden-FK semantics: exclude row vs null field vs sentinel — and the cross-depth id
-- Cascade performance: subquery-per-FK vs a single annotated pass; N+1 under nested
-- M2M / reverse-relation visibility (upstream's cascade skips M2M) — in scope here or
+- Open question — hidden-FK semantics: when a parent row references a hidden target, choose between excluding the parent row, nulling the FK field, or returning a sentinel. The upstream uses sentinels; the Strawberry side has to pick before the cascade lands. Pinned in `docs/spec-permissions.md`.
+- Open question — cascade performance: subquery-per-FK (one extra round-trip per FK in the cascade) vs a single annotated pass (one query that joins every cascaded relation). The upstream is subquery-per-FK; benchmark both before committing.
+- Open question — M2M / reverse-relation visibility: the upstream cascade explicitly skips M2M and reverse FK. Decide whether to extend coverage here or defer to a sibling card; if deferring, name the follow-up card in the spec.
+- Open question — `check_permissions` API surface: does the existing per-field filter-denial `check_<field>_permission(self, request)` survive in its current form, get renamed to disambiguate from the new field-level read gate (`FieldSet.check_<field>_permission(info)` per `TODO-BETA-044-0.1.1`), or get deprecated in favor of a unified shape? Spec must answer before implementation.
 
 #### Card references
 
@@ -926,12 +922,12 @@ planned
 
 #### Definition of done
 
-- [ ] Implement `django_strawberry_framework/testing/client.py` exposing `TestClient` / `AsyncTestClient` (per the inheritance shape pinned above) plus a `GraphQLTestMixin` and two concrete `(Mixin, TestCase)` / `(Mixin, TransactionTestCase)` combinations for the unittest crowd.
+- [ ] Implement `django_strawberry_framework/test/client.py` exposing `TestClient` / `AsyncTestClient` (per the inheritance shape pinned above) plus a `GraphQLTestMixin` and two concrete `(Mixin, TestCase)` / `(Mixin, TransactionTestCase)` combinations for the unittest crowd.
 - [ ] Mixin carries `assertResponseNoErrors` / `assertResponseHasErrors` helpers (or the equivalent named for the chosen `.query()` return type).
 - [ ] Project-wide endpoint settings key (working name `GRAPHQL_TESTING_ENDPOINT`, final name pinned during implementation) under `DJANGO_STRAWBERRY_FRAMEWORK`, with constructor / per-call override.
 - [ ] Multipart file-upload support on `request()` so consumers can drive `Upload`-scalar mutations from the same helper once `TODO-ALPHA-035-0.0.11` ships.
 - [ ] Live HTTP tests under `examples/fakeshop/test_query/` switch to the helper.
-- [ ] Tests under `tests/testing/test_client.py`.
+- [ ] Tests under `tests/test/test_client.py`.
 
 #### Verified in upstream
 
@@ -1101,25 +1097,41 @@ planned
 
 #### Planning note
 
-needs spec or implementation slice
+Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative field-level behavior layer that the cookbook drives via `Meta.fields_class`. The cookbook shape: a consumer-authored `class GalaxyFieldSet(FieldSet)` carries `resolve_<field>(self, root, info)` overrides for custom resolution, `check_<field>_permission(self, info)` denial gates that raise before resolve runs, and class-level annotations like `display_name: str | None = strawberry.field(description="...")` for computed fields the Django model does not have. Pointed at by `Meta.fields_class = GalaxyFieldSet` on the owning `DjangoType`. This is the smallest Layer-3 surface by file count but the most novel by semantic surface area — the resolver-override contract, the redaction-vs-denial split, and the computed-field annotation discipline all live here.
+
+#### Scope
+
+- Cookbook anchor: the `fields.py` example in `GOAL.md` and the `recipes/fields.py` in the django-graphene-filters cookbook are the canonical shapes. Tiered date visibility (staff → full datetime, perm-holder → day precision, authenticated → month precision, anonymous → year precision) plus redaction-vs-denial (`resolve_is_private` returns `False` for non-staff = redaction; `check_updated_date_permission` raises for anonymous = denial) plus computed-field annotations (`display_name: str | None = strawberry.field(...)` with `resolve_display_name`) are the three patterns the FieldSet contract must support cleanly.
+- Class shape: `class FooFieldSet(FieldSet)` with `class Meta: model = Foo`. The body holds three flavors of declarations: `resolve_<field>(self, root, info)` (custom resolver, overrides the auto-generated one for `<field>`), `check_<field>_permission(self, info)` (denial gate; raises `GraphQLError` or returns silently — runs before `resolve_<field>` for this request), and class-level annotated attributes (computed fields the model does not have; paired with a `resolve_<field>` method).
+- Wiring: `DjangoType.Meta.fields_class = FooFieldSet` binds the fieldset at finalizer phase 2.5 (the same seam `filterset_class` / `orderset_class` use). At type-creation time the framework wires each `resolve_<field>` / `check_<field>_permission` into the owning `DjangoType`'s resolver chain so consumers do not have to subclass the type or hand-attach decorators.
+- Composes with `DjangoType.Meta.fields`: declaring `Meta.fields = ("id", "name", ...)` on the owning type stays the source of truth for which model fields surface; `FieldSet` only customizes resolution / permission for fields already in `Meta.fields` AND declares any computed fields via class-level annotations.
+- Optimizer cooperation: a `resolve_<field>` that touches ORM data (e.g. tiered date redaction reads `root.created_date`) must NOT defeat the optimizer's `only_fields` projection. The fieldset declares which model columns its resolvers depend on via `Meta.depends_on = {"resolve_created_date": ("created_date",), ...}` (or auto-introspection if reliably available); the optimizer adds those columns to the `only()` projection so the resolver does not trigger a deferred-field fetch.
+- Composability with `apply_cascade_permissions` (`TODO-ALPHA-033-0.0.10`): a `check_<field>_permission` gate that raises does NOT short-circuit cascade visibility; the cascade narrows the queryset first, then field-level gates run on whatever survives. A field denial does not leak existence — null fields and denials look identical to the client.
 
 #### Definition of done
 
-- [ ] Add `docs/spec-fieldset.md`.
-- [ ] Implement `django_strawberry_framework/fieldset.py`.
-- [ ] Add `tests/test_fieldset.py`.
-- [ ] Keep the API Meta-class-driven.
-- [ ] Do not top-level export until the public-surface rules are satisfied.
+- [ ] Add `docs/spec-fieldset.md` covering the `resolve_<field>` override contract, the `check_<field>_permission` denial-vs-redaction guidance, the computed-field annotation discipline (`display_name: str | None = strawberry.field(...)`), and the optimizer `depends_on` contract.
+- [ ] Implement `django_strawberry_framework/fieldset/` (package, mirroring the `filters/` shape) with `base.py` (FieldSet class + metaclass), `factories.py` (resolver-binding factory), and a per-fieldset finalizer hook in `types/finalizer.py` phase 2.5.
+- [ ] `FieldSet` accepts `class Meta: model = Foo` only; field declarations are method-based (`resolve_<field>`, `check_<field>_permission`) plus class-level computed-field annotations. No `Meta.fields` on the FieldSet itself — the owning `DjangoType.Meta.fields` is the single source of truth for the model-field surface.
+- [ ] Optimizer `Meta.depends_on` contract: when a `resolve_<field>` reads model columns the owning type's `Meta.fields` does not surface, the FieldSet declares them via `Meta.depends_on`; the optimizer adds those columns to the `only_fields` projection.
+- [ ] Promote `Meta.fields_class` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the resolver-binding pipeline applies end-to-end (per `TODO-BETA-047-0.1.3`).
+- [ ] Tests under `tests/fieldset/` mirror the source one-to-one. Live HTTP coverage under `examples/fakeshop/test_query/` exercises tiered visibility (staff vs perm-holder vs authenticated vs anonymous), redaction (non-staff sees `is_private = False`), denial (anonymous raises on `updated_date`), and a computed field (`display_name` resolves only for authenticated users).
+- [ ] Composability tests: `FieldSet` + `FilterSet` (a field with a `check_<field>_permission` gate is still filterable by an authorized user); `FieldSet` + `OrderSet` (same for ordering); `FieldSet` + `apply_cascade_permissions` (cascade narrows first, then field gates run — no existence leak).
 
 #### Foundation-slice seam
 
 - `DjangoTypeDefinition.fields_class` is the forward-reserved slot the collection phase will populate.
 - `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
+- Phase-2.5 finalizer wiring follows the shipped `_bind_filtersets` / `_bind_ordersets` pattern. New helper `_bind_fieldsets` (or the equivalent dispatched form when `TODO-BETA-047-0.1.3` lands) binds each `Meta.fields_class` to its owning `DjangoTypeDefinition` so resolvers and gates are wired before schema construction.
+- Per-field resolver attachment: the existing `_attach_relation_resolvers` already accepts a `skip_field_names` set so consumer-authored fields are not clobbered; FieldSet-bound `resolve_<field>` extends that skip-set so the FieldSet's resolver wins over the auto-generated scalar resolver.
+- Custom Strawberry field class — graphene's `AdvancedFieldSet` works with a custom field type that carries the `check_<field>_permission` gate at resolve time. Strawberry's `strawberry.field(...)` already supports a `permission_classes` argument; the spec must decide between mapping `check_<field>_permission` onto that machinery or carrying a parallel gate. See [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` direction.
 
 #### Why it matters
 
 - `FieldSet` is the smallest Layer 3 surface and can define field-selection semantics used by `DjangoConnectionField`.
 - It bridges the existing `DjangoType.Meta.fields` behavior and future connection/query APIs.
+- Field-level visibility is the only cookbook surface where redaction (return a safe value) and denial (raise an error) need to be distinct. Filter / order / cascade all use queryset narrowing — they remove rows. FieldSet is the one place where a row stays visible but a field is either redacted or guarded behind an error. Without it, the cookbook's `is_private` and `description` patterns are not portable.
+- Computed fields (annotations like `display_name: str | None = strawberry.field(...)` paired with `resolve_display_name`) are the cookbook's escape hatch for fields the Django model does not have. The framework currently has no declarative way to add them without subclassing `DjangoType`; the FieldSet is the home for that contract.
 
 #### Other
 
@@ -1136,12 +1148,19 @@ needs spec or implementation slice
 
 #### Planning note
 
-planned; gated on `DONE-027-0.0.8` (Filtering) and `TODO-ALPHA-030-0.0.9` (DjangoConnectionField)
+Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Planned; gated on `DONE-027-0.0.8` (Filtering) and `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`).
 
 #### Dependencies
 
 - `DONE-027-0.0.8` — Filtering subsystem
 - `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+
+#### Scope
+
+- Cookbook anchor: the `recipes/schema.py` example shipped with django-graphene-filters declares `search_fields = ("name", "description", "object_type__name", "object_type__description")` — flat field names AND relation-traversal paths in the same tuple. The framework must accept both shapes identically; relation traversal is built on Django's standard `<rel>__<field>` lookup syntax.
+- Argument shape: a single `search: String` argument on the connection field. Empty/null/whitespace-only input is a no-op (queryset passes through unchanged). Non-empty input produces a single Q-object that OR's `<path>__icontains=<input>` across every declared path.
+- Composition with `filterset_class`: `search` and `filter` compose by intersection — the resulting queryset matches every declared filter AND the search OR-clause. The argument-factory machinery is shared between `filterset_class` and `search_fields`, so adding `search` does not duplicate the factory infrastructure.
+- Composition with `get_queryset`: search runs against the post-visibility queryset (visibility narrows first), so a user cannot search for hidden rows by guessing field values.
 
 #### Definition of done
 
@@ -1195,7 +1214,7 @@ planned; gated on `DONE-027-0.0.8` (Filtering) and `TODO-ALPHA-030-0.0.9` (Djang
 
 #### Planning note
 
-planned
+Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-type aggregation via `Meta.aggregate_class`. Mirrors the shipped Filtering / in-flight Ordering architecture (six-layer lazy-resolution pipeline; finalizer phase-2.5 binding; per-module input-class namespace) but emits `strawberry.type` output types (not input) and adds a sync/async `compute` / `acompute` split. The cookbook shape: `AggregateSet` subclasses declare `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], ...}`, per-stat `check_<field>_<statname>_permission` gates, custom-stat `compute_<field>_<statname>` methods registered via `Meta.custom_stats = {...}`, `RelatedAggregate` for cross-relation traversal, and a `get_child_queryset` cascade hook for related aggregates.
 
 #### Scope
 
@@ -1203,6 +1222,14 @@ planned
 - `AggregateSet`
 - GraphQL argument/result factories
 - `Meta.aggregate_class` promotion
+- Cookbook anchor: graphene-django's `recipes/aggregates.py` declares `class ObjectTypeAggregate(AggregateSet)` with `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], "description": ["count", "min", "max"]}` and `Meta.custom_stats = {"type_breakdown": str}` paired with a `compute_body_type_type_breakdown(self, queryset) -> str` method. The Strawberry port carries this shape verbatim with `OrderSet` → `AggregateSet` substitution and the `compute` / `acompute` sync/async split.
+- Built-in stat surface: `count`, `min`, `max`, `mode`, `uniques`, plus the Django aggregate primitives `Sum`, `Count`, `Avg`, `Min`, `Max`, `GroupBy`. The cookbook ships every one as a per-field option on `Meta.fields`; this card pins the same surface.
+- `RelatedAggregate("TargetAggregate", field_name="...")` for relation-traversed aggregates (e.g. `celestial_bodies = RelatedAggregate("CelestialBodyAggregate", field_name="galaxy")` on a `GalaxyAggregate`). Accepts a class reference, an absolute import path, or an unqualified name for circular references — the same lazy-resolution contract `RelatedFilter` and `RelatedOrder` ship.
+- `Meta.custom_stats = {"<statname>": <return_type>}` declares consumer-defined stats; the framework expects a paired `compute_<field>_<statname>(self, queryset)` method that returns a value matching the declared type. Cookbook example: `Meta.custom_stats = {"type_breakdown": str}` paired with `compute_body_type_type_breakdown(self, queryset) -> str` returning a comma-separated `KEY=count` breakdown.
+- Per-stat permission: `check_<field>_<statname>_permission(self, request)` gates a specific (field, stat) pair (cookbook example: `check_name_uniques_permission` raises for non-staff so non-staff cannot see the unique-name distribution while still seeing `count` / `min` / `max`). Mirrors the per-field permission gate in `FilterSet` / `OrderSet` but keyed on the (field, stat) tuple, not just the field.
+- `get_child_queryset(self, rel_name, rel_agg)` cascade hook on `AggregateSet` lets a parent aggregate enforce a cascade rule on its children (cookbook example: a shared `_private_aware_child_qs` that filters out `is_private=True` rows when traversing through a `RelatedAggregate`). Composes with `apply_cascade_permissions` (`TODO-ALPHA-033-0.0.10`).
+- Sync / async `compute(self, info, queryset) -> <Output>` and `async def acompute(self, info, queryset) -> <Output>` — same dual-shape contract `FilterSet.apply_sync` / `apply_async` ships. Selection-set-aware: only the aggregate output fields the GraphQL query actually selects are computed; the optimizer plan-cache infrastructure drives the selected-fields detection so a 20-stat aggregate output type does not eagerly compute all 20 when the consumer asked for 3.
+- Output-type emission: each `AggregateSet` emits a `@strawberry.type`-decorated output class named `<AggregateSet>OutputType` (e.g. `ObjectTypeAggregateOutputType`) materialized in a per-module `aggregates.outputs` namespace — disjoint from `filters.inputs` / `orders.inputs`, mirroring the per-module namespace pattern.
 
 #### Definition of done
 
@@ -1213,6 +1240,9 @@ planned
 - [ ] Decide result type naming and grouping semantics.
 - [ ] Validate generated queryset aggregation paths.
 - [ ] Keep aggregation declarations composable with filters, ordering, and connection field behavior.
+- [ ] Add `docs/spec-aggregates.md` covering: `AggregateSet` / `RelatedAggregate` class shape; the `count`/`min`/`max`/`mode`/`uniques` built-in stat surface; `Meta.custom_stats` + `compute_<field>_<statname>` contract; per-stat `check_<field>_<statname>_permission` gating; `get_child_queryset` cascade hook; sync/async `compute` / `acompute` split; selection-set-aware computation; output-type emission and the `aggregates.outputs` namespace.
+- [ ] Live HTTP coverage in `examples/fakeshop/test_query/` exercises a real cookbook-shaped aggregate: a parent type with `RelatedAggregate` traversal, a custom stat, a per-stat permission gate, and a selection-set test confirming only the selected stats are computed.
+- [ ] Composability with the shipped sidecars: filter narrows first → order is a no-op for aggregate output → aggregate computes against the filtered + cascade-permissioned queryset. Pinned by a single test that exercises all three at once.
 
 #### Foundation-slice seam
 
@@ -2361,8 +2391,8 @@ Ref: spec-021 pre-merge review M-filters-3 / H-filters-3.
 [filters]: django_strawberry_framework/filters/
 [plans]: django_strawberry_framework/optimizer/plans.py
 [resolvers]: django_strawberry_framework/types/resolvers.py
-[test-init]: django_strawberry_framework/testing/__init__.py
-[wrap]: django_strawberry_framework/testing/_wrap.py
+[test-init]: django_strawberry_framework/test/__init__.py
+[wrap]: django_strawberry_framework/test/_wrap.py
 
 <!-- tests/ -->
 [test-converters]: tests/types/test_converters.py
@@ -2373,6 +2403,7 @@ Ref: spec-021 pre-merge review M-filters-3 / H-filters-3.
 [db-shard-b.sqlite3]: examples/fakeshop/db_shard_b.sqlite3
 [example-schema]: examples/fakeshop/config/schema.py
 [fakeshop-library]: examples/fakeshop/apps/library/
+[kanban-app]: examples/fakeshop/apps/kanban/
 [fakeshop-test-multi-db]: examples/fakeshop/test_query/test_multi_db.py
 [settings]: examples/fakeshop/config/settings.py
 [test-library-api]: examples/fakeshop/test_query/test_library_api.py

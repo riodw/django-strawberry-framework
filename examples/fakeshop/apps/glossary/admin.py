@@ -112,10 +112,3 @@ class GlossarySourceLinkAdmin(admin.ModelAdmin):
     list_filter = ("kind",)
     search_fields = ("term__title", "label", "target", "kind")
     autocomplete_fields = ("term",)
-
-
-@admin.register(models.GlossaryDocument)
-class GlossaryDocumentAdmin(admin.ModelAdmin):
-    list_display = ("key", "title", "order", "include_heading")
-    list_filter = ("include_heading",)
-    search_fields = ("key", "title", "body")

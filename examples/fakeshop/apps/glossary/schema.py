@@ -4,6 +4,7 @@ import strawberry
 from strawberry.types import Info
 
 from apps.glossary import filters, models
+from apps.kanban import models as kanban_models
 from django_strawberry_framework import DjangoType, OptimizerHint
 from django_strawberry_framework.filters import filter_input_type
 
@@ -175,9 +176,10 @@ class GlossarySourceLinkType(DjangoType):
 
 class GlossaryDocumentType(DjangoType):
     class Meta:
-        model = models.GlossaryDocument
+        model = kanban_models.BoardDoc
         fields = (
             "id",
+            "namespace",
             "key",
             "title",
             "order",
@@ -187,6 +189,7 @@ class GlossaryDocumentType(DjangoType):
             "updated_date",
         )
         filterset_class = filters.GlossaryDocumentFilter
+        primary = False
 
 
 @strawberry.type
@@ -298,7 +301,7 @@ class Query:
         info: Info,
         filter: filter_input_type(filters.GlossaryDocumentFilter) | None = None,  # noqa: A002
     ) -> list[GlossaryDocumentType]:
-        queryset = models.GlossaryDocument.objects.order_by("order")
+        queryset = kanban_models.BoardDoc.objects.filter(namespace="glossary").order_by("order")
         if filter is not None:
             queryset = filters.GlossaryDocumentFilter.apply_sync(filter, queryset, info)
         return queryset

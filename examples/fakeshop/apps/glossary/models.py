@@ -308,27 +308,3 @@ class GlossarySourceLink(TimeStampedModel):
 
     def __str__(self):
         return f"{self.term.title}: {self.label}"
-
-
-class GlossaryDocument(TimeStampedModel):
-    """Non-term prose needed to render the exported glossary markdown."""
-
-    key = models.SlugField(unique=True)
-    title = models.TextField(blank=True, default="")
-    order = models.PositiveIntegerField(default=0)
-    body = models.TextField(blank=True, default="")
-    include_heading = models.BooleanField(default=True)
-
-    class Meta:
-        ordering = ["order"]
-        verbose_name = "glossary document"
-        verbose_name_plural = "glossary documents"
-        constraints = [
-            models.CheckConstraint(
-                condition=~models.Q(key=""),
-                name="glossary_document_key_required",
-            ),
-        ]
-
-    def __str__(self):
-        return self.title or self.key

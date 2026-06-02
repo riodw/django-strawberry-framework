@@ -495,16 +495,16 @@ class Label(TimeStampedModel):
 
 
 class BoardDoc(TimeStampedModel):
-    """One ordered prose section of the board document -- everything in the
-    board that is not a card.
+    """One ordered prose section of a repository document export.
 
-    The card-ID-format legend, the relative-size scale, the snapshot narrative,
-    each column's intro, the release checklist, and the maintenance notes all
-    live here as ordered markdown. Storing them in the DB lets the same data
-    drive the HTML dashboard and regenerate a ``KANBAN.md`` file from the board.
+    ``namespace`` partitions document exports such as ``kanban`` and
+    ``glossary`` so both flows share one model instead of each app carrying a
+    bespoke prose-section table. The kanban exporter also uses
+    ``BoardDocCardReference`` for FK-backed card placeholders.
     """
 
-    key = models.SlugField(unique=True)
+    namespace = models.SlugField(default="kanban")
+    key = models.SlugField()
     kind = models.ForeignKey(
         BoardDocKind,
         related_name="docs",
@@ -513,11 +513,21 @@ class BoardDoc(TimeStampedModel):
     title = models.TextField(blank=True, default="")
     order = models.PositiveIntegerField(default=0)
     body = models.TextField(blank=True, default="")
+    include_heading = models.BooleanField(default=True)
 
     class Meta:
-        ordering = ["order"]
+        ordering = ["namespace", "order"]
         verbose_name = "board doc"
         verbose_name_plural = "board docs"
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "namespace",
+                    "key",
+                ],
+                name="unique_board_doc_key_per_namespace",
+            ),
+        ]
 
     def __str__(self):
         return self.title or self.key

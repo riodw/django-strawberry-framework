@@ -486,14 +486,17 @@ LOOKUP_FIELDS = {
 }
 
 
-def fetch_dashboard_data() -> dict[str, Any]:
-    """Fetch the kanban dashboard payload through the real ``/graphql/`` route."""
-    from apps.kanban import models as kanban_models
+def fetch_graphql_data(
+    query: str,
+    *,
+    required_lists: tuple[str, ...],
+) -> dict[str, Any]:
+    """Fetch a GraphQL payload and validate required top-level list fields."""
     from django.test import Client
 
     response = Client(HTTP_HOST="localhost").post(
         "/graphql/",
-        data={"query": STATIC_KANBAN_QUERY},
+        data={"query": query},
         content_type="application/json",
     )
     if response.status_code != 200:
@@ -505,24 +508,28 @@ def fetch_dashboard_data() -> dict[str, Any]:
         raise RuntimeError(json.dumps(payload["errors"], indent=2, sort_keys=True))
 
     data = payload.get("data") or {}
-    cards = data.get("allCards")
-    if not isinstance(cards, list):
-        raise TypeError("GraphQL response did not include data.allCards as a list.")
+    for key in required_lists:
+        if not isinstance(data.get(key), list):
+            raise TypeError(f"GraphQL response did not include data.{key} as a list.")
+    return data
 
-    board_docs = data.get("allKanbanBoardDocs")
-    if not isinstance(board_docs, list):
-        raise TypeError("GraphQL response did not include data.allKanbanBoardDocs as a list.")
+
+def fetch_dashboard_data() -> dict[str, Any]:
+    """Fetch the kanban dashboard payload through the real ``/graphql/`` route."""
+    from apps.kanban import models as kanban_models
+
+    data = fetch_graphql_data(
+        STATIC_KANBAN_QUERY,
+        required_lists=("allCards", "allKanbanBoardDocs", *LOOKUP_FIELDS),
+    )
 
     lookups = {}
     for graphql_name, payload_name in LOOKUP_FIELDS.items():
-        values = data.get(graphql_name)
-        if not isinstance(values, list):
-            raise TypeError(f"GraphQL response did not include data.{graphql_name} as a list.")
-        lookups[payload_name] = values
+        lookups[payload_name] = data[graphql_name]
 
     return {
-        "cards": cards,
-        "boardDocs": board_docs,
+        "cards": data["allCards"],
+        "boardDocs": data["allKanbanBoardDocs"],
         "lookups": lookups,
         "blockingReferenceKindKeys": sorted(kanban_models.BLOCKING_REFERENCE_KIND_KEYS),
     }

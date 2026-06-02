@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def finalize_markdown(lines: list[str]) -> str:
+    """Normalize rendered markdown lines into one trailing-newline document."""
+    text = "\n".join(line.rstrip() for line in lines).strip()
+    return f"{text}\n"
+
+
 def card_key(card: dict[str, Any]) -> str:
     """Return the current kanban card id for ``card``."""
     status = card["status"]["key"].upper()
@@ -382,8 +388,7 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     if link_definitions is not None:
         rendered.extend(render_doc(link_definitions))
 
-    text = "\n".join(line.rstrip() for line in rendered).strip()
-    return f"{text}\n"
+    return finalize_markdown(rendered)
 
 
 def main() -> None:

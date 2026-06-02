@@ -159,9 +159,11 @@ class BoardDocFilter(FilterSet):
         model = models.BoardDoc
         fields = {
             "id": "__all__",
+            "namespace": "__all__",
             "key": "__all__",
             "title": "__all__",
             "order": "__all__",
+            "include_heading": "__all__",
         }
 
 

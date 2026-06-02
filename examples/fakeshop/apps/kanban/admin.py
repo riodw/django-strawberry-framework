@@ -138,12 +138,14 @@ class BoardDocCardReferenceInline(admin.TabularInline):
 @admin.register(models.BoardDoc)
 class BoardDocAdmin(admin.ModelAdmin):
     list_display = (
+        "namespace",
         "key",
         "kind",
         "title",
         "order",
+        "include_heading",
     )
-    list_filter = ("kind",)
+    list_filter = ("namespace", "kind", "include_heading")
     search_fields = ("key", "title", "body")
     autocomplete_fields = ("kind",)
     inlines = [BoardDocCardReferenceInline]

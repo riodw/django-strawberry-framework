@@ -395,11 +395,13 @@ class BoardDocType(DjangoType):
         model = models.BoardDoc
         fields = (
             "id",
+            "namespace",
             "key",
             "kind",
             "title",
             "order",
             "body",
+            "include_heading",
             "created_date",
             "updated_date",
             "uuid",
@@ -407,6 +409,7 @@ class BoardDocType(DjangoType):
         )
         filterset_class = filters.BoardDocFilter
         optimizer_hints = {"card_references": OptimizerHint.prefetch_related()}
+        primary = True
 
 
 class BoardDocCardReferenceType(DjangoType):
@@ -572,7 +575,8 @@ class Query:
         info: Info,
         filter: filter_input_type(filters.BoardDocKindFilter) | None = None,  # noqa: A002
     ) -> list[BoardDocKindType]:
-        queryset = models.BoardDocKind.objects.order_by("order")
+        queryset = models.BoardDocKind.objects.filter(docs__namespace="kanban").distinct()
+        queryset = queryset.order_by("order")
         if filter is not None:
             queryset = filters.BoardDocKindFilter.apply_sync(filter, queryset, info)
         return queryset
@@ -616,7 +620,7 @@ class Query:
         info: Info,
         filter: filter_input_type(filters.BoardDocFilter) | None = None,  # noqa: A002
     ) -> list[BoardDocType]:
-        queryset = models.BoardDoc.objects.order_by("order")
+        queryset = models.BoardDoc.objects.filter(namespace="kanban").order_by("order")
         if filter is not None:
             queryset = filters.BoardDocFilter.apply_sync(filter, queryset, info)
         return queryset

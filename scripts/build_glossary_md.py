@@ -1,16 +1,16 @@
-"""Build ``docs/GLOSSARY.md`` from the glossary app's GraphQL payload."""
+"""Build ``docs/GLOSSARY2.md`` from the glossary app's GraphQL payload."""
 
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any
 
-from build_kanban_html import configure_django
+from build_kanban_html import configure_django, fetch_graphql_data
+from build_kanban_md import finalize_markdown
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_MD_PATH = REPO_ROOT / "docs" / "GLOSSARY.md"
+DEFAULT_MD_PATH = REPO_ROOT / "docs" / "GLOSSARY2.md"
 
 STATIC_GLOSSARY_QUERY = """
 query StaticGlossary {
@@ -96,44 +96,28 @@ query StaticGlossary {
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
-        description="Render docs/GLOSSARY.md from the glossary GraphQL payload.",
+        description="Render docs/GLOSSARY2.md from the glossary GraphQL payload.",
     )
     parser.add_argument(
         "--md",
         type=Path,
         default=DEFAULT_MD_PATH,
-        help="Markdown file to write. Defaults to docs/GLOSSARY.md.",
+        help="Markdown file to write. Defaults to docs/GLOSSARY2.md.",
     )
     return parser.parse_args()
 
 
 def fetch_glossary_data() -> dict[str, Any]:
     """Fetch glossary data through the real ``/graphql/`` route."""
-    from django.test import Client
-
-    response = Client(HTTP_HOST="localhost").post(
-        "/graphql/",
-        data={"query": STATIC_GLOSSARY_QUERY},
-        content_type="application/json",
+    data = fetch_graphql_data(
+        STATIC_GLOSSARY_QUERY,
+        required_lists=(
+            "allGlossaryDocuments",
+            "allGlossaryTerms",
+            "allGlossaryCategoryMemberships",
+            "allGlossarySpecMentions",
+        ),
     )
-    if response.status_code != 200:
-        body = response.content.decode("utf-8", errors="replace")
-        raise RuntimeError(f"GraphQL request failed with HTTP {response.status_code}:\n{body}")
-
-    payload = response.json()
-    if payload.get("errors"):
-        raise RuntimeError(json.dumps(payload["errors"], indent=2, sort_keys=True))
-
-    data = payload.get("data") or {}
-    required_lists = (
-        "allGlossaryDocuments",
-        "allGlossaryTerms",
-        "allGlossaryCategoryMemberships",
-        "allGlossarySpecMentions",
-    )
-    for key in required_lists:
-        if not isinstance(data.get(key), list):
-            raise TypeError(f"GraphQL response did not include data.{key} as a list.")
     return {
         "documents": data["allGlossaryDocuments"],
         "terms": data["allGlossaryTerms"],
@@ -259,8 +243,7 @@ def render_markdown(glossary_data: dict[str, Any]) -> str:
     if link_definitions is not None and link_definitions.get("body"):
         rendered.append(link_definitions["body"].strip())
 
-    text = "\n".join(line.rstrip() for line in rendered).strip()
-    return f"{text}\n"
+    return finalize_markdown(rendered)
 
 
 def main() -> None:

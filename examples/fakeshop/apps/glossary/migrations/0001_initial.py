@@ -16,7 +16,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -39,7 +42,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -62,7 +68,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -85,7 +94,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -112,7 +124,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -141,7 +156,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -192,7 +210,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -220,7 +241,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -274,7 +298,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -301,7 +328,8 @@ class Migration(migrations.Migration):
                 ],
                 "constraints": [
                     models.UniqueConstraint(
-                        fields=("spec_path", "term"), name="unique_glossary_term_per_spec",
+                        fields=("spec_path", "term"),
+                        name="unique_glossary_term_per_spec",
                     ),
                     models.CheckConstraint(
                         condition=models.Q(("spec_path", ""), _negated=True),
@@ -320,7 +348,10 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False, verbose_name="ID",
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
                     ),
                 ),
                 ("created_date", models.DateTimeField(auto_now_add=True)),
@@ -344,7 +375,8 @@ class Migration(migrations.Migration):
                 "ordering": ["term", "order"],
                 "constraints": [
                     models.UniqueConstraint(
-                        fields=("term", "order"), name="unique_glossary_source_link_position",
+                        fields=("term", "order"),
+                        name="unique_glossary_source_link_position",
                     ),
                     models.CheckConstraint(
                         condition=models.Q(("label", ""), _negated=True),
@@ -360,13 +392,15 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="glossarycategorymembership",
             constraint=models.UniqueConstraint(
-                fields=("category", "term"), name="unique_glossary_term_per_category",
+                fields=("category", "term"),
+                name="unique_glossary_term_per_category",
             ),
         ),
         migrations.AddConstraint(
             model_name="glossarycategorymembership",
             constraint=models.UniqueConstraint(
-                fields=("category", "order"), name="unique_glossary_category_position",
+                fields=("category", "order"),
+                name="unique_glossary_category_position",
             ),
         ),
         migrations.AddIndex(
@@ -376,7 +410,8 @@ class Migration(migrations.Migration):
         migrations.AddConstraint(
             model_name="glossaryalias",
             constraint=models.UniqueConstraint(
-                fields=("term", "normalized"), name="unique_glossary_alias_per_term",
+                fields=("term", "normalized"),
+                name="unique_glossary_alias_per_term",
             ),
         ),
         migrations.AddConstraint(
@@ -400,7 +435,8 @@ class Migration(migrations.Migration):
         migrations.AddIndex(
             model_name="glossaryterm",
             index=models.Index(
-                fields=["status", "entry_order"], name="glossary_gl_status__438637_idx",
+                fields=["status", "entry_order"],
+                name="glossary_gl_status__438637_idx",
             ),
         ),
         migrations.AddConstraint(
@@ -434,19 +470,22 @@ class Migration(migrations.Migration):
         migrations.AddIndex(
             model_name="glossarytermlink",
             index=models.Index(
-                fields=["target_term", "kind"], name="glossary_gl_target__dede3d_idx",
+                fields=["target_term", "kind"],
+                name="glossary_gl_target__dede3d_idx",
             ),
         ),
         migrations.AddIndex(
             model_name="glossarytermlink",
             index=models.Index(
-                fields=["source_term", "kind"], name="glossary_gl_source__c0831e_idx",
+                fields=["source_term", "kind"],
+                name="glossary_gl_source__c0831e_idx",
             ),
         ),
         migrations.AddConstraint(
             model_name="glossarytermlink",
             constraint=models.UniqueConstraint(
-                fields=("source_term", "kind", "order"), name="unique_glossary_term_link_position",
+                fields=("source_term", "kind", "order"),
+                name="unique_glossary_term_link_position",
             ),
         ),
     ]

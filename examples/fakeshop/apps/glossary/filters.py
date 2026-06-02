@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from apps.kanban import models as kanban_models
 from django_strawberry_framework.filters import FilterSet, RelatedFilter
 
 from . import models
@@ -73,9 +74,10 @@ class GlossarySourceLinkFilter(FilterSet):
 
 class GlossaryDocumentFilter(FilterSet):
     class Meta:
-        model = models.GlossaryDocument
+        model = kanban_models.BoardDoc
         fields = {
             "id": "__all__",
+            "namespace": "__all__",
             "key": "__all__",
             "title": "__all__",
             "order": "__all__",

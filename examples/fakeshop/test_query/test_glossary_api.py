@@ -5,6 +5,7 @@ import sys
 
 import pytest
 from apps.glossary import models
+from apps.kanban import models as kanban_models
 from django.test import Client
 from django.urls import clear_url_caches
 
@@ -70,6 +71,28 @@ def _seed_glossary():
         key="see-also",
         label="See also",
         order=0,
+    )
+    doc_kind = kanban_models.BoardDocKind.objects.create(
+        key="glossary",
+        label="Glossary",
+        order=0,
+    )
+    kanban_models.BoardDoc.objects.create(
+        namespace="glossary",
+        key="preamble",
+        kind=doc_kind,
+        title="",
+        order=0,
+        body="# Glossary\n\nIntro.",
+        include_heading=False,
+    )
+    kanban_models.BoardDoc.objects.create(
+        namespace="kanban",
+        key="preamble",
+        kind=doc_kind,
+        title="Kanban",
+        order=0,
+        body="# Kanban",
     )
     models.GlossaryCategoryMembership.objects.create(
         category=filtering,
@@ -176,6 +199,35 @@ def test_filter_glossary_terms_by_spec_mention_and_select_edges():
                         "notes": "Primary ordering sidecar.",
                     },
                 ],
+            },
+        ],
+    }
+
+
+@pytest.mark.django_db
+def test_glossary_documents_are_shared_board_docs_scoped_to_glossary_namespace():
+    _seed_glossary()
+
+    assert _graphql_data(
+        """
+        query {
+          allGlossaryDocuments {
+            namespace
+            key
+            title
+            body
+            includeHeading
+          }
+        }
+        """,
+    ) == {
+        "allGlossaryDocuments": [
+            {
+                "namespace": "glossary",
+                "key": "preamble",
+                "title": "",
+                "body": "# Glossary\n\nIntro.",
+                "includeHeading": False,
             },
         ],
     }

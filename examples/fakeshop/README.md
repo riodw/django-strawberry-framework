@@ -1,7 +1,7 @@
 # Fakeshop Example Django Project
 
 A Django + Strawberry GraphQL example project that exercises
-`django-strawberry-framework` end-to-end. It ships two apps:
+`django-strawberry-framework` end-to-end. It ships several app surfaces:
 
 - **`apps.library`** — acceptance app with a real `DjangoType` schema
   (FK, reverse FK, OneToOne, M2M, Relay `Node`, optimizer hints,
@@ -10,14 +10,22 @@ A Django + Strawberry GraphQL example project that exercises
   `DjangoConnectionField` declarations are intentionally commented
   out). The app still ships migrations, models, admin, services, and
   management commands so the seed / delete / user flows work.
+- **`apps.scalars`** — converter-table substrate for scalar wire formats.
+- **`apps.kanban`** — relational source for the exported root `KANBAN.md`.
+- **`apps.glossary`** — relational source for the exported `docs/GLOSSARY.md`
+  and the spec-term audit rows that link specs to glossary terms. Generic
+  prose sections share `apps.kanban.BoardDoc` under `namespace="glossary"`.
 
 The project root layout:
 
 ```
 examples/fakeshop/
 ├── apps/
+│   ├── glossary/     # glossary terms + spec-term audit rows + GraphQL schema
+│   ├── kanban/       # KANBAN.md source tables + GraphQL schema
 │   ├── library/      # working DjangoType schema (acceptance)
-│   └── products/     # placeholder schema + seed/admin tooling
+│   ├── products/     # placeholder schema + seed/admin tooling
+│   └── scalars/      # scalar converter substrate
 ├── config/
 │   ├── schema.py     # composes per-app Query + DjangoOptimizerExtension
 │   ├── settings.py
@@ -42,7 +50,7 @@ uv sync
 Now set up the database:
 
 ```bash
-# Apply migrations (library + products + Django built-ins)
+# Apply migrations (example apps + Django built-ins)
 uv run python examples/fakeshop/manage.py migrate
 
 # Create an admin user (for /admin and /login)
@@ -109,6 +117,25 @@ The `products` app currently only exposes a placeholder field:
 
 ```graphql
 { hello }   # → "fakeshop placeholder"
+```
+
+The `glossary` app exposes the term database that exports
+`docs/GLOSSARY.md`:
+
+```graphql
+{
+  allGlossaryTerms(filter: { anchor: { exact: "filterset" } }) {
+    title
+    statusText
+    specMentions { specName }
+  }
+}
+```
+
+To regenerate the exported markdown from glossary DB rows:
+
+```bash
+uv run python scripts/build_glossary_md.py
 ```
 
 # Generate Dummy Data

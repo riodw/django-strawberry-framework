@@ -167,6 +167,49 @@ def test_related_target_for_caches_resolved_pair_after_finalize():
     assert first is not None
 
 
+def test_related_target_for_resolves_to_primary_when_two_types_share_target_model():
+    """Two ``DjangoType``s registered for the same target model: the primary wins.
+
+    Pins the consolidation contract relied upon at
+    ``django_strawberry_framework/types/definition.py``
+    ``DjangoTypeDefinition.related_target_for`` — the call site is
+    ``target_type = registry.get(target_model)``, NOT the historical
+    ``registry.primary_for(target_model) or registry.get(target_model)``
+    chain. The collapse is safe only because ``registry.get`` itself
+    honors ``_primaries`` as its first return state; this test pins
+    that end-to-end so a future change that breaks the primary-first
+    rule in ``registry.get`` surfaces here before the Decision-4
+    owner-aware FK/PK lookup silently swings to the wrong target.
+    """
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+
+    class AdminShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+            primary = True
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf")
+
+    finalize_django_types()
+
+    book_definition = BookType.__django_strawberry_definition__
+    pair = book_definition.related_target_for("shelf")
+    assert pair is not None
+    shelf_definition, _shelf_field = pair
+    # The primary (``AdminShelfType``) wins over the non-primary sibling
+    # (``ShelfType``) — ``registry.get(Shelf)`` returns ``AdminShelfType``
+    # because ``_primaries[Shelf] is AdminShelfType``.
+    assert shelf_definition is AdminShelfType.__django_strawberry_definition__
+
+
 def test_related_target_for_returns_none_for_generic_foreign_key():
     """A ``GenericForeignKey`` is a relation with no ``related_model`` -> ``None``."""
     from apps.library.models import TaggedItem

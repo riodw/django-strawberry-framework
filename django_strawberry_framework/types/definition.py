@@ -64,8 +64,9 @@ class DjangoTypeDefinition:
           ``(target_definition, model_field)`` pair the Decision-4
           owner-aware FK/PK conditional consults; the lookup walks
           ``self.model._meta`` and resolves the target ``DjangoType``
-          via ``registry.primary_for(target_model)`` with a
-          ``registry.get(target_model)`` fallback. Returns ``None`` for
+          via ``registry.get(target_model)`` (which itself honors
+          ``Meta.primary`` as its first return state, then falls back
+          to the single-registered-type rule). Returns ``None`` for
           non-relation fields and for fields not present on the model.
     """
 
@@ -130,9 +131,9 @@ class DjangoTypeDefinition:
         ``field.related_model`` (the canonical attribute on every
         Django relation field — forward FK / OneToOne / M2M, reverse FK
         / OneToOne / M2M). The target ``DjangoType`` is resolved via
-        ``registry.primary_for(target_model) or registry.get(target_model)``
-        so the owner-aware Decision-4 lookup honors ``Meta.primary``
-        declarations without losing the single-type-no-primary fallback.
+        ``registry.get(target_model)`` — the registry's own first
+        return state honors ``Meta.primary`` declarations, and the
+        fallback path preserves the single-type-no-primary rule.
         Returns ``None`` when no ``DjangoType`` is registered for the
         target model.
         """
@@ -169,7 +170,7 @@ class DjangoTypeDefinition:
                 if target_model is None:
                     result = None
                 else:
-                    target_type = registry.primary_for(target_model) or registry.get(target_model)
+                    target_type = registry.get(target_model)
                     if target_type is None:
                         result = None
                     else:

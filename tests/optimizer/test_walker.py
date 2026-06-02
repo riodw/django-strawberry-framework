@@ -25,7 +25,9 @@ from django.db.models import Prefetch
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
+from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.optimizer.walker import (
+    _apply_hint,
     _ensure_connector_only_fields,
     _is_fragment,
     _merge_aliased_selections,
@@ -1573,6 +1575,65 @@ def test_prefetch_hint_for_path_rejects_mismatched_lookup():
             full_path="category__items",
             type_name="CategoryType",
         )
+
+
+def test_apply_hint_prefetch_obj_misconfigured_lookup_leaves_plan_clean():
+    """B4: ``_apply_hint`` must NOT mutate ``plan`` when ``_prefetch_hint_for_path`` raises.
+
+    The ``prefetch_obj`` branch validates the consumer-supplied Prefetch
+    via ``_prefetch_hint_for_path`` before recording the resolver identity
+    or flipping ``plan.cacheable``. The current call path raises
+    ``ConfigurationError`` out of ``plan_optimizations`` and the
+    partially-mutated plan is unreachable, but the invariant — "no plan
+    mutation on a raised validator" — must hold so any future caller
+    that catches ``ConfigurationError`` at this layer (e.g. a permissive
+    mode toggle, a per-field ``try/except`` around ``_apply_hint``)
+    cannot consume a plan with phantom ``planned_resolver_keys``,
+    ``only_fields``, or ``cacheable=False`` for a relation that was
+    never actually planned.
+    """
+
+    class ItemType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    plan = OptimizationPlan()
+    baseline = (
+        list(plan.only_fields),
+        list(plan.planned_resolver_keys),
+        plan.cacheable,
+    )
+
+    explicit = Prefetch("unrelated_relation", queryset=Entry.objects.all())
+    hint = OptimizerHint.prefetch(explicit)
+    django_field = Item._meta.get_field("category")
+
+    with pytest.raises(
+        ConfigurationError,
+        match=r"OptimizerHint\.prefetch\(obj\) lookup on ItemType\.category "
+        r"must target the hinted relation 'category'",
+    ):
+        _apply_hint(
+            hint,
+            sel=_sel("category", selections=[_sel("name")]),
+            django_field=django_field,
+            django_name="category",
+            type_cls=ItemType,
+            target_type=None,
+            plan=plan,
+            prefix="",
+            full_path="category",
+            info=None,
+            runtime_paths=((),),
+            resolver_identities=("ItemType.category@category",),
+        )
+
+    assert (
+        list(plan.only_fields),
+        list(plan.planned_resolver_keys),
+        plan.cacheable,
+    ) == baseline
 
 
 def test_ensure_connector_only_fields_adds_reverse_o2o_connector():

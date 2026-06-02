@@ -23,14 +23,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol
 
 from ..exceptions import OptimizerError
-from ..utils.relations import (
-    RelationKind,
-    is_many_side_relation_kind,
-    relation_kind,
-)
+from ..utils.relations import is_many_side_relation_kind, relation_kind
 
 if TYPE_CHECKING:  # pragma: no cover
     from django.db import models
+
+    from ..utils.relations import RelationKind
 
 
 class _DjangoFieldLike(Protocol):
@@ -77,10 +75,16 @@ class FieldMeta:
         related_model: The target model class for relations, or ``None``.
         attname: The DB column name (e.g., ``category_id`` for a FK).
             ``None`` for reverse relations and non-FK fields.
-        target_field_name: The target model field name a FK points at,
-            or ``None`` for non-FK fields.
-        target_field_attname: The target model column attname a FK
-            points at, preserving non-PK ``to_field`` connector rules.
+        target_field_name: The target model field name a FK or forward
+            M2M points at (Django's ``ManyToManyField`` descriptor
+            exposes ``target_field`` pointing at the target model's PK,
+            so forward M2M resolves to ``"id"`` here, not ``None``), or
+            ``None`` for descriptors whose ``target_field`` attribute is
+            absent (most reverse-relation descriptors).
+        target_field_attname: The target model column attname a FK or
+            forward M2M points at, preserving non-PK ``to_field``
+            connector rules; ``None`` for descriptors whose
+            ``target_field`` attribute is absent.
         reverse_connector_attname: For reverse FK relations, the forward
             FK column on the related model that points back to the
             parent model.
@@ -137,19 +141,7 @@ class FieldMeta:
         target_field = getattr(field, "target_field", None)
         is_m2m = bool(getattr(field, "many_to_many", False))
         is_o2m = bool(getattr(field, "one_to_many", False))
-        # Many-side cardinalities (reverse FK / M2M, forward or reverse)
-        # resolve to a manager / queryset that may be empty but is never
-        # ``None``, so the rendered GraphQL annotation is
-        # ``list[target_type]`` regardless of any Django ``null`` flag.
-        # Force ``nullable=False`` for those shapes BEFORE consulting
-        # ``field.null`` — Django's ``ForeignObjectRel`` (parent of
-        # ``ManyToOneRel`` / ``ManyToManyRel``) proxies the forward FK's
-        # ``null`` flag, so a reverse-FK descriptor for a nullable
-        # forward FK would otherwise read ``True`` here. Reverse
-        # OneToOne short-circuits to ``True`` because the related row
-        # may legitimately be absent; every other single-relation shape
-        # follows ``field.null`` with the ``getattr`` default of
-        # ``False`` for descriptors that omit it.
+        # Cardinality-gated nullable rule — see ``nullable`` field docstring above for the full rationale.
         if is_m2m or is_o2m:
             nullable = False
         else:

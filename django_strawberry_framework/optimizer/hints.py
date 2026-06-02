@@ -1,9 +1,7 @@
 """``OptimizerHint`` — typed wrapper for ``Meta.optimizer_hints`` values.
 
 Provides a uniform API for declaring per-field optimization overrides
-in ``DjangoType.Meta.optimizer_hints``. Replaces the earlier exploratory
-design that mixed raw strings (``"skip"``), ``Prefetch`` objects, and
-dicts (``{"select_related": True}``) in the same field-value position.
+in ``DjangoType.Meta.optimizer_hints``.
 
 Consumer surface::
 
@@ -25,8 +23,8 @@ top-level ``__init__.py`` so the import path stays short.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, ClassVar
+from dataclasses import dataclass
+from typing import ClassVar
 
 from django.db.models import Prefetch
 
@@ -59,7 +57,7 @@ class OptimizerHint:
 
     force_select: bool = False
     force_prefetch: bool = False
-    prefetch_obj: Prefetch | None = field(default=None, repr=False)
+    prefetch_obj: Prefetch | None = None
     skip: bool = False
 
     # ------------------------------------------------------------------
@@ -73,12 +71,16 @@ class OptimizerHint:
     def __post_init__(self) -> None:
         """Reject conflicting flag combinations at construction time.
 
-        The walker consumes flags in a strict priority order
-        (``skip`` → ``prefetch_obj`` → ``force_select`` → ``force_prefetch``),
-        so any combination beyond the four documented shapes silently
-        loses the lower-priority directive.  Raising here surfaces the
-        mistake at ``Meta.optimizer_hints`` build time instead of at
-        query time.
+        Construction-time rejection is the load-bearing contract: any
+        combination beyond the four documented shapes raises
+        ``ConfigurationError`` at ``OptimizerHint(...)`` time, surfacing
+        the mistake at ``Meta.optimizer_hints`` build time instead of at
+        query time. The walker's own priority order
+        (``skip`` → ``prefetch_obj`` → ``force_select`` → ``force_prefetch``
+        in ``optimizer/walker.py::_apply_hint``) is therefore documentation
+        of the dispatch sequence, not collision arbitration — every
+        conflict the priority order would have arbitrated has already
+        been rejected here.
         """
         if self.skip and (
             self.force_select or self.force_prefetch or self.prefetch_obj is not None
@@ -128,7 +130,7 @@ class OptimizerHint:
         return cls(prefetch_obj=obj)
 
 
-def hint_is_skip(hint: Any) -> bool:
+def hint_is_skip(hint: OptimizerHint | None) -> bool:
     """Return ``True`` if ``hint`` represents a "skip this relation" directive.
 
     Centralises the hint-shape contract so callers (the walker, the

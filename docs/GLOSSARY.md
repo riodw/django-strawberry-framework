@@ -355,6 +355,7 @@ schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 Shipped behavior:
 
 - root-gated optimization for root resolvers returning Django `QuerySet`s
+- `Manager` shorthand coercion (`return Model.objects` is coerced via `.all()` and optimized as if the consumer had written `Model.objects.all()`)
 - passthrough for non-root resolvers and non-`QuerySet` results
 - `select_related` for safe single-valued relation chains
 - `prefetch_related` for many-side relations
@@ -362,8 +363,10 @@ Shipped behavior:
 - nested prefetch chains for nested GraphQL selections
 - [`only`](#only-projection) projection for selected scalar columns
 - connector-column inclusion so Django can attach joined and prefetched rows without lazy loads
+- [FK-id elision](#fk-id-elision) for forward-FK selections that touch only the target's `id`
 - custom [`get_queryset`](#get_queryset-visibility-hook) downgrade from join to `Prefetch`
 - async resolver support
+- multi-type plan-cache separation: primary-return and secondary-return resolvers on the same Django model receive distinct cache entries via the resolver's origin Strawberry type
 
 Constructor accepts a `strictness` argument — see [Strictness mode](#strictness-mode). Classmethod [`check_schema`](#schema-audit) audits schema-reachable `DjangoType`s.
 
@@ -765,6 +768,17 @@ Supported modes:
 - `OptimizerHint.prefetch_related()` — force `prefetch_related`.
 - `OptimizerHint.prefetch(Prefetch(...))` — use a consumer-provided `Prefetch` object and stop walking below that relation.
 
+Validation: ``OptimizerHint(...)`` rejects conflicting flag combinations at
+construction time and raises [`ConfigurationError`](#configurationerror).
+The factories (`SKIP`, `select_related()`, `prefetch_related()`,
+`prefetch(Prefetch(...))`) are the documented consumer API; direct
+construction is supported but the same four shapes are the only ones the
+walker dispatches, and any other combination — `skip=True` with any of the
+three other flags, `force_select=True` with `force_prefetch=True`,
+`prefetch_obj=` set with `force_select=True` or `force_prefetch=True`, or a
+`prefetch_obj=` value that is not a `django.db.models.Prefetch` instance —
+is rejected before the hint can reach `Meta.optimizer_hints`.
+
 **See also:** [`Meta.optimizer_hints`](#metaoptimizer_hints) · [`DjangoOptimizerExtension`](#djangooptimizerextension).
 
 ## `Ordering`
@@ -812,7 +826,7 @@ Caches optimizer plans across requests. The same query 10,000×/sec walks the se
 
 Properties:
 
-- **Selection-shape keys.** Cache keys include the selected operation AST, relevant `@skip` / `@include` variables, target model, and root runtime path.
+- **Selection-shape keys.** Cache keys include the selected operation AST, relevant `@skip` / `@include` variables, target model, root runtime path, and the resolver's origin Strawberry type.
 - **Variable filtering.** Filter-variable values that do not affect selection shape are excluded from the key, so a query with many filter combinations reuses one cached plan.
 - **Multi-operation safety.** `query A { ... } query B { ... }` in one document never shares a plan across operations.
 - **Named-fragment safety.** Directives inside named fragments are tracked into the cache key.
@@ -835,6 +849,7 @@ Cooperation rules:
 - **Prefetch cooperation.** If your resolver returns `Category.objects.prefetch_related(Prefetch("items", queryset=...))`, the consumer `Prefetch` wins over less-specific automatic work.
 - **Subtree-aware reconciliation.** `prefetch_related("items", "items__entries")` cooperates with the optimizer's nested `Prefetch("items", ...)` instead of raising Django's "lookup already seen with a different queryset" error.
 - **Plain-string absorption.** Safe consumer string prefetches can be absorbed by richer optimizer `Prefetch` objects.
+- **`only()` cooperation.** If your resolver already calls `.only(...)` to enforce a column-level projection (e.g., a permission boundary that restricts which columns leave the database), the optimizer drops its own `only_fields` rather than chaining a second `.only(...)` that would replace yours — Django's `QuerySet.only(...).only(...)` replaces (not merges) the deferred-field set. `.defer(...)` is not treated as a consumer projection because `.defer()` and `.only()` compose cleanly in Django.
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache) · [`OptimizerHint`](#optimizerhint).
 
@@ -1000,7 +1015,7 @@ Opt-out continues via [`Meta.exclude`](#metaexclude); field-level metadata (desc
 
 **Status:** shipped (`0.0.3`).
 
-`DjangoOptimizerExtension.check_schema(schema)` walks every schema-reachable `DjangoType` and reports relation targets without registered `DjangoType`s as warnings. Hidden fields and [`OptimizerHint.SKIP`](#optimizerhint) fields are ignored. Intended for use as a unit-test assertion or a CI gate.
+`DjangoOptimizerExtension.check_schema(schema)` walks every schema-reachable `DjangoType` (descending through object fields, union members, and the concrete implementations of any interface type encountered, so a `DjangoType` reachable only via an interface-typed root field still participates) and reports relation targets without registered `DjangoType`s as warnings. Identical `(source_model, field_name)` warnings produced by multi-type overlap are deduped to one warning per pair so multi-type models do not double-report. Hidden fields and [`OptimizerHint.SKIP`](#optimizerhint) fields are ignored. Intended for use as a unit-test assertion or a CI gate.
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Strictness mode](#strictness-mode).
 

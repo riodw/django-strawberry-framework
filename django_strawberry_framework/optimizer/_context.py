@@ -66,7 +66,12 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
       via ``__setitem__`` because their object disallowed ``setattr``
       (e.g. ``__slots__`` classes, or consumer contexts like
       ``strawberry-graphql-django``'s ``StrawberryDjangoContext`` whose
-      ``__getitem__`` is bridged to ``__getattribute__``).
+      ``__getitem__`` is bridged to ``__getattribute__``). Pinned by
+      ``tests/optimizer/test_extension.py::test_stash_on_non_dict_mapping_reads_correctly``
+      (``__slots__`` mapping shape) and
+      ``tests/optimizer/test_extension.py::test_get_context_value_swallows_attribute_error_from_getitem``
+      (bridged-``AttributeError`` shape) — a future refactor that
+      removes this fallback must trip those pins.
     - ``__getitem__`` on a missing key may raise ``KeyError``,
       ``TypeError``, or ``AttributeError`` (the last one for bridged
       attribute-access contexts); all three are caught and return
@@ -124,6 +129,20 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
             setattr(context, key, value)
             return
         except (AttributeError, TypeError):
+            # Chain into the dict-write path; covers the ``__slots__`` /
+            # bridged-context case where ``setattr`` fails but
+            # ``__setitem__`` succeeds (e.g., ``StrawberryDjangoContext``
+            # whose attribute writes are blocked while item assignment
+            # routes through ``__setitem__``). Catch-and-chain is the
+            # write-side counterpart to the read-side ``__getitem__``
+            # fallback in ``get_context_value`` (the ``try`` /
+            # ``except (TypeError, KeyError, AttributeError)`` block that
+            # routes through ``context[key]`` when ``getattr`` returns
+            # the ``_MISSING`` sentinel) — both paths exist so the
+            # helper round-trips through whichever access mode the
+            # context supports. The trailing dict-write ``except`` below
+            # is the catch-and-return pattern; this one is the
+            # catch-and-chain pattern, intentionally distinct.
             pass
     try:
         context[key] = value

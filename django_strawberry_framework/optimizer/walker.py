@@ -95,7 +95,7 @@ def _resolve_field_map(
     against the secondary's metadata rather than the primary's.
     Nested ``_walk_selections`` calls leave ``source_type`` ``None``,
     which routes through ``registry.get(model)`` and resolves nested
-    relation targets to the primary (the spec-014 nested contract).
+    relation targets to the primary (the spec-018 nested contract).
 
     DUAL CONTRACT (read before consuming the returned map): the values
     are ``FieldMeta`` when the model has a registered ``DjangoType``, but
@@ -362,7 +362,16 @@ def _record_relation_access(
     prefix: str,
     resolver_identities: tuple[str, ...],
 ) -> None:
-    """Record the shared connector and resolver metadata for a relation."""
+    """Record the shared connector and resolver metadata for a relation.
+
+    MUST run before ``_can_elide_fk_id`` fires in ``_plan_select_relation``:
+    the FK ``attname`` appended to ``plan.only_fields`` here is the column
+    Django still needs to materialise the relation when the JOIN is elided
+    (``_resolve_id_default`` reads ``obj.<fk>_id`` directly instead of
+    triggering a lazy load through ``obj.<fk>.pk``). Moving this call
+    after the elision check would silently drop the FK column on the
+    elided path and reintroduce the N+1.
+    """
     attname = getattr(django_field, "attname", None)
     if attname is not None:
         append_unique(plan.only_fields, f"{prefix}{attname}")
@@ -433,13 +442,6 @@ def _apply_hint(
     if hint_is_skip(hint):
         return True
     if hint.prefetch_obj is not None:
-        _record_relation_access(plan, django_field, prefix, resolver_identities)
-        # Consumer-supplied Prefetch objects commonly close over a queryset
-        # built with request- or user-scoped filters; matching the
-        # has_custom_get_queryset discipline in _plan_prefetch_relation, mark
-        # the plan non-cacheable so the plan cache cannot serve one
-        # request's queryset to the next.
-        plan.cacheable = False
         # ``_apply_hint`` is only entered when ``_resolve_optimizer_hints``
         # returned a non-empty hints map, which it cannot do for
         # ``type_cls is None`` (it short-circuits to ``{}``). The hint
@@ -447,15 +449,30 @@ def _apply_hint(
         # unguarded; a future direct caller with ``type_cls=None`` will
         # ``AttributeError`` loudly rather than rotting behind a silent
         # ``"UnknownType"`` literal.
-        append_prefetch_unique(
-            plan.prefetch_related,
-            _prefetch_hint_for_path(
-                hint.prefetch_obj,
-                django_name=django_name,
-                full_path=full_path,
-                type_name=type_cls.__name__,
-            ),
+        #
+        # Validate the consumer-supplied Prefetch BEFORE mutating ``plan``:
+        # ``_prefetch_hint_for_path`` may raise ``ConfigurationError`` for
+        # a missing lookup path or a lookup that does not target the
+        # hinted relation. Recording the resolver identity / non-cacheable
+        # flip before validation would leave the plan with phantom
+        # connector columns and resolver keys for a relation that was
+        # never actually planned, which any future caller catching
+        # ``ConfigurationError`` at this layer would consume. Compute the
+        # rebased Prefetch first, mutate only on success.
+        rebased_prefetch = _prefetch_hint_for_path(
+            hint.prefetch_obj,
+            django_name=django_name,
+            full_path=full_path,
+            type_name=type_cls.__name__,
         )
+        _record_relation_access(plan, django_field, prefix, resolver_identities)
+        # Consumer-supplied Prefetch objects commonly close over a queryset
+        # built with request- or user-scoped filters; matching the
+        # has_custom_get_queryset discipline in _plan_prefetch_relation, mark
+        # the plan non-cacheable so the plan cache cannot serve one
+        # request's queryset to the next.
+        plan.cacheable = False
+        append_prefetch_unique(plan.prefetch_related, rebased_prefetch)
         return True
     if hint.force_select:
         kind = relation_kind(django_field)
@@ -561,7 +578,7 @@ def _selected_scalar_names(
     # registry.get(model), which is what the default _resolve_field_map(model)
     # call already does. The scalar-only secondary-type regression is
     # exercised through the root _walk_selections path, not through this
-    # helper. (spec-014 rev6 M1 audit invariant.)
+    # helper. (spec-018 rev6 M1 audit invariant.)
     _type_cls, field_map = _resolve_field_map(model)
     scalar_names: set[str] = set()
     for sel in _merge_aliased_selections(_included_field_selections(selections)):

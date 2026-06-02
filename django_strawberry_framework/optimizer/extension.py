@@ -698,7 +698,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         reachable = _collect_schema_reachable_types(schema)
         # Dedupe (source_model, field_name) so multi-type models do not
         # double-warn: registry.iter_types() yields one entry per registered
-        # type after spec-014 Slice 1, so a model with multiple types whose
+        # type after spec-018 Slice 1, so a model with multiple types whose
         # field maps overlap on the same unregistered-target relation would
         # otherwise produce one identical warning per registered type. The
         # dedupe is a multi-type artifact, not generic defensiveness — every

@@ -49,6 +49,18 @@ class OptimizationPlan:
     are typed as ``Sequence`` because they are lists during construction
     and tuples after ``finalize()``; mutator helpers retain
     ``MutableSequence`` parameters for the walker-only construction path.
+
+    Scope of the post-``finalize()`` immutability enforcement: only the
+    five list fields (``select_related``, ``prefetch_related``,
+    ``only_fields``, ``fk_id_elisions``, ``planned_resolver_keys``) are
+    swapped to tuples, so ``plan.prefetch_related.append(...)`` after
+    handoff raises ``AttributeError``.  The ``cacheable`` bool remains a
+    plain settable attribute and its post-handoff immutability is a
+    convention enforced by the single writer
+    ``walker.py::plan_optimizations`` (pre-finalize only).  Trigger to
+    move ``OptimizationPlan`` to ``@dataclass(frozen=True)``: a second
+    writer that flips ``cacheable`` lands, or a cache-poisoning incident
+    surfaces a post-finalize mutation.
     """
 
     select_related: Sequence[str] = field(default_factory=list)
@@ -84,7 +96,16 @@ class OptimizationPlan:
         """Return ``True`` when no optimization directives were collected.
 
         ``cacheable`` is metadata about cache reuse and is excluded from the
-        emptiness check.
+        emptiness check.  Consequence: an ``OptimizationPlan(cacheable=False)``
+        with no other directives reports ``is_empty=True`` (pinned by
+        ``tests/optimizer/test_plans.py::test_cacheable_flag_does_not_affect_empty_state``),
+        so a resolver keying off ``is_empty`` for a "skip optimizer"
+        early-out will not see the uncacheable-flag signal.  Trigger to
+        revisit: a resolver-side call site reads ``is_empty`` and
+        ``cacheable`` together for a logic decision.  Today only
+        ``apply()`` is empty-tolerant and the extension's
+        ``plan_relation`` / ``_optimize`` paths do not branch on
+        ``is_empty``.
         """
         return (
             not self.select_related
@@ -257,7 +278,14 @@ def _consumer_prefetch_lookups(queryset: Any) -> list[Any]:
     Centralizes the brittle Django-private contract for
     ``QuerySet._prefetch_related_lookups``.  Returns an empty list when
     the queryset has no prefetches (or the attribute is missing entirely
-    on a non-QuerySet input).
+    on a non-QuerySet input).  The trailing ``or ()`` is a paranoid
+    guard for non-``QuerySet`` inputs (test doubles, custom managers)
+    whose ``_prefetch_related_lookups`` attribute is present but
+    ``None``; stock Django always stores a tuple
+    (``prefetch_related(None)`` resets to ``()``), so the guard is dead
+    code under a real ``QuerySet``.  Trigger to revisit removal: a real
+    consumer surfaces a ``None`` lookups attribute or the test-double
+    case is otherwise retired.
     """
     return list(getattr(queryset, "_prefetch_related_lookups", ()) or ())
 

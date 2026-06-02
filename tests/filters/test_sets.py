@@ -1444,6 +1444,34 @@ def test_evaluate_logic_tree_caps_recursion_depth():
     assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
 
 
+def test_collect_nested_visibility_querysets_async_caps_recursion_depth():
+    """``_collect_nested_visibility_querysets_async`` raises past ``_MAX_LOGIC_DEPTH``.
+
+    Third site of the shared ``_raise_logic_depth_exceeded`` helper -- the async
+    pre-walker enforces the same depth cap as ``_run_permission_checks`` and
+    ``_evaluate_logic_tree``, surfacing the identical typed error rather than
+    silently bottoming out into a Python ``RecursionError``.
+    """
+    import asyncio
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        asyncio.run(
+            CategoryFilter._collect_nested_visibility_querysets_async(
+                {"and_": [{"name": "x"}]},
+                _make_info(),
+                _depth=CategoryFilter._MAX_LOGIC_DEPTH + 1,
+            ),
+        )
+    assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
+    # Pin the qualname-prefixed shape that the shared helper preserves.
+    assert "CategoryFilter" in str(excinfo.value)
+
+
 def test_target_type_for_related_filter_returns_none_without_child_model():
     """A ``RelatedFilter`` whose filterset has no model resolves to ``None``."""
 
@@ -1766,6 +1794,79 @@ def test_derive_related_visibility_querysets_async_skips_unregistered_target():
 
 
 @pytest.mark.django_db
+def test_iter_visibility_steps_yields_pre_await_tuple_for_active_branches():
+    """``_iter_visibility_steps`` yields the shared pre-await state both derive methods consume.
+
+    Pins the DRY-0_0_7 consolidation: both
+    ``_derive_related_visibility_querysets_sync`` and
+    ``_derive_related_visibility_querysets_async`` route through the
+    single ``_iter_visibility_steps`` classmethod, so the helper's
+    five-tuple shape (``field_name, target_type, child_filterset,
+    child_input, child_base``) is the load-bearing contract. Skips
+    branches missing ``target_type`` or ``child_filterset`` so the derive
+    methods carry only the two awaits / calls per step.
+    """
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    steps = list(
+        BranchFilter._iter_visibility_steps({"shelves": {"code": "A"}}),
+    )
+    assert len(steps) == 1
+    field_name, target_type, child_filterset, child_input, child_base = steps[0]
+    assert field_name == "shelves"
+    assert target_type is ShelfType
+    assert child_filterset is ShelfFilter
+    assert child_input == {"code": "A"}
+    assert child_base.model is library_models.Shelf
+
+
+@pytest.mark.django_db
+def test_iter_visibility_steps_skips_branches_without_resolved_target_or_filterset():
+    """``_iter_visibility_steps`` swallows the ``None`` target / filterset branches.
+
+    The skip contract is what lets each derive method shrink to a tight
+    loop carrying only the two awaits — every guard lives in the
+    helper. Without a registered ``DjangoType`` for ``Shelf`` the branch
+    drops out (mirrors the sibling async skip test, but pins the
+    helper directly).
+    """
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    # No ShelfType registered -> ``_target_type_for_related_filter`` is
+    # ``None`` -> the helper drops the branch before yielding.
+    steps = list(
+        BranchFilter._iter_visibility_steps({"shelves": {"code": "A"}}),
+    )
+    assert steps == []
+
+
+@pytest.mark.django_db
 def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_sync_misuse():
     """``apply_async`` pre-derives nested visibility so an async-only ``get_queryset`` hook
     does not raise ``SyncMisuseError`` mid-``.qs`` from a nested ``or_`` branch.
@@ -1986,3 +2087,54 @@ def test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms():
 
     # A missing field resolves to an empty list (defensive).
     assert _lookups_for_field(None) == []
+
+
+# ---------------------------------------------------------------------
+# DRY consolidation pins (dry-0_0_7): ``FilterSet._iter_input_items``
+# ---------------------------------------------------------------------
+#
+# Three sites (``_normalize_input``, ``_operator_bag_items``,
+# ``_active_permission_field_paths``) route through a single shared
+# staticmethod that walks dicts AND Strawberry-input dataclasses into
+# ``(name, value)`` pairs. The helper returns ``None`` for non-walkable
+# shapes and ``[]`` for walkable-but-empty inputs. Site 2
+# (``_operator_bag_items``) keeps its scalar/collection/dict pre-rejection
+# above the helper call so operator bags remain dataclass-only at the
+# call boundary while sites 1 / 3 accept both dict and dataclass shapes.
+
+
+def test_iter_input_items_returns_pairs_for_plain_dict():
+    """Dict input walks to ``list(input.items())`` verbatim."""
+
+    assert FilterSet._iter_input_items({"name": "x", "id": 1}) == [
+        ("name", "x"),
+        ("id", 1),
+    ]
+
+
+def test_iter_input_items_returns_empty_list_for_empty_dict():
+    """Walkable-but-empty dict returns ``[]`` (sentinel-distinct from None)."""
+
+    assert FilterSet._iter_input_items({}) == []
+
+
+def test_iter_input_items_walks_strawberry_input_dataclass_via_attribute_sniff():
+    """``__dataclass_fields__`` sniff unpacks Strawberry-input shapes."""
+
+    @strawberry.input
+    class FooInput:
+        name: str = "x"
+        count: int = 3
+
+    items = FilterSet._iter_input_items(FooInput(name="y", count=7))
+    assert items == [("name", "y"), ("count", 7)]
+
+
+def test_iter_input_items_returns_none_for_non_walkable_shapes():
+    """Non-dict / non-dataclass shapes return ``None`` (not ``[]``)."""
+
+    assert FilterSet._iter_input_items(object()) is None
+    assert FilterSet._iter_input_items("scalar") is None
+    assert FilterSet._iter_input_items(42) is None
+    assert FilterSet._iter_input_items([1, 2, 3]) is None
+    assert FilterSet._iter_input_items(None) is None

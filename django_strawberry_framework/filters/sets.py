@@ -17,7 +17,8 @@ from __future__ import annotations
 
 import copy
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, ClassVar
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 
 from asgiref.sync import sync_to_async
 from django.db import models
@@ -587,6 +588,23 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     # Decision-8 / M1-of-rev5 apply pipeline.
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
+        """Walk a dict or Strawberry-input dataclass into ``(name, value)`` pairs.
+
+        Returns ``None`` when ``input_value`` is neither a dict nor an
+        object carrying ``__dataclass_fields__`` (the Strawberry-input
+        sniff used package-wide; see ``_operator_bag_items`` docstring
+        for the rationale over ``dataclasses.is_dataclass``).
+        Returns ``[]`` for a walkable-but-empty input.
+        """
+        if isinstance(input_value, dict):
+            return list(input_value.items())
+        dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
+        if dataclass_fields is None:
+            return None
+        return [(name, getattr(input_value, name)) for name in dataclass_fields]
+
     @classmethod
     def _normalize_input(cls, input_value: Any) -> dict[str, Any]:
         """Translate a Strawberry input dataclass into `django-filter` form data.
@@ -616,13 +634,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """
         if input_value is None or input_value is UNSET:
             return {}
-        if isinstance(input_value, dict):
-            items = list(input_value.items())
-        else:
-            dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
-            if dataclass_fields is None:
-                return {}
-            items = [(name, getattr(input_value, name)) for name in dataclass_fields]
+        items = cls._iter_input_items(input_value)
+        if items is None:
+            return {}
 
         # Related-branch keys are owned by the apply pipeline's
         # `_apply_related_constraints` step (which constrains the parent
@@ -745,10 +759,13 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             ),
         ):
             return None
-        dataclass_fields = getattr(raw_value, "__dataclass_fields__", None)
-        if dataclass_fields is None:
+        # Operator bags are always Strawberry-input dataclasses, never dicts;
+        # reject dicts before delegating to ``_iter_input_items`` (which
+        # accepts both dict and dataclass shapes for sites 1 / 3) so this
+        # site only walks the dataclass tail per the helper's contract.
+        if isinstance(raw_value, dict):
             return None
-        return [(name, getattr(raw_value, name)) for name in dataclass_fields]
+        return FilterSet._iter_input_items(raw_value)
 
     @staticmethod
     def _form_key_for_python_attr(python_attr: str) -> str:
@@ -844,6 +861,33 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         return value
 
     @classmethod
+    def _iter_visibility_steps(
+        cls,
+        input_value: Any,
+    ) -> Iterator[tuple[str, Any, type[FilterSet], Any, models.QuerySet]]:
+        """Yield the pre-await state each visibility derive method needs.
+
+        Returns ``(field_name, target_type, child_filterset, child_input,
+        child_base)`` for every active related branch whose ``target_type``
+        and ``child_filterset`` resolved; skips branches missing either so
+        the sync / async derive methods carry ONLY the two awaits / calls
+        per step. Composes with
+        ``_iter_active_related_branches`` (per-branch yield shape) so the
+        two iterators chain naturally without materializing intermediate
+        lists.
+        """
+        for field_name, related_filter, child_input in cls._iter_active_related_branches(
+            input_value,
+        ):
+            target_type = cls._target_type_for_related_filter(related_filter)
+            child_filterset = related_filter.filterset
+            if target_type is None or child_filterset is None:
+                continue
+            child_model = child_filterset._meta.model
+            child_base = child_model._default_manager.all()
+            yield field_name, target_type, child_filterset, child_input, child_base
+
+    @classmethod
     def _derive_related_visibility_querysets_sync(
         cls,
         input_value: Any,
@@ -865,15 +909,13 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         ``<rel>__in=<intersected>`` clause is computed (spec-027 L668-678).
         """
         result: dict[str, models.QuerySet] = {}
-        for field_name, related_filter, child_input in cls._iter_active_related_branches(
-            input_value,
-        ):
-            target_type = cls._target_type_for_related_filter(related_filter)
-            child_filterset = related_filter.filterset
-            if target_type is None or child_filterset is None:
-                continue
-            child_model = child_filterset._meta.model
-            child_base = child_model._default_manager.all()
+        for (
+            field_name,
+            target_type,
+            child_filterset,
+            child_input,
+            child_base,
+        ) in cls._iter_visibility_steps(input_value):
             scoped = _apply_get_queryset_sync(target_type, child_base, info)
             result[field_name] = child_filterset.apply_sync(child_input, scoped, info)
         return result
@@ -886,18 +928,31 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> dict[str, models.QuerySet]:
         """Async sibling of `_derive_related_visibility_querysets_sync`."""
         result: dict[str, models.QuerySet] = {}
-        for field_name, related_filter, child_input in cls._iter_active_related_branches(
-            input_value,
-        ):
-            target_type = cls._target_type_for_related_filter(related_filter)
-            child_filterset = related_filter.filterset
-            if target_type is None or child_filterset is None:
-                continue
-            child_model = child_filterset._meta.model
-            child_base = child_model._default_manager.all()
+        for (
+            field_name,
+            target_type,
+            child_filterset,
+            child_input,
+            child_base,
+        ) in cls._iter_visibility_steps(input_value):
             scoped = await _apply_get_queryset_async(target_type, child_base, info)
             result[field_name] = await child_filterset.apply_async(child_input, scoped, info)
         return result
+
+    @classmethod
+    def _raise_logic_depth_exceeded(cls) -> NoReturn:
+        """Raise the canonical depth-cap ``ConfigurationError`` for this FilterSet.
+
+        Single source of truth for the consumer-visible message shared by
+        ``_collect_nested_visibility_querysets_async``, ``_run_permission_checks``,
+        and ``_evaluate_logic_tree`` -- all three cap at ``cls._MAX_LOGIC_DEPTH``
+        and surface the identical typed error.
+        """
+        raise ConfigurationError(
+            f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
+            f"_MAX_LOGIC_DEPTH={cls._MAX_LOGIC_DEPTH}. Flatten the filter input "
+            "or split into multiple queries.",
+        )
 
     @classmethod
     async def _collect_nested_visibility_querysets_async(
@@ -936,11 +991,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         if input_value is None or input_value is UNSET:
             return result
         if _depth > cls._MAX_LOGIC_DEPTH:
-            raise ConfigurationError(
-                f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
-                f"_MAX_LOGIC_DEPTH={cls._MAX_LOGIC_DEPTH}. Flatten the filter input "
-                "or split into multiple queries.",
-            )
+            cls._raise_logic_depth_exceeded()
         # Walk each logical sub-branch (``and_`` / ``or_`` / ``not_`` on the
         # Strawberry side; the dict-side input may already carry the
         # normalized ``and`` / ``or`` / ``not`` keys when a consumer hands a
@@ -1064,11 +1115,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         if input_value is None or input_value is UNSET:
             return
         if _depth > cls._MAX_LOGIC_DEPTH:
-            raise ConfigurationError(
-                f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
-                f"_MAX_LOGIC_DEPTH={cls._MAX_LOGIC_DEPTH}. Flatten the filter input "
-                "or split into multiple queries.",
-            )
+            cls._raise_logic_depth_exceeded()
 
         if _fired is None:
             _fired = {}
@@ -1188,13 +1235,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """
         if input_value is None or input_value is UNSET:
             return []
-        if isinstance(input_value, dict):
-            items = list(input_value.items())
-        else:
-            dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
-            if dataclass_fields is None:
-                return []
-            items = [(name, getattr(input_value, name)) for name in dataclass_fields]
+        items = cls._iter_input_items(input_value)
+        if items is None:
+            return []
 
         logic_lookup = dict(_LOGIC_KEYS)
         related_keys = set(getattr(cls, "related_filters", {}) or {})
@@ -1342,11 +1385,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         if not isinstance(tree_data, dict) or not tree_data:
             return q
         if _depth > cls._MAX_LOGIC_DEPTH:
-            raise ConfigurationError(
-                f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded "
-                f"_MAX_LOGIC_DEPTH={cls._MAX_LOGIC_DEPTH}. Flatten the filter input "
-                "or split into multiple queries.",
-            )
+            cls._raise_logic_depth_exceeded()
 
         and_branches = tree_data.get("and") or []
         for child_input in and_branches:
@@ -1540,6 +1579,49 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         return constrained
 
     @classmethod
+    def _apply_common_prelude(
+        cls,
+        input_value: Any,
+        queryset: models.QuerySet,
+        info: Any,
+        child_qs_by_branch: dict[str, models.QuerySet],
+    ) -> tuple[FilterSet, Any]:
+        """Build the filterset_instance + request shared by apply_sync / apply_async.
+
+        Captures the verbatim normalize / request / constraints / ctor /
+        ``_apply_info`` stash sequence both apply paths run identically.
+        The async-only ``_nested_qs_by_branch_id`` stash stays inline in
+        ``apply_async`` (no sync analog) — callers attach it on the
+        returned instance.
+        """
+        data = cls._normalize_input(input_value)
+        request = cls._request_from_info(info)
+        constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
+        filterset_instance = cls(data=data, queryset=constrained, request=request)
+        filterset_instance._apply_info = info
+        return filterset_instance, request
+
+    @classmethod
+    def _apply_common_finalize(
+        cls,
+        filterset_instance: FilterSet,
+        input_value: Any,
+        request: Any,
+    ) -> models.QuerySet:
+        """Run the perm check + form validate + ``.qs`` read trailer.
+
+        Sync ``apply_sync`` calls this directly; async ``apply_async``
+        wraps the single call in ``sync_to_async(..., thread_sensitive=True)``
+        so a consumer's ``check_*_permission`` hook / custom ``method=``
+        filter body / leaf-clause ORM evaluation does not block the
+        event loop. The thread-sensitive shape mirrors how Django wraps
+        consumer sync hooks on its own async paths.
+        """
+        cls._run_permission_checks(input_value, request)
+        cls._validate_form_or_raise(filterset_instance)
+        return filterset_instance.qs
+
+    @classmethod
     def apply_sync(
         cls,
         input_value: Any,
@@ -1554,15 +1636,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         `self.queryset` and propagate through to `.qs`), then permission
         check, form validate, and return the materialized queryset.
         """
-        data = cls._normalize_input(input_value)
         child_qs_by_branch = cls._derive_related_visibility_querysets_sync(input_value, info)
-        request = cls._request_from_info(info)
-        constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
-        filterset_instance = cls(data=data, queryset=constrained, request=request)
-        filterset_instance._apply_info = info
-        cls._run_permission_checks(input_value, request)
-        cls._validate_form_or_raise(filterset_instance)
-        return filterset_instance.qs
+        filterset_instance, request = cls._apply_common_prelude(
+            input_value,
+            queryset,
+            info,
+            child_qs_by_branch,
+        )
+        return cls._apply_common_finalize(filterset_instance, input_value, request)
 
     @classmethod
     async def apply_async(
@@ -1574,49 +1655,44 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """Async sibling of `apply_sync` awaiting every blocking step.
 
         Steps:
-            1. Normalize the input (pure-Python).
-            2. Await the top-level ``_derive_related_visibility_querysets_async``
+            1. Await the top-level ``_derive_related_visibility_querysets_async``
                so every active ``RelatedFilter`` branch's target
                ``get_queryset`` runs on the async path.
-            3. Pre-walk every ``and`` / ``or`` / ``not`` arm via
+            2. Pre-walk every ``and`` / ``or`` / ``not`` arm via
                ``_collect_nested_visibility_querysets_async`` so nested
                branches whose target type's ``get_queryset`` is async-only
                get their visibility maps awaited BEFORE the sync ``.qs``
                read fans into ``_q_for_branch``. Without this step,
                ``_q_for_branch``'s sync derive would raise
                ``SyncMisuseError`` mid-``.qs``.
-            4. Resolve the request, apply related constraints, construct
-               the filterset.
-            5. Route ``_run_permission_checks`` and ``_validate_form_or_raise``
-               through ``sync_to_async(thread_sensitive=True)`` so a
-               consumer's ``check_*_permission`` hook that performs a
-               blocking ORM read does not block the event loop. The
-               thread-sensitive shape mirrors how Django wraps consumer
-               sync hooks on its own async paths.
-            6. Read ``.qs`` inside ``sync_to_async`` for the same reason --
-               ``.qs`` triggers ``BaseFilterSet.filter_queryset`` which
-               recurses through ``_q_for_branch`` (sync) and may evaluate
-               a custom ``method=`` filter's body or run leaf-clause ORM.
+            3. Build the filterset via ``_apply_common_prelude`` (shared
+               with ``apply_sync``) and stash the nested-visibility map
+               on the instance — the async-only step with no sync analog.
+            4. Route ``_apply_common_finalize`` (perm check + form
+               validate + ``.qs`` read) through a single
+               ``sync_to_async(thread_sensitive=True)`` so a consumer's
+               ``check_*_permission`` hook that performs a blocking ORM
+               read does not block the event loop. The thread-sensitive
+               shape mirrors how Django wraps consumer sync hooks on its
+               own async paths.
         """
-        data = cls._normalize_input(input_value)
         child_qs_by_branch = await cls._derive_related_visibility_querysets_async(input_value, info)
         nested_qs_by_branch_id = await cls._collect_nested_visibility_querysets_async(
             input_value,
             info,
         )
-        request = cls._request_from_info(info)
-        constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
-        filterset_instance = cls(data=data, queryset=constrained, request=request)
-        filterset_instance._apply_info = info
+        filterset_instance, request = cls._apply_common_prelude(
+            input_value,
+            queryset,
+            info,
+            child_qs_by_branch,
+        )
         filterset_instance._nested_qs_by_branch_id = nested_qs_by_branch_id
-        await sync_to_async(cls._run_permission_checks, thread_sensitive=True)(
+        return await sync_to_async(cls._apply_common_finalize, thread_sensitive=True)(
+            filterset_instance,
             input_value,
             request,
         )
-        await sync_to_async(cls._validate_form_or_raise, thread_sensitive=True)(
-            filterset_instance,
-        )
-        return await sync_to_async(_read_qs, thread_sensitive=True)(filterset_instance)
 
     @classmethod
     def apply(

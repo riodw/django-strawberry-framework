@@ -247,6 +247,47 @@ def test_phase_2_5_non_import_get_fields_failure_rewraps_as_configuration_error(
     assert isinstance(exc_info.value.__cause__, ValueError)
 
 
+def test_phase_2_5_configuration_error_during_expansion_propagates_by_identity():
+    """A ``ConfigurationError`` from the subpass-2 expansion re-raises unchanged.
+
+    The order twin of the filter side's ``finalizer.py`` ``except
+    ConfigurationError: raise`` pass-through: if ``get_fields()`` / the
+    ``related.orderset`` Layer-2 walk raises a ``ConfigurationError`` directly
+    (as opposed to an ``ImportError`` or a generic ``Exception``), it must
+    propagate by identity rather than being re-wrapped into a second
+    ``ConfigurationError`` with the first on ``__cause__``.
+    """
+    sentinel = ConfigurationError("intentional config failure from related factory")
+
+    def _config_error_factory():
+        raise sentinel
+
+    class BookOrder(OrderSet):
+        broken = RelatedOrder(_config_error_factory, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf")
+            orderset_class = BookOrder
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    # Propagated by identity -- NOT re-wrapped (no second ConfigurationError,
+    # no ``raised during expansion`` prefix, the original is not on __cause__).
+    assert exc_info.value is sentinel
+    assert "raised during expansion" not in str(exc_info.value)
+
+
 # ---------------------------------------------------------------------------
 # Subpass 3 -- orphan validation (runs BEFORE materialize)
 # ---------------------------------------------------------------------------

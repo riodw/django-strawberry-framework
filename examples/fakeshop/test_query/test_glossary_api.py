@@ -72,10 +72,14 @@ def _seed_glossary():
         label="See also",
         order=0,
     )
-    doc_kind = kanban_models.BoardDocKind.objects.create(
+    # The glossary data migration (0002_*) already seeds a ``BoardDocKind``
+    # with ``key="glossary"`` via ``get_or_create``; on a migrated test DB the
+    # row pre-exists, so a plain ``.create()`` would collide on the unique
+    # ``key``. Use ``get_or_create`` so the fixture is idempotent against the
+    # migration seed.
+    doc_kind, _ = kanban_models.BoardDocKind.objects.get_or_create(
         key="glossary",
-        label="Glossary",
-        order=0,
+        defaults={"label": "Glossary", "order": 0},
     )
     kanban_models.BoardDoc.objects.create(
         namespace="glossary",

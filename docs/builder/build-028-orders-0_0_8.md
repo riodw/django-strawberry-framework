@@ -85,4 +85,4 @@ Build-wide context flags:
 - [x] Slice 5: Docs + KANBAN + CHANGELOG status updates (no version bump) -> `docs/builder/bld-slice-5-docs_kanban_changelog.md`
 - [x] Slice 6: Cross-card composition smoke test with shipped Filtering subsystem -> `docs/builder/bld-slice-6-composition_smoke.md`
 - [x] Cross-slice integration pass -> `docs/builder/bld-integration.md`
-- [ ] Final test-run gate -> `docs/builder/bld-final.md`
+- [x] Final test-run gate -> `docs/builder/bld-final.md`

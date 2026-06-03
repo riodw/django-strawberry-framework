@@ -28,7 +28,7 @@ from django_strawberry_framework.filters import (
     GlobalIDMultipleChoiceFilter,
     RelatedFilter,
 )
-from django_strawberry_framework.filters.sets import _lookups_for_field
+from django_strawberry_framework.filters.sets import _lookups_for_field, _read_qs
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 
@@ -2135,3 +2135,114 @@ def test_iter_input_items_returns_none_for_non_walkable_shapes():
     assert FilterSet._iter_input_items(42) is None
     assert FilterSet._iter_input_items([1, 2, 3]) is None
     assert FilterSet._iter_input_items(None) is None
+
+
+# ---------------------------------------------------------------------------
+# Async-path coverage. These four branches live in the apply_async pipeline
+# (the sync_to_async qs read, the nested-visibility pre-walk, and the
+# _q_for_branch stash-miss fallback). The fakeshop live HTTP suites drive
+# Django's SYNC test Client -> sync views -> apply_sync, so per
+# examples/fakeshop/test_query/README.md these lines are genuinely
+# unreachable from a live /graphql/ request and are earned here as unit
+# tests (the README's documented fallback for live-unreachable code).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_read_qs_returns_filterset_qs():
+    """``_read_qs`` returns the instance's ``.qs`` (the ``sync_to_async`` callable wrapper).
+
+    ``apply_async`` routes the synchronous ``.qs`` read through
+    ``sync_to_async(_read_qs)`` to keep the ORM work off the event-loop
+    thread; the wrapper exists only because ``sync_to_async`` wants a
+    callable rather than an attribute read. The threaded call site is not
+    reachable from the sync live HTTP Client, so it is covered directly here.
+    """
+
+    class BranchFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    fs = BranchFilter(data={}, queryset=library_models.Branch.objects.all())
+    # ``.qs`` is a cached_property, so the helper's read returns the same
+    # object the direct attribute read does.
+    assert _read_qs(fs) is fs.qs
+
+
+def test_collect_nested_visibility_querysets_async_returns_empty_for_none_input():
+    """``_collect_nested_visibility_querysets_async(None, ...)`` short-circuits to ``{}``.
+
+    The ``input_value is None or input_value is UNSET`` guard returns the
+    empty map before any branch walk -- the apply_async pre-pass over a
+    branch with no nested logical input does no work.
+    """
+    import asyncio
+
+    class BranchFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    result = asyncio.run(
+        BranchFilter._collect_nested_visibility_querysets_async(None, _make_info()),
+    )
+    assert result == {}
+
+
+def test_collect_nested_visibility_querysets_async_skips_none_child_branch():
+    """A ``None`` child inside a logical branch is skipped without a derive.
+
+    ``{"or": [None]}`` yields a single ``None`` child; the child loop's
+    ``if child_input is None or child_input is UNSET: continue`` skips it, so
+    no visibility derive runs and the result stays empty.
+    """
+    import asyncio
+
+    class BranchFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    result = asyncio.run(
+        BranchFilter._collect_nested_visibility_querysets_async({"or": [None]}, _make_info()),
+    )
+    assert result == {}
+
+
+@pytest.mark.django_db
+def test_q_for_branch_falls_back_to_sync_derive_on_stash_miss():
+    """``_q_for_branch`` with a present-but-missing stash uses the sync-derive fallback.
+
+    Under ``apply_async`` the nested visibility map is pre-derived and threaded
+    through ``_nested_qs_by_branch_id`` keyed by ``id(child_input)``. A consumer
+    who short-circuits past the async pre-pass (modeled here by an empty stash
+    dict, so ``.get(id(child_input))`` misses) still gets a correct result via
+    the defensive sync-derive fallback rather than a ``None`` map.
+    """
+    from django.db.models import Q
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    child_input = {"shelves": {"code": "A"}}
+    q = BranchFilter._q_for_branch(
+        library_models.Branch.objects.all(),
+        child_input,
+        info=_make_info(),
+        _nested_qs_by_branch_id={},  # present but empty -> stash miss -> sync fallback
+    )
+    assert isinstance(q, Q)

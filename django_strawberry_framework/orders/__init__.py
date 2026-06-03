@@ -12,9 +12,14 @@ clear the namespace via the local-import dance per spec-028 Decision 9
 module scope for Slice 2 / Slice 3 consumers but NOT listed in
 ``__all__`` -- the leading ``_`` flags them private to consumers.
 Mirrors ``django_strawberry_framework/filters/__init__.py``'s
-convention. ``OrderArgumentsFactory`` is module-importable for
-advanced uses per Spec Decision 2 but not in ``__all__`` (matches the
-filter side's ``FilterArgumentsFactory`` treatment).
+convention. ``OrderArgumentsFactory`` is **not** re-exported from this
+entry point: advanced consumers import it from
+``django_strawberry_framework.orders.factories`` directly, exactly as
+the filter side keeps ``FilterArgumentsFactory`` out of
+``filters/__init__.py`` (per spec-028 Decision 2). ``OrderSetMetaclass``
+IS in ``__all__`` because the filter twin keeps ``FilterSetMetaclass``
+in its ``__all__`` -- one-for-one parity with the shipped filter
+surface.
 """
 
 from __future__ import annotations
@@ -24,7 +29,6 @@ from typing import Annotated
 import strawberry
 
 from .base import RelatedOrder
-from .factories import OrderArgumentsFactory
 from .inputs import INPUTS_MODULE_PATH, Ordering, _input_type_name_for
 from .sets import OrderSet, OrderSetMetaclass
 

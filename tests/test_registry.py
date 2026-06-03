@@ -1356,3 +1356,39 @@ def test_clear_tolerates_unimportable_filter_submodules(fresh_registry):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+
+
+def test_clear_tolerates_unimportable_order_submodules(fresh_registry):
+    """Both order-side ``except ImportError`` guards in ``clear()`` are best-effort.
+
+    Order twin of ``test_clear_tolerates_unimportable_filter_submodules``. The
+    order-namespace co-clear (``clear_order_input_namespace`` +
+    ``_helper_referenced_ordersets.clear()``) uses cycle-safe local imports per
+    spec-028 Decision 9. If either order submodule cannot be imported (forced
+    here by poisoning ``sys.modules``), ``clear()`` skips that block and still
+    clears the registry's own state rather than raising.
+    """
+    import sys
+
+    inputs_name = "django_strawberry_framework.orders.inputs"
+    orders_name = "django_strawberry_framework.orders"
+    saved = {name: sys.modules.get(name) for name in (inputs_name, orders_name)}
+
+    class CategoryType:
+        pass
+
+    try:
+        # ``None`` in ``sys.modules`` makes ``from <name> import ...`` raise
+        # ImportError, exercising both order-side guards.
+        sys.modules[inputs_name] = None
+        sys.modules[orders_name] = None
+        fresh_registry.register(Category, CategoryType)
+        # Must not raise even though neither order submodule can be imported.
+        fresh_registry.clear()
+        assert fresh_registry.get(Category) is None
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module

@@ -1,7 +1,7 @@
 # Build: Final test-run gate
 
 Spec reference: `docs/spec-028-orders-0_0_8.md` (whole spec — the final gate verifies the entire build end-to-end; no single spec line range)
-Status: revision-needed (corrected 2026-06-02 after maintainer review — see "## Correction (2026-06-02 maintainer review)" at the bottom)
+Status: final-accepted (gate GREEN 2026-06-02 after two maintainer-review rounds — see "## Gate green (2026-06-02, round-2 closure)" at the bottom)
 
 ## Plan (Worker 1)
 
@@ -139,3 +139,24 @@ The `### Final status: final-accepted` above was **wrong** and is superseded. Th
 
 - **N1** (`KANBAN.md` snapshot paragraph still names the retired joint-cut convention): KANBAN.md is rendered from the kanban-app SQLite source and there is a heavy in-flight kanban workstream in the working tree; editing it now risks colliding with that work. Left for the maintainer per the review ("otherwise leave for the maintainer").
 - **N2** (`CHANGELOG.md [Unreleased]` not promoted to `## [0.0.8]` despite version files at 0.0.8): the review states this promotion "is the maintainer's to make, not this card's" (Decision 10 / DoD item 23 gate it on the explicit version-bump command). Left for the maintainer.
+
+---
+
+## Gate green (2026-06-02, round-2 closure)
+
+`docs/feedback.md` round-2 disproved the round-1 correction's causal claim (it was NOT the glossary failures suppressing the nine lines — making them pass left the same nine red). The gate closed on four independent pieces:
+
+- **5 card-owned order-wiring lines** — `tests/test_registry.py::test_clear_tolerates_unimportable_order_submodules` (poisons `orders.inputs` + `orders` in `sys.modules`, covers `registry.py:443-444,450-451`) and `tests/orders/test_finalizer.py::test_phase_2_5_configuration_error_during_expansion_propagates_by_identity` (covers the subpass-2 `except ConfigurationError: raise` at `finalizer.py:709`). Both are the order twins of tests the filter subsystem already had.
+- **4 filter async-path lines** (`filters/sets.py:76,992,1012,1493`) — 4 net-new unit tests appended to `tests/filters/test_sets.py`. Verified these are a spec-027 source-refactor gap (blame: commit `ebe593c`), NOT a regression from the deliberate filter-test relocation: the prune commit `4c40039` removed only live-earnable tests (own-PK GlobalID-in, non-exact permission gate, per-field `__all__`), none async. The async paths are genuinely unreachable from the sync live HTTP Client, so per `examples/fakeshop/test_query/README.md` they're correctly earned as unit tests.
+- **3 glossary failures** — `_seed_glossary` in `examples/fakeshop/test_query/test_glossary_api.py` switched from `.create(key="glossary")` to `get_or_create`, idempotent against the glossary data migration's seed (kanban/glossary workstream).
+
+Final gate commands, all green:
+
+- `uv run pytest` → **1354 passed, 3 skipped, 100.00% coverage** (`Required test coverage of 100.0% reached`).
+- `uv run python examples/fakeshop/manage.py check` → no issues.
+- `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` → No changes detected.
+- `uv run ruff format --check .` → 221 files already formatted (standing COM812 config warning only).
+- `uv run ruff check .` → All checks passed.
+- `git diff --check` → clean.
+
+The build is genuinely complete and the suite is green. Awaiting maintainer commit. Note the (c) filter and (d) glossary fixes span spec-027 and the kanban/glossary workstream respectively — the maintainer may split them into their own commits.

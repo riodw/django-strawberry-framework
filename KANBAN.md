@@ -88,7 +88,7 @@ demoted to a bullet under its label.
   - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
-  - connection-aware planning for Relay-style nested connection selections (new card `TODO-ALPHA-030-0.0.9`)
+  - connection-aware planning for Relay-style nested connection selections (new card `WIP-ALPHA-030-0.0.9`)
 - Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract ([`BACKLOG.md`][backlog] item 38).
 - The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
 
@@ -98,6 +98,10 @@ demoted to a bullet under its label.
 
 | Card | Spec file |
 | --- | --- |
+| `WIP-ALPHA-029-0.0.9` — `DjangoType` consumer-DX cleanup pass | No dedicated spec |
+| `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField` | No dedicated spec |
+| `WIP-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation) | No dedicated spec |
+| `WIP-ALPHA-032-0.0.9` — Connection-aware optimizer planning | No dedicated spec |
 | `DONE-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md) |
 | `DONE-027-0.0.8` — Filtering subsystem | [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md) |
 | `DONE-026-0.0.7` — Scalar conversion end-to-end coverage in the fakeshop example | [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md) |
@@ -131,12 +135,8 @@ demoted to a bullet under its label.
 
 No active WIP cards.
 
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
-
 <a id="djangotype_consumer_dx_cleanup_pass"></a>
-### [TODO-ALPHA-029-0.0.9 — `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)
+### [WIP-ALPHA-029-0.0.9 — `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -151,7 +151,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Dependencies
 
-- `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 #### Scope
 
@@ -173,7 +173,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Dependencies
 
-- None blocking. Slice 1 should land before any new schema-construction surfaces ship in `TODO-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one.
+- None blocking. Slice 1 should land before any new schema-construction surfaces ship in `WIP-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one.
 
 #### Other
 
@@ -184,10 +184,10 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Card references
 
-- Dependency via Dependencies section: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `TODO-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Dependency via Dependencies section: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `WIP-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="djangoconnectionfield"></a>
-### [TODO-ALPHA-030-0.0.9 — `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)
+### [WIP-ALPHA-030-0.0.9 — `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -227,14 +227,14 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - [ ] When the wrapped type declares `Meta.filterset_class`, the connection field exposes `filter: <Type>FilterInput` and routes input values through the filterset's `apply_sync` / `apply_async` pair.
 - [ ] When the wrapped type declares `Meta.orderset_class`, the connection field exposes `orderBy: [<Type>OrderInput!]` and routes through the orderset's `apply_sync` / `apply_async` pair.
 - [ ] Connection field composes with `cls.get_queryset(queryset, info)` — visibility scoping runs before any filter / order / cursor work.
-- [ ] Optimizer cooperation: the connection-aware planner (`TODO-ALPHA-032-0.0.9`) layers on without retrofit; this card ships against the existing flat-selection walker and the connection-aware walker takes over when 032 lands.
+- [ ] Optimizer cooperation: the connection-aware planner (`WIP-ALPHA-032-0.0.9`) layers on without retrofit; this card ships against the existing flat-selection walker and the connection-aware walker takes over when 032 lands.
 - [ ] Live HTTP coverage in `examples/fakeshop/test_query/` exercises a real round-trip with filter + orderBy + cursor + totalCount on a Relay-Node-shaped type.
 
 #### Foundation-slice seam
 
 - `finalize_django_types()` is the single architectural entry point that `DjangoConnectionField(DjangoType)` (and `DjangoNodeField`) will auto-trigger as their wrapper.
 - An auto-trigger wrapper must respect the single-threaded-setup window: either be constrained to schema-construction time, or acquire a real lock around the finalizer.
-- Connection-aware optimizer planning is its own follow-up slice (`TODO-ALPHA-032-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
+- Connection-aware optimizer planning is its own follow-up slice (`WIP-ALPHA-032-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
 
 #### Dependencies
 
@@ -255,11 +255,11 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - Dependency via Dependencies section: `FilterSet` (`DONE-027-0.0.8`) -> `DONE-027-0.0.8` — Filtering subsystem
 - Dependency via Dependencies section: `OrderSet` (`DONE-028-0.0.8`) -> `DONE-028-0.0.8` — Ordering subsystem
 - Dependency via Dependencies section: `FieldSet` — **deferred to `TODO-BETA-044-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker. -> `TODO-BETA-044-0.1.1` — `FieldSet`
-- Related via Card item: Connection-aware optimizer planning is its own follow-up slice (`TODO-ALPHA-032-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `TODO-ALPHA-032-0.0.9` — Connection-aware optimizer planning
+- Related via Card item: Connection-aware optimizer planning is its own follow-up slice (`WIP-ALPHA-032-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `WIP-ALPHA-032-0.0.9` — Connection-aware optimizer planning
 - Related via Card item: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-044-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-044-0.1.1` — `FieldSet`
 
 <a id="full_relay_story_node_connection_root_validation"></a>
-### [TODO-ALPHA-031-0.0.9 — Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
+### [WIP-ALPHA-031-0.0.9 — Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -270,11 +270,11 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 
 #### Planning note
 
-blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it.
+blocked on `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it.
 
 #### Dependencies
 
-- `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 #### Other
 
@@ -313,10 +313,10 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 - Auto-upgrade reverse FK / M2M to Connection based on a row-count threshold
 - Refetchable container schema metadata for `useRefetchableFragment`
 - Permission-aware cursor decoding (cursor decode re-runs `get_queryset` so privileged cursors don't leak)
-- `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands.
+- `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands.
 - `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
 - `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
-- `TODO-ALPHA-032-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
+- `WIP-ALPHA-032-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
 - `TODO-ALPHA-033-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands.
 - New spec: `docs/spec-relay_connection.md` covering all eight goals above with worked examples and decision rationale.
 - `DjangoNodeField` and `DjangoNodesField` exported from the package public surface; both wired through the registry's GlobalID decode path and the per-type `get_queryset`.
@@ -329,7 +329,7 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 - `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
 - The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-050-0.1.5`.
 - 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
-- `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-ALPHA-030-0.0.9`)
+- `django_strawberry_framework/connection.py` — main implementation (shipped as part of `WIP-ALPHA-030-0.0.9`)
 - `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
 - `django_strawberry_framework/types/base.py` — `Meta.connection` / `Meta.relation_shapes` validation
 - `django_strawberry_framework/types/finalizer.py` — auto-upgrade reverse-FK / M2M to Connection
@@ -346,20 +346,20 @@ blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection
 
 #### Card references
 
-- Blocked by via Planning note: blocked on `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Blocked by via Planning note: blocked on `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 - Related via Card item: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` — Filtering subsystem
 - Related via Card item: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` — Ordering subsystem
 - Related via Card item: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-045-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-045-0.1.2` — `Meta.search_fields` support
-- Related via Card item: `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Related via Card item: `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 - Related via Card item: `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections. -> `DONE-027-0.0.8` — Filtering subsystem
 - Related via Card item: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` — Ordering subsystem
-- Related via Card item: `TODO-ALPHA-032-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `TODO-ALPHA-032-0.0.9` — Connection-aware optimizer planning
+- Related via Card item: `WIP-ALPHA-032-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `WIP-ALPHA-032-0.0.9` — Connection-aware optimizer planning
 - Related via Card item: `TODO-ALPHA-033-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `TODO-ALPHA-033-0.0.10` — Permissions subsystem
 - Related via Card item: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-050-0.1.5`. -> `TODO-BETA-050-0.1.5` — Fakeshop GraphQL schema activation
-- Related via Card item: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `TODO-ALPHA-030-0.0.9`) -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Related via Card item: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `WIP-ALPHA-030-0.0.9`) -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="connection_aware_optimizer_planning"></a>
-### [TODO-ALPHA-032-0.0.9 — Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
+### [WIP-ALPHA-032-0.0.9 — Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -389,7 +389,7 @@ planned
 
 #### Other
 
-- gated on `TODO-ALPHA-030-0.0.9` / Relay decisions.
+- gated on `WIP-ALPHA-030-0.0.9` / Relay decisions.
 - strawberry-graphql-django plans connection selections natively; graphene-django has only rudimentary connection-aware optimization (⚛️ parity-adjacent).
 - bounded optimizer extension: teach the selection-walker to recognize Relay `edges { node }` and plan paginated selections. No new subpackage; touches `walker.py` / `plans.py` / `extension.py` + mirrored tests.
 - The optimizer's plan cache, `select_related` / `prefetch_related` planning, FK-id elision, and queryset diffing are all proven for direct selection trees and nested non-Relay relation paths.
@@ -402,7 +402,11 @@ planned
 
 #### Card references
 
-- Related via Card item: gated on `TODO-ALPHA-030-0.0.9` / Relay decisions. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Related via Card item: gated on `WIP-ALPHA-030-0.0.9` / Relay decisions. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="permissions_subsystem"></a>
 ### [TODO-ALPHA-033-0.0.10 — Permissions subsystem](KANBAN.html#permissions_subsystem)
@@ -420,7 +424,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 #### Dependencies
 
-- `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 #### Scope
 
@@ -473,7 +477,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 #### Card references
 
-- Dependency via Dependencies section: future `DjangoConnectionField` -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Dependency via Dependencies section: future `DjangoConnectionField` -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="mutations_auto_generated_input_types"></a>
 ### [TODO-ALPHA-034-0.0.11 — Mutations + auto-generated Input types](KANBAN.html#mutations_auto_generated_input_types)
@@ -1083,12 +1087,12 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 
 #### Planning note
 
-Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Planned; gated on `DONE-027-0.0.8` (Filtering) and `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`).
+Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Planned; gated on `DONE-027-0.0.8` (Filtering) and `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`).
 
 #### Dependencies
 
 - `DONE-027-0.0.8` — Filtering subsystem
-- `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 #### Scope
 
@@ -1121,7 +1125,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 #### Dependencies
 
 - `DONE-027-0.0.8` (Filtering subsystem) — the argument factory is shared.
-- `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields.
+- `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields.
 
 #### Other
 
@@ -1131,9 +1135,9 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 #### Card references
 
 - Dependency via Dependencies section: `DONE-027-0.0.8` (Filtering subsystem) — the argument factory is shared. -> `DONE-027-0.0.8` — Filtering subsystem
-- Dependency via Dependencies section: `TODO-ALPHA-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields. -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
-- Dependency via Planning note: planned; gated on `DONE-027-0.0.8` (Filtering) and `TODO-ALPHA-030-0.0.9` (DjangoConnectionField) -> `DONE-027-0.0.8` — Filtering subsystem
-- Dependency via Planning note: planned; gated on `DONE-027-0.0.8` (Filtering) and `TODO-ALPHA-030-0.0.9` (DjangoConnectionField) -> `TODO-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Dependency via Dependencies section: `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Dependency via Planning note: planned; gated on `DONE-027-0.0.8` (Filtering) and `WIP-ALPHA-030-0.0.9` (DjangoConnectionField) -> `DONE-027-0.0.8` — Filtering subsystem
+- Dependency via Planning note: planned; gated on `DONE-027-0.0.8` (Filtering) and `WIP-ALPHA-030-0.0.9` (DjangoConnectionField) -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 - Related via Card item: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-048-0.1.3`). -> `TODO-BETA-048-0.1.3` — Layer 3 Meta key promotion
 - Related via Card item: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-050-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-050-0.1.5` — Fakeshop GraphQL schema activation
 - Related via Card item: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` — Filtering subsystem
@@ -1328,11 +1332,11 @@ planned
 
 #### Planning note
 
-blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (Layer 3 Meta key promotion).
+blocked on `WIP-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (Layer 3 Meta key promotion).
 
 #### Dependencies
 
-- `TODO-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation)
+- `WIP-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation)
 - `TODO-BETA-048-0.1.3` — Layer 3 Meta key promotion
 
 #### Definition of done
@@ -1351,8 +1355,8 @@ blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (L
 
 #### Card references
 
-- Blocked by via Planning note: blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (Layer 3 Meta key promotion). -> `TODO-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation)
-- Blocked by via Planning note: blocked on `TODO-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-048-0.1.3` — Layer 3 Meta key promotion
+- Blocked by via Planning note: blocked on `WIP-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (Layer 3 Meta key promotion). -> `WIP-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation)
+- Blocked by via Planning note: blocked on `WIP-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-048-0.1.3` — Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
 ### [TODO-BETA-051-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)

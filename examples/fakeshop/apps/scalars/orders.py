@@ -56,8 +56,4 @@ class NullableScalarSpecimenOrder(OrderSet):
         ]
 
 
-__all__ = (
-    "NullableScalarSpecimenOrder",
-    "ScalarSpecimenOrder",
-    "ScalarSpecimenTagOrder",
-)
+__all__ = ("NullableScalarSpecimenOrder", "ScalarSpecimenOrder", "ScalarSpecimenTagOrder")

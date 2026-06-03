@@ -24,6 +24,12 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 - Order permission hooks mirror the filter side's active-input discipline: `check_<field>_permission(request)` fires only for supplied leaf fields, active related-order branches recurse into their child `OrderSet`, and parent branch gates such as `check_shelf_permission` fire once per top-level apply call.
 - Shared set machinery moved into [`django_strawberry_framework/sets_mixins.py`][sets-mixins]. `ClassBasedTypeNameMixin` centralizes class-derived GraphQL input naming, and `LazyRelatedClassMixin` centralizes string / callable related-class resolution for filters, orders, and future set families.
 - [`SyncMisuseError`][glossary-syncmisuseerror] is now exported from `django_strawberry_framework` and `django_strawberry_framework.types`. It marks the specific misuse where a sync resolver path receives an async `get_queryset` coroutine, while still matching both `ConfigurationError` and `RuntimeError` handlers.
+- **Fakeshop filter/order acceptance surfaces.** The example project now dogfoods the new filter and order APIs through real schema code: products and scalars define `FilterSet` declarations, library defines both `FilterSet` and `OrderSet` declarations, and kanban / glossary expose queryable filter surfaces. [`examples/fakeshop/config/schema.py`][fakeshop-config-schema] wires those apps into the shared schema, while live `/graphql/` suites cover products, library, scalars, kanban, and glossary queries.
+- **Kanban example app and dashboard publishing.** [`examples/fakeshop/apps/kanban/`][fakeshop-kanban] adds a relational model of the repository board, including lookup tables, UUID side rows, card references, board documents, labels, glossary-term links, factories, admin wiring, signals, `import_cards`, and GraphQL schema exposure. [`KANBAN.md`][kanban] and [`KANBAN.html`][kanban-html] are now generated from that database-backed GraphQL payload.
+- **Glossary example app and glossary publishing.** [`examples/fakeshop/apps/glossary/`][fakeshop-glossary] adds database-backed terms, aliases, categories, term links, spec mentions, documents, filters, factories, admin wiring, and GraphQL schema exposure for [`docs/GLOSSARY.md`][glossary]. [`scripts/build_glossary_md.py`][build-glossary-md] renders the standing glossary from the same live GraphQL data path used by the Kanban builders.
+- **Kanban/glossary tooling and CI.** [`scripts/build_kanban_html.py`][build-kanban-html], [`scripts/build_kanban_md.py`][build-kanban-md], and [`scripts/build_glossary_md.py`][build-glossary-md] now render the static dashboard and glossary artifacts from the fakeshop GraphQL API. [`kanban-pages.yml`][github-kanban-pages-workflow] builds and deploys those artifacts to GitHub Pages and tracks source, schema, database, script, Kanban, and glossary inputs.
+- **Formatting gate.** [`scripts/check_trailing_commas.py`][check-trailing-commas] enforces the repository's explode-at-threshold trailing-comma layout, with a default threshold of four items and a stricter two-item threshold for `models.py`. The new [`pre-commit` configuration][pre-commit-config] runs the trailing-comma fixer, Ruff format, and Ruff check locally, and [`django.yml`][github-django-workflow] runs the trailing-comma check in CI.
+- **0.0.8 verification coverage.** Package tests now include dedicated [`tests/filters/`][tests-filters] and [`tests/orders/`][tests-orders] suites, plus focused pins for registry, type-finalization, resolver, optimizer, scalar, export-schema, cleanup, testing-helper, and relation behavior. Example coverage expanded through live `/graphql/` query tests for products, library, scalars, kanban, and glossary, and app-local tests now live with the example app that owns the behavior.
 
 ### Changed
 - [`Meta.filterset_class`][glossary-metafilterset_class] is no longer in `DEFERRED_META_KEYS`; declaring `Meta.filterset_class = MyFilter` now wires through to finalizer phase 2.5 and surfaces a working filter input on the GraphQL type. Consumers who declared the key against `0.0.7` saw a [`ConfigurationError`][glossary-configurationerror]; against `0.0.8` it produces a filter surface.
@@ -34,6 +40,11 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 - `DjangoTypeDefinition` now records `filterset_class` and `orderset_class`, and `related_target_for(field_name)` is memoized after finalization. Filter and order binding use the recorded owner definition to resolve Relay own-PK shape and related-target identity consistently.
 - The consumer testing helper path is [`django_strawberry_framework.testing`][test-init]. The old `django_strawberry_framework.test` package path has been renamed, so consumers should import `safe_wrap_connection_method` from `django_strawberry_framework.testing`.
 - `django_strawberry_framework.__version__` is now `0.0.8`.
+- The example test layout now matches the repository's real-usage test policy: app-owned tests live under `examples/fakeshop/apps/<app>/tests/`, live GraphQL tests live under [`examples/fakeshop/test_query/`][test-query-readme], and `pytest.ini` includes `examples/fakeshop/apps` so app-local test packages are discovered. Optimizer behaviors observable through the example API moved from package tests into live `/graphql/` coverage.
+- The documentation surface was synchronized for the 0.0.8 cycle. [`spec-027-filters-0_0_8.md`][spec-filters] documents the filtering subsystem, [`spec-028-orders-0_0_8.md`][spec-orders] documents the ordering subsystem, prior specs were archived / renumbered under [`docs/SPECS/`][docs-specs], and [`README.md`][root-readme], [`docs/README.md`][readme], [`START.md`][start], [`GOAL.md`][goal], [`TODAY.md`][today], [`docs/TREE.md`][tree], [`docs/GLOSSARY.md`][glossary], [`KANBAN.md`][kanban], [`BACKLOG.md`][backlog], and [`CONTRIBUTING.md`][contributing] were refreshed to match the shipped API and workflow.
+- Review and build tooling now use non-overlapping generated-output ownership: [`review_historical_package_snapshot_at_commit.py`][review-historical-package-snapshot] owns `docs/shadow/current/`, [`review_changed_python_diffs_against_head.py`][review-changed-python-diffs] owns `docs/shadow/old`, `docs/shadow/new`, and `docs/shadow/diff`, and [`clean_up.py`][clean-up-script] clears only known generated review / builder / bug-hunt paths. The diff helper also accepts repeatable `--path` scopes for focused changed-file reviews.
+- [`check_spec_glossary.py`][check-spec-glossary] now understands the standing docs' reference-style link convention. Its `--auto-link` mode inserts `[text][glossary-...]` body links plus sorted link definitions under the `<!-- docs/ -->` block instead of writing inline `GLOSSARY.md#...` links.
+- Ruff's formatter target is now 100 columns, with `E501` kept at a 110-column grace for long strings and comments the formatter cannot split. The repo-wide Python layout was reformatted to that policy.
 
 ### Fixed
 - `FilterSet._q_for_branch` now threads the live `request` through to nested filterset instances built for `and` / `or` / `not` sub-branches. Previously the sibling instance was constructed with `request=None`, so any `method=`-shaped filter that read `self.request` inside a logical branch silently lost the context. The new shape is the right semantic — a logically-nested filter sees the same request as its top-level peer — and only affects consumers who happened to depend on the request being `None` to disambiguate nested calls (no real-world consumer is expected to take that branch). The behavioral change is observable to any consumer running a custom `Filter(method=...)` callable that reads the request.
@@ -50,6 +61,11 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 - Relay `resolve_node` / `resolve_nodes` defaults now await async `get_queryset` hooks on async resolver paths and raise `SyncMisuseError` on sync resolver paths that cannot await them, rather than attempting queryset operations on a coroutine.
 - `scalar_for_field(field)` centralizes Django-field-to-scalar MRO lookup, so `DjangoType` scalar conversion and generated filter-input scalar conversion resolve consumer field subclasses and consumer-registered `SCALAR_MAP` entries through the same path.
 - `FieldMeta._from_field_shape(...)` is now the shared implementation for canonical Django field descriptors and resolver test-double fallback shapes, keeping cardinality, nullable, target-field, and connector-column metadata from drifting between optimizer and resolver code.
+
+### Removed
+- Removed the dead fakeshop products aggregates module after the products example moved to explicit filter/schema surfaces and live API coverage.
+- Removed the old in-process fakeshop schema test path in favor of app-local example tests and live `/graphql/` tests.
+- Retired obsolete transient planning / builder artifacts for the 0.0.7 scalar-map-helper and Django Trac #37064 cycles after the standing spec archive, builder notes, and changelog carried the shipped behavior.
 
 ## [0.0.7] - 2026-05-27
 ### Added
@@ -203,10 +219,20 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [card-schema-export-management-command]: KANBAN.md#schema_export_management_command
 [card-stable-release-api-freeze-cleanup-verification-beta-stable]: KANBAN.md#stable_release_api_freeze_cleanup_verification_beta_stable
 [card-warning-free-scalar-registration-via-strawberryconfigscalar-map]: KANBAN.md#warning_free_scalar_registration_via_strawberryconfigscalar_map
+[contributing]: CONTRIBUTING.md
+[github-django-workflow]: .github/workflows/django.yml
+[github-kanban-pages-workflow]: .github/workflows/kanban-pages.yml
+[goal]: GOAL.md
 [kanban]: KANBAN.md
+[kanban-html]: KANBAN.html
+[pre-commit-config]: .pre-commit-config.yaml
+[root-readme]: README.md
+[start]: START.md
+[today]: TODAY.md
 
 <!-- docs/ -->
 [feedback]: docs/feedback.md
+[glossary]: docs/GLOSSARY.md
 [glossary-bigint-scalar]: docs/GLOSSARY.md#bigint-scalar
 [glossary-configurationerror]: docs/GLOSSARY.md#configurationerror
 [glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
@@ -225,8 +251,12 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config
 [glossary-syncmisuseerror]: docs/GLOSSARY.md#syncmisuseerror
 [readme]: docs/README.md
+[spec-orders]: docs/spec-028-orders-0_0_8.md
+[tree]: docs/TREE.md
 
 <!-- docs/SPECS/ -->
+[docs-specs]: docs/SPECS/
+[spec-filters]: docs/SPECS/spec-027-filters-0_0_8.md
 
 <!-- docs/builder/ -->
 
@@ -244,15 +274,29 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [optimizer-multi-db]: tests/optimizer/test_multi_db.py
 [test-converters]: tests/types/test_converters.py
 [test-resolvers]: tests/types/test_resolvers.py
+[tests-filters]: tests/filters/
+[tests-orders]: tests/orders/
 
 <!-- examples/ -->
 [db-shard-b]: examples/fakeshop/db_shard_b.sqlite3
+[fakeshop-config-schema]: examples/fakeshop/config/schema.py
+[fakeshop-glossary]: examples/fakeshop/apps/glossary/
+[fakeshop-kanban]: examples/fakeshop/apps/kanban/
 [fakeshop-multi-db]: examples/fakeshop/test_query/test_multi_db.py
 [settings]: examples/fakeshop/config/settings.py
+[test-query-readme]: examples/fakeshop/test_query/README.md
 [test-library-api]: examples/fakeshop/test_query/test_library_api.py
 [test-scalars-api]: examples/fakeshop/test_query/test_scalars_api.py
 
 <!-- scripts/ -->
+[build-glossary-md]: scripts/build_glossary_md.py
+[build-kanban-html]: scripts/build_kanban_html.py
+[build-kanban-md]: scripts/build_kanban_md.py
+[check-spec-glossary]: scripts/check_spec_glossary.py
+[check-trailing-commas]: scripts/check_trailing_commas.py
+[clean-up-script]: scripts/clean_up.py
+[review-changed-python-diffs]: scripts/review_changed_python_diffs_against_head.py
+[review-historical-package-snapshot]: scripts/review_historical_package_snapshot_at_commit.py
 
 <!-- .venv/ -->
 

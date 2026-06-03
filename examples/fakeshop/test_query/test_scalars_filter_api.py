@@ -155,3 +155,22 @@ def test_scalars_filter_by_related_tag_label():
         """,
         {"allScalarSpecimens": [{"label": "alpha"}]},
     )
+
+
+@pytest.mark.django_db
+def test_scalars_order_by_label_desc():
+    """``orderBy: [{ label: DESC }]`` sorts specimens by label descending (DONE-028 wiring)."""
+    _seed_specimen("alpha")
+    _seed_specimen("gamma")
+    _seed_specimen("beta")
+    expected = [
+        {"label": label}
+        for label in models.ScalarSpecimen.objects.order_by("-label").values_list(
+            "label",
+            flat=True,
+        )
+    ]
+    _assert_graphql_data(
+        "query { allScalarSpecimens(orderBy: [{ label: DESC }]) { label } }",
+        {"allScalarSpecimens": expected},
+    )

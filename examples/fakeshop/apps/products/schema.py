@@ -9,23 +9,25 @@ across nested selections without per-resolver boilerplate.
 The eventual `1.0.0` shape — Relay-node types with the cookbook-shaped
 filter / order / aggregate / fields / search / permissions surface, a
 1-to-1 port of the `django-graphene-filters` cookbook recipe — is
-tracked in `KANBAN.md` under the Layer-3 cards (`DONE-021-0.0.8`
-filters, `WIP-ALPHA-022-0.0.8` orders, `TODO-ALPHA-024-0.0.9` `DjangoConnectionField`,
+tracked in `KANBAN.md` under the Layer-3 cards (`DONE-027-0.0.8`
+filters, `DONE-028-0.0.8` orders, `TODO-ALPHA-024-0.0.9` `DjangoConnectionField`,
 `TODO-ALPHA-027-0.0.10` permissions, `TODO-BETA-038-0.1.1` fieldsets,
-`TODO-BETA-039-0.1.2` search, `TODO-BETA-040-0.1.3` aggregates). Each `*Type`
-class below carries commented-out future-shape Meta keys and methods —
-uncomment each line as the corresponding card ships. Sidecar keys
-(`filterset_class`, `orderset_class`, `aggregate_class`,
-`fields_class`) additionally need a `filters.py` / `orders.py` /
-`aggregates.py` / `fields.py` module under this app — the sibling
-files are not yet present.
+`TODO-BETA-039-0.1.2` search, `TODO-BETA-040-0.1.3` aggregates). The
+shipped `filterset_class` + `orderset_class` surface is wired below;
+each `*Type` class still carries commented-out future-shape Meta keys
+and methods — uncomment each line as the corresponding card ships.
+Sidecar keys `filterset_class` / `orderset_class` are backed by the
+present `filters.py` / `orders.py` modules; `aggregate_class` /
+`fields_class` additionally need their cards plus an `aggregates.py` /
+`fields.py` module under this app (`fields.py` is present;
+`aggregates.py` is not yet).
 """
 
 # Future imports (uncomment as Layer-3 subsystems ship):
 #
 # from django_strawberry_framework import DjangoConnectionField      # TODO-ALPHA-024-0.0.9
 # from django_strawberry_framework import apply_cascade_permissions  # TODO-ALPHA-027-0.0.10
-# from apps.products import aggregates, orders                       # WIP-ALPHA-022-0.0.8 (orders) + TODO-BETA-040-0.1.3 (aggregates)
+# from apps.products import aggregates                               # TODO-BETA-040-0.1.3 (aggregates)
 # from apps.products import fields as fieldsets                      # TODO-BETA-038-0.1.1
 
 import strawberry
@@ -33,8 +35,9 @@ from strawberry import relay
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.filters import filter_input_type
+from django_strawberry_framework.orders import order_input_type
 
-from . import filters, models
+from . import filters, models, orders
 
 
 class CategoryType(DjangoType):
@@ -52,9 +55,9 @@ class CategoryType(DjangoType):
         )
         interfaces = (relay.Node,)
         filterset_class = filters.CategoryFilter
+        orderset_class = orders.CategoryOrder
         # Future Layer-3 additions — uncomment each as the relevant card ships:
         # search_fields = ("name", "description")           # needs TODO-BETA-039-0.1.2
-        # orderset_class = orders.CategoryOrder             # needs WIP-ALPHA-022-0.0.8 + orders.py
         # aggregate_class = aggregates.CategoryAggregate    # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.CategoryFieldSet         # needs TODO-BETA-038-0.1.1 + fields.py
 
@@ -86,9 +89,9 @@ class ItemType(DjangoType):
         )
         interfaces = (relay.Node,)
         filterset_class = filters.ItemFilter
+        orderset_class = orders.ItemOrder
         # Future Layer-3 additions — uncomment each as the relevant card ships:
         # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-039-0.1.2
-        # orderset_class = orders.ItemOrder              # needs WIP-ALPHA-022-0.0.8 + orders.py
         # aggregate_class = aggregates.ItemAggregate     # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.ItemFieldSet          # needs TODO-BETA-038-0.1.1 + fields.py
 
@@ -120,9 +123,9 @@ class PropertyType(DjangoType):
         )
         interfaces = (relay.Node,)
         filterset_class = filters.PropertyFilter
+        orderset_class = orders.PropertyOrder
         # Future Layer-3 additions — uncomment each as the relevant card ships:
         # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-039-0.1.2
-        # orderset_class = orders.PropertyOrder           # needs WIP-ALPHA-022-0.0.8 + orders.py
         # aggregate_class = aggregates.PropertyAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.PropertyFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py
 
@@ -154,9 +157,9 @@ class EntryType(DjangoType):
         )
         interfaces = (relay.Node,)
         filterset_class = filters.EntryFilter
+        orderset_class = orders.EntryOrder
         # Future Layer-3 additions — uncomment each as the relevant card ships:
         # search_fields = ("value", "property__name", "item__name") # needs TODO-BETA-039-0.1.2
-        # orderset_class = orders.EntryOrder           # needs WIP-ALPHA-022-0.0.8 + orders.py
         # aggregate_class = aggregates.EntryAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.EntryFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py
 
@@ -202,10 +205,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters.CategoryFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.CategoryOrder)] | None = None,
     ) -> list[CategoryType]:
         queryset = CategoryType.get_queryset(models.Category.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.CategoryFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.CategoryOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -213,10 +219,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters.ItemFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.ItemOrder)] | None = None,
     ) -> list[ItemType]:
         queryset = ItemType.get_queryset(models.Item.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.ItemFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.ItemOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -224,10 +233,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters.PropertyFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.PropertyOrder)] | None = None,
     ) -> list[PropertyType]:
         queryset = PropertyType.get_queryset(models.Property.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.PropertyFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.PropertyOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -235,10 +247,13 @@ class Query:
         self,
         info: strawberry.Info,
         filter: filter_input_type(filters.EntryFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.EntryOrder)] | None = None,
     ) -> list[EntryType]:
         queryset = EntryType.get_queryset(models.Entry.objects.order_by("id"), info)
         if filter is not None:
             queryset = filters.EntryFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.EntryOrder.apply_sync(order_by, queryset, info)
         return queryset
 
 

@@ -29,9 +29,10 @@ from typing import Any
 import strawberry
 from strawberry.types import Info
 
-from apps.scalars import filters, models
+from apps.scalars import filters, models, orders
 from django_strawberry_framework import BigInt, DjangoType
 from django_strawberry_framework.filters import filter_input_type
+from django_strawberry_framework.orders import order_input_type
 
 
 class ScalarSpecimenTagType(DjangoType):
@@ -56,6 +57,7 @@ class ScalarSpecimenTagType(DjangoType):
             "tagged_specimens",
         )
         filterset_class = filters.ScalarSpecimenTagFilter
+        orderset_class = orders.ScalarSpecimenTagOrder
 
 
 class ScalarSpecimenType(DjangoType):
@@ -82,6 +84,7 @@ class ScalarSpecimenType(DjangoType):
             "tag",
         )
         filterset_class = filters.ScalarSpecimenFilter
+        orderset_class = orders.ScalarSpecimenOrder
 
 
 class NullableScalarSpecimenType(DjangoType):
@@ -111,6 +114,7 @@ class NullableScalarSpecimenType(DjangoType):
             "partner",
         )
         filterset_class = filters.NullableScalarSpecimenFilter
+        orderset_class = orders.NullableScalarSpecimenOrder
 
 
 @strawberry.type
@@ -122,10 +126,13 @@ class Query:
         self,
         info: Info,
         filter: filter_input_type(filters.ScalarSpecimenFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.ScalarSpecimenOrder)] | None = None,
     ) -> list[ScalarSpecimenType]:
         queryset = models.ScalarSpecimen.objects.order_by("id")
         if filter is not None:
             queryset = filters.ScalarSpecimenFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.ScalarSpecimenOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -148,10 +155,13 @@ class Query:
         self,
         info: Info,
         filter: filter_input_type(filters.NullableScalarSpecimenFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.NullableScalarSpecimenOrder)] | None = None,
     ) -> list[NullableScalarSpecimenType]:
         queryset = models.NullableScalarSpecimen.objects.order_by("id")
         if filter is not None:
             queryset = filters.NullableScalarSpecimenFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.NullableScalarSpecimenOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field
@@ -159,10 +169,13 @@ class Query:
         self,
         info: Info,
         filter: filter_input_type(filters.ScalarSpecimenTagFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.ScalarSpecimenTagOrder)] | None = None,
     ) -> list[ScalarSpecimenTagType]:
         queryset = models.ScalarSpecimenTag.objects.order_by("id")
         if filter is not None:
             queryset = filters.ScalarSpecimenTagFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.ScalarSpecimenTagOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field

@@ -328,3 +328,94 @@ def test_products_items_filter_by_related_category_global_id():
         f'query {{ allItems(filter: {{ category: {{ id: {{ exact: "{gid}" }} }} }}) {{ name }} }}',
         {"allItems": expected},
     )
+
+
+# ---------------------------------------------------------------------------
+# Ordering (DONE-028-0.0.8) — wired in ``apps.products.schema`` via the
+# ``orderset_class`` Meta key and the ``order_input_type(...)`` resolver
+# arguments. Expectations compare against the equivalent ORM ``order_by`` so
+# the GraphQL ``ORDER BY`` and the expected sequence share one DB collation
+# (robust across Faker-generated values and name ties).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_products_items_order_by_name_asc():
+    """``orderBy: [{ name: ASC }]`` sorts items by name ascending (Item has no order gate)."""
+    seed_data(1)
+    expected = [
+        {"name": name}
+        for name in models.Item.objects.order_by("name").values_list("name", flat=True)
+    ]
+    _assert_graphql_data(
+        "query { allItems(orderBy: [{ name: ASC }]) { name } }",
+        {"allItems": expected},
+    )
+
+
+@pytest.mark.django_db
+def test_products_items_order_by_name_desc():
+    """``orderBy: [{ name: DESC }]`` sorts items by name descending."""
+    seed_data(1)
+    expected = [
+        {"name": name}
+        for name in models.Item.objects.order_by("-name").values_list("name", flat=True)
+    ]
+    _assert_graphql_data(
+        "query { allItems(orderBy: [{ name: DESC }]) { name } }",
+        {"allItems": expected},
+    )
+
+
+@pytest.mark.django_db
+def test_products_categories_order_by_name_denied_for_anonymous():
+    """``CategoryOrder.check_name_permission`` rejects an anonymous order-by-name.
+
+    Active-input-only: the gate fires because the ``orderBy`` input names the
+    gated ``name`` field — mirroring ``CategoryFilter.check_name_permission``
+    on the filter side.
+    """
+    seed_data(1)
+    response = _post_graphql("query { allCategories(orderBy: [{ name: ASC }]) { name } }")
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert "staff user" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_products_categories_order_by_name_as_staff():
+    """A staff user clears the order-by-name gate and gets categories sorted by name."""
+    seed_data(1)
+    expected = [
+        {"name": name}
+        for name in models.Category.objects.order_by("name").values_list("name", flat=True)
+    ]
+    _assert_graphql_data(
+        "query { allCategories(orderBy: [{ name: ASC }]) { name } }",
+        {"allCategories": expected},
+        client=_staff_client(),
+    )
+
+
+@pytest.mark.django_db
+def test_products_items_filter_and_order_compose():
+    """``filter:`` narrows rows then ``orderBy:`` arranges them (filter → order chain).
+
+    Filters items to one category via the own-PK GlobalID ``RelatedFilter``
+    (no gate on ``id``) and orders the survivors by ``name`` (no gate on
+    ``Item.name``), so the whole query runs anonymously.
+    """
+    seed_data(1)
+    category = models.Category.objects.order_by("id").first()
+    gid = str(relay.GlobalID(type_name="CategoryType", node_id=str(category.pk)))
+    expected = [
+        {"name": name}
+        for name in models.Item.objects.filter(category=category)
+        .order_by("name")
+        .values_list("name", flat=True)
+    ]
+    _assert_graphql_data(
+        f'query {{ allItems(filter: {{ category: {{ id: {{ exact: "{gid}" }} }} }}, '
+        "orderBy: [{ name: ASC }]) { name } }",
+        {"allItems": expected},
+    )

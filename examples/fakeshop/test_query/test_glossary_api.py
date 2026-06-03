@@ -226,3 +226,19 @@ def test_glossary_documents_are_shared_board_docs_scoped_to_glossary_namespace()
             },
         ],
     }
+
+
+@pytest.mark.django_db
+def test_order_glossary_terms_by_title_desc():
+    """``orderBy: [{ title: DESC }]`` reorders the glossary terms list (DONE-028 order wiring)."""
+    _seed_glossary()
+    expected = [
+        {"title": title}
+        for title in models.GlossaryTerm.objects.order_by("-title").values_list(
+            "title",
+            flat=True,
+        )
+    ]
+    assert _graphql_data(
+        "query { allGlossaryTerms(orderBy: [{ title: DESC }]) { title } }",
+    ) == {"allGlossaryTerms": expected}

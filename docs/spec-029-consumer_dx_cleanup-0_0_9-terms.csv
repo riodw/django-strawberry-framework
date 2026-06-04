@@ -1,8 +1,8 @@
 term,anchor,notes
 DjangoType,djangotype,The model-backed Strawberry type all three slices touch; Slice 2 introspects it and Slice 3 adds two Meta keys to its surface.
-DjangoOptimizerExtension,djangooptimizerextension,The schema extension whose instance form Slice 1 keeps (its plan cache is instance-bound); the card's migration is deferred per Decision 3.
-Plan cache,plan-cache,Instance-bound optimizer plan cache (self._plan_cache); the reason Slice 1 keeps DjangoOptimizerExtension on the instance form per Decision 3.
-Strictness mode,strictness-mode,The optimizer strictness constructor argument; a strictness= site would need a lambda factory under the deferred migration (which regresses the plan cache too).
+DjangoOptimizerExtension,djangooptimizerextension,The schema extension whose instance-form construction Slice 1 migrates to a singleton-factory (lambda over a module-level instance) per Decision 3 — preserves the instance-bound plan cache, drops the 0.316.0 deprecation warning.
+Plan cache,plan-cache,Instance-bound optimizer plan cache (self._plan_cache); why Slice 1 uses a singleton-factory rather than the bare class or a constructing factory per Decision 3.
+Strictness mode,strictness-mode,The optimizer strictness constructor argument; a strictness= site declares the module-level singleton _optimizer=DjangoOptimizerExtension(strictness=...) then extensions=[lambda: _optimizer] per Decision 3.
 Meta.fields,metafields,Existing field-selection key whose tuple-of-names shape Slice 3's override keys mirror; determines the selected field set an override may name.
 Meta.exclude,metaexclude,Existing field-selection key; an excluded field cannot be named in an override set (Decision 8 rule 2).
 Scalar field conversion,scalar-field-conversion,The convert_scalar path Slice 3 threads force_nullable into.

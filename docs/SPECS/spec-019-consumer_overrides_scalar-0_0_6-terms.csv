@@ -1,0 +1,16 @@
+term,anchor,notes
+BigInt,bigint-scalar,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Choice enum generation,choice-enum-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
+ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Definition-order independence,definition-order-independence,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
+finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.exclude,metaexclude,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.interfaces,metainterfaces,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Relation handling,relation-handling,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Relay Node integration,relay-node-integration,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Scalar field conversion,scalar-field-conversion,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Scalar field override semantics,scalar-field-override-semantics,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Specialized scalar conversions,specialized-scalar-conversions,Backfilled for DONE-card glossary linkage from the shipped spec body.

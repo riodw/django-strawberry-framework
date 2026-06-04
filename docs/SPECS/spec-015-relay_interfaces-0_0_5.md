@@ -12,7 +12,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
     - [ ] Normalize tuple/list input and a single real Strawberry interface class; reject strings, sets, generators, and other invalid non-sequence values
     - [ ] Each entry satisfies `hasattr(entry, "__strawberry_definition__") and entry.__strawberry_definition__.is_interface`
     - [ ] Reject string entries
-    - [ ] Reject `DjangoType` self-reference and other `DjangoType` subclasses
+    - [ ] Reject [`DjangoType`][glossary-djangotype] self-reference and other `DjangoType` subclasses
     - [ ] Reject duplicates
   - [ ] Pass the normalized interfaces tuple to `DjangoTypeDefinition` at `django_strawberry_framework/types/base.py::DjangoType.__init_subclass__ #"definition = DjangoTypeDefinition("`
   - [ ] Validation and lifecycle tests in `tests/types/test_relay_interfaces.py`
@@ -33,7 +33,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
   - [ ] Preserve consumer-declared `is_type_of` (do not overwrite when present)
   - [ ] Test: `test_is_type_of_injected_for_all_djangotypes`
 - [ ] Slice 3: `id` suppression
-  - [ ] In `_build_annotations` (`django_strawberry_framework/types/base.py::_build_annotations`), drop the `id` key from the synthesized annotations dict when `relay.Node` is among `Meta.interfaces`
+  - [ ] In `_build_annotations` (`django_strawberry_framework/types/base.py::_build_annotations`), drop the `id` key from the synthesized annotations dict when `relay.Node` is among [`Meta.interfaces`][glossary-metainterfaces]
   - [ ] Keep the primary-key field in `DjangoTypeDefinition.field_map` (Decision 7) so the optimizer still sees `id` as a connector column
   - [ ] Tests
     - [ ] `test_relay_node_strips_django_id_annotation`
@@ -50,7 +50,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
     - [ ] `install_relay_node_resolvers(type_cls)` (uses the `__func__` identity test from Decision 3)
   - [ ] Insert Phase 2.5 in `finalize_django_types()` (`django_strawberry_framework/types/finalizer.py::finalize_django_types`) between Phase 2 and Phase 3
     - [ ] Inject each entry of `definition.interfaces` into `cls.__bases__` (skip those already in `cls.__mro__`)
-    - [ ] Surface `TypeError` from base assignment as `ConfigurationError` naming the offending interface
+    - [ ] Surface `TypeError` from base assignment as [`ConfigurationError`][glossary-configurationerror] naming the offending interface
     - [ ] Run the composite-pk check when `relay.Node` is among the resolved bases
     - [ ] Inject the four `resolve_*` defaults via the `__func__` identity test
   - [ ] Relay Node behavior tests (`tests/types/test_relay_interfaces.py`)
@@ -83,7 +83,7 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
 - [ ] Slice 5: Promotion + docs + version
   - [ ] Move `"interfaces"` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` (`django_strawberry_framework/types/base.py #"DEFERRED_META_KEYS: frozenset[str]"` and `django_strawberry_framework/types/base.py #"ALLOWED_META_KEYS: frozenset[str]"`)
   - [ ] Doc updates
-    - [ ] `docs/GLOSSARY.md` — move `Meta.interfaces` and Relay GlobalID mapping from deferred to shipped; add the "Relay Node integration" subsection; update version mention
+    - [ ] `docs/GLOSSARY.md` — move `Meta.interfaces` and Relay GlobalID mapping from deferred to shipped; add the "[Relay Node integration][glossary-relay-node-integration]" subsection; update version mention
     - [ ] `docs/README.md` — add the gated "Relay Node" subsection with a short example next to the quick start
     - [ ] `TODAY.md` — drop `Meta.interfaces` and `Relay node` from the "wait for" list; update fakeshop guidance if a `library` schema starts using `relay.Node`
     - [ ] `KANBAN.md` — move `IN-PROGRESS-001` to `DONE-011` with shipped scope, borrowed patterns, and test-file evidence; advance the recommended hybrid sequence past Relay
@@ -99,14 +99,14 @@ Each top-level item maps to one of the five commits in the "Implementation plan"
     - [ ] `uv run ruff format .` passes
     - [ ] `uv run ruff check --fix .` passes
     - [ ] `uv run pytest` passes with 100% package coverage (`fail_under = 100`)
-    - [ ] No new public exports (Definition of done item 11)
+    - [ ] No new [public exports][glossary-public-exports] (Definition of done item 11)
 ## Problem statement
 `DjangoType` users cannot declare GraphQL interfaces (Relay `Node` or otherwise) through `class Meta`. Today `Meta.interfaces` is rejected with `ConfigurationError` because the package does not apply it end-to-end. The result is that:
 - `GOAL.md`'s target API (`interfaces = (relay.Node,)`) is unreachable today.
 - `TODAY.md` lists Relay node and connection support as a hard blocker for the rich fakeshop schema.
 - `docs/GLOSSARY.md` lists `Meta.interfaces` and `GlobalID` mapping in the deferred set.
 - `KANBAN.md` `READY-004` and `BACKLOG-005` cannot land without a Relay foundation.
-- `NEXT-005` (`DjangoConnectionField`) and `NEXT-006` (permissions) cannot start a stable design until interface application is decided.
+- `NEXT-005` ([`DjangoConnectionField`][glossary-djangoconnectionfield]) and `NEXT-006` (permissions) cannot start a stable design until interface application is decided.
 
 `0.0.4` shipped the architectural seam this slice needs: `DjangoTypeDefinition.interfaces`, the three-phase `finalize_django_types()` finalizer, and the consumer-override contract for relation fields. `0.0.5` should populate and apply that seam.
 
@@ -117,7 +117,7 @@ The target is not a full connection/query-field release. The target is to make m
 - `django_strawberry_framework/types/finalizer.py::finalize_django_types` runs three loops with no interface awareness today: Phase 1 resolves pending relations; Phase 2 calls `_attach_relation_resolvers`; Phase 3 calls `strawberry.type(cls, name=..., description=...)` and marks the definition finalized.
 - `django_strawberry_framework/types/converters.py::convert_scalar` synthesizes `id` from `AutoField` / `BigAutoField` / `SmallAutoField` (`django_strawberry_framework/types/converters.py #"SCALAR_MAP: dict[type[models.Field], Any]"`, applied via `django_strawberry_framework/types/converters.py::convert_scalar`). Until this slice, every Django auto-id column produces a GraphQL `id: Int!`, which collides with Strawberry's `Node._id -> id: GlobalID!`.
 - `DjangoType.get_queryset(cls, queryset, info, **kwargs)` (`django_strawberry_framework/types/base.py::DjangoType.get_queryset`) is the existing visibility hook. It is stable through `0.1.0` per `README.md #"For the current capability snapshot"` and `docs/README.md #"DjangoOptimizerExtension"`, so the Relay node resolvers can call into it without compatibility risk.
-- `DjangoOptimizerExtension` is consultable through `info.context` (`optimizer/extension.py`); the four Relay resolvers can opt into optimizer cooperation the same way root resolvers do today.
+- [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] is consultable through `info.context` (`optimizer/extension.py`); the four Relay resolvers can opt into optimizer cooperation the same way root resolvers do today.
 - The `0.0.4` lifecycle contract is pinned in `docs/GLOSSARY.md #"Declaring a new concrete"`: "Declaring a new concrete `DjangoType` after finalization raises `ConfigurationError`; tests should use `registry.clear()` and fresh type classes when they need a new registry lifecycle." The Relay slice must preserve this contract bit-for-bit.
 ## Pre-implementation spike outcome
 A minimal local spike against the installed Strawberry version showed that mutating bases before `strawberry.type(...)` works:
@@ -139,12 +139,12 @@ The resulting type is a subclass of `relay.Node`, and Strawberry records the `No
 4. Stay tight: no `DjangoConnectionField`, no cascade permissions, no FK redaction sentinels, no node-aware filters, and no broad node-aware optimizer feature work beyond preserving primary-key projection for Relay `id`.
 5. Promote `Meta.interfaces` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when each behavior listed here is implemented and tested.
 ## Non-goals
-- `DjangoConnectionField` and `DjangoNodeField` (planned for a later slice; this spec only lays the groundwork).
+- `DjangoConnectionField` and [`DjangoNodeField`][glossary-djangonodefield] (planned for a later slice; this spec only lays the groundwork).
 - `Prefetch`-aware Relay edge planning (tracked under `BACKLOG-012`).
 - Cascade permissions, redacted-FK sentinels, or `is_redacted` (graphene-django's territory; revisit during the permissions slice).
 - Connection-field-driven auto-upgrade of reverse FK / M2M fields (planned for `NEXT-005`).
 - Stable `GlobalID`-typed filter inputs (planned for the filters slice).
-- Multiple `DjangoType`s per Django model / `Meta.primary` (`READY-002`, separate slice).
+- Multiple `DjangoType`s per Django model / [`Meta.primary`][glossary-metaprimary] (`READY-002`, separate slice).
 - Composite-primary-key support for Relay node mapping (Django 5.2+); explicitly rejected with `ConfigurationError` for `0.0.5` and tracked as future work.
 ## Borrowing posture
 The two reference packages at the paths given in `docs/TREE.md` show two different ways to build this. The slice should borrow patterns (not implementations).
@@ -279,7 +279,7 @@ Justification:
 When `relay.Node` is among `Meta.interfaces` for a given `DjangoType`:
 - `id` is removed from synthesized scalar annotations during `_build_annotations` so the Relay-supplied `id: GlobalID!` is not shadowed by a Django `int` field.
 - The Django `id` column itself is still selected for ORM/optimizer purposes (it is the connector column the optimizer relies on); only the Strawberry annotation is suppressed.
-- If the consumer includes `"id"` in `Meta.fields` while declaring `relay.Node`, the slice does not raise — the field is simply not generated on the GraphQL side. Document this clearly in `docs/GLOSSARY.md`.
+- If the consumer includes `"id"` in [`Meta.fields`][glossary-metafields] while declaring `relay.Node`, the slice does not raise — the field is simply not generated on the GraphQL side. Document this clearly in `docs/GLOSSARY.md`.
 - If `relay.Node` is not in `Meta.interfaces`, behavior is unchanged from `0.0.4`: `id: int!` is generated as before.
 
 This mirrors strawberry-django's `MAP_AUTO_ID_AS_GLOBAL_ID` behavior but is opt-in per type rather than a global setting. A global setting can be added later if real-world adopters need it.
@@ -329,7 +329,7 @@ Validation rules:
 - A class that already inherits from one of the listed interfaces directly (e.g. consumer wrote `class Foo(DjangoType, relay.Node): class Meta: interfaces = (relay.Node,)`) is accepted — the base-injection step is then a structural no-op (`relay.Node in cls.__bases__` is already true).
 - The composite-pk constraint from Decision 2 is **not** enforced inside `_validate_meta`. It is enforced once during Phase 2.5 (Decision 5), which runs after `cls.__bases__` is resolved and therefore catches both `Meta.interfaces = (relay.Node,)` consumers and consumers who write `class Foo(DjangoType, relay.Node)` directly. Centralizing the check there avoids duplicating the `model._meta.pk` inspection.
 
-Composition with `Meta.optimizer_hints`: the two keys are independent. `optimizer_hints` continues to apply unchanged. Suppressing the synthesized `id` annotation when `relay.Node` is declared has no effect on the optimizer field map (`FieldMeta` is keyed off Django's field selection, not Strawberry's annotations) — `id` is still selected as the connector column.
+Composition with [`Meta.optimizer_hints`][glossary-metaoptimizer-hints]: the two keys are independent. `optimizer_hints` continues to apply unchanged. Suppressing the synthesized `id` annotation when `relay.Node` is declared has no effect on the optimizer field map (`FieldMeta` is keyed off Django's field selection, not Strawberry's annotations) — `id` is still selected as the connector column.
 ### Decision 5: lifecycle and idempotency
 - Calling `finalize_django_types()` twice is still a no-op via the existing short-circuit at `django_strawberry_framework/types/finalizer.py::finalize_django_types #"if registry.is_finalized():"`.
 - `registry.clear()` (`django_strawberry_framework/registry.py::TypeRegistry.clear`) already drops `_definitions`, `_pending`, `_finalized`, `_types`, `_models`, and `_enums`. Test isolation continues to require **fresh class objects** after `clear()`, exactly as documented in `docs/GLOSSARY.md #"Declaring a new concrete"`. No new tracking state is added on `DjangoTypeDefinition` for the Relay slice — the source of truth is `cls.__bases__` itself for interface injection and the `relay.Node` MRO check for resolver injection. Justification: any new state would be redundant with `cls.__bases__` and would have to be re-validated for clear/redefine cycles, increasing the surface this slice has to test.
@@ -352,9 +352,9 @@ The new `Meta.interfaces` consumer-override contract is:
 ### Decision 7: optimizer and projection invariants
 Relay node support must not regress shipped optimizer behavior. Required invariants:
 
-- **Primary-key projection.** When GraphQL selects Relay `id` on a Relay-declared `DjangoType`, the optimizer's `only()` projection must include the concrete primary-key attname. Reference: `django_strawberry_framework/optimizer/walker.py::_walk_selections` (where scalar selections are appended to `only_fields`), and `django_strawberry_framework/optimizer/walker.py::_plan_select_relation` (relation select planning). Justification: Strawberry resolves Relay `id` via `_resolve_id_default`, which reads `root.__dict__[attname]` first; the only way that path produces no extra query is if the optimizer kept `attname` in `only()`.
+- **Primary-key projection.** When GraphQL selects Relay `id` on a Relay-declared `DjangoType`, the optimizer's [`only()`][glossary-only-projection] projection must include the concrete primary-key attname. Reference: `django_strawberry_framework/optimizer/walker.py::_walk_selections` (where scalar selections are appended to `only_fields`), and `django_strawberry_framework/optimizer/walker.py::_plan_select_relation` (relation select planning). Justification: Strawberry resolves Relay `id` via `_resolve_id_default`, which reads `root.__dict__[attname]` first; the only way that path produces no extra query is if the optimizer kept `attname` in `only()`.
 - **Connector-column preservation.** Existing connector-column behavior (`docs/GLOSSARY.md #"Connector columns required for"`) for `select_related`, reverse FK, FK/OneToOne, and M2M attachment paths is unchanged. The Relay slice does not modify the walker.
-- **FK-id elision scoping.** B2 FK-id elision (`django_strawberry_framework/types/resolvers.py::_is_fk_id_elided`, `django_strawberry_framework/optimizer/walker.py::_can_elide_fk_id`) is scoped to forward relation selections. The Relay slice does not introduce a code path where `GlobalID` is fed into FK-id elision logic. Justification: GlobalID handling lives entirely in the Relay resolvers (`django_strawberry_framework/types/relay.py`); the walker continues to see the Django primary-key column it always saw.
+- **[FK-id elision][glossary-fk-id-elision] scoping.** B2 FK-id elision (`django_strawberry_framework/types/resolvers.py::_is_fk_id_elided`, `django_strawberry_framework/optimizer/walker.py::_can_elide_fk_id`) is scoped to forward relation selections. The Relay slice does not introduce a code path where `GlobalID` is fed into FK-id elision logic. Justification: GlobalID handling lives entirely in the Relay resolvers (`django_strawberry_framework/types/relay.py`); the walker continues to see the Django primary-key column it always saw.
 - **No avoidable lazy loads on `resolve_id`.** `_resolve_id_default` reads from `root.__dict__` first; if the optimizer kept the pk in `only()`, the `__dict__` cache hit avoids any lazy load. The cache-then-`getattr` order in `strawberry_django/relay/utils.py::resolve_model_id` is the exact reason we chose that borrow.
 - **Relation traversal across Relay node targets.** `select_related` / `prefetch_related` planning for relations whose target is a Relay-declared `DjangoType` continues to work unchanged. The optimizer reads target metadata from `DjangoTypeDefinition`, not from the Strawberry `__strawberry_definition__`, so suppressing the synthesized scalar `id` annotation does not affect the optimizer's view of the model.
 
@@ -526,7 +526,7 @@ These pin Decision 7's invariants:
 
 - `KANBAN.md`
   - Move `READY-004` to Done with a new `DONE-NNN` card describing the shipped scope, the borrowed patterns, and the test files.
-  - Update the recommended hybrid sequence to advance to `NEXT-001` (`FieldSet`) or `NEXT-002` (filters) for `0.0.6`.
+  - Update the recommended hybrid sequence to advance to `NEXT-001` ([`FieldSet`][glossary-fieldset]) or `NEXT-002` (filters) for `0.0.6`.
 
 - `CHANGELOG.md`
   - `[0.0.5]` `### Added`: Relay Node interface support, `Meta.interfaces` accepted for any Strawberry interface, default `resolve_id_attr` / `resolve_id` / `resolve_node` / `resolve_nodes` for Relay-declared types, automatic id suppression when `relay.Node` is declared, `is_type_of` injection for all `DjangoType`s.
@@ -556,15 +556,15 @@ Each item names a preferred answer for `0.0.5` and a fallback if implementation 
 
 - **Connection-field stability.** Once `DjangoConnectionField` (`NEXT-005` in `KANBAN.md`) lands, the resolver-injection contract may need hooks for connection fields to call. The four default implementations are intentionally small (one queryset shape, one optimizer call, one filter step) so the connection slice can wrap or replace them without churn.
 
-- **Sentinel/cascade behavior.** Graphene-django routes FK target resolution through `get_node` so its sentinel system works (`django_graphene_filters/object_type.py #"sentinel"`). `0.0.5` deliberately does not adopt that pattern. When the permissions slice (`NEXT-006`) lands, decide whether `apply_cascade_permissions` integrates with `resolve_node` or with our existing `Prefetch` downgrade in the optimizer. That decision belongs to the permissions spec, not this one.
+- **Sentinel/cascade behavior.** Graphene-django routes FK target resolution through `get_node` so its sentinel system works (`django_graphene_filters/object_type.py #"sentinel"`). `0.0.5` deliberately does not adopt that pattern. When the permissions slice (`NEXT-006`) lands, decide whether [`apply_cascade_permissions`][glossary-apply-cascade-permissions] integrates with `resolve_node` or with our existing `Prefetch` downgrade in the optimizer. That decision belongs to the permissions spec, not this one.
 ## Out of scope (explicitly tracked elsewhere)
 - `DjangoConnectionField` and `DjangoNodeField`: `NEXT-005`.
 - Cascade permissions and field-level permissions: `NEXT-006`.
-- Connection-aware optimizer planning: `BACKLOG-012`.
+- [Connection-aware optimizer planning][glossary-connection-aware-optimizer-planning]: `BACKLOG-012`.
 - `Meta.primary` / multiple types per model: `READY-002`.
 - Stable consumer override semantics for scalar fields: `READY-003`.
 - Deferred scalar conversions (`BigIntegerField`, `JSONField`, etc.): `READY-005`.
-- Stable choice enum naming: `BACKLOG-007`.
+- Stable [choice enum][glossary-choice-enum-generation] naming: `BACKLOG-007`.
 - Layered manual override-test policy: `BACKLOG-011`.
 - Migration/adoption guides: `BACKLOG-009`.
 - Composite-primary-key Relay node encoding: future slice.
@@ -581,7 +581,7 @@ The `0.0.5` slice is complete when all of the following are true:
 8. `docs/GLOSSARY.md`, `docs/README.md`, `TODAY.md`, `KANBAN.md`, and `CHANGELOG.md` reflect the shipped state per the "Doc updates" section.
 9. Version bumped to `0.0.5` in `pyproject.toml #"version ="`, `django_strawberry_framework/__init__.py #"__version__ ="`, and the assertion in `tests/base/test_init.py`; `uv.lock` regenerated by running `uv lock`.
 10. `KANBAN.md` `READY-004` moves to a new Done card describing the shipped scope (the next available `DONE-NNN` id), and the recommended hybrid sequence advances past Relay/`Meta.interfaces`.
-11. No new public exports. The public surface stays `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto`, `__version__` (`django_strawberry_framework/__init__.py #"__all__ = ("`). Justification: the public-surface promise in `README.md #"For the current capability snapshot"` says today's names remain stable through `0.1.0`; `0.0.5` only changes what `Meta.interfaces` enables, not the import surface.
+11. No new public exports. The public surface stays `DjangoType`, `DjangoOptimizerExtension`, [`OptimizerHint`][glossary-optimizerhint], [`finalize_django_types`][glossary-finalize-django-types], `auto`, `__version__` (`django_strawberry_framework/__init__.py #"__all__ = ("`). Justification: the public-surface promise in `README.md #"For the current capability snapshot"` says today's names remain stable through `0.1.0`; `0.0.5` only changes what `Meta.interfaces` enables, not the import surface.
 12. `_resolve_node_default` and `_resolve_nodes_default` work in both sync and async resolver contexts per Decision 9. A consumer-authored `async def resolve_node(...)` is preserved by the override contract.
 
 <!-- LINK DEFINITIONS -->
@@ -589,6 +589,25 @@ The `0.0.5` slice is complete when all of the following are true:
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-apply-cascade-permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-choice-enum-generation]: ../GLOSSARY.md#choice-enum-generation
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metainterfaces]: ../GLOSSARY.md#metainterfaces
+[glossary-metaoptimizer-hints]: ../GLOSSARY.md#metaoptimizer_hints
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-public-exports]: ../GLOSSARY.md#public-exports
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
 
 <!-- docs/SPECS/ -->
 

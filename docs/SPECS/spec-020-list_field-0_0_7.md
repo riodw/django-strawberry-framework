@@ -16,7 +16,7 @@ Revision history (kept inline so the spec is self-contained):
   4. **M1**: rev1's Decision 9 picks `all_library_branches` as the resolver to replace, but that resolver carries `order_by("id")` and the live HTTP test `test_library_relation_override_shapes_http_response_data` in `examples/fakeshop/test_query/test_library_api.py` asserts a deterministic branch order ("Override" before "Override East"). `Branch` has no model-level `Meta.ordering` in `examples/fakeshop/apps/library/models.py`; the default-manager queryset is unordered. Three options were considered: (a) keep `all_library_branches` as `@strawberry.field` and **add** a new sibling field `all_library_branches_via_list_field: list[BranchType] = DjangoListField(BranchType)` that exercises `DjangoListField` independently; (b) use `DjangoListField(BranchType, resolver=...)` with a consumer resolver preserving `order_by("id")` (now safe under the H1 contract because `get_queryset` still applies); (c) add `class Meta: ordering = ("id",)` to `Branch`. Rev2 picks **option (a)** — adds a new field rather than replacing an existing one; zero blast radius on the existing HTTP tests; the new field exercises the default-resolver code path cleanly without the ordering coupling. Updated Decision 9, the Slice 4 checklist, and the Test plan; updated the implementation-plan delta table's Slice 4 row.
   5. **M2**: rev1's live HTTP test plan said "assert `cls.get_queryset` was applied (e.g., the library example's `get_queryset` filter, if added for this test)" — but adding a custom `get_queryset` to `BranchType` changes every `BranchType` path in the library schema (including nested `book → shelf → branch` selections and the existing branch tests). Fix: move `get_queryset` application coverage entirely to package-internal `tests/test_list_field.py`, where a fresh `DjangoType` fixture can declare an isolated `get_queryset`; the live HTTP test in `examples/fakeshop/test_query/test_library_api.py` proves only the end-to-end pipeline (URL routing, view, schema execution) and the optimizer cooperation (planned `select_related` / `prefetch_related` via `assertNumQueries`). Updated Slice 4 checklist and Test plan.
   6. **M3**: rev1 said the contract is for "root and nested fields" but the optimizer extension is explicitly root-gated on `info.path.prev is None` (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.resolve #"if info.path.prev is not None:"`). A `DjangoListField` used on a nested non-root Strawberry type would be a functional list resolver but would NOT be planned by the existing optimizer hook. Fix: narrow the `0.0.7` contract to **root list fields only**. Goals 1-5, the User-facing API, Decisions 2 and 4, the CHANGELOG entry, the doc-updates section, the Definition of done, and the User-facing description all say "root" — never "nested". A new Decision 4 paragraph says nested non-root usage is functional (the field still produces a list resolver) but is NOT root-optimized in `0.0.7`; the connection card (`TODO-ALPHA-024-0.0.9`) or a follow-up spec can revisit nested optimization. A new test in `tests/test_list_field.py` pins this: `test_djangolistfield_at_root_position_is_optimized`.
-  7. **L1**: rev1's Doc updates section adds `list_field.py` to the target on-disk layout in `docs/TREE.md` but doesn't remove the stale `DjangoListField` mention on the existing `connection.py # [alpha] DjangoConnectionField + DjangoListField` line. Fix: add a Slice 5 doc-updates bullet that removes `DjangoListField` from the `connection.py` line in the target layout so the docs don't advertise two homes for the symbol.
+  7. **L1**: rev1's Doc updates section adds `list_field.py` to the target on-disk layout in `docs/TREE.md` but doesn't remove the stale `DjangoListField` mention on the existing `connection.py # [alpha] [DjangoConnection][glossary-djangoconnection]Field + DjangoListField` line. Fix: add a Slice 5 doc-updates bullet that removes `DjangoListField` from the `connection.py` line in the target layout so the docs don't advertise two homes for the symbol.
   8. **L2**: rev1's CHANGELOG entry says "non-Relay `list[T]` field for root and nested fields"; after the M3 scope narrowing, this becomes stale and over-promises. Fix: change the bullet to "non-Relay `list[T]` field for **root** Query fields" so the release note matches what is tested and shipped.
 - **Revision 3** (post-rev2 review against `feedback2.md`) — the reviewer audited the rev1 draft (not the rev2 update), so several feedback2 items had already been pre-empted by rev2; the rest land here as one high, six medium, and two low corrections:
   1. **(feedback2 H1 — pre-empted by rev2 M1.)** The reviewer flagged that `all_library_branches` carries `order_by("id")` and the rev1 replacement would have dropped it. Rev2 M1 already switched strategy from "replace `all_library_branches`" to "add new sibling `all_library_branches_via_list_field`", so no existing resolver is touched and no ordering is dropped. The new field has no `order_by`, but its HTTP test is order-agnostic (sort by `id` in the assertion — already named in [Decision 9](#decision-9--example-app-migration-posture)). No additional rev3 work required.
@@ -137,7 +137,7 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
   - [ ] Tests for validation cluster live in `tests/test_list_field.py`.
   - [ ] (rev2 H2: dropped — `nullable_list=` is NOT a constructor argument; outer nullability is driven by the consumer's class-attribute annotation.)
 - [ ] Slice 3: Optimizer + `get_queryset` cooperation tests
-  - [x] Package-internal tests under `tests/test_list_field.py` covering: default-resolver shape, `cls.get_queryset` invocation, sync coroutine rejection, async path awaits sync + async `get_queryset`, **sync consumer `resolver=` return value receives `get_queryset` when it is a `Manager`/`QuerySet`** (rev2 H1), Python-`list` sync consumer returns pass through unchanged (rev2 H1), **async consumer `resolver=` returning a `Manager`/`QuerySet` receives `get_queryset`** (rev4 H2), Python-`list` async consumer returns pass through unchanged (rev4 H2), nullable-outer-via-consumer-annotation produces `[T!]` (rev2 H2), non-nullable-outer default produces `[T!]!` (rev2 H2), `DjangoListField` at root position is optimized (rev2 M3), FK-id elision survives, `Meta.primary` interaction (explicit primary, explicit secondary).
+  - [x] Package-internal tests under `tests/test_list_field.py` covering: default-resolver shape, `cls.get_queryset` invocation, sync coroutine rejection, async path awaits sync + async `get_queryset`, **sync consumer `resolver=` return value receives `get_queryset` when it is a `Manager`/`QuerySet`** (rev2 H1), Python-`list` sync consumer returns pass through unchanged (rev2 H1), **async consumer `resolver=` returning a `Manager`/`QuerySet` receives `get_queryset`** (rev4 H2), Python-`list` async consumer returns pass through unchanged (rev4 H2), nullable-outer-via-consumer-annotation produces `[T!]` (rev2 H2), non-nullable-outer default produces `[T!]!` (rev2 H2), `DjangoListField` at root position is optimized (rev2 M3), [FK-id elision][glossary-fk-id-elision] survives, `Meta.primary` interaction (explicit primary, explicit secondary).
   - [x] Remove the spec-016 scaffold TODOs at this site (rev6 L2) — covers the 18 TODO stubs in `tests/test_list_field.py` as they get replaced with real test bodies.
 - [ ] Slice 4: Live HTTP coverage
   - [ ] **Add a new** root field — `all_library_branches_via_list_field: list[BranchType] = DjangoListField(BranchType)` — to `examples/fakeshop/apps/library/schema.py` (rev2 M1; do NOT replace the existing `all_library_branches` because its `order_by("id")` is depended on by `test_library_relation_override_shapes_http_response_data`). The other seven `@strawberry.field` resolvers stay unchanged.
@@ -185,7 +185,7 @@ The target is not a full connection/query-field release. The target is to make `
 
 ## Current state
 
-- `django_strawberry_framework/__init__.py #"__all__"` re-exports `BigInt`, `DjangoOptimizerExtension`, `DjangoType`, `OptimizerHint`, `__version__`, `auto`, `finalize_django_types` — and only those seven. (Historical citation: before `DjangoListField` shipped in `0.0.7`, this re-export tuple did NOT include `DjangoListField`; the spec was authored against that pre-ship state.)
+- `django_strawberry_framework/__init__.py #"__all__"` re-exports [`BigInt`][glossary-bigint-scalar], `DjangoOptimizerExtension`, `DjangoType`, [`OptimizerHint`][glossary-optimizerhint], `__version__`, `auto`, [`finalize_django_types`][glossary-finalize-django-types] — and only those seven. (Historical citation: before `DjangoListField` shipped in `0.0.7`, this re-export tuple did NOT include `DjangoListField`; the spec was authored against that pre-ship state.)
 - The `library` example schema at `examples/fakeshop/apps/library/schema.py::Query` carries eight hand-rolled root list resolvers, seven of which share the identical "queryset over model.objects ordered by id" shape (see the [Problem statement](#problem-statement) for the exact code).
 - The `products` example schema at `examples/fakeshop/apps/products/schema.py::Query` has the same shape: four `@strawberry.field` resolvers returning `Model.objects.all()` directly. The post-`TODO-ALPHA-022` future shape in the comments (`examples/fakeshop/apps/products/schema.py::Query #"Future shape"`) jumps straight from `@strawberry.field` resolvers to `relay.ListConnection[…] = DjangoConnectionField(…)` — the simpler `DjangoListField` shape is not the documented future target for products because products' design goal is Relay-shaped throughout. `DjangoListField`'s natural example home is the `library` app, where a single new sibling root field (`all_library_branches_via_list_field`) is enough to pin the default-resolver contract end-to-end via the live HTTP test (rev2 M1 — sibling-add, not replacement; see [Decision 9](#decision-9--example-app-migration-posture)).
 - `django_strawberry_framework/types/relay.py` defines `_apply_get_queryset_sync` (`django_strawberry_framework/types/relay.py::_apply_get_queryset_sync`) and `_apply_get_queryset_async` (`django_strawberry_framework/types/relay.py::_apply_get_queryset_async`), the helpers that run `cls.get_queryset(...)` in sync and async contexts respectively. The sync helper rejects a coroutine-from-sync mismatch with a `ConfigurationError` (`django_strawberry_framework/types/relay.py::_apply_get_queryset_sync #"raise ConfigurationError"`). These are the helpers the `DjangoListField` default resolver re-uses verbatim — no new sync/async plumbing is invented in this slice.
@@ -206,9 +206,9 @@ The target is not a full connection/query-field release. The target is to make `
 
 - `DjangoConnectionField` and the Relay-shaped pagination surface. Tracked under `TODO-ALPHA-024-0.0.9` in [`KANBAN.md`][kanban]. Justification: the connection field shipping in `0.0.9` (not `0.0.7`) is a deliberate sequencing decision — connection-aware optimizer planning (`TODO-ALPHA-030-0.0.9`) is the gating dependency, and the connection field has a much larger API surface (edges / pageInfo / pagination args / connection-aware planning) than the list field.
 - Filter / order / search / aggregate input arguments on `DjangoListField`. Those are the Layer-3 read-side primitives tracked in `WIP-ALPHA-021-0.0.8` (filters), `WIP-ALPHA-022-0.0.8` (orders), `TODO-BETA-039-0.1.2` (search), `TODO-BETA-040-0.1.3` (aggregates). Once those subsystems ship, `DjangoListField` will pick up the corresponding input arguments under their own specs — this card is the minimum primitive that exists ahead of those.
-- Cascade permissions and field-level permissions. Tracked under `TODO-ALPHA-027-0.0.10`. `DjangoListField`'s relationship to `apply_cascade_permissions` is a follow-up spec — the per-type `cls.get_queryset(...)` hook continues to cover row-level visibility today.
+- Cascade permissions and field-level permissions. Tracked under `TODO-ALPHA-027-0.0.10`. `DjangoListField`'s relationship to [`apply_cascade_permissions`][glossary-apply-cascade-permissions] is a follow-up spec — the per-type `cls.get_queryset(...)` hook continues to cover row-level visibility today.
 - Auto-upgrading reverse-FK / M2M many-side relation fields to `DjangoListField`. Relation many-side fields are already shipped as `list[T]` via generated resolvers (see [`Relation handling`][glossary-relation-handling]); `DjangoListField` is the **root** primitive, not a relation-side replacement. See [Decision 7](#decision-7--scope-boundary-vs-relation-list-fields).
-- Multi-database / sharding-aware queryset routing. Tracked under `WIP-ALPHA-019-0.0.7` (the multi-db cooperation contract). `DjangoListField` uses `model._default_manager.all()` which Django routes through the configured database router automatically; nothing in this card precludes the cooperation contract that lands alongside.
+- [Multi-database][glossary-multi-database-cooperation] / sharding-aware queryset routing. Tracked under `WIP-ALPHA-019-0.0.7` (the multi-db cooperation contract). `DjangoListField` uses `model._default_manager.all()` which Django routes through the configured database router automatically; nothing in this card precludes the cooperation contract that lands alongside.
 - Pagination, limits, ordering defaults. Out of scope by design — `DjangoListField` returns the unbounded queryset. The Relay-connection field is the right home for pagination.
 - A flat-list helper class shape that wraps every `DjangoType` declaration (e.g., `class MyTypeListField(DjangoListField): pass`). Not needed; `DjangoListField(MyType)` at the call site is sufficient.
 
@@ -271,7 +271,7 @@ Expected GraphQL behavior:
 
 - `Query.allLibraryBranches: [BranchType!]!` (item-non-null + list-non-null by default).
 - The resolver returns `Branch._default_manager.all()`, threaded through `BranchType.get_queryset(qs, info)`.
-- `DjangoOptimizerExtension` plans `select_related` / `prefetch_related` / `only()` for nested selections.
+- `DjangoOptimizerExtension` plans `select_related` / `prefetch_related` / [`only()`][glossary-only-projection] for nested selections.
 - Async resolvers awaiting `BranchType.get_queryset` work without consumer wiring.
 
 ### Custom resolver override
@@ -525,7 +525,7 @@ Alternatives considered (and rejected):
 - The root-gated `DjangoOptimizerExtension.resolve` hook (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.resolve`) fires on `info.path.prev is None`; the field site IS a root (top-level `Query` field), so the hook fires.
 - `_optimize` (`django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension._optimize`) accepts both `Manager` and `QuerySet`; the field returns a `QuerySet` so the existing coercion is a no-op.
 - The selection-tree walker (`django_strawberry_framework/optimizer/walker.py`) reads the target `DjangoType` from `_resolve_model_from_return_type(info)` — defined at `django_strawberry_framework/optimizer/extension.py::_resolve_model_from_return_type`, called inside `django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension._optimize #"resolved = _resolve_model_from_return_type(info)"` (rev3 M4 — the call site is where the lookup happens; the definition is where the logic lives). The return-type machinery already handles `list[T]` annotations.
-- Plan caching, FK-id elision, `only()` projection, queryset diffing, strictness mode — all shipped, all apply unchanged.
+- Plan caching, FK-id elision, `only()` projection, [queryset diffing][glossary-queryset-diffing], strictness mode — all shipped, all apply unchanged.
 
 Justification: the optimizer's contract is "give me a `QuerySet` at the root; I'll walk the selection tree once." `DjangoListField` is a primitive that produces a `QuerySet`; it inherits every shipped optimizer feature for free.
 
@@ -576,7 +576,7 @@ Alternatives considered (and rejected):
 Justification:
 
 - The explicit-target shape is the same as how the existing relation-resolver paths handle multi-type-per-model — annotation overrides like `category: AdminCategoryType` and assigned `strawberry.field` relation resolvers can target a secondary type unchanged ([`docs/GLOSSARY.md#metaprimary`][glossary-metaprimary], "Multiple `DjangoType`s, exactly one with `Meta.primary = True` — allowed; relation targets resolve to the primary"). `DjangoListField` follows the same explicit-target shape.
-- The optimizer's plan cache keys include the resolver's origin Strawberry type ([`docs/GLOSSARY.md#metaprimary`][glossary-metaprimary] — "a primary-return and a secondary-return resolver on the same model do not share a cached plan"). `DjangoListField(PrimaryType)` and `DjangoListField(SecondaryType)` produce two distinct plans; no cache-poisoning risk.
+- The optimizer's [plan cache][glossary-plan-cache] keys include the resolver's origin Strawberry type ([`docs/GLOSSARY.md#metaprimary`][glossary-metaprimary] — "a primary-return and a secondary-return resolver on the same model do not share a cached plan"). `DjangoListField(PrimaryType)` and `DjangoListField(SecondaryType)` produce two distinct plans; no cache-poisoning risk.
 
 Tests in `tests/test_list_field.py` must cover:
 
@@ -693,7 +693,7 @@ The six slices must be authored in order. Slice 0 is a gating check — Slice 1 
 - **Model proxies**. Django proxy models share the underlying table; `_default_manager.all()` returns proxy instances. `DjangoListField` works the same way it does for the base model; the consumer just passes the proxy-backed `DjangoType`.
 - **Abstract `DjangoType` bases without a `Meta`**. The validation in [Decision 5](#decision-5--validation--error-shapes) catches this via the "registered DjangoType" check — abstract bases don't have `__django_strawberry_definition__` and raise `ConfigurationError` at construction.
 - **Multi-database routing**. `model._default_manager.all()` is routed by Django's database router automatically. The multi-db cooperation contract pinned by `WIP-ALPHA-019-0.0.7` already covers the relation-traversal case; root-list fields inherit the same routing behavior because the queryset is the same `Manager.all()` call relations use.
-- **Strictness mode and N+1 detection**. The optimizer's strictness mode operates at the relation-walk level, not the root-resolver level. `DjangoListField`-served root querysets pass through the strictness contract unchanged.
+- **[Strictness mode][glossary-strictness-mode] and N+1 detection**. The optimizer's strictness mode operates at the relation-walk level, not the root-resolver level. `DjangoListField`-served root querysets pass through the strictness contract unchanged.
 - **`schema.execute_sync` testing**. The field works under both `schema.execute_sync` (synchronous) and `await schema.execute` (asynchronous) call shapes; the in-async-context detection handles both. Pinned by `test_djangolistfield_default_resolver_works_under_sync_and_async_schema_execution` (rev5 M3).
 - **`functools.partial`-wrapped async consumer resolvers**. `inspect.iscoroutinefunction(functools.partial(some_async_fn, ...))` returns `False` in current Python versions, so the factory's construction-time detection treats the partial as a sync resolver and builds a sync `_wrap`. If the partial actually returns a coroutine, the sync wrapper passes the coroutine through `_post_process_consumer_sync` (which checks `isinstance(result, QuerySet)`), the isinstance check is False against a coroutine, and the coroutine is returned unchanged — `get_queryset` is silently skipped. Rev5 H1 chose YAGNI here (no runtime fallback) over keeping a branch that would be hard to cover under the 100% gate. Workaround (rev6 M4 — explicit before/after instead of compressed prose):
 
@@ -770,7 +770,7 @@ The HTTP test file's reload pattern from [`docs/TREE.md #"HTTP tests that import
 - [`docs/GLOSSARY.md`][glossary]
   - Flip [`DjangoListField`][glossary-djangolistfield] from `planned for 0.0.7` to `shipped (0.0.7)`.
   - Update the entry body to describe the shipped contract: factory function (not class), `list[T]` annotation on the class attribute drives outer nullability, default `model._default_manager.all()` resolver, `cls.get_queryset(...)` applied in sync + async contexts AND to consumer-resolver `Manager`/`QuerySet` returns (rev2 H1, graphene-django parity), root-only optimizer cooperation (rev2 M3).
-  - Update the Public exports list near the top to include `DjangoListField`.
+  - Update the [Public exports][glossary-public-exports] list near the top to include `DjangoListField`.
   - Update the Index table's status column.
 
 - [`README.md`][readme]
@@ -814,10 +814,10 @@ Each item names a preferred answer for `0.0.7` and a fallback if implementation 
 ## Out of scope (explicitly tracked elsewhere)
 
 - `DjangoConnectionField` and Relay-shaped pagination: `TODO-ALPHA-024-0.0.9` in [`KANBAN.md`][kanban].
-- `DjangoNodeField` (root-level Relay node lookup): `TODO-ALPHA-024-0.0.9` (same card as connection field per current KANBAN scoping).
+- [`DjangoNodeField`][glossary-djangonodefield] (root-level Relay node lookup): `TODO-ALPHA-024-0.0.9` (same card as connection field per current KANBAN scoping).
 - Filter / order / search / aggregate input arguments on the field: `WIP-ALPHA-021-0.0.8` / `WIP-ALPHA-022-0.0.8` / `TODO-BETA-039-0.1.2` / `TODO-BETA-040-0.1.3`.
 - Cascade permissions and field-level permissions: `TODO-ALPHA-027-0.0.10`.
-- Connection-aware optimizer planning: `TODO-ALPHA-030-0.0.9` (note: same-named entry under the connection card).
+- [Connection-aware optimizer planning][glossary-connection-aware-optimizer-planning]: `TODO-ALPHA-030-0.0.9` (note: same-named entry under the connection card).
 - Multi-database / sharding-aware queryset routing: cooperation contract `WIP-ALPHA-019-0.0.7`; first-class sharding-aware planning post-`1.0.0` in [`BACKLOG.md`][backlog].
 - Auto-upgrade of reverse-FK / M2M relation fields to `DjangoListField`-based plumbing: deferred indefinitely; see [Decision 7](#decision-7--scope-boundary-vs-relation-list-fields).
 - Pagination / limits on `DjangoListField`: not on the roadmap; pagination is the connection field's responsibility.
@@ -863,18 +863,32 @@ The card is complete when all of the following are true:
 <!-- docs/ -->
 [docs-readme]: ../README.md
 [feedback]: ../feedback.md
-[glossary]: ../GLOSSARY.md
+[glossary-apply-cascade-permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-bigint-scalar]: ../GLOSSARY.md#bigint-scalar
 [glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-djangoconnection]: ../GLOSSARY.md#djangoconnection
 [glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
 [glossary-djangolistfield]: ../GLOSSARY.md#djangolistfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
 [glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
 [glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
 [glossary-get-queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
 [glossary-metafields]: ../GLOSSARY.md#metafields
 [glossary-metamodel]: ../GLOSSARY.md#metamodel
 [glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-public-exports]: ../GLOSSARY.md#public-exports
+[glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
 [glossary-relation-handling]: ../GLOSSARY.md#relation-handling
 [glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[glossary]: ../GLOSSARY.md
 [tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->

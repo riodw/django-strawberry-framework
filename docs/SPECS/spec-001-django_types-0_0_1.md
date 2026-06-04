@@ -2,17 +2,17 @@
 
 ## Problem statement
 
-`django-strawberry-framework` needs a first load-bearing primitive that both graphene-django and strawberry-graphql-django already provide: a way to turn a Django model into a GraphQL type. In this package that primitive must be DRF-shaped, meaning configuration lives in a nested `Meta` class, not in stacked decorators. This same primitive must also solve the most common GraphQL performance failure mode — N+1 relation queries — because every later subsystem (`FilterSet`, `OrderSet`, `AggregateSet`, permissions, connection fields) will sit on top of it.
+`django-strawberry-framework` needs a first load-bearing primitive that both graphene-django and strawberry-graphql-django already provide: a way to turn a Django model into a GraphQL type. In this package that primitive must be DRF-shaped, meaning configuration lives in a nested `Meta` class, not in stacked decorators. This same primitive must also solve the most common GraphQL performance failure mode — N+1 relation queries — because every later subsystem ([`FilterSet`][glossary-filterset], [`OrderSet`][glossary-orderset], [`AggregateSet`][glossary-aggregateset], permissions, connection fields) will sit on top of it.
 
 ## Current state
 
-The package source currently contains only `django_strawberry_framework/conf.py`. The aspirational example schema at `examples/fakeshop/fakeshop/products/schema.py` already assumes the existence of `DjangoType`, `DjangoConnectionField`, and `apply_cascade_permissions`. The sibling files `examples/fakeshop/fakeshop/products/filters.py`, `orders.py`, `aggregates.py`, and `fields.py` likewise assume a future package surface, but none of those names exist yet.
+The package source currently contains only `django_strawberry_framework/conf.py`. The aspirational example schema at `examples/fakeshop/fakeshop/products/schema.py` already assumes the existence of [`DjangoType`][glossary-djangotype], [`DjangoConnectionField`][glossary-djangoconnectionfield], and [`apply_cascade_permissions`][glossary-apply-cascade-permissions]. The sibling files `examples/fakeshop/fakeshop/products/filters.py`, `orders.py`, `aggregates.py`, and `fields.py` likewise assume a future package surface, but none of those names exist yet.
 
 The example data model is already stable enough to drive this spec: `Category`, `Item`, `Property`, and `Entry` in `examples/fakeshop/fakeshop/products/models.py`, with seed helpers in `examples/fakeshop/fakeshop/products/services.py` and real-world integration tests in `tests/`.
 
-graphene-django's overlapping foundation is `DjangoObjectType` plus the model/type registry and the field converter layer at `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py:132-258`, `registry.py:1-42`, and `converter.py:182-507`. That gives us the core Meta options, the model registry, scalar field conversion, enum-from-choices, Relay node support, and relation-field generation.
+graphene-django's overlapping foundation is `DjangoObjectType` plus the model/type registry and the field converter layer at `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py:132-258`, `registry.py:1-42`, and `converter.py:182-507`. That gives us the core Meta options, the model registry, scalar field conversion, enum-from-choices, [Relay node][glossary-relay-node-integration] support, and relation-field generation.
 
-strawberry-graphql-django's overlapping foundation is `@strawberry_django.type(...)`, `StrawberryDjangoField`, and the `DjangoOptimizerExtension`, documented at `https://strawberry.rocks/docs/django/guide/types`, `https://strawberry.rocks/docs/django/guide/optimizer`, and implemented in `strawberry_django/type.py` / `strawberry_django/fields/field.py`. That gives us the modern parts graphene-django lacks: automatic `select_related` / `prefetch_related` / `only()` optimization, field-level optimization hints, and a clean integration with Strawberry's type system.
+strawberry-graphql-django's overlapping foundation is `@strawberry_django.type(...)`, `StrawberryDjangoField`, and the [`DjangoOptimizerExtension`][glossary-djangooptimizerextension], documented at `https://strawberry.rocks/docs/django/guide/types`, `https://strawberry.rocks/docs/django/guide/optimizer`, and implemented in `strawberry_django/type.py` / `strawberry_django/fields/field.py`. That gives us the modern parts graphene-django lacks: automatic `select_related` / `prefetch_related` / [`only()`][glossary-only-projection] optimization, field-level optimization hints, and a clean integration with Strawberry's type system.
 
 ## What both libraries overlap on
 
@@ -40,7 +40,7 @@ Add a `DjangoType` base class and a `DjangoOptimizerExtension` so that consumers
 
 ## Non-goals
 
-This spec does not implement `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `DjangoConnectionField`, `apply_cascade_permissions`, per-field permission hooks, mutations, polymorphic interfaces, or the full relay connection story. Those follow later. The first spec only creates the foundation that later specs can attach to.
+This spec does not implement `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, `search_fields`, `DjangoConnectionField`, `apply_cascade_permissions`, [per-field permission hooks][glossary-per-field-permission-hooks], mutations, polymorphic interfaces, or the full relay connection story. Those follow later. The first spec only creates the foundation that later specs can attach to.
 
 ## Scope creep into the N+1 problem
 
@@ -77,17 +77,17 @@ from django_strawberry_framework.exceptions import ConfigurationError
 
 The consumer surface is intentionally DRF-like:
 
-required: `Meta.model`
+required: [`Meta.model`][glossary-metamodel]
 
-optional: `Meta.fields` as `"__all__"` or a list of field names
+optional: [`Meta.fields`][glossary-metafields] as `"__all__"` or a list of field names
 
-optional: `Meta.exclude` as a list of field names, mutually exclusive with `fields`
+optional: [`Meta.exclude`][glossary-metaexclude] as a list of field names, mutually exclusive with `fields`
 
-optional: `Meta.interfaces`, for example `(relay.Node,)`
+optional: [`Meta.interfaces`][glossary-metainterfaces], for example `(relay.Node,)`
 
-optional: `Meta.name` to override the GraphQL type name
+optional: [`Meta.name`][glossary-metaname] to override the GraphQL type name
 
-optional: `Meta.description`
+optional: [`Meta.description`][glossary-metadescription]
 
 Subclasses without their own `Meta` are treated as abstract intermediates and pass through `__init_subclass__` untouched. This lets consumers layer shared scoping logic (tenant filtering, soft-delete, audit) into a base class that downstream concrete types inherit:
 
@@ -106,7 +106,7 @@ class CategoryType(TenantScopedType):
         fields = "__all__"
 ```
 
-The metaclass must reject unsupported future-surface keys for now. If a consumer declares `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, or `search_fields` before those specs ship, raise `ConfigurationError` rather than silently accepting noop config.
+The metaclass must reject unsupported future-surface keys for now. If a consumer declares `filterset_class`, `orderset_class`, `aggregate_class`, `fields_class`, or `search_fields` before those specs ship, raise [`ConfigurationError`][glossary-configurationerror] rather than silently accepting noop config.
 
 ```python
 # Minimal, scalars only
@@ -151,7 +151,7 @@ Field-selection defaults: when neither `fields` nor `exclude` is declared on `Me
 
 `Meta.interfaces` parking: the key is accepted by validation (it is in `ALLOWED_META_KEYS`) but not yet wired through `__init_subclass__`. Until a future slice injects declared interfaces into `cls.__bases__` before `strawberry.type` finalization, consumers wanting a Strawberry interface (e.g., `relay.Node`) should subclass it directly: `class CategoryType(DjangoType, relay.Node):`. The `Meta.interfaces` tuple still validates without raising; it just has no effect.
 
-## Scalar field conversion
+## [Scalar field conversion][glossary-scalar-field-conversion]
 
 The converter layer should mirror graphene-django's coverage but emit Strawberry/Python-native types instead of graphene field instances.
 
@@ -163,7 +163,7 @@ The converter layer should mirror graphene-django's coverage but emit Strawberry
 
 `AutoField`, `BigAutoField`, `SmallAutoField` -> `int` (Django primary-key column types; relay `GlobalID` remapping is the open question below)
 
-`BigIntegerField` -> custom `BigInt` scalar
+`BigIntegerField` -> custom [`BigInt`][glossary-bigint-scalar] scalar
 
 `BooleanField` -> `bool`
 
@@ -312,7 +312,7 @@ assert ItemTypeA.__annotations__["status"] is ItemTypeB.__annotations__["status"
 
 The first type defined wins the enum's name (`ItemTypeAStatusEnum`), even when later types share it. The enum name is for schema introspection only; the runtime behaviour is identical regardless of which type registered it first.
 
-This is intentional, but it leaves the published schema name dependent on Python import order — the trap class-based naming was meant to avoid. Consumers who want a stable, predictable name should declare the `DjangoType` they want to win first (or, eventually, override via a `Meta.choice_enum_names` mapping once such a key exists).
+This is intentional, but it leaves the published schema name dependent on Python import order — the trap class-based naming was meant to avoid. Consumers who want a stable, predictable name should declare the `DjangoType` they want to win first (or, eventually, override via a [`Meta.choice_enum_names`][glossary-metachoice-enum-names] mapping once such a key exists).
 
 ### `null=True` interaction
 
@@ -368,7 +368,7 @@ def convert_relation(field: models.Field) -> Any:
 
 Slice 2 -> Slice 3 hand-off: `_build_annotations` in Slice 2 filters relations out entirely (`[f for f in model._meta.get_fields() if not f.is_relation]`) so a model with FKs or reverse rels can be partially mapped (scalars only) without the unimplemented `convert_relation` raising. Slice 3 must flip that filter: every field goes through dispatch, with relations routed to `convert_relation` and scalars to `convert_scalar`. Once that change lands, `Meta.fields = "__all__"` will include relations on Category (`items`, `properties`), Item (`category`, `entries`), Property (`category`), and Entry (`property`, `item`). The `tests/test_django_types.py` placeholders for `test_relation_fk_to_target_djangotype`, `test_relation_reverse_fk_returns_list`, `test_relation_m2m_returns_list`, and `test_forward_reference_resolves_when_target_defined_later` already mark the test surface Slice 3 must fill in.
 
-Slice 3 status (post-implementation): Slice 3 shipped eager-only relation resolution. `convert_relation` looks up the target via `registry.get(field.related_model)` and raises `ConfigurationError` (with a message naming the unregistered model) if the target is not yet declared. `registry.lazy_ref` therefore stays as `NotImplementedError`; the spec's promise of definition-order independence is deferred to a future slice. The practical implication: consumers must declare related `DjangoType`s in dependency order — declare a target type before any type that references it via FK / OneToOne / M2M, or before any type whose model surfaces it via a reverse rel. The fakeshop dependency order is `CategoryType -> (PropertyType, ItemType) -> EntryType`. M2M handling is implemented in `convert_relation` (the `field.many_to_many` branch shares the same line as `field.one_to_many`, so line coverage holds), but no fakeshop model declares an M2M field, so the dedicated test placeholder stays skipped.
+Slice 3 status (post-implementation): Slice 3 shipped eager-only relation resolution. `convert_relation` looks up the target via `registry.get(field.related_model)` and raises `ConfigurationError` (with a message naming the unregistered model) if the target is not yet declared. `registry.lazy_ref` therefore stays as `NotImplementedError`; the spec's promise of [definition-order independence][glossary-definition-order-independence] is deferred to a future slice. The practical implication: consumers must declare related `DjangoType`s in dependency order — declare a target type before any type that references it via FK / OneToOne / M2M, or before any type whose model surfaces it via a reverse rel. The fakeshop dependency order is `CategoryType -> (PropertyType, ItemType) -> EntryType`. M2M handling is implemented in `convert_relation` (the `field.many_to_many` branch shares the same line as `field.one_to_many`, so line coverage holds), but no fakeshop model declares an M2M field, so the dedicated test placeholder stays skipped.
 
 ## Registry
 
@@ -704,6 +704,27 @@ strawberry-graphql-django custom-`get_queryset` / optimizer edge case: issue #57
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-aggregateset]: ../GLOSSARY.md#aggregateset
+[glossary-apply-cascade-permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-bigint-scalar]: ../GLOSSARY.md#bigint-scalar
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-metachoice-enum-names]: ../GLOSSARY.md#metachoice_enum_names
+[glossary-metadescription]: ../GLOSSARY.md#metadescription
+[glossary-metaexclude]: ../GLOSSARY.md#metaexclude
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metainterfaces]: ../GLOSSARY.md#metainterfaces
+[glossary-metamodel]: ../GLOSSARY.md#metamodel
+[glossary-metaname]: ../GLOSSARY.md#metaname
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-per-field-permission-hooks]: ../GLOSSARY.md#per-field-permission-hooks
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-scalar-field-conversion]: ../GLOSSARY.md#scalar-field-conversion
 
 <!-- docs/SPECS/ -->
 

@@ -1,0 +1,19 @@
+term,anchor,notes
+apply_cascade_permissions,apply_cascade_permissions,Backfilled for DONE-card glossary linkage from the shipped spec body.
+choice enum,choice-enum-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
+ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Connection-aware optimizer planning,connection-aware-optimizer-planning,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoNodeField,djangonodefield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
+FieldSet,fieldset,Backfilled for DONE-card glossary linkage from the shipped spec body.
+finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
+FK-id elision,fk-id-elision,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.interfaces,metainterfaces,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.optimizer_hints,metaoptimizer_hints,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
+only(),only-projection,Backfilled for DONE-card glossary linkage from the shipped spec body.
+OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Relay Node integration,relay-node-integration,Backfilled for DONE-card glossary linkage from the shipped spec body.

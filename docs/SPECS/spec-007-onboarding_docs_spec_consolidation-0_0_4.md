@@ -24,7 +24,7 @@ shipped
 ## Scope
 
 - Root `README.md` is the canonical documentation map and operational entry point.
-- `docs/README.md` is code-first: quickstart, three-minute path, optimizer behavior, and status.
+- `docs/README.md` is code-first: quickstart, three-minute path, [optimizer behavior][glossary-djangooptimizerextension], and status.
 - `docs/GLOSSARY.md` is the capability catalog with value-led optimizer language and comparison table.
 - `docs/TREE.md` is the detailed layout/test-tree reference.
 - `CHANGELOG.md` is condensed and no longer relies on design-doc pointers for release context.
@@ -48,6 +48,7 @@ shipped
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
 
 <!-- docs/SPECS/ -->
 

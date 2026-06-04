@@ -39,7 +39,7 @@ Revision history (kept inline so the spec is self-contained):
   Polish (L1, L2, L4, L5, L6): BigInt import smoke test softened to `BigInt is not None` only — drops the `isinstance(BigInt, strawberry.types.scalar.ScalarWrapper)` assertion since `ScalarWrapper` is an undocumented internal Strawberry path; schema-execution tests downstream catch deeper regressions with stronger signal. TODO-045's "Files likely touched" list hedged with "(subject to the follow-up spec settling final locations)". Subprocess deprecation-suppression test gained a docstring comment explaining `sys.executable` is the venv's Python under `uv run pytest`. Decision 7's "Synthetic-model declaration patterns" cross-references the upstream `app_label = "tests"` requirement explicitly. TODO-045's "Hard break in alpha" decision softened to "Recommended posture" tone — the follow-up spec author can revisit after surveying real `0.0.6` consumer adoption.
 - **Revision 10** (post-feedback2 re-review) — A separate reviewer's pass on revision 8 surfaced one rendering bug, three API/contract corrections, and four polish items. (One of the reviewer's findings — the renumber-option footgun — was already addressed in rev 9 as M1.) Seven new fixes:
   1. **H1 (rendering)**: The verbatim `WIP-ALPHA-020-0.0.7` body in Slice 6 used a ` ```markdown ` outer fence containing a ` ```python ` inner fence. The inner triple backticks close the outer block prematurely in markdown rendering, so the verbatim body was not actually safe to copy. Switched the outer fence to four backticks (` ````markdown `) so the inner Python snippet renders as intended.
-  2. **M1 (API correctness)**: Removed `extra_extensions=None` from the recommended `strawberry_config(...)` signature in Decision 6 and the TODO-045 card body. Strawberry's extensions are passed to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig` — a factory returning `StrawberryConfig` cannot meaningfully accept `extra_extensions`. The follow-up spec can introduce a separate helper (returning a schema-construction bundle, not a `StrawberryConfig`) if extension composition becomes a real need.
+  2. **M1 (API correctness)**: Removed `extra_extensions=None` from the recommended `[strawberry_config][glossary-strawberry-config](...)` signature in Decision 6 and the TODO-045 card body. Strawberry's extensions are passed to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig` — a factory returning `StrawberryConfig` cannot meaningfully accept `extra_extensions`. The follow-up spec can introduce a separate helper (returning a schema-construction bundle, not a `StrawberryConfig`) if extension composition becomes a real need.
   3. **M2 (internal consistency)**: TODO-045 body had two contradictions — (a) "BigInt stays usable as a direct annotation" conflicted with "BigInt may or may not stay in `__all__`" in the DoD; (b) "Recommended posture: hard break in alpha" conflicted with "compatibility shim for `0.0.6` consumers" listed as an open design question. Resolved (a) by committing to `BigInt` staying in `__all__` (consistent with the direct-annotation recommendation); kept (b) consistent by framing the open question as "deprecation-window details" rather than a yes/no on the shim.
   4. **M3 (stale reference)**: Test plan category 17 still described the deprecation-suppression regression as `package import under warnings.catch_warnings(record=True)`. Updated to match the subprocess-based mechanism pinned in Decision 7 (rev 8).
   5. **L1 (consistency)**: HStore outer-`choices` rejection (added to Decision 5 in rev 8) was missing from the Goals, Non-goals, and User-facing API table. All three updated so the policy is discoverable without reading Decision 5.
@@ -77,9 +77,9 @@ Each top-level item maps to one commit in the [Implementation plan](#implementat
     ```python
     __all__ = (
         "BigInt",
-        "DjangoOptimizerExtension",
+        "[DjangoOptimizerExtension][glossary-djangooptimizerextension]",
         "DjangoType",
-        "OptimizerHint",
+        "[OptimizerHint][glossary-optimizerhint]",
         "__version__",
         "auto",
         "finalize_django_types",
@@ -498,7 +498,7 @@ if _HSTORE_FIELD_CLS is not None and isinstance(field, _HSTORE_FIELD_CLS):
 
 The follow-up is a **real public-API migration**, not an internal-only refactor. The package will need to document the migration step (deprecation period, a config-merge helper, a stable annotation path), which is exactly why the warning-free design needs its own spec rather than being folded into this card. Roadmapped as `WIP-ALPHA-020-0.0.7 — Warning-free scalar registration via StrawberryConfig.scalar_map` (added to KANBAN in Slice 6 of this card).
 
-**Recommended starting point** for the follow-up (final shape settled in TODO-ALPHA-045's own spec; this spec author has thought through alternatives and pinned a vetted direction, but the follow-up author may react to new information — e.g., Strawberry adding first-class scalar-registration support, or implementation revealing that conflict-resolution forces a different API shape): a **factory function** `strawberry_config(extra_scalar_map=None) -> StrawberryConfig` returning a composed `StrawberryConfig` pre-populated with the package's scalar map. `BigInt` stays usable as a direct annotation. Composable with consumer extras (factory accepts `extra_scalar_map=...`). Forward-extensible for future package scalars (`Upload` from TODO-ALPHA-027 slots into the factory's internal map automatically). Consumer migration is a single-line change: add `config=strawberry_config()` to existing `strawberry.Schema(query=Query, ...)` calls. The TODO-ALPHA-045 card body — drafted verbatim in Slice 6 of this spec — explores this direction and enumerates the open design questions (helper module name, conflict-resolution behavior for colliding scalar-map keys, deprecation-window shape) for the follow-up spec to settle. (Note: `extra_extensions=` is deliberately *not* part of the factory signature — Strawberry extensions are passed to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig`. If extension composition becomes a real need, that's a separate helper returning a schema-construction bundle, not a `StrawberryConfig`.)
+**Recommended starting point** for the follow-up (final shape settled in TODO-ALPHA-045's own spec; this spec author has thought through alternatives and pinned a vetted direction, but the follow-up author may react to new information — e.g., Strawberry adding first-class scalar-registration support, or implementation revealing that conflict-resolution forces a different API shape): a **factory function** `strawberry_config(extra_scalar_map=None) -> StrawberryConfig` returning a composed `StrawberryConfig` pre-populated with the package's scalar map. `BigInt` stays usable as a direct annotation. Composable with consumer extras (factory accepts `extra_scalar_map=...`). Forward-extensible for future package scalars ([`Upload`][glossary-upload-scalar] from TODO-ALPHA-027 slots into the factory's internal map automatically). Consumer migration is a single-line change: add `config=strawberry_config()` to existing `strawberry.Schema(query=Query, ...)` calls. The TODO-ALPHA-045 card body — drafted verbatim in Slice 6 of this spec — explores this direction and enumerates the open design questions (helper module name, conflict-resolution behavior for colliding scalar-map keys, deprecation-window shape) for the follow-up spec to settle. (Note: `extra_extensions=` is deliberately *not* part of the factory signature — Strawberry extensions are passed to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig`. If extension composition becomes a real need, that's a separate helper returning a schema-construction bundle, not a `StrawberryConfig`.)
 
 ### Decision 7 — Test strategy
 
@@ -772,21 +772,25 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
-[glossary]: ../GLOSSARY.md
 [glossary-bigint-scalar]: ../GLOSSARY.md#bigint-scalar
 [glossary-choice-enum-generation]: ../GLOSSARY.md#choice-enum-generation
 [glossary-configurationerror]: ../GLOSSARY.md#configurationerror
 [glossary-djangomutation]: ../GLOSSARY.md#djangomutation
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
 [glossary-djangotype]: ../GLOSSARY.md#djangotype
 [glossary-filterset]: ../GLOSSARY.md#filterset
 [glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
 [glossary-index]: ../GLOSSARY.md#index
 [glossary-metaexclude]: ../GLOSSARY.md#metaexclude
 [glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
 [glossary-public-exports]: ../GLOSSARY.md#public-exports
 [glossary-scalar-field-conversion]: ../GLOSSARY.md#scalar-field-conversion
 [glossary-scalar-field-override-semantics]: ../GLOSSARY.md#scalar-field-override-semantics
 [glossary-specialized-scalar-conversions]: ../GLOSSARY.md#specialized-scalar-conversions
+[glossary-strawberry-config]: ../GLOSSARY.md#strawberry_config
+[glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
+[glossary]: ../GLOSSARY.md
 [tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->

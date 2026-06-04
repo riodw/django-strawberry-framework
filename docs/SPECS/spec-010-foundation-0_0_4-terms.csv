@@ -1,0 +1,13 @@
+term,anchor,notes
+choice enum,choice-enum-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
+ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
+definition-order independence,definition-order-independence,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoNodeField,djangonodefield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
+finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
+OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
+schema audit,schema-audit,Backfilled for DONE-card glossary linkage from the shipped spec body.

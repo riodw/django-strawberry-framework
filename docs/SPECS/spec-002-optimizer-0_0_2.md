@@ -1,14 +1,14 @@
 # Spec: Optimizer & Reverse-Relation Resolution
 
 ## Purpose
-This parent spec records the optimizer architecture and the shipped foundation slices for relation resolution, root-gated query planning, nested prefetch chains, `only()` projection, and `get_queryset`-aware `Prefetch` downgrade.
+This parent spec records the optimizer architecture and the shipped foundation slices for relation resolution, root-gated query planning, nested prefetch chains, [`only()`][glossary-only-projection] projection, and `get_queryset`-aware `Prefetch` downgrade.
 
 O4 was extracted out of this document during implementation. The O4 design record remains in `docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md`; keep detailed O4 rationale there rather than duplicating it here.
 
 ## Problem statement
 `spec-001-django_types-0_0_1.md` predicted that the optimizer half of its scope would eventually warrant its own document; running the early DjangoType slice tests confirmed it. Two concrete failures pushed the optimizer story into its own subsystem:
 
-- Reverse relations exposed by `DjangoType` need generated resolvers because Strawberry's default resolver returns a Django `RelatedManager`, which is not directly iterable.
+- Reverse relations exposed by [`DjangoType`][glossary-djangotype] need generated resolvers because Strawberry's default resolver returns a Django `RelatedManager`, which is not directly iterable.
 - Query planning needs to run from the operation root so the optimizer can inspect the GraphQL selection tree before relation resolvers evaluate model attributes.
 
 These problems share one seam: how the framework gets from Strawberry field resolution to the underlying Django model relation.
@@ -18,7 +18,7 @@ The foundation optimizer architecture has shipped:
 
 - O1 — Custom resolvers for relation fields.
 - O2 — Selection-tree walker in `django_strawberry_framework/optimizer/walker.py`.
-- O3 — Root-gated optimizer hook in `DjangoOptimizerExtension`.
+- O3 — Root-gated optimizer hook in [`DjangoOptimizerExtension`][glossary-djangooptimizerextension].
 - O4 — Nested prefetch chains and same-query recursion.
 - O5 — `only()` projection.
 - O6 — `get_queryset` + `Prefetch` downgrade.
@@ -92,6 +92,9 @@ The visibility-leak / `Prefetch` downgrade discussion that motivated bundling th
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
 
 <!-- docs/SPECS/ -->
 

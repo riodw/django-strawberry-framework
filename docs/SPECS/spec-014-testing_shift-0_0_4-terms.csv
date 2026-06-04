@@ -1,0 +1,8 @@
+term,anchor,notes
+choice enum,choice-enum-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
+finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
+OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Strictness mode,strictness-mode,Backfilled for DONE-card glossary linkage from the shipped spec body.

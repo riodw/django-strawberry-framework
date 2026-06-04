@@ -1,0 +1,9 @@
+term,anchor,notes
+DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
+FK-id elision,fk-id-elision,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.optimizer_hints,metaoptimizer_hints,Backfilled for DONE-card glossary linkage from the shipped spec body.
+only(),only-projection,Backfilled for DONE-card glossary linkage from the shipped spec body.
+OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
+plan cache,plan-cache,Backfilled for DONE-card glossary linkage from the shipped spec body.
+queryset diffing,queryset-diffing,Backfilled for DONE-card glossary linkage from the shipped spec body.
+schema audit,schema-audit,Backfilled for DONE-card glossary linkage from the shipped spec body.

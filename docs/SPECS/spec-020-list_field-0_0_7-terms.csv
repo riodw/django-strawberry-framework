@@ -1,0 +1,25 @@
+term,anchor,notes
+apply_cascade_permissions,apply_cascade_permissions,Backfilled for DONE-card glossary linkage from the shipped spec body.
+BigInt,bigint-scalar,Backfilled for DONE-card glossary linkage from the shipped spec body.
+ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Connection-aware optimizer planning,connection-aware-optimizer-planning,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoConnection,djangoconnection,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoListField,djangolistfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoNodeField,djangonodefield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
+finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
+FK-id elision,fk-id-elision,Backfilled for DONE-card glossary linkage from the shipped spec body.
+get_queryset visibility hook,get_queryset-visibility-hook,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.model,metamodel,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Multi-database,multi-database-cooperation,Backfilled for DONE-card glossary linkage from the shipped spec body.
+only(),only-projection,Backfilled for DONE-card glossary linkage from the shipped spec body.
+OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
+plan cache,plan-cache,Backfilled for DONE-card glossary linkage from the shipped spec body.
+queryset diffing,queryset-diffing,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Relation handling,relation-handling,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Relay Node integration,relay-node-integration,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Strictness mode,strictness-mode,Backfilled for DONE-card glossary linkage from the shipped spec body.

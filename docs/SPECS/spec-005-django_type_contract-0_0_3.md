@@ -4,10 +4,10 @@
 
 The DjangoType pipeline (`spec-001-django_types-0_0_1.md` Slices 1–4 and 7, plus `spec-002-optimizer-0_0_2.md` Slice O1) is shipped, but the *contract* between the package and its consumers — which Meta knobs work, which are deferred, which are silently dropped, what consumers can and cannot rely on — has not been pinned in a single document. The alpha review surfaced four concrete gaps:
 
-1. Registry uniqueness. `TypeRegistry.register` raises `ConfigurationError` on collision, forcing one `DjangoType` per Django model. DRF allows multiple Serializers per model; `graphene-django` and `strawberry-graphql-django` both allow multiple types per model. The constraint was real but not previously documented as temporary.
+1. Registry uniqueness. `TypeRegistry.register` raises [`ConfigurationError`][glossary-configurationerror] on collision, forcing one [`DjangoType`][glossary-djangotype] per Django model. DRF allows multiple Serializers per model; `graphene-django` and `strawberry-graphql-django` both allow multiple types per model. The constraint was real but not previously documented as temporary.
 2. Consumer override semantics. `DjangoType.__init_subclass__` claimed in its docstring that consumer-declared annotations override synthesized ones, but `@strawberry.type` rewrites `cls.__annotations__` after the merge so the override doesn't actually hold. The skipped `test_consumer_annotation_overrides_synthesized` pinned the failure.
-3. Invalid `Meta.fields` / `Meta.exclude` names. Until 0.0.3, `_select_fields` did a set intersection and silently dropped unknown names — typos became partial-type bugs without any signal.
-4. Accepted-but-unwired Meta keys. `Meta.interfaces` was in `ALLOWED_META_KEYS` (validation passed) but never applied to the Strawberry type — a misleading "supported" surface for a feature that did nothing.
+3. Invalid [`Meta.fields`][glossary-metafields] / [`Meta.exclude`][glossary-metaexclude] names. Until 0.0.3, `_select_fields` did a set intersection and silently dropped unknown names — typos became partial-type bugs without any signal.
+4. Accepted-but-unwired Meta keys. [`Meta.interfaces`][glossary-metainterfaces] was in `ALLOWED_META_KEYS` (validation passed) but never applied to the Strawberry type — a misleading "supported" surface for a feature that did nothing.
 
 The unifying thread: an alpha-stage Meta-driven generator must be narrow and explicit about what it accepts. Silent acceptance of unwired surfaces, silent drops of unknown names, and undocumented hard constraints all corrupt user feedback and break the Meta-class clarity pitch the package is built around.
 
@@ -26,7 +26,7 @@ The unifying thread: an alpha-stage Meta-driven generator must be narrow and exp
 - `_select_fields` raises `ConfigurationError` naming the model, the unknown names, and the available field set when `Meta.fields` or `Meta.exclude` references nonexistent fields.
 - `_is_default_get_queryset` sentinel flip in `__init_subclass__` and the implemented `has_custom_get_queryset` body (covered by `spec-002-optimizer-0_0_2.md` for the O6 consumer; covered here for the type-system half of the contract).
 
-The two remaining contract items — the override claim removal and the registry uniqueness rule — are pinned by this spec. The override claim removal ships in 0.0.3; the registry uniqueness resolution is deferred to a future `Meta.primary` spec.
+The two remaining contract items — the override claim removal and the registry uniqueness rule — are pinned by this spec. The override claim removal ships in 0.0.3; the registry uniqueness resolution is deferred to a future [`Meta.primary`][glossary-metaprimary] spec.
 
 ## Goal
 
@@ -83,7 +83,7 @@ None of these belongs in this spec. They belong to a future `spec-consumer_overr
 
 ### Invalid `Meta.fields` / `Meta.exclude` (shipped in 0.0.3)
 
-`_select_fields` validates that every name in `Meta.fields` or `Meta.exclude` corresponds to a real field on `Meta.model`. Unknown names raise `ConfigurationError` whose message names the model, lists the unknowns, and lists the available fields so typos are obvious. Implementation lives in `django_strawberry_framework/types/base.py`; tests in `tests/types/test_base.py` (`test_meta_fields_unknown_name_raises`, `test_meta_fields_unknown_name_includes_model_and_available`, `test_meta_exclude_unknown_name_raises`).
+`_select_fields` validates that every name in `Meta.fields` or `Meta.exclude` corresponds to a real field on [`Meta.model`][glossary-metamodel]. Unknown names raise `ConfigurationError` whose message names the model, lists the unknowns, and lists the available fields so typos are obvious. Implementation lives in `django_strawberry_framework/types/base.py`; tests in `tests/types/test_base.py` (`test_meta_fields_unknown_name_raises`, `test_meta_fields_unknown_name_includes_model_and_available`, `test_meta_exclude_unknown_name_raises`).
 
 This rule is final. The error shape — model + unknowns + available — is part of the public contract: a consumer can rely on every `ConfigurationError` from this code path naming both the bad input and the valid surface.
 
@@ -129,6 +129,13 @@ None blocking 0.0.3. The two follow-on specs (`Meta.primary` and consumer overri
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-metaexclude]: ../GLOSSARY.md#metaexclude
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metainterfaces]: ../GLOSSARY.md#metainterfaces
+[glossary-metamodel]: ../GLOSSARY.md#metamodel
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
 
 <!-- docs/SPECS/ -->
 

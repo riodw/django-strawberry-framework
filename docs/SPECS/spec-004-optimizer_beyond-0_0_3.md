@@ -8,7 +8,7 @@ This spec covers eight improvements that the existing libraries do not ship. The
 
 ## Current state
 
-O1 (custom relation resolvers), O2 (selection-tree walker), O3 (root-gated resolve hook with async parity and type-tracing), O4 (nested prefetch chains), O5 (`only()` projection), and O6 (`Prefetch` downgrade) have shipped. The optimizer is effective end-to-end for nested relation queries, including B2 forward-FK-id elision for `id`-only target selections and B3 strictness keys that remain branch-sensitive under aliases.
+O1 (custom relation resolvers), O2 (selection-tree walker), O3 (root-gated resolve hook with async parity and type-tracing), O4 (nested prefetch chains), O5 ([`only()`][glossary-only-projection] projection), and O6 (`Prefetch` downgrade) have shipped. The optimizer is effective end-to-end for nested relation queries, including B2 forward-[FK-id elision][glossary-fk-id-elision] for `id`-only target selections and B3 strictness keys that remain branch-sensitive under aliases.
 
 ## Proposed improvements
 
@@ -20,7 +20,7 @@ O1 (custom relation resolvers), O2 (selection-tree walker), O3 (root-gated resol
 
 **Directive-variable extraction.** `frozenset(skip_include_vars)` requires knowing *which* variables affect `@skip`/`@include` directives. Including all operation variables would cause cardinality explosion (a query with 10 filter variables would produce 2^10 cache entries even though none of them affect the selection tree). The correct approach: pre-walk the document AST once during cache-key construction to collect only the variable names referenced inside `@skip`/`@include` directive arguments, then extract just those values from `info.variable_values`. For queries with no conditional directives (the common production case), the directive-var set is empty and the cache collapses to `(document_hash, frozenset(), target_model)` — one entry per document per model.
 
-**Cache lifetime (spike completed 2026-04-30).** Strawberry's `Schema` has two extension accessors: `_sync_extensions` (`@cached_property` — instantiated once per schema, reused across all sync requests) and `_async_extensions` (plain `@property` — fresh instances per access so concurrent async requests don't share state). However, `get_extensions()` passes through already-instantiated objects unchanged via an `isinstance` check. So consumers passing `DjangoOptimizerExtension()` (an instance) get the same object reused in both sync and async modes; consumers passing the bare class get fresh instances in async mode (zero cache hit rate). **Decision:** use `self._plan_cache` (a dict on the instance). Document in the class docstring and README that consumers should pass an instance (`extensions=[DjangoOptimizerExtension()]`), not the bare class, to benefit from plan caching in async mode. This matches `strawberry-graphql-django`'s recommended usage pattern. Use a simple bounded-size dict (not `functools.lru_cache`, since the cache key includes a model class which is not hashable by `lru_cache`'s default).
+**Cache lifetime (spike completed 2026-04-30).** Strawberry's `Schema` has two extension accessors: `_sync_extensions` (`@cached_property` — instantiated once per schema, reused across all sync requests) and `_async_extensions` (plain `@property` — fresh instances per access so concurrent async requests don't share state). However, `get_extensions()` passes through already-instantiated objects unchanged via an `isinstance` check. So consumers passing `[DjangoOptimizerExtension][glossary-djangooptimizerextension]()` (an instance) get the same object reused in both sync and async modes; consumers passing the bare class get fresh instances in async mode (zero cache hit rate). **Decision:** use `self._plan_cache` (a dict on the instance). Document in the class docstring and README that consumers should pass an instance (`extensions=[DjangoOptimizerExtension()]`), not the bare class, to benefit from plan caching in async mode. This matches `strawberry-graphql-django`'s recommended usage pattern. Use a simple bounded-size dict (not `functools.lru_cache`, since the cache key includes a model class which is not hashable by `lru_cache`'s default).
 
 Pseudo code:
 
@@ -110,11 +110,11 @@ if relation_path not in info.context.dst_optimizer_planned:
 
 **Depends on.** O3 (shipped). B5 (context stashing mechanism). Independent of O4–O6.
 
-### B4 — `Meta.optimizer_hints`
+### B4 — [`Meta.optimizer_hints`][glossary-metaoptimizer-hints]
 
 **The win.** strawberry-graphql-django's optimization hints live on per-field decorators (`@strawberry_django.field(select_related="...")`) — fine for their decorator API, awkward for ours. Meta-class hints are a free win because we already have the surface. DRF teams will reach for this without asking.
 
-**Mechanism.** Add an optional `Meta.optimizer_hints` dict to `DjangoType`. Keys are field names; values are `OptimizerHint` instances that override the walker's automatic dispatch for that field.
+**Mechanism.** Add an optional `Meta.optimizer_hints` dict to [`DjangoType`][glossary-djangotype]. Keys are field names; values are [`OptimizerHint`][glossary-optimizerhint] instances that override the walker's automatic dispatch for that field.
 
 **`OptimizerHint` typed wrapper.** Mixing raw strings (`"skip"`), `Prefetch` objects, and dicts (`{"select_related": True}`) in the same field-value position works but reads awkwardly and makes `_validate_meta` validation ad-hoc. Instead, a small typed class provides uniform shape and clean validation:
 
@@ -147,7 +147,7 @@ if hint and hint.force_prefetch:
     return
 ```
 
-**Validation.** `_validate_meta` rejects unknown field names in `optimizer_hints` (same as `fields`/`exclude` validation). Hint values must be `OptimizerHint` instances — anything else raises `ConfigurationError` at schema-build time so typos and shape errors surface early.
+**Validation.** `_validate_meta` rejects unknown field names in `optimizer_hints` (same as `fields`/`exclude` validation). Hint values must be `OptimizerHint` instances — anything else raises [`ConfigurationError`][glossary-configurationerror] at schema-build time so typos and shape errors surface early.
 
 **Test surface.** `SKIP` suppresses a relation from the plan. `.prefetch(Prefetch(...))` appears in the plan instead of a plain string. `.select_related()` forces select_related on a many-side relation. Unknown field name raises `ConfigurationError`. Non-`OptimizerHint` value raises `ConfigurationError`.
 
@@ -182,7 +182,7 @@ return plan.apply(queryset)
 
 **Mechanism.** At schema build time (callable from `ready()` or a management command), walk only the types reachable from the schema's root types — not the entire registry. Walking all registered types would produce false positives for types that are registered but not exposed in the schema (e.g., types used only in tests or internal helpers). The `schema` argument provides the root; the audit traverses the type graph from there.
 
-For each reachable registered model, walk only the relation fields **exposed by the `DjangoType`** (i.e., those that passed `Meta.fields` / `Meta.exclude` filtering and are present in `cls._optimizer_field_map`), not the full set from `model._meta.get_fields()`. Relations hidden by Meta-level filtering, or opted out via `OptimizerHint.SKIP` (B4), are intentionally invisible to the optimizer and must not be flagged. For each exposed relation field, check:
+For each reachable registered model, walk only the relation fields **exposed by the `DjangoType`** (i.e., those that passed [`Meta.fields`][glossary-metafields] / [`Meta.exclude`][glossary-metaexclude] filtering and are present in `cls._optimizer_field_map`), not the full set from `model._meta.get_fields()`. Relations hidden by Meta-level filtering, or opted out via `OptimizerHint.SKIP` (B4), are intentionally invisible to the optimizer and must not be flagged. For each exposed relation field, check:
 - The target model has a corresponding `DjangoType` registered in the registry.
 - The relation is not hidden behind a custom resolver that bypasses the optimizer.
 - Forward FKs to unregistered types are flagged as "will lazy-load on every access."
@@ -232,7 +232,7 @@ def check_schema(cls, schema):
 
 **B6 late** because the schema-build-time audit is ambitious and independent — it does not block any other slice and benefits from B4's `optimizer_hints` being available (hints affect which relations are flagged as unoptimized).
 
-**B8 last** because queryset diffing is a pure polish item. Django handles duplicates gracefully, so B8 is about debug-log clarity and principle rather than correctness.
+**B8 last** because [queryset diffing][glossary-queryset-diffing] is a pure polish item. Django handles duplicates gracefully, so B8 is about debug-log clarity and principle rather than correctness.
 
 ### B7 — Precomputed optimizer field metadata
 
@@ -331,6 +331,16 @@ graphql-core AST node types: `graphql/language/ast.py` — `FieldNode`, `InlineF
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-metaexclude]: ../GLOSSARY.md#metaexclude
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metaoptimizer-hints]: ../GLOSSARY.md#metaoptimizer_hints
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
 
 <!-- docs/SPECS/ -->
 

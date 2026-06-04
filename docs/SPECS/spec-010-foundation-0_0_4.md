@@ -1,4 +1,4 @@
-# Foundation slice: definition-order independence
+# Foundation slice: [definition-order independence][glossary-definition-order-independence]
 
 ## Purpose
 This document is the implementation contract for the 0.0.4 foundation slice. It is the single source of truth for what ships in this release. It is intentionally narrower than the broader design specs:
@@ -18,14 +18,14 @@ The foundation slice ships six things and only six things:
 ## What does not ship in this slice
 The foundation slice deliberately skips:
 - Custom Strawberry field class (`DjangoModelField`). Rich-schema spec layer 4. We keep today's `_attach_relation_resolvers` pattern.
-- `DjangoSchema`, `DjangoConnectionField`, `DjangoNodeField`. Rich-schema spec layer 5+. The foundation only exposes the explicit `finalize_django_types()` entry point; helpers wrap it in later releases.
+- `DjangoSchema`, [`DjangoConnectionField`][glossary-djangoconnectionfield], [`DjangoNodeField`][glossary-djangonodefield]. Rich-schema spec layer 5+. The foundation only exposes the explicit `finalize_django_types()` entry point; helpers wrap it in later releases.
 - Filters, orders, aggregates, fieldsets, permissions, sentinel redaction, field-level optimizer stores. Rich-schema spec layers 6–11.
 - Strawberry-Django's decorator API surface and `DjangoModelType` generic relation fallback.
-- `Meta.primary` for multiple `DjangoType`s per model. The current registry hard-fails on duplicate models, and that stays.
+- [`Meta.primary`][glossary-metaprimary] for multiple [`DjangoType`][glossary-djangotype]s per model. The current registry hard-fails on duplicate models, and that stays.
 - A general consumer manual-annotation override contract. The 0.0.4 contract is narrower and explicit (see "Manual annotation contract for relation fields" below): for relation fields only, a consumer-supplied annotation suppresses both placeholder synthesis and pending-relation recording, so the user's annotation flows through unchanged. Validation that a consumer annotation matches the Django relation cardinality is deferred. Manual override on scalar fields remains the same documented "implementation detail" with the same warning as today.
 ## Invariants this slice must protect
 The following are the invariants every reviewer should test the design against. Any change that violates one of them is a rejected change.
-- `Meta.fields = "__all__"` produces concrete rich related `DjangoType`s by default, regardless of declaration order.
+- `[Meta.fields][glossary-metafields] = "__all__"` produces concrete rich related `DjangoType`s by default, regardless of declaration order.
 - Schema shape never silently degrades based on import order.
 - Unresolved exposed relation targets fail loud at finalization, not silently and not at class creation.
 - The optimizer always sees concrete relation metadata after finalization; `registry.get(target_model)` returns the registered `DjangoType` for every relation field that survived selection.
@@ -447,9 +447,9 @@ Every change below is mapped to a specific symbol in the current source.
 - `django_strawberry_framework/types/base.py:377 (_build_annotations)`. Becomes a per-field dispatch over `convert_scalar` and a relation branch that either resolves through the registry or appends to the caller's pending list. Today's monolithic loop is replaced.
 - `django_strawberry_framework/registry.py:93 (TypeRegistry.lazy_ref)`. **Deleted.** The placeholder `raise NotImplementedError(...)` and its three-option docstring are misleading; the actual pending-relation API supersedes them.
 - `django_strawberry_framework/registry.py:154 (TypeRegistry.clear)`. Extended to also reset `_definitions`, `_pending`, and `_finalized`. Required for test isolation; without it, pending relations and finalized markers leak between tests.
-- `tests/types/test_converters.py` and `tests/types/test_base.py`. Any test that pins "creating a `DjangoType` whose target is not yet registered raises `ConfigurationError`" is rewritten. New behavior: class creation succeeds; `finalize_django_types()` raises with the unresolved-targets format.
+- `tests/types/test_converters.py` and `tests/types/test_base.py`. Any test that pins "creating a `DjangoType` whose target is not yet registered raises [`ConfigurationError`][glossary-configurationerror]" is rewritten. New behavior: class creation succeeds; `finalize_django_types()` raises with the unresolved-targets format.
 ### Should redo now (cheap to do, expensive to defer)
-- `django_strawberry_framework/types/base.py:147 (cls._optimizer_field_map)` and `:149 (cls._optimizer_hints)`. The canonical store moves to `DjangoTypeDefinition.field_map` and `.optimizer_hints`. The walker keeps reading `getattr(type_cls, "_optimizer_field_map", None)` at `walker.py:64` and `getattr(type_cls, "_optimizer_hints", {})` at `walker.py:130` for one minor version. The compat surface is **direct class-attribute mirroring** in `__init_subclass__` (see step 13 of the collection pseudocode), **not** a `@property` — a normal instance property returns the descriptor object itself when the walker does `getattr(type_cls, "_optimizer_field_map", None)` (because `type_cls` is the class, not an instance), which would silently break the walker and the schema audit. The mirrored attributes are removed in the next minor once the walker reads through `registry.get_definition(...)`.
+- `django_strawberry_framework/types/base.py:147 (cls._optimizer_field_map)` and `:149 (cls._optimizer_hints)`. The canonical store moves to `DjangoTypeDefinition.field_map` and `.optimizer_hints`. The walker keeps reading `getattr(type_cls, "_optimizer_field_map", None)` at `walker.py:64` and `getattr(type_cls, "_optimizer_hints", {})` at `walker.py:130` for one minor version. The compat surface is **direct class-attribute mirroring** in `__init_subclass__` (see step 13 of the collection pseudocode), **not** a `@property` — a normal instance property returns the descriptor object itself when the walker does `getattr(type_cls, "_optimizer_field_map", None)` (because `type_cls` is the class, not an instance), which would silently break the walker and the [schema audit][glossary-schema-audit]. The mirrored attributes are removed in the next minor once the walker reads through `registry.get_definition(...)`.
 - `django_strawberry_framework/types/base.py:71 (_is_default_get_queryset)`. Migrated onto `DjangoTypeDefinition.has_custom_get_queryset`, but populated by an MRO-walking helper (`_detect_custom_get_queryset(cls)`), **not** by `"get_queryset" in cls.__dict__` alone. The MRO walk is required so an abstract base that overrides `get_queryset` (e.g., a tenant-scoped mixin) propagates the flag to concrete subclasses exactly as today's class-attribute sentinel does at `base.py:128-131`. The `has_custom_get_queryset()` classmethod stays as a thin lookup (`return cls.__django_strawberry_definition__.has_custom_get_queryset`) so `walker.py:42` keeps reading the same shape. The legacy `cls._is_default_get_queryset` is mirrored from the definition for one minor version (collection pseudocode step 13).
 - `django_strawberry_framework/types/base.py (_build_annotations)` callers and `_attach_relation_resolvers` callers now consume `DjangoTypeDefinition.selected_fields` — the real Django field objects — rather than receiving them as a separate argument. This is required because resolver attachment runs in `finalize_django_types()` and no longer has the original `_select_fields` return value at hand; the definition object is the only source of truth at that point. `FieldMeta` is **not** sufficient for resolver bodies because they need `attname`, `related_model.DoesNotExist`, and cardinality flags.
 - `django_strawberry_framework/types/resolvers.py:168 (_attach_relation_resolvers)`. The function body stays. Its call site moves from `__init_subclass__` to `finalize_django_types()` and reads `definition.selected_fields` instead of receiving a fresh field list. Today's resolvers do not look up the registry at construction time — they call `getattr(root, field_name)` — so deferring attachment is purely a timing change.
@@ -496,7 +496,7 @@ Under `tests/types/test_definition_order_schema.py` and `examples/fakeshop/tests
 - The library `DjangoType` declaration order is intentionally awkward and is pinned so future reordering does not erase definition-order coverage.
 Under `examples/fakeshop/test_query/test_library_api.py`:
 - Live `/graphql/` tests cover nested traversal through `Branch -> Shelf -> Book -> Loan -> Patron`.
-- Reverse OneToOne nullability, reverse M2M traversal, choice enum wire values, and nullable scalar wire values are asserted over HTTP.
+- Reverse OneToOne nullability, reverse M2M traversal, [choice enum][glossary-choice-enum-generation] wire values, and nullable scalar wire values are asserted over HTTP.
 - Forward FK, reverse FK, and M2M optimizer SQL shapes are asserted with Django query capture.
 - Consumer-shaped queryset cooperation, `OptimizerHint.prefetch_related()`, `OptimizerHint.SKIP`, and consumer-authored relation overrides are observable through the HTTP layer.
 ### Optimizer regression tests
@@ -531,7 +531,7 @@ The slice is ordered so each step lands a passing test suite. **Phase 0 is the s
     - `TODAY.md` — capability snapshot.
     - `CHANGELOG.md` — release entry summarizing the new capability and the new public API.
 11. Update export points:
-    - `django_strawberry_framework/__init__.py` — re-export `finalize_django_types`, add it to `__all__`.
+    - `django_strawberry_framework/__init__.py` — re-export [`finalize_django_types`][glossary-finalize-django-types], add it to `__all__`.
     - `django_strawberry_framework/types/__init__.py` — re-export `finalize_django_types` so it is reachable as `from django_strawberry_framework.types import finalize_django_types` for symmetry with `DjangoType`.
 12. Bump version metadata to `0.0.4`:
     - `pyproject.toml` (`version = "0.0.4"`).
@@ -539,7 +539,7 @@ The slice is ordered so each step lands a passing test suite. **Phase 0 is the s
 ## Public API delta
 After this slice the public surface gains exactly one new symbol:
 - `finalize_django_types: Callable[[], None]` — re-exported from both `django_strawberry_framework` (top-level) and `django_strawberry_framework.types` (subpackage), so consumers can import it the same way they import `DjangoType`.
-Existing public names — `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `auto` — are unchanged.
+Existing public names — `DjangoType`, [`DjangoOptimizerExtension`][glossary-djangooptimizerextension], [`OptimizerHint`][glossary-optimizerhint], `auto` — are unchanged.
 Version metadata bumps from `0.0.3` to `0.0.4` in both `pyproject.toml` and `django_strawberry_framework/__init__.py:__version__`.
 The `__django_strawberry_definition__` attribute is *not* part of the public API surface but is documented as a stable internal hook for the optimizer and future subsystems.
 
@@ -562,6 +562,18 @@ This spec includes line numbers for some current source files (e.g., `walker.py:
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-choice-enum-generation]: ../GLOSSARY.md#choice-enum-generation
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-schema-audit]: ../GLOSSARY.md#schema-audit
 
 <!-- docs/SPECS/ -->
 

@@ -30,7 +30,7 @@ The Graphene reference exposes four model nodes, each with:
 - `fields_class`
 - `search_fields`
 - row-level `get_queryset`
-- `apply_cascade_permissions`
+- [`apply_cascade_permissions`][glossary-apply-cascade-permissions]
 - root `AdvancedDjangoFilterConnectionField(...)`
 
 The Strawberry version should preserve that high-level shape:
@@ -89,7 +89,7 @@ Important current functions:
 - `_make_relation_resolver`: `django_strawberry_framework/types/resolvers.py:111`
 - `_attach_relation_resolvers`: `django_strawberry_framework/types/resolvers.py:168`
 - `TypeRegistry.lazy_ref`: `django_strawberry_framework/registry.py:93`
-- `DjangoOptimizerExtension`: `django_strawberry_framework/optimizer/extension.py:254`
+- [`DjangoOptimizerExtension`][glossary-djangooptimizerextension]: `django_strawberry_framework/optimizer/extension.py:254`
 - `DjangoOptimizerExtension.check_schema`: `django_strawberry_framework/optimizer/extension.py:442`
 - `walker.plan_relation`: `django_strawberry_framework/optimizer/walker.py:36`
 - `walker._plan_prefetch_relation`: `django_strawberry_framework/optimizer/walker.py:216`
@@ -130,9 +130,9 @@ Important source references:
 - `FilterArgumentsFactory._ensure_built`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/filter_arguments_factory.py#L98`
 - `OrderArgumentsFactory._ensure_built`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/order_arguments_factory.py#L78`
 - `AggregateArgumentsFactory._ensure_built`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregate_arguments_factory.py#L89`
-- `AdvancedAggregateSet.compute`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L440`
+- `Advanced[AggregateSet][glossary-aggregateset].compute`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L440`
 - `AdvancedAggregateSet.acompute`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/aggregateset.py#L474`
-- `AdvancedFieldSet`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/fieldset.py#L80`
+- `Advanced[FieldSet][glossary-fieldset]`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/fieldset.py#L80`
 - `apply_cascade_permissions`: `file:///Users/riordenweber/projects/django-graphene-filters/django_graphene_filters/permissions.py#L19`
 
 ### What to take from django-graphene-filters
@@ -156,7 +156,7 @@ The names should stay close to the Graphene package because this is a migration 
 `AdvancedDjangoFilterConnectionField` is the correct architectural hub. It binds:
 
 - the target node type
-- filter input type
+- filter [input type][glossary-input-type-generation]
 - order input type
 - search argument
 - aggregate output type
@@ -164,7 +164,7 @@ The names should stay close to the Graphene package because this is a migration 
 - permission-aware filtering
 - connection result shape
 
-The Strawberry version should have a `DjangoConnectionField` that plays the same role. It should not force users to write manual list resolvers for common model lists.
+The Strawberry version should have a [`DjangoConnectionField`][glossary-djangoconnectionfield] that plays the same role. It should not force users to write manual list resolvers for common model lists.
 
 #### Take lazy related class references
 `LazyRelatedClassMixin` solves circular filter/order/aggregate class graphs without depending on Python declaration order.
@@ -180,9 +180,9 @@ Take the concept and adapt it:
 
 This pattern is separate from model relation type finalization. It should be reused for:
 
-- `RelatedFilter`
-- `RelatedOrder`
-- `RelatedAggregate`
+- [`RelatedFilter`][glossary-relatedfilter]
+- [`RelatedOrder`][glossary-relatedorder]
+- [`RelatedAggregate`][glossary-relatedaggregate]
 - future related fieldset or permission declarations if needed
 
 #### Take BFS graph factories
@@ -226,7 +226,7 @@ Take the layered model. Do not collapse all permission behavior into Strawberry'
 #### Take aggregate semantics
 `AdvancedAggregateSet` is a good design:
 
-- declarative `Meta.fields`
+- declarative [`Meta.fields`][glossary-metafields]
 - stat validation at class creation
 - custom stat output types
 - `compute_<field>_<stat>` overrides
@@ -388,7 +388,7 @@ Benefits:
 - one canonical place for model/type metadata
 - optimizer can read from the definition rather than scattered class attrs
 - connection fields can resolve filter/order/aggregate defaults from the node type
-- schema audit can report exact unfinalized or unresolved fields
+- [schema audit][glossary-schema-audit] can report exact unfinalized or unresolved fields
 
 ### Borrow `get_strawberry_annotations`
 `get_strawberry_annotations` preserves annotation namespaces across inheritance and postponed annotations.
@@ -465,14 +465,14 @@ Strawberry-Django's default relation fallback maps:
 - `ForeignKey` -> `DjangoModelType`
 - reverse FK -> `list[DjangoModelType]`
 
-That is useful for Strawberry-Django's goals, but it is too weak for this package. This package should resolve relations to concrete registered `DjangoType`s whenever the relation field is exposed.
+That is useful for Strawberry-Django's goals, but it is too weak for this package. This package should resolve relations to concrete registered [`DjangoType`][glossary-djangotype]s whenever the relation field is exposed.
 
 Recommended behavior:
 
 1. scalar fields may use a local `resolve_model_field_type`-style map
 2. relation fields should first ask the package registry for the concrete target type
 3. if the target is missing during collection, create a pending relation record
-4. if the target is still missing during finalization, raise `ConfigurationError`
+4. if the target is still missing during finalization, raise [`ConfigurationError`][glossary-configurationerror]
 5. do not expose `DjangoModelType` as the default public relation shape
 
 Keep `DjangoModelType` only as an internal or explicitly requested fallback, not as the default for `Meta.fields = "__all__"`.
@@ -508,7 +508,7 @@ This package can expose:
 
 - `DjangoField(...)` for explicit advanced fields
 - `DjangoConnectionField(...)` for root and nested connections
-- `DjangoNodeField(...)` for Relay node lookup
+- `DjangoNodeField(...)` for [Relay node][glossary-relay-node-integration] lookup
 
 Internally those should use a custom `DjangoModelField`.
 
@@ -672,7 +672,7 @@ The package needs an explicit, Strawberry-safe finalization point.
 
 Preferred triggers:
 
-1. `DjangoConnectionField(Type)` calls `finalize_django_types()` before it returns a field.
+1. `DjangoConnectionField(Type)` calls `[finalize_django_types][glossary-finalize-django-types]()` before it returns a field.
 2. `DjangoNodeField(Type)` calls `finalize_django_types()` before it returns a field.
 3. `DjangoSchema(...)` calls `finalize_django_types()` before constructing `strawberry.Schema`.
 4. `finalize_django_types()` remains public for advanced users.
@@ -751,7 +751,7 @@ class ObjectFilter(AdvancedFilterSet):
 
 Implementation:
 
-- `FilterSetMetaclass` collects `RelatedFilter`
+- `[FilterSet][glossary-filterset]Metaclass` collects `RelatedFilter`
 - `RelatedFilter` uses lazy class refs
 - `FilterArgumentsFactory` BFS-builds Strawberry input types
 - generated types use class-based names
@@ -770,7 +770,7 @@ Do not adopt Strawberry-Django's generic relation fallback as the main shape.
 ### Layer 7: Order system
 Use `django-graphene-filters` semantics:
 
-- `AdvancedOrderSet`
+- `Advanced[OrderSet][glossary-orderset]`
 - `RelatedOrder`
 - ordered list of order directives
 - `ASC`, `DESC`, `ASC_DISTINCT`, `DESC_DISTINCT`
@@ -781,7 +781,7 @@ Use `django-graphene-filters` semantics:
 Borrow from Strawberry-Django:
 
 - recursive `process_order` shape
-- `Ordering` enum implementation details for null ordering if useful
+- [`Ordering`][glossary-ordering] enum implementation details for null ordering if useful
 - input object traversal and prefix handling
 
 Prefer the Graphene package's list-of-order-objects semantics if matching existing clients matters.
@@ -858,7 +858,7 @@ Keep current features:
 - root-gated optimization
 - plan caching
 - strictness modes
-- FK-id elision
+- [FK-id elision][glossary-fk-id-elision]
 - existing queryset reconciliation
 - `get_queryset`-aware prefetch downgrade
 
@@ -966,12 +966,12 @@ This phase is the foundation slice defined in [`docs/SPECS/spec-010-foundation-0
 It does **not** ship:
 
 - `DjangoSchema` — deferred to a later wrapper phase. Earlier drafts of this spec listed `DjangoSchema` here; the foundation contract has narrowed.
-- `DjangoConnectionField`, `DjangoNodeField`
+- `DjangoConnectionField`, [`DjangoNodeField`][glossary-djangonodefield]
 - any Layer 3 subsystem
 
 Keep current behavior for acyclic simple types if possible.
 
-### Phase 2: Definition-order independence
+### Phase 2: [Definition-order independence][glossary-definition-order-independence]
 Move `convert_relation` from eager lookup to pending relation creation.
 
 Acceptance tests:
@@ -995,7 +995,7 @@ Acceptance tests:
 ### Phase 4: Connection field
 Add:
 
-- `DjangoConnection`
+- [`DjangoConnection`][glossary-djangoconnection]
 - `DjangoConnectionField`
 - `DjangoNodeField`
 - Relay node support
@@ -1073,7 +1073,7 @@ Never silently skip exposed fields whose target type is missing. Raise at finali
 Best answer: yes for simple schemas, but rich schemas should use `DjangoSchema` or package-owned fields that finalize before schema construction.
 
 ### Should multiple `DjangoType`s per model be allowed?
-The Graphene package currently assumes one primary node per model. This package's docs mention a future `Meta.primary`. Rich relation auto-resolution needs one primary target per model. Multiple types can exist later, but relation auto-resolution should require exactly one primary type.
+The Graphene package currently assumes one primary node per model. This package's docs mention a future [`Meta.primary`][glossary-metaprimary]. Rich relation auto-resolution needs one primary target per model. Multiple types can exist later, but relation auto-resolution should require exactly one primary type.
 
 ### Should generic fallback exist?
 Not for 1.0 by default. Consider an explicit opt-in after concrete relation finalization ships.
@@ -1114,6 +1114,29 @@ The end state should feel like the Graphene package to users and like a Strawber
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-aggregateset]: ../GLOSSARY.md#aggregateset
+[glossary-apply-cascade-permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnection]: ../GLOSSARY.md#djangoconnection
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-input-type-generation]: ../GLOSSARY.md#input-type-generation
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-ordering]: ../GLOSSARY.md#ordering
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-relatedaggregate]: ../GLOSSARY.md#relatedaggregate
+[glossary-relatedfilter]: ../GLOSSARY.md#relatedfilter
+[glossary-relatedorder]: ../GLOSSARY.md#relatedorder
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-schema-audit]: ../GLOSSARY.md#schema-audit
 
 <!-- docs/SPECS/ -->
 

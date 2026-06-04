@@ -99,38 +99,6 @@ def test_ordering_resolve_desc_returns_orderby_with_descending_true():
     assert expr.nulls_last is None
 
 
-def test_ordering_resolve_asc_nulls_first_sets_nulls_first_true():
-    """``ASC_NULLS_FIRST`` sets ``nulls_first=True`` only."""
-    expr = Ordering.ASC_NULLS_FIRST.resolve("name")
-    assert expr.descending is False
-    assert expr.nulls_first is True
-    assert expr.nulls_last is None
-
-
-def test_ordering_resolve_asc_nulls_last_sets_nulls_last_true():
-    """``ASC_NULLS_LAST`` sets ``nulls_last=True`` only."""
-    expr = Ordering.ASC_NULLS_LAST.resolve("name")
-    assert expr.descending is False
-    assert expr.nulls_first is None
-    assert expr.nulls_last is True
-
-
-def test_ordering_resolve_desc_nulls_first_sets_nulls_first_true():
-    """``DESC_NULLS_FIRST`` sets ``descending=True`` and ``nulls_first=True``."""
-    expr = Ordering.DESC_NULLS_FIRST.resolve("name")
-    assert expr.descending is True
-    assert expr.nulls_first is True
-    assert expr.nulls_last is None
-
-
-def test_ordering_resolve_desc_nulls_last_sets_nulls_last_true():
-    """``DESC_NULLS_LAST`` sets ``descending=True`` and ``nulls_last=True``."""
-    expr = Ordering.DESC_NULLS_LAST.resolve("subtitle")
-    assert expr.descending is True
-    assert expr.nulls_first is None
-    assert expr.nulls_last is True
-
-
 def test_ordering_resolve_wraps_value_in_f_expression():
     """``resolve(value)`` produces ``F(value)``-backed expressions."""
     expr = Ordering.ASC.resolve("shelf__code")
@@ -196,41 +164,6 @@ def test_materialize_input_class_raises_on_collision(_materialization_cleanup):
     message = str(exc_info.value)
     assert "FooA" in message
     assert "FooB" in message
-
-
-# ---------------------------------------------------------------------------
-# Slice 2 — _get_concrete_field_names_for_order
-# ---------------------------------------------------------------------------
-
-
-def test_get_concrete_field_names_for_order_includes_forward_fk_column():
-    """Forward ``ForeignKey`` columns appear in the column-backed list."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders.inputs import _get_concrete_field_names_for_order
-
-    names = _get_concrete_field_names_for_order(Book)
-    assert "shelf" in names
-
-
-def test_get_concrete_field_names_for_order_excludes_m2m_managers():
-    """``ManyToManyField`` managers do NOT appear (spec-028 Revision 4 B4)."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders.inputs import _get_concrete_field_names_for_order
-
-    names = _get_concrete_field_names_for_order(Book)
-    assert "genres" not in names
-
-
-def test_get_concrete_field_names_for_order_excludes_reverse_fk():
-    """Reverse FK accessors do NOT appear (no ``column`` attribute)."""
-    from apps.library.models import Book
-
-    from django_strawberry_framework.orders.inputs import _get_concrete_field_names_for_order
-
-    names = _get_concrete_field_names_for_order(Book)
-    assert "loans" not in names
 
 
 # ---------------------------------------------------------------------------

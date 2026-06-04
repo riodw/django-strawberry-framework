@@ -21,6 +21,7 @@ def test_clean_up_targets_current_generated_artifacts(tmp_path, monkeypatch):
         "docs/review/review-generated.py",
         "docs/builder/temp-tests/probe.py",
         "docs/builder/worker-memory/worker-1.md",
+        "docs/dry/worker-memory/worker-2.md",
         "docs/builder/bld-final.md",
         "docs/builder/bld-generated.py",
         "docs/builder/review-generated.py",
@@ -51,3 +52,4 @@ def test_clean_up_targets_current_generated_artifacts(tmp_path, monkeypatch):
         assert (tmp_path / relative_path).exists()
     assert (tmp_path / "docs/review/worker-memory").exists()
     assert (tmp_path / "docs/builder/worker-memory").exists()
+    assert (tmp_path / "docs/dry/worker-memory").exists()

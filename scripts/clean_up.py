@@ -6,10 +6,9 @@ This script intentionally targets only known generated paths:
   (``current/`` snapshot, ``old/`` ``new/`` ``diff/`` diff sides) plus any
   static-helper / bug-hunt byproducts written to the root
 - contents of ``docs/review/temp-tests/``
-- contents of ``docs/review/worker-memory/``
+- contents of every ``docs/**/worker-memory/`` directory
 - ``rev-*.py`` and case-sensitive ``review-*.py`` files directly under ``docs/review/``
 - contents of ``docs/builder/temp-tests/``
-- contents of ``docs/builder/worker-memory/``
 - ``bld-*.md`` files directly under ``docs/builder/``
 - ``bld-*.py`` and case-sensitive ``review-*.py`` files directly under ``docs/builder/``
 - ``docs/bug_hunt/bug_hunt.*.md``
@@ -23,13 +22,9 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-CLEAR_DIRECTORIES = (
-    "docs/shadow",
-    "docs/review/temp-tests",
-    "docs/review/worker-memory",
-    "docs/builder/temp-tests",
-    "docs/builder/worker-memory",
-)
+CLEAR_DIRECTORIES = ("docs/shadow", "docs/review/temp-tests", "docs/builder/temp-tests")
+WORKER_MEMORY_ROOTS = ("docs",)
+WORKER_MEMORY_DIRECTORY_NAME = "worker-memory"
 FILE_GLOBS = (
     ("docs/review", "rev-*.py"),
     ("docs/review", "review-*.py"),
@@ -86,12 +81,29 @@ def _glob_files(directory: Path, pattern: str) -> Iterable[Path]:
     return (path for path in sorted(directory.glob(pattern)) if path.is_file() or path.is_symlink())
 
 
+def _worker_memory_directories() -> Iterable[Path]:
+    """Yield every worker-memory directory below configured workflow roots."""
+    directories: list[Path] = []
+    for root in WORKER_MEMORY_ROOTS:
+        root_path = _repo_path(root)
+        if not root_path.exists():
+            continue
+        directories.extend(
+            path
+            for path in root_path.rglob(WORKER_MEMORY_DIRECTORY_NAME)
+            if path.name == WORKER_MEMORY_DIRECTORY_NAME
+        )
+    return sorted(directories)
+
+
 def clean_up() -> list[Path]:
     """Delete all configured generated artifacts and return deleted paths."""
     deleted: list[Path] = []
 
     for directory in CLEAR_DIRECTORIES:
         deleted.extend(_clear_directory(_repo_path(directory)))
+    for directory in _worker_memory_directories():
+        deleted.extend(_clear_directory(directory))
     for directory, pattern in FILE_GLOBS:
         for path in _glob_files(_repo_path(directory), pattern):
             if _delete_file(path):

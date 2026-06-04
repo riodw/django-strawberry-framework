@@ -398,6 +398,46 @@ def test_products_categories_order_by_name_as_staff():
 
 
 @pytest.mark.django_db
+def test_products_items_order_by_related_category_name_denied_for_anonymous():
+    """A child ``RelatedOrder`` permission gate fires through the live API."""
+    seed_data(1)
+    response = _post_graphql(
+        """
+        query {
+          allItems(orderBy: [{ category: { name: ASC } }]) {
+            name
+          }
+        }
+        """,
+    )
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert "staff user" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_products_items_order_by_related_category_name_as_staff():
+    """Nested ``RelatedOrder`` input sorts by the child order field."""
+    seed_data(1)
+    expected = [
+        {"name": item.name, "category": {"name": item.category.name}}
+        for item in models.Item.objects.select_related("category").order_by("category__name")
+    ]
+    _assert_graphql_data(
+        """
+        query {
+          allItems(orderBy: [{ category: { name: ASC } }]) {
+            name
+            category { name }
+          }
+        }
+        """,
+        {"allItems": expected},
+        client=_staff_client(),
+    )
+
+
+@pytest.mark.django_db
 def test_products_items_filter_and_order_compose():
     """``filter:`` narrows rows then ``orderBy:`` arranges them (filter → order chain).
 

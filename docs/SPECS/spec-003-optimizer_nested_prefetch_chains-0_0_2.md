@@ -415,3 +415,25 @@ The O4 pseudocode anchors have already been staged in the relevant source and te
 
 ## Missing `.py` files
 None. Every O4 change lands in an existing module: `walker.py`, `plans.py`, `extension.py`, `resolvers.py`, `hints.py`, and the four parallel test files. No new subpackage or Python module needs to be created for O4.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

@@ -1,37 +1,37 @@
 # Today
 
-This document is the current-state playbook for the local fakeshop example. It is intentionally hyper-specific to `examples/fakeshop/apps/products/schema.py` and answers: “what can this package do in the example project right now?”
+`TODAY.md` is the current-state playbook for **what `django-strawberry-framework` (the package) can do right now**, demonstrated through one canonical example: `examples/fakeshop/apps/products/`. It answers: "if I wire a model app with this package today, what works?"
 
-For the package-wide capability catalog, shipped/planned feature status, optimizer hints, strictness modes, and future work, see [`docs/GLOSSARY.md`][glossary].
+> **Scope of this file — keep it this way.** This document is about **package capabilities**, not the example apps. `products` is the *single canonical demonstration vehicle* and the only app this file talks about. The other fakeshop apps (`library`, `scalars`, `kanban`, `glossary`) deliberately re-exercise the same package surface against different model shapes — cataloguing them here would only repeat these capabilities. Do **not** broaden this file to enumerate the other apps; keep every example and edit products-centric and capability-focused.
+>
+> For the package-wide capability catalog, shipped/planned status, optimizer hints, strictness modes, and future work, see [`docs/GLOSSARY.md`][glossary].
 
-## Current fakeshop state
+## What products demonstrates today
 
-Three example apps are wired today:
+`examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.8` it exercises, end to end, the package capabilities a real consumer reaches for:
 
-- `examples/fakeshop/apps/library/schema.py` — the **rich live demonstration** of the shipped surface. Seven `DjangoType` classes exercise, in one place: forward FK, reverse FK, forward OneToOne, reverse OneToOne, forward M2M, reverse M2M, choice-enum generation (`Book.circulation_status`), `Meta.interfaces = (relay.Node,)` on `GenreType`, `Meta.optimizer_hints` on `LoanType` (`OptimizerHint.prefetch_related()` + `OptimizerHint.SKIP`), a consumer-authored relation override on `Branch.shelves`, a consumer-shaped queryset cooperating with the optimizer (`all_library_prefetched_books` uses `select_related("shelf").prefetch_related("genres")`), and definition-order-independent finalization (the type declaration order is intentionally awkward — `LoanType` before `BookType` and `PatronType`, etc.). The live `/graphql/` HTTP tests in `examples/fakeshop/test_query/test_library_api.py` exercise all of these end-to-end, including the Relay GlobalID round trip via `test_library_relay_node_global_id_round_trips`. The `all_library_branches_via_list_field` root field added in `0.0.7` exercises `DjangoListField`'s default-resolver path — added as a sibling, no existing resolver was replaced. `Patron.lifetime_fines_cents` (`BigIntegerField`) added in `0.0.7` exercises the `BigIntegerField → BigInt` converter on a real-domain model, with a live HTTP test pinning the decimal-string wire format past `2**53 - 1`. The new `BranchFilter` / `ShelfFilter` / `BookFilter` / `LoanFilter` / `PatronFilter` declarations at `examples/fakeshop/apps/library/filters.py` (plus `GenreFilter` at `filters_genre.py` for the cross-module absolute-import-path case) and the 14 live `/graphql/` HTTP filter tests at `examples/fakeshop/test_query/test_library_api.py` exercise the `FilterSet` / `RelatedFilter` / `Meta.filterset_class` wiring end-to-end through finalizer phase 2.5. The new `BranchOrder` / `ShelfOrder` / `BookOrder` / `LoanOrder` / `PatronOrder` declarations at `examples/fakeshop/apps/library/orders.py` (plus `GenreOrder` at `orders_genre.py` for the cross-module absolute-import-path case) and the 14 live `/graphql/` HTTP order tests at `examples/fakeshop/test_query/test_library_api.py` exercise the `OrderSet` / `RelatedOrder` / `Meta.orderset_class` / `Ordering` / `order_input_type` wiring end-to-end through finalizer phase 2.5, including filter+order composition on the `allLibraryBooks` resolver.
-- `examples/fakeshop/apps/products/schema.py` — the **minimal "wire up a model app today" demonstration**. A bidirectional list-based graph over `Category` / `Item` / `Property` / `Entry`: four `DjangoType` classes with FK + reverse-FK traversal and four root list resolvers (`all_categories`, `all_items`, `all_properties`, `all_entries`). Non-Relay; intentionally narrower than `library` to show the absolute minimum a consumer needs to type to get a model app queryable through GraphQL today.
-- `examples/fakeshop/apps/scalars/schema.py` — the **converter-table coverage substrate** added in `0.0.7`. Two paired `DjangoType` classes: `ScalarSpecimenType` (all scalar fields non-null, plus a self-FK `parent` / reverse `children`) and `NullableScalarSpecimenType` (all scalar fields nullable, plus a cross-model FK `partner` to `ScalarSpecimen` with `on_delete=SET_NULL`, reverse-exposed on `ScalarSpecimenType.nullable_partners`). The pairing exercises Django's two-`CreateModel` initial migration path, package finalization across sibling `DjangoType` classes in one app, Strawberry type registration across sibling types, optimizer planning across two managed models in one query, and the only `SET_NULL` ondelete in the example tree. The live `/graphql/` HTTP tests in `examples/fakeshop/test_query/test_scalars_api.py` pin every non-trivial `SCALAR_MAP` entry in both nullable and non-null shapes — `BooleanField`, `FloatField`, `DecimalField`, `DateField`, `DateTimeField`, `TimeField`, `JSONField`, `UUIDField`, `BigIntegerField`, `PositiveBigIntegerField` — plus the self-FK and cross-model FK traversals. `ArrayField` and `HStoreField` are absent because the fakeshop runs on SQLite; their converter rows stay covered by `tests/`.
-- `examples/fakeshop/apps/glossary/schema.py` — the **docs-as-data glossary surface**. `docs/GLOSSARY.md` is now an export from normalized term/status/category/link/spec-mention rows, so specs can be audited against canonical glossary terms through the same live GraphQL route that builds the markdown export.
+- **`DjangoType` schema** — four types configured entirely through `class Meta` (`model` + `fields`), with forward-FK + reverse-FK traversal and four root list resolvers (`allCategories` / `allItems` / `allProperties` / `allEntries`).
+- **Relay nodes** — every type declares `Meta.interfaces = (relay.Node,)`, so each `id` is a Relay `GlobalID` (own-PK GlobalID filtering, `node(id:)` refetch shape).
+- **Filtering** — `Meta.filterset_class` on every type (declared in `apps/products/filters.py`), surfaced on each root resolver via a `filter:` argument from `filter_input_type(...)`. Includes a per-field `check_name_permission` denial gate on `CategoryFilter` (active-input-only).
+- **Ordering** — `Meta.orderset_class` on every type (declared in `apps/products/orders.py`), surfaced via an `orderBy:` argument from `order_input_type(...)`. Includes the matching `check_name_permission` gate on `CategoryOrder`.
+- **Optimizer cooperation** — root resolvers return `QuerySet`s, so `DjangoOptimizerExtension` plans `select_related` / `prefetch_related` / `only()` across nested selections without per-resolver boilerplate.
+- **Filter + order composition** — each resolver chains `<Type>.get_queryset(queryset, info)` → `<Type>Filter.apply_sync(filter, queryset, info)` → `<Type>Order.apply_sync(order_by, queryset, info)` (visibility scopes, filter narrows, order arranges).
 
-The eventual `1.0.0` shape for products — Relay `DjangoConnectionField`s with `filterset_class` / `orderset_class` / `aggregate_class` / `fields_class` / `search_fields` / `apply_cascade_permissions` — is tracked in `KANBAN.md` under the Layer-3 cards ([021-filtering_subsystem-0.0.8][card-filtering-subsystem] filters, [022-ordering_subsystem-0.0.8][card-ordering-subsystem] orders, [040-aggregation_subsystem-0.1.3][card-aggregation-subsystem] aggregates, [027-permissions_subsystem-0.0.10][card-permissions-subsystem] permissions, etc.). The list-based schema below is what's there today; the Relay shape grows in as those cards land.
+The live `/graphql/` HTTP suite at `examples/fakeshop/test_query/test_products_api.py` pins all of the above end to end.
 
-The products design depends on these unshipped APIs and features to reach its `1.0.0` shape:
+## What's in `products/schema.py` today
 
-- `DjangoConnectionField`
-- `apply_cascade_permissions`
-- `Meta.aggregate_class`
-- `Meta.fields_class`
-- `Meta.search_fields`
+A representative slice — one type and its resolver. The full file declares all four types and all four resolvers the same way:
 
-## What's in `examples/fakeshop/apps/products/schema.py` today
-
-This is the actual current contents of the products app's schema — list-based Strawberry query fields using `DjangoType` and manual root resolvers that return Django `QuerySet`s:
 ```python
 import strawberry
+from strawberry import relay
 
 from django_strawberry_framework import DjangoType
+from django_strawberry_framework.filters import filter_input_type
+from django_strawberry_framework.orders import order_input_type
 
-from . import models
+from . import filters, models, orders
 
 
 class CategoryType(DjangoType):
@@ -47,148 +47,98 @@ class CategoryType(DjangoType):
             "created_date",
             "updated_date",
         )
-
-
-class ItemType(DjangoType):
-    class Meta:
-        model = models.Item
-        fields = (
-            "id",
-            "name",
-            "description",
-            "category",
-            "entries",
-            "is_private",
-            "created_date",
-            "updated_date",
-        )
-
-
-class PropertyType(DjangoType):
-    class Meta:
-        model = models.Property
-        fields = (
-            "id",
-            "name",
-            "description",
-            "category",
-            "entries",
-            "is_private",
-            "created_date",
-            "updated_date",
-        )
-
-
-class EntryType(DjangoType):
-    class Meta:
-        model = models.Entry
-        fields = (
-            "id",
-            "value",
-            "description",
-            "property",
-            "item",
-            "is_private",
-            "created_date",
-            "updated_date",
-        )
+        interfaces = (relay.Node,)
+        filterset_class = filters.CategoryFilter
+        orderset_class = orders.CategoryOrder
+        # Future Layer-3 keys — uncomment each as the relevant card ships:
+        # search_fields = ("name", "description")        # 0.1.2
+        # aggregate_class = aggregates.CategoryAggregate # 0.1.3
+        # fields_class = fieldsets.CategoryFieldSet      # 0.1.1
 
 
 @strawberry.type
 class Query:
     @strawberry.field
-    def all_categories(self) -> list[CategoryType]:
-        return models.Category.objects.all()
-
-    @strawberry.field
-    def all_items(self) -> list[ItemType]:
-        return models.Item.objects.all()
-
-    @strawberry.field
-    def all_properties(self) -> list[PropertyType]:
-        return models.Property.objects.all()
-
-    @strawberry.field
-    def all_entries(self) -> list[EntryType]:
-        return models.Entry.objects.all()
-
-
-__all__ = ("Query",)
+    def all_categories(
+        self,
+        info: strawberry.Info,
+        filter: filter_input_type(filters.CategoryFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.CategoryOrder)] | None = None,
+    ) -> list[CategoryType]:
+        queryset = CategoryType.get_queryset(models.Category.objects.order_by("id"), info)
+        if filter is not None:
+            queryset = filters.CategoryFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.CategoryOrder.apply_sync(order_by, queryset, info)
+        return queryset
 ```
 
-## What to put in `examples/fakeshop/config/schema.py` today
-Enable the optimizer at the project schema boundary and finalize all imported `DjangoType`s before constructing the Strawberry schema:
+## What to put in `config/schema.py` today
+
+Enable the optimizer at the project-schema boundary and finalize every imported `DjangoType` before constructing the Strawberry schema:
+
 ```python
 import strawberry
-from apps.glossary.schema import Query as GlossaryQuery
-from apps.kanban.schema import Query as KanbanQuery
-from apps.library.schema import Query as LibraryQuery
 from apps.products.schema import Query as ProductsQuery
-from apps.scalars.schema import Query as ScalarsQuery
 
-from django_strawberry_framework import DjangoOptimizerExtension, finalize_django_types, strawberry_config
+from django_strawberry_framework import (
+    DjangoOptimizerExtension,
+    finalize_django_types,
+    strawberry_config,
+)
+
+
+@strawberry.type
+class Query(ProductsQuery):
+    """Top-level Query — extend with each app's Query as bases."""
 
 
 finalize_django_types()
 
-
-@strawberry.type
-class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuery):
-    """Top-level Query — extends each app's Query."""
-
-
 schema = strawberry.Schema(
     query=Query,
     config=strawberry_config(),
-    extensions=[DjangoOptimizerExtension()],
+    extensions=[DjangoOptimizerExtension],
 )
 ```
 
-## What fakeshop model fields work today
+Two rules the package enforces: `finalize_django_types()` must run **after** every module that defines `DjangoType` classes is imported and **before** `strawberry.Schema(...)` is constructed; and the optimizer is added as the `DjangoOptimizerExtension` class (Strawberry instantiates it).
 
-Across the products, library, scalars, kanban, and glossary example apps, `DjangoType` currently generates:
+## Package scalar conversions
 
-Scalar conversions:
-- `BigAutoField` / `AutoField` / `IntegerField` → `int`
-- `BigIntegerField` / `PositiveBigIntegerField` → `BigInt` (JSON-safe string-serialized scalar; `PositiveBigIntegerField` switched from `int` to `BigInt` in `0.0.6` — breaking wire-format change)
-- `TextField` / `CharField` → `str`
-- `BooleanField` → `bool`
-- `DateTimeField` / `DateField` / `TimeField` / `DurationField` → Python-native time types
+`DjangoType` converts these model fields to Strawberry scalars. **Products exercises the integer / text / boolean / datetime subset** (its models are `TextField` / `BooleanField` / `DateTimeField` + FK + the `BigAutoField` PK); the remaining conversions are package capabilities covered by the package test suite.
+
+- `BigAutoField` / `AutoField` / `IntegerField` → `int`  *(products: every PK)*
+- `TextField` / `CharField` → `str`  *(products: `name` / `value` / `description`)*
+- `BooleanField` → `bool`  *(products: `is_private`)*
+- `DateTimeField` / `DateField` / `TimeField` / `DurationField` → Python-native time types  *(products: `created_date` / `updated_date`)*
+- `BigIntegerField` / `PositiveBigIntegerField` → `BigInt` (JSON-safe string-serialized; `PositiveBigIntegerField` switched from `int` to `BigInt` in `0.0.6` — breaking wire-format change)
 - `DecimalField` → `decimal.Decimal`
 - `FloatField` → `float`
 - `UUIDField` → `uuid.UUID`
 - `BinaryField` → `bytes`
 - `FileField` / `ImageField` → `str`
 - `JSONField` → `strawberry.scalars.JSON`
-- PostgreSQL `ArrayField` → `list[T]` (recursive through `field.base_field`; soft-registered, only when `django.contrib.postgres.fields` imports successfully)
-- PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered, only when `django.contrib.postgres.fields` imports successfully)
+- PostgreSQL `ArrayField` → `list[T]` (recursive through `field.base_field`; soft-registered when `django.contrib.postgres.fields` imports)
+- PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered)
 - `null=True` → `T | None`
-- `CharField` / `TextField` with `choices` → generated Strawberry enum (live: `Book.circulation_status` in library)
-- Relay `GlobalID` when `Meta.interfaces = (relay.Node,)` is declared (live: `GenreType` in library)
+- `CharField` / `TextField` with `choices` → generated Strawberry enum
+- Relay `GlobalID` when `Meta.interfaces = (relay.Node,)` is declared  *(products: every type)*
 
-Relation conversions:
-- forward `ForeignKey` → related `DjangoType`
-- reverse `ForeignKey` → `list[RelatedType]`
+## Package relation conversions
+
+- forward `ForeignKey` → related `DjangoType`  *(products: `Item.category` / `Property.category` / `Entry.item` / `Entry.property`)*
+- reverse `ForeignKey` → `list[RelatedType]`  *(products: `Category.items` / `Category.properties` / `Item.entries` / `Property.entries`)*
 - forward `OneToOneField` → related `DjangoType` or `None`
-- reverse `OneToOneField` → related `DjangoType` or `None` (live: `Patron.card` in library)
-- forward `ManyToManyField` → `list[RelatedType]` (live: `Book.genres` in library)
-- reverse `ManyToManyField` → `list[RelatedType]` (live: `Genre.books` in library)
+- reverse `OneToOneField` → related `DjangoType` or `None`
+- forward `ManyToManyField` → `list[RelatedType]`
+- reverse `ManyToManyField` → `list[RelatedType]`
 
-Products-catalog bidirectional relations exercised in the schema below:
-- `Item.category` / `Property.category` / `Entry.item` / `Entry.property` (forward FK)
-- `Category.items` / `Category.properties` / `Item.entries` / `Property.entries` (reverse FK)
+Products' graph is FK-only; `OneToOneField` and `ManyToManyField` conversions are package capabilities covered by the package test suite.
 
-Library bidirectional relations exercised live in `examples/fakeshop/apps/library/schema.py`:
-- `Shelf.branch` / `Loan.book` / `Loan.patron` / `Book.shelf` / `MembershipCard.patron` (forward FK / OneToOne)
-- `Branch.shelves` / `Patron.loans` / `Shelf.books` / `Book.loans` (reverse FK)
-- `Patron.card` (reverse OneToOne, nullable)
-- `Book.genres` / `Genre.books` (M2M, bidirectional)
+## Optimized products queries that work today
 
-## Optimized fakeshop queries that work today
-
-If the fakeshop root resolvers return `QuerySet`s and `examples/fakeshop/config/schema.py` uses `DjangoOptimizerExtension()`, nested selections are optimized.
-
-Example:
+Root resolvers return `QuerySet`s and `config/schema.py` adds `DjangoOptimizerExtension`, so nested selections are planned into one ORM query.
 
 ```graphql
 {
@@ -201,9 +151,7 @@ Example:
 }
 ```
 
-Expected behavior: `select_related("category")`.
-
-Example:
+Expected: `select_related("category")`.
 
 ```graphql
 {
@@ -225,19 +173,53 @@ Example:
 }
 ```
 
-Expected behavior: nested `select_related` paths and `only()` projections.
+Expected: nested `select_related` paths and `only()` projections.
 
-## Optional fakeshop visibility filtering today
+## Filtering and ordering on products today
 
-Because automatic connection/query fields do not exist yet, fakeshop root query fields are manual. If a root fakeshop list should apply public/staff visibility rules, call the type hook from the root resolver yourself.
+Both ship in `0.0.8` and are wired on every products resolver. `filter:` narrows, `orderBy:` arranges, and they compose:
 
-Example:
+```graphql
+{
+  allItems(
+    filter: {
+      category: {
+        id: {
+          exact: "<CategoryType GlobalID>"
+        }
+      }
+    }
+    orderBy: [
+      {
+        name: ASC
+      }
+    ]
+  ) {
+    name
+    category {
+      name
+    }
+  }
+}
+```
+
+`CategoryFilter` / `CategoryOrder` additionally declare a `check_name_permission` gate, so an anonymous request that filters or orders by `Category.name` is denied — the gate fires only when the input actually names the gated field (active-input-only scope).
+
+## Visibility filtering via `get_queryset`
+
+Automatic connection/query fields do not exist yet, so root resolvers are manual — which means a root list applies visibility rules by calling the type's `get_queryset` hook itself (already part of the filter/order chain above):
 
 ```python
 class ItemType(DjangoType):
     class Meta:
         model = models.Item
-        fields = ("id", "name", "description", "category", "is_private")
+        fields = (
+            "id",
+            "name",
+            "description",
+            "category",
+            "is_private",
+        )
 
     @classmethod
     def get_queryset(cls, queryset, info, **kwargs):
@@ -245,37 +227,32 @@ class ItemType(DjangoType):
         if user and user.is_staff:
             return queryset
         return queryset.filter(is_private=False)
-
-
-@strawberry.type
-class Query:
-    @strawberry.field
-    def all_items(self, info) -> list[ItemType]:
-        return ItemType.get_queryset(models.Item.objects.all(), info)
 ```
 
-Relation traversal to a type with custom `get_queryset` is handled by the optimizer with a `Prefetch` downgrade, so target visibility filters are not bypassed by raw joins.
+Relation traversal into a type with a custom `get_queryset` is handled by the optimizer with a `Prefetch` downgrade, so target visibility filters are not bypassed by raw joins. (The `products/schema.py` types carry commented cascade-permission `get_queryset` hooks that activate once the permissions card ships — see below.)
 
-## What the fakeshop example should wait for
+## What products is still waiting for
 
-Do not turn the commented rich fakeshop design into active code until the features it depends on ship. In practice, that means waiting for:
-- `DjangoConnectionField`
-- aggregates and fieldsets
-- search fields
-- permission cascade helpers
+Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today.
 
-## Shipped capabilities available but not currently demonstrated in fakeshop
+- `DjangoConnectionField` — Relay connections (`0.0.9`, in progress: `WIP-ALPHA-030-0.0.9`)
+- permissions / `apply_cascade_permissions` (`0.0.10`: `TODO-ALPHA-033-0.0.10`) — activates the commented cascade `get_queryset` hooks in `products/schema.py`
+- `Meta.fields_class` — `FieldSet` (`0.1.1`)
+- `Meta.search_fields` (`0.1.2`)
+- `Meta.aggregate_class` — aggregation (`0.1.3`)
 
-- `Meta.primary` (shipped in `0.0.6`) — multiple `DjangoType` subclasses per Django model with one explicit primary. Fakeshop's `apps/products/schema.py` and `apps/library/schema.py` each declare one `DjangoType` per model, so the multi-type contract is not exercised in the example today; the feature is fully covered by the package test suite. See [`docs/GLOSSARY.md#metaprimary`][glossary-metaprimary].
-- Consumer override semantics for scalar fields (shipped in `0.0.6`) — annotation-only and `strawberry.field` scalar overrides bypass `convert_scalar` validations, and `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time. Fakeshop's `apps/products/schema.py` and `apps/library/schema.py` exercise the relation-override path (`Branch.shelves` in library) but no scalar override; the four-corner override matrix is fully covered by the package test suite. See [`docs/GLOSSARY.md#scalar-field-override-semantics`][glossary-scalar-field-override-semantics].
+## Shipped package capabilities not exercised by products
+
+These ship today but products' model shapes don't reach them; they're covered by the package test suite (see [`docs/GLOSSARY.md`][glossary]):
+
+- **`Meta.primary`** (shipped `0.0.6`) — multiple `DjangoType` subclasses per model with one explicit primary. Products declares one type per model. See [`docs/GLOSSARY.md#metaprimary`][glossary-metaprimary].
+- **Consumer override semantics for scalar fields** (shipped `0.0.6`) — annotation-only and `strawberry.field` scalar overrides bypass `convert_scalar`; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time. Products exercises no scalar override. See [`docs/GLOSSARY.md#scalar-field-override-semantics`][glossary-scalar-field-override-semantics].
+- **OneToOne / M2M relation conversion, choice-enum generation, and the specialized scalar conversions** (`BigInt`, `JSON`, `UUID`, `Decimal`, `Array`, `HStore`) — products has no OneToOne, M2M, `choices`, or those field types.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[card-aggregation-subsystem]: KANBAN.md#aggregation_subsystem
-[card-filtering-subsystem]: KANBAN.md#filtering_subsystem
-[card-ordering-subsystem]: KANBAN.md#ordering_subsystem
-[card-permissions-subsystem]: KANBAN.md#permissions_subsystem
+[kanban]: KANBAN.md
 
 <!-- docs/ -->
 [glossary]: docs/GLOSSARY.md

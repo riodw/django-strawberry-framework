@@ -556,3 +556,25 @@ This spec includes line numbers for some current source files (e.g., `walker.py:
 - North star and goal: [`GOAL.md`](../GOAL.md).
 - Today's shipped surface: [`TODAY.md`](../TODAY.md).
 - Tree layout: [`docs/TREE.md`](TREE.md).
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

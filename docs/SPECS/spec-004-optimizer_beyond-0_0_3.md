@@ -325,3 +325,25 @@ graphql-core AST node types: `graphql/language/ast.py` — `FieldNode`, `InlineF
 - [x] B2 — Forward-FK-id elision
 - [x] B6 — Schema-build-time optimization audit
 - [x] B8 — Queryset optimization diffing
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

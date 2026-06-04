@@ -8,7 +8,9 @@ Tests in this directory exercise the full Django + Strawberry HTTP stack end-to-
 
 Use the sibling [`../tests/`][tests-dir] directory for tests that exercise schemas (via `schema.execute_sync`), services, models, admin, management commands, or URLs **without** hitting `/graphql/` over HTTP.
 
-`test_library_api.py` is the first live API suite. It covers the `library` acceptance app through real HTTP requests, including FK and reverse-FK traversal, OneToOne nullability, M2M traversal, choice enum serialization, nullable scalar serialization, optimizer SQL shape, optimizer hints, consumer-shaped querysets, and a consumer relation override.
+`test_library_api.py` is the first live API suite. It covers the `library` acceptance app through real HTTP requests, including FK and reverse-FK traversal, OneToOne nullability, M2M traversal, choice enum serialization, nullable scalar serialization, optimizer SQL shape, optimizer hints, consumer-shaped querysets, a consumer relation override, and the `filter:` / `orderBy:` surfaces.
+
+Sibling live suites now cover the other fakeshop apps: `test_products_api.py`, `test_scalars_filter_api.py`, `test_kanban_api.py`, and `test_glossary_api.py` — exercising the `FilterSet` / `OrderSet` surfaces (`filter:` / `orderBy:`) wired across every app.
 
 The project schema lives at `../config/schema.py`. It imports each app's `Query`, composes them into the top-level `Query`, calls `finalize_django_types()`, then constructs `strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])`.
 

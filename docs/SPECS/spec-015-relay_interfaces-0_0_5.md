@@ -583,3 +583,25 @@ The `0.0.5` slice is complete when all of the following are true:
 10. `KANBAN.md` `READY-004` moves to a new Done card describing the shipped scope (the next available `DONE-NNN` id), and the recommended hybrid sequence advances past Relay/`Meta.interfaces`.
 11. No new public exports. The public surface stays `DjangoType`, `DjangoOptimizerExtension`, `OptimizerHint`, `finalize_django_types`, `auto`, `__version__` (`django_strawberry_framework/__init__.py #"__all__ = ("`). Justification: the public-surface promise in `README.md #"For the current capability snapshot"` says today's names remain stable through `0.1.0`; `0.0.5` only changes what `Meta.interfaces` enables, not the import surface.
 12. `_resolve_node_default` and `_resolve_nodes_default` work in both sync and async resolver contexts per Decision 9. A consumer-authored `async def resolve_node(...)` is preserved by the override contract.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

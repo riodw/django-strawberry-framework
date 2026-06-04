@@ -108,22 +108,23 @@ A quick summary:
 - ordering subsystem (new in `0.0.8`) — `OrderSet` declarative ordering classes with `Meta.fields` (list form or `"__all__"` shorthand for every column-backed model field); `RelatedOrder` cross-relation ordering traversal (class / absolute import path / unqualified-name); `Meta.orderset_class` consumer wiring (promoted out of `DEFERRED_META_KEYS`); the public `Ordering` enum (six members with NULLS positioning); the `order_input_type` resolver-argument helper; finalizer phase-2.5 binding with orphan validation; per-field `check_*_permission` denial gates with active-input-only scope plus active-branch dispatch on `RelatedOrder` branches; clean composition with the shipped filter subsystem and the optimizer. See [`GLOSSARY.md#orderset`][glossary-orderset].
 
 
-**Coming in `0.1.0`** (beta — feature parity with `graphene-django` and `strawberry-graphql-django`):
-- `DjangoConnectionField` (Relay connection)
-- permissions / cascade permissions
-- mutations + auto-generated `Input` types, plus form-based and DRF-serializer-based mutation flavors
-- `Upload` scalar and file-field mapping
-- auth mutations (`login` / `logout` / `register`) and `current_user` query
-- Channels ASGI router, debug-toolbar middleware, test client helper, response-extensions debug
+**Coming next — remaining alpha (`0.0.9` → `0.0.12`):**
+- `0.0.9` *(in progress)* — `DjangoConnectionField` (Relay connection), the full Relay story (Node + Connection + Root + validation), connection-aware optimizer planning, and a `DjangoType` consumer-DX cleanup pass
+- `0.0.10` — permissions / cascade-permissions subsystem
+- `0.0.11` — mutations + auto-generated `Input` types (form-based and DRF-`SerializerMutation` flavors), the `Upload` scalar + file/image field mapping, and auth mutations (`login` / `logout` / `register`)
+- `0.0.12` — Channels ASGI router, debug-toolbar middleware, test-client helper, response-extensions debug middleware
 
-**Coming in `1.0.0`** (stable — `django-graphene-filters` depth + API freeze):
-- `FieldSet` (declarative `fields_class`)
-- `AggregateSet` with `Sum` / `Count` / `Avg` / `Min` / `Max` / `GroupBy` (`aggregate_class`)
-- `Meta.search_fields`
-- stable choice-enum naming overrides
-- fakeshop GraphQL schema activation end-to-end
-- migration and adoption guides
-- API freeze: strict SemVer applies from `1.0.0` forward
+**`0.1.0`** — beta release: feature parity with `graphene-django` and `strawberry-graphql-django` (alpha → beta cut-over).
+
+**Beta (`0.1.x`)** — Layer-3 depth on the road to `1.0.0`:
+- `0.1.1` — `FieldSet` (declarative `fields_class`)
+- `0.1.2` — `Meta.search_fields` + Postgres full-text-search filter primitives
+- `0.1.3` — `AggregateSet` (`Sum` / `Count` / `Avg` / `Min` / `Max` / `GroupBy`, `aggregate_class`) + Layer-3 `Meta`-key promotion
+- `0.1.4` — stable choice-enum naming overrides
+- `0.1.5` — fakeshop GraphQL schema activation end-to-end + product-catalog Layer-3 HTTP tests
+- `0.1.6` — migration and adoption guides
+
+**`1.0.0`** — stable release: full `django-graphene-filters` depth + **API freeze** (strict SemVer applies from `1.0.0` forward).
 
 ## Schema setup boundary
 

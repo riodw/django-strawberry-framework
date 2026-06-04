@@ -569,3 +569,25 @@ Before implementation, keep these conclusions visible:
 - Strawberry-Django gives the wrong default relation shape for this package's goal: generic relation placeholders should not be the normal automatic output.
 - `django-graphene-filters` gives the product target: concrete rich nodes with sidecar filters, orders, aggregates, fieldsets, permissions, and connection fields.
 - The package should combine those lessons into a Strawberry-native, fail-loud, concrete-relation finalization model.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

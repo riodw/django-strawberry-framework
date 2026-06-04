@@ -147,7 +147,7 @@ def make_card(**fields):
 
     ``milestone`` defaults to the target version's milestone (matching the
     ``prepare_card_save`` signal). Passing ``status=make_status("done")`` creates
-    a required spec first, then flips the card to ``done``.
+    the required spec and glossary link first, then flips the card to ``done``.
     """
     target_version = fields.pop("target_version", None) or make_target_version()
     fields.setdefault("target_version", target_version)
@@ -164,6 +164,7 @@ def make_card(**fields):
     fields["status"] = make_status("todo")
     card = models.Card.objects.create(**fields)
     make_spec_doc(card=card)
+    make_card_glossary_term(card=card)
     card.status = requested_status
     card.save(update_fields=["status"])
     card.refresh_from_db()

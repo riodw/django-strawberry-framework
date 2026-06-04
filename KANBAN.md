@@ -98,11 +98,11 @@ demoted to a bullet under its label.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-029-0.0.9` — `DjangoType` consumer-DX cleanup pass | No dedicated spec |
+| `WIP-ALPHA-029-0.0.9` — `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/spec-029-consumer_dx_cleanup-0_0_9.md) |
 | `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField` | No dedicated spec |
 | `WIP-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation) | No dedicated spec |
 | `WIP-ALPHA-032-0.0.9` — Connection-aware optimizer planning | No dedicated spec |
-| `DONE-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md) |
+| `DONE-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md) |
 | `DONE-027-0.0.8` — Filtering subsystem | [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md) |
 | `DONE-026-0.0.7` — Scalar conversion end-to-end coverage in the fakeshop example | [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md) |
 | `DONE-025-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map` | [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md) |
@@ -143,7 +143,7 @@ No active WIP cards.
 - Severity: Medium
 - Status: Planned
 - Relative size: S-M
-- Labels: `cleanup`, `developer-tools`, `public-api`, `types`
+- Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/spec-029-consumer_dx_cleanup-0_0_9.md)
 
 #### Planning note
 
@@ -194,7 +194,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Severity: Major
 - Status: Planned
 - Relative size: L
-- Labels: `connections`, `filters`, `optimizer`, `ordering`, `public-api`, `relay`
 
 #### Planning note
 
@@ -266,7 +265,6 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - Severity: Major
 - Status: Planned
 - Relative size: L-XL
-- Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
 
 #### Planning note
 
@@ -366,7 +364,6 @@ blocked on `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection 
 - Severity: Medium
 - Status: Planned
 - Relative size: M
-- Labels: `connections`, `optimizer`, `query-planning`, `relay`
 
 #### Planning note
 
@@ -416,7 +413,6 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Severity: Major
 - Status: Planned
 - Relative size: L
-- Labels: `optimizer`, `permissions`, `public-api`, `security`
 
 #### Planning note
 
@@ -487,7 +483,6 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - Severity: Major
 - Status: Planned
 - Relative size: XL
-- Labels: `graphql-api`, `mutations`, `permissions`, `public-api`
 
 #### Planning note
 
@@ -552,7 +547,6 @@ needs spec
 - Severity: Medium
 - Status: Planned
 - Relative size: S
-- Labels: `converters`, `mutations`, `scalars`, `uploads`
 
 #### Planning note
 
@@ -598,7 +592,6 @@ planned
 - Severity: Major
 - Status: Planned
 - Relative size: L
-- Labels: `forms`, `mutations`, `public-api`
 
 #### Planning note
 
@@ -658,7 +651,6 @@ needs spec
 - Severity: Major
 - Status: Planned
 - Relative size: L
-- Labels: `mutations`, `public-api`, `serializers`
 
 #### Planning note
 
@@ -718,7 +710,6 @@ needs spec
 - Severity: Medium
 - Status: Planned
 - Relative size: M
-- Labels: `auth`, `mutations`, `public-api`
 
 #### Planning note
 
@@ -756,7 +747,6 @@ planned
 - Severity: Low
 - Status: Planned
 - Relative size: S
-- Labels: `asgi`, `channels`, `django-integration`
 
 #### Planning note
 
@@ -802,7 +792,6 @@ planned
 - Severity: Low
 - Status: Planned
 - Relative size: M
-- Labels: `debugging`, `django-integration`, `middleware`
 
 #### Planning note
 
@@ -849,7 +838,6 @@ planned
 - Severity: Low
 - Status: Planned
 - Relative size: M
-- Labels: `graphql-api`, `test-client`, `tests`, `uploads`
 
 #### Planning note
 
@@ -913,7 +901,6 @@ planned
 - Severity: Low
 - Status: Planned
 - Relative size: M
-- Labels: `debugging`, `graphql-api`, `middleware`
 
 #### Planning note
 
@@ -986,7 +973,6 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 - Severity: Major
 - Status: Planned
 - Relative size: M
-- Labels: `cleanup`, `release`, `tests`
 
 #### Planning note
 
@@ -1032,7 +1018,6 @@ planned
 - Severity: Medium
 - Status: Needs spec
 - Relative size: M
-- Labels: `fieldsets`, `layer-3`, `public-api`
 
 #### Planning note
 
@@ -1083,7 +1068,6 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - Severity: Medium
 - Status: Planned
 - Relative size: M
-- Labels: `connections`, `filters`, `public-api`, `search`
 
 #### Planning note
 
@@ -1149,7 +1133,6 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 - Severity: Medium
 - Status: Planned
 - Relative size: M
-- Labels: `filters`, `public-api`, `search`
 
 #### Planning note
 
@@ -1216,7 +1199,6 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 - Severity: Major
 - Status: Planned
 - Relative size: L
-- Labels: `aggregations`, `filters`, `layer-3`, `public-api`
 
 #### Planning note
 
@@ -1271,7 +1253,6 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - Severity: Low
 - Status: Planned
 - Relative size: XS
-- Labels: `cleanup`, `layer-3`, `public-api`
 
 #### Other
 
@@ -1291,7 +1272,6 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - Severity: Medium
 - Status: Planned
 - Relative size: S
-- Labels: `choice-enums`, `public-api`, `schema`, `stable-api`
 
 #### Planning note
 
@@ -1328,7 +1308,6 @@ planned
 - Severity: Medium
 - Status: Planned
 - Relative size: S
-- Labels: `example-app`, `graphql-api`, `relay`, `schema`
 
 #### Planning note
 
@@ -1365,7 +1344,6 @@ blocked on `WIP-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (La
 - Severity: Medium
 - Status: Planned
 - Relative size: S
-- Labels: `example-app`, `graphql-api`, `layer-3`, `tests`
 
 #### Other
 
@@ -1383,7 +1361,6 @@ blocked on `WIP-ALPHA-031-0.0.9` (Relay decisions) and `TODO-BETA-048-0.1.3` (La
 - Severity: Medium
 - Status: Planned
 - Relative size: M
-- Labels: `docs`, `guides`, `public-api`
 
 #### Planning note
 
@@ -1418,7 +1395,6 @@ planned
 - Severity: Medium
 - Status: Planned
 - Relative size: M
-- Labels: `adversarial-testing`, `hardening`, `tests`
 
 #### Planning note
 
@@ -1461,7 +1437,6 @@ planned
 - Severity: Major
 - Status: Planned
 - Relative size: M-L
-- Labels: `cleanup`, `release`, `stable-api`, `tests`
 
 #### Planning note
 
@@ -1515,8 +1490,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Labels: `filters`, `graphql-api`, `layer-3`, `ordering`, `public-api`
-- Spec: [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md)
+- Spec: [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md)
 
 #### Glossary terms
 
@@ -1565,6 +1539,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 | [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
 | [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 
 #### Planning note
 
@@ -1597,7 +1572,6 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: XL
-- Labels: `example-app`, `filters`, `graphql-api`, `public-api`
 - Spec: [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md)
 
 #### Glossary terms
@@ -1631,6 +1605,7 @@ shipped
 | [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
 | [Input type generation](docs/GLOSSARY.md#input-type-generation) | planned for `0.0.11` |
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
 | [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
@@ -1669,8 +1644,15 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: M
-- Labels: `example-app`, `graphql-api`, `scalars`, `tests`
 - Spec: [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
 
 #### Planning note
 
@@ -1700,7 +1682,6 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: S
-- Labels: `config`, `public-api`, `scalar-map`, `scalars`
 - Spec: [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md)
 
 #### Glossary terms
@@ -1741,8 +1722,14 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
-- Labels: `django-integration`, `hardening`
 - Spec: [spec-024-django_trac_37064_hardening-0_0_7.md](docs/SPECS/spec-024-django_trac_37064_hardening-0_0_7.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) | shipped (`0.0.7`) |
+| [Django Trac #37064 hardening](docs/GLOSSARY.md#django-trac-37064-hardening) | shipped (`0.0.7`) |
 
 #### Planning note
 
@@ -1760,7 +1747,6 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
-- Labels: `multi-db`, `optimizer`, `tests`
 - Spec: [spec-023-multi_db-0_0_7.md](docs/SPECS/spec-023-multi_db-0_0_7.md)
 
 #### Glossary terms
@@ -1803,7 +1789,6 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
-- Labels: `management-command`, `public-api`, `schema`
 - Spec: [spec-022-export_schema-0_0_7.md](docs/SPECS/spec-022-export_schema-0_0_7.md)
 
 #### Glossary terms
@@ -1841,7 +1826,6 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: XS
-- Labels: `django-app`, `packaging`
 - Spec: [spec-021-apps-0_0_7.md](docs/SPECS/spec-021-apps-0_0_7.md)
 
 #### Glossary terms
@@ -1878,8 +1862,36 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: M
-- Labels: `graphql-api`, `list-field`, `optimizer`, `public-api`
 - Spec: [spec-020-list_field-0_0_7.md](docs/SPECS/spec-020-list_field-0_0_7.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | planned for `0.0.9` |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -1898,8 +1910,27 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: L
-- Labels: `public-api`, `relay`, `scalars`, `types`
 - Spec: [spec-019-consumer_overrides_scalar-0_0_6.md](docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
+| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
 
 #### Planning note
 
@@ -1928,8 +1959,27 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: L
-- Labels: `optimizer`, `public-api`, `registry`, `types`
 - Spec: [spec-018-meta_primary-0_0_6.md](docs/SPECS/spec-018-meta_primary-0_0_6.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -1964,8 +2014,28 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: M
-- Labels: `converters`, `public-api`, `scalars`
 - Spec: [spec-017-deferred_scalars-0_0_6.md](docs/SPECS/spec-017-deferred_scalars-0_0_6.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | planned for `0.0.11` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
+| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | planned for `0.0.11` |
 
 #### Planning note
 
@@ -2001,8 +2071,14 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: M
-- Labels: `cleanup`, `field-meta`, `metadata`, `optimizer`, `types`
 - Spec: [spec-016-fieldmeta_consolidation-0_0_6.md](docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
 
 #### Planning note
 
@@ -2050,8 +2126,30 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Labels: `public-api`, `relay`, `types`
 - Spec: [spec-015-relay_interfaces-0_0_5.md](docs/SPECS/spec-015-relay_interfaces-0_0_5.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 
 #### Planning note
 
@@ -2099,8 +2197,19 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
-- Labels: `cleanup`, `example-app`, `tests`
 - Spec: [spec-014-testing_shift-0_0_4.md](docs/SPECS/spec-014-testing_shift-0_0_4.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -2129,8 +2238,13 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
-- Labels: `example-app`, `m2m`, `tests`
 - Spec: [spec-013-real_m2m_coverage-0_0_4.md](docs/SPECS/spec-013-real_m2m_coverage-0_0_4.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
 
 #### Planning note
 
@@ -2157,8 +2271,13 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: XS
-- Labels: `release`, `versioning`
 - Spec: [spec-012-version_release_alignment-0_0_4.md](docs/SPECS/spec-012-version_release_alignment-0_0_4.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 
 #### Planning note
 
@@ -2186,8 +2305,14 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: XS
-- Labels: `cleanup`, `docs`, `tests`
 - Spec: [spec-011-stale_placeholder_cleanup-0_0_4.md](docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
 
 #### Planning note
 
@@ -2218,8 +2343,24 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Labels: `finalizer`, `registry`, `relations`, `types`
 - Spec: [spec-010-foundation-0_0_4.md](docs/SPECS/spec-010-foundation-0_0_4.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -2271,8 +2412,35 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Labels: `layer-3`, `public-api`, `relations`, `types`
 - Spec: [spec-009-rich_schema_architecture-0_0_4.md](docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | planned for `0.0.9` |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [Input type generation](docs/GLOSSARY.md#input-type-generation) | planned for `0.0.11` |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`Ordering`](docs/GLOSSARY.md#ordering) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
+| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
+| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -2295,8 +2463,22 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: M
-- Labels: `finalizer`, `registry`, `relations`, `types`
 - Spec: [spec-008-definition_order_independence-0_0_4.md](docs/SPECS/spec-008-definition_order_independence-0_0_4.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -2319,8 +2501,13 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
-- Labels: `docs`, `release`
 - Spec: [spec-007-onboarding_docs_spec_consolidation-0_0_4.md](docs/SPECS/spec-007-onboarding_docs_spec_consolidation-0_0_4.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 
 #### Planning note
 
@@ -2353,8 +2540,19 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
-- Labels: `docs`
 - Spec: [spec-006-public_surface-0_0_3.md](docs/SPECS/spec-006-public_surface-0_0_3.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -2382,8 +2580,19 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: M
-- Labels: `docs`, `public-api`, `registry`, `types`
 - Spec: [spec-005-django_type_contract-0_0_3.md](docs/SPECS/spec-005-django_type_contract-0_0_3.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
 
 #### Planning note
 
@@ -2407,8 +2616,22 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Labels: `optimizer`, `performance`, `query-planning`, `schema-audit`
 - Spec: [spec-004-optimizer_beyond-0_0_3.md](docs/SPECS/spec-004-optimizer_beyond-0_0_3.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -2447,8 +2670,20 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: M
-- Labels: `optimizer`, `performance`, `query-planning`, `relations`
 - Spec: [spec-003-optimizer_nested_prefetch_chains-0_0_2.md](docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
 #### Planning note
 
@@ -2472,8 +2707,15 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Labels: `optimizer`, `performance`, `query-planning`, `relations`
 - Spec: [spec-002-optimizer-0_0_2.md](docs/SPECS/spec-002-optimizer-0_0_2.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
 
 #### Planning note
 
@@ -2509,8 +2751,33 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Labels: `public-api`, `registry`, `relations`, `scalars`, `types`
 - Spec: [spec-001-django_types-0_0_1.md](docs/SPECS/spec-001-django_types-0_0_1.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`Meta.choice_enum_names`](docs/GLOSSARY.md#metachoice_enum_names) | planned for `0.1.4` |
+| [`Meta.description`](docs/GLOSSARY.md#metadescription) | shipped |
+| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
 
 #### Planning note
 

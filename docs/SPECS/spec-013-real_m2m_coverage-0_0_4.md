@@ -24,7 +24,7 @@ shipped
 ## Scope
 
 - Replaced test-only M2M/cardinality fixtures with real managed models in the `library` example app.
-- Added package-level and HTTP-level coverage for M2M traversal and optimizer planning.
+- Added package-level and HTTP-level coverage for [M2M traversal][glossary-relation-handling] and optimizer planning.
 
 ## Other
 
@@ -42,6 +42,7 @@ shipped
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
 
 <!-- docs/SPECS/ -->
 

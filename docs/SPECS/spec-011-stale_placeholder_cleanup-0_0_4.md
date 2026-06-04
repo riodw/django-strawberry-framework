@@ -23,8 +23,8 @@ shipped
 
 ## Scope
 
-- Replaced stale M2M and forward-reference skips with definition-order tests.
-- Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-019-0.0.6`.
+- Replaced stale M2M and forward-reference skips with [definition-order][glossary-definition-order-independence] tests.
+- Kept the remaining scalar override skip documented as a separate [scalar-field][glossary-scalar-field-override-semantics] concern under `DONE-019-0.0.6`.
 
 ## Other
 
@@ -42,6 +42,8 @@ shipped
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-scalar-field-override-semantics]: ../GLOSSARY.md#scalar-field-override-semantics
 
 <!-- docs/SPECS/ -->
 

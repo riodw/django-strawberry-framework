@@ -1,4 +1,4 @@
-# Definition-order independence
+# [Definition-order independence][glossary-definition-order-independence]
 
 ## Problem
 `django_strawberry_framework.DjangoType` currently resolves relation target types eagerly during class creation.
@@ -8,7 +8,7 @@ The current pipeline is:
 1. `DjangoType.__init_subclass__` selects Django fields.
 2. `_build_annotations(cls, fields)` dispatches relation fields through `convert_relation`.
 3. `convert_relation(field)` immediately asks the registry for `field.related_model`.
-4. If the related model has no registered `DjangoType`, `ConfigurationError` is raised.
+4. If the related model has no registered [`DjangoType`][glossary-djangotype], [`ConfigurationError`][glossary-configurationerror] is raised.
 
 That means bidirectional model graphs cannot be represented as one rich `DjangoType` per model without careful ordering or field omission. For example:
 
@@ -32,7 +32,7 @@ The intended end state includes:
 - related aggregates
 - fieldsets
 - cascade permissions
-- Relay node lookup
+- [Relay node][glossary-relay-node-integration] lookup
 - automatic optimizer planning across nested selections
 - cookbook-style schemas with minimal resolver boilerplate
 
@@ -265,8 +265,8 @@ The best design should be judged against these criteria:
 ### Features that depend on this decision
 Definition-order independence becomes the shared foundation for later systems:
 
-- `DjangoConnectionField` needs the target node and nested relation types to be concrete before argument and return types are built.
-- `DjangoNodeField` needs a finalized primary type per model for Relay lookup.
+- [`DjangoConnectionField`][glossary-djangoconnectionfield] needs the target node and nested relation types to be concrete before argument and return types are built.
+- [`DjangoNodeField`][glossary-djangonodefield] needs a finalized primary type per model for Relay lookup.
 - related filters need stable related model/type metadata.
 - related orders need stable relation paths and generated input types.
 - related aggregates need stable related aggregate class graphs and output types.
@@ -329,7 +329,7 @@ Record unresolved relation fields during `DjangoType` class creation and resolve
 Pros:
 
 - Best fit for automatic rich relation generation.
-- Preserves DRF-shaped `Meta.fields` behavior.
+- Preserves DRF-shaped [`Meta.fields`][glossary-metafields] behavior.
 - Supports bidirectional model graphs.
 - Keeps the current "relations become concrete related `DjangoType`s" promise.
 
@@ -404,7 +404,7 @@ Possible approaches:
 1. Delay `strawberry.type(cls, ...)` until relation targets are resolved.
 2. Finalize immediately with placeholders, then patch `__strawberry_definition__.fields`.
 3. Require schema construction through a package helper that finalizes pending relations before creating `strawberry.Schema`.
-4. Use a hybrid: collect early, finalize through package-owned fields or schema helpers, and keep an explicit `finalize_django_types()` escape hatch for tests and advanced import layouts.
+4. Use a hybrid: collect early, finalize through package-owned fields or schema helpers, and keep an explicit `[finalize_django_types][glossary-finalize-django-types]()` escape hatch for tests and advanced import layouts.
 
 The tradeoffs:
 
@@ -427,7 +427,7 @@ The registry will need to answer more than "which type owns this model?"
 
 Questions to settle:
 
-- Can there be multiple `DjangoType`s per model before `Meta.primary` exists?
+- Can there be multiple `DjangoType`s per model before [`Meta.primary`][glossary-metaprimary] exists?
 - If multiple types exist, which one should automatic relations choose?
 - Should automatic relation resolution require exactly one primary type?
 - How should abstract/interface types participate?
@@ -466,7 +466,7 @@ Questions to settle:
 - Should generic fallback exist at all in 1.0?
 - If it exists, should it be per-field, per-type, or global?
 - Should it be allowed only for intentionally skipped relation targets?
-- How would it appear in schema audit output?
+- How would it appear in [schema audit][glossary-schema-audit] output?
 
 Likely direction:
 
@@ -575,6 +575,16 @@ Before implementation, keep these conclusions visible:
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-schema-audit]: ../GLOSSARY.md#schema-audit
 
 <!-- docs/SPECS/ -->
 

@@ -1,0 +1,11 @@
+term,anchor,notes
+ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
+FK-id elision,fk-id-elision,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.exclude,metaexclude,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.optimizer_hints,metaoptimizer_hints,Backfilled for DONE-card glossary linkage from the shipped spec body.
+only(),only-projection,Backfilled for DONE-card glossary linkage from the shipped spec body.
+OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
+queryset diffing,queryset-diffing,Backfilled for DONE-card glossary linkage from the shipped spec body.

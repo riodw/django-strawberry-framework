@@ -120,6 +120,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`TestClient`](#testclient) | planned for `0.0.12` |
 | [Django Trac #37064 hardening](#django-trac-37064-hardening) | shipped (`0.0.7`) |
 | [`Upload` scalar](#upload-scalar) | planned for `0.0.11` |
+| [Cross-subsystem invariants](#cross-subsystem-invariants) | planned for 1.0.0 |
 
 ## Browse by category
 
@@ -1157,6 +1158,8 @@ Strawberry `Upload` scalar mapping for `FileField` / `ImageField` on mutation in
 ---
 
 ## Cross-subsystem invariants
+
+**Status:** planned for 1.0.0.
 
 Goals that the Layer-3 cards collectively satisfy by `1.0.0`:
 

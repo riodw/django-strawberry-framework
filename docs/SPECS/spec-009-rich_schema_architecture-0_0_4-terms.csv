@@ -1,0 +1,24 @@
+term,anchor,notes
+AggregateSet,aggregateset,Backfilled for DONE-card glossary linkage from the shipped spec body.
+apply_cascade_permissions,apply_cascade_permissions,Backfilled for DONE-card glossary linkage from the shipped spec body.
+ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Definition-order independence,definition-order-independence,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoConnection,djangoconnection,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoConnectionField,djangoconnectionfield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoNodeField,djangonodefield,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
+FieldSet,fieldset,Backfilled for DONE-card glossary linkage from the shipped spec body.
+FilterSet,filterset,Backfilled for DONE-card glossary linkage from the shipped spec body.
+finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
+FK-id elision,fk-id-elision,Backfilled for DONE-card glossary linkage from the shipped spec body.
+input type,input-type-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.fields,metafields,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.primary,metaprimary,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Ordering,ordering,Backfilled for DONE-card glossary linkage from the shipped spec body.
+OrderSet,orderset,Backfilled for DONE-card glossary linkage from the shipped spec body.
+RelatedAggregate,relatedaggregate,Backfilled for DONE-card glossary linkage from the shipped spec body.
+RelatedFilter,relatedfilter,Backfilled for DONE-card glossary linkage from the shipped spec body.
+RelatedOrder,relatedorder,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Relay node,relay-node-integration,Backfilled for DONE-card glossary linkage from the shipped spec body.
+schema audit,schema-audit,Backfilled for DONE-card glossary linkage from the shipped spec body.

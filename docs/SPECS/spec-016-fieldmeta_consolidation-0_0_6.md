@@ -23,7 +23,7 @@ shipped
 
 ## Scope
 
-- **SSoT consolidation.** Three reader sites now read `FieldMeta` from the canonical source on `DjangoTypeDefinition.field_map`:
+- **SSoT consolidation.** Three reader sites now read `FieldMeta` from the canonical source on `[DjangoType][glossary-djangotype]Definition.field_map`:
 - `django_strawberry_framework/types/base.py:_record_pending_relation`
 - `django_strawberry_framework/types/converters.py:resolved_relation_annotation`
 - `django_strawberry_framework/types/resolvers.py:_make_relation_resolver`
@@ -37,7 +37,7 @@ shipped
 
 ## Why it matters
 
-- Three reader sites were re-deriving relation shape via `relation_kind(field)` + raw `getattr(field, ...)` instead of reading the `FieldMeta` already on `DjangoTypeDefinition.field_map` — duplicating logic and creating drift surface for any future relation-flag addition.
+- Three reader sites were re-deriving [relation shape][glossary-relation-handling] via `relation_kind(field)` + raw `getattr(field, ...)` instead of reading the `FieldMeta` already on `DjangoTypeDefinition.field_map` — duplicating logic and creating drift surface for any future relation-flag addition.
 - `DjangoType.__init_subclass__` was writing legacy class-attribute mirrors (`cls._optimizer_field_map`, `cls._optimizer_hints`) that survived `registry.clear()`, then four optimizer sites read those mirrors instead of the canonical `DjangoTypeDefinition`. Two parallel sources of field metadata with no enforced consistency.
 
 ## Other
@@ -62,6 +62,8 @@ shipped
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
 
 <!-- docs/SPECS/ -->
 

@@ -10,9 +10,9 @@ The fix is not more documentation. It is stricter documentation discipline. This
 
 0.0.3 public surface (per `django_strawberry_framework/__init__.py`):
 
-- `DjangoType` — Layer 2 type system, shipped.
-- `DjangoOptimizerExtension` — Layer 2 optimizer, shipped end-to-end through O1-O6 and B1-B8.
-- `OptimizerHint` — typed optimizer-hint wrapper, shipped as part of B4.
+- [`DjangoType`][glossary-djangotype] — Layer 2 type system, shipped.
+- [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] — Layer 2 optimizer, shipped end-to-end through O1-O6 and B1-B8.
+- [`OptimizerHint`][glossary-optimizerhint] — typed optimizer-hint wrapper, shipped as part of B4.
 - `auto` — re-exported from `strawberry`.
 - `__version__`.
 
@@ -50,7 +50,7 @@ Names that fail any of these stay reachable via their dotted submodule path (`fr
 
 #### Decision for 0.0.3
 
-`DjangoOptimizerExtension` remains top-level-exported because the optimizer is now effective end-to-end. O1-O6 and B1-B8 are implemented and covered, including the O3 root-gated resolve hook, nested prefetch chains, projection, custom `get_queryset` downgrade to `Prefetch`, optimizer hints, plan introspection, schema audit, field metadata caching, and queryset diffing.
+`DjangoOptimizerExtension` remains top-level-exported because the optimizer is now effective end-to-end. O1-O6 and B1-B8 are implemented and covered, including the O3 root-gated resolve hook, nested prefetch chains, projection, custom `get_queryset` downgrade to `Prefetch`, optimizer hints, plan introspection, [schema audit][glossary-schema-audit], field metadata caching, and [queryset diffing][glossary-queryset-diffing].
 
 ```
 from django_strawberry_framework import DjangoOptimizerExtension, OptimizerHint
@@ -114,13 +114,13 @@ The language describing a feature must match its marker:
 
 - `shipped` features use present tense without hedging: "DjangoType generates...", "convert_choices_to_enum produces...".
 - `partial` features must qualify which paths work: "DjangoOptimizerExtension's per-resolver dispatch is shipped; the `on_executing_start` hook required for end-to-end effectiveness is in flight."
-- `experimental`, `planned`, `in flight`, `deferred`, `aspirational` features use future tense or hedged language: "FilterSet will provide...", "permissions.py is reserved for...".
+- `experimental`, `planned`, `in flight`, `deferred`, `aspirational` features use future tense or hedged language: "[FilterSet][glossary-filterset] will provide...", "permissions.py is reserved for...".
 
 Rule of thumb: if a Django developer reading the section would assume they can use the feature today, the marker must support that assumption. If reading the marker would tell them "no, not yet", the language must agree.
 
 ### When to amend this spec
 
-Every future subsystem spec (filters, orders, aggregates, permissions, connection field, relay interfaces, `Meta.primary`, consumer overrides) should:
+Every future subsystem spec (filters, orders, aggregates, permissions, connection field, relay interfaces, [`Meta.primary`][glossary-metaprimary], consumer overrides) should:
 
 - Pick a starting marker for its subsystem in the README.
 - Specify the migration path through the markers as the work lands (`planned` -> `in flight` -> `partial` -> `shipped`).
@@ -153,6 +153,13 @@ None blocking 0.0.3.
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
+[glossary-schema-audit]: ../GLOSSARY.md#schema-audit
 
 <!-- docs/SPECS/ -->
 

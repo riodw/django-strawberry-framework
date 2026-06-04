@@ -1,4 +1,4 @@
-# Spec: Django Trac #37064 hardening + `safe_wrap_connection_method`
+# Spec: [Django Trac #37064 hardening][glossary-django-trac-37064-hardening] + [`safe_wrap_connection_method`][glossary-safe-wrap-connection-method]
 
 Target release: `0.0.7` (per [KANBAN.md][kanban] card `DONE-024-0.0.7`).
 Status: shipped — canonical spec stub created to keep the Kanban DB one-to-one spec invariant intact.
@@ -33,6 +33,8 @@ shipped
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
+[glossary-django-trac-37064-hardening]: ../GLOSSARY.md#django-trac-37064-hardening
+[glossary-safe-wrap-connection-method]: ../GLOSSARY.md#safe_wrap_connection_method
 
 <!-- docs/SPECS/ -->
 

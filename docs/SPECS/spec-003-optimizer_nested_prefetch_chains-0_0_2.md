@@ -6,14 +6,14 @@
 The current walker already carries a `prefix` argument and can collect scalar fields through `select_related` paths via `_collect_scalar_only_fields`, but it stops after planning the current relation. The TODO in `django_strawberry_framework/optimizer/walker.py` (right at the end of `_walk_selections`) is the implementation anchor: recurse into relation child selections and emit depth > 1 relation chains.
 
 ## End-goal context
-`docs/SPECS/spec-004-optimizer_beyond-0_0_3.md` assumes O4 is the last missing foundation slice. B1 plan caching, B7 field metadata, B3 strictness, B4 optimizer hints, B5 context stashing, B2 FK-id elision, and B6 schema audit have shipped or are designed around the current `OptimizationPlan` shape. O4 must therefore extend the planner without breaking these contracts:
+`docs/SPECS/spec-004-optimizer_beyond-0_0_3.md` assumes O4 is the last missing foundation slice. B1 plan caching, B7 field metadata, B3 strictness, B4 optimizer hints, B5 context stashing, B2 [FK-id elision][glossary-fk-id-elision], and B6 [schema audit][glossary-schema-audit] have shipped or are designed around the current `OptimizationPlan` shape. O4 must therefore extend the planner without breaking these contracts:
 
 - Cached plans must remain reusable; request-dependent nested `Prefetch` querysets must set `plan.cacheable = False`.
 - `_optimizer_field_map` (B7) is already used at every recursion level because `_walk_selections` re-reads it on each entry — that property must be preserved when recursion is introduced for nested branches.
-- `Meta.optimizer_hints` (B4) must apply at nested levels, not only root fields.
+- [`Meta.optimizer_hints`][glossary-metaoptimizer-hints] (B4) must apply at nested levels, not only root fields.
 - `get_queryset` downgrades (O6) must compose with nested child plans.
 - B2 FK-id elisions and B3 strictness sentinels must use walker-produced branch-sensitive resolver keys once nested paths exist; Django lookup paths are only for debugging/B8 (see "Lookup paths vs resolver keys" below).
-- Future B8 queryset diffing will normalize `select_related` paths and `Prefetch.prefetch_to` paths, so O4 should preserve stable lookup identities.
+- Future B8 [queryset diffing][glossary-queryset-diffing] will normalize `select_related` paths and `Prefetch.prefetch_to` paths, so O4 should preserve stable lookup identities.
 
 ## Current state
 `OptimizationPlan` currently holds:
@@ -22,7 +22,7 @@ The current walker already carries a `prefix` argument and can collect scalar fi
 - `prefetch_related`: strings or `Prefetch` objects for `QuerySet.prefetch_related`.
 - `only_fields`: root-query scalar paths for `QuerySet.only`.
 - `fk_id_elisions`: currently relation paths whose selected target primary key can be served from the source row. O4 must migrate this bag, or a replacement bag, to branch-sensitive resolver keys.
-- `cacheable`: whether the plan can be stored in the extension plan cache.
+- `cacheable`: whether the plan can be stored in the extension [plan cache][glossary-plan-cache].
 
 `plan_optimizations(selected_fields, model, info=None)` calls `_walk_selections(...)` with an empty prefix. `_walk_selections` can already produce prefixed paths such as `item__category_id` for single-valued joins via `_collect_scalar_only_fields`, but the final relation-dispatch block still has O4 TODO anchors instead of recursing into `sel.selections`. Concretely, the same-query branch's depth-1 behavior is:
 
@@ -116,7 +116,7 @@ else:  # relation_kind == "select"
 `_collect_scalar_only_fields` becomes obsolete in the same-query branch and can be deleted once the recursion lands and tests pass. (It is not called from the prefetch branch today.)
 
 ### Prefetch-boundary recursion for many-side and downgraded paths
-Reverse FK, M2M, and O6-downgraded forward relations cross a queryset boundary. Child scalar `only()` paths must not be pushed into the root queryset. Instead:
+Reverse FK, M2M, and O6-downgraded forward relations cross a queryset boundary. Child scalar [`only()`][glossary-only-projection] paths must not be pushed into the root queryset. Instead:
 
 - Build a child queryset for the related model (use the target type's `get_queryset(queryset, info)` if O6 requires it).
 - Refactor `plan_relation` before wiring this branch. Today it calls `target_type.get_queryset(...)` and returns a `Prefetch` object for O6. O4 should move queryset construction into `_build_child_queryset(...)` so custom `get_queryset` is called exactly once and the prefetch branch owns the child plan application.
@@ -185,7 +185,7 @@ def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> 
 For a default branch with no child plan and no child `only()` projection, a plain string lookup is still acceptable — but the simplest implementation always emits a `Prefetch`, which is semantically equivalent. Prefer `Prefetch` for uniformity with B8 diffing (which inspects `prefetch_to`).
 
 ### Hints are leaf operations
-`OptimizerHint.prefetch(obj)` already lets the consumer hand in their own `Prefetch` instance. O4 must not recurse into `sel.selections` for hint-supplied prefetches — the consumer's queryset is the source of truth, including any `only()` and nested prefetches it carries. The current walker already treats `hint.prefetch_obj` as a leaf; preserve that.
+`[OptimizerHint][glossary-optimizerhint].prefetch(obj)` already lets the consumer hand in their own `Prefetch` instance. O4 must not recurse into `sel.selections` for hint-supplied prefetches — the consumer's queryset is the source of truth, including any `only()` and nested prefetches it carries. The current walker already treats `hint.prefetch_obj` as a leaf; preserve that.
 
 `OptimizerHint.prefetch_related()` (no `obj`) and `OptimizerHint.select_related()` should both go through the recursive paths above so nested selections under a hinted relation still get optimized. The current implementation calls `_collect_scalar_only_fields` for `force_select`; that line should also switch to `_walk_selections` for symmetry with the unhinted same-query branch.
 
@@ -197,7 +197,7 @@ Keep two identities separate:
 - **Django lookup paths**: strings such as `items__entries` or `item__category`. These are useful for debug output and B8 queryset diffing.
 - **Resolver sentinel keys**: branch-sensitive identities used by B2 FK-id elision and B3 strictness when a resolver runs. These must distinguish aliases, sibling branches, parent types, and root fields.
 
-Do not try to derive resolver sentinel keys from `Prefetch` objects after planning. A `Prefetch` only carries Django lookup strings and a queryset; it does not retain the parent `DjangoType`, GraphQL response aliases, or selection-branch identity. The walker has that information while it traverses the selection tree, so it should record resolver keys as part of planning.
+Do not try to derive resolver sentinel keys from `Prefetch` objects after planning. A `Prefetch` only carries Django lookup strings and a queryset; it does not retain the parent [`DjangoType`][glossary-djangotype], GraphQL response aliases, or selection-branch identity. The walker has that information while it traverses the selection tree, so it should record resolver keys as part of planning.
 
 ### Lookup-path flattening
 B8 still needs a helper that flattens relation lookup paths. This helper should recurse through nested `Prefetch.queryset._prefetch_related_lookups` to arbitrary depth, not just one child level. Locate it on `plans.py` next to `OptimizationPlan`.
@@ -421,6 +421,14 @@ None. Every O4 change lands in an existing module: `walker.py`, `plans.py`, `ext
 <!-- Root -->
 
 <!-- docs/ -->
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-metaoptimizer-hints]: ../GLOSSARY.md#metaoptimizer_hints
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
+[glossary-schema-audit]: ../GLOSSARY.md#schema-audit
 
 <!-- docs/SPECS/ -->
 

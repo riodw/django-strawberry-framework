@@ -23,7 +23,7 @@ shipped
 
 ## Scope
 
-- Package metadata, runtime version, lockfile, tests, and changelog now agree on `0.0.4`.
+- Package metadata for the [`DjangoType`][glossary-djangotype] release line, runtime version, lockfile, tests, and changelog now agree on `0.0.4`.
 - The changelog entry is condensed for the alpha release and covers the actual commit range through 2026-05-08.
 
 ## Other
@@ -43,6 +43,7 @@ shipped
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
 
 <!-- docs/SPECS/ -->
 

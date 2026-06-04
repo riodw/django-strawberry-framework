@@ -1,0 +1,17 @@
+term,anchor,notes
+BigInt scalar,bigint-scalar,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Choice enum generation,choice-enum-generation,Backfilled for DONE-card glossary linkage from the shipped spec body.
+ConfigurationError,configurationerror,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoMutation,djangomutation,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoOptimizerExtension,djangooptimizerextension,Backfilled for DONE-card glossary linkage from the shipped spec body.
+DjangoType,djangotype,Backfilled for DONE-card glossary linkage from the shipped spec body.
+FilterSet,filterset,Backfilled for DONE-card glossary linkage from the shipped spec body.
+finalize_django_types,finalize_django_types,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Meta.exclude,metaexclude,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Multi-database cooperation,multi-database-cooperation,Backfilled for DONE-card glossary linkage from the shipped spec body.
+OptimizerHint,optimizerhint,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Scalar field conversion,scalar-field-conversion,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Scalar field override semantics,scalar-field-override-semantics,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Specialized scalar conversions,specialized-scalar-conversions,Backfilled for DONE-card glossary linkage from the shipped spec body.
+strawberry_config,strawberry_config,Backfilled for DONE-card glossary linkage from the shipped spec body.
+Upload,upload-scalar,Backfilled for DONE-card glossary linkage from the shipped spec body.

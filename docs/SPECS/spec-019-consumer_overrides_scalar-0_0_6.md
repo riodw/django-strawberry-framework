@@ -67,7 +67,7 @@ Skim these [`docs/GLOSSARY.md`][glossary] entries first — they anchor the voca
 - [`DjangoType`][glossary-djangotype] — the base class whose scalar-override gap this card closes.
 - [`Scalar field conversion`][glossary-scalar-field-conversion] — the auto-synthesized scalar annotation path this card lets consumers override.
 - [`Scalar field override semantics`][glossary-scalar-field-override-semantics] — currently `planned for 0.0.6`; flipped to `shipped (0.0.6)` in [Slice 5](#slice-5--docs-kanban-changelog-archive).
-- [`Specialized scalar conversions`][glossary-specialized-scalar-conversions] — home of the `ArrayField`, `HStoreField`, and `BigInt` mappings whose rejection paths the H2 converter-bypass contract explicitly skips for overridden fields.
+- [`Specialized scalar conversions`][glossary-specialized-scalar-conversions] — home of the `ArrayField`, `HStoreField`, and [`BigInt`][glossary-bigint-scalar] mappings whose rejection paths the H2 converter-bypass contract explicitly skips for overridden fields.
 - [`Relation handling`][glossary-relation-handling] — the relation-override path whose annotation-only contract this card mirrors for scalars.
 - [`Relay Node integration`][glossary-relay-node-integration] — the broader Relay contract the H1 collision guard protects; documents `relay.NodeID[...]` as the supported consumer escape hatch.
 - [`Definition-order independence`][glossary-definition-order-independence] — the foundation slice (`DONE-010-0.0.4`) that pinned the relation-field override contract; this card extends the same shape to scalars.
@@ -812,7 +812,7 @@ Slices 3 / 4 / 5 are documentation-only and have no test deltas. Coverage stays 
 [kanban]: ../../KANBAN.md
 
 <!-- docs/ -->
-[glossary]: ../GLOSSARY.md
+[glossary-bigint-scalar]: ../GLOSSARY.md#bigint-scalar
 [glossary-choice-enum-generation]: ../GLOSSARY.md#choice-enum-generation
 [glossary-configurationerror]: ../GLOSSARY.md#configurationerror
 [glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
@@ -828,6 +828,7 @@ Slices 3 / 4 / 5 are documentation-only and have no test deltas. Coverage stays 
 [glossary-scalar-field-conversion]: ../GLOSSARY.md#scalar-field-conversion
 [glossary-scalar-field-override-semantics]: ../GLOSSARY.md#scalar-field-override-semantics
 [glossary-specialized-scalar-conversions]: ../GLOSSARY.md#specialized-scalar-conversions
+[glossary]: ../GLOSSARY.md
 [tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->

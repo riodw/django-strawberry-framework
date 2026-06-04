@@ -19,9 +19,12 @@ DEFAULT_REFERENCE_SOURCE_KEY = "dependencies_section"
 DEFAULT_REFERENCE_SOURCE_LABEL = "Dependencies section"
 DONE_STATUS_KEY = "done"
 DONE_CARD_SPEC_ERROR = "Done kanban cards require a linked spec doc."
+DONE_CARD_GLOSSARY_ERROR = "Done kanban cards require at least one glossary link."
 SPEC_CARD_REQUIRED_ERROR = "Kanban spec docs must be linked to a card."
 DONE_CARD_SPEC_REASSIGN_ERROR = "Cannot move a spec doc away from a done kanban card."
 DONE_CARD_SPEC_DELETE_ERROR = "Cannot delete a spec doc linked to a done kanban card."
+DONE_CARD_GLOSSARY_REASSIGN_ERROR = "Cannot move the last glossary link away from a done card."
+DONE_CARD_GLOSSARY_DELETE_ERROR = "Cannot delete the last glossary link from a done card."
 DEPENDENCY_REFERENCE_KIND_KEYS = models.DEPENDENCY_REFERENCE_KIND_KEYS
 DEPENDENCY_SYNC_FLAG = "_kanban_syncing_dependency_edges"
 
@@ -85,9 +88,33 @@ def _card_has_spec(card: models.Card, using: str | None) -> bool:
     return _manager(models.SpecDoc, using).filter(card_id=card.pk).exists()
 
 
+def _card_has_glossary_link(card: models.Card, using: str | None) -> bool:
+    if card.pk is None:
+        return False
+    return _manager(models.CardGlossaryTerm, using).filter(card_id=card.pk).exists()
+
+
+def _card_has_other_glossary_link(
+    card_id: int | None,
+    link_id: int | None,
+    using: str | None,
+) -> bool:
+    if card_id is None:
+        return False
+    queryset = _manager(models.CardGlossaryTerm, using).filter(card_id=card_id)
+    if link_id is not None:
+        queryset = queryset.exclude(pk=link_id)
+    return queryset.exists()
+
+
 def _validate_done_card_has_spec(card: models.Card, using: str | None) -> None:
     if _status_is_done(card.status_id, using) and not _card_has_spec(card, using):
         raise ValidationError(DONE_CARD_SPEC_ERROR)
+
+
+def _validate_done_card_has_glossary_link(card: models.Card, using: str | None) -> None:
+    if _status_is_done(card.status_id, using) and not _card_has_glossary_link(card, using):
+        raise ValidationError(DONE_CARD_GLOSSARY_ERROR)
 
 
 def _delete_origin_is_card(origin) -> bool:
@@ -353,6 +380,7 @@ def _dependency_edges_for_clear(
 def prepare_card_save(sender, instance: models.Card, using: str | None, **kwargs) -> None:
     instance.milestone_id = _target_milestone_id(instance, using)
     _validate_done_card_has_spec(instance, using)
+    _validate_done_card_has_glossary_link(instance, using)
 
 
 @receiver(pre_save, sender=models.SpecDoc, dispatch_uid="kanban_validate_spec_doc_card")
@@ -387,6 +415,56 @@ def protect_done_card_spec(
         return
     if _card_is_done(instance.card_id, using):
         raise ValidationError(DONE_CARD_SPEC_DELETE_ERROR)
+
+
+@receiver(
+    pre_save,
+    sender=models.CardGlossaryTerm,
+    dispatch_uid="kanban_validate_card_glossary_term_card",
+)
+def validate_card_glossary_term_card(
+    sender,
+    instance: models.CardGlossaryTerm,
+    using: str | None,
+    **kwargs,
+) -> None:
+    if instance.pk is None:
+        return
+    old_card_id = (
+        _manager(models.CardGlossaryTerm, using)
+        .filter(pk=instance.pk)
+        .values_list("card_id", flat=True)
+        .first()
+    )
+    if old_card_id == instance.card_id:
+        return
+    if _card_is_done(old_card_id, using) and not _card_has_other_glossary_link(
+        old_card_id,
+        instance.pk,
+        using,
+    ):
+        raise ValidationError(DONE_CARD_GLOSSARY_REASSIGN_ERROR)
+
+
+@receiver(
+    pre_delete,
+    sender=models.CardGlossaryTerm,
+    dispatch_uid="kanban_protect_done_card_glossary_link",
+)
+def protect_done_card_glossary_link(
+    sender,
+    instance: models.CardGlossaryTerm,
+    using: str | None,
+    **kwargs,
+) -> None:
+    if _delete_origin_is_card(kwargs.get("origin")):
+        return
+    if _card_is_done(instance.card_id, using) and not _card_has_other_glossary_link(
+        instance.card_id,
+        instance.pk,
+        using,
+    ):
+        raise ValidationError(DONE_CARD_GLOSSARY_DELETE_ERROR)
 
 
 @receiver(post_save, sender=models.Card, dispatch_uid="kanban_sync_card_after_save")

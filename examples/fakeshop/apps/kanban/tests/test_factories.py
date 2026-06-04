@@ -61,6 +61,7 @@ def test_make_card_with_done_status_creates_required_spec():
     card = factories.make_card(status=factories.make_status("done"))
     assert card.status.key == "done"
     assert card.spec.name.startswith(f"spec-{card.number:03d}-")
+    assert card.glossary_links.exists()
 
 
 @pytest.mark.django_db

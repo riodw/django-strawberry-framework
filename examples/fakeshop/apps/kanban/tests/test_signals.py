@@ -1,8 +1,9 @@
 """Signal-level invariants for the kanban board app.
 
 Data is built through the shared kanban factories; the done-card lifecycle
-(create-as-todo, attach spec, flip to done) is encapsulated in ``_make_card`` so
-each test reads as a behavior assertion rather than setup boilerplate.
+(create-as-todo, attach spec and glossary link, flip to done) is encapsulated in
+``_make_card`` so each test reads as a behavior assertion rather than setup
+boilerplate.
 """
 
 import pytest
@@ -42,6 +43,7 @@ def _make_card(
     if status == "done":
         card = kf.make_card(status=kf.make_status("todo"), **common)
         _spec_for(card)
+        kf.make_card_glossary_term(card=card)
         card.status = kf.make_status("done")
         card.save(update_fields=["status"])
         card.refresh_from_db()
@@ -76,6 +78,7 @@ def test_done_card_requires_spec_on_save():
 def test_done_card_with_spec_can_save():
     card = _make_card(number=1, title="Has spec")
     _spec_for(card)
+    kf.make_card_glossary_term(card=card)
 
     card.status = kf.make_status("done")
     card.save(update_fields=["status"])
@@ -83,6 +86,32 @@ def test_done_card_with_spec_can_save():
     card.refresh_from_db()
     assert card.status.key == "done"
     assert card.spec.name == "spec-001"
+    assert card.glossary_links.exists()
+
+
+@pytest.mark.django_db
+def test_done_card_requires_glossary_link_on_save():
+    card = _make_card(number=1, title="No glossary link")
+    _spec_for(card)
+
+    card.status = kf.make_status("done")
+
+    with pytest.raises(ValidationError, match="glossary link"):
+        card.save(update_fields=["status"])
+
+
+@pytest.mark.django_db
+def test_done_card_last_glossary_link_cannot_be_deleted_or_moved():
+    card = _make_card(number=1, title="Protected glossary", status="done")
+    other_card = _make_card(number=2, title="Other card")
+    link = card.glossary_links.get()
+
+    with pytest.raises(ValidationError, match="Cannot delete"):
+        link.delete()
+
+    link.card = other_card
+    with pytest.raises(ValidationError, match="Cannot move"):
+        link.save(update_fields=["card"])
 
 
 @pytest.mark.django_db

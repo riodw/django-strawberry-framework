@@ -1,0 +1,37 @@
+term,anchor,notes
+DjangoType,djangotype,The model-backed Strawberry type all three slices touch; Slice 2 introspects it and Slice 3 adds two Meta keys to its surface.
+DjangoOptimizerExtension,djangooptimizerextension,The schema extension whose instance-form construction Slice 1 migrates to the factory-callable form.
+Strictness mode,strictness-mode,The optimizer strictness constructor argument; the reason Slice 1 needs the lambda factory form for argument-bearing sites.
+Meta.fields,metafields,Existing field-selection key whose tuple-of-names shape Slice 3's override keys mirror; determines the selected field set an override may name.
+Meta.exclude,metaexclude,Existing field-selection key; an excluded field cannot be named in an override set (Decision 8 rule 2).
+Scalar field conversion,scalar-field-conversion,The convert_scalar path Slice 3 threads force_nullable into.
+Choice enum generation,choice-enum-generation,Choice columns resolve to a generated enum before null widening; the override flips the enum's nullability (Decision 9).
+Specialized scalar conversions,specialized-scalar-conversions,The ArrayField / HStoreField / BigInt branches that widen on field.null internally; the override applies uniformly (Decision 7).
+Scalar field override semantics,scalar-field-override-semantics,Consumer-authored annotation already controls nullability; Decision 8 rejects naming a consumer-authored field in an override set.
+Meta.choice_enum_names,metachoice_enum_names,Sibling future Meta key referenced when reasoning about choice-field overrides; not implemented here.
+ConfigurationError,configurationerror,Raised at type-creation time for every Slice 3 validation failure and by Slice 2's command for a bad type path.
+Relation handling,relation-handling,FK / OneToOne / M2M / reverse cardinality mapping; Decision 10 scopes overrides to scalars and rejects relation override-targets.
+finalize_django_types,finalize_django_types,Slice 3 needs no finalizer change; Slice 2 reads the post-finalize DjangoTypeDefinition.
+Definition-order independence,definition-order-independence,The invariant keeping Slice 3 entirely inside type-construction; nullability resolves with zero relation-target import-order dependency.
+Schema export management command,schema-export-management-command,The shipped export_schema command whose Command shape Slice 2's inspect_django_type mirrors.
+Django AppConfig,django-appconfig,The management-command discovery path Slice 2's command resolves through.
+Meta.filterset_class,metafilterset_class,Shipped sidecar key whose _validate_filterset_class validator is the structural template for Slice 3's validation.
+Meta.orderset_class,metaorderset_class,Shipped sidecar key promoted via the deferred-key gate; cited because Slice 3's net-new keys do NOT use that gate (Decision 6).
+FilterSet,filterset,Shipped Layer-3 subsystem; cited because Slice 3 does not follow its deferred-key promotion gate.
+OrderSet,orderset,Shipped Layer-3 subsystem; same deferred-key-gate contrast as FilterSet.
+Cross-subsystem invariants,cross-subsystem-invariants,The deferred-Meta-key promotion rule lives here; Decision 6 explains why it does not apply to net-new keys.
+DjangoConnectionField,djangoconnectionfield,The sibling 0.0.9 card's primitive; a dependency of Slice 1 (migrate before new construction surfaces ship).
+DjangoListField,djangolistfield,Shipped non-Relay list factory; cited as a schema surface Slice 2's introspection complements.
+Meta.fields_class,metafields_class,Future 0.1.1 FieldSet sidecar key; orthogonal to nullability override.
+FieldSet,fieldset,Future 0.1.1 Layer-3 sidecar; out of scope.
+Meta.search_fields,metasearch_fields,Future 0.1.2 surface; out of scope.
+AggregateSet,aggregateset,Future 0.1.3 Layer-3 sidecar referenced as forward-composition surface in Out of scope.
+Meta.aggregate_class,metaaggregate_class,Future 0.1.3 Meta key; out of scope.
+BigInt,bigint-scalar,JSON-safe scalar used in the inspect-command output example and as a Specialized-scalar-conversions branch the override must widen uniformly.
+Meta.primary,metaprimary,Multi-DjangoType-per-model design; a secondary type may flip a column's nullability differently from the primary (Edge cases).
+Meta.optimizer_hints,metaoptimizer_hints,Cited for its unknown-field guard that Slice 3's override validation mirrors.
+RelatedFilter,relatedfilter,Cited for the two-step lazy resolution shape Slice 2's argument resolution mirrors.
+RelatedOrder,relatedorder,Sibling two-step lazy resolution shape; same precedent as RelatedFilter.
+apply_cascade_permissions,apply_cascade_permissions,Future 0.0.10 permissions hook; cited in Out of scope.
+Connection-aware optimizer planning,connection-aware-optimizer-planning,Sibling 0.0.9 card; part of the joint cut that owns the version bump.
+get_queryset visibility hook,get_queryset-visibility-hook,The DjangoListField get_queryset-applying wrapper Slice 2's introspection complements.

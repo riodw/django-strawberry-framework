@@ -1312,18 +1312,24 @@ def _seed_branches_with_varying_shelves():
 
 
 def _seed_books_with_nullable_subtitles():
-    """Seed one nullable-subtitle book + one non-null-subtitle book.
+    """Seed one nullable-subtitle book + two non-null-subtitle books.
 
-    Load-bearing for the ``DESC_NULLS_LAST`` contract per spec-028
-    Slice 4 Test 2 (B3-rev3): the non-null subtitle row must appear
-    BEFORE the ``subtitle=None`` row under ``DESC_NULLS_LAST``.
+    Load-bearing for the ``NULLS_FIRST`` / ``NULLS_LAST`` contracts per
+    spec-028 Slice 4 Test 2 (B3-rev3): the null row must move to the
+    requested edge, while the two non-null rows still prove ASC versus
+    DESC ordering inside the non-null partition.
     """
     branch = models.Branch.objects.create(name="Branch", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
     models.Book.objects.create(title="Null Title", subtitle=None, shelf=shelf)
     models.Book.objects.create(
-        title="Non-null Title",
+        title="Alpha Subtitle Title",
         subtitle="A Short Subtitle",
+        shelf=shelf,
+    )
+    models.Book.objects.create(
+        title="Zulu Subtitle Title",
+        subtitle="Z Long Subtitle",
         shelf=shelf,
     )
 
@@ -1359,32 +1365,35 @@ def test_library_branches_order_by_name_asc():
     assert names == ["Alpha", "Bravo", "Charlie"]
 
 
+@pytest.mark.parametrize(
+    ("direction", "expected_subtitles"),
+    [
+        ("ASC_NULLS_FIRST", [None, "A Short Subtitle", "Z Long Subtitle"]),
+        ("ASC_NULLS_LAST", ["A Short Subtitle", "Z Long Subtitle", None]),
+        ("DESC_NULLS_FIRST", [None, "Z Long Subtitle", "A Short Subtitle"]),
+        ("DESC_NULLS_LAST", ["Z Long Subtitle", "A Short Subtitle", None]),
+    ],
+)
 @pytest.mark.django_db
-def test_library_books_order_by_subtitle_desc_nulls_last():
-    """Spec-028 Slice 4 Test 2 (B3-rev3): ``DESC_NULLS_LAST`` on ``Book.subtitle``.
-
-    The non-null subtitle row appears BEFORE the ``subtitle=None`` row;
-    NULLS-last positioning is verified explicitly.
-    """
+def test_library_books_order_by_subtitle_null_positioning(direction, expected_subtitles):
+    """Spec-028 Slice 4 Test 2: NULLS positioning through real ``/graphql/``."""
     _seed_books_with_nullable_subtitles()
 
     response = _post_graphql(
-        """
-        query {
-          allLibraryBooks(orderBy: [{ subtitle: DESC_NULLS_LAST }]) {
+        f"""
+        query {{
+          allLibraryBooks(orderBy: [{{ subtitle: {direction} }}]) {{
             title
             subtitle
-          }
-        }
+          }}
+        }}
         """,
     )
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
     rows = payload["data"]["allLibraryBooks"]
-    assert len(rows) == 2
-    assert rows[0]["subtitle"] == "A Short Subtitle"
-    assert rows[-1]["subtitle"] is None
+    assert [row["subtitle"] for row in rows] == expected_subtitles
 
 
 @pytest.mark.django_db

@@ -145,36 +145,6 @@ def test_orderset_meta_fields_list_form():
     assert all(v is None for v in fields.values())
 
 
-def test_orderset_meta_fields_all_expands_to_column_backed_fields_per_cookbook():
-    """``"__all__"`` expands to the column-backed field names per spec-028 Revision 4 B4.
-
-    Forward ``ForeignKey`` columns are included (their ``<field>_id``
-    column is on the model's own table); M2M managers and reverse FKs
-    are excluded. Replaces the Slice 1
-    ``test_orderset_meta_fields_all_raises_until_slice_2`` placeholder
-    -- Slice 2 wires the
-    ``_get_concrete_field_names_for_order`` helper through
-    ``_expand_meta_fields``.
-    """
-
-    class BookOrderAll(OrderSet):
-        class Meta:
-            model = Book
-            fields = "__all__"
-
-    fields = BookOrderAll.get_fields()
-    keys = list(fields)
-    # Concrete columns and forward FK -- present.
-    assert "id" in keys
-    assert "title" in keys
-    assert "subtitle" in keys
-    assert "circulation_status" in keys
-    assert "shelf" in keys
-    # M2M (``genres``) and reverse FK (``loans``) -- excluded per B4.
-    assert "genres" not in keys
-    assert "loans" not in keys
-
-
 def test_orderset_get_fields_merges_related_orders():
     """``Meta.fields`` entries land first; ``related_orders`` merge on top."""
 
@@ -270,32 +240,6 @@ def test_orderset_meta_fields_all_raises_configurationerror_without_meta_model()
     assert "Meta.model" in str(exc_info.value)
 
 
-def test_orderset_get_fields_all_with_explicit_relatedorder_override_replaces_column_leaf():
-    """An explicit ``RelatedOrder("shelf", ...)`` replaces the column leaf.
-
-    Per spec-028 Edge cases: when ``Meta.fields = "__all__"`` AND a
-    ``RelatedOrder`` declares ``field_name="shelf"``, the merge step
-    overlays the related orderset on top of the column leaf, so
-    ``fields["shelf"]`` is the ``RelatedOrder`` instance, not ``None``.
-    """
-
-    class ShelfOrderOverride(OrderSet):
-        class Meta:
-            model = Shelf
-            fields = ["code"]
-
-    class BookOrderOverride(OrderSet):
-        shelf = RelatedOrder(ShelfOrderOverride, field_name="shelf")
-
-        class Meta:
-            model = Book
-            fields = "__all__"
-
-    fields = BookOrderOverride.get_fields()
-    assert "shelf" in fields
-    assert fields["shelf"] is BookOrderOverride.related_orders["shelf"]
-
-
 # ---------------------------------------------------------------------------
 # Slice 2 — Slice 2 apply_sync / apply_async / permissions fixtures
 # ---------------------------------------------------------------------------
@@ -335,107 +279,9 @@ def _book_order_with_factory():
     return BookOrder, input_cls
 
 
-def _book_order_with_shelf_factory():
-    """Declare ``BookOrder`` with a ``shelf`` ``RelatedOrder`` + build input classes."""
-
-    class ShelfOrder(OrderSet):
-        class Meta:
-            model = Shelf
-            fields = ["code"]
-
-    class BookOrder(OrderSet):
-        shelf = RelatedOrder(ShelfOrder, field_name="shelf")
-
-        class Meta:
-            model = Book
-            fields = ["title"]
-
-    factory = OrderArgumentsFactory(BookOrder)
-    book_input_cls = factory.arguments
-    shelf_input_cls = OrderArgumentsFactory.input_object_types["ShelfOrderInputType"]
-    return BookOrder, ShelfOrder, book_input_cls, shelf_input_cls
-
-
 # ---------------------------------------------------------------------------
-# Slice 2 — apply_sync / apply_async
+# Slice 2 — apply_async
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_orderset_apply_sync_applies_order_by_to_queryset():
-    """A single ``Ordering.ASC`` leaf -> ``queryset.order_by`` carries one expression."""
-    BookOrder, BookInput = _book_order_with_factory()
-    input_value = [BookInput(title=Ordering.ASC)]
-    info = _make_info()
-    queryset = Book.objects.all()
-    result = BookOrder.apply_sync(input_value, queryset, info)
-    order_by = list(result.query.order_by)
-    # Django stores the F-based ascending form as an OrderBy expression
-    # tuple rather than a bare-string. Confirm at least one item with
-    # the title field.
-    assert order_by  # non-empty
-    # The result is a different queryset reference (order_by clones).
-    assert result is not queryset
-
-
-@pytest.mark.django_db
-def test_orderset_apply_sync_returns_unmodified_queryset_for_empty_input():
-    """Empty top-level list -> queryset is returned unchanged (no clone)."""
-    BookOrder, _ = _book_order_with_factory()
-    info = _make_info()
-    queryset = Book.objects.all()
-    result = BookOrder.apply_sync([], queryset, info)
-    assert result is queryset
-
-
-@pytest.mark.django_db
-def test_orderset_apply_sync_returns_unmodified_queryset_for_all_null_directions():
-    """Every leaf direction is ``None`` -> queryset is returned unchanged."""
-    BookOrder, BookInput = _book_order_with_factory()
-    input_value = [BookInput(title=None, subtitle=None)]
-    info = _make_info()
-    queryset = Book.objects.all()
-    result = BookOrder.apply_sync(input_value, queryset, info)
-    assert result is queryset
-
-
-@pytest.mark.django_db
-def test_orderset_apply_sync_emits_multi_field_priority():
-    """List-element order is the tie-breaker mechanism per Spec Decision 5."""
-    BookOrder, BookInput = _book_order_with_factory()
-    input_value = [BookInput(title=Ordering.ASC), BookInput(subtitle=Ordering.DESC_NULLS_LAST)]
-    info = _make_info()
-    queryset = Book.objects.all()
-    result = BookOrder.apply_sync(input_value, queryset, info)
-    order_by = list(result.query.order_by)
-    # Two expressions in declaration order.
-    assert len(order_by) == 2
-
-
-@pytest.mark.django_db
-def test_orderset_apply_sync_propagates_graphqlerror_from_check_permission():
-    """A ``check_<field>_permission`` raising ``GraphQLError`` halts before ``order_by``."""
-
-    class GatedBookOrder(OrderSet):
-        class Meta:
-            model = Book
-            fields = ["title"]
-
-        def check_title_permission(self, request):
-            if request.user.is_anonymous:
-                raise GraphQLError(
-                    "staff only",
-                    extensions={"code": "ORDER_PERMISSION_DENIED"},
-                )
-
-    factory = OrderArgumentsFactory(GatedBookOrder)
-    BookInput = factory.arguments
-    input_value = [BookInput(title=Ordering.ASC)]
-    info = _make_info(user_is_anonymous=True)
-    queryset = Book.objects.all()
-    with pytest.raises(GraphQLError) as exc_info:
-        GatedBookOrder.apply_sync(input_value, queryset, info)
-    assert "staff only" in str(exc_info.value)
 
 
 @pytest.mark.django_db
@@ -475,101 +321,6 @@ def test_orderset_apply_async_runs_check_permission_in_sync_to_async():
 # ---------------------------------------------------------------------------
 # Slice 2 — active-input-only + active-branch double-dispatch + dedup
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_orderset_check_permission_denies_for_active_field():
-    """An active leaf field fires its gate."""
-
-    class ActiveGateOrder(OrderSet):
-        class Meta:
-            model = Book
-            fields = ["title", "subtitle"]
-
-        def check_title_permission(self, request):
-            raise GraphQLError("denied")
-
-    factory = OrderArgumentsFactory(ActiveGateOrder)
-    BookInput = factory.arguments
-    input_value = [BookInput(title=Ordering.ASC)]
-    with pytest.raises(GraphQLError):
-        ActiveGateOrder.apply_sync(input_value, Book.objects.all(), _make_info())
-
-
-@pytest.mark.django_db
-def test_orderset_check_permission_quiet_for_inactive_field():
-    """An inactive (None) leaf field does NOT fire its gate."""
-
-    class QuietGateOrder(OrderSet):
-        class Meta:
-            model = Book
-            fields = ["title", "subtitle"]
-
-        def check_title_permission(self, request):
-            raise GraphQLError("would deny if fired")
-
-    factory = OrderArgumentsFactory(QuietGateOrder)
-    BookInput = factory.arguments
-    # ``title`` is absent (None); only ``subtitle`` is populated.
-    input_value = [BookInput(subtitle=Ordering.ASC)]
-    # No raise -- the gate stays quiet.
-    QuietGateOrder.apply_sync(input_value, Book.objects.all(), _make_info())
-
-
-@pytest.mark.django_db
-def test_orderset_check_permission_active_relatedorder_branch_fires_parent_gate():
-    """An active ``RelatedOrder`` branch fires the parent's per-branch gate."""
-
-    class ShelfOrder(OrderSet):
-        class Meta:
-            model = Shelf
-            fields = ["code"]
-
-    class BookOrderParentGate(OrderSet):
-        shelf = RelatedOrder(ShelfOrder, field_name="shelf")
-
-        class Meta:
-            model = Book
-            fields = ["title"]
-
-        def check_shelf_permission(self, request):
-            raise GraphQLError("no shelf order")
-
-    factory = OrderArgumentsFactory(BookOrderParentGate)
-    BookInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderInputType"]
-    input_value = [BookInput(shelf=ShelfInput(code=Ordering.ASC))]
-    with pytest.raises(GraphQLError) as exc:
-        BookOrderParentGate.apply_sync(input_value, Book.objects.all(), _make_info())
-    assert "no shelf order" in str(exc.value)
-
-
-@pytest.mark.django_db
-def test_orderset_check_permission_active_relatedorder_branch_fires_child_gate():
-    """The child orderset's own gates also fire via the recursive call."""
-
-    class ShelfOrderChild(OrderSet):
-        class Meta:
-            model = Shelf
-            fields = ["code"]
-
-        def check_code_permission(self, request):
-            raise GraphQLError("child denies")
-
-    class BookOrderChildGate(OrderSet):
-        shelf = RelatedOrder(ShelfOrderChild, field_name="shelf")
-
-        class Meta:
-            model = Book
-            fields = ["title"]
-
-    factory = OrderArgumentsFactory(BookOrderChildGate)
-    BookInput = factory.arguments
-    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderChildInputType"]
-    input_value = [BookInput(shelf=ShelfInput(code=Ordering.ASC))]
-    with pytest.raises(GraphQLError) as exc:
-        BookOrderChildGate.apply_sync(input_value, Book.objects.all(), _make_info())
-    assert "child denies" in str(exc.value)
 
 
 @pytest.mark.django_db

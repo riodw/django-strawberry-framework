@@ -105,15 +105,8 @@ query StaticKanbanDashboard {
     dependents {
       ...CardLinkFields
     }
-    labels {
-      id
-      uuid {
-        id
-      }
-      key
-      color
-      createdDate
-      updatedDate
+    badges: labels {
+      ...CardBadgeFields
     }
     glossaryLinks {
       id
@@ -198,9 +191,6 @@ query StaticKanbanDashboard {
   }
   allKanbanBoardDocKinds {
     ...BoardDocKindFields
-  }
-  allKanbanLabels {
-    ...LabelFields
   }
 }
 
@@ -368,7 +358,7 @@ fragment BoardDocKindFields on BoardDocKindType {
   updatedDate
 }
 
-fragment LabelFields on LabelType {
+fragment CardBadgeFields on LabelType {
   id
   uuid {
     id
@@ -498,7 +488,6 @@ LOOKUP_FIELDS = {
     "allKanbanReferenceKinds": "referenceKinds",
     "allKanbanReferenceSources": "referenceSources",
     "allKanbanBoardDocKinds": "boardDocKinds",
-    "allKanbanLabels": "labels",
 }
 
 

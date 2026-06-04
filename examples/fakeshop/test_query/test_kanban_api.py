@@ -561,7 +561,6 @@ def test_reverse_fk_from_lookup_status_to_cards():
 def test_select_board_docs_and_lookup_roots_for_static_dashboard():
     """The static dashboard can fetch board docs and FK options directly."""
     _seed_board()
-    models.Label.objects.create(key="filters", color="#2563eb")
     _assert_graphql_data(
         """
         query {
@@ -584,7 +583,6 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
           allKanbanReferenceKinds { key }
           allKanbanReferenceSources { key }
           allKanbanBoardDocKinds { key docs { key } }
-          allKanbanLabels { key color }
         }
         """,
         {
@@ -615,7 +613,6 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
             "allKanbanReferenceKinds": [{"key": "dependency"}],
             "allKanbanReferenceSources": [{"key": "planning_note"}],
             "allKanbanBoardDocKinds": [{"key": "reference", "docs": [{"key": "snapshot"}]}],
-            "allKanbanLabels": [{"key": "filters", "color": "#2563eb"}],
         },
     )
 
@@ -995,3 +992,56 @@ def test_order_kanban_statuses_by_key_desc():
         "query { allKanbanStatuses(orderBy: [{ key: DESC }]) { key } }",
         {"allKanbanStatuses": expected},
     )
+
+
+def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
+    """``Meta.fields = "__all__"`` exposes FK columns but not reverse/M2M managers."""
+    data = _graphql_data(
+        """
+        query {
+          __type(name: "CardOrderInputType") {
+            inputFields {
+              name
+              type {
+                kind
+                name
+                ofType {
+                  kind
+                  name
+                  ofType {
+                    kind
+                    name
+                  }
+                }
+              }
+            }
+          }
+        }
+        """,
+    )
+    fields = {field["name"]: field for field in data["__type"]["inputFields"]}
+
+    for name in (
+        "status",
+        "milestone",
+        "targetVersion",
+        "priority",
+        "severity",
+        "relativeSize",
+        "relativeSizeHigh",
+        "planningState",
+    ):
+        field_type = fields[name]["type"]
+        while field_type.get("ofType") is not None:
+            field_type = field_type["ofType"]
+        assert field_type["name"] == "Ordering"
+
+    assert {
+        "dependencies",
+        "dependents",
+        "parity",
+        "labels",
+        "glossaryTerms",
+        "items",
+        "uuid",
+    }.isdisjoint(fields)

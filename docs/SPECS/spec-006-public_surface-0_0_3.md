@@ -147,3 +147,25 @@ None blocking 0.0.3.
 - `docs/SPECS/spec-002-optimizer-0_0_2.md` — carries the local visibility-status amendment that this spec governs.
 - `docs/README.md` — the surface this spec governs.
 - `django_strawberry_framework/__init__.py` — the canonical top-level surface.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

@@ -10,13 +10,22 @@
       "severity": "medium",
       "planning_state": "planned",
       "planning_note": "One-paragraph summary of the card. Mention any gating cards by their stable title or id, e.g. depends on `DONE-027-0.0.8`.",
-      "labels": ["filters", "public-api"],
+      "labels": [
+        "filters",
+        "public-api"
+      ],
       "parity": [
-        {"upstream": "graphene_django", "level": "required"}
+        {
+          "upstream": "graphene_django",
+          "level": "required"
+        }
       ],
       "after": "`Meta.search_fields` support",
       "dependencies": [
-        {"card": "Filtering subsystem", "note": "`DONE-027-0.0.8` (Filtering subsystem) -- the shared machinery this card builds on."}
+        {
+          "card": "Filtering subsystem",
+          "note": "`DONE-027-0.0.8` (Filtering subsystem) -- the shared machinery this card builds on."
+        }
       ],
       "sections": {
         "scope": [
@@ -25,7 +34,10 @@
         ],
         "definition_of_done": [
           "A plain done-bullet renders as an unchecked checkbox.",
-          {"text": "An already-finished item.", "done": true}
+          {
+            "text": "An already-finished item.",
+            "done": true
+          }
         ],
         "files_touched": [
           "`django_strawberry_framework/...` (what changes)"
@@ -38,7 +50,12 @@
         ]
       },
       "references": [
-        {"target": "Filtering subsystem", "kind": "related", "source": "card_item", "text": "Optional extra cross-reference for token rewriting."}
+        {
+          "target": "Filtering subsystem",
+          "kind": "related",
+          "source": "card_item",
+          "text": "Optional extra cross-reference for token rewriting."
+        }
       ]
     }
   ]

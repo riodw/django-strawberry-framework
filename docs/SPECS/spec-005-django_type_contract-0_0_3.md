@@ -123,3 +123,25 @@ None blocking 0.0.3. The two follow-on specs (`Meta.primary` and consumer overri
 - `docs/SPECS/spec-002-optimizer-0_0_2.md` — for the `has_custom_get_queryset` sentinel that consumers of this contract spec will eventually use.
 - `docs/SPECS/spec-006-public_surface-0_0_3.md` — companion spec covering the package-level public-surface and documentation-discipline rules that this contract feeds into.
 - `tests/types/test_base.py` — pins the contract for accepted Meta keys, deferred Meta keys, unknown-name validation, the override-merge skipped placeholder, and the `has_custom_get_queryset` sentinel.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

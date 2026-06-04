@@ -16,6 +16,11 @@ A DRF-shaped Django integration for [Strawberry GraphQL](https://github.com/stra
 ```python
 from django_strawberry_framework import DjangoType, finalize_django_types
 
+class CategoryType(DjangoType):
+    class Meta:
+        model = Category
+        fields = ("id", "name")
+
 class ItemType(DjangoType):
     class Meta:
         model = Item
@@ -38,7 +43,7 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 
 **Coming from `strawberry-graphql-django`?** Keep Strawberry; lose the decorators. Configuration moves into `class Meta` so it's consistent with the rest of your Django app. Bonus: plan caching, FK-id elision, queryset diffing, strictness mode.
 
-**Coming from DRF + django-filter?** Your `Meta.model` / `fields` / `exclude` / `filterset_class` mental model travels straight over. Mutations land as `DjangoMutation` classes with the same nested-`Meta` shape; DRF Serializers integrate via `Meta.serializer_class`.
+**Coming from DRF + django-filter?** Your `Meta.model` / `fields` / `exclude` / `filterset_class` mental model travels straight over — and filtering *and* ordering ship today via `Meta.filterset_class` / `Meta.orderset_class`. Mutations are on the roadmap (`0.0.11`): planned as `DjangoMutation` classes with the same nested-`Meta` shape, including a DRF-serializer flavor via `Meta.serializer_class`.
 
 ## Status
 

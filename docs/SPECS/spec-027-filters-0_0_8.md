@@ -398,12 +398,24 @@ The factory auto-generates the three logical-operator fields on every `<TypeName
 
 ```graphql
 {
-  allGalaxies(filter: {
-    and: [
-      { name: { iContains: "andromeda" } }
-      { not: { isPrivate: { exact: true } } }
-    ]
-  }) {
+  allGalaxies(
+    filter: {
+      and: [
+        {
+          name: {
+            iContains: "andromeda"
+          }
+        }
+        {
+          not: {
+            isPrivate: {
+              exact: true
+            }
+          }
+        }
+      ]
+    }
+  ) {
     id
     name
   }

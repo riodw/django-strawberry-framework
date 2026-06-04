@@ -698,3 +698,25 @@ strawberry-graphql-django type generation: `https://strawberry.rocks/docs/django
 strawberry-graphql-django optimizer: `https://strawberry.rocks/docs/django/guide/optimizer`
 
 strawberry-graphql-django custom-`get_queryset` / optimizer edge case: issue #572 and PR #583 on `strawberry-graphql/strawberry-django`
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

@@ -378,11 +378,23 @@ The denial gate raises `GraphQLError`; the consumer sees a structured response e
 
 ```graphql
 {
-  allLibraryBooks(orderBy: [
-    { shelf: { code: ASC } },
-    { title: DESC }
-  ]) {
-    id title shelf { code }
+  allLibraryBooks(
+    orderBy: [
+      {
+        shelf: {
+          code: ASC
+        }
+      }
+      {
+        title: DESC
+      }
+    ]
+  ) {
+    id
+    title
+    shelf {
+      code
+    }
   }
 }
 ```
@@ -584,10 +596,60 @@ The GraphQL argument shape is **`orderBy: [<TypeName>OrderInputType!]`** (list o
 GraphQL surface examples:
 
 ```graphql
-{ allLibraryBranches(orderBy: [{ name: ASC }]) { id } }                          # single-field, ascending
-{ allLibraryBooks(orderBy: [{ subtitle: DESC_NULLS_LAST }]) { id } }             # NULLS positioning (Book.subtitle is the only nullable text field)
-{ allLibraryBooks(orderBy: [{ shelf: { code: ASC } }, { title: DESC }]) { id } } # tie-breaker via list order
-{ allLibraryBooks(orderBy: [{ genres: { name: ASC } }]) { id } }                 # M2M relation order
+{
+  allLibraryBranches(
+    orderBy: [
+      {
+        name: ASC
+      }
+    ]
+  ) {
+    id
+  }
+}
+
+{
+  allLibraryBooks(
+    orderBy: [
+      {
+        subtitle: DESC_NULLS_LAST
+      }
+    ]
+  ) {
+    id
+  }
+}
+
+{
+  allLibraryBooks(
+    orderBy: [
+      {
+        shelf: {
+          code: ASC
+        }
+      }
+      {
+        title: DESC
+      }
+    ]
+  ) {
+    id
+  }
+}
+
+{
+  allLibraryBooks(
+    orderBy: [
+      {
+        genres: {
+          name: ASC
+        }
+      }
+    ]
+  ) {
+    id
+  }
+}
 ```
 
 Justification:
@@ -1291,11 +1353,11 @@ Each item names a preferred answer for the current cut and a fallback if impleme
 
 <!-- External -->
 [strawberry-lazy]: https://strawberry.rocks
-[upstream-cookbook]: https://github.com/devind-team/django-graphene-filters
-[upstream-cookbook-filterset-factories]: https://github.com/devind-team/django-graphene-filters
-[upstream-cookbook-mixins]: https://github.com/devind-team/django-graphene-filters
-[upstream-cookbook-order-arguments-factory]: https://github.com/devind-team/django-graphene-filters
-[upstream-cookbook-orders]: https://github.com/devind-team/django-graphene-filters
-[upstream-cookbook-orderset]: https://github.com/devind-team/django-graphene-filters
+[upstream-cookbook]: https://github.com/riodw/django-graphene-filters
+[upstream-cookbook-filterset-factories]: https://github.com/riodw/django-graphene-filters
+[upstream-cookbook-mixins]: https://github.com/riodw/django-graphene-filters
+[upstream-cookbook-order-arguments-factory]: https://github.com/riodw/django-graphene-filters
+[upstream-cookbook-orders]: https://github.com/riodw/django-graphene-filters
+[upstream-cookbook-orderset]: https://github.com/riodw/django-graphene-filters
 [upstream-graphene-filter-fields]: https://github.com/graphql-python/graphene-django
 [upstream-strawberry-ordering]: https://github.com/strawberry-graphql/strawberry-django

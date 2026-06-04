@@ -1,5 +1,24 @@
 #!/usr/bin/env python
-"""Enforce the project's explode-at-threshold trailing-comma layout (both ways).
+"""Enforce the project's source-layout conventions across .py / .md / .json / .graphql.
+
+Three checks, all with ``--check`` (gate, exit 1) and ``--fix`` (auto-repair):
+
+1. **Trailing-comma layout** (``.py``) -- the explode-at-threshold rule below.
+2. **Markdown link-definition scaffold** (``.md``) -- every markdown file must
+   end with the canonical ``<!-- LINK DEFINITIONS -->`` block carrying all
+   per-source category markers (``<!-- Root -->`` ... ``<!-- External -->``) in
+   order, so the buckets are never silently dropped. The fixer rebuilds the
+   footer, preserving every existing def line under its category and inserting
+   any missing markers.
+3. **JSON / GraphQL brace explosion** (``.json`` / ``.graphql`` / ``.gql`` files
+   and ```` ```json ```` / ```` ```graphql ```` fenced blocks in markdown) --
+   content is normalized to its canonical pretty-printed form so every ``{``
+   opens a new line. JSON goes through ``json.dumps(indent=2)`` (every object
+   brace explodes); GraphQL through graphql-core's ``print_ast`` (selection sets
+   explode; argument input-objects stay inline per the GraphQL convention).
+   Detection is parse-gated: bare ``{`` in Python/JS, f-string interpolation,
+   and unparseable pseudo-snippets are never touched, and the fix output is
+   itself canonical (fixpoint-safe). ``.py`` string literals are out of scope.
 
 Collection literals (list / set / dict / parenthesized tuple) and ``def`` /
 method signatures are kept exploded one-item-per-line **iff** they have at least
@@ -88,6 +107,22 @@ EXCLUDE_DIRS = frozenset(
         "docs",  # regenerable artifacts (docs/shadow/*.py), not authored source
     },
 )
+# Transient scratch trees -- never enforced (no scaffold / JSON / GraphQL layout),
+# at any depth and for every file type. These are working notes, not authored
+# source, and are meant to be churned/deleted freely.
+EXCLUDE_SCRATCH_DIRS = frozenset(
+    {
+        "review",
+        "bug_hunt",
+        "builder",
+        "shadow",
+        "dry",
+        "worker-memory",
+    },
+)
+# Transient file-name substrings (case-insensitive): any file whose name contains
+# one of these is excluded anywhere in the tree, for every suffix.
+EXCLUDE_NAME_SUBSTRINGS = ("worker", "feedback")
 _CLOSE_BYTES = (b")", b"]", b"}")
 _SKIP_TOK = frozenset(
     {
@@ -345,13 +380,316 @@ def _run_ruff_format(files: list[Path]) -> None:
         print(f"warning: `ruff format` exited {result.returncode}", file=sys.stderr)
 
 
-def iter_files(paths: list[str]) -> Iterator[Path]:
-    """Yield the ``.py`` files to process (given files/dirs, or the whole repo)."""
+# ---------------------------------------------------------------------------
+# Markdown link-definition footer scaffold.
+#
+# Every ``.md`` file must end with the canonical LINK-DEFINITIONS scaffold so
+# the per-source category buckets are never silently dropped (a real
+# regression: editors strip "unused" category comments and the next author
+# has nowhere to slot a link def). The check requires all markers present in
+# canonical order; the fixer rebuilds the footer, preserving every existing
+# def line under its category and inserting any missing category markers.
+# ---------------------------------------------------------------------------
+
+LINK_DEF_HEADER = "<!-- LINK DEFINITIONS -->"
+LINK_DEF_CATEGORIES = (
+    "<!-- Root -->",
+    "<!-- docs/ -->",
+    "<!-- docs/SPECS/ -->",
+    "<!-- docs/builder/ -->",
+    "<!-- django_strawberry_framework/ -->",
+    "<!-- tests/ -->",
+    "<!-- examples/ -->",
+    "<!-- scripts/ -->",
+    "<!-- .venv/ -->",
+    "<!-- External -->",
+)
+_SCAFFOLD_MARKERS = (LINK_DEF_HEADER, *LINK_DEF_CATEGORIES)
+
+
+def _scaffold_in_canonical_order(text: str) -> bool:
+    """True iff every scaffold marker appears, each after the previous one."""
+    pos = 0
+    for marker in _SCAFFOLD_MARKERS:
+        idx = text.find(marker, pos)
+        if idx < 0:
+            return False
+        pos = idx + len(marker)
+    return True
+
+
+def _parse_footer(text: str) -> tuple[str, dict[str, list[str]], list[str]]:
+    """Split ``text`` at the LINK-DEFINITIONS header.
+
+    Returns ``(body, {category: [def lines]}, orphan_def_lines)``. ``orphan``
+    holds def lines that sat under the header but before the first recognized
+    category. With no header the whole text is the body.
+    """
+    idx = text.find(LINK_DEF_HEADER)
+    if idx < 0:
+        return text, {}, []
+    body = text[:idx]
+    footer = text[idx + len(LINK_DEF_HEADER) :]
+    cats: dict[str, list[str]] = {}
+    orphan: list[str] = []
+    current: str | None = None
+    for line in footer.split("\n"):
+        stripped = line.strip()
+        if stripped in LINK_DEF_CATEGORIES:
+            current = stripped
+            cats.setdefault(current, [])
+        elif stripped == "":
+            continue  # blank separators are rebuilt deterministically
+        elif current is None:
+            orphan.append(line.rstrip())
+        else:
+            cats[current].append(line.rstrip())
+    return body, cats, orphan
+
+
+def _render_footer(cats: dict[str, list[str]], orphan: list[str]) -> str:
+    """Render the canonical footer with existing def lines slotted per category."""
+    parts = [LINK_DEF_HEADER, ""]
+    parts.extend(orphan)
+    if orphan:
+        parts.append("")
+    for cat in LINK_DEF_CATEGORIES:
+        parts.append(cat)
+        parts.extend(cats.get(cat, []))
+        parts.append("")
+    while parts and parts[-1] == "":
+        parts.pop()
+    return "\n".join(parts) + "\n"
+
+
+def fix_markdown_scaffold(text: str) -> str:
+    """Ensure ``text`` ends with the canonical footer, preserving existing defs."""
+    body, cats, orphan = _parse_footer(text)
+    return body.rstrip("\n") + "\n\n" + _render_footer(cats, orphan)
+
+
+# ---------------------------------------------------------------------------
+# JSON / GraphQL brace explosion: every `{` must be followed by a newline.
+#
+# The rule applies ONLY to genuine JSON / GraphQL content -- standalone
+# ``.json`` / ``.graphql`` / ``.gql`` files and ```json / ```graphql fenced
+# blocks in markdown. Detection never touches bare ``{`` in Python/JS/etc.
+# Empty ``{}`` (optionally ``{ }``) is exempt. The fixer reformats through the
+# canonical pretty-printers (``json.dumps(indent=2)`` / graphql-core
+# ``print_ast``), which guarantees every ``{`` opens a new line.
+# ---------------------------------------------------------------------------
+
+_FENCE = re.compile(
+    r"(?m)^([ \t]*)```(json|graphql|gql)[ \t]*\n(.*?\n)?([ \t]*)```[ \t]*$",
+    re.DOTALL,
+)
+
+
+def _format_json(content: str) -> str | None:
+    """Pretty-print JSON at 2-space indent, or None if ``content`` is not JSON."""
+    try:
+        import json
+
+        obj = json.loads(content)
+    except (ValueError, TypeError):
+        return None
+    return json.dumps(obj, indent=2, ensure_ascii=False)
+
+
+def _format_graphql(content: str) -> str | None:
+    """Fully explode a GraphQL document: every brace/bracket opens its own line.
+
+    Field arguments each break onto their own 2-space-indented line too. Leaf
+    values (strings, ints, floats, bools, null, enums, variables) and any
+    node kind not handled here fall back to graphql-core's inline printer, so
+    escaping and exotic constructs stay correct. Returns ``None`` if ``content``
+    does not parse as GraphQL or hits an unexpected node shape (-> not enforced,
+    never mangled). Deterministic, so re-formatting its own output is a no-op
+    (fixpoint-safe).
+    """
+    try:
+        from graphql import parse, print_ast
+    except ImportError:
+        return None
+    try:
+        document = parse(content)
+    except Exception:  # noqa: BLE001 -- not a GraphQL document
+        return None
+
+    def pad(level: int) -> str:
+        return "  " * level
+
+    def value(node: object, level: int) -> str:
+        if node.kind == "object_value":
+            if not node.fields:
+                return "{}"
+            rows = [
+                f"{pad(level + 1)}{f.name.value}: {value(f.value, level + 1)}" for f in node.fields
+            ]
+            return "{\n" + "\n".join(rows) + "\n" + pad(level) + "}"
+        if node.kind == "list_value":
+            if not node.values:
+                return "[]"
+            rows = [f"{pad(level + 1)}{value(v, level + 1)}" for v in node.values]
+            return "[\n" + "\n".join(rows) + "\n" + pad(level) + "]"
+        return print_ast(node)  # string / int / float / bool / null / enum / variable
+
+    def directives(nodes: object) -> str:
+        return "".join(f" {print_ast(d)}" for d in nodes)
+
+    def arguments(nodes: object, level: int) -> str:
+        rows = [f"{pad(level + 1)}{a.name.value}: {value(a.value, level + 1)}" for a in nodes]
+        return "(\n" + "\n".join(rows) + "\n" + pad(level) + ")"
+
+    def selection_set(node: object, level: int) -> str:
+        rows = [selection(s, level + 1) for s in node.selections]
+        return "{\n" + "\n".join(rows) + "\n" + pad(level) + "}"
+
+    def selection(node: object, level: int) -> str:
+        if node.kind == "field":
+            text = pad(level) + (f"{node.alias.value}: " if node.alias else "") + node.name.value
+            if node.arguments:
+                text += arguments(node.arguments, level)
+            text += directives(node.directives)
+            if node.selection_set:
+                text += " " + selection_set(node.selection_set, level)
+            return text
+        if node.kind == "fragment_spread":
+            return f"{pad(level)}...{node.name.value}{directives(node.directives)}"
+        if node.kind == "inline_fragment":
+            cond = f" on {node.type_condition.name.value}" if node.type_condition else ""
+            head = f"{pad(level)}...{cond}{directives(node.directives)}"
+            return head + " " + selection_set(node.selection_set, level)
+        return pad(level) + print_ast(node)
+
+    def definition(node: object) -> str:
+        if node.kind == "operation_definition":
+            anonymous = (
+                node.operation.value == "query"
+                and node.name is None
+                and not node.variable_definitions
+                and not node.directives
+            )
+            if anonymous:
+                return selection_set(node.selection_set, 0)
+            head = node.operation.value + (f" {node.name.value}" if node.name else "")
+            if node.variable_definitions:
+                head += "(" + ", ".join(print_ast(v) for v in node.variable_definitions) + ")"
+            return head + directives(node.directives) + " " + selection_set(node.selection_set, 0)
+        if node.kind == "fragment_definition":
+            head = f"fragment {node.name.value} on {node.type_condition.name.value}"
+            return head + directives(node.directives) + " " + selection_set(node.selection_set, 0)
+        return print_ast(node)  # type-system / unhandled defs -> graphql-core inline printer
+
+    try:
+        return "\n\n".join(definition(d) for d in document.definitions)
+    except Exception:  # noqa: BLE001 -- unexpected node shape -> bail, never mangle
+        return None
+
+
+def _reformat(content: str, kind: str) -> str | None:
+    """Return the exploded canonical form of a JSON/GraphQL block."""
+    return _format_json(content) if kind == "json" else _format_graphql(content)
+
+
+def _noncanonical(content: str, kind: str) -> str | None:
+    """Return the canonical form if ``content`` is non-canonical JSON/GraphQL, else None.
+
+    ``None`` means "nothing enforceable here": no ``{`` at all, content that does
+    not parse as ``kind`` (e.g. an illustrative pseudo-snippet), or content
+    already canonical. The fix output is itself canonical, so re-checking after a
+    fix always passes (fixpoint-safe). ``json.dumps(indent=2)`` opens every
+    object brace onto its own line; graphql-core's printer explodes selection
+    sets while keeping argument input-objects inline per the GraphQL convention.
+    """
+    if "{" not in content:
+        return None
+    canonical = _reformat(content.strip(), kind)
+    if canonical is None or canonical == content.strip():
+        return None
+    return canonical
+
+
+def _reindent(block: str, indent: str) -> str:
+    """Prefix every non-empty line of ``block`` with ``indent``."""
+    return "\n".join(indent + line if line else line for line in block.split("\n"))
+
+
+def _dedent(block: str, indent: str) -> str:
+    """Strip a leading ``indent`` from each line of ``block`` that carries it."""
+    return "\n".join(
+        line[len(indent) :] if line.startswith(indent) else line for line in block.split("\n")
+    )
+
+
+def process_json_graphql_file(text: str, kind: str, do_fix: bool) -> tuple[bool, str]:
+    """Check/fix a whole ``.json`` / ``.graphql`` file. Returns (violation, new_text)."""
+    canonical = _noncanonical(text, kind)
+    if canonical is None:
+        return False, text
+    if not do_fix:
+        return True, text
+    trailing = "\n" if text.endswith("\n") else ""
+    return True, canonical + trailing
+
+
+def process_markdown_fences(text: str, do_fix: bool) -> tuple[list[int], str]:
+    """Check/fix ```json / ```graphql fenced blocks. Returns (violation lines, new_text)."""
+    violations: list[int] = []
+    out: list[str] = []
+    last = 0
+    for m in _FENCE.finditer(text):
+        indent, lang, body = m.group(1), m.group(2), m.group(3) or ""
+        kind = "json" if lang == "json" else "graphql"
+        inner = body[:-1] if body.endswith("\n") else body
+        dedented = _dedent(inner, indent)
+        canonical = _noncanonical(dedented, kind)
+        if canonical is None:
+            continue
+        violations.append(text.count("\n", 0, m.start()) + 1)
+        if do_fix:
+            out.append(text[last : m.start()])
+            out.append(f"{indent}```{lang}\n{_reindent(canonical, indent)}\n{indent}```")
+            last = m.end()
+    if do_fix and last:
+        out.append(text[last:])
+        return violations, "".join(out)
+    return violations, text
+
+
+def iter_files(paths: list[str], suffixes: tuple[str, ...]) -> Iterator[Path]:
+    """Yield files with one of ``suffixes`` (given files/dirs, or the whole repo).
+
+    ``EXCLUDE_DIRS`` always drops external/generated trees (``.venv``, caches,
+    ``node_modules``, ``build``/``dist``). The ``docs`` exclusion only applies
+    to ``.py`` (regenerable ``docs/shadow/*.py``); markdown anywhere under
+    ``docs`` is in scope per the "every ``.md``" rule -- EXCEPT the transient
+    scratch trees in ``EXCLUDE_SCRATCH_DIRS`` and any file whose name contains a
+    substring in ``EXCLUDE_NAME_SUBSTRINGS`` (worker / feedback), which are never
+    enforced for any file type.
+    """
     roots: list[Path] = [Path(p) for p in paths] if paths else [Path()]
+    seen: set[Path] = set()
     for root in roots:
-        files = sorted(root.rglob("*.py")) if root.is_dir() else [root]
+        files = (
+            sorted(p for suf in suffixes for p in root.rglob(f"*{suf}"))
+            if root.is_dir()
+            else [root]
+        )
         for path in files:
-            if path.suffix == ".py" and not any(part in EXCLUDE_DIRS for part in path.parts):
+            if path.suffix not in suffixes:
+                continue
+            excluded = set(EXCLUDE_DIRS)
+            if path.suffix != ".py":
+                excluded.discard("docs")  # markdown under docs/ stays in scope
+            excluded |= EXCLUDE_SCRATCH_DIRS  # scratch trees, every file type
+            if any(part in excluded for part in path.parts):
+                continue
+            name = path.name.lower()
+            if any(sub in name for sub in EXCLUDE_NAME_SUBSTRINGS):  # worker/feedback scratch
+                continue
+            if path not in seen:
+                seen.add(path)
                 yield path
 
 
@@ -370,52 +708,90 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--fix", action="store_true", help="auto-fix (the default)")
     parser.add_argument("paths", nargs="*", help="files/dirs to process (default: whole repo)")
     args = parser.parse_args(argv)
-    files = list(iter_files(args.paths))
+    do_fix = not args.check
+    suffixes = (
+        ".py",
+        ".md",
+        ".json",
+        ".graphql",
+        ".gql",
+    )
+    files = list(iter_files(args.paths, suffixes))
 
-    if args.check:
-        violations = 0
-        for path in files:
-            try:
-                _, _, found = _analyze(path.read_text(encoding="utf-8"), threshold_for(path))
-            except (SyntaxError, tokenize.TokenError) as exc:
-                print(f"{path}: parse error ({exc}) -- skipped", file=sys.stderr)
-                continue
-            for lineno, kind in found:
-                action = (
-                    "explode (>= threshold, no trailing comma)"
-                    if kind == "explode"
-                    else "collapse (< threshold, over-exploded)"
-                )
-                print(f"{path}:{lineno}: should {action}")
-                violations += 1
-        if violations:
-            print(f"\n{violations} construct(s) violate the layout rule; run with --fix to resolve")
-            return 1
-        return 0
-
+    messages = {
+        "explode": "explode (>= threshold, no trailing comma)",
+        "collapse": "collapse (< threshold, over-exploded)",
+        "md-scaffold": "carry the canonical LINK-DEFINITIONS footer scaffold (all category markers)",
+        "brace-explode": "explode JSON/GraphQL `{` onto its own line",
+    }
+    violations = 0
     changed: list[Path] = []
-    edits = 0
+    py_changed: list[Path] = []
+
     for path in files:
         try:
             text = path.read_text(encoding="utf-8")
-            inserts, deletes, _ = _analyze(text, threshold_for(path))
-        except (SyntaxError, tokenize.TokenError) as exc:
-            print(f"{path}: parse error ({exc}) -- skipped", file=sys.stderr)
+        except (OSError, UnicodeDecodeError) as exc:
+            print(f"{path}: read error ({exc}) -- skipped", file=sys.stderr)
             continue
-        if not inserts and not deletes:
-            continue
-        new = _apply(text, inserts, deletes)
-        try:
-            ast.parse(new)
-        except SyntaxError as exc:  # safety net -- never write broken syntax
-            print(f"{path}: fix would break syntax ({exc}) -- skipped", file=sys.stderr)
-            continue
-        path.write_text(new, encoding="utf-8")
-        changed.append(path)
-        edits += len(inserts) + len(deletes)
-    if changed:
-        _run_ruff_format(changed)
-    print(f"Adjusted {edits} trailing comma(s) across {len(changed)} file(s).")
+        new = text
+        found: list[tuple[int, str]] = []
+
+        if path.suffix == ".py":
+            try:
+                inserts, deletes, comma_found = _analyze(text, threshold_for(path))
+            except (SyntaxError, tokenize.TokenError) as exc:
+                print(f"{path}: parse error ({exc}) -- skipped", file=sys.stderr)
+                continue
+            found.extend(comma_found)
+            if do_fix and (inserts or deletes):
+                candidate = _apply(new, inserts, deletes)
+                try:
+                    ast.parse(candidate)
+                    new = candidate
+                except SyntaxError as exc:  # safety net -- never write broken syntax
+                    print(
+                        f"{path}: comma fix would break syntax ({exc}) -- skipped",
+                        file=sys.stderr,
+                    )
+
+        elif path.suffix == ".md":
+            if not _scaffold_in_canonical_order(new):
+                found.append((new.count("\n") + 1, "md-scaffold"))
+                if do_fix:
+                    new = fix_markdown_scaffold(new)
+            fence_lines, fenced = process_markdown_fences(new, do_fix)
+            found.extend((ln, "brace-explode") for ln in fence_lines)
+            if do_fix:
+                new = fenced
+
+        else:  # .json / .graphql / .gql
+            kind = "json" if path.suffix == ".json" else "graphql"
+            viol, jg_new = process_json_graphql_file(new, kind, do_fix)
+            if viol:
+                found.append((1, "brace-explode"))
+                if do_fix:
+                    new = jg_new
+
+        if args.check:
+            for lineno, kind in sorted(found):
+                print(f"{path}:{lineno}: should {messages[kind]}")
+                violations += 1
+        elif new != text:
+            path.write_text(new, encoding="utf-8")
+            changed.append(path)
+            if path.suffix == ".py":
+                py_changed.append(path)
+
+    if args.check:
+        if violations:
+            print(f"\n{violations} layout violation(s); run with --fix to resolve")
+            return 1
+        return 0
+
+    if py_changed:
+        _run_ruff_format(py_changed)
+    print(f"Fixed {len(changed)} file(s).")
     return 0
 
 

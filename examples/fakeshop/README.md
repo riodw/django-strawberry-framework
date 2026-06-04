@@ -5,11 +5,14 @@ A Django + Strawberry GraphQL example project that exercises
 
 - **`apps.library`** — acceptance app with a real `DjangoType` schema
   (FK, reverse FK, OneToOne, M2M, Relay `Node`, optimizer hints,
-  consumer relation overrides). This is the working slice.
-- **`apps.products`** — placeholder schema (the `DjangoType` /
-  `DjangoConnectionField` declarations are intentionally commented
-  out). The app still ships migrations, models, admin, services, and
-  management commands so the seed / delete / user flows work.
+  consumer relation overrides) plus `FilterSet` / `OrderSet` sidecars on
+  every type. This is the primary acceptance slice.
+- **`apps.products`** — working `DjangoType` schema over `Category` /
+  `Item` / `Property` / `Entry`, with `FilterSet` and `OrderSet` sidecars
+  (`Meta.filterset_class` / `Meta.orderset_class`) wired on every type and
+  `filter:` / `orderBy:` arguments on the root list resolvers. Also ships
+  migrations, models, admin, services, and management commands so the
+  seed / delete / user flows work.
 - **`apps.scalars`** — converter-table substrate for scalar wire formats.
 - **`apps.kanban`** — relational source for the exported root `KANBAN.md`.
 - **`apps.glossary`** — relational source for the exported `docs/GLOSSARY.md`
@@ -24,7 +27,7 @@ examples/fakeshop/
 │   ├── glossary/     # glossary terms + spec-term audit rows + GraphQL schema
 │   ├── kanban/       # KANBAN.md source tables + GraphQL schema
 │   ├── library/      # working DjangoType schema (acceptance)
-│   ├── products/     # placeholder schema + seed/admin tooling
+│   ├── products/     # working filter+order schema + seed/admin tooling
 │   └── scalars/      # scalar converter substrate
 ├── config/
 │   ├── schema.py     # composes per-app Query + DjangoOptimizerExtension
@@ -95,9 +98,18 @@ after seeding (see below):
     id
     title
     circulationStatus
-    shelf { code topic }
-    genres { id name }
-    loans { id note }
+    shelf {
+      code
+      topic
+    }
+    genres {
+      id
+      name
+    }
+    loans {
+      id
+      note
+    }
   }
 }
 ```
@@ -107,16 +119,62 @@ after seeding (see below):
   allLibraryPatrons {
     id
     name
-    card { barcode }
-    loans { id note book { title } }
+    card {
+      barcode
+    }
+    loans {
+      id
+      note
+      book {
+        title
+      }
+    }
   }
 }
 ```
 
-The `products` app currently only exposes a placeholder field:
+Filtering and ordering compose on any root list (`filter:` narrows the
+rows, `orderBy:` arranges them):
 
 ```graphql
-{ hello }   # → "fakeshop placeholder"
+{
+  allLibraryBooks(
+    filter: {
+      circulationStatus: {
+        exact: available
+      }
+    }
+    orderBy: [
+      {
+        title: ASC
+      }
+    ]
+  ) {
+    title
+    circulationStatus
+  }
+}
+```
+
+The `products` app exposes a working catalog schema; every root list
+(`allCategories` / `allItems` / `allProperties` / `allEntries`) takes
+`filter:` and `orderBy:` arguments:
+
+```graphql
+{
+  allItems(
+    orderBy: [
+      {
+        name: ASC
+      }
+    ]
+  ) {
+    name
+    category {
+      name
+    }
+  }
+}
 ```
 
 The `glossary` app exposes the term database that exports
@@ -124,10 +182,18 @@ The `glossary` app exposes the term database that exports
 
 ```graphql
 {
-  allGlossaryTerms(filter: { anchor: { exact: "filterset" } }) {
+  allGlossaryTerms(
+    filter: {
+      anchor: {
+        exact: "filterset"
+      }
+    }
+  ) {
     title
     statusText
-    specMentions { specName }
+    specMentions {
+      specName
+    }
   }
 }
 ```

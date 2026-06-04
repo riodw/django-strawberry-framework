@@ -86,3 +86,25 @@ The visibility-leak / `Prefetch` downgrade discussion that motivated bundling th
 - [x] O4 — Nested prefetch chains
 - [x] O5 — `only()` projection
 - [x] O6 — `get_queryset` + `Prefetch` downgrade
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

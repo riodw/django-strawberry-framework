@@ -29,3 +29,25 @@ You can expect an initial response within **7 days**. We will work with you to v
 ## Disclosure
 
 Once a fix is available we will publish a release and a corresponding GitHub Security Advisory. Reporters will be credited unless they request otherwise.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

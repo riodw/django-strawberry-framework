@@ -27,3 +27,25 @@ The current HTTP layer covers the first acceptance surface and several high-valu
 - Strictness mode currently remains package-level. Move it to HTTP only if a debug header, test-only extension, or other consumer-visible response surface exposes the planned-key state without relying on internals.
 - Queryset-cooperation diffing is partially covered by `test_library_consumer_prefetched_queryset_cooperates_with_optimizer_over_http`; custom `Prefetch(...)` objects with shaped querysets remain package-level until a live API flow needs them.
 Layer 3 features such as filters, orders, aggregates, fieldsets, permissions, Relay nodes, and `DjangoConnectionField` remain non-goals for this slice and should land under their own specs.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

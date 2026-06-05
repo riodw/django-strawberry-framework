@@ -50,9 +50,9 @@ Every plan, implementation, and review pass must justify any shared or duplicate
 - [x] Slice 1: migrate `extensions=` construction sites to the singleton-factory form (spec "Slice checklist" Slice 1; Decision 3) -> `docs/builder/bld-slice-1-extensions_singleton_factory.md`
 - [x] Slice 2: `inspect_django_type` diagnostic command (spec "Slice checklist" Slice 2; Decision 4) -> `docs/builder/bld-slice-2-inspect_django_type.md`
 - [x] Slice 3: `Meta.nullable_overrides` / `Meta.required_overrides` (spec "Slice checklist" Slice 3; Decisions 5–10) -> `docs/builder/bld-slice-3-nullability_overrides.md`
-- [~] Slice 4: card-completion wrap — **MAINTAINER-OWNED** (carved out per the 2026-06-05 maintainer decision below; NOT built by a worker cycle). Plan exists at `docs/builder/bld-slice-4-card_completion_wrap.md` (`Status: planned`) for the maintainer's reference. -> `docs/builder/bld-slice-4-card_completion_wrap.md`
-- [ ] Cross-slice integration pass (over Slices 1–3) -> `docs/builder/bld-integration.md`
-- [ ] Final test-run gate -> `docs/builder/bld-final.md`
+- [x] Slice 4: card-completion wrap — closed **DB-backed** on 2026-06-05 (maintainer later authorized the DB close-out, superseding the "maintainer-owned" deferral below). Card 29 moved to `DONE-029-0.0.9` via the kanban DB + regenerate; `bld-slice-4-card_completion_wrap.md` `final-accepted`. -> `docs/builder/bld-slice-4-card_completion_wrap.md`
+- [x] Cross-slice integration pass (over Slices 1–3) -> `docs/builder/bld-integration.md`
+- [x] Final test-run gate -> `docs/builder/bld-final.md`
 
 ## Maintainer decision — 2026-06-05 (Slice 4 + kanban baseline)
 

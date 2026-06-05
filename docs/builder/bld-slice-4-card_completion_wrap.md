@@ -1,7 +1,7 @@
 # Build: Slice 4 — Card-completion wrap
 
 Spec reference: `docs/spec-029-consumer_dx_cleanup-0_0_9.md` (Slice checklist "Card-completion wrap", lines 122-125; Decision 11 lines 498-514; Decision 12 lines 516-529; Doc updates "Card-completion wrap" bullet lines 638-639; DoD items 15-16 lines 700-703; Risks "stale spec filename" / "stale CHANGELOG heading" lines 646-647)
-Status: planned
+Status: final-accepted
 
 ## Plan (Worker 1)
 
@@ -118,6 +118,24 @@ Note on the third sub-check: Slice 3 shipped and is `final-accepted`, so the car
 
 ---
 
-## Final verification (Worker 1)
+## Final verification — card-completion wrap executed (2026-06-05, DB-backed)
 
-(to be filled by Worker 1 at final verification)
+> Performed **inline by Worker 0** after the maintainer authorized the DB close-out (follow-up to the "Slice 4 maintainer-owned" decision). `KANBAN.md` / `KANBAN.html` / `docs/GLOSSARY.md` are generated from `examples/fakeshop/db.sqlite3`, so the wrap was a DB edit + regenerate (Path A), not a text edit. The full procedure is now documented in `docs/builder/worker-0.md` → "Closing out a kanban card (DB-backed)".
+
+What landed (all via the Django ORM; the DB is git-tracked / reversible):
+
+- **Card moved to Done:** card 29's `status` → `done`; it renders as **`DONE-029-0.0.9`** and now sits in the `## Done` section of the regenerated `KANBAN.md` (was `WIP-ALPHA-029-0.0.9` in `## In progress`). The `WIP/DONE spec map` row moved with it.
+- **Spec reference confirmed:** created the `SpecDoc(card=29, name="spec-029-consumer_dx_cleanup-0_0_9", url=…/docs/spec-029-consumer_dx_cleanup-0_0_9.md)` so the card body's `Spec:` line resolves to this document.
+- **Glossary prerequisite:** the 3 net-new spec-029 terms (`metanullable_overrides`, `metarequired_overrides`, `schema-introspection-management-command`) were seeded as `GlossaryTerm` rows + category memberships (derived from the committed `docs/GLOSSARY.md`); `manage.py import_spec_terms` then synced card 29's full **44** `CardGlossaryTerm` links + `GlossarySpecMention` rows from `…-terms.csv`. Also reconciled the 5 existing `GlossaryTerm` bodies the build had hand-edited only in the generated `GLOSSARY.md` (Slice 1 singleton-factory snippets + Slice 2 See-also) so the generated glossary round-trips.
+- **Stale card-body refs fixed (spec wrap scope):** `docs/spec-021-nullable_overrides-0_0_8.md` → `docs/spec-029-consumer_dx_cleanup-0_0_9.md`; `## [0.0.8]` → `[Unreleased]` in the affected `CardItem.text` rows. The 3 `definition_of_done` items marked `is_complete = True` (DONE-card convention).
+- **No version-file edits** (Decision 11 / DoD 16): `pyproject.toml`, `__version__`, `tests/base/test_init.py::test_version`, `uv.lock` untouched; no CHANGELOG release-heading promotion.
+
+Verification:
+- `manage.py import_spec_terms --check` → `OK: 29 done cards have glossary links.`
+- `git diff docs/GLOSSARY.md` → clean (the DB now regenerates the committed glossary identically).
+- `KANBAN.md` → `DONE-029-0.0.9` in Done, DoD all `[x]`, no `WIP-ALPHA-029` / `spec-021` left.
+- `manage.py check` → no issues; `makemigrations --check --dry-run` → No changes detected.
+
+### Spec changes made (Worker 1 only)
+
+None. The card-completion wrap edits the kanban DB (card status + body + glossary links) and regenerated docs, not the active spec. The spec's status line was already refreshed during the Slice-3 final-verification pass.

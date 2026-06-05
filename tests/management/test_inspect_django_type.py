@@ -2,7 +2,16 @@
 
 Failure-mode coverage for the ``CommandError`` paths not reachable from a live
 registered type, mirroring ``tests/management/test_export_schema.py``'s
-``_make_test_module`` + ``monkeypatch.setitem(sys.modules, ...)`` pattern.
+``_make_test_module`` + ``monkeypatch.setitem(sys.modules, ...)`` pattern. The
+happy-path command behavior is earned against the real fakeshop schema in
+``examples/fakeshop/tests/test_inspect_django_type.py`` (a management command is
+not reachable over ``/graphql/``, so the in-process example tier is its home).
+
+Also holds direct unit tests for the module's internal helpers
+(``_matched_scalar_key``, ``_render_annotation``) whose distinguishing branches
+-- a consumer field subclass resolving to a supported MRO ancestor, and a
+multi-member union annotation -- are unreachable from the fakeshop schema's live
+surface and so are earned here in the package tier.
 """
 
 import sys
@@ -11,8 +20,13 @@ import types
 import pytest
 from apps.products.models import Category, Item
 from django.core.management import CommandError, call_command
+from django.db import models
 
 from django_strawberry_framework import DjangoType
+from django_strawberry_framework.management.commands.inspect_django_type import (
+    _matched_scalar_key,
+    _render_annotation,
+)
 from django_strawberry_framework.registry import registry
 
 
@@ -50,6 +64,20 @@ def test_ambiguous_bare_name_raises_command_error():
         call_command("inspect_django_type", "DupType")
 
 
+def test_bad_schema_selector_raises_command_error():
+    # A --schema selector that cannot be imported surfaces as CommandError
+    # (the import failure is caught before any type resolution runs).
+    with pytest.raises(CommandError, match="No module named"):
+        call_command("inspect_django_type", "BookType", "--schema", "nonexistent_xyz_module")
+
+
+def test_unregistered_bare_name_raises_command_error():
+    # A bare name with no registry match (registry cleared by the autouse
+    # fixture) raises the "import the project schema first" CommandError.
+    with pytest.raises(CommandError, match="Import the project schema first"):
+        call_command("inspect_django_type", "TotallyUnregisteredType")
+
+
 def test_non_djangotype_symbol_raises_command_error(monkeypatch):
     _make_test_module(monkeypatch, not_a_type=object())
     with pytest.raises(CommandError, match="is not a DjangoType subclass"):
@@ -79,3 +107,20 @@ def test_unfinalized_type_raises_command_error(monkeypatch):
     _make_test_module(monkeypatch, ConcreteType=ConcreteType)
     with pytest.raises(CommandError, match=r"finalize_django_types\(\) has not run"):
         call_command("inspect_django_type", "test_module.ConcreteType")
+
+
+def test_matched_scalar_key_names_supported_mro_ancestor():
+    # A consumer subclass of a supported field must report the SCALAR_MAP row
+    # that actually fired (the matched MRO ancestor), not its own concrete class.
+    class CustomTextField(models.TextField):
+        pass
+
+    assert _matched_scalar_key(CustomTextField()) == "TextField"
+    # A directly-supported field reports its own class (ancestor == concrete).
+    assert _matched_scalar_key(models.CharField()) == "CharField"
+
+
+def test_render_annotation_renders_multi_member_union():
+    # A consumer-authored union annotation (>1 non-None member) renders each
+    # member name joined by " | " with no trailing "!" on the members.
+    assert _render_annotation(int | str) == "Int | String"

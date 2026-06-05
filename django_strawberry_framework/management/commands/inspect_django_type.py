@@ -34,11 +34,22 @@ from strawberry.utils.importer import import_module_symbol
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import BigInt
 from django_strawberry_framework.types.base import DjangoType
-from django_strawberry_framework.types.converters import scalar_for_field
+from django_strawberry_framework.types.converters import SCALAR_MAP
 from django_strawberry_framework.utils.strings import snake_case
 
 _GLOBAL_ID_GRAPHQL_TYPE = "GlobalID!"
 _RELAY_PK_CONVERTER = "relay.Node id"
+
+# Friendly converter-column labels for relation rows, mirroring the spec's
+# illustrative output (``M2M`` / ``forward FK`` / ``reverse FK``).
+# ``FieldMeta.relation_kind`` returns the internal cardinality token; this maps
+# it to the consumer-facing name. Unmapped kinds fall back to the raw token.
+_RELATION_KIND_LABELS: dict[str, str] = {
+    "many": "M2M",
+    "forward_single": "forward FK",
+    "reverse_many_to_one": "reverse FK",
+    "reverse_one_to_one": "reverse O2O",
+}
 _UNFINALIZED_HINT = (
     "finalize_django_types() has not run — pass "
     "--schema <your project schema dotted path> so all types register and finalize"
@@ -181,7 +192,8 @@ class Command(BaseCommand):
     ) -> tuple[str, str, str]:
         """Build the row for a relation field from its resolved annotation + cardinality."""
         graphql_type = _render_annotation(definition.origin.__annotations__[field.name])
-        converter = f"relation: {field_meta.relation_kind}"
+        kind = field_meta.relation_kind
+        converter = f"relation: {_RELATION_KIND_LABELS.get(kind, kind)}"
         nullable = "no (list)" if field_meta.is_many_side else _yes_no(field_meta.nullable)
         return graphql_type, nullable, converter
 
@@ -191,14 +203,11 @@ class Command(BaseCommand):
         annotation = definition.origin.__annotations__[field.name]
         graphql_type = _render_annotation(annotation)
         nullable = _yes_no(_annotation_is_optional(annotation))
-        if field.choices:
-            converter = "choice enum"
-        else:
-            # Re-walk SCALAR_MAP only to NAME the row that fired (Decision 4):
-            # ``scalar_for_field`` raises if the field is unsupported, so the
-            # call doubles as a guard that the printed row is real.
-            scalar_for_field(field)
-            converter = f"SCALAR_MAP[{type(field).__name__}]"
+        # ``choice enum`` for a choice field; otherwise name the SCALAR_MAP row
+        # that fired — the matched MRO ancestor (Decision 4) — so a consumer
+        # subclass of a supported field reports the ancestor row (e.g.
+        # ``TextField``) rather than its own concrete class name.
+        converter = "choice enum" if field.choices else f"SCALAR_MAP[{_matched_scalar_key(field)}]"
         return graphql_type, nullable, converter
 
 
@@ -212,6 +221,23 @@ def _annotation_is_optional(annotation: object) -> bool:
     if typing.get_origin(annotation) in (typing.Union, pytypes.UnionType):
         return type(None) in typing.get_args(annotation)
     return False
+
+
+def _matched_scalar_key(field: models.Field) -> str:
+    """Name the ``SCALAR_MAP`` entry (the MRO ancestor) that fired for ``field``.
+
+    ``convert_scalar`` resolves a scalar field by walking ``type(field).__mro__``
+    against ``SCALAR_MAP``, so a consumer subclass of a supported field is
+    converted by its nearest supported ancestor — ``MyTextField(TextField)``
+    fires the ``TextField`` row, not a ``MyTextField`` row. Report that ancestor
+    so the converter column names the row that actually fired. Falls back to the
+    concrete class name, which is only reached for an unsupported field — itself
+    unreachable for a finalized type, whose scalars all resolved at construction.
+    """
+    return next(
+        (klass.__name__ for klass in type(field).__mro__ if klass in SCALAR_MAP),
+        type(field).__name__,
+    )
 
 
 def _scalar_name(scalar: object) -> str:

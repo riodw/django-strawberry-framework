@@ -81,6 +81,9 @@ def test_inspect_by_registered_name(reload_inspect_schema):
     title_row = _field_row(text, "title")
     assert "String!" in title_row
     assert " no " in title_row
+    # The converter column names the matched SCALAR_MAP row (TextField), the
+    # MRO ancestor that fired -- not, in the subclass case, the concrete class.
+    assert "SCALAR_MAP[TextField]" in title_row
     subtitle_row = _field_row(text, "subtitle")
     assert "String" in subtitle_row
     assert "String!" not in subtitle_row
@@ -141,13 +144,17 @@ def test_inspect_relation_field_rows(reload_inspect_schema):
     out = StringIO()
     call_command("inspect_django_type", "BookType", stdout=out)
     text = out.getvalue()
-    # Forward FK, M2M, and reverse FK render their resolved list / type annotations.
-    assert "shelf" in text
-    assert "ShelfType!" in text
-    assert "genres" in text
-    assert "[GenreType!]!" in text
-    assert "loans" in text
-    assert "[LoanType!]!" in text
+    # Forward FK, M2M, and reverse FK render their resolved list / type
+    # annotations and the friendly relation label in the converter column.
+    shelf_row = _field_row(text, "shelf")
+    assert "ShelfType!" in shelf_row
+    assert "relation: forward FK" in shelf_row
+    genres_row = _field_row(text, "genres")
+    assert "[GenreType!]!" in genres_row
+    assert "relation: M2M" in genres_row
+    loans_row = _field_row(text, "loans")
+    assert "[LoanType!]!" in loans_row
+    assert "relation: reverse FK" in loans_row
 
 
 def test_inspect_relay_node_pk_row(reload_inspect_schema):

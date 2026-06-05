@@ -8,6 +8,7 @@ boilerplate.
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import transaction
 
 from apps.kanban import factories as kf
 from apps.kanban import models
@@ -106,11 +107,14 @@ def test_done_card_last_glossary_link_cannot_be_deleted_or_moved():
     other_card = _make_card(number=2, title="Other card")
     link = card.glossary_links.get()
 
-    with pytest.raises(ValidationError, match="Cannot delete"):
+    # Each protected op touches the DB before its pre_save/pre_delete signal
+    # raises, which marks the test transaction broken. Wrap each in atomic() so
+    # the failure rolls back to a savepoint and the next assertion can still run.
+    with pytest.raises(ValidationError, match="Cannot delete"), transaction.atomic():
         link.delete()
 
     link.card = other_card
-    with pytest.raises(ValidationError, match="Cannot move"):
+    with pytest.raises(ValidationError, match="Cannot move"), transaction.atomic():
         link.save(update_fields=["card"])
 
 
@@ -219,6 +223,7 @@ def test_dependency_reference_does_not_store_or_derive_blocked_badge():
     assert not models.Label.objects.filter(key="blocked").exists()
 
     _spec_for(dependency)
+    kf.make_card_glossary_term(card=dependency)
     dependency.status = kf.make_status("done")
     dependency.save(update_fields=["status"])
 

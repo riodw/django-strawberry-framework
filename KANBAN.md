@@ -98,11 +98,11 @@ demoted to a bullet under its label.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-029-0.0.9` — `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/spec-029-consumer_dx_cleanup-0_0_9.md) |
 | `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField` | No dedicated spec |
 | `WIP-ALPHA-031-0.0.9` — Full Relay story (Node + Connection + Root + validation) | No dedicated spec |
 | `WIP-ALPHA-032-0.0.9` — Connection-aware optimizer planning | No dedicated spec |
-| `DONE-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md) |
+| `DONE-029-0.0.9` — `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/spec-029-consumer_dx_cleanup-0_0_9.md) |
+| `DONE-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md) |
 | `DONE-027-0.0.8` — Filtering subsystem | [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md) |
 | `DONE-026-0.0.7` — Scalar conversion end-to-end coverage in the fakeshop example | [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md) |
 | `DONE-025-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map` | [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md) |
@@ -134,65 +134,6 @@ demoted to a bullet under its label.
 ## In progress
 
 No active WIP cards.
-
-<a id="djangotype_consumer_dx_cleanup_pass"></a>
-### [WIP-ALPHA-029-0.0.9 — `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)
-
-- Priority: Medium
-- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
-- Status: Planned
-- Relative size: S-M
-- Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/spec-029-consumer_dx_cleanup-0_0_9.md)
-
-<!-- TODO(spec-029 wrap):
-When all slices ship, update the kanban app source rows and regenerate this rendered board.
-Pseudo:
-    move WIP-ALPHA-029-0.0.9 to DONE-NNN-0.0.9
-    rewrite stale card-body spec and 0.0.8 changelog references in the source data
-    run scripts/build_kanban_md.py and scripts/build_kanban_html.py
--->
-
-#### Planning note
-
-planned; three independent slices that ship in any order. Card body counts as complete when all three slices land; if the schedule forces Slice 3 to defer, the slice carves off as its own follow-up card without disrupting Slices 1 + 2.
-
-#### Dependencies
-
-- `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
-
-#### Scope
-
-- **Slice 1** — Strawberry `extensions=[instance]` factory-callable migration. Mechanical sweep of every `strawberry.Schema(query=…, extensions=[DjangoOptimizerExtension()])` site, replacing the deprecated instance form with `extensions=[DjangoOptimizerExtension]` (class) or `extensions=[lambda: DjangoOptimizerExtension()]` (factory callable). Strawberry deprecated the instance form upstream; future releases will remove it. Affects `tests/optimizer/test_relay_id_projection.py`, `tests/test_list_field.py`, `tests/types/test_generic_foreign_key.py`, `examples/fakeshop/config/schema.py`, plus the schema-construction snippet in `docs/README.md`, `docs/GLOSSARY.md`, `GOAL.md`, and `TODAY.md`. ~30 min mechanical. No spec.
-- **Slice 2** — `manage.py inspect_django_type <TypeName>` diagnostic command. New Django management command at `django_strawberry_framework/management/commands/inspect_django_type.py` walking a `DjangoType.__django_strawberry_definition__` and printing per-field: Django field name → Django field type → resolved GraphQL scalar/type → nullability → which `SCALAR_MAP` row (or relation converter) fired. Mirrors Django's `inspectdb` conceptually but scoped to the framework's type-definition surface. Tests via `examples/fakeshop/tests/test_commands.py::call_command("inspect_django_type", "PatronType", ...)`. Sub-1-day. Light spec or none.
-- **Slice 3** — `Meta.nullable_overrides` GraphQL-layer nullability override. New public `Meta` key (and possibly a companion `Meta.required_overrides`) letting consumers decouple the GraphQL type's nullability from the underlying Django column without an `AlterField` migration or a custom resolver. Implemented inside `django_strawberry_framework/types/base.py` and `django_strawberry_framework/types/converters.py`'s scalar-resolution path. Tests in `tests/types/test_converters.py` (override + collision cases) plus a live HTTP test on the library or scalars app demonstrating the override flipping the GraphQL type's nullability without touching the model column. **Requires spec**: `docs/spec-021-nullable_overrides-0_0_8.md` — open design decisions include dict-of-name vs tuple-set per direction, interaction with `Meta.exclude`, error behavior when both override sets name the same field, choice-field interaction, and FK / reverse-FK interaction.
-
-#### Definition of done
-
-- [ ] **Slice 1**: every `extensions=[DjangoOptimizerExtension()]` instance form replaced with the factory-callable equivalent in tests, examples, and consumer-facing docs. `uv run pytest` shows zero `DeprecationWarning` about Strawberry extension instances. CHANGELOG entry under `## [0.0.8]` `### Changed`.
-- [ ] **Slice 2**: `django_strawberry_framework/management/commands/inspect_django_type.py` ships with module + class docstring, `add_arguments` taking a positional `type_dotted_path`, and `handle` printing the resolved field table. Tests via `examples/fakeshop/tests/test_commands.py` using `call_command`. `docs/GLOSSARY.md` adds an entry; `docs/TREE.md` lists the new module under `management/commands/`. CHANGELOG entry under `## [0.0.8]` `### Added`.
-- [ ] **Slice 3**: `docs/spec-021-nullable_overrides-0_0_8.md` written and reviewed; `Meta.nullable_overrides` (and `Meta.required_overrides` if the spec confirms it) implemented; tests cover override-applies, override-rejects-unknown-field, override-collides-with-other-direction error, and override-on-choice-field. `docs/GLOSSARY.md` adds an entry; live HTTP test in `examples/fakeshop/test_query/` demonstrates the override flipping nullability for a real model field. CHANGELOG entry under `## [0.0.8]` `### Added`.
-
-#### Foundation-slice seam
-
-- Slice 1 has no foundation interaction; it's a sweep across already-shipped surfaces.
-- Slice 2 reads `DjangoTypeDefinition` populated by `finalize_django_types()`; the command is a strict consumer of the existing introspection surface.
-- Slice 3 plugs into `DjangoType._build_annotations` (the converter loop in `django_strawberry_framework/types/base.py`) and the scalar-resolution path in `django_strawberry_framework/types/converters.py`. No finalizer changes — overrides apply at type-construction time, before finalization.
-
-#### Dependencies
-
-- None blocking. Slice 1 should land before any new schema-construction surfaces ship in `WIP-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one.
-
-#### Other
-
-- three independent slices: Slice 1 `extensions=` factory-form sweep (XS, ~30 min, no spec), Slice 2 `inspect_django_type` command (S, sub-1-day), Slice 3 `Meta.nullable_overrides` (M, needs spec, deferrable to `0.0.9`). Smallest of the three `0.0.8` cards.
-- **Slice 1**: defensive — both upstreams already use the factory-callable form in their consumer docs. Strawberry's removal runway is multiple releases, but landing the migration in 0.0.8 keeps the package's surface aligned with the upstream recommendation.
-- **Slice 2**: differentiating — neither `graphene-django` nor `strawberry-graphql-django` ships an equivalent `manage.py inspect_*` diagnostic for their type definitions. Consumers currently introspect by hand against the GraphQL schema after construction. This command moves that diagnostic to the type-definition layer, before schema construction.
-- **Slice 3**: ⚛️&🍓 required — `strawberry_django.field(required=True/False)` allows per-field GraphQL nullability override against the Django column's native nullability. `graphene_django` allows the same via `DjangoObjectType.Meta.fields` plus per-field overrides on the type class. This card surfaces the same capability through a single `Meta`-key dict that the rest of the package's `Meta`-shaped API already prefers.
-
-#### Card references
-
-- Dependency via Dependencies section: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `WIP-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="djangoconnectionfield"></a>
 ### [WIP-ALPHA-030-0.0.9 — `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)
@@ -1490,6 +1431,106 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 ## Done
 
+<a id="djangotype_consumer_dx_cleanup_pass"></a>
+### [DONE-029-0.0.9 — `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)
+
+- Priority: Medium
+- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
+- Severity: Medium
+- Status: Planned
+- Relative size: S-M
+- Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/spec-029-consumer_dx_cleanup-0_0_9.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
+| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
+| [`Meta.choice_enum_names`](docs/GLOSSARY.md#metachoice_enum_names) | planned for `0.1.4` |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
+| [Schema introspection management command](docs/GLOSSARY.md#schema-introspection-management-command) | shipped (`0.0.9`) |
+| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
+| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
+| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
+| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
+| [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
+| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
+| [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) | shipped (`0.0.9`) |
+| [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) | shipped (`0.0.9`) |
+
+#### Planning note
+
+planned; three independent slices that ship in any order. Card body counts as complete when all three slices land; if the schedule forces Slice 3 to defer, the slice carves off as its own follow-up card without disrupting Slices 1 + 2.
+
+#### Dependencies
+
+- `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+
+#### Scope
+
+- **Slice 1** — Strawberry `extensions=[instance]` factory-callable migration. Mechanical sweep of every `strawberry.Schema(query=…, extensions=[DjangoOptimizerExtension()])` site, replacing the deprecated instance form with `extensions=[DjangoOptimizerExtension]` (class) or `extensions=[lambda: DjangoOptimizerExtension()]` (factory callable). Strawberry deprecated the instance form upstream; future releases will remove it. Affects `tests/optimizer/test_relay_id_projection.py`, `tests/test_list_field.py`, `tests/types/test_generic_foreign_key.py`, `examples/fakeshop/config/schema.py`, plus the schema-construction snippet in `docs/README.md`, `docs/GLOSSARY.md`, `GOAL.md`, and `TODAY.md`. ~30 min mechanical. No spec.
+- **Slice 2** — `manage.py inspect_django_type <TypeName>` diagnostic command. New Django management command at `django_strawberry_framework/management/commands/inspect_django_type.py` walking a `DjangoType.__django_strawberry_definition__` and printing per-field: Django field name → Django field type → resolved GraphQL scalar/type → nullability → which `SCALAR_MAP` row (or relation converter) fired. Mirrors Django's `inspectdb` conceptually but scoped to the framework's type-definition surface. Tests via `examples/fakeshop/tests/test_commands.py::call_command("inspect_django_type", "PatronType", ...)`. Sub-1-day. Light spec or none.
+- **Slice 3** — `Meta.nullable_overrides` GraphQL-layer nullability override. New public `Meta` key (and possibly a companion `Meta.required_overrides`) letting consumers decouple the GraphQL type's nullability from the underlying Django column without an `AlterField` migration or a custom resolver. Implemented inside `django_strawberry_framework/types/base.py` and `django_strawberry_framework/types/converters.py`'s scalar-resolution path. Tests in `tests/types/test_converters.py` (override + collision cases) plus a live HTTP test on the library or scalars app demonstrating the override flipping the GraphQL type's nullability without touching the model column. **Requires spec**: `docs/spec-029-consumer_dx_cleanup-0_0_9.md` — open design decisions include dict-of-name vs tuple-set per direction, interaction with `Meta.exclude`, error behavior when both override sets name the same field, choice-field interaction, and FK / reverse-FK interaction.
+
+#### Definition of done
+
+- [x] **Slice 1**: every `extensions=[DjangoOptimizerExtension()]` instance form replaced with the factory-callable equivalent in tests, examples, and consumer-facing docs. `uv run pytest` shows zero `DeprecationWarning` about Strawberry extension instances. CHANGELOG entry under `[Unreleased]` `### Changed`.
+- [x] **Slice 2**: `django_strawberry_framework/management/commands/inspect_django_type.py` ships with module + class docstring, `add_arguments` taking a positional `type_dotted_path`, and `handle` printing the resolved field table. Tests via `examples/fakeshop/tests/test_commands.py` using `call_command`. `docs/GLOSSARY.md` adds an entry; `docs/TREE.md` lists the new module under `management/commands/`. CHANGELOG entry under `[Unreleased]` `### Added`.
+- [x] **Slice 3**: `docs/spec-029-consumer_dx_cleanup-0_0_9.md` written and reviewed; `Meta.nullable_overrides` (and `Meta.required_overrides` if the spec confirms it) implemented; tests cover override-applies, override-rejects-unknown-field, override-collides-with-other-direction error, and override-on-choice-field. `docs/GLOSSARY.md` adds an entry; live HTTP test in `examples/fakeshop/test_query/` demonstrates the override flipping nullability for a real model field. CHANGELOG entry under `[Unreleased]` `### Added`.
+
+#### Foundation-slice seam
+
+- Slice 1 has no foundation interaction; it's a sweep across already-shipped surfaces.
+- Slice 2 reads `DjangoTypeDefinition` populated by `finalize_django_types()`; the command is a strict consumer of the existing introspection surface.
+- Slice 3 plugs into `DjangoType._build_annotations` (the converter loop in `django_strawberry_framework/types/base.py`) and the scalar-resolution path in `django_strawberry_framework/types/converters.py`. No finalizer changes — overrides apply at type-construction time, before finalization.
+
+#### Dependencies
+
+- None blocking. Slice 1 should land before any new schema-construction surfaces ship in `WIP-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one.
+
+#### Other
+
+- three independent slices: Slice 1 `extensions=` factory-form sweep (XS, ~30 min, no spec), Slice 2 `inspect_django_type` command (S, sub-1-day), Slice 3 `Meta.nullable_overrides` (M, needs spec, deferrable to `0.0.9`). Smallest of the three `0.0.8` cards.
+- **Slice 1**: defensive — both upstreams already use the factory-callable form in their consumer docs. Strawberry's removal runway is multiple releases, but landing the migration in 0.0.8 keeps the package's surface aligned with the upstream recommendation.
+- **Slice 2**: differentiating — neither `graphene-django` nor `strawberry-graphql-django` ships an equivalent `manage.py inspect_*` diagnostic for their type definitions. Consumers currently introspect by hand against the GraphQL schema after construction. This command moves that diagnostic to the type-definition layer, before schema construction.
+- **Slice 3**: ⚛️&🍓 required — `strawberry_django.field(required=True/False)` allows per-field GraphQL nullability override against the Django column's native nullability. `graphene_django` allows the same via `DjangoObjectType.Meta.fields` plus per-field overrides on the type class. This card surfaces the same capability through a single `Meta`-key dict that the rest of the package's `Meta`-shaped API already prefers.
+
+#### Card references
+
+- Dependency via Dependencies section: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `WIP-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+
 <a id="ordering_subsystem"></a>
 ### [DONE-028-0.0.8 — Ordering subsystem](KANBAN.html#ordering_subsystem)
 
@@ -1498,7 +1539,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 - Severity: Major
 - Status: Shipped
 - Relative size: L
-- Spec: [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md)
+- Spec: [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md)
 
 #### Glossary terms
 

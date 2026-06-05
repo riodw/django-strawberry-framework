@@ -31,7 +31,7 @@ Worker 0 must not:
 - edit source code or tests
 - create or fill ordinary `docs/builder/bld-*.md` slice artifacts
 - mark a build-plan checkbox complete before Worker 1 sets the artifact status to `final-accepted`
-- tick sub-check boxes (`- [ ]`) inside any `bld-slice-*.md` artifact. Worker 1 owns those boxes; Worker 0 owns only the slice-level boxes in `build-<NNN>-*.md`
+- tick sub-check boxes (`- [ ]`) inside any `bld-slice-*.md` artifact. Worker 2 ticks those boxes as it builds each sub-check and Worker 1 audits them at final verification; Worker 0 owns only the slice-level boxes in `build-<NNN>-*.md`
 - bypass per-slice subagent dispatch by inlining a worker's job
 - read Worker 1/2/3 memory during the active cycle
 - edit any worker's memory file except its own
@@ -155,6 +155,36 @@ After all build-plan checkboxes are complete, the maintainer has committed the b
 7. Delete `docs/shadow/` contents and `docs/builder/temp-tests/` contents after the retrospective is complete. Worker memory may remain until the retrospective is finished, but it is scratch state; the next build's pre-flight cleanup clears it before Worker 0 seeds fresh memory files.
 
 Retrospective notes must stay general. Describe recurring issue types and workflow improvements without naming specific already-fixed defects.
+
+## Closing out a kanban card (DB-backed — `KANBAN.md` / `KANBAN.html` / `docs/GLOSSARY.md` are GENERATED)
+
+**Critical:** `KANBAN.md`, `KANBAN.html`, and `docs/GLOSSARY.md` are NOT hand-editable source — they are **rendered from the kanban/glossary tables in `examples/fakeshop/db.sqlite3`** by `scripts/build_kanban_md.py`, `scripts/build_kanban_html.py`, and `scripts/build_glossary_md.py` (each runs an in-process `/graphql/` query). A spec's "card-completion wrap" / glossary doc-update steps that say "edit `KANBAN.md`" or "edit `docs/GLOSSARY.md`" mean **edit the DB, then regenerate**. Hand-editing the generated files creates drift that the next regenerate silently reverts. The DB is git-tracked, so any edit is reversible with `git checkout -- examples/fakeshop/db.sqlite3`.
+
+Always use the **Django ORM** (`manage.py shell`, `.save()` / `.objects.create()` / `import_spec_terms`), never raw SQL: kanban models (`SpecDoc`, `CardGlossaryTerm`, `Card`, …) get a `UUIDModel` side-row created by a `post_save` signal, and the build queries request `uuid { id }`; a raw `INSERT` skips the side-row and breaks the GraphQL render.
+
+### DONE-card invariants (enforced by `examples/fakeshop/apps/kanban/signals.py`)
+
+A card cannot be saved with `status.key == "done"` unless it has BOTH:
+1. a linked `SpecDoc` (`SpecDoc.card` OneToOne), and
+2. at least one `CardGlossaryTerm` (`card.glossary_links`).
+
+And `manage.py import_spec_terms` (the canonical tool that syncs each done card's `CardGlossaryTerm` + `GlossarySpecMention` rows from its `docs/spec-<NNN>-…-terms.csv`) requires **every anchor in that CSV to already exist as a `GlossaryTerm` row**.
+
+### Procedure (move `WIP-…-<NNN>-<ver>` → `DONE-<NNN>-<ver>`)
+
+Run DB edits via `uv run python examples/fakeshop/manage.py shell`; regenerate from the repo root.
+
+1. **Seed any net-new glossary terms the card's spec introduced.** For each term in the spec's `-terms.csv` whose `anchor` is missing from `GlossaryTerm` (check `GlossaryTerm.objects.filter(anchor=...)`), create a row deriving `title` / `status_text` / `body` from the committed `docs/GLOSSARY.md` entry (body = the text between the `**Status:** …` line and the next `## ` heading, stripped). Set `status` (`GlossaryStatus` key `shipped`/`planned`), `title_sort = title.replace("\`","").lower()`, and place it in the generated ordering: `entry_order`/`index_order` equal to the **preceding alphabetical neighbor's** value (the renderer sorts by `(entry_order, title_sort)` then `(index_order, title_sort)`, so a tie + a larger `title_sort` slots it right after the neighbor — no renumbering of other rows). Add `GlossaryCategoryMembership` rows for the term's Browse-by-category buckets; since memberships sort by `order` alone, bump the category's existing members into a temp band (`order += 1000`) then reassign the full desired order `0..N-1` to avoid the `(category, order)` unique collision.
+   - Also reconcile any **existing** term whose body the build hand-edited in the committed `docs/GLOSSARY.md` but not in the DB (otherwise step 7's GLOSSARY regenerate reverts that shipped doc content). Sync those `GlossaryTerm.body` values from the committed file too.
+2. **Create the `SpecDoc`:** `SpecDoc.objects.create(card=card, name="spec-<NNN>-<topic>-<ver>", url="https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-<NNN>-<topic>-<ver>.md")` (name is unique; the `url` must contain the repo `docs/…` path the build/`import_spec_terms` parse).
+3. **Bootstrap ≥1 glossary link** so the done-save passes: create one `CardGlossaryTerm` (a term that is in the spec's CSV, e.g. the first one). `import_spec_terms` reconciles the full set next.
+4. **Flip status:** `card.status = Status.objects.get(key="done"); card.save()` (ORM `.save()` fires the pre_save validation + sets `milestone_id`). The rendered id auto-becomes `DONE-<NNN>-<ver>` (done cards drop the milestone prefix).
+5. **Sync the full glossary-link set:** `uv run python examples/fakeshop/manage.py import_spec_terms` (processes every done card; creates `CardGlossaryTerm` + `GlossarySpecMention` rows from each CSV).
+6. **Fix card-body content the spec wrap names** (e.g. stale `docs/spec-0NN-…` filename refs, `## [0.0.X]` → `[Unreleased]`) by editing `CardItem.text`, and mark every `definition_of_done` `CardItem.is_complete = True` (done-card convention — see existing DONE cards). Keep this to what the spec authorizes; leave unrelated card-body prose alone.
+7. **Regenerate all three docs** from the repo root: `uv run python scripts/build_kanban_md.py`, `uv run python scripts/build_kanban_html.py`, `uv run python scripts/build_glossary_md.py`.
+8. **Verify:** `uv run python examples/fakeshop/manage.py import_spec_terms --check` reports OK for all done cards; `git diff docs/GLOSSARY.md` is **clean** (proves the DB regenerates the committed glossary identically — a non-empty diff means a body in the DB still drifts from the committed file, fix in step 1); `KANBAN.md` shows `DONE-<NNN>` in the Done section with its DoD ticked; `uv run python examples/fakeshop/manage.py check` passes.
+
+Workers never commit — hand the regenerated `KANBAN.md` / `KANBAN.html` / `docs/GLOSSARY.md` + `examples/fakeshop/db.sqlite3` to the maintainer for review and commit.
 
 ## Stop conditions
 

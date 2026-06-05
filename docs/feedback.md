@@ -1,262 +1,76 @@
-# Spec 029 review feedback
+# Feedback: spec-029 TODO-scaffold verification
 
 ## Verdict
 
-The spec is on the right track for the larger goal: recreate the original
-`django_graphene_filters` feature set on a DRF-shaped, `Meta`-first Strawberry
-foundation instead of inheriting strawberry-graphql-django's decorator-heavy
-consumer API.
+The spec is broadly implementable and the TODO scaffold mapped to real source sites without exposing a major design mismatch. It is also clearly aligned with the package direction: DRF-style `Meta` surfaces, real fakeshop acceptance coverage, and parity-enabling foundation work rather than Strawberry-decorator API drift.
 
-This card is correctly scoped as a consumer-DX cleanup / foundation card, not
-as the whole parity project. It supports the parity path by tightening schema
-construction, adding an inspect command, and adding a `Meta`-level nullability
-escape hatch. The already-shipped filters and orders map cleanly onto the old
-package's `AdvancedFilterSet` / `RelatedFilter` and `AdvancedOrderSet` /
-`RelatedOrder`; later cards still need to carry the old package's connection
-field, cascade permissions, search filters, fieldsets, and aggregates.
-
-I would not implement the spec unchanged yet. The core design is sound, but the
-details below need correction for the spec to be executable and honestly
-verified.
+That said, scaffolding exposed several places where the spec should be tightened before implementation so the slice work does not become order-dependent or accidentally ship an awkward interim surface.
 
 ## Findings
 
-### P1 - `--schema config.schema` will not work with `import_string`
+### P1 — The `--schema` cold-path test is not cold if `config.schema` is already cached
 
-Slice 2 says the inspect command's `--schema <dotted_path>` import mirrors
-`export_schema`, but the proposed loader does not mirror it. The shipped export
-command uses `strawberry.utils.importer.import_module_symbol(...,
-default_symbol_name="schema")`, which is why both `config.schema:schema` and
-`config.schema` work in `examples/fakeshop/tests/test_export_schema.py`.
+The spec says the cold-path test should start from `registry.clear()` and call `call_command("inspect_django_type", "BookType", "--schema", "config.schema")` without the reload fixture. In an in-process pytest run, that is not enough. If `config.schema` or app schema modules are already in `sys.modules`, `import_module_symbol("config.schema", default_symbol_name="schema")` can return the cached schema symbol without re-running class registration or `finalize_django_types()`. After `registry.clear()`, that leaves an empty registry and makes the test order-dependent.
 
-By contrast, `django.utils.module_loading.import_string("config.schema")`
-tries to import module `config` and read an attribute named `schema` from that
-package. In this project `examples/fakeshop/config/__init__.py` is empty, so
-that call fails with:
+Clarify the test plan: either run the cold-path assertion in a subprocess management-command invocation, or explicitly evict/reload the relevant schema modules before calling `call_command`. The production command should still only import `--schema`; the test harness must simulate a real cold CLI process.
 
-```text
-ImportError: Module "config" does not define a "schema" attribute/class
-```
+### P1 — New management-command file must fail loudly until implemented
 
-Impact: the planned `test_inspect_with_schema_option` will fail, and the cold
-CLI path still will not finalize the registry from `--schema config.schema`.
-There is a second correctness trap here: if the command catches every
-`ImportError` from a dotted type path and falls back to registry-name lookup, it
-can mask a real import-time bug inside a consumer module.
+The spec tells implementers to create `django_strawberry_framework/management/commands/inspect_django_type.py`. Once that file exists, Django command discovery will load it. A comment-only or TODO-only file produces an unhelpful `AttributeError` because Django expects a `Command` class.
 
-Required spec change:
+Add an implementation note: if the file lands before the real command body, it must define a minimal `Command(BaseCommand)` whose `handle()` raises `CommandError` naming spec-029 Slice 2. Better yet, do not create the command file until the command is implemented. This keeps interim branches fail-loud and grep-stable.
 
-- Use `import_module_symbol(options["schema"], default_symbol_name="schema")`
-  for the `--schema` option, matching `export_schema`.
-- Keep `import_string` for the positional type argument only when resolving a
-  fully dotted object path such as `apps.library.schema.BookType`.
-- Fall back to registered-name lookup only for bare names, or at least only
-  after determining the argument is not a dotted import path. A dotted import
-  failure should raise `CommandError` with the original import failure, not be
-  hidden behind a registry miss.
-- Test both accepted schema selector forms: `config.schema` and
-  `config.schema:schema`.
+### P2 — The placeholder-command behavior should not count as Slice 2 completion
 
-### P1 - The bare-name inspect tests are order-dependent as written
+Related to the previous point: a fail-loud `Command` shell is useful as a TODO anchor, but it is not the shipped command. The Definition of Done should explicitly require successful `call_command` happy-path output and failure-mode coverage, not merely command discovery or `manage.py help` working.
 
-The spec's happy-path example uses:
+Suggested clarification: `manage.py help inspect_django_type` may work before implementation, but Slice 2 is incomplete until `handle()` resolves types, reads finalized definitions, and prints the field table.
 
-```python
-call_command("inspect_django_type", "BookType")
-```
+### P2 — The inspect-command pseudocode needs to name the Relay-suppressed pk case everywhere implementation guidance appears
 
-That only works after `config.schema` has imported all app schemas and called
-`finalize_django_types()`. The command itself cannot discover `BookType` by
-bare name in a cold registry unless `--schema` imports the schema first. The
-fakeshop live-test README explicitly warns that schema tests must clear the
-registry and reload app schema modules / `config.schema` to avoid stale or
-missing `DjangoType` classes.
+The Decision text covers the Relay-suppressed primary key: Relay `Node` types omit the pk from `origin.__annotations__`, and the command must report the interface-provided `GlobalID!` row instead of indexing annotations. The TODO scaffold needed this called out explicitly because the naive pseudocode naturally says “read rows from `origin.__annotations__`.”
 
-Impact: `examples/fakeshop/tests/test_inspect_django_type.py` could pass when
-run after another test that imported `config.schema`, then fail when run alone.
-That is not an acceptable command contract or test plan.
+Make sure all implementation-plan and command-pseudocode references include that exception, not only Decision 4 and the test plan. Otherwise the implementation path is likely to reintroduce the `KeyError` the spec already diagnosed.
 
-Required spec change:
+### P2 — The Slice 3 validation helper needs a precise selected-name vs model-field split
 
-- Add an explicit fixture for the example command tests that clears the global
-  registry and imports/reloads `apps.library.schema`, `config.schema`, and any
-  needed URL/schema modules before bare-name assertions.
-- Keep a separate cold-path test that starts from a cleared registry and calls
-  `call_command("inspect_django_type", "BookType", "--schema",
-  "config.schema")`, proving the option performs finalization.
-- State that bare-name lookup is intentionally a post-schema-import convenience;
-  cold CLI usage should pass `--schema`.
+The spec correctly requires rejecting unknown, excluded, consumer-authored, relation, and Relay-suppressed pk override targets. The implementation guidance should be more explicit about deriving two different sets:
 
-### P2 - Slice 1 undercounts the extension migration and the edit map still omits `GOAL.md`
+- model field names from `model._meta.get_fields()` for unknown-field reporting
+- selected field names from the post-`Meta.fields` / `Meta.exclude` result for excluded/not-selected reporting
 
-The spec now has the correct singleton-factory target, but the migration size
-is stale. A focused audit with `rg -c "extensions=\\["` reports:
+Without that split, an implementer can collapse unknown and excluded fields into one error path, weakening the `Meta.exclude` contract the spec explicitly cares about.
 
-```text
-tests/optimizer/test_extension.py: 42
-tests/optimizer/test_relay_id_projection.py: 3
-tests/optimizer/test_field_meta.py: 1
-tests/test_list_field.py: 2
-tests/types/test_generic_foreign_key.py: 1
-examples/fakeshop/test_query/test_multi_db.py: 1
-examples/fakeshop/config/schema.py: 1
-```
+### P2 — The `required_overrides` acceptance resolver should specify ordering
 
-One `tests/optimizer/test_extension.py` match is a prose/docstring example, but
-that still leaves 41 actual schema-construction entries in that file. The five
-package test files contain 48 actual schema-construction entries, not the
-implementation-plan table's `~24 package test-schema sites`. The two
-`_CaptureExt()` entries in `tests/optimizer/test_extension.py` are subclass
-instances and must be migrated too; a grep for only `DjangoOptimizerExtension()`
-will miss them.
+The spec correctly says the resolver must use `Book.objects.exclude(subtitle__isnull=True)` so `subtitle: String!` does not violate runtime data. It should also require deterministic ordering, likely `.order_by("id")`, because the existing live HTTP tests generally expect stable response ordering.
 
-The Slice 1 checklist and DoD correctly mention `GOAL.md`, but the
-implementation-plan table's Slice 1 file list still omits it.
+This is not a design blocker, but it prevents flaky acceptance assertions once the data-query test selects rows.
 
-Impact: implementers following the table can leave deprecated instance-form
-entries behind, causing Strawberry's instance-extension deprecation warning to
-survive and the proposed no-warning assertion to fail. They can also miss the
-north-star `GOAL.md` schema update even though the checklist requires it.
+### P2 — Slice 1’s “every extensions entry” audit should include a mechanical post-migration gate
 
-Required spec change:
+The spec says to audit with `rg 'extensions=\['` and migrate every anonymous, named, strictness, bare class, and subclass-instance entry. Add a post-migration gate that searches for the forbidden forms specifically:
 
-- Update the Slice 1 implementation-plan table to include `GOAL.md`.
-- Replace the `~19` / `~24` estimates with current counts, or remove the
-  fragile counts and specify an audit command.
-- Make the audit target all `strawberry.Schema(..., extensions=[...])` entries,
-  not only `DjangoOptimizerExtension()` literals. Named `ext` instances,
-  strictness variants, bare class entries, and subclass instances such as
-  `_CaptureExt()` all need a callable factory wrapper.
+- `extensions=[DjangoOptimizerExtension()]`
+- `extensions=[DjangoOptimizerExtension]`
+- `extensions=[ext]`
+- `extensions=[_CaptureExt()]`
+- `lambda: DjangoOptimizerExtension()`
 
-### P2 - The `required_overrides=("subtitle",)` acceptance resolver can expose invalid data
+The broad `extensions=[` audit finds construction sites, but the forbidden-form grep catches the exact regressions Slice 1 is trying to remove.
 
-The Slice 3 acceptance type sets `required_overrides = ("subtitle",)` on
-`library.Book`. That is a valid feature contract if the consumer guarantees the
-field is non-null at the GraphQL boundary. The current fakeshop data does not
-guarantee that. `examples/fakeshop/test_query/test_library_api.py` already
-creates `Book` rows with `subtitle=None`, and many other `Book.objects.create`
-calls omit `subtitle`.
+### P3 — The docs/TREE update should be explicitly delayed until the command is real
 
-The planned test only introspects SDL, so it can pass while the dedicated root
-resolver is queryable and broken. If that resolver returns all books and a
-client queries `subtitle`, Strawberry must surface a non-null violation because
-the GraphQL type says `String!` while Django returns `None`.
+The spec currently lists `docs/TREE.md` in Slice 2 doc updates. That is right once the command exists as a shipped module. If a TODO-only scaffold file exists temporarily, `TREE.md` should not describe it as shipped command behavior.
 
-Impact: the spec would verify the schema shape but not verify the exposed API
-works. That violates the fakeshop live-query rule and gives consumers a bad
-example for `required_overrides`.
+Clarify that `TREE.md` is updated in the Slice 2 implementation commit, not in a planning scaffold, unless the wording clearly says “planned placeholder.”
 
-Required spec change:
+### P3 — CHANGELOG permission is clear, but placeholder TODOs should not imply release-note content exists
 
-- Either make the dedicated acceptance resolver return only rows satisfying the
-  declared GraphQL invariant, e.g. `Book.objects.exclude(subtitle__isnull=True)`,
-  or choose a nullable field / fixture setup where the invariant is true.
-- Add a live HTTP data query against the acceptance root field that requests
-  `title` and `subtitle` and asserts no GraphQL errors.
-- Document the core rule: `required_overrides` changes the GraphQL contract; it
-  does not change the database column or sanitize runtime values.
+The spec properly grants per-slice CHANGELOG edit permission. Add a small note that TODO scaffolding must not add real `[Unreleased]` bullets until the slice ships. A TODO comment under `[Unreleased]` is acceptable as a temporary anchor, but it must not be confused with shipped release-note content.
 
-### P3 - The spec still contains raw numeric source-line references
+### P3 — The spec’s scaffold guidance could explicitly mention `ERA001`
 
-The current-state section still uses raw numeric line references for several
-extension sites. This is a standing design doc, not a per-cycle scratchpad, so
-the repo rule from `AGENTS.md` / `START.md` applies: source references should
-use symbol-qualified paths or unique substrings, not raw line numbers.
+The repo has `ERA001` enabled, and TODO pseudocode in Python files can trigger commented-out-code lint. The implementation guidance should say TODO pseudocode in Python source either needs to be prose-shaped or carry targeted `# noqa: ERA001` on lines Ruff flags.
 
-Impact: this does not break implementation, but it does violate the standing-doc
-reference convention and will create churn when files move or tests are edited.
-
-Required spec change:
-
-- Replace raw numeric references with forms such as
-  `tests/optimizer/test_field_meta.py #"extensions=[DjangoOptimizerExtension()]"`
-  or symbol-qualified references where an enclosing function is useful.
-
-## Positive checks
-
-- The singleton-factory decision is technically correct for the installed
-  Strawberry. `Schema.get_extensions()` returns existing `SchemaExtension`
-  instances as-is and otherwise calls the extension entry. A callable returning
-  a module- or function-scoped singleton preserves the existing plan cache while
-  avoiding the instance-form deprecation emitted at `Schema.__init__`.
-- The spec correctly preserves the DRF-shaped public surface: `DjangoType.Meta`
-  keys, `Meta.filterset_class`, `Meta.orderset_class`, and now
-  `Meta.nullable_overrides` / `Meta.required_overrides`. It does not drift into
-  stacked consumer-facing Strawberry decorators.
-- The `inspect_django_type` command's source-of-truth decision is correct: read
-  resolved annotations from `origin.__annotations__` after finalization, and use
-  `selected_fields` / `field_map` for Django metadata and converter
-  classification. Re-running `convert_scalar` would lie about consumer-authored
-  annotations and nullability overrides.
-- The two distinct inspect error branches are correct: no
-  `__django_strawberry_definition__` means an abstract / non-registered
-  `DjangoType`; `definition.finalized is False` means the concrete type exists
-  but `finalize_django_types()` has not run.
-- The Slice 3 validation flow is pointed at the right root cause: add net-new
-  `ALLOWED_META_KEYS`, normalize on `_ValidatedMeta`, validate targets after
-  field selection and consumer-authored field detection, and reject relations /
-  Relay pk / excluded / consumer-authored targets.
-- The scalar-only scope is appropriate for this card. Relation nullability
-  overrides would touch finalizer relation annotation semantics and should stay
-  out of this cleanup slice.
-
-## Feature-parity direction
-
-The package is still aligned with recreating the original
-`django_graphene_filters` package, but the parity story should stay explicit:
-
-- `AdvancedDjangoObjectType` maps to `DjangoType` plus `Meta` keys and
-  `finalize_django_types()`.
-- `AdvancedFilterSet` / `RelatedFilter` are already represented by the shipped
-  `FilterSet` / `RelatedFilter` system.
-- `AdvancedOrderSet` / `RelatedOrder` are already represented by the shipped
-  `OrderSet` / `RelatedOrder` system.
-- `AdvancedDjangoFilterConnectionField` maps to the upcoming
-  `DjangoConnectionField` / Relay connection work, not to this cleanup card.
-- `apply_cascade_permissions`, `AdvancedFieldSet`, `SearchQueryFilter` /
-  `SearchRankFilter` / `TrigramFilter`, `AdvancedAggregateSet`, and
-  `RelatedAggregate` remain future parity work per the roadmap.
-
-So the answer is yes: the spec is moving in the correct direction. It should be
-tightened around the concrete issues above before implementation starts, because
-those are not cosmetic; they affect whether the command works, whether tests are
-order-independent, whether Slice 1 actually removes the warnings, and whether
-the live acceptance API can be queried successfully.
-
-## Verification performed
-
-- Read the project orientation docs the review is grounded in: `AGENTS.md`,
-  `START.md`, `docs/README.md`, and `examples/fakeshop/test_query/README.md`.
-- Re-read `docs/spec-029-consumer_dx_cleanup-0_0_9.md`.
-- Checked the installed Strawberry `Schema.get_extensions()` behavior.
-- Checked `django_strawberry_framework/management/commands/export_schema.py` and
-  `examples/fakeshop/tests/test_export_schema.py` for the existing schema-loader
-  contract.
-- Ran a local `import_string("config.schema")` check and confirmed it fails for
-  this project shape.
-- Audited current `extensions=[...]` construction sites with `rg`.
-- Rechecked the old package public exports under
-  `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters`.
-- No pytest run, per repo instruction.
-
-<!-- LINK DEFINITIONS -->
-
-<!-- Root -->
-
-<!-- docs/ -->
-
-<!-- docs/SPECS/ -->
-
-<!-- docs/builder/ -->
-
-<!-- django_strawberry_framework/ -->
-
-<!-- tests/ -->
-
-<!-- examples/ -->
-
-<!-- scripts/ -->
-
-<!-- .venv/ -->
-
-<!-- External -->
+This is a process clarification, not a product-design issue, but it prevents a predictable lint churn during scaffold or staged implementation work.

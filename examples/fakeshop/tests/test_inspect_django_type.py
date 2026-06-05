@@ -157,6 +157,30 @@ def test_inspect_relation_field_rows(reload_inspect_schema):
     assert "relation: reverse FK" in loans_row
 
 
+def test_inspect_consumer_authored_relation_field(reload_inspect_schema):
+    """A live ``@strawberry.field`` relation override renders from the resolved type.
+
+    ``BranchType.shelves`` (``apps/library/schema.py``) shadows the ``shelves``
+    reverse-FK column with a consumer ``@strawberry.field`` resolver, so
+    ``_build_annotations`` skips auto-synthesis for it and ``origin.__annotations__``
+    holds a ``StrawberryAnnotation`` (not a renderable type). The command must read
+    the resolved type from the finalized Strawberry field metadata — printing the
+    real ``[ShelfType!]!`` list and the ``consumer strawberry.field (relation)``
+    converter, NOT the auto reverse-FK label nor the ``StrawberryAnnotation`` repr.
+    """
+    out = StringIO()
+    call_command("inspect_django_type", "BranchType", stdout=out)
+    text = out.getvalue()
+    shelves_row = _field_row(text, "shelves")
+    assert "[ShelfType!]!" in shelves_row
+    assert " no (list) " in shelves_row
+    assert "consumer strawberry.field (relation)" in shelves_row
+    # The auto reverse-FK converter must NOT fire for the overridden field, and
+    # the StrawberryAnnotation repr must never leak into the type column.
+    assert "relation: reverse FK" not in shelves_row
+    assert "StrawberryAnnotation" not in text
+
+
 def test_inspect_relay_node_pk_row(reload_inspect_schema):
     """GenreType declares ``interfaces = (relay.Node,)`` — its pk is suppressed.
 

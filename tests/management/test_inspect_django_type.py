@@ -12,17 +12,30 @@ Also holds direct unit tests for the module's internal helpers
 -- a consumer field subclass resolving to a supported MRO ancestor, and a
 multi-member union annotation -- are unreachable from the fakeshop schema's live
 surface and so are earned here in the package tier.
+
+Finally, holds the consumer-authored-field command tests (assigned scalar,
+annotation-only scalar whose type differs from the Django field converter,
+annotation-only forced-optional scalar, and annotation-only override of an
+*unsupported* Django field type). The fakeshop schema exercises only the
+assigned-*relation* corner live (``BranchType.shelves``, pinned in
+``examples/fakeshop/tests/test_inspect_django_type.py``); the other three corners
+are not present on any fakeshop ``DjangoType``, and the unsupported-field corner
+fundamentally needs a synthetic ``models.Field`` subclass with no ``SCALAR_MAP``
+ancestor -- so they are earned here against finalize-in-test types, mirroring
+``tests/types/test_definition_order.py``'s ``_FakeUnsupportedField`` pattern.
 """
 
 import sys
 import types
+from io import StringIO
 
 import pytest
+import strawberry
 from apps.products.models import Category, Item
 from django.core.management import CommandError, call_command
 from django.db import models
 
-from django_strawberry_framework import DjangoType
+from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.management.commands.inspect_django_type import (
     _matched_scalar_key,
     _render_annotation,
@@ -44,6 +57,20 @@ def _make_test_module(monkeypatch, **attrs):
         setattr(module, key, value)
     monkeypatch.setitem(sys.modules, "test_module", module)
     return module
+
+
+def _field_row(text: str, field_name: str) -> str:
+    """Return the single rendered table row whose first token is ``field_name``.
+
+    Mirrors ``examples/fakeshop/tests/test_inspect_django_type.py::_field_row`` so
+    per-row substring assertions (e.g. ``String`` vs ``String!``, or ``yes`` vs
+    ``no``) cannot false-green against another field's row.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.split(" ", 1)[:1] == [field_name]:
+            return line
+    raise AssertionError(f"no row for field {field_name!r} in:\n{text}")
 
 
 def test_bad_dotted_path_raises_command_error():
@@ -124,3 +151,101 @@ def test_render_annotation_renders_multi_member_union():
     # A consumer-authored union annotation (>1 non-None member) renders each
     # member name joined by " | " with no trailing "!" on the members.
     assert _render_annotation(int | str) == "Int | String"
+
+
+def test_inspect_consumer_authored_scalar_fields():
+    """The command labels each consumer-authored scalar corner by its true row.
+
+    Three scalar corners on one finalized type:
+
+    - ``name`` is an assigned ``@strawberry.field`` resolver -> the resolved type
+      reads from the finalized Strawberry field metadata (``String!``), labelled
+      ``consumer strawberry.field (scalar)`` (NOT the ``SCALAR_MAP[TextField]``
+      row, which never fired for it).
+    - ``description`` is an annotation-only override whose ``int`` differs from
+      the Django ``TextField`` converter -> ``Int!`` / ``consumer annotation
+      (scalar)`` (NOT ``SCALAR_MAP[TextField]``).
+    - ``is_private`` is an annotation-only override forcing the ``NOT NULL``
+      ``BooleanField`` optional -> ``Boolean`` (no ``!``), nullable ``yes``,
+      ``consumer annotation (scalar)`` (exercises the ``StrawberryOptional`` path).
+    """
+
+    class ConsumerScalarOverrideType(DjangoType):
+        description: int
+        is_private: bool | None
+
+        @strawberry.field
+        def name(self) -> str:
+            return "overridden"
+
+        class Meta:
+            model = Category
+            fields = (
+                "id",
+                "name",
+                "description",
+                "is_private",
+            )
+
+    finalize_django_types()
+    out = StringIO()
+    call_command("inspect_django_type", "ConsumerScalarOverrideType", stdout=out)
+    text = out.getvalue()
+
+    name_row = _field_row(text, "name")
+    assert "String!" in name_row
+    assert " no " in name_row
+    assert "consumer strawberry.field (scalar)" in name_row
+    assert "SCALAR_MAP" not in name_row
+
+    description_row = _field_row(text, "description")
+    assert "Int!" in description_row
+    assert " no " in description_row
+    assert "consumer annotation (scalar)" in description_row
+    assert "SCALAR_MAP" not in description_row
+
+    is_private_row = _field_row(text, "is_private")
+    assert "Boolean" in is_private_row
+    assert "Boolean!" not in is_private_row
+    assert " yes " in is_private_row
+    assert "consumer annotation (scalar)" in is_private_row
+
+
+def test_inspect_consumer_annotation_over_unsupported_field():
+    """An annotation override of an unsupported column renders, never crashing.
+
+    ``myfield`` is a ``models.Field`` subclass with no ``SCALAR_MAP`` ancestor; a
+    bare-synthesis type over it raises ``ConfigurationError`` at construction. A
+    consumer ``myfield: str`` annotation makes it build, and the command must read
+    the consumer type (``String!`` / ``consumer annotation (scalar)``) rather than
+    routing through ``_scalar_row`` -> ``_matched_scalar_key`` (whose fallback the
+    review flagged as wrongly reachable on a finalized type). Routing
+    consumer-authored fields away from the scalar branch keeps that fallback
+    unreachable.
+    """
+
+    class _UnsupportedField(models.Field):
+        pass
+
+    class UnsupportedFieldOwner(models.Model):
+        myfield = _UnsupportedField()
+
+        class Meta:
+            app_label = "test_inspect_unsupported_field"
+
+    class UnsupportedAnnotationType(DjangoType):
+        myfield: str
+
+        class Meta:
+            model = UnsupportedFieldOwner
+            fields = ("myfield",)
+
+    finalize_django_types()
+    out = StringIO()
+    call_command("inspect_django_type", "UnsupportedAnnotationType", stdout=out)
+    text = out.getvalue()
+
+    myfield_row = _field_row(text, "myfield")
+    assert "String!" in myfield_row
+    assert "consumer annotation (scalar)" in myfield_row
+    assert "SCALAR_MAP" not in myfield_row

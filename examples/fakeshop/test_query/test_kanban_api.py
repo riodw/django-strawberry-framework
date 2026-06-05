@@ -150,9 +150,10 @@ def _seed_board():
         name="spec-027-filters-0_0_8",
         url="https://github.com/example/spec-027-filters-0_0_8.md",
     )
-    # A done card requires >=1 glossary link (apps/kanban/signals.py:
-    # _validate_done_card_has_glossary_link); attach the links BEFORE flipping
-    # the card to ``done`` so the pre_save validation is satisfied.
+    # A done card requires >=1 glossary link
+    # (examples/fakeshop/apps/kanban/signals.py::_validate_done_card_has_glossary_link);
+    # attach the links BEFORE flipping the card to ``done`` so the pre_save
+    # validation is satisfied.
     glossary_link = models.CardGlossaryTerm.objects.create(
         card=filters_card,
         term=filterset_term,

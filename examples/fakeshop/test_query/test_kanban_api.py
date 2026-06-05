@@ -150,6 +150,21 @@ def _seed_board():
         name="spec-027-filters-0_0_8",
         url="https://github.com/example/spec-027-filters-0_0_8.md",
     )
+    # A done card requires >=1 glossary link (apps/kanban/signals.py:
+    # _validate_done_card_has_glossary_link); attach the links BEFORE flipping
+    # the card to ``done`` so the pre_save validation is satisfied.
+    glossary_link = models.CardGlossaryTerm.objects.create(
+        card=filters_card,
+        term=filterset_term,
+        raw_text="FilterSet",
+        order=0,
+    )
+    related_glossary_link = models.CardGlossaryTerm.objects.create(
+        card=filters_card,
+        term=related_filter_term,
+        raw_text="RelatedFilter",
+        order=1,
+    )
     filters_card.status = done
     filters_card.save(update_fields=["status"])
     conn_card = models.Card.objects.create(
@@ -171,19 +186,6 @@ def _seed_board():
         raw_text="planned; gated on `DONE-021-0.0.8`",
         order=0,
     )
-    glossary_link = models.CardGlossaryTerm.objects.create(
-        card=filters_card,
-        term=filterset_term,
-        raw_text="FilterSet",
-        order=0,
-    )
-    related_glossary_link = models.CardGlossaryTerm.objects.create(
-        card=filters_card,
-        term=related_filter_term,
-        raw_text="RelatedFilter",
-        order=1,
-    )
-
     models.ParityClaim.objects.create(card=filters_card, upstream=graphene, level=required)
     models.ParityClaim.objects.create(card=filters_card, upstream=straw, level=required)
     models.ParityClaim.objects.create(card=conn_card, upstream=straw, level=adjacent)

@@ -7,6 +7,11 @@ from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, fi
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 
+# TODO(spec-029 Slice 1): Wrap the optimizer extension instance used in this file.
+# Pseudo:
+#   ext = DjangoOptimizerExtension()
+#   schema = strawberry.Schema(..., extensions=[lambda: ext])
+
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():

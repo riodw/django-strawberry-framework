@@ -1,5 +1,19 @@
 """Live GraphQL HTTP tests for the library acceptance app."""
 
+# TODO(spec-029 Slice 3): Add live HTTP coverage for the acceptance-only nullability type.
+# Pseudo:
+#   def test_nullability_override_flips_sdl_nullability():
+#       _seed_library_graph()
+#       query __type(name: "NullabilityOverrideBookType") { fields { name type { ... } } }
+#       assert title is String and subtitle is String!
+#       assert Book._meta.get_field("title").null is False
+#       assert Book._meta.get_field("subtitle").null is True
+#
+#   def test_nullability_override_acceptance_api_is_queryable():
+#       _seed_library_graph()
+#       query { allLibraryNullabilityOverrideBooks { title subtitle } }
+#       assert "errors" not in response.json()
+
 import base64
 import importlib
 import sys

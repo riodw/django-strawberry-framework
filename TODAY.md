@@ -95,6 +95,14 @@ class Query(ProductsQuery):
 
 finalize_django_types()
 
+# TODO(spec-029 Slice 1): Replace class-form optimizer construction with singleton factory.
+# Pseudo:
+#   _optimizer = DjangoOptimizerExtension()
+#   schema = strawberry.Schema(
+#       query=Query,
+#       config=strawberry_config(),
+#       extensions=[lambda: _optimizer],
+#   )
 schema = strawberry.Schema(
     query=Query,
     config=strawberry_config(),

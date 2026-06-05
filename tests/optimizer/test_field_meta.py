@@ -4,6 +4,11 @@ Covers ``FieldMeta.from_django_field``, definition-backed field maps on
 ``DjangoType`` subclasses, and the walker's use of the cached map.
 """
 
+# TODO(spec-029 Slice 1): Wrap the local optimizer extension schema construction.
+# Pseudo:
+#   ext = DjangoOptimizerExtension()
+#   schema = strawberry.Schema(..., extensions=[lambda: ext])
+
 import pytest
 from apps.library.models import Book, Genre, MembershipCard, Patron
 from apps.products import services

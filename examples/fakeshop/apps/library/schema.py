@@ -70,6 +70,19 @@ class BookType(DjangoType):
         orderset_class = orders.BookOrder
 
 
+# TODO(spec-029 Slice 3): Add the nullability-override acceptance type here.
+# Pseudo:
+#   class BookType.Meta:
+#       primary = True
+#   class NullabilityOverrideBookType(DjangoType):
+#       class Meta:
+#           model = models.Book
+#           fields = ("id", "title", "subtitle")
+#           primary = False
+#           nullable_overrides = ("title",)
+#           required_overrides = ("subtitle",)
+#   # Query adds a dedicated root resolver returning:
+#   # models.Book.objects.exclude(subtitle__isnull=True).order_by("id")
 class ShelfType(DjangoType):
     """Shelf declared before Branch to exercise FK finalization."""
 

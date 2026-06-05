@@ -14,6 +14,13 @@ Sibling live suites now cover the other fakeshop apps: `test_products_api.py`, `
 
 The project schema lives at `../config/schema.py`. It imports each app's `Query`, composes them into the top-level `Query`, calls `finalize_django_types()`, then constructs `strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])`.
 
+<!-- TODO(spec-029 Slice 1):
+Update this prose to the singleton-factory optimizer form.
+Pseudo:
+    _optimizer = DjangoOptimizerExtension()
+    strawberry.Schema(query=Query, extensions=[lambda: _optimizer])
+-->
+
 HTTP tests in this directory should follow the `_reload_project_schema_for_acceptance_tests` fixture pattern from `test_library_api.py`: clear the global registry, reload `apps.<app>.schema` modules, reload `config.schema`, then reload `config.urls` and clear URL caches. Package tests under `../../../tests/` clear the same global registry for isolation; without the reload pattern, cached example-schema modules can hold stale `DjangoType` classes.
 
 Cross-reference:

@@ -18,6 +18,16 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 
 ## [Unreleased]
 
+<!-- TODO(spec-029 Slices 1-3):
+Append the per-slice release notes under [Unreleased], without promoting a 0.0.9 heading.
+Pseudo:
+    ### Changed
+    - Migrated DjangoOptimizerExtension schema construction to singleton-factory form.
+    ### Added
+    - Added inspect_django_type management command.
+    - Added Meta.nullable_overrides and Meta.required_overrides.
+-->
+
 ## [0.0.8] - 2026-06-03
 ### Added
 - **Filtering subsystem.** [`FilterSet`][glossary-filterset] and [`RelatedFilter`][glossary-relatedfilter] now ship under [`django_strawberry_framework/filters/`][filters]. The subsystem exposes declarative `Meta.model` / `Meta.fields` filter classes, class / absolute-path / unqualified-name related-filter targets, active-input-only `check_<field>_permission(request)` hooks, `filter_input_type(FilterSet)` resolver annotations, generated Strawberry input classes materialized into `django_strawberry_framework.filters.inputs`, lookup-name pinning through `LOOKUP_NAME_MAP`, logical `and_` / `or_` / `not` input branches, sync and async `apply_*` entry points, and `RelatedFilter(queryset=...)` constraints intersected with target visibility querysets.

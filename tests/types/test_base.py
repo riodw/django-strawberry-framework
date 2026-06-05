@@ -23,6 +23,13 @@ test focused on the behaviour under examination. ``CATEGORY_SCALAR_FIELDS``
 captures the scalar-only field list used in those updated tests.
 """
 
+# TODO(spec-029 Slice 3): Add Meta.nullable_overrides / Meta.required_overrides tests.
+# Pseudo:
+#   assert keys are in ALLOWED_META_KEYS and not DEFERRED_META_KEYS
+#   assert nullable_overrides flips a non-null field annotation to T | None
+#   assert required_overrides flips a nullable field annotation to T
+#   assert unknown, excluded, consumer-authored, relation, Relay pk, and collisions raise.
+
 import datetime
 
 import pytest

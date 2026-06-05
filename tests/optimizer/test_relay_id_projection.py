@@ -8,6 +8,11 @@ across Relay-declared fakeshop targets is pinned through live HTTP in
 ``examples/fakeshop/test_query/test_products_api.py``.
 """
 
+# TODO(spec-029 Slice 1): Wrap each optimizer extension construction in this file.
+# Pseudo:
+#   ext = DjangoOptimizerExtension(strictness="raise")  # preserve per-site kwargs.
+#   schema = strawberry.Schema(..., extensions=[lambda: ext])
+
 from types import SimpleNamespace
 
 import pytest

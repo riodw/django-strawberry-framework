@@ -63,6 +63,10 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "primary",
     },
 )
+# TODO(spec-029 Slice 3): Add the nullability override Meta keys here.
+# Pseudo:
+#   ALLOWED_META_KEYS |= {"nullable_overrides", "required_overrides"}  # noqa: ERA001
+#   DEFERRED_META_KEYS must stay unchanged because these are net-new keys.
 
 
 def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
@@ -262,6 +266,17 @@ class DjangoType:
             },
         )
         relay_shaped = _is_relay_shaped(cls, validated.interfaces)
+        # TODO(spec-029 Slice 3): Validate nullability override targets after field selection.
+        # Pseudo:
+        #   _validate_nullability_override_targets(
+        #       model=meta.model,  # noqa: ERA001
+        #       selected_fields=fields,  # noqa: ERA001
+        #       consumer_authored_fields=consumer_authored_fields,  # noqa: ERA001
+        #       relay_shaped=relay_shaped,  # noqa: ERA001
+        #       nullable_overrides=validated.nullable_overrides,  # noqa: ERA001
+        #       required_overrides=validated.required_overrides,  # noqa: ERA001
+        #   )  # noqa: ERA001
+        #   # Reject unknown, excluded, consumer-authored, relation, and Relay-suppressed pk targets.
         if relay_shaped:
             has_id_assignment = isinstance(cls.__dict__.get("id"), StrawberryField)
             has_id_annotation = "id" in cls.__annotations__
@@ -294,6 +309,10 @@ class DjangoType:
             field_map=field_map,
             consumer_authored_fields=consumer_authored_fields,
             interfaces=validated.interfaces,
+            # TODO(spec-029 Slice 3): Thread the normalized override sets into annotation synthesis.
+            # Pseudo:
+            #   nullable_overrides=validated.nullable_overrides,  # noqa: ERA001
+            #   required_overrides=validated.required_overrides,  # noqa: ERA001
         )
         definition = DjangoTypeDefinition(
             origin=cls,
@@ -600,6 +619,10 @@ class _ValidatedMeta(NamedTuple):
     exclude_spec: tuple[str, ...] | None
     filterset_class: type | None
     orderset_class: type | None
+    # TODO(spec-029 Slice 3): Store normalized nullability override sets on the meta snapshot.
+    # Pseudo:
+    #   nullable_overrides: frozenset[str]  # noqa: ERA001
+    #   required_overrides: frozenset[str]  # noqa: ERA001
 
 
 def _validate_meta(meta: type) -> _ValidatedMeta:
@@ -676,6 +699,16 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
     interfaces = _validate_interfaces(meta)
     filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
     orderset_class = _validate_orderset_class(meta, getattr(meta, "orderset_class", None))
+    # TODO(spec-029 Slice 3): Shape-check and normalize the override tuple-set keys here.
+    # Pseudo:
+    #   nullable_raw = _normalize_sequence_spec(getattr(meta, "nullable_overrides", None))  # noqa: ERA001
+    #   required_raw = _normalize_sequence_spec(getattr(meta, "required_overrides", None))  # noqa: ERA001
+    #   nullable = frozenset(nullable_raw or ())  # noqa: ERA001
+    #   required = frozenset(required_raw or ())  # noqa: ERA001
+    #   if collision := sorted(nullable & required):
+    #       raise ConfigurationError(
+    #           f"{meta.model.__name__}.Meta override conflict: {collision}"  # noqa: ERA001
+    #       )  # noqa: ERA001
 
     return _ValidatedMeta(
         interfaces=interfaces,
@@ -828,6 +861,10 @@ def _build_annotations(
     field_map: dict[str, FieldMeta],
     consumer_authored_fields: frozenset[str] = frozenset(),
     interfaces: tuple[type, ...] = (),
+    # TODO(spec-029 Slice 3): Accept normalized nullability override sets as keyword-only inputs.
+    # Pseudo:
+    #   nullable_overrides: frozenset[str] = frozenset()  # noqa: ERA001
+    #   required_overrides: frozenset[str] = frozenset()  # noqa: ERA001
 ) -> tuple[dict[str, Any], list[PendingRelation]]:
     """Build the annotation dict the Strawberry type decorator consumes.
 
@@ -955,5 +992,18 @@ def _build_annotations(
                 # so the optimizer's field map still sees it as a connector
                 # column (spec-011 Decision 7 #"keeps every selected Django field including the primary key").
                 continue
+            # TODO(spec-029 Slice 3): Compute force_nullable from the two override sets.
+            # Pseudo:
+            #   if field.name in nullable_overrides:
+            #       force_nullable = True  # noqa: ERA001
+            #   elif field.name in required_overrides:  # noqa: ERA001
+            #       force_nullable = False  # noqa: ERA001
+            #   else:  # noqa: ERA001
+            #       force_nullable = None  # noqa: ERA001
+            #   annotations[field.name] = convert_scalar(
+            #       field,
+            #       cls.__name__,
+            #       force_nullable=force_nullable,  # noqa: ERA001
+            #   )  # noqa: ERA001
             annotations[field.name] = convert_scalar(field, cls.__name__)
     return annotations, pending

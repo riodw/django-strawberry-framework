@@ -152,6 +152,14 @@ class Query:
 
 
 finalize_django_types()
+# TODO(spec-029 Slice 1): Include the optimizer via the singleton-factory form.
+# Pseudo:
+#   _optimizer = DjangoOptimizerExtension()
+#   schema = strawberry.Schema(
+#       query=Query,
+#       config=strawberry_config(),
+#       extensions=[lambda: _optimizer],
+#   )
 schema = strawberry.Schema(query=Query, config=strawberry_config())
 ```
 

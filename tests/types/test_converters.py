@@ -18,6 +18,13 @@ Coverage knock-ons: these tests exercise ``convert_scalar``'s ``null``
 widening branch and ``registry.register_enum`` / ``get_enum``.
 """
 
+# TODO(spec-029 Slice 3): Add force_nullable tri-state converter coverage here.
+# Pseudo:
+#   assert convert_scalar(non_null_text, "T", force_nullable=True) == str | None
+#   assert convert_scalar(nullable_text, "T", force_nullable=False) is str
+#   assert convert_scalar(nullable_text, "T", force_nullable=None) == str | None
+#   # Repeat for choice, ArrayField outer nullability, and HStoreField.
+
 import enum
 import itertools
 

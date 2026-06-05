@@ -95,22 +95,15 @@ class Query(ProductsQuery):
 
 finalize_django_types()
 
-# TODO(spec-029 Slice 1): Replace class-form optimizer construction with singleton factory.
-# Pseudo:
-#   _optimizer = DjangoOptimizerExtension()
-#   schema = strawberry.Schema(
-#       query=Query,
-#       config=strawberry_config(),
-#       extensions=[lambda: _optimizer],
-#   )
+_optimizer = DjangoOptimizerExtension()
 schema = strawberry.Schema(
     query=Query,
     config=strawberry_config(),
-    extensions=[DjangoOptimizerExtension],
+    extensions=[lambda: _optimizer],
 )
 ```
 
-Two rules the package enforces: `finalize_django_types()` must run **after** every module that defines `DjangoType` classes is imported and **before** `strawberry.Schema(...)` is constructed; and the optimizer is added as the `DjangoOptimizerExtension` class (Strawberry instantiates it).
+Two rules the package enforces: `finalize_django_types()` must run **after** every module that defines `DjangoType` classes is imported and **before** `strawberry.Schema(...)` is constructed; and the optimizer is added as a module-level `DjangoOptimizerExtension` singleton wrapped in a factory (`extensions=[lambda: _optimizer]`), which preserves the instance-bound plan cache and emits no deprecation warning.
 
 ## Package scalar conversions
 
@@ -256,6 +249,7 @@ These ship today but products' model shapes don't reach them; they're covered by
 - **`Meta.primary`** (shipped `0.0.6`) — multiple `DjangoType` subclasses per model with one explicit primary. Products declares one type per model. See [`docs/GLOSSARY.md#metaprimary`][glossary-metaprimary].
 - **Consumer override semantics for scalar fields** (shipped `0.0.6`) — annotation-only and `strawberry.field` scalar overrides bypass `convert_scalar`; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time. Products exercises no scalar override. See [`docs/GLOSSARY.md#scalar-field-override-semantics`][glossary-scalar-field-override-semantics].
 - **OneToOne / M2M relation conversion, choice-enum generation, and the specialized scalar conversions** (`BigInt`, `JSON`, `UUID`, `Decimal`, `Array`, `HStore`) — products has no OneToOne, M2M, `choices`, or those field types.
+- **`Meta.nullable_overrides` / `Meta.required_overrides`** (shipped `0.0.9`) — force a scalar field's GraphQL nullability independent of its Django column (`T!`→`T` or `T`→`T!`), scalar-only, validated at type creation. Products declares no override; the library app's `NullabilityOverrideBookType` exercises both directions. See [`docs/GLOSSARY.md#metanullable_overrides`][glossary-metanullable_overrides].
 
 <!-- LINK DEFINITIONS -->
 
@@ -264,6 +258,7 @@ These ship today but products' model shapes don't reach them; they're covered by
 
 <!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
+[glossary-metanullable_overrides]: docs/GLOSSARY.md#metanullable_overrides
 [glossary-metaprimary]: docs/GLOSSARY.md#metaprimary
 [glossary-scalar-field-override-semantics]: docs/GLOSSARY.md#scalar-field-override-semantics
 

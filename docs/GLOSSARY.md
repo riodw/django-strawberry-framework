@@ -88,9 +88,11 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Meta.interfaces`](#metainterfaces) | shipped (`0.0.5`) |
 | [`Meta.model`](#metamodel) | shipped |
 | [`Meta.name`](#metaname) | shipped |
+| [`Meta.nullable_overrides`](#metanullable_overrides) | shipped (`0.0.9`) |
 | [`Meta.optimizer_hints`](#metaoptimizer_hints) | shipped (`0.0.3`) |
 | [`Meta.orderset_class`](#metaorderset_class) | shipped (`0.0.8`) |
 | [`Meta.primary`](#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.required_overrides`](#metarequired_overrides) | shipped (`0.0.9`) |
 | [`Meta.search_fields`](#metasearch_fields) | planned for `0.1.2` |
 | [Multi-database cooperation](#multi-database-cooperation) | shipped (`0.0.7`) |
 | [`only()` projection](#only-projection) | shipped (`0.0.2`) |
@@ -112,6 +114,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Scalar field override semantics](#scalar-field-override-semantics) | shipped (`0.0.6`) |
 | [Schema audit](#schema-audit) | shipped (`0.0.3`) |
 | [Schema export management command](#schema-export-management-command) | shipped (`0.0.7`) |
+| [Schema introspection management command](#schema-introspection-management-command) | shipped (`0.0.9`) |
 | [`SerializerMutation`](#serializermutation) | planned for `0.0.11` |
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [strawberry_config](#strawberry_config) | shipped (`0.0.7`) |
@@ -126,8 +129,8 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 
 For readers exploring rather than looking up a specific term:
 
-- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
-- **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.choice_enum_names`](#metachoice_enum_names).
+- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
+- **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [`Meta.choice_enum_names`](#metachoice_enum_names).
 - **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 - **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`Meta.filterset_class`](#metafilterset_class).
 - **Ordering:** [`OrderSet`](#orderset) · [`RelatedOrder`](#relatedorder) · [`Ordering`](#ordering) · [`order_input_type`](#order_input_type) · [`Meta.orderset_class`](#metaorderset_class).
@@ -139,7 +142,7 @@ For readers exploring rather than looking up a specific term:
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
-- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware).
+- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware).
 - **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase).
 
 ---
@@ -182,7 +185,7 @@ Composes with filter / order / aggregate permission gates and with the post-writ
 
 JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntegerField` and `PositiveBigIntegerField` (not `BigAutoField`). Technically arbitrary-precision: serialized via Python `str(int_value)`, which handles any `int`. Wire format is a decimal string to survive GraphQL's signed 32-bit `Int` boundary (executing a query returning an `int`-annotated value past `2**31 - 1` raises a `GraphQLError` with message containing `Int cannot represent non 32-bit signed integer value`). Strict parser accepts Python `int` (excluding `bool`) and strings matching `^(0|-?[1-9][0-9]*)$` — plain ASCII decimal, optional leading minus for non-zero, no leading zeroes (except `"0"` itself), no underscores, no plus sign, no Unicode digits. Strict serializer rejects `bool`, `float`, `str`, `Decimal`, and any non-`int` type with `TypeError`. Part of [Specialized scalar conversions](#specialized-scalar-conversions).
 
-Consumers register `BigInt` via the [`strawberry_config`](#strawberry_config) factory on their `strawberry.Schema(...)` call: `strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])`. Direct `BigInt` annotations (`category: BigInt`, `@strawberry.field def big_id(self) -> BigInt: ...`) continue to work unchanged at the schema-declaration site; the registration path changes, not the symbol. The migration applies to any schema that resolves to `BigInt` — including [`DjangoType`](#djangotype) schemas whose fields are backed by `BigIntegerField` or `PositiveBigIntegerField` (resolved to `BigInt` by the [`Specialized scalar conversions`](#specialized-scalar-conversions) converter table) even when the consumer never imports or annotates `BigInt` directly.
+Consumers register `BigInt` via the [`strawberry_config`](#strawberry_config) factory on their `strawberry.Schema(...)` call: `strawberry.Schema(query=Query, config=strawberry_config(), extensions=[lambda: _optimizer])` (the optimizer is a module-level singleton wrapped in a factory — see [`DjangoOptimizerExtension`](#djangooptimizerextension)). Direct `BigInt` annotations (`category: BigInt`, `@strawberry.field def big_id(self) -> BigInt: ...`) continue to work unchanged at the schema-declaration site; the registration path changes, not the symbol. The migration applies to any schema that resolves to `BigInt` — including [`DjangoType`](#djangotype) schemas whose fields are backed by `BigIntegerField` or `PositiveBigIntegerField` (resolved to `BigInt` by the [`Specialized scalar conversions`](#specialized-scalar-conversions) converter table) even when the consumer never imports or annotates `BigInt` directly.
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [Specialized scalar conversions](#specialized-scalar-conversions).
 
@@ -352,16 +355,11 @@ Root-level single-node lookup field — the `category: GalaxyNode = DjangoNodeFi
 Strawberry schema extension that translates selected GraphQL fields into Django ORM optimization calls. Opt-in at Strawberry schema construction time:
 
 ```python
-schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+_optimizer = DjangoOptimizerExtension()
+schema = strawberry.Schema(query=Query, extensions=[lambda: _optimizer])
 ```
 
-<!-- TODO(spec-029 Slice 1):
-Rewrite this snippet and the other schema-construction snippets in this file to the
-singleton-factory optimizer form.
-Pseudo:
-    _optimizer = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: _optimizer])
--->
+Use a module-level singleton wrapped in a factory — that preserves the instance-bound [Plan cache](#plan-cache) (Strawberry runs the callable per request and gets the same instance back) and emits no deprecation warning (the entry is a callable, not an instance).
 
 Shipped behavior:
 
@@ -497,7 +495,8 @@ import apps.library.schema
 
 finalize_django_types()
 
-schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+_optimizer = DjangoOptimizerExtension()
+schema = strawberry.Schema(query=Query, extensions=[lambda: _optimizer])
 ```
 
 Calling it a second time is a no-op. Declaring a new concrete `DjangoType` after finalization raises [`ConfigurationError`](#configurationerror); tests that need a new registry lifecycle should use `registry.clear()` and fresh type classes.
@@ -680,6 +679,36 @@ Overrides the GraphQL type name (defaults to the Python class name).
 
 **See also:** [`DjangoType`](#djangotype) · [`Meta.description`](#metadescription).
 
+## `Meta.nullable_overrides`
+
+**Status:** shipped (`0.0.9`).
+
+Tuple / list of **scalar** field names whose GraphQL nullability is forced to nullable (`T` → `T | None`) regardless of the Django column's `null`. The companion [`Meta.required_overrides`](#metarequired_overrides) forces the opposite direction (`T | None` → `T`). Together they decouple a scalar field's GraphQL nullability from its database column without an `AlterField` migration or a consumer-authored annotation:
+
+```python
+class NullabilityOverrideBookType(DjangoType):
+    class Meta:
+        model = Book
+        fields = ("id", "title", "subtitle")
+        nullable_overrides = ("title",)     # NOT NULL column -> String
+        required_overrides = ("subtitle",)  # null=True column -> String!
+```
+
+The override threads a tri-state `force_nullable` into [Scalar field conversion](#scalar-field-conversion)'s `convert_scalar`, so the widening decision is computed once and applied uniformly across plain scalars, [choice enums](#choice-enum-generation) (the enum's nullability flips; its members are unchanged), `ArrayField` (the outer `list[inner]` nullability flips; the inner element nullability still follows `base_field.null`), and `HStoreField`.
+
+**Scalar-only scope.** Relation-field overrides are rejected (deferred — the many-side list-vs-element nullability ambiguity is its own design).
+
+**Validation at type creation** (every failure raises [`ConfigurationError`](#configurationerror) naming the field):
+
+- **unknown** — a name not on `model._meta` (mirrors the [`Meta.optimizer_hints`](#metaoptimizer_hints) typo guard).
+- **excluded** — a name not in the post-[`Meta.fields`](#metafields) / [`Meta.exclude`](#metaexclude) selected set (kept distinct from *unknown* so the [`Meta.exclude`](#metaexclude) contract is not collapsed).
+- **consumer-authored** — a name with a consumer annotation / `strawberry.field` assignment (the annotation already controls nullability per [Scalar field override semantics](#scalar-field-override-semantics)).
+- **relation** — a relation field name (scalar-only scope).
+- **Relay-suppressed pk** — the pk on a [`relay.Node`](#metainterfaces)-shaped type (its nullability is the interface's `id: GlobalID!` contract).
+- **both-sets collision** — a name in both `nullable_overrides` and `required_overrides` (contradictory; raised at the shape stage).
+
+**See also:** [`Meta.required_overrides`](#metarequired_overrides) · [Scalar field conversion](#scalar-field-conversion) · [Scalar field override semantics](#scalar-field-override-semantics) · [Choice enum generation](#choice-enum-generation) · [`ConfigurationError`](#configurationerror).
+
 ## `Meta.optimizer_hints`
 
 **Status:** shipped (`0.0.3`).
@@ -721,17 +750,6 @@ Promotion gate: no longer in `DEFERRED_META_KEYS` since `0.0.8`. Declaring the k
 
 **Status:** shipped (`0.0.6`).
 
-<!-- TODO(spec-029 Slice 3):
-Add sibling entries for Meta.nullable_overrides and Meta.required_overrides.
-Pseudo:
-    ## Meta.nullable_overrides
-    Status: shipped (0.0.9)
-    tuple/list of scalar field names forced nullable; reject relation and consumer-authored fields.
-    ## Meta.required_overrides
-    Status: shipped (0.0.9)
-    tuple/list of scalar field names forced required; consumer must guarantee non-null data.
--->
-
 Boolean flag (default `False`) declared on a `DjangoType`'s nested `Meta` to opt one of several types on the same Django model into the **primary** role. The primary type is the one auto-synthesized relation fields resolve to and the one [`registry.get(model)`](#djangotype) returns. Secondary types are still registered and reverse-discoverable via `registry.model_for_type(SecondaryType)`, so resolvers returning a secondary type stay planable through [`DjangoOptimizerExtension`](#djangooptimizerextension).
 
 Ambiguity rules:
@@ -746,6 +764,16 @@ Registry surface: `primary_for(model)` returns the declared primary or `None`; `
 The already-shipped consumer relation-override paths (annotation overrides like `category: AdminCategoryType` and assigned `strawberry.field` relation resolvers) are preserved unchanged and may legitimately target a secondary `DjangoType`. The optimizer's plan cache keys include the resolver's origin Strawberry type, so a primary-return and a secondary-return resolver on the same model do not share a cached plan.
 
 **See also:** [`Meta.model`](#metamodel) · [`DjangoType`](#djangotype) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
+
+## `Meta.required_overrides`
+
+**Status:** shipped (`0.0.9`).
+
+Tuple / list of **scalar** field names whose GraphQL nullability is forced to required (`T | None` → `T`) regardless of the Django column's `null`. It is the inverse-direction companion to [`Meta.nullable_overrides`](#metanullable_overrides); both share one tri-state `force_nullable` seam through [Scalar field conversion](#scalar-field-conversion), the same scalar-only scope, and the same type-creation validation (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision all raise [`ConfigurationError`](#configurationerror)). See [`Meta.nullable_overrides`](#metanullable_overrides) for the full validation table and the choice / array / hstore behavior.
+
+**`required_overrides` changes the GraphQL contract, not the data.** Declaring `required_overrides = ("x",)` renders `x` as `T!` but does NOT alter the Django column (`null=True` stays) or sanitize runtime values — a resolver returning a row with `x is None` hits a Strawberry non-null violation at query time. The consumer must guarantee the invariant at the resolver boundary (e.g. `.exclude(x__isnull=True)`), exactly as for any non-null GraphQL field backed by nullable storage. (Symmetrically, [`Meta.nullable_overrides`](#metanullable_overrides) is always safe — widening to `T | None` never violates a non-null contract.)
+
+**See also:** [`Meta.nullable_overrides`](#metanullable_overrides) · [Scalar field conversion](#scalar-field-conversion) · [Scalar field override semantics](#scalar-field-override-semantics) · [`ConfigurationError`](#configurationerror).
 
 ## `Meta.search_fields`
 
@@ -1053,19 +1081,21 @@ Opt-out continues via [`Meta.exclude`](#metaexclude); field-level metadata (desc
 
 **Status:** shipped (`0.0.7`).
 
-<!-- TODO(spec-029 Slice 2):
-Add the Schema introspection management command / inspect_django_type entry near this section,
-plus index and category links.
-Pseudo:
-    ## Schema introspection management command
-    Status: shipped (0.0.9)
-    manage.py inspect_django_type <Type> [--schema config.schema]
-    dotted type args use import_string; bare names use unique registry lookup.
--->
-
 `django_strawberry_framework/management/commands/export_schema.py` ships `Command(BaseCommand)` with positional `schema` (dotted path, default symbol name `"schema"`) and optional `--path`; SDL output via `strawberry.printer.print_schema`. `--path` omitted writes SDL to `self.stdout`; `--path <file>` writes UTF-8 SDL to the named path and reports `Wrote schema to <file>` via `self.style.SUCCESS`. `CommandError` for unimportable dotted path, non-`strawberry.Schema` resolved symbol, missing positional argument, bare `--path` with no value, empty-string `--path`, and file-write `OSError` (missing parent directory, permission denied, target is a directory). No `--watch` / `--indent` / JSON mode / settings-backed defaults in `0.0.7`.
 
-**See also:** [Django `AppConfig`](#django-appconfig).
+**See also:** [Django `AppConfig`](#django-appconfig) · [Schema introspection management command](#schema-introspection-management-command).
+
+## Schema introspection management command
+
+**Status:** shipped (`0.0.9`).
+
+`django_strawberry_framework/management/commands/inspect_django_type.py` ships `Command(BaseCommand)` as `manage.py inspect_django_type <Type> [--schema <selector>]` — a diagnostic that prints, per selected field, the Django field name → Django field type → resolved GraphQL type → nullability → which converter row fired. It is a strict reader of the existing introspection surface: the resolved GraphQL type and nullability are read from `origin.__annotations__` (the authoritative post-finalize record that already reflects `Meta.nullable_overrides` / `Meta.required_overrides` and consumer-authored annotations), while [`SCALAR_MAP`](#scalar-field-conversion) is re-walked only to NAME the converter row — never to re-derive nullability via `convert_scalar`.
+
+The positional `type` argument dispatches by shape: a **dotted** object path (`apps.library.schema.BookType`) resolves via Django's `import_string`, and a dotted import failure raises `CommandError` carrying the **original** error (never masked by a registry fallback); a **bare** name (`BookType`) resolves via a unique `__name__` registry lookup (a post-schema-import convenience). The optional `--schema <selector>` is imported first via Strawberry's `import_module_symbol(..., default_symbol_name="schema")` (mirroring [Schema export management command](#schema-export-management-command), accepting both `config.schema` and `config.schema:schema`) so a cold CLI process registers + finalizes every type before resolution. On a [Relay-Node-shaped](#relay-node-integration) type the suppressed primary key reports the interface-supplied `GlobalID!` / `relay.Node id` row rather than indexing the (absent) `origin.__annotations__[pk_name]`.
+
+`CommandError` is raised for: an unresolvable argument; an ambiguous bare name (≥2 registered types share the `__name__` — candidates listed by `module.qualname`); a resolved symbol that is not a [`DjangoType`](#djangotype) subclass; a `DjangoType` with no `__django_strawberry_definition__` (abstract / no-`Meta` base — "not a registered DjangoType"); and a `DjangoType` whose `definition.finalized is False` ("`finalize_django_types()` has not run — pass `--schema …`"). The last two are distinct branches. No `--json` / `--watch` mode in `0.0.9` (single human-readable table, matching the `export_schema` posture).
+
+**See also:** [Schema export management command](#schema-export-management-command) · [`DjangoType`](#djangotype) · [Relay Node integration](#relay-node-integration) · [Scalar field conversion](#scalar-field-conversion).
 
 ## `SerializerMutation`
 
@@ -1098,10 +1128,11 @@ Factory returning a [`StrawberryConfig`](https://strawberry.rocks) pre-populated
 ```python
 from django_strawberry_framework import strawberry_config
 
+_optimizer = DjangoOptimizerExtension()
 schema = strawberry.Schema(
     query=Query,
     config=strawberry_config(),
-    extensions=[DjangoOptimizerExtension()],
+    extensions=[lambda: _optimizer],
 )
 ```
 

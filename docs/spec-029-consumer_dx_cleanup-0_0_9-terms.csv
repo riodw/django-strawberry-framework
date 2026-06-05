@@ -15,6 +15,7 @@ Relation handling,relation-handling,FK / OneToOne / M2M / reverse cardinality ma
 finalize_django_types,finalize_django_types,Slice 3 needs no finalizer change; Slice 2 reads the post-finalize DjangoTypeDefinition.
 Definition-order independence,definition-order-independence,The invariant keeping Slice 3 entirely inside type-construction; nullability resolves with zero relation-target import-order dependency.
 Schema export management command,schema-export-management-command,The shipped export_schema command whose Command shape Slice 2's inspect_django_type mirrors.
+Schema introspection management command,schema-introspection-management-command,The inspect_django_type command Slice 2 ships; reads origin.__annotations__ for the per-field GraphQL resolution table and special-cases the Relay-suppressed pk per Decision 4.
 Django AppConfig,django-appconfig,The management-command discovery path Slice 2's command resolves through.
 Meta.filterset_class,metafilterset_class,Shipped sidecar key whose _validate_filterset_class validator is the structural template for Slice 3's validation.
 Meta.orderset_class,metaorderset_class,Shipped sidecar key promoted via the deferred-key gate; cited because Slice 3's net-new keys do NOT use that gate (Decision 6).
@@ -40,3 +41,5 @@ strawberry_config,strawberry_config,The scalar-map factory consumers pass to str
 apply_cascade_permissions,apply_cascade_permissions,Future 0.0.10 permissions hook; cited in Out of scope.
 Connection-aware optimizer planning,connection-aware-optimizer-planning,Sibling 0.0.9 card; part of the joint cut that owns the version bump.
 get_queryset visibility hook,get_queryset-visibility-hook,The DjangoListField get_queryset-applying wrapper Slice 2's introspection complements.
+Meta.nullable_overrides,metanullable_overrides,Slice 3 net-new tuple-set Meta key forcing a scalar field nullable (T -> T | None) via the convert_scalar force_nullable tri-state; scalar-only, validated at type creation (Decisions 5-10).
+Meta.required_overrides,metarequired_overrides,Slice 3 net-new tuple-set Meta key forcing a scalar field required (T | None -> T); inverse-direction companion to Meta.nullable_overrides, changes the GraphQL contract not the column or data (Decisions 5-10).

@@ -26,11 +26,6 @@ Critical contract pins (do not violate without an explicit spec revision):
   ``clear_url_caches()`` on enter AND in teardown.
 """
 
-# TODO(spec-029 Slice 1): Wrap this test-local optimizer instance in a singleton factory.
-# Pseudo:
-#   optimizer = DjangoOptimizerExtension()
-#   _current["schema"] = strawberry.Schema(..., extensions=[lambda: optimizer])
-
 # Top-block imports support the autouse reload fixture per Decision 7 +
 # rev4 V6 — sys.modules.get(...), importlib.reload(...) /
 # importlib.import_module(...). os is the env-var gate.
@@ -144,10 +139,11 @@ def _build_test_schema(_reload_project_schema_for_acceptance_tests):
                 "shelf__branch",
             )
 
+    optimizer = DjangoOptimizerExtension()
     _current["schema"] = strawberry.Schema(
         query=_MultiDbTestQuery,
         config=strawberry_config(),
-        extensions=[DjangoOptimizerExtension()],
+        extensions=[lambda: optimizer],
     )
     yield
     _current["schema"] = None

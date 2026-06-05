@@ -7,11 +7,6 @@ from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, fi
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 
-# TODO(spec-029 Slice 1): Wrap the optimizer extension instance used in this file.
-# Pseudo:
-#   ext = DjangoOptimizerExtension()
-#   schema = strawberry.Schema(..., extensions=[lambda: ext])
-
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():
@@ -102,9 +97,10 @@ def test_generic_relation_executes_with_optimizer_extension():
             return Branch.objects.order_by("id")
 
     finalize_django_types()
+    ext = DjangoOptimizerExtension()
     schema = strawberry.Schema(
         query=Query,
-        extensions=[DjangoOptimizerExtension()],
+        extensions=[lambda: ext],
     )
     result = schema.execute_sync("{ branches { name tags { tag } } }")
 

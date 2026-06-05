@@ -8,8 +8,9 @@ Consumer surface::
             fields = "__all__"
 
 A nested ``Meta`` class declares the model and (optionally) ``fields``,
-``exclude``, ``name``, ``description``, ``optimizer_hints``, and
-``interfaces``. Subclassing
+``exclude``, ``name``, ``description``, ``optimizer_hints``,
+``interfaces``, ``nullable_overrides``, and ``required_overrides``.
+Subclassing
 triggers the collection pipeline, which:
 
 1. Detects whether the subclass declares its own ``Meta``. Intermediate
@@ -58,15 +59,17 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "interfaces",
         "model",
         "name",
+        "nullable_overrides",
         "optimizer_hints",
         "orderset_class",
         "primary",
+        "required_overrides",
     },
 )
-# TODO(spec-029 Slice 3): Add the nullability override Meta keys here.
-# Pseudo:
-#   ALLOWED_META_KEYS |= {"nullable_overrides", "required_overrides"}  # noqa: ERA001
-#   DEFERRED_META_KEYS must stay unchanged because these are net-new keys.
+# ``nullable_overrides`` / ``required_overrides`` are net-new ALLOWED keys
+# (spec-029 Decision 6), NOT a DEFERRED_META_KEYS promotion — their feature
+# ships in the same card that adds them, so they were never reserved-but-
+# nonfunctional. DEFERRED_META_KEYS stays unchanged.
 
 
 def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
@@ -266,17 +269,14 @@ class DjangoType:
             },
         )
         relay_shaped = _is_relay_shaped(cls, validated.interfaces)
-        # TODO(spec-029 Slice 3): Validate nullability override targets after field selection.
-        # Pseudo:
-        #   _validate_nullability_override_targets(
-        #       model=meta.model,  # noqa: ERA001
-        #       selected_fields=fields,  # noqa: ERA001
-        #       consumer_authored_fields=consumer_authored_fields,  # noqa: ERA001
-        #       relay_shaped=relay_shaped,  # noqa: ERA001
-        #       nullable_overrides=validated.nullable_overrides,  # noqa: ERA001
-        #       required_overrides=validated.required_overrides,  # noqa: ERA001
-        #   )  # noqa: ERA001
-        #   # Reject unknown, excluded, consumer-authored, relation, and Relay-suppressed pk targets.
+        _validate_nullability_override_targets(
+            model=meta.model,
+            selected_fields=fields,
+            consumer_authored_fields=consumer_authored_fields,
+            relay_shaped=relay_shaped,
+            nullable_overrides=validated.nullable_overrides,
+            required_overrides=validated.required_overrides,
+        )
         if relay_shaped:
             has_id_assignment = isinstance(cls.__dict__.get("id"), StrawberryField)
             has_id_annotation = "id" in cls.__annotations__
@@ -309,10 +309,8 @@ class DjangoType:
             field_map=field_map,
             consumer_authored_fields=consumer_authored_fields,
             interfaces=validated.interfaces,
-            # TODO(spec-029 Slice 3): Thread the normalized override sets into annotation synthesis.
-            # Pseudo:
-            #   nullable_overrides=validated.nullable_overrides,  # noqa: ERA001
-            #   required_overrides=validated.required_overrides,  # noqa: ERA001
+            nullable_overrides=validated.nullable_overrides,
+            required_overrides=validated.required_overrides,
         )
         definition = DjangoTypeDefinition(
             origin=cls,
@@ -619,10 +617,8 @@ class _ValidatedMeta(NamedTuple):
     exclude_spec: tuple[str, ...] | None
     filterset_class: type | None
     orderset_class: type | None
-    # TODO(spec-029 Slice 3): Store normalized nullability override sets on the meta snapshot.
-    # Pseudo:
-    #   nullable_overrides: frozenset[str]  # noqa: ERA001
-    #   required_overrides: frozenset[str]  # noqa: ERA001
+    nullable_overrides: frozenset[str]
+    required_overrides: frozenset[str]
 
 
 def _validate_meta(meta: type) -> _ValidatedMeta:
@@ -699,16 +695,27 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
     interfaces = _validate_interfaces(meta)
     filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
     orderset_class = _validate_orderset_class(meta, getattr(meta, "orderset_class", None))
-    # TODO(spec-029 Slice 3): Shape-check and normalize the override tuple-set keys here.
-    # Pseudo:
-    #   nullable_raw = _normalize_sequence_spec(getattr(meta, "nullable_overrides", None))  # noqa: ERA001
-    #   required_raw = _normalize_sequence_spec(getattr(meta, "required_overrides", None))  # noqa: ERA001
-    #   nullable = frozenset(nullable_raw or ())  # noqa: ERA001
-    #   required = frozenset(required_raw or ())  # noqa: ERA001
-    #   if collision := sorted(nullable & required):
-    #       raise ConfigurationError(
-    #           f"{meta.model.__name__}.Meta override conflict: {collision}"  # noqa: ERA001
-    #       )  # noqa: ERA001
+    # Override shape stage (spec-029 Decision 8 step 1): the two tuple-set
+    # keys reuse the ``Meta.exclude`` non-string-sequence guard
+    # (``_normalize_sequence_spec``), then normalize to ``frozenset``. The
+    # both-sets collision is a shape-level contradiction visible from the raw
+    # ``Meta`` alone (no model/field access needed), so it raises here rather
+    # than in the target-validator. Target existence / scope checks
+    # (unknown / excluded / consumer-authored / relation / Relay-pk) need the
+    # selected fields and run later in ``_validate_nullability_override_targets``.
+    nullable_overrides = frozenset(
+        _normalize_sequence_spec(getattr(meta, "nullable_overrides", None)) or (),
+    )
+    required_overrides = frozenset(
+        _normalize_sequence_spec(getattr(meta, "required_overrides", None)) or (),
+    )
+    both_sets_collision = sorted(nullable_overrides & required_overrides)
+    if both_sets_collision:
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta names {both_sets_collision} in both "
+            "nullable_overrides and required_overrides; a field cannot be both "
+            "forced-nullable and forced-required.",
+        )
 
     return _ValidatedMeta(
         interfaces=interfaces,
@@ -718,6 +725,8 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
         exclude_spec=exclude_spec,
         filterset_class=filterset_class,
         orderset_class=orderset_class,
+        nullable_overrides=nullable_overrides,
+        required_overrides=required_overrides,
     )
 
 
@@ -782,6 +791,104 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], mo
             f"optimizer_hints values must be OptimizerHint instances, "
             f"got non-OptimizerHint for: {bad_values}",
         )
+
+
+def _validate_nullability_override_targets(
+    *,
+    model: type[models.Model],
+    selected_fields: tuple[Any, ...],
+    consumer_authored_fields: frozenset[str],
+    relay_shaped: bool,
+    nullable_overrides: frozenset[str],
+    required_overrides: frozenset[str],
+) -> None:
+    """Reject every illegal ``nullable_overrides`` / ``required_overrides`` target.
+
+    Stage 2 of the override validation flow (spec-029 Decision 8). Runs in
+    ``__init_subclass__`` AFTER ``_select_fields`` + ``consumer_authored_fields``
+    + the Relay-shape check, so the selected fields, the consumer-override set,
+    and the Relay-pk identity all exist. The shape check + both-sets collision
+    already ran earlier in ``_validate_meta``; this helper only validates the
+    union of the two normalized sets against the model and selected fields.
+
+    Two distinct name sets are derived as separate error paths so the
+    ``Meta.exclude`` contract is not collapsed into "unknown": the model-wide
+    names (``model._meta.get_fields()``) gate the *unknown-field* path, and the
+    selected-field names gate the *excluded / not-selected* path. The unknown
+    path routes through ``_format_unknown_fields_error`` so its consumer-visible
+    shape matches the ``Meta.fields`` / ``Meta.exclude`` / ``Meta.optimizer_hints``
+    typo guards.
+
+    Check order: unknown -> excluded -> (consumer-authored / relation / Relay-pk).
+    The last three operate on selected, known fields, so they run only after the
+    first two have confirmed the name exists and is selected. Every failure
+    raises ``ConfigurationError`` at type-creation time naming the offending
+    field.
+
+    Args:
+        model: The Django model the type wraps; ``model._meta.get_fields()``
+            defines the valid-field surface (unknown-field path) and
+            ``model._meta.pk.name`` the Relay-suppressed pk identity.
+        selected_fields: The Meta-filtered Django field objects from
+            ``_select_fields`` — defines the selected name set (excluded path)
+            and supplies ``field.is_relation`` for the relation-reject path.
+        consumer_authored_fields: The four-corner consumer-override union; a
+            name here already controls its own nullability via the annotation /
+            ``strawberry.field`` assignment, so an override on it is rejected.
+        relay_shaped: Whether the type participates in the Relay ``Node``
+            interface; when ``True`` the suppressed pk's nullability is the
+            interface's contract and cannot be overridden.
+        nullable_overrides: Normalized ``Meta.nullable_overrides`` frozenset.
+        required_overrides: Normalized ``Meta.required_overrides`` frozenset.
+
+    Raises:
+        ConfigurationError: any target is unknown / excluded / consumer-authored
+            / a relation field / the Relay-suppressed pk.
+    """
+    targets = nullable_overrides | required_overrides
+    if not targets:
+        return
+    model_field_names = {f.name for f in model._meta.get_fields()}
+    unknown = sorted(targets - model_field_names)
+    if unknown:
+        raise ConfigurationError(
+            _format_unknown_fields_error(
+                model=model,
+                attr="nullable_overrides/required_overrides",
+                unknown=unknown,
+                available=model_field_names,
+            ),
+        )
+    selected_by_name = {f.name: f for f in selected_fields}
+    excluded = sorted(targets - set(selected_by_name))
+    if excluded:
+        raise ConfigurationError(
+            f"{model.__name__}.Meta nullable_overrides/required_overrides name fields not in "
+            f"the selected set: {excluded}. The override targets a field that will not appear "
+            "in the GraphQL type (excluded via Meta.exclude or absent from a subset Meta.fields); "
+            "select the field or drop the override.",
+        )
+    relay_pk_name = model._meta.pk.name if relay_shaped else None
+    for name in sorted(targets):
+        if name in consumer_authored_fields:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta nullable_overrides/required_overrides names "
+                f"consumer-authored field {name!r}; a consumer annotation or strawberry.field "
+                "assignment already controls its nullability. Drop the override and control "
+                "nullability through the annotation instead.",
+            )
+        if name == relay_pk_name:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta nullable_overrides/required_overrides names the "
+                f"Relay-Node-suppressed pk {name!r}; the pk's nullability is the relay.Node "
+                "interface's contract (id: GlobalID!), not the column's, and cannot be overridden.",
+            )
+        if selected_by_name[name].is_relation:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta nullable_overrides/required_overrides names relation "
+                f"field {name!r}; nullability overrides are scalar-only for now. Relation-field "
+                "nullability override is deferred (see spec-029 Decision 10).",
+            )
 
 
 def _select_fields(
@@ -861,10 +968,8 @@ def _build_annotations(
     field_map: dict[str, FieldMeta],
     consumer_authored_fields: frozenset[str] = frozenset(),
     interfaces: tuple[type, ...] = (),
-    # TODO(spec-029 Slice 3): Accept normalized nullability override sets as keyword-only inputs.
-    # Pseudo:
-    #   nullable_overrides: frozenset[str] = frozenset()  # noqa: ERA001
-    #   required_overrides: frozenset[str] = frozenset()  # noqa: ERA001
+    nullable_overrides: frozenset[str] = frozenset(),
+    required_overrides: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, Any], list[PendingRelation]]:
     """Build the annotation dict the Strawberry type decorator consumes.
 
@@ -906,6 +1011,14 @@ def _build_annotations(
             ``relay.Node`` is among them, the primary-key field's
             synthesized scalar annotation is suppressed so Strawberry's
             interface-supplied ``id: GlobalID!`` is not shadowed.
+        nullable_overrides: Normalized ``Meta.nullable_overrides`` frozenset.
+            A selected scalar field named here is forced to ``T | None``
+            (``force_nullable=True`` into ``convert_scalar``) regardless of
+            ``field.null``.
+        required_overrides: Normalized ``Meta.required_overrides`` frozenset.
+            A selected scalar field named here is forced to ``T``
+            (``force_nullable=False``) regardless of ``field.null``. The two
+            sets are validated disjoint and scalar-only upstream.
 
     Returns:
         A tuple of ``(annotations, pending_relations)``.
@@ -992,18 +1105,22 @@ def _build_annotations(
                 # so the optimizer's field map still sees it as a connector
                 # column (spec-011 Decision 7 #"keeps every selected Django field including the primary key").
                 continue
-            # TODO(spec-029 Slice 3): Compute force_nullable from the two override sets.
-            # Pseudo:
-            #   if field.name in nullable_overrides:
-            #       force_nullable = True  # noqa: ERA001
-            #   elif field.name in required_overrides:  # noqa: ERA001
-            #       force_nullable = False  # noqa: ERA001
-            #   else:  # noqa: ERA001
-            #       force_nullable = None  # noqa: ERA001
-            #   annotations[field.name] = convert_scalar(
-            #       field,
-            #       cls.__name__,
-            #       force_nullable=force_nullable,  # noqa: ERA001
-            #   )  # noqa: ERA001
-            annotations[field.name] = convert_scalar(field, cls.__name__)
+            # Per-field nullability override tri-state (spec-029 Decision 7):
+            # membership in ``nullable_overrides`` forces ``T | None``,
+            # membership in ``required_overrides`` forces ``T``, and absence
+            # from both leaves ``None`` so ``convert_scalar`` honors
+            # ``field.null``. The two sets are validated to be disjoint and
+            # scalar-only in ``_validate_nullability_override_targets`` before
+            # this loop runs, so the elif is exhaustive and unambiguous.
+            if field.name in nullable_overrides:
+                force_nullable: bool | None = True
+            elif field.name in required_overrides:
+                force_nullable = False
+            else:
+                force_nullable = None
+            annotations[field.name] = convert_scalar(
+                field,
+                cls.__name__,
+                force_nullable=force_nullable,
+            )
     return annotations, pending

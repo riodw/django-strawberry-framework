@@ -8,11 +8,6 @@ across Relay-declared fakeshop targets is pinned through live HTTP in
 ``examples/fakeshop/test_query/test_products_api.py``.
 """
 
-# TODO(spec-029 Slice 1): Wrap each optimizer extension construction in this file.
-# Pseudo:
-#   ext = DjangoOptimizerExtension(strictness="raise")  # preserve per-site kwargs.
-#   schema = strawberry.Schema(..., extensions=[lambda: ext])
-
 from types import SimpleNamespace
 
 import pytest
@@ -53,7 +48,8 @@ def test_relay_id_only_projection_includes_pk_attname(django_assert_num_queries)
             return Category.objects.all()
 
     finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ext = DjangoOptimizerExtension()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
     ctx = SimpleNamespace()
     with django_assert_num_queries(1):
         result = schema.execute_sync("{ allCategories { id } }", context_value=ctx)
@@ -80,9 +76,10 @@ def test_relay_id_does_not_trigger_lazy_load():
             return Category.objects.all()
 
     finalize_django_types()
+    ext = DjangoOptimizerExtension(strictness="raise")
     schema = strawberry.Schema(
         query=Query,
-        extensions=[DjangoOptimizerExtension(strictness="raise")],
+        extensions=[lambda: ext],
     )
     result = schema.execute_sync("{ allCategories { id name } }")
     assert result.errors is None
@@ -159,7 +156,8 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
                 return CustomPKItem.objects.all()
 
         finalize_django_types()
-        schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+        ext = DjangoOptimizerExtension()
+        schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
         ctx = SimpleNamespace()
         with django_assert_num_queries(1):
             result = schema.execute_sync("{ allItems { id name } }", context_value=ctx)

@@ -18,15 +18,12 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 
 ## [Unreleased]
 
-<!-- TODO(spec-029 Slices 1-3):
-Append the per-slice release notes under [Unreleased], without promoting a 0.0.9 heading.
-Pseudo:
-    ### Changed
-    - Migrated DjangoOptimizerExtension schema construction to singleton-factory form.
-    ### Added
-    - Added inspect_django_type management command.
-    - Added Meta.nullable_overrides and Meta.required_overrides.
--->
+### Changed
+- Migrated `extensions=[DjangoOptimizerExtension()]` to the module-level-singleton factory form (`extensions=[lambda: _optimizer]`): preserves the instance-bound plan cache and removes Strawberry 0.316.0's instance-form `DeprecationWarning`.
+
+### Added
+- Added the `inspect_django_type` management command — `manage.py inspect_django_type <Type> [--schema <selector>]` prints the per-field GraphQL resolution table (Django field → resolved GraphQL type → nullability → converter row) for a finalized `DjangoType`. Reads the resolved annotation from `origin.__annotations__` (so it reflects consumer-authored annotations and overrides) rather than re-running `convert_scalar`. The positional `type` argument dispatches by shape (dotted path via `import_string`; bare name via a unique registry lookup), `--schema` imports the project schema first so a cold CLI process registers + finalizes every type, and the Relay-Node-suppressed primary key reports the interface-supplied `GlobalID!`.
+- Added `Meta.nullable_overrides` and `Meta.required_overrides` — two net-new tuple-set `Meta` keys that decouple a scalar field's GraphQL nullability from its Django column (force `T!`→`T` or `T`→`T!`) without an `AlterField` migration or a consumer-authored annotation. Validated at type-creation time (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision raise `ConfigurationError`); scalar-only scope; the override flips a choice field's generated enum nullability for free.
 
 ## [0.0.8] - 2026-06-03
 ### Added

@@ -35,11 +35,6 @@ are genuinely unreachable from the sync ``GraphQLView`` mounted at
 ``RuntimeError: GraphQL execution failed to complete synchronously``).
 """
 
-# TODO(spec-029 Slice 1): Wrap optimizer extension instances used by list-field tests.
-# Pseudo:
-#   ext = DjangoOptimizerExtension()
-#   schema = strawberry.Schema(..., extensions=[lambda: ext])
-
 import functools
 from types import SimpleNamespace
 from typing import Any
@@ -755,7 +750,8 @@ def test_djangolistfield_at_root_position_is_optimized(django_assert_num_queries
         all_categories: list[CategoryType] = DjangoListField(CategoryType)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ext = DjangoOptimizerExtension()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
     ctx = SimpleNamespace()
 
     with django_assert_num_queries(2):
@@ -888,7 +884,8 @@ def test_djangolistfield_fk_id_elision_survives(django_assert_num_queries) -> No
         all_items: list[ItemType] = DjangoListField(ItemType)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
+    ext = DjangoOptimizerExtension()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
     ctx = SimpleNamespace()
 
     with django_assert_num_queries(1):

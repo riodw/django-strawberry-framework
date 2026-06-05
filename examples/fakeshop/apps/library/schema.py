@@ -57,6 +57,11 @@ class BookType(DjangoType):
 
     class Meta:
         model = models.Book
+        # ``primary = True`` makes ``BookType`` the relation-resolution target
+        # for ``library.Book`` so the acceptance-only ``NullabilityOverrideBookType``
+        # secondary below can register on the same model without ambiguity
+        # (spec-029 Decision 5 / Edge cases — exactly one type per model is primary).
+        primary = True
         fields = (
             "id",
             "title",
@@ -70,19 +75,29 @@ class BookType(DjangoType):
         orderset_class = orders.BookOrder
 
 
-# TODO(spec-029 Slice 3): Add the nullability-override acceptance type here.
-# Pseudo:
-#   class BookType.Meta:
-#       primary = True
-#   class NullabilityOverrideBookType(DjangoType):
-#       class Meta:
-#           model = models.Book
-#           fields = ("id", "title", "subtitle")
-#           primary = False
-#           nullable_overrides = ("title",)
-#           required_overrides = ("subtitle",)
-#   # Query adds a dedicated root resolver returning:
-#   # models.Book.objects.exclude(subtitle__isnull=True).order_by("id")
+class NullabilityOverrideBookType(DjangoType):
+    """Acceptance-only secondary ``Book`` type proving the nullability overrides.
+
+    ``nullable_overrides = ("title",)`` flips the ``NOT NULL`` ``title`` column
+    from its native ``String!`` to ``String``; ``required_overrides = ("subtitle",)``
+    flips the ``null=True`` ``subtitle`` column from its native ``String`` to
+    ``String!`` — both without touching the Django column (spec-029 Slice 3).
+    ``Meta.primary = False`` keeps ``BookType`` the relation target; this type
+    stays reverse-discoverable via the registry. The dedicated root resolver
+    (``Query.all_library_nullability_override_books``) returns only rows with a
+    non-null ``subtitle`` so the forced ``subtitle = String!`` contract holds at
+    the query boundary (``required_overrides`` changes the GraphQL contract, not
+    the data).
+    """
+
+    class Meta:
+        model = models.Book
+        primary = False
+        fields = ("id", "title", "subtitle")
+        nullable_overrides = ("title",)
+        required_overrides = ("subtitle",)
+
+
 class ShelfType(DjangoType):
     """Shelf declared before Branch to exercise FK finalization."""
 
@@ -243,6 +258,15 @@ class Query:
     @strawberry.field
     def all_library_prefetched_books(self) -> list[BookType]:
         return models.Book.objects.select_related("shelf").prefetch_related("genres").order_by("id")
+
+    @strawberry.field
+    def all_library_nullability_override_books(self) -> list[NullabilityOverrideBookType]:
+        # ``required_overrides = ("subtitle",)`` declares ``subtitle`` as
+        # ``String!`` on this type, but the column is ``null=True`` and fakeshop
+        # seeds ``subtitle=None`` rows — so exclude null-subtitle rows to keep
+        # the non-null GraphQL contract true at the boundary, ordered by id for
+        # deterministic responses (spec-029 Slice 3 / Edge cases).
+        return models.Book.objects.exclude(subtitle__isnull=True).order_by("id")
 
     @strawberry.field
     def all_library_genres(

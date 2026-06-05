@@ -139,27 +139,38 @@ def scalar_for_field(field: models.Field) -> Any:
     )
 
 
-def convert_scalar(field: models.Field, type_name: str) -> Any:
+def convert_scalar(
+    field: models.Field,
+    type_name: str,
+    *,
+    force_nullable: bool | None = None,
+) -> Any:
     """Map a Django scalar field to a Python / Strawberry type.
 
     Algorithm:
 
-    0. If the field is a sentinel-guarded postgres type (``ArrayField`` /
+    0. Compute ``effective_null`` from the ``force_nullable`` tri-state
+       (``field.null`` when ``force_nullable is None``, else
+       ``force_nullable`` itself); this single value drives every outer
+       nullability decision below.
+    0b. If the field is a sentinel-guarded postgres type (``ArrayField`` /
        ``HStoreField``), dispatch to the matching branch and return early.
        ``ArrayField`` rejects nested arrays and outer ``choices``, then
        recurses on ``base_field`` and wraps in ``list[inner]``.
        ``HStoreField`` rejects outer ``choices``, then returns
        ``strawberry.scalars.JSON``. Both branches widen to ``T | None`` on
-       outer ``field.null`` themselves.
+       ``effective_null`` themselves.
     1. Walk ``type(field).__mro__`` until a supported Django field class is
        found in ``SCALAR_MAP``; raise ``ConfigurationError`` if unsupported.
     2. If the field declares ``choices``, replace the scalar type with a
        generated ``Enum`` via ``convert_choices_to_enum(field, type_name)``.
-    3. If the field is nullable, widen to ``T | None``.
+    3. If ``effective_null``, widen to ``T | None``.
 
     Order matters: choices replaces ``py_type`` *before* null widening so
     nullable choice fields end up as ``EnumType | None``, not
-    ``(str | None)`` collapsed away.
+    ``(str | None)`` collapsed away. The widening test reads
+    ``effective_null`` (not ``field.null``) at every site, so a
+    ``force_nullable`` override flips the choice enum's nullability for free.
 
     Args:
         field: A bound Django model field.
@@ -169,6 +180,16 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
             the recursive ``base_field`` call on ``ArrayField``, so an
             inner choice-bearing element resolves under the outer field's
             name.
+        force_nullable: Keyword-only nullability override tri-state.
+            ``None`` (default) honors ``field.null`` — identical to the
+            pre-override behavior, so every existing call site is
+            unaffected. ``True`` emits ``T | None`` regardless of the
+            column (force nullable). ``False`` emits ``T`` regardless (force
+            required). Sourced per field from ``Meta.nullable_overrides`` /
+            ``Meta.required_overrides`` by ``types/base._build_annotations``.
+            Only the OUTER field's nullability is affected; the recursive
+            ``ArrayField.base_field`` call is left unset, so the inner
+            element nullability follows ``base_field.null``.
 
     Raises:
         ConfigurationError: triggered by any of the following:
@@ -188,17 +209,22 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
               raised from ``convert_choices_to_enum`` for nested-tuple
               choice declarations.
     """
-    # TODO(spec-029 Slice 3): Add keyword-only force_nullable: bool | None = None.
-    # Pseudo:
-    #   def convert_scalar(field, type_name, *, force_nullable=None):
-    #       effective_null = field.null if force_nullable is None else force_nullable  # noqa: ERA001
-    #       # Use effective_null in every outer nullability branch below.
+    # The tri-state collapses to a single boolean computed once: the
+    # override (``force_nullable``) wins when set, otherwise the column's
+    # ``field.null`` drives the decision. Every outer widening site below
+    # reads ``effective_null`` so the override applies uniformly across the
+    # ArrayField / HStoreField / choice / scalar branches without per-branch
+    # override logic.
+    effective_null = field.null if force_nullable is None else force_nullable
     # Sentinel-guarded ``ArrayField`` dispatch runs **before** the MRO walk
     # so a subclass-of-``models.Field`` test double does not accidentally
     # match a parent in ``SCALAR_MAP``. The recursive call into
     # ``base_field`` re-enters ``convert_scalar`` and naturally inherits
-    # choice substitution and inner-null widening; the outer ``field.null``
-    # widens the resulting ``list[inner]`` here.
+    # choice substitution and inner-null widening; the outer
+    # ``effective_null`` widens the resulting ``list[inner]`` here. The
+    # recursion is left ``force_nullable``-unset so the inner element
+    # nullability follows ``base_field.null`` and is NOT affected by the
+    # outer override.
     if _ARRAY_FIELD_CLS is not None and isinstance(field, _ARRAY_FIELD_CLS):
         if isinstance(field.base_field, _ARRAY_FIELD_CLS):
             raise ConfigurationError(
@@ -212,14 +238,11 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
             )
         inner = convert_scalar(field.base_field, type_name)
         result = list[inner]
-        # TODO(spec-029 Slice 3): Widen ArrayField with effective_null, not field.null.
-        # Pseudo:
-        #   return result | None if effective_null else result  # noqa: ERA001
-        return result | None if field.null else result
+        return result | None if effective_null else result
     # Sentinel-guarded ``HStoreField`` dispatch mirrors the ArrayField
     # posture: outer-``choices`` rejection (HStore stores
     # ``dict[str, str | None]`` with no enum-able GraphQL shape), then
-    # return ``strawberry.scalars.JSON`` widened on outer ``field.null``.
+    # return ``strawberry.scalars.JSON`` widened on ``effective_null``.
     if _HSTORE_FIELD_CLS is not None and isinstance(field, _HSTORE_FIELD_CLS):
         if field.choices:
             raise ConfigurationError(
@@ -229,10 +252,7 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
                 f"shape with a separate field.",
             )
         py_type = strawberry.scalars.JSON
-        # TODO(spec-029 Slice 3): Widen HStoreField with effective_null, not field.null.
-        # Pseudo:
-        #   return py_type | None if effective_null else py_type  # noqa: ERA001
-        return py_type | None if field.null else py_type
+        return py_type | None if effective_null else py_type
     # Shared field-class -> scalar lookup (also used by the filter-input
     # converter) so a column resolves to the same scalar on both sides. Walks
     # the MRO, so consumer subclasses of a supported field resolve to the
@@ -240,11 +260,7 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
     py_type = scalar_for_field(field)
     if field.choices:
         py_type = convert_choices_to_enum(field, type_name)
-    # TODO(spec-029 Slice 3): Widen scalar and choice results with effective_null.
-    # Pseudo:
-    #   if effective_null:
-    #       py_type = py_type | None  # noqa: ERA001
-    if field.null:
+    if effective_null:
         py_type = py_type | None
     return py_type
 

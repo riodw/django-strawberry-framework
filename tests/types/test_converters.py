@@ -18,13 +18,6 @@ Coverage knock-ons: these tests exercise ``convert_scalar``'s ``null``
 widening branch and ``registry.register_enum`` / ``get_enum``.
 """
 
-# TODO(spec-029 Slice 3): Add force_nullable tri-state converter coverage here.
-# Pseudo:
-#   assert convert_scalar(non_null_text, "T", force_nullable=True) == str | None
-#   assert convert_scalar(nullable_text, "T", force_nullable=False) is str
-#   assert convert_scalar(nullable_text, "T", force_nullable=None) == str | None
-#   # Repeat for choice, ArrayField outer nullability, and HStoreField.
-
 import enum
 import itertools
 
@@ -1528,3 +1521,137 @@ def test_relation_target_with_multiple_no_primary_surfaces_audit_error_at_finali
     # The audit message is what fires — not the "no registered DjangoType"
     # message of the unresolved-target path.
     assert "Declare Meta.primary = True" in msg
+
+
+# ---------------------------------------------------------------------------
+# spec-029 Slice 3 — convert_scalar force_nullable tri-state
+#
+# These are direct ``convert_scalar`` unit tests (the tri-state seam fires at
+# conversion time, unreachable from a live query without the override
+# machinery). ``None`` must reproduce the column-native ``field.null`` result
+# exactly (regression guard); ``True`` always widens; ``False`` always
+# narrows. The choice / Array / HStore branches each read the same single
+# ``effective_null`` value, so the override applies uniformly. Synthetic
+# models reuse the existing ``_unique_app_label`` namespacing + the
+# ``_FakeArrayField`` / ``_FakeHStoreField`` doubles and their monkeypatch
+# pattern.
+# ---------------------------------------------------------------------------
+
+
+def _text_field(*, null: bool) -> models.Field:
+    """Return a bound ``TextField`` on a synthetic model with the given ``null``."""
+
+    class _Owner(models.Model):
+        value = models.TextField(null=null)
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_force_nullable")
+
+    return _Owner._meta.get_field("value")
+
+
+def test_convert_scalar_force_nullable_true_widens_non_null_column():
+    """``force_nullable=True`` on a non-null ``TextField`` returns ``str | None``."""
+    field = _text_field(null=False)
+    assert convert_scalar(field, "OwnerType", force_nullable=True) == (str | None)
+
+
+def test_convert_scalar_force_nullable_false_narrows_nullable_column():
+    """``force_nullable=False`` on a nullable ``TextField`` returns bare ``str``."""
+    field = _text_field(null=True)
+    assert convert_scalar(field, "OwnerType", force_nullable=False) is str
+
+
+def test_convert_scalar_force_nullable_none_honors_field_null():
+    """``force_nullable=None`` (and the implicit default) reproduce ``field.null``.
+
+    Regression guard for Decision 7's "the ``None`` default is identical to
+    today's behavior" contract, checked in both column directions and against
+    the no-kwarg call so the new keyword-only parameter cannot drift the
+    existing default.
+    """
+    non_null = _text_field(null=False)
+    nullable = _text_field(null=True)
+    # Explicit None.
+    assert convert_scalar(non_null, "OwnerType", force_nullable=None) is str
+    assert convert_scalar(nullable, "OwnerType", force_nullable=None) == (str | None)
+    # Implicit default (no kwarg) — the pre-override call shape.
+    assert convert_scalar(non_null, "OwnerType") is str
+    assert convert_scalar(nullable, "OwnerType") == (str | None)
+
+
+def test_convert_scalar_force_nullable_on_choice_field(choice_fixture_model):
+    """The override flips a choice field's generated enum nullability (Decision 9).
+
+    Widening sits AFTER choice substitution, so ``force_nullable=True`` on the
+    non-null ``status`` column yields ``EnumType | None`` and ``False`` on the
+    nullable ``nullable_status`` column yields a bare ``EnumType`` — the enum
+    members are untouched in both directions.
+    """
+    registry.clear()
+    status = choice_fixture_model._meta.get_field("status")
+    widened = convert_scalar(status, "FixtureType", force_nullable=True)
+    enum_cls = registry.get_enum(choice_fixture_model, "status")
+    assert enum_cls is not None
+    assert widened == (enum_cls | None)
+
+    nullable_status = choice_fixture_model._meta.get_field("nullable_status")
+    narrowed = convert_scalar(nullable_status, "FixtureType", force_nullable=False)
+    nullable_enum = registry.get_enum(choice_fixture_model, "nullable_status")
+    assert nullable_enum is not None
+    assert narrowed is nullable_enum
+
+
+def test_convert_scalar_force_nullable_on_array_field(monkeypatch):
+    """The override flips the OUTER ``list[inner]`` nullability; inner is unchanged.
+
+    A non-null ``ArrayField(IntegerField())`` with ``force_nullable=True``
+    becomes ``list[int] | None`` (outer widened) while the inner element stays
+    ``int`` (NOT ``int | None``) — the recursive ``base_field`` conversion is
+    left ``force_nullable``-unset, so inner nullability follows
+    ``base_field.null`` and is NOT affected by the outer override (Edge cases).
+    A nullable-outer ``ArrayField(..., null=True)`` with ``force_nullable=False``
+    narrows back to bare ``list[int]``.
+    """
+    monkeypatch.setattr(converters, "_ARRAY_FIELD_CLS", _FakeArrayField)
+
+    class _ArrOwner(models.Model):
+        arr = _FakeArrayField(models.IntegerField())
+        nullable_arr = _FakeArrayField(models.IntegerField(), null=True)
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_force_nullable_array")
+
+    field = _ArrOwner._meta.get_field("arr")
+    widened = convert_scalar(field, "OwnerType", force_nullable=True)
+    # Outer widened to | None; inner element stays bare int (override is outer-only).
+    assert widened == (list[int] | None)
+    # The unforced default on the same non-null-outer field is bare list[int].
+    assert convert_scalar(field, "OwnerType") == list[int]
+
+    nullable_field = _ArrOwner._meta.get_field("nullable_arr")
+    narrowed = convert_scalar(nullable_field, "OwnerType", force_nullable=False)
+    assert narrowed == list[int]
+
+
+def test_convert_scalar_force_nullable_on_hstore_field(monkeypatch):
+    """The override flips ``HStoreField`` between ``JSON | None`` and ``JSON``."""
+    monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", _FakeHStoreField)
+
+    class _HStoreOwner(models.Model):
+        data = _FakeHStoreField()
+        nullable_data = _FakeHStoreField(null=True)
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_force_nullable_hstore")
+
+    field = _HStoreOwner._meta.get_field("data")
+    widened = convert_scalar(field, "OwnerType", force_nullable=True)
+    assert widened == (strawberry.scalars.JSON | None)
+
+    nullable_field = _HStoreOwner._meta.get_field("nullable_data")
+    narrowed = convert_scalar(nullable_field, "OwnerType", force_nullable=False)
+    assert narrowed is strawberry.scalars.JSON

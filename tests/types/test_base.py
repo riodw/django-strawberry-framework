@@ -23,14 +23,8 @@ test focused on the behaviour under examination. ``CATEGORY_SCALAR_FIELDS``
 captures the scalar-only field list used in those updated tests.
 """
 
-# TODO(spec-029 Slice 3): Add Meta.nullable_overrides / Meta.required_overrides tests.
-# Pseudo:
-#   assert keys are in ALLOWED_META_KEYS and not DEFERRED_META_KEYS
-#   assert nullable_overrides flips a non-null field annotation to T | None
-#   assert required_overrides flips a nullable field annotation to T
-#   assert unknown, excluded, consumer-authored, relation, Relay pk, and collisions raise.
-
 import datetime
+import itertools
 
 import pytest
 from apps.products.models import Category, Entry, Item, Property
@@ -906,3 +900,176 @@ def test_resolved_relation_annotation_nullable_fk_widens_to_optional(monkeypatch
     monkeypatch.setattr(item_category, "null", True)
     annotation = resolved_relation_annotation(item_category, CategoryType)
     assert annotation == (CategoryType | None)
+
+
+# ---------------------------------------------------------------------------
+# spec-029 Slice 3 — Meta.nullable_overrides / Meta.required_overrides
+#
+# Synthetic ``managed=False`` models give clean control over per-field
+# ``null`` (and a relation field) for the override-applies and validation
+# cases. ``text_value`` is a non-null column, ``note`` a nullable one (the
+# two directions the spec test plan names); ``partner`` is a relation field
+# for the scalar-only-scope reject. ``_unique_override_app_label`` namespaces
+# each synthetic model so Django's app registry does not collide across tests.
+# ---------------------------------------------------------------------------
+
+_override_app_label_counter = itertools.count(1)
+
+
+def _unique_override_app_label() -> str:
+    """Return a unique ``app_label`` per call for synthetic override models."""
+    return f"test_overrides__{next(_override_app_label_counter)}"
+
+
+def _make_override_model():
+    """Return a synthetic model with a non-null + a nullable scalar and a relation."""
+
+    class _OverrideOwner(models.Model):
+        text_value = models.TextField()
+        note = models.TextField(null=True)
+        partner = models.ForeignKey(
+            "self",
+            null=True,
+            on_delete=models.SET_NULL,
+            related_name="+",
+        )
+
+        class Meta:
+            managed = False
+            app_label = _unique_override_app_label()
+
+    return _OverrideOwner
+
+
+def _make_override_type(model, *, namespace=None, **meta_attrs):
+    """Build an ``OverrideType`` subclass for ``model`` with the given Meta attrs.
+
+    Uses ``type(...)`` construction (mirroring ``test_meta_rejects_each_deferred_key``)
+    so the synthetic ``model`` local is passed by value rather than referenced from
+    a nested ``class Meta`` body (class bodies do not close over function locals).
+    ``namespace`` carries consumer-authored annotations / assignments onto the type.
+    """
+    meta_cls = type("Meta", (), {"model": model, **meta_attrs})
+    return type("OverrideType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})
+
+
+def test_nullable_overrides_in_allowed_meta_keys():
+    """Both override keys are net-new ALLOWED keys, NOT deferred (Decision 6)."""
+    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
+
+    assert "nullable_overrides" in ALLOWED_META_KEYS
+    assert "required_overrides" in ALLOWED_META_KEYS
+    assert "nullable_overrides" not in DEFERRED_META_KEYS
+    assert "required_overrides" not in DEFERRED_META_KEYS
+
+
+def test_nullable_override_flips_annotation():
+    """``nullable_overrides`` widens a non-null column; ``required_overrides`` narrows a nullable one."""
+    override_type = _make_override_type(
+        _make_override_model(),
+        fields=("id", "text_value", "note"),
+        nullable_overrides=("text_value",),
+        required_overrides=("note",),
+    )
+
+    # text_value is NOT NULL natively (str); the override widens it to str | None.
+    assert override_type.__annotations__["text_value"] == (str | None)
+    # note is null=True natively (str | None); the override narrows it to bare str.
+    assert override_type.__annotations__["note"] is str
+
+
+def test_override_unknown_field_raises():
+    """A name not on the model raises ``ConfigurationError`` (unknown-field path)."""
+    with pytest.raises(ConfigurationError, match="unknown fields"):
+        _make_override_type(
+            _make_override_model(),
+            fields=("id", "text_value"),
+            nullable_overrides=("does_not_exist",),
+        )
+
+
+def test_override_excluded_field_raises():
+    """A name excluded from the selected set raises — distinct from unknown (Decision 8 rule 2)."""
+    with pytest.raises(ConfigurationError, match="not in the selected set"):
+        # ``note`` exists on the model but is excluded from the type.
+        _make_override_type(
+            _make_override_model(),
+            fields=("id", "text_value"),
+            required_overrides=("note",),
+        )
+
+
+def test_override_consumer_authored_field_raises():
+    """A name with a consumer annotation raises (the annotation already controls nullability)."""
+    with pytest.raises(ConfigurationError, match="consumer-authored"):
+        _make_override_type(
+            _make_override_model(),
+            namespace={"__annotations__": {"text_value": int}},
+            fields=("id", "text_value"),
+            nullable_overrides=("text_value",),
+        )
+
+
+def test_override_relation_field_raises():
+    """A relation field name raises — scalar-only scope (Decision 10)."""
+    with pytest.raises(ConfigurationError, match="relation field"):
+        _make_override_type(
+            _make_override_model(),
+            fields=("id", "text_value", "partner"),
+            nullable_overrides=("partner",),
+        )
+
+
+def test_override_relay_suppressed_pk_raises():
+    """Naming the Relay-Node-suppressed pk in an override set raises (Decision 8 rule e)."""
+    from strawberry import relay
+
+    with pytest.raises(ConfigurationError, match="Relay-Node-suppressed pk"):
+
+        class CategoryNodeOverride(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                interfaces = (relay.Node,)
+                required_overrides = ("id",)
+
+
+def test_override_both_sets_collision_raises():
+    """The same name in both sets raises at the shape stage, naming the field."""
+    with pytest.raises(ConfigurationError, match="both"):
+        _make_override_type(
+            _make_override_model(),
+            fields=("id", "text_value"),
+            nullable_overrides=("text_value",),
+            required_overrides=("text_value",),
+        )
+
+
+def test_override_non_sequence_raises():
+    """A bare-string override is rejected by the non-string-sequence shape guard."""
+    with pytest.raises(ConfigurationError, match="non-string sequence"):
+        # A bare string is an iterable of characters, not a field-name list.
+        _make_override_type(
+            _make_override_model(),
+            fields=("id", "text_value"),
+            nullable_overrides="text_value",
+        )
+
+
+def test_override_redundant_is_no_op():
+    """A redundant override (already in the target direction) is accepted, not raised.
+
+    ``nullable_overrides`` on an already-nullable column and
+    ``required_overrides`` on an already-non-null column are legitimate
+    (if redundant) declarations — pinned as a passing case (Edge cases).
+    """
+    # note is already nullable; text_value is already non-null.
+    override_type = _make_override_type(
+        _make_override_model(),
+        fields=("id", "text_value", "note"),
+        nullable_overrides=("note",),
+        required_overrides=("text_value",),
+    )
+
+    assert override_type.__annotations__["note"] == (str | None)
+    assert override_type.__annotations__["text_value"] is str

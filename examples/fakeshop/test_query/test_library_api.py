@@ -1,19 +1,5 @@
 """Live GraphQL HTTP tests for the library acceptance app."""
 
-# TODO(spec-029 Slice 3): Add live HTTP coverage for the acceptance-only nullability type.
-# Pseudo:
-#   def test_nullability_override_flips_sdl_nullability():
-#       _seed_library_graph()
-#       query __type(name: "NullabilityOverrideBookType") { fields { name type { ... } } }
-#       assert title is String and subtitle is String!
-#       assert Book._meta.get_field("title").null is False
-#       assert Book._meta.get_field("subtitle").null is True
-#
-#   def test_nullability_override_acceptance_api_is_queryable():
-#       _seed_library_graph()
-#       query { allLibraryNullabilityOverrideBooks { title subtitle } }
-#       assert "errors" not in response.json()
-
 import base64
 import importlib
 import sys
@@ -1905,3 +1891,93 @@ def test_library_branches_order_empty_list_and_null_direction_no_op():
     assert "errors" not in null_payload, null_payload
     null_names = [row["name"] for row in null_payload["data"]["allLibraryBranches"]]
     assert null_names == ["Bravo", "Alpha", "Charlie"]
+
+
+# ---------------------------------------------------------------------------
+# spec-029 Slice 3 — Meta.nullable_overrides / Meta.required_overrides
+#
+# Live HTTP coverage against the acceptance-only ``NullabilityOverrideBookType``
+# secondary type on ``library.Book``: the SDL flip (title String! -> String,
+# subtitle String -> String!) proves the override decouples GraphQL nullability
+# from the Django column without an AlterField; the data query proves the
+# forced ``subtitle = String!`` invariant holds at the boundary (the resolver
+# excludes null-subtitle rows). The existing ``BookType`` baseline above stays
+# untouched.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_nullability_override_flips_sdl_nullability():
+    """The override flips the acceptance type's SDL nullability, columns unchanged."""
+    _seed_library_graph()
+
+    response = _post_graphql(
+        """
+        query {
+          __type(name: "NullabilityOverrideBookType") {
+            fields {
+              name
+              type {
+                kind
+                name
+                ofType { kind name }
+              }
+            }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    type_info = payload["data"]["__type"]
+    assert type_info is not None
+
+    # title: NOT NULL column natively String! -> flipped to String by nullable_overrides.
+    title_type = _field_type(type_info, "title")
+    assert title_type == {"kind": "SCALAR", "name": "String", "ofType": None}
+    # subtitle: null=True column natively String -> flipped to String! by required_overrides.
+    subtitle_type = _field_type(type_info, "subtitle")
+    assert subtitle_type["kind"] == "NON_NULL"
+    assert subtitle_type["ofType"] == {"kind": "SCALAR", "name": "String"}
+
+    # The override changes only the GraphQL contract; the Django columns are unchanged.
+    assert models.Book._meta.get_field("title").null is False
+    assert models.Book._meta.get_field("subtitle").null is True
+
+
+@pytest.mark.django_db
+def test_nullability_override_acceptance_api_is_queryable():
+    """The dedicated root field is queryable with no errors over non-null-subtitle rows.
+
+    The autouse seed creates a ``subtitle=None`` book; this test adds a book
+    WITH a non-null subtitle so the resolver's
+    ``exclude(subtitle__isnull=True)`` returns a row and the forced
+    ``subtitle = String!`` contract holds at the boundary (a null subtitle
+    would surface a non-null violation otherwise).
+    """
+    _seed_library_graph()
+    shelf = models.Shelf.objects.first()
+    models.Book.objects.create(
+        title="Parable of the Sower",
+        subtitle="Earthseed",
+        circulation_status=models.Book.CirculationStatus.CHECKED_OUT,
+        shelf=shelf,
+    )
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryNullabilityOverrideBooks {
+            title
+            subtitle
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    rows = payload["data"]["allLibraryNullabilityOverrideBooks"]
+    # Only the non-null-subtitle row survives the resolver's exclude().
+    assert rows == [{"title": "Parable of the Sower", "subtitle": "Earthseed"}]

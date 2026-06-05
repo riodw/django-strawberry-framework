@@ -30,16 +30,13 @@ class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuer
 
 finalize_django_types()
 
-# TODO(spec-029 Slice 1): Migrate the project schema to the singleton-factory extension form.
-# Pseudo:
-#   _optimizer = DjangoOptimizerExtension()
-#   schema = strawberry.Schema(
-#       query=Query,
-#       config=strawberry_config(),
-#       extensions=[lambda: _optimizer],
-#   )
+# Module-level singleton wrapped in a factory: ``get_extensions`` runs the
+# callable per request and gets the same ``_optimizer`` back, so the
+# instance-bound plan cache is preserved, and because the entry is a callable
+# (not an instance) ``Schema.__init__`` emits no deprecation warning.
+_optimizer = DjangoOptimizerExtension()
 schema = strawberry.Schema(
     query=Query,
     config=strawberry_config(),
-    extensions=[DjangoOptimizerExtension],
+    extensions=[lambda: _optimizer],
 )

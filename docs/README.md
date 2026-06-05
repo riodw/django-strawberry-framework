@@ -42,19 +42,15 @@ class Query:
 
 finalize_django_types()
 
+_optimizer = DjangoOptimizerExtension()
 schema = strawberry.Schema(
     query=Query,
     config=strawberry_config(),
-    extensions=[DjangoOptimizerExtension()],
+    extensions=[lambda: _optimizer],
 )
 ```
 
-<!-- TODO(spec-029 Slice 1):
-Rewrite this quick-start schema construction to the singleton-factory optimizer form.
-Pseudo:
-    _optimizer = DjangoOptimizerExtension()
-    schema = strawberry.Schema(..., extensions=[lambda: _optimizer])
--->
+The optimizer is a module-level singleton wrapped in a factory — that preserves the instance-bound [Plan cache][glossary-plan-cache] (Strawberry runs the callable per request and gets the same instance back) and emits no deprecation warning (the entry is a callable, not an instance).
 
 That is the shipped surface: `class Meta` configures the type, `finalize_django_types()` resolves relations after all `DjangoType` modules are imported, and the optimizer extension turns nested selections into Django ORM `select_related`, `prefetch_related`, and `only` calls. Relation fields can point at target types declared earlier or later, as long as every target type is registered before finalization.
 
@@ -145,18 +141,15 @@ from django_strawberry_framework import finalize_django_types, strawberry_config
 from myapp import types as _types  # noqa: F401
 
 finalize_django_types()
-schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])
+_optimizer = DjangoOptimizerExtension()
+schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[lambda: _optimizer])
 ```
-
-<!-- TODO(spec-029 Slice 1):
-Rewrite the recommended and wrong-order snippets above/below to use the singleton-factory
-optimizer form, preserving the warning-free construction contract from spec-029.
--->
 
 Wrong order:
 
 ```python
-schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])
+_optimizer = DjangoOptimizerExtension()
+schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[lambda: _optimizer])
 finalize_django_types()
 ```
 
@@ -270,6 +263,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-filterset]: GLOSSARY.md#filterset
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-orderset]: GLOSSARY.md#orderset
+[glossary-plan-cache]: GLOSSARY.md#plan-cache
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
 [glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command
 

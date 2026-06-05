@@ -2,9 +2,10 @@
 
 Opt-in at schema construction::
 
+    _optimizer = DjangoOptimizerExtension()
     schema = strawberry.Schema(
         query=Query,
-        extensions=[DjangoOptimizerExtension()],
+        extensions=[lambda: _optimizer],
     )
 
 The extension hooks Strawberry's ``resolve`` middleware. At the
@@ -448,12 +449,15 @@ def _resolve_model_from_return_type(info: Any) -> _OriginAndModel | None:
 class DjangoOptimizerExtension(SchemaExtension):
     """Strawberry schema extension that optimizes Django querysets per request.
 
-    Pass an **instance** (not the bare class) to benefit from plan
-    caching in async mode::
+    Pass a module-level singleton wrapped in a factory — that preserves
+    the instance-bound plan cache (Strawberry runs the callable per
+    request and gets the same instance back) and emits no deprecation
+    warning (the entry is a callable, not an instance)::
 
+        _optimizer = DjangoOptimizerExtension()
         schema = strawberry.Schema(
             query=Query,
-            extensions=[DjangoOptimizerExtension()],  # instance!
+            extensions=[lambda: _optimizer],  # singleton wrapped in a factory
         )
 
     The plan cache is correctness-safe under concurrent / async access

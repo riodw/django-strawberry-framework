@@ -30,6 +30,14 @@ class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuer
 
 finalize_django_types()
 
+# TODO(spec-029 Slice 1): Migrate the project schema to the singleton-factory extension form.
+# Pseudo:
+#   _optimizer = DjangoOptimizerExtension()
+#   schema = strawberry.Schema(
+#       query=Query,
+#       config=strawberry_config(),
+#       extensions=[lambda: _optimizer],
+#   )
 schema = strawberry.Schema(
     query=Query,
     config=strawberry_config(),

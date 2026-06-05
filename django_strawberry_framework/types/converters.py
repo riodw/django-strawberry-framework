@@ -188,6 +188,11 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
               raised from ``convert_choices_to_enum`` for nested-tuple
               choice declarations.
     """
+    # TODO(spec-029 Slice 3): Add keyword-only force_nullable: bool | None = None.
+    # Pseudo:
+    #   def convert_scalar(field, type_name, *, force_nullable=None):
+    #       effective_null = field.null if force_nullable is None else force_nullable  # noqa: ERA001
+    #       # Use effective_null in every outer nullability branch below.
     # Sentinel-guarded ``ArrayField`` dispatch runs **before** the MRO walk
     # so a subclass-of-``models.Field`` test double does not accidentally
     # match a parent in ``SCALAR_MAP``. The recursive call into
@@ -207,6 +212,9 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
             )
         inner = convert_scalar(field.base_field, type_name)
         result = list[inner]
+        # TODO(spec-029 Slice 3): Widen ArrayField with effective_null, not field.null.
+        # Pseudo:
+        #   return result | None if effective_null else result  # noqa: ERA001
         return result | None if field.null else result
     # Sentinel-guarded ``HStoreField`` dispatch mirrors the ArrayField
     # posture: outer-``choices`` rejection (HStore stores
@@ -221,6 +229,9 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
                 f"shape with a separate field.",
             )
         py_type = strawberry.scalars.JSON
+        # TODO(spec-029 Slice 3): Widen HStoreField with effective_null, not field.null.
+        # Pseudo:
+        #   return py_type | None if effective_null else py_type  # noqa: ERA001
         return py_type | None if field.null else py_type
     # Shared field-class -> scalar lookup (also used by the filter-input
     # converter) so a column resolves to the same scalar on both sides. Walks
@@ -229,6 +240,10 @@ def convert_scalar(field: models.Field, type_name: str) -> Any:
     py_type = scalar_for_field(field)
     if field.choices:
         py_type = convert_choices_to_enum(field, type_name)
+    # TODO(spec-029 Slice 3): Widen scalar and choice results with effective_null.
+    # Pseudo:
+    #   if effective_null:
+    #       py_type = py_type | None  # noqa: ERA001
     if field.null:
         py_type = py_type | None
     return py_type

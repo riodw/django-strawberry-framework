@@ -145,6 +145,14 @@ No active WIP cards.
 - Relative size: S-M
 - Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/spec-029-consumer_dx_cleanup-0_0_9.md)
 
+<!-- TODO(spec-029 wrap):
+When all slices ship, update the kanban app source rows and regenerate this rendered board.
+Pseudo:
+    move WIP-ALPHA-029-0.0.9 to DONE-NNN-0.0.9
+    rewrite stale card-body spec and 0.0.8 changelog references in the source data
+    run scripts/build_kanban_md.py and scripts/build_kanban_html.py
+-->
+
 #### Planning note
 
 planned; three independent slices that ship in any order. Card body counts as complete when all three slices land; if the schedule forces Slice 3 to defer, the slice carves off as its own follow-up card without disrupting Slices 1 + 2.

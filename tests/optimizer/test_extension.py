@@ -31,6 +31,13 @@ Every test uses the autouse ``_isolate_registry`` fixture so the
 global ``registry`` is cleared on entry and exit.
 """
 
+# TODO(spec-029 Slice 1): Migrate every schema-construction site in this file.
+# Pseudo:
+#   ext = DjangoOptimizerExtension(...)
+#   schema = strawberry.Schema(..., extensions=[lambda: ext])
+#   # Keep function-local ext objects where tests assert cache_info().
+#   # Wrap _CaptureExt() subclass instances too; literal-only greps miss them.
+
 import contextlib
 from types import SimpleNamespace
 

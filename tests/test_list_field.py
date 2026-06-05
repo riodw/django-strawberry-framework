@@ -35,6 +35,11 @@ are genuinely unreachable from the sync ``GraphQLView`` mounted at
 ``RuntimeError: GraphQL execution failed to complete synchronously``).
 """
 
+# TODO(spec-029 Slice 1): Wrap optimizer extension instances used by list-field tests.
+# Pseudo:
+#   ext = DjangoOptimizerExtension()
+#   schema = strawberry.Schema(..., extensions=[lambda: ext])
+
 import functools
 from types import SimpleNamespace
 from typing import Any

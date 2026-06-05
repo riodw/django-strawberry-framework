@@ -49,6 +49,13 @@ schema = strawberry.Schema(
 )
 ```
 
+<!-- TODO(spec-029 Slice 1):
+Rewrite this quick-start schema construction to the singleton-factory optimizer form.
+Pseudo:
+    _optimizer = DjangoOptimizerExtension()
+    schema = strawberry.Schema(..., extensions=[lambda: _optimizer])
+-->
+
 That is the shipped surface: `class Meta` configures the type, `finalize_django_types()` resolves relations after all `DjangoType` modules are imported, and the optimizer extension turns nested selections into Django ORM `select_related`, `prefetch_related`, and `only` calls. Relation fields can point at target types declared earlier or later, as long as every target type is registered before finalization.
 
 ### Relay Node
@@ -140,6 +147,11 @@ from myapp import types as _types  # noqa: F401
 finalize_django_types()
 schema = strawberry.Schema(query=Query, config=strawberry_config(), extensions=[DjangoOptimizerExtension()])
 ```
+
+<!-- TODO(spec-029 Slice 1):
+Rewrite the recommended and wrong-order snippets above/below to use the singleton-factory
+optimizer form, preserving the warning-free construction contract from spec-029.
+-->
 
 Wrong order:
 

@@ -355,6 +355,14 @@ Strawberry schema extension that translates selected GraphQL fields into Django 
 schema = strawberry.Schema(query=Query, extensions=[DjangoOptimizerExtension()])
 ```
 
+<!-- TODO(spec-029 Slice 1):
+Rewrite this snippet and the other schema-construction snippets in this file to the
+singleton-factory optimizer form.
+Pseudo:
+    _optimizer = DjangoOptimizerExtension()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: _optimizer])
+-->
+
 Shipped behavior:
 
 - root-gated optimization for root resolvers returning Django `QuerySet`s
@@ -713,6 +721,17 @@ Promotion gate: no longer in `DEFERRED_META_KEYS` since `0.0.8`. Declaring the k
 
 **Status:** shipped (`0.0.6`).
 
+<!-- TODO(spec-029 Slice 3):
+Add sibling entries for Meta.nullable_overrides and Meta.required_overrides.
+Pseudo:
+    ## Meta.nullable_overrides
+    Status: shipped (0.0.9)
+    tuple/list of scalar field names forced nullable; reject relation and consumer-authored fields.
+    ## Meta.required_overrides
+    Status: shipped (0.0.9)
+    tuple/list of scalar field names forced required; consumer must guarantee non-null data.
+-->
+
 Boolean flag (default `False`) declared on a `DjangoType`'s nested `Meta` to opt one of several types on the same Django model into the **primary** role. The primary type is the one auto-synthesized relation fields resolve to and the one [`registry.get(model)`](#djangotype) returns. Secondary types are still registered and reverse-discoverable via `registry.model_for_type(SecondaryType)`, so resolvers returning a secondary type stay planable through [`DjangoOptimizerExtension`](#djangooptimizerextension).
 
 Ambiguity rules:
@@ -1033,6 +1052,16 @@ Opt-out continues via [`Meta.exclude`](#metaexclude); field-level metadata (desc
 ## Schema export management command
 
 **Status:** shipped (`0.0.7`).
+
+<!-- TODO(spec-029 Slice 2):
+Add the Schema introspection management command / inspect_django_type entry near this section,
+plus index and category links.
+Pseudo:
+    ## Schema introspection management command
+    Status: shipped (0.0.9)
+    manage.py inspect_django_type <Type> [--schema config.schema]
+    dotted type args use import_string; bare names use unique registry lookup.
+-->
 
 `django_strawberry_framework/management/commands/export_schema.py` ships `Command(BaseCommand)` with positional `schema` (dotted path, default symbol name `"schema"`) and optional `--path`; SDL output via `strawberry.printer.print_schema`. `--path` omitted writes SDL to `self.stdout`; `--path <file>` writes UTF-8 SDL to the named path and reports `Wrote schema to <file>` via `self.style.SUCCESS`. `CommandError` for unimportable dotted path, non-`strawberry.Schema` resolved symbol, missing positional argument, bare `--path` with no value, empty-string `--path`, and file-write `OSError` (missing parent directory, permission denied, target is a directory). No `--watch` / `--indent` / JSON mode / settings-backed defaults in `0.0.7`.
 

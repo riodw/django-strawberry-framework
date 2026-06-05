@@ -190,6 +190,13 @@ django_graphene_filters/
 The shared infrastructure plus model/type, optimizer, filters, orders, testing, and utility subpackages are on disk: `types/`, `optimizer/`, `filters/`, `orders/`, `testing/`, and `utils/`. Every other module shown in the target package layout below — the remaining query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the full test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
 The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`, `apps.scalars`, `apps.kanban`, `apps.glossary`). `apps.products` is the catalog example (Category / Item / Property / Entry); `apps.library` is the deeper relation example (Branch / Shelf / Book / Patron / Loan, with `Patron.lifetime_fines_cents` as a real-domain `BigIntegerField → BigInt` proof); `apps.scalars` is a test substrate carrying the paired `ScalarSpecimen` (every scalar non-null + self-FK) / `NullableScalarSpecimen` (every scalar nullable + cross-model FK to `ScalarSpecimen` with `on_delete=SET_NULL`) layout that pins every non-trivial converter row in both shapes via live `/graphql/` tests; `apps.kanban` is the relational source for the exported root `KANBAN.md` and owns the shared `BoardDoc` prose-section table; `apps.glossary` is the relational source for glossary terms and spec-term audit rows, while its generic prose sections share `BoardDoc` under `namespace="glossary"`. `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
 
+<!-- TODO(spec-029 Slice 2):
+List django_strawberry_framework/management/commands/inspect_django_type.py in the tree once
+the command ships, and mirror it with tests/management/test_inspect_django_type.py below.
+Pseudo:
+    inspect_django_type.py  # inspect DjangoType field-resolution metadata
+-->
+
 ```text
 django_strawberry_framework/
 ├── __init__.py              # public-API re-exports (DjangoType, DjangoOptimizerExtension, OptimizerHint, BigInt, finalize_django_types, auto)

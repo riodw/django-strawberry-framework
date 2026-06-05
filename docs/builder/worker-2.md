@@ -22,7 +22,7 @@ Worker 2 may edit:
 - tests required by the current artifact
 - docs required by the current artifact
 - `CHANGELOG.md` only when the active spec explicitly includes changelog work or the maintainer explicitly authorizes it through the artifact
-- the current `docs/builder/bld-*.md` artifact, appending build-report sections only
+- the current `docs/builder/bld-*.md` artifact: appending build-report sections, AND ticking `- [x]` the `### Spec slice checklist (verbatim)` boxes whose contract landed in the current pass (see the Build job). Do not otherwise edit prior sections.
 - `docs/builder/worker-memory/worker-2.md`
 
 Worker 2 must not:
@@ -30,7 +30,7 @@ Worker 2 must not:
 - edit the active spec
 - edit Worker 0/1/3 memory
 - mark build-plan checkboxes
-- tick sub-check boxes (`- [ ]`) inside the artifact's `### Spec slice checklist (verbatim)` section. Worker 1 owns those boxes; Worker 2 implements the underlying contract
+- **over-tick** sub-check boxes: Worker 2 DOES tick `### Spec slice checklist (verbatim)` boxes, but ONLY a box whose contract actually landed in its diff this pass (see the Build job). Never tick a box for a deferred or not-yet-built sub-check (leave it `- [ ]` and note the deferral in the build report), and never touch the slice-level `- [ ]` boxes in `build-<NNN>-*.md` — those are Worker 0's. Worker 1 audits every tick at final verification
 - edit prior artifact sections except to append a new build report
 - make unrelated cleanup
 - broaden the slice beyond Worker 1's plan
@@ -51,9 +51,10 @@ Worker 2 must not:
 9. Run `uv run ruff check --fix .`.
 10. Run `git status --short` after both ruff invocations. For each modified file, classify: slice-intended (stays in the diff and appears in `### Files touched`) or unrelated tool churn (revert with `git checkout -- path` before continuing). Tool-induced drift is your responsibility to own at this boundary — never pass it through to Worker 3 as "out of scope" or defer it to Worker 1. If a tooling-caused change cannot be cleanly classified, escalate to the maintainer.
 11. Do not run `pytest` unless the artifact explicitly instructs you to run a focused test as part of the pass; Worker 1 owns the normal test gates. When the artifact does require a focused `pytest`, run it **without** `--cov*` flags. Use the focused run only to confirm pass/fail of the assertions you wrote; never to chase coverage.
-12. Append a `Build report (Worker 2)` section, or `Build report (Worker 2, pass N)` on re-pass.
-13. Set the artifact `Status:` line to `built` so Worker 0 knows to dispatch Worker 3 next.
-14. Append a short memory entry when the pass is complete.
+12. Tick each `### Spec slice checklist (verbatim)` box `- [x]` whose contract landed in this pass's diff, so progress is visible incrementally rather than only at final verification. Tick ONLY boxes whose contract actually landed; leave a deferred or not-yet-built sub-check `- [ ]` and state the deferral in the build report. On a re-pass, tick any box the re-pass newly lands. Do not edit the box text — only the `[ ]` → `[x]` marker. Worker 1 audits every tick at final verification.
+13. Append a `Build report (Worker 2)` section, or `Build report (Worker 2, pass N)` on re-pass.
+14. Set the artifact `Status:` line to `built` so Worker 0 knows to dispatch Worker 3 next.
+15. Append a short memory entry when the pass is complete.
 
 ### Pass-name and status conventions
 

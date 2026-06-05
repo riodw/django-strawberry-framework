@@ -29,6 +29,7 @@ from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import models
 from django.utils.module_loading import import_string
 from strawberry import relay
+from strawberry.types.base import StrawberryList, StrawberryOptional
 from strawberry.utils.importer import import_module_symbol
 
 from django_strawberry_framework.registry import registry
@@ -160,12 +161,29 @@ class Command(BaseCommand):
             )
 
     def _resolve_row(self, definition: object, field: models.Field) -> tuple[str, str, str]:
-        """Return ``(graphql_type, nullable, converter)`` for one selected field."""
+        """Return ``(graphql_type, nullable, converter)`` for one selected field.
+
+        Dispatch is most-specific first:
+
+        1. A Relay-Node-suppressed pk wins over everything — its
+           ``id: GlobalID!`` is interface-supplied, so it is absent from
+           ``origin.__annotations__`` and must not be read there (a relation pk
+           on a Relay type, e.g. ``OneToOneField(primary_key=True)``, would
+           otherwise reach ``_relation_row`` and ``KeyError``).
+        2. A consumer-authored field (``definition.consumer_authored_fields``)
+           is next: ``_build_annotations`` deliberately skips auto-synthesis for
+           it (the four-corner override contract in ``types/base.py``), so
+           neither the relation auto-converter nor a ``SCALAR_MAP`` row produced
+           it — the consumer's annotation / ``strawberry.field`` did.
+        3. Only then do the auto-synthesized relation / scalar branches apply.
+        """
         field_meta = definition.field_map[snake_case(field.name)]
-        if field_meta.is_relation:
-            return self._relation_row(definition, field, field_meta)
         if self._is_suppressed_relay_pk(definition, field):
             return _GLOBAL_ID_GRAPHQL_TYPE, "no", _RELAY_PK_CONVERTER
+        if field.name in definition.consumer_authored_fields:
+            return self._consumer_authored_row(definition, field)
+        if field_meta.is_relation:
+            return self._relation_row(definition, field, field_meta)
         return self._scalar_row(definition, field)
 
     @staticmethod
@@ -210,6 +228,27 @@ class Command(BaseCommand):
         converter = "choice enum" if field.choices else f"SCALAR_MAP[{_matched_scalar_key(field)}]"
         return graphql_type, nullable, converter
 
+    @staticmethod
+    def _consumer_authored_row(definition: object, field: models.Field) -> tuple[str, str, str]:
+        """Build the row for a consumer-authored field (annotation / ``strawberry.field`` override).
+
+        ``_build_annotations`` skips auto-synthesis for any name in
+        ``definition.consumer_authored_fields``, so the resolved GraphQL type is
+        read from the finalized Strawberry field metadata
+        (``origin.__strawberry_definition__``) rather than ``origin.__annotations__``.
+        The Strawberry field's ``.type`` is the single authoritative post-finalize
+        record for BOTH override kinds and already resolves forward references,
+        whereas ``origin.__annotations__`` holds a ``StrawberryAnnotation`` for an
+        assigned field and an unresolved forward-reference string for an annotated
+        relation — neither renderable here.
+        """
+        strawberry_fields = definition.origin.__strawberry_definition__.fields
+        field_type = next(sf.type for sf in strawberry_fields if sf.python_name == field.name)
+        graphql_type = _render_strawberry_type(field_type)
+        nullable = _consumer_nullable(field_type)
+        converter = _consumer_converter_label(definition, field.name)
+        return graphql_type, nullable, converter
+
 
 def _yes_no(value: bool) -> str:
     """Render a boolean as the ``yes`` / ``no`` nullability-column token."""
@@ -231,13 +270,68 @@ def _matched_scalar_key(field: models.Field) -> str:
     converted by its nearest supported ancestor — ``MyTextField(TextField)``
     fires the ``TextField`` row, not a ``MyTextField`` row. Report that ancestor
     so the converter column names the row that actually fired. Falls back to the
-    concrete class name, which is only reached for an unsupported field — itself
-    unreachable for a finalized type, whose scalars all resolved at construction.
+    concrete class name, only reachable for a field with no ``SCALAR_MAP``
+    ancestor — and this helper only ever sees an *auto-synthesized* scalar
+    (``_resolve_row`` routes every consumer-authored field, including an
+    annotation override of an unsupported column, to ``_consumer_authored_row``
+    first), whose scalar necessarily resolved at construction. So the fallback is
+    unreachable for a finalized type.
     """
     return next(
         (klass.__name__ for klass in type(field).__mro__ if klass in SCALAR_MAP),
         type(field).__name__,
     )
+
+
+def _render_strawberry_type(field_type: object) -> str:
+    """Render a finalized Strawberry field type as a GraphQL-shaped string.
+
+    The Strawberry-wrapper analogue of ``_render_annotation`` (which renders
+    Python typing annotations): ``StrawberryOptional`` is the nullable ``Name``
+    form (strip the trailing ``!``), ``StrawberryList`` is ``[Inner!]!`` (a
+    non-null list whose element keeps its own rendered nullability), and a
+    concrete leaf scalar / type is ``Name!`` via ``_scalar_name``.
+    """
+    if isinstance(field_type, StrawberryOptional):
+        return _render_strawberry_type(field_type.of_type).rstrip("!")
+    if isinstance(field_type, StrawberryList):
+        return f"[{_render_strawberry_type(field_type.of_type)}]!"
+    return f"{_scalar_name(field_type)}!"
+
+
+def _consumer_nullable(field_type: object) -> str:
+    """Map a finalized Strawberry field type to the nullability-column token.
+
+    A ``StrawberryOptional`` (including ``list[T] | None``, whose top wrapper is
+    the optional) is nullable ``yes``; a non-optional ``StrawberryList`` is
+    ``no (list)`` to match the relation-row convention; any other leaf is ``no``.
+    """
+    if isinstance(field_type, StrawberryOptional):
+        return "yes"
+    if isinstance(field_type, StrawberryList):
+        return "no (list)"
+    return "no"
+
+
+def _consumer_converter_label(definition: object, name: str) -> str:
+    """Name the override row that produced a consumer-authored field.
+
+    ``annotation`` vs ``strawberry.field`` distinguishes the two authoring styles
+    and the ``(scalar)`` / ``(relation)`` suffix names the column kind — both
+    facts come straight from the four-corner override sets recorded on the
+    definition (see ``types/base._consumer_assigned_fields``). This is the row
+    that actually fired: NOT the relation auto-converter and NOT a ``SCALAR_MAP``
+    entry, both of which ``_build_annotations`` skipped for this name.
+    """
+    annotated = name in (
+        definition.consumer_annotated_scalar_fields | definition.consumer_annotated_relation_fields
+    )
+    is_relation = name in (
+        definition.consumer_annotated_relation_fields | definition.consumer_assigned_relation_fields
+    )
+    source = "annotation" if annotated else "strawberry.field"
+    kind = "relation" if is_relation else "scalar"
+    return f"consumer {source} ({kind})"
 
 
 def _scalar_name(scalar: object) -> str:

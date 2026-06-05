@@ -102,7 +102,7 @@ Each top-level item maps to one commit / PR. **Three independent functional slic
   - [ ] Rewrite **every** instance-form `extensions=` entry — anonymous `[DjangoOptimizerExtension()]`, **named** (`ext = DjangoOptimizerExtension(); extensions=[ext]`), and the bare class `[DjangoOptimizerExtension]` — to a factory over a singleton **scoped to that construction site**: `extensions=[lambda: <instance>]`. This preserves the instance-bound [Plan cache][glossary-plan-cache] (same instance per request under 0.316.0's `get_extensions`) AND drops the `Schema.__init__` instance-form `DeprecationWarning`. Do NOT use the bare class or a constructing-`lambda` `lambda: DjangoOptimizerExtension()` (re-instantiated per request → cold cache, both modes, and a cache-hit-test failure).
   - [ ] Code sites — **per construction site, not per file** (per [Decision 3](#decision-3--slice-1-adopts-the-singleton-factory-extensions-form)); audit the whole set with `rg 'extensions=\[' <files>` (≈48 entries across the 5 package test files), wrapping **every** entry — anonymous, named `ext`, `strictness=`, bare class, and the two `_CaptureExt()` **subclass** instances in [`tests/optimizer/test_extension.py`][test-extension] (a `DjangoOptimizerExtension()`-literal grep misses these): in [`tests/optimizer/test_extension.py`][test-extension] (41) the cache tests keep their **function-local** `ext` and wrap it `extensions=[lambda: ext]` (a shared module-level instance would pollute per-test `cache_info()` counters); [`tests/optimizer/test_relay_id_projection.py`][test-relay-id-projection] (3) keeps each site's instance including the `strictness="raise"` one (one module-level instance cannot carry two strictness values); same per-site wrap for [`tests/optimizer/test_field_meta.py`][test-field-meta] (1) / [`tests/test_list_field.py`][test-list-field] (2) / [`tests/types/test_generic_foreign_key.py`][test-generic-fk] (1) / [`examples/fakeshop/test_query/test_multi_db.py`][fakeshop-test-multi-db] (1). The example schema [`examples/fakeshop/config/schema.py`][fakeshop-config-schema] (currently the bare class — a cold-cache regression under 0.316.0) and [`TODAY.md`][today] (class form) have one schema per module, so a module-level `_optimizer` is right there.
   - [ ] Consumer-doc snippets: rewrite the `extensions=[DjangoOptimizerExtension()]` schema-construction snippets in [`docs/README.md`][docs-readme] and [`docs/GLOSSARY.md`][glossary] to the module-level-singleton factory form (one schema per snippet), with a one-line "module-level singleton wrapped in a factory — preserves the instance-bound [Plan cache][glossary-plan-cache], no deprecation warning" note. Migrate the [`examples/fakeshop/test_query/README.md`][fakeshop-test-query-readme] prose snippet too (prose, not test-breaking, but kept consistent).
-  - [ ] Bring the [`GOAL.md`][goal] astronomy schema into the sweep: it currently constructs `strawberry.Schema(query=Query, config=strawberry_config())` with **no** `extensions=` at all, so the north-star recipe omits a foundation feature this Strawberry port adds over the old Graphene package — Slice 1 adds `DjangoOptimizerExtension` via the singleton-factory (`_optimizer = DjangoOptimizerExtension(); … extensions=[lambda: _optimizer]`) so the feature-complete example shows the optimized boundary the [`DjangoConnectionField`][glossary-djangoconnectionfield] / Relay cards inherit by default.
+  - [ ] Bring the [`GOAL.md`][goal] astronomy schema into the sweep: it currently constructs `strawberry.Schema(query=Query, config=strawberry_config())` (the [`strawberry_config`][glossary-strawberry-config] scalar-map factory) with **no** `extensions=` at all, so the north-star recipe omits a foundation feature this Strawberry port adds over the old Graphene package — Slice 1 adds `DjangoOptimizerExtension` via the singleton-factory (`_optimizer = DjangoOptimizerExtension(); … extensions=[lambda: _optimizer]`) so the feature-complete example shows the optimized boundary the [`DjangoConnectionField`][glossary-djangoconnectionfield] / Relay cards inherit by default.
   - [ ] **Post-migration forbidden-form gate:** after the rewrite, a grep for the **exact forbidden forms** finds zero hits in active source/docs — `extensions=[DjangoOptimizerExtension()]`, `extensions=[DjangoOptimizerExtension]`, `extensions=[ext]`, `extensions=[_CaptureExt()]`, and `lambda: DjangoOptimizerExtension()`. (The broad `rg 'extensions=\['` audit finds construction *sites*; this forbidden-form grep catches the exact regressions Slice 1 removes.) The only surviving instance-form occurrences are this spec's own quoted examples and historical CHANGELOG / archived-spec prose.
   - [ ] [`CHANGELOG.md`][changelog]: append a `### Changed` bullet under `[Unreleased]` recording the migration to the singleton-factory `extensions=` form (preserves the plan cache, removes Strawberry's instance-form `DeprecationWarning`). No version-heading promotion (per [Decision 11](#decision-11--version-bumps-are-owned-by-the-joint-009-cut)).
 - [ ] Slice 2: `inspect_django_type` diagnostic command
@@ -183,7 +183,7 @@ This card is one *enabling* step in the larger effort to rebuild the released [`
 | `AdvancedOrderSet` / `RelatedOrder` | [`OrderSet`][glossary-orderset] / [`RelatedOrder`][glossary-relatedorder] | shipped (`0.0.8`) |
 | `AdvancedDjangoFilterConnectionField` | [`DjangoConnectionField`][glossary-djangoconnectionfield] / full Relay / [connection-aware optimizer planning][glossary-connection-aware-optimizer-planning] | planned (`0.0.9` — [`WIP-ALPHA-030/031/032-0.0.9`][kanban]) |
 | `AdvancedFieldSet` | [`FieldSet`][glossary-fieldset] | planned (`0.1.1`) |
-| `AdvancedAggregateSet` / `RelatedAggregate` | [`AggregateSet`][glossary-aggregateset] / `RelatedAggregate` | planned (`0.1.3`) |
+| `AdvancedAggregateSet` / `RelatedAggregate` | [`AggregateSet`][glossary-aggregateset] / [`RelatedAggregate`][glossary-relatedaggregate] | planned (`0.1.3`) |
 | `apply_cascade_permissions` | [`apply_cascade_permissions`][glossary-apply_cascade_permissions] (permissions subsystem) | planned (`0.0.10`) |
 | `SearchQueryFilter` / `SearchRankFilter` / `TrigramFilter` + `Meta.search_fields` | Postgres search filters + [`Meta.search_fields`][glossary-metasearch_fields] | planned (`0.1.2`) |
 
@@ -255,7 +255,7 @@ BookType  (model: apps.library.models.Book)
   loans                reverse ForeignKey   [LoanType!]!                     no (list)  relation: reverse FK
 ```
 
-`BookType` is **not** Relay-shaped (its `Meta` declares no `interfaces`), so its `id` renders as a plain `Int!` read from `origin.__annotations__`, not `GlobalID!`. A Relay-Node type — e.g. `GenreType` (`Meta.interfaces = (relay.Node,)`) — instead shows `id → GlobalID! → relay.Node id`, sourced from the interface (the pk is suppressed from `cls.__annotations__`) per [Decision 4](#decision-4--inspect_django_type-command-shape-and-argument-resolution)'s suppressed-pk contract.
+`BookType` is **not** Relay-shaped (its `Meta` declares no `interfaces`), so its `id` renders as a plain `Int!` read from `origin.__annotations__`, not `GlobalID!`. A Relay-Node type — one whose [`Meta.interfaces`][glossary-metainterfaces] includes `relay.Node`, e.g. `GenreType` (`Meta.interfaces = (relay.Node,)`) — instead shows `id → GlobalID! → relay.Node id`, sourced from the [Relay Node integration][glossary-relay-node-integration] interface (the pk is suppressed from `cls.__annotations__`) per [Decision 4](#decision-4--inspect_django_type-command-shape-and-argument-resolution)'s suppressed-pk contract.
 
 ### Slice 3 — `Meta.nullable_overrides` / `Meta.required_overrides`
 
@@ -740,19 +740,23 @@ The completion contract the card is built against. Items are grouped by slice; t
 [glossary-metafields]: GLOSSARY.md#metafields
 [glossary-metafields_class]: GLOSSARY.md#metafields_class
 [glossary-metafilterset_class]: GLOSSARY.md#metafilterset_class
+[glossary-metainterfaces]: GLOSSARY.md#metainterfaces
 [glossary-metaoptimizer_hints]: GLOSSARY.md#metaoptimizer_hints
 [glossary-metaorderset_class]: GLOSSARY.md#metaorderset_class
 [glossary-metaprimary]: GLOSSARY.md#metaprimary
 [glossary-metasearch_fields]: GLOSSARY.md#metasearch_fields
 [glossary-orderset]: GLOSSARY.md#orderset
 [glossary-plan-cache]: GLOSSARY.md#plan-cache
+[glossary-relatedaggregate]: GLOSSARY.md#relatedaggregate
 [glossary-relatedfilter]: GLOSSARY.md#relatedfilter
 [glossary-relatedorder]: GLOSSARY.md#relatedorder
 [glossary-relation-handling]: GLOSSARY.md#relation-handling
+[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
 [glossary-scalar-field-conversion]: GLOSSARY.md#scalar-field-conversion
 [glossary-scalar-field-override-semantics]: GLOSSARY.md#scalar-field-override-semantics
 [glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command
 [glossary-specialized-scalar-conversions]: GLOSSARY.md#specialized-scalar-conversions
+[glossary-strawberry-config]: GLOSSARY.md#strawberry_config
 [glossary-strictness-mode]: GLOSSARY.md#strictness-mode
 [spec-029]: spec-029-consumer_dx_cleanup-0_0_9.md
 [spec-029-terms]: spec-029-consumer_dx_cleanup-0_0_9-terms.csv

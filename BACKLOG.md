@@ -54,22 +54,6 @@ The package's Relay Node foundation deliberately stays limited to `Meta.interfac
 - Resolve how Node lookup chooses a GraphQL type once `Meta.primary` permits multiple `DjangoType`s for the same Django model.
 - Revisit whether one model can expose multiple Relay IDs for different public/admin/list/detail variants without breaking client cache identity.
 
-### 7. Optimizer "explain" mode as a first-class GraphQL extension
-
-**Realistic**: 10/10 — We already stash the plan in `info.context.dst_optimizer_plan`; this is just serializing it into the response extensions.
-
-**Impact**: 8/10 — Devtools-grade visibility for the Django ORM half of GraphQL queries; nobody else ships this.
-
-**Difficulty**: 2/10 — Tiny slice — opt-in extension, serialize existing data, document the toggle.
-
-**What `graphene-django` does**: nothing — you read SQL logs and reverse-engineer the plan.
-
-**What `strawberry-graphql-django` does**: nothing — same.
-
-**What we'd do**: promote the existing `info.context.dst_optimizer_plan` stash to a built-in `DST-Plan` extension that returns the plan in the GraphQL response (toggled per-request via a header, query param, or `@plan` directive). Output format: JSON describing `select_related`, `prefetch_related`, `Prefetch` chains, `only()` projection, hints applied, FK-id elisions, and strictness decisions.
-
-**Why it matters**: this is GraphiQL-grade dev tooling specifically for the Django ORM half of GraphQL. Lets developers see "what did the optimizer do for this query?" without grepping logs. Nobody offers this. Particularly powerful when paired with item 1 (permissions): the explain output also shows which permission filters were applied.
-
 ### 23. Mutation transactions and idempotency
 
 **Realistic**: 10/10 — `transaction.atomic()` is one line; idempotency-key cache lookup is a standard pattern.
@@ -121,7 +105,7 @@ A second mutation with the same `request_id` within the TTL returns the cached f
 
 **Realistic**: 10/10 — The extension already has the `on_execute` hook that builds the plan; an early-return check is one branch. The context-key plumbing pattern is already established (`info.context.dst_optimizer_plan`, `dst_optimizer_fk_id_elisions`).
 
-**Impact**: 5/10 — Real win for debugging and CI baselines but a smaller audience than item 7 ("explain mode"); useful primarily to package maintainers, test authors, and developers chasing the question *"is this slow because of MY code or the optimizer?"*.
+**Impact**: 5/10 — Real win for debugging and CI baselines but a smaller audience than the promoted [Optimizer explain mode][card-optimizer-explain-mode] card; useful primarily to package maintainers, test authors, and developers chasing the question *"is this slow because of MY code or the optimizer?"*.
 
 **Difficulty**: 2/10 — ~20 lines of code: one context-key constant, one early-return guard in the extension's `on_execute` hook, optional settings default, plus tests. The doc effort is larger than the code — consumers need to know exactly what behavior changes when disabled (FK-id stubs aren't built, `select_related` / `prefetch_related` aren't applied, `only()` projections aren't added) so they can reason about the trade.
 
@@ -142,7 +126,7 @@ context_value = {"dst_disable_optimizer": True}
 DJANGO_STRAWBERRY_FRAMEWORK = {"OPTIMIZER_DEFAULT": "off"}
 ```
 
-**Why it matters**: today the optimizer is binary — either include the extension or omit it at schema construction time. There's no way to compare optimized vs unoptimized execution on the same schema in a single test session, and no way to debug *"is this slowness from the optimizer or my resolver?"* without rebuilding the schema. Companion to **item 7** ("explain mode"): together they form the optimizer's debugging pair — *"see the plan"* and *"see what happens without the plan."* Distinct from the existing **B3 strictness mode** (already shipped) which detects unintended lazy loads *when the optimizer is on*; this feature is the orthogonal *"turn the optimizer off entirely for this request"* surface. Pairs cleanly with **item 22** (Anti-N+1 CI mode): the CI gate can run the same suite both with and without the optimizer and assert that query counts diverge — direct proof the optimizer is doing meaningful work.
+**Why it matters**: today the optimizer is binary — either include the extension or omit it at schema construction time. There's no way to compare optimized vs unoptimized execution on the same schema in a single test session, and no way to debug *"is this slowness from the optimizer or my resolver?"* without rebuilding the schema. Companion to the promoted [Optimizer explain mode][card-optimizer-explain-mode] card: together they form the optimizer's debugging pair — *"see the plan"* and *"see what happens without the plan."* Distinct from the existing **B3 strictness mode** (already shipped) which detects unintended lazy loads *when the optimizer is on*; this feature is the orthogonal *"turn the optimizer off entirely for this request"* surface. Pairs cleanly with **item 22** (Anti-N+1 CI mode): the CI gate can run the same suite both with and without the optimizer and assert that query counts diverge — direct proof the optimizer is doing meaningful work.
 
 ### 37. Public surface promotion discipline
 
@@ -228,131 +212,6 @@ class FieldError:
 Codes come from a package registry that consumers extend (`@register_error_code("payment.declined")`). The translation hook uses Django's `gettext` so messages localize per request locale. DRF's `ValidationError.detail` with its `code` attribute maps in directly; `form.errors.as_data()` Django-Form errors map in via `form.errors.get_json_data()`.
 
 **Why it matters**: client-side error handling beyond *"show the string in a toast"* requires structured codes — branching logic on `code == "payment.declined"` is the table-stakes pattern, and GraphQL's missing standard pushes every team to roll their own (`extensions.code`, Apollo Error Link conventions, the `graphql-errors` package, ad-hoc string parsing). DRF has had `code` on validation errors for years; we can ship the GraphQL equivalent as a first-class envelope.
-
-### 40. Django-model-based GlobalID encoding (instead of GraphQL-type-based)
-
-**Realistic**: 9/10 — Drop-in replacement for the type-name-based encoder. Reuses Django's stable `_meta.label_lower` API; the decoder change is bounded. No new infrastructure; no rebuild of Strawberry's Relay layer.
-
-**Impact**: 8/10 — Eliminates an entire class of *"we renamed a GraphQL type and now every Apollo cache entry is a miss"* production incidents. Aligns durability of GlobalIDs with durability of Django model identity — the right thing. Foundational shift, not a feature add; downstream effects are large (this is what makes item 39 sub-feature 1 a tiny helper instead of a full migration system).
-
-**Difficulty**: 3/10 — The encode and decode functions swap their identifier source (`type._strawberry_definition.name` → `type._meta.model._meta.label_lower`). Add per-model override via `Meta.globalid_strategy` and schema-wide default via Django setting. Small slice.
-
-**What `graphene-django` / `graphene-relay-django` does**: encodes `b64("DjangoObjectTypeName:id")` — the GraphQL type name is the identity. Renaming the GraphQL type breaks every cached client ID, and there's no upstream story for it.
-
-**What `strawberry-graphql-django` does**: same — `b64("TypeName:id")`. Same renaming hazard, same lack of mitigation.
-
-**What the Relay spec actually requires**: GlobalIDs must be (a) *globally unique within the schema*, (b) *opaque to clients*, and (c) *resolve correctly via `node(id:)`*. **The encoding payload is implementation-defined.** The type-name convention is cargo-culted from the Facebook reference implementation, where the GraphQL type name was the natural durable identifier. **In Django apps, it isn't** — the Django model is what's durable; the GraphQL type is a presentation-layer choice that should be free to refactor.
-
-**What we'd do**: invert the durability assumption. Default GlobalID encoding becomes `app_label.model_name:id` (e.g., `b64("products.item:42")`). The GraphQL type name no longer participates in the encoded payload — so renaming `ItemType` → `ProductType` (or splitting one type into `PublicItemType` + `AdminItemType`) **stops breaking cached IDs entirely**. The only events that *can* invalidate an ID are Django-side data migrations (model renames, app moves), and those already require explicit developer intent.
-
-#### Design decision 1: precedence chain
-
-Three sources of truth, in priority order:
-
-1. **Per-model `Meta.globalid_strategy`** — the most specific declaration wins.
-2. **Schema-wide setting `DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]`** — the project-wide default.
-3. **Package default** — `"model"` (the new convention).
-
-This mirrors how every other Django setting works (project setting overrides package default; per-instance override beats project setting).
-
-#### Design decision 2: three modes, plus callable
-
-- **`"model"`** *(new default)* — encodes `app_label.model_name:id`. Example: `b64("products.item:42")`. Reads `type_cls._meta.model._meta.label_lower` for the identifier.
-- **`"type"`** *(opt-in fallback)* — encodes `GraphQLTypeName:id`. Example: `b64("ItemType:42")`. Reads `type_cls._strawberry_definition.name`. For teams who want the standard Relay convention — most commonly multi-tenant setups where the GraphQL type discriminates auth scope (e.g., `PublicItemType` and `AdminItemType` should *not* share an ID space).
-- **`"type+model"`** *(transitional)* — encodes `b64("ItemType|products.item:42")`. Decoder accepts either fragment for routing. Useful during a one-time migration from `"type"` to `"model"` — emit dual-encoded IDs for a deployment cycle, then switch fully to `"model"` after the old client cache has rolled over.
-- **Callable** — full consumer control: `globalid_strategy = lambda type_cls, id_value: ...`. For custom encodings (HMAC-signed opaque tokens, version-prefixed IDs, namespaced multi-tenant IDs).
-
-#### Design decision 3: routing decoded IDs
-
-The decoded `app_label.model_name` resolves to a Django model via Django's app registry. The `registry.get_definition_for_model(model)` lookup returns the `DjangoTypeDefinition` for that model. If multiple `DjangoType`s exist for the same model (`Meta.primary` — [014-multiple_djangotypes_per_model_with_metaprimary-0.0.6][card-multiple-djangotypes-per-model-with-metaprimary]), the primary type wins; consumers reaching for a non-primary type use a Strawberry `... on AdminItemType { ... }` inline fragment.
-
-This works *better* than the type-name encoding for the multi-`DjangoType`-per-model case: instead of needing a separate GlobalID for every type variant over the same model, all variants share one ID space and the schema author picks the discriminator (primary type, or explicit inline fragments).
-
-#### Design decision 4: edge cases handled
-
-| Case | Encoded payload | Decoded routing |
-|---|---|---|
-| **Standard `DjangoType`** | `b64("products.item:42")` | `apps.get_model("products", "item")` → `ItemType` |
-| **Multiple `DjangoType`s per model** (`Meta.primary`) | `b64("products.item:42")` | Resolves to `Meta.primary` type; non-primary via inline fragment |
-| **Proxy model** | `b64("blog.proxypost:42")` | `_meta.label_lower` distinguishes proxies even with shared `db_table` |
-| **Multi-table inheritance** | `b64("blog.blogpost:42")` | Encode the concrete class; PK is unambiguous (MTI shares PK) |
-| **`django-polymorphic`** | `b64("blog.blogpost:42")` | Encode the concrete class via `polymorphic_ctype`; cross-class lookup routes correctly |
-| **`Meta.id_field = "slug"`** | `b64("products.item:my-cool-slug")` | Decode the configured field; reuses existing `resolve_id_attr` |
-| **Composite primary keys (Django 5.2+)** | `b64("products.item:(2025, 'abc')")` | Already gated by `ConfigurationError` from the foundation slice; when supported, decode the tuple |
-| **Model moved between apps** | `auth.user:42` → `accounts.user:42` | Breakage same as a Django data migration. App-rename helper from item 39 sub-feature 1 covers this rare case. |
-| **Model class renamed** | `products.item:42` → `products.product:42` | Same as above; rare and intentional. App-rename helper covers it. |
-
-#### Schema-author experience
-
-Project-wide default (one declaration):
-
-```python path=null start=null
-# settings.py
-DJANGO_STRAWBERRY_FRAMEWORK = {
-    "RELAY_GLOBALID_STRATEGY": "model",   # default for every DjangoType
-}
-```
-
-Per-type overrides where needed (the override is the rare case, not the rule):
-
-```python path=null start=null
-# schema.py
-
-class ItemType(DjangoType):
-    """Standard case — inherits the schema-wide 'model' strategy."""
-    class Meta:
-        model = Item
-        interfaces = (relay.Node,)
-
-
-class LegacyAdminItemType(DjangoType):
-    """Multi-tenant: this type's IDs must NOT interoperate with ItemType's IDs.
-    Auth scope is encoded by the type name, so we want the old behaviour here."""
-    class Meta:
-        model = Item
-        interfaces = (relay.Node,)
-        globalid_strategy = "type"          # override: type-name encoding for this type only
-
-
-class SignedItemType(DjangoType):
-    """High-security namespace: IDs are HMAC-signed so consumers can't forge them."""
-    class Meta:
-        model = Item
-        interfaces = (relay.Node,)
-        globalid_strategy = signed_globalid_factory   # callable, full custom encoding
-
-
-class TransitionalType(DjangoType):
-    """In the middle of migrating from 'type' to 'model' — emit both for a deployment cycle."""
-    class Meta:
-        model = Item
-        interfaces = (relay.Node,)
-        globalid_strategy = "type+model"    # decoder accepts either; encoder emits new form
-```
-
-#### Trade-offs vs the standard convention
-
-| Concern | Verdict |
-|---|---|
-| **Convention deviation** | Real but minor. The Relay spec treats GlobalIDs as opaque — Apollo / Relay Compiler / urql don't care what's inside the payload. The convention is *cargo-culted from Facebook's reference impl*, not required. Documented explicitly; teams who want the standard convention opt into `"type"` per type or project-wide. |
-| **Info leak** | Slightly more Django-shape info reaches clients (`products.item` vs `ItemType`). Both base64-decode trivially with one CLI command; this is effectively a wash. Teams who want true opacity use the callable strategy with a salted HMAC. |
-| **Backward compatibility** | Pre-`1.0.0` schemas may have already minted `"type"`-format IDs to clients. The `"type+model"` transitional mode lets teams roll over without a flag day. After `1.0.0`, the default is locked. |
-| **Multi-tenant with scope-bound IDs** | Some teams want different GraphQL types to mint disjoint ID spaces over the same backing model. They opt into `"type"` per type. Documented as the legitimate use case for the legacy convention. |
-| **Debug tooling** | Some introspection tools decode GlobalIDs to show the type name. With `"model"` encoding, they show `products.item:42` instead of `ItemType:42` — arguably more useful for Django-shop debugging. A `manage.py decode_globalid <gid>` helper covers both representations. |
-
-#### Composition with other `BACKLOG.md` items
-
-- **Item 39 (Relay magic)** — sub-feature 1 (GlobalID migrations) collapses to a tiny *"app-move alias helper"* once `"model"` is the default. The full migration system this item replaces was always a workaround for the type-name convention's fragility; with model identity as the durable anchor, the migration system isn't needed for the common case.
-- **Item 15 (Content-versioned Node types)** — composes cleanly; content versions are computed off the row data, not the encoding strategy.
-- **[023-full_relay_story_node_connection_root_validation-0.0.9][card-full-relay-story-node-connection-root-validation] (Full Relay story)** — this item is the *recommended encoding strategy* for that card's `1.0.0` Relay surface. Worth pinning the decision *before* [023-full_relay_story_node_connection_root_validation-0.0.9][card-full-relay-story-node-connection-root-validation] ships so client deployments are minted against the durable identifier from day one. Promoting this item to a `TODO-ALPHA-*` card before [023-full_relay_story_node_connection_root_validation-0.0.9][card-full-relay-story-node-connection-root-validation] is the cleanest path.
-
-#### Why it matters
-
-GlobalID encoding is one of those decisions that looks like a small implementation detail and turns out to be a foundational architecture commitment. Get it right at `1.0.0` and consumers can refactor their GraphQL schemas freely forever; get it wrong and every type rename becomes a *"please flush your cache and re-login"* event in production.
-
-The standard Relay convention encodes the *presentation layer* (GraphQL type name) into the *durable identity* (GlobalID). For Django apps — where the model is the durable thing and the GraphQL type is a refactor-friendly facade — this is exactly backward. Inverting the convention so that GlobalIDs are tied to `app_label.model_name` puts the durable identifier where it belongs: the part of the system that *already* requires explicit developer intent to change.
-
-The headline pitch: **"Rename your GraphQL types as freely as you rename your Python classes. The Django model is what's durable; GlobalIDs follow that durability."** Nothing else in the Django + GraphQL ecosystem makes that promise.
 
 ### 17. Declarative query cost & complexity limits
 
@@ -1342,7 +1201,7 @@ class ItemType(DjangoType):
 
 #### Sub-feature 1: GlobalID model-rename / app-move helper
 
-**Note**: this sub-feature shrinks dramatically once item 40 (Django-model-based GlobalID encoding) is adopted. With `app_label.model_name:id` as the durable identifier, GraphQL type renames no longer break IDs at all — the type name was never in the encoded payload to begin with. The full Django-migrations-style history described in earlier drafts of this item is unnecessary in the common case.
+**Note**: this sub-feature shrinks dramatically once the promoted [Django-model-based GlobalID encoding][card-django-model-based-globalid-encoding] card is adopted. With `app_label.model_name:id` as the durable identifier, GraphQL type renames no longer break IDs at all — the type name was never in the encoded payload to begin with. The full Django-migrations-style history described in earlier drafts of this item is unnecessary in the common case.
 
 The remaining failure mode is far rarer: **moving a Django model between apps** (`auth.user` → `accounts.user`) or **renaming the model class itself** (`products.item` → `products.product`). Both events already require a Django data migration; the GlobalID breakage is symmetric and intentional. But for the rare case where a consumer needs old-format IDs to keep working after a model move, ship a thin alias helper:
 
@@ -1359,7 +1218,7 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 
 The decoder consults the alias list at decode time and routes `b64("auth.user:42")` to the new `accounts.user` model. New IDs are minted against the new identifier; the alias map is append-only over the project's lifetime; consumers can drop entries via a future `manage.py expire_globalid_aliases --before=YYYY-MM-DD` command once they're confident no client still holds the old format.
 
-This is ~30 lines of code (a dict lookup at decode time) rather than the multi-hundred-line migration-system originally scoped here. The bulk of that work moved to item 40, which restructures the encoding itself so the migrations aren't needed.
+This is ~30 lines of code (a dict lookup at decode time) rather than the multi-hundred-line migration-system originally scoped here. The bulk of that work moved to the promoted [Django-model-based GlobalID encoding][card-django-model-based-globalid-encoding] card, which restructures the encoding itself so the migrations aren't needed.
 
 #### Sub-feature 2: Polymorphic connections (`Connection[Interface]`)
 
@@ -2028,6 +1887,8 @@ If a `BACKLOG.md` item turns out to be wrong (the upstream packages ship it, rea
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+[card-optimizer-explain-mode]: KANBAN.md#optimizer_explain_mode
+[card-django-model-based-globalid-encoding]: KANBAN.md#django_model_based_globalid_encoding
 [card-connection-aware-optimizer-planning]: KANBAN.md#connection_aware_optimizer_planning
 [card-full-relay-story-node-connection-root-validation]: KANBAN.md#full_relay_story_node_connection_root_validation
 [card-multi-database-cooperation-contract]: KANBAN.md#multi_database_cooperation_contract

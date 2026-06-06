@@ -83,7 +83,7 @@ def test_make_card_reference_defaults_to_related_no_m2m():
 
 @pytest.mark.django_db
 def test_make_card_reference_dependency_kind_syncs_m2m():
-    source, target = factories.make_card(), factories.make_card()
+    target, source = factories.make_card(), factories.make_card()
     factories.make_card_reference(
         source_card=source,
         target_card=target,

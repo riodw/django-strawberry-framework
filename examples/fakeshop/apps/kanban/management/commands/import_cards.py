@@ -1,11 +1,10 @@
 """manage.py import_cards — create kanban cards from a JSON file.
 
 One JSON file describes one or more cards. The command resolves every lookup by
-key, derives the milestone from the target version, inserts each card at the
-requested board position (renumbering the cards after it), and wires labels,
-parity, dependencies, section bullets, and card references — handling the
-dependency/reference signal sync so callers never touch the models or the DB
-directly.
+key, derives the milestone from the target version, chooses each card's requested
+board position, and wires labels, parity, dependencies, section bullets, and card
+references — handling the card-order and dependency/reference signal sync so
+callers never touch the models or the DB directly.
 
 Usage::
 
@@ -70,18 +69,22 @@ Notes:
 import json
 import pathlib
 
+from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
 
-from apps.kanban import models
+from apps.kanban import models, services
 
 DEFAULT_STATUS = "todo"
 DEFAULT_PLANNING_STATE = "planned"
-DEPENDENCY_SECTION_KEY = "dependencies_note"
 
 
 class _DryRunRollbackError(Exception):
     """Internal sentinel used to roll back the transaction in --dry-run mode."""
+
+
+def _validation_error_message(error: ValidationError) -> str:
+    return "; ".join(error.messages)
 
 
 class Command(BaseCommand):
@@ -143,22 +146,17 @@ class Command(BaseCommand):
         raise CommandError(f"Cannot resolve card reference: {identifier!r} (use the card title).")
 
     def _target_number(self, spec: dict) -> int:
-        """Compute the board number for a new card and make room if inserting."""
+        """Compute the requested board number for a new card."""
         if spec.get("number") is not None:
-            number = int(spec["number"])
+            try:
+                return int(spec["number"])
+            except (TypeError, ValueError) as error:
+                raise CommandError('"number" must be an integer when provided.') from error
         elif spec.get("after") is not None:
-            number = self._resolve_card(spec["after"]).number + 1
+            return self._resolve_card(spec["after"]).number + 1
         else:
             highest = models.Card.objects.order_by("-number").first()
             return (highest.number + 1) if highest else 1
-        # Insert: shift everything at/after this slot up by one, highest first.
-        for existing in models.Card.objects.filter(number__gte=number).order_by("-number"):
-            existing.number += 1
-            existing.save(update_fields=["number"])
-        return number
-
-    def _next_ref_order(self, card: models.Card, source: models.CardReferenceSource) -> int:
-        return card.outgoing_references.filter(source=source).count()
 
     # -- per-card creation -----------------------------------------------
 
@@ -230,7 +228,7 @@ class Command(BaseCommand):
                     text, done = bullet.get("text", ""), bool(bullet.get("done", False))
                 else:
                     text, done = bullet, False
-                models.CardItem.objects.create(
+                services.append_card_item(
                     card=card,
                     section=section,
                     text=text,
@@ -239,46 +237,27 @@ class Command(BaseCommand):
                 )
 
     def _create_dependencies(self, card: models.Card, dependencies: list) -> None:
-        """Create the dependency edge, its reference, and its rendered prose bullet.
-
-        Creating a ``dependency``-kind / ``dependencies_section`` reference
-        auto-adds the ``dependencies`` M2M edge via the kanban signal, so we
-        never call ``dependencies.add()`` (which would create a duplicate
-        reference and collide on the unique (card, source, order) key).
-        """
+        """Create dependency notes through the kanban app workflow service."""
         if not dependencies:
             return
-        source = self._lookup(models.CardReferenceSource, "dependencies_section")
-        kind = self._lookup(models.CardReferenceKind, "dependency")
-        section = self._lookup(models.Section, DEPENDENCY_SECTION_KEY)
         for order, dependency in enumerate(dependencies):
             target = self._resolve_card(dependency["card"])
             note = dependency.get("note", "")
-            models.CardReference.objects.create(
-                source_card=card,
-                target_card=target,
-                kind=kind,
-                source=source,
-                order=order,
-                raw_text=note,
-            )
-            models.CardItem.objects.create(
+            services.add_dependency_note(
                 card=card,
-                section=section,
-                text=note,
+                target_card=target,
+                note=note,
                 order=order,
-                is_complete=False,
             )
 
     def _create_references(self, card: models.Card, references: list) -> None:
         for reference in references:
             source = self._lookup(models.CardReferenceSource, reference["source"])
-            models.CardReference.objects.create(
+            services.append_card_reference(
                 source_card=card,
                 target_card=self._resolve_card(reference["target"]),
                 kind=self._lookup(models.CardReferenceKind, reference.get("kind", "related")),
                 source=source,
-                order=self._next_ref_order(card, source),
                 raw_text=reference.get("text", ""),
             )
 
@@ -292,7 +271,13 @@ class Command(BaseCommand):
         try:
             with transaction.atomic():
                 for spec in cards:
-                    card = self._create_card(spec)
+                    try:
+                        card = self._create_card(spec)
+                    except ValidationError as error:
+                        title = spec.get("title", "<missing title>")
+                        raise CommandError(
+                            f"Invalid kanban card {title!r}: {_validation_error_message(error)}",
+                        ) from error
                     created.append(str(card))
                 if dry_run:
                     raise _DryRunRollbackError

@@ -222,6 +222,24 @@ def test_unresolvable_dependency_card_raises(tmp_path, beta_version):
 
 
 @pytest.mark.django_db
+def test_out_of_order_dependency_rolls_back_with_clear_error(tmp_path, beta_version):
+    dependency = kf.make_card(title="Dependency")
+    payload = _minimal_card(
+        beta_version.number,
+        number=1,
+        dependencies=[{"card": dependency.title, "note": "must already be done"}],
+    )
+    path = _write(tmp_path, payload)
+
+    with pytest.raises(CommandError, match="dependencies must appear before"):
+        call_command("import_cards", path, stdout=StringIO())
+
+    dependency.refresh_from_db()
+    assert dependency.number == 1
+    assert not models.Card.objects.filter(title="Importer test card").exists()
+
+
+@pytest.mark.django_db
 def test_bad_json_and_missing_file_raise(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{ not json", encoding="utf-8")

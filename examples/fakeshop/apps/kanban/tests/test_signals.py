@@ -140,8 +140,8 @@ def test_done_card_spec_cannot_be_moved_to_another_card():
 
 @pytest.mark.django_db
 def test_card_reference_syncs_to_dependency_edge_and_back():
-    source = _make_card(number=1, title="Source")
-    target = _make_card(number=2, title="Target", status="done")
+    target = _make_card(number=1, title="Target", status="done")
+    source = _make_card(number=2, title="Source")
 
     reference = models.CardReference.objects.create(
         source_card=source,
@@ -159,8 +159,8 @@ def test_card_reference_syncs_to_dependency_edge_and_back():
 
 @pytest.mark.django_db
 def test_direct_dependency_add_creates_normalized_reference():
-    source = _make_card(number=1, title="Source")
-    target = _make_card(number=2, title="Target", status="done")
+    target = _make_card(number=1, title="Target", status="done")
+    source = _make_card(number=2, title="Source")
 
     source.dependencies.add(target)
 
@@ -189,10 +189,147 @@ def test_dependency_cycle_is_rejected_from_dependency_edge():
     first = _make_card(number=1, title="First")
     second = _make_card(number=2, title="Second")
 
-    first.dependencies.add(second)
+    second.dependencies.add(first)
 
     with pytest.raises(ValidationError):
-        second.dependencies.add(first)
+        first.dependencies.add(second)
+
+
+@pytest.mark.django_db
+def test_card_insert_shifts_existing_numbers():
+    first = _make_card(number=1, title="First")
+    second = _make_card(number=2, title="Second")
+
+    inserted = _make_card(number=1, title="Inserted")
+
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert inserted.number == 1
+    assert first.number == 2
+    assert second.number == 3
+
+
+@pytest.mark.django_db
+def test_card_move_up_shifts_intervening_numbers():
+    first = _make_card(number=1, title="First")
+    second = _make_card(number=2, title="Second")
+    third = _make_card(number=3, title="Third")
+
+    third.number = 1
+    third.save(update_fields=["number"])
+
+    first.refresh_from_db()
+    second.refresh_from_db()
+    third.refresh_from_db()
+    assert third.number == 1
+    assert first.number == 2
+    assert second.number == 3
+
+
+@pytest.mark.django_db
+def test_card_move_down_shifts_intervening_numbers():
+    first = _make_card(number=1, title="First")
+    second = _make_card(number=2, title="Second")
+    third = _make_card(number=3, title="Third")
+
+    first.number = 3
+    first.save(update_fields=["number"])
+
+    first.refresh_from_db()
+    second.refresh_from_db()
+    third.refresh_from_db()
+    assert second.number == 1
+    assert third.number == 2
+    assert first.number == 3
+
+
+@pytest.mark.django_db
+def test_card_delete_compacts_following_numbers():
+    first = _make_card(number=1, title="First")
+    second = _make_card(number=2, title="Second")
+    third = _make_card(number=3, title="Third")
+
+    second.delete()
+
+    first.refresh_from_db()
+    third.refresh_from_db()
+    assert first.number == 1
+    assert third.number == 2
+
+
+@pytest.mark.django_db
+def test_card_create_allows_sparse_explicit_number():
+    first = _make_card(number=1, title="First")
+
+    sparse = _make_card(number=3, title="Sparse")
+
+    first.refresh_from_db()
+    assert first.number == 1
+    assert sparse.number == 3
+
+
+@pytest.mark.django_db
+def test_card_move_past_end_shifts_following_numbers():
+    first = _make_card(number=1, title="First")
+    second = _make_card(number=2, title="Second")
+    third = _make_card(number=3, title="Third")
+
+    first.number = 99
+    first.save(update_fields=["number"])
+
+    first.refresh_from_db()
+    second.refresh_from_db()
+    third.refresh_from_db()
+    assert second.number == 1
+    assert third.number == 2
+    assert first.number == 99
+
+
+@pytest.mark.django_db
+def test_dependency_edge_must_point_to_an_earlier_card():
+    source = _make_card(number=1, title="Source")
+    target = _make_card(number=2, title="Target")
+
+    with pytest.raises(ValidationError, match="before dependent"):
+        source.dependencies.add(target)
+
+
+@pytest.mark.django_db
+def test_dependency_reference_must_point_to_an_earlier_card():
+    source = _make_card(number=1, title="Source")
+    target = _make_card(number=2, title="Target")
+
+    with pytest.raises(ValidationError, match="before dependent"):
+        models.CardReference.objects.create(
+            source_card=source,
+            target_card=target,
+            kind=kf.make_card_reference_kind("dependency"),
+            source=kf.make_card_reference_source("dependencies_section"),
+        )
+
+
+@pytest.mark.django_db
+def test_dependent_card_cannot_move_before_dependency():
+    dependency = _make_card(number=1, title="Dependency")
+    dependent = _make_card(number=2, title="Dependent")
+    dependent.dependencies.add(dependency)
+
+    dependent.number = 1
+
+    with pytest.raises(ValidationError, match="before dependent"):
+        dependent.save(update_fields=["number"])
+
+
+@pytest.mark.django_db
+def test_dependency_card_cannot_move_after_dependent():
+    dependency = _make_card(number=1, title="Dependency")
+    dependent = _make_card(number=2, title="Dependent")
+    dependent.dependencies.add(dependency)
+
+    dependency.number = 2
+
+    with pytest.raises(ValidationError, match="before dependent"):
+        dependency.save(update_fields=["number"])
 
 
 @pytest.mark.django_db

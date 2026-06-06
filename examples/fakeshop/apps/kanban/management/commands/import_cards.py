@@ -47,8 +47,7 @@ JSON schema (see ``apps/kanban/card_import.example.json`` for a filled template)
             ]
           },
           "references": [                  # optional, advanced extra refs
-            {"target": "...", "kind": "related",
-             "source": "card_item", "text": "..."}
+            {"target": "...", "kind": "related", "text": "..."}
           ]
         }
       ]
@@ -61,7 +60,7 @@ Notes:
 - Card identifiers (``after``, ``dependencies[].card``, ``references[].target``)
   match a card by exact ``title`` first, then by integer board ``number``.
 - ``dependencies`` is the single source for a dependency edge: it creates the
-  ``dependencies_section`` reference (which auto-syncs the ``dependencies`` M2M
+  dependency-kind ``CardReference`` (which auto-syncs the ``dependencies`` M2M
   via signals) AND the rendered "Dependencies" prose bullet. Do not also list a
   ``dependencies`` key under ``sections``.
 """
@@ -73,10 +72,7 @@ from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
 
-from apps.kanban import models, services
-
-DEFAULT_STATUS = "todo"
-DEFAULT_PLANNING_STATE = "planned"
+from apps.kanban import services
 
 
 class _DryRunRollbackError(Exception):
@@ -116,151 +112,6 @@ class Command(BaseCommand):
             raise CommandError('JSON must be an object with a non-empty "cards" array.')
         return cards
 
-    def _lookup(
-        self,
-        model,
-        key: str,
-        field: str = "key",
-    ):
-        """Resolve a lookup row by ``key``; raise a CommandError listing valid keys."""
-        try:
-            return model.objects.get(**{field: key})
-        except model.DoesNotExist:
-            valid = ", ".join(
-                sorted(model.objects.values_list(field, flat=True).distinct()),
-            )
-            raise CommandError(
-                f"Unknown {model.__name__} {field}={key!r}. Valid values: {valid}",
-            ) from None
-
-    def _resolve_card(self, identifier) -> models.Card:
-        """Resolve a card by exact title, then by integer board number."""
-        if isinstance(identifier, str):
-            card = models.Card.objects.filter(title=identifier).first()
-            if card is not None:
-                return card
-        if isinstance(identifier, int) or (isinstance(identifier, str) and identifier.isdigit()):
-            card = models.Card.objects.filter(number=int(identifier)).first()
-            if card is not None:
-                return card
-        raise CommandError(f"Cannot resolve card reference: {identifier!r} (use the card title).")
-
-    def _target_number(self, spec: dict) -> int:
-        """Compute the requested board number for a new card."""
-        if spec.get("number") is not None:
-            try:
-                return int(spec["number"])
-            except (TypeError, ValueError) as error:
-                raise CommandError('"number" must be an integer when provided.') from error
-        elif spec.get("after") is not None:
-            return self._resolve_card(spec["after"]).number + 1
-        else:
-            highest = models.Card.objects.order_by("-number").first()
-            return (highest.number + 1) if highest else 1
-
-    # -- per-card creation -----------------------------------------------
-
-    def _create_card(self, spec: dict) -> models.Card:
-        for required in ("title", "target_version", "relative_size"):
-            if not spec.get(required):
-                raise CommandError(f'Card is missing required field "{required}".')
-        title = spec["title"]
-        if models.Card.objects.filter(title=title).exists():
-            raise CommandError(f"A card titled {title!r} already exists.")
-        if isinstance(spec.get("sections"), dict) and "dependencies" in spec["sections"]:
-            raise CommandError(
-                'Put dependencies under the top-level "dependencies" key, not "sections".',
-            )
-
-        status_key = spec.get("status", DEFAULT_STATUS)
-        if status_key == "done":
-            raise CommandError(
-                'Card imports cannot create "done" cards because done cards require '
-                "a linked spec doc. Import the card before marking it done.",
-            )
-
-        target_version = self._lookup(models.TargetVersion, spec["target_version"], field="number")
-        size_high = None
-        if spec.get("relative_size_high"):
-            size_high = self._lookup(models.RelativeSize, spec["relative_size_high"])
-
-        card = models.Card.objects.create(
-            title=title,
-            number=self._target_number(spec),
-            status=self._lookup(models.Status, status_key),
-            milestone=target_version.milestone,
-            target_version=target_version,
-            priority=self._lookup(models.Priority, spec["priority"])
-            if spec.get("priority")
-            else None,
-            severity=self._lookup(models.Severity, spec["severity"])
-            if spec.get("severity")
-            else None,
-            relative_size=self._lookup(models.RelativeSize, spec["relative_size"]),
-            relative_size_high=size_high,
-            planning_state=self._lookup(
-                models.PlanningState,
-                spec.get("planning_state", DEFAULT_PLANNING_STATE),
-            ),
-            planning_note=spec.get("planning_note", ""),
-        )
-
-        for label_key in spec.get("labels", []):
-            card.labels.add(self._lookup(models.Label, label_key))
-
-        for claim in spec.get("parity", []):
-            models.ParityClaim.objects.create(
-                card=card,
-                upstream=self._lookup(models.Upstream, claim["upstream"]),
-                level=self._lookup(models.ParityLevel, claim["level"]),
-            )
-
-        self._create_sections(card, spec.get("sections", {}))
-        self._create_dependencies(card, spec.get("dependencies", []))
-        self._create_references(card, spec.get("references", []))
-        return card
-
-    def _create_sections(self, card: models.Card, sections: dict) -> None:
-        for section_key, bullets in sections.items():
-            section = self._lookup(models.Section, section_key)
-            for order, bullet in enumerate(bullets):
-                if isinstance(bullet, dict):
-                    text, done = bullet.get("text", ""), bool(bullet.get("done", False))
-                else:
-                    text, done = bullet, False
-                services.append_card_item(
-                    card=card,
-                    section=section,
-                    text=text,
-                    order=order,
-                    is_complete=done,
-                )
-
-    def _create_dependencies(self, card: models.Card, dependencies: list) -> None:
-        """Create dependency notes through the kanban app workflow service."""
-        if not dependencies:
-            return
-        for order, dependency in enumerate(dependencies):
-            target = self._resolve_card(dependency["card"])
-            note = dependency.get("note", "")
-            services.add_dependency_note(
-                card=card,
-                target_card=target,
-                note=note,
-                order=order,
-            )
-
-    def _create_references(self, card: models.Card, references: list) -> None:
-        for reference in references:
-            source = self._lookup(models.CardReferenceSource, reference["source"])
-            services.append_card_reference(
-                source_card=card,
-                target_card=self._resolve_card(reference["target"]),
-                kind=self._lookup(models.CardReferenceKind, reference.get("kind", "related")),
-                source=source,
-                raw_text=reference.get("text", ""),
-            )
-
     # -- entrypoint -------------------------------------------------------
 
     def handle(self, *args: object, **options: object) -> None:
@@ -272,7 +123,9 @@ class Command(BaseCommand):
             with transaction.atomic():
                 for spec in cards:
                     try:
-                        card = self._create_card(spec)
+                        card = services.create_card_from_spec(spec)
+                    except services.KanbanServiceError as error:
+                        raise CommandError(str(error)) from error
                     except ValidationError as error:
                         title = spec.get("title", "<missing title>")
                         raise CommandError(

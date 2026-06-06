@@ -27,6 +27,7 @@ query StaticKanbanDashboard {
     title
     slug
     isBlocked
+    cardId
     number
     planningNote
     createdDate
@@ -186,9 +187,6 @@ query StaticKanbanDashboard {
   allKanbanReferenceKinds {
     ...CardReferenceKindFields
   }
-  allKanbanReferenceSources {
-    ...CardReferenceSourceFields
-  }
   allKanbanBoardDocKinds {
     ...BoardDocKindFields
   }
@@ -269,6 +267,7 @@ fragment RelativeSizeFields on RelativeSizeType {
   label
   order
   rank
+  description
   createdDate
   updatedDate
 }
@@ -334,18 +333,6 @@ fragment CardReferenceKindFields on CardReferenceKindType {
   updatedDate
 }
 
-fragment CardReferenceSourceFields on CardReferenceSourceType {
-  id
-  uuid {
-    id
-  }
-  key
-  label
-  order
-  createdDate
-  updatedDate
-}
-
 fragment BoardDocKindFields on BoardDocKindType {
   id
   uuid {
@@ -376,6 +363,7 @@ fragment CardLinkFields on CardType {
   }
   title
   slug
+  cardId
   number
   status {
     id
@@ -413,9 +401,6 @@ fragment OutgoingReferenceFields on CardReferenceType {
   kind {
     ...CardReferenceKindFields
   }
-  source {
-    ...CardReferenceSourceFields
-  }
   targetCard {
     ...CardLinkFields
   }
@@ -432,9 +417,6 @@ fragment IncomingReferenceFields on CardReferenceType {
   updatedDate
   kind {
     ...CardReferenceKindFields
-  }
-  source {
-    ...CardReferenceSourceFields
   }
   sourceCard {
     ...CardLinkFields
@@ -486,7 +468,6 @@ LOOKUP_FIELDS = {
     "allKanbanParityLevels": "parityLevels",
     "allKanbanSections": "sections",
     "allKanbanReferenceKinds": "referenceKinds",
-    "allKanbanReferenceSources": "referenceSources",
     "allKanbanBoardDocKinds": "boardDocKinds",
 }
 

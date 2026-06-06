@@ -113,6 +113,10 @@ class RelativeSize(LookupBase):
     """T-shirt size: ``xs`` / ``s`` / ``m`` / ``l`` / ``xl``."""
 
     rank = models.PositiveIntegerField(default=0)
+    # The per-size effort blurb rendered as the ``## Relative size`` scale in
+    # KANBAN.md / KANBAN.html, so the scale is derived from this table rather
+    # than frozen in the board prose.
+    description = models.TextField(blank=True, default="")
 
     class Meta(LookupBase.Meta):
         verbose_name = "relative size"
@@ -159,14 +163,6 @@ class CardReferenceKind(LookupBase):
     class Meta(LookupBase.Meta):
         verbose_name = "card reference kind"
         verbose_name_plural = "card reference kinds"
-
-
-class CardReferenceSource(LookupBase):
-    """Where the importer found a card-to-card reference in the board source."""
-
-    class Meta(LookupBase.Meta):
-        verbose_name = "card reference source"
-        verbose_name_plural = "card reference sources"
 
 
 class BoardDocKind(LookupBase):
@@ -234,6 +230,27 @@ class SpecDoc(TimeStampedModel):
 # ---------------------------------------------------------------------------
 # Card + its edges
 # ---------------------------------------------------------------------------
+
+
+def format_card_id(
+    *,
+    status_key: str,
+    milestone_key: str | None,
+    number: int,
+    version: str,
+) -> str:
+    """Render the canonical ``<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`` card id.
+
+    Single source of truth for the id format. ``Card.card_id`` (and through it
+    ``Card.__str__`` and the ``cardId`` GraphQL field) is the only caller; the
+    KANBAN.md / KANBAN.html exporters read the rendered ``cardId`` field rather
+    than recomputing the format, so the shape lives in exactly one place. The
+    caller decides whether a milestone segment applies (pass ``None`` to omit).
+    """
+    parts = [status_key.upper()]
+    if milestone_key:
+        parts.append(milestone_key.upper())
+    return f"{'-'.join(parts)}-{number:03d}-{version}"
 
 
 class Card(TimeStampedModel):
@@ -326,10 +343,26 @@ class Card(TimeStampedModel):
         ]
 
     def __str__(self):
-        milestone = ""
-        if self.status.key != "done" and self.milestone_id:
-            milestone = f"-{self.milestone.key.upper()}"
-        return f"{self.status.key.upper()}{milestone}-{self.number:03d}-{self.target_version.number} — {self.title}"
+        return f"{self.card_id} — {self.title}"
+
+    @property
+    def card_id(self) -> str:
+        """Canonical card id (e.g. ``WIP-ALPHA-030-0.0.9``) without the title.
+
+        Derived, never stored. Exposed as the ``cardId`` GraphQL field and read
+        by the KANBAN.md / KANBAN.html exporters, so the id format lives in one
+        place (``format_card_id``). The milestone segment is dropped on shipped
+        (``done``) cards, mirroring the card-id convention in the board preamble.
+        """
+        milestone_key = (
+            self.milestone.key if (self.status.key != "done" and self.milestone_id) else None
+        )
+        return format_card_id(
+            status_key=self.status.key,
+            milestone_key=milestone_key,
+            number=self.number,
+            version=self.target_version.number,
+        )
 
     @property
     def slug(self) -> str:
@@ -358,8 +391,8 @@ class CardReference(TimeStampedModel):
     """A normalized card-to-card reference parsed out of prose.
 
     ``Card.dependencies`` remains the compatibility/convenience M2M. This model
-    preserves the richer source data: the reference kind, where it came from,
-    the raw prose that contained it, and the position within that source.
+    preserves the richer data: the reference kind, the raw prose that contained
+    it, and the position within the source card's reference list.
     """
 
     source_card = models.ForeignKey(
@@ -377,32 +410,16 @@ class CardReference(TimeStampedModel):
         related_name="card_references",
         on_delete=models.PROTECT,
     )
-    source = models.ForeignKey(
-        CardReferenceSource,
-        related_name="card_references",
-        on_delete=models.PROTECT,
-    )
     raw_text = models.TextField(blank=True, default="")
     order = models.PositiveIntegerField(default=0)
 
     class Meta:
         ordering = [
             "source_card",
-            "source",
             "order",
         ]
         verbose_name = "card reference"
         verbose_name_plural = "card references"
-        constraints = [
-            models.UniqueConstraint(
-                fields=[
-                    "source_card",
-                    "source",
-                    "order",
-                ],
-                name="unique_card_reference_position",
-            ),
-        ]
         indexes = [
             models.Index(
                 fields=[
@@ -417,6 +434,25 @@ class CardReference(TimeStampedModel):
                 ],
             ),
         ]
+
+    def save(self, *args, **kwargs):
+        """Assign a per-``source_card`` sequential ``order`` on insert.
+
+        Replaces the former ``(source_card, source, order)`` DB unique
+        constraint with app-level logic: ``order`` stays unique within a card
+        by construction, so references keep a stable, collision-free display
+        order without a database constraint (and without a per-card renumber
+        migration when ``source`` was dropped).
+        """
+        if self._state.adding:
+            manager = CardReference.objects
+            if kwargs.get("using"):
+                manager = manager.db_manager(kwargs["using"])
+            last = manager.filter(source_card=self.source_card).aggregate(
+                models.Max("order"),
+            )["order__max"]
+            self.order = 0 if last is None else last + 1
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.source_card.title} -> {self.target_card.title} ({self.kind.key})"
@@ -659,7 +695,6 @@ _UUID_LINK_NAMES = (
     "paritylevel",
     "section",
     "cardreferencekind",
-    "cardreferencesource",
     "boarddockind",
     "targetversion",
     "specdoc",
@@ -777,13 +812,6 @@ class UUIDModel(TimeStampedModel):
     )
     cardreferencekind = models.OneToOneField(
         "CardReferenceKind",
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name="uuid",
-    )
-    cardreferencesource = models.OneToOneField(
-        "CardReferenceSource",
         null=True,
         blank=True,
         on_delete=models.CASCADE,

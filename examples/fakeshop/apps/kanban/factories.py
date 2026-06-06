@@ -96,10 +96,6 @@ def make_card_reference_kind(key: str = "related", **defaults):
     return _lookup(models.CardReferenceKind, key, **defaults)
 
 
-def make_card_reference_source(key: str = "card_item", **defaults):
-    return _lookup(models.CardReferenceSource, key, **defaults)
-
-
 def make_board_doc_kind(key: str = "column", **defaults):
     return _lookup(models.BoardDocKind, key, **defaults)
 
@@ -179,24 +175,22 @@ def make_card_item(*, card=None, section=None, **fields):
     return models.CardItem.objects.create(card=card, section=section, **fields)
 
 
-def make_card_reference(*, source_card=None, target_card=None, kind=None, source=None, **fields):
+def make_card_reference(*, source_card=None, target_card=None, kind=None, **fields):
     """Create a CardReference.
 
     Defaults to a side-effect-free ``related`` reference. A ``dependency``-kind
     reference additionally auto-syncs the ``Card.dependencies`` M2M edge via the
-    ``sync_reference_dependency`` signal.
+    ``sync_reference_dependency`` signal. ``order`` is assigned per source_card
+    by ``CardReference.save()``.
     """
     source_card = source_card or make_card()
     target_card = target_card or make_card()
     kind = kind or make_card_reference_kind()
-    source = source or make_card_reference_source()
     fields.setdefault("raw_text", "")
-    fields.setdefault("order", _next_order(source_card.outgoing_references, source=source))
     return models.CardReference.objects.create(
         source_card=source_card,
         target_card=target_card,
         kind=kind,
-        source=source,
         **fields,
     )
 

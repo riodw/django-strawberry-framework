@@ -26,7 +26,6 @@ for _model in (
     models.ParityLevel,
     models.Section,
     models.CardReferenceKind,
-    models.CardReferenceSource,
     models.BoardDocKind,
 ):
     admin.site.register(_model, _LookupAdmin)
@@ -62,7 +61,7 @@ class CardReferenceInline(admin.TabularInline):
     fk_name = "source_card"
     extra = 0
     show_change_link = True
-    autocomplete_fields = ("target_card", "kind", "source")
+    autocomplete_fields = ("target_card", "kind")
 
 
 class CardGlossaryTermInline(admin.TabularInline):
@@ -114,17 +113,11 @@ class CardReferenceAdmin(admin.ModelAdmin):
         "source_card",
         "target_card",
         "kind",
-        "source",
         "order",
     )
-    list_filter = ("kind", "source")
+    list_filter = ("kind",)
     search_fields = ("source_card__title", "target_card__title", "raw_text")
-    autocomplete_fields = (
-        "source_card",
-        "target_card",
-        "kind",
-        "source",
-    )
+    autocomplete_fields = ("source_card", "target_card", "kind")
 
 
 @admin.register(models.CardGlossaryTerm)

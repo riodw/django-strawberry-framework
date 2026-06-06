@@ -48,13 +48,14 @@ def finalize_markdown(lines: list[str]) -> str:
 
 
 def card_key(card: dict[str, Any]) -> str:
-    """Return the current kanban card id for ``card``."""
-    status = card["status"]["key"].upper()
-    status_parts = [status]
-    milestone = card.get("milestone")
-    if status != "DONE" and milestone:
-        status_parts.append(milestone["key"].upper())
-    return f"{'-'.join(status_parts)}-{int(card['number']):03d}-{card['targetVersion']['number']}"
+    """Return the kanban card id for ``card``.
+
+    Reads the ``cardId`` GraphQL field (sourced from ``Card.card_id`` in the
+    model layer) instead of recomputing the ``<STATUS>[-<MILESTONE>]-NNN-X.Y.Z``
+    format here — single source of truth shared with ``Card.__str__`` and the
+    KANBAN.html renderer.
+    """
+    return card["cardId"]
 
 
 def card_url(card: dict[str, Any]) -> str:
@@ -160,28 +161,6 @@ def card_reference_replacements(card: dict[str, Any]) -> tuple[dict[str, str], d
     return text_replacements, token_replacements
 
 
-def source_token_replacements(
-    card: dict[str, Any],
-    source_key: str,
-    text: str,
-    token_replacements: dict[str, str],
-) -> dict[str, str]:
-    """Map card-id tokens in one source field to that source's FK targets."""
-    replacements = token_replacements.copy()
-    tokens = CARD_ID_RE.findall(text)
-    if not tokens:
-        return replacements
-
-    references = [
-        reference
-        for reference in card.get("outgoingReferences", [])
-        if reference["source"]["key"] == source_key
-    ]
-    for token, reference in zip(tokens, references, strict=False):
-        replacements.setdefault(token, card_key(reference["targetCard"]))
-    return replacements
-
-
 def resolve_card_text(
     text: str,
     text_replacements: dict[str, str],
@@ -210,17 +189,85 @@ def bullet_lines(prefix: str, text: str) -> list[str]:
     return rendered
 
 
-def render_doc(doc: dict[str, Any]) -> list[str]:
+def _version_key(version: str) -> tuple[int, ...]:
+    """Sort key for a dotted ``X.Y.Z`` version (so ``0.0.10`` > ``0.0.9``)."""
+    return tuple(int(part) for part in version.split("."))
+
+
+def render_relative_size_scale(dashboard_data: dict[str, Any]) -> str:
+    """Render the ``## Relative size`` bullet scale from the RelativeSize table.
+
+    The five rows (and their effort blurbs) live in the lookup table, so the
+    scale is derived rather than frozen in the board prose. Sorted by ``rank``.
+    """
+    sizes = sorted(
+        dashboard_data["lookups"].get("relativeSizes", []),
+        key=lambda size: size.get("rank", 0),
+    )
+    return "\n".join(
+        f"- **{size['label']}** — {size['description']}"
+        for size in sizes
+        if size.get("description")
+    )
+
+
+def compute_tokens(dashboard_data: dict[str, Any]) -> dict[str, str]:
+    """Derive the board-wide computed placeholders from the card/doc data.
+
+    These are facts the DB already knows, so the prose stores a ``{{token}}``
+    placeholder instead of a frozen literal — the renderer fills it from the
+    live data and it can never go stale. The KANBAN.html Vue app resolves the
+    same tokens client-side, so both exports stay consistent.
+    """
+    cards = dashboard_data["cards"]
+
+    def versions_for(status_key: str) -> list[str]:
+        return sorted(
+            {
+                card["targetVersion"]["number"]
+                for card in cards
+                if card["status"]["key"] == status_key and card.get("targetVersion")
+            },
+            key=_version_key,
+        )
+
+    wip_versions = versions_for("wip")
+    done_versions = versions_for("done")
+    active_version = (
+        wip_versions[0] if wip_versions else (done_versions[-1] if done_versions else "")
+    )
+    has_wip = any(card["status"]["key"] == "wip" for card in cards)
+    dates = [card.get("updatedDate") for card in cards]
+    dates += [doc.get("updatedDate") for doc in dashboard_data["boardDocs"]]
+    dates = [date for date in dates if date]
+    last_refreshed = max(dates)[:10] if dates else ""
+
+    return {
+        "active_version": active_version,
+        "last_refreshed": last_refreshed,
+        "in_progress_intro": "" if has_wip else "No active WIP cards.",
+        "relative_size_scale": render_relative_size_scale(dashboard_data),
+    }
+
+
+def resolve_computed_tokens(text: str, computed: dict[str, str]) -> str:
+    """Replace every ``{{token}}`` from :func:`compute_tokens` in ``text``."""
+    for token, value in computed.items():
+        text = text.replace(f"{{{{{token}}}}}", value)
+    return text
+
+
+def render_doc(doc: dict[str, Any], computed: dict[str, str]) -> list[str]:
     """Render one ordered board-prose document."""
     if doc["key"] == LINK_DEFINITIONS_KEY:
-        return [resolve_card_refs(doc["body"], doc).strip()]
+        return [resolve_computed_tokens(resolve_card_refs(doc["body"], doc), computed).strip()]
 
     lines = []
     if doc.get("title"):
         heading = "#" if doc["kind"]["key"] == "preamble" else "##"
         lines.extend([f"{heading} {doc['title']}", ""])
 
-    body = resolve_card_refs(doc.get("body", ""), doc).strip()
+    body = resolve_computed_tokens(resolve_card_refs(doc.get("body", ""), doc), computed).strip()
     if body:
         lines.extend([body, ""])
     return lines
@@ -316,21 +363,11 @@ def render_card(card: dict[str, Any]) -> list[str]:
 
     planning_note = card.get("planningNote") or ""
     if planning_note:
-        planning_token_replacements = source_token_replacements(
-            card,
-            "planning_note",
-            planning_note,
-            token_replacements,
-        )
         lines.extend(
             [
                 "#### Planning note",
                 "",
-                resolve_card_text(
-                    planning_note.strip(),
-                    text_replacements,
-                    planning_token_replacements,
-                ),
+                resolve_card_text(planning_note.strip(), text_replacements, token_replacements),
                 "",
             ],
         )
@@ -374,23 +411,23 @@ def render_card(card: dict[str, Any]) -> list[str]:
 
     references = sorted(
         card.get("outgoingReferences", []),
-        key=lambda reference: (reference["source"]["order"], reference["order"]),
+        key=lambda reference: reference["order"],
     )
     if references:
         lines.extend(["#### Card references", ""])
         for reference in references:
             target_card = reference["targetCard"]
             target = f"`{card_key(target_card)}` — {target_card['title']}"
-            source = f"{reference['kind']['label']} via {reference['source']['label']}"
+            kind = reference["kind"]["label"]
             text = resolve_card_text(
                 reference.get("rawText", "").strip(),
                 text_replacements,
                 token_replacements,
             )
             if text:
-                lines.extend(bullet_lines(f"- {source}: {text} ->", target))
+                lines.extend(bullet_lines(f"- {kind}: {text} ->", target))
             else:
-                lines.append(f"- {source}: {target}")
+                lines.append(f"- {kind}: {target}")
         lines.append("")
 
     return lines
@@ -406,12 +443,13 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     for card in dashboard_data["cards"]:
         cards_by_column[card_column_key(card)].append(card)
 
+    computed = compute_tokens(dashboard_data)
     rendered = []
     rendered_card_ids = set()
     for doc in docs:
         if doc["kind"]["key"] == "column" and doc["key"] not in COLUMN_DOC_KEYS:
             continue
-        rendered.extend(render_doc(doc))
+        rendered.extend(render_doc(doc, computed))
         if doc["key"] == "board-columns":
             rendered.extend(render_spec_map(dashboard_data))
         if doc["key"] in COLUMN_DOC_KEYS:
@@ -420,7 +458,7 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
                 rendered_card_ids.add(card["id"])
 
     if link_definitions is not None:
-        rendered.extend(render_doc(link_definitions))
+        rendered.extend(render_doc(link_definitions, computed))
 
     return finalize_markdown(rendered)
 

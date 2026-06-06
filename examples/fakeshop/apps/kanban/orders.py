@@ -78,12 +78,6 @@ class CardReferenceKindOrder(OrderSet):
         fields = "__all__"
 
 
-class CardReferenceSourceOrder(OrderSet):
-    class Meta:
-        model = models.CardReferenceSource
-        fields = "__all__"
-
-
 class BoardDocKindOrder(OrderSet):
     class Meta:
         model = models.BoardDocKind
@@ -147,7 +141,6 @@ __all__ = (
     "CardOrder",
     "CardReferenceKindOrder",
     "CardReferenceOrder",
-    "CardReferenceSourceOrder",
     "LabelOrder",
     "MilestoneOrder",
     "ParityLevelOrder",

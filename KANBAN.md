@@ -11,7 +11,7 @@ Editing this board: `KANBAN.md` is a rendered artifact, not a source. The source
 Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 
 - `<STATUS>` — the card workflow state: `BACKLOG` (unscheduled investigation / strategic-differentiation candidate), `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), or `DONE` (shipped). Updated when the card moves between workflow states. Blocking is not part of the workflow status; blocked cards render a derived `blocked` badge from unfinished `blocked_by` references and stay in their normal planning column.
-- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-044-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-056-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
+- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-044-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-057-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is being tracked (everything else; scheduled cards are ordered by planned ship version, and backlog cards sort after the scheduled board). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
 - `X.Y.Z` — the package version the card shipped in (`DONE` cards), is planned to ship in (scheduled cards), or is provisionally bucketed under (`BACKLOG` cards). Alpha cards span `0.0.6` through `0.0.12` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Backlog cards may use post-`1.0.0` buckets as ordering placeholders; they stay unscheduled until promoted to `TODO`.
 
@@ -134,8 +134,6 @@ demoted to a bullet under its label.
 
 ## In progress
 
-No active WIP cards.
-
 <a id="djangoconnectionfield"></a>
 ### [WIP-ALPHA-030-0.0.9 — `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)
 
@@ -202,11 +200,11 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 
 #### Card references
 
-- Dependency via Dependencies section: `FilterSet` (`DONE-027-0.0.8`) -> `DONE-027-0.0.8` — Filtering subsystem
-- Dependency via Dependencies section: `OrderSet` (`DONE-028-0.0.8`) -> `DONE-028-0.0.8` — Ordering subsystem
-- Dependency via Dependencies section: `FieldSet` — **deferred to `TODO-BETA-045-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker. -> `TODO-BETA-045-0.1.1` — `FieldSet`
-- Related via Card item: Connection-aware optimizer planning is its own follow-up slice (`WIP-ALPHA-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `WIP-ALPHA-033-0.0.9` — Connection-aware optimizer planning
-- Related via Card item: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-045-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-045-0.1.1` — `FieldSet`
+- Dependency: `FilterSet` (`DONE-027-0.0.8`) -> `DONE-027-0.0.8` — Filtering subsystem
+- Related: Connection-aware optimizer planning is its own follow-up slice (`WIP-ALPHA-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `WIP-ALPHA-033-0.0.9` — Connection-aware optimizer planning
+- Dependency: `OrderSet` (`DONE-028-0.0.8`) -> `DONE-028-0.0.8` — Ordering subsystem
+- Related: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-045-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-045-0.1.1` — `FieldSet`
+- Dependency: `FieldSet` — **deferred to `TODO-BETA-045-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker. -> `TODO-BETA-045-0.1.1` — `FieldSet`
 
 <a id="django_model_based_globalid_encoding"></a>
 ### [WIP-ALPHA-031-0.0.9 — Django-model-based GlobalID encoding](KANBAN.html#django_model_based_globalid_encoding)
@@ -264,8 +262,8 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 
 #### Card references
 
-- Related via Planning note: This card should land before Full Relay because root `node(id:)`, `nodes(ids:)`, and refetch helpers make GlobalID encoding a public durability contract. -> `WIP-ALPHA-032-0.0.9` — Full Relay story (Node + Connection + Root + validation)
-- Related via Planning note: `DjangoConnectionField` can land before this card because connection pagination does not require changing the Relay GlobalID payload. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Related: This card should land before Full Relay because root `node(id:)`, `nodes(ids:)`, and refetch helpers make GlobalID encoding a public durability contract. -> `WIP-ALPHA-032-0.0.9` — Full Relay story (Node + Connection + Root + validation)
+- Related: `DjangoConnectionField` can land before this card because connection pagination does not require changing the Relay GlobalID payload. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="full_relay_story_node_connection_root_validation"></a>
 ### [WIP-ALPHA-032-0.0.9 — Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
@@ -354,17 +352,17 @@ blocked on `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection 
 
 #### Card references
 
-- Blocked by via Planning note: blocked on `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
-- Related via Card item: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` — Filtering subsystem
-- Related via Card item: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` — Ordering subsystem
-- Related via Card item: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-046-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-046-0.1.2` — `Meta.search_fields` support
-- Related via Card item: `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
-- Related via Card item: `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections. -> `DONE-027-0.0.8` — Filtering subsystem
-- Related via Card item: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` — Ordering subsystem
-- Related via Card item: `WIP-ALPHA-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `WIP-ALPHA-033-0.0.9` — Connection-aware optimizer planning
-- Related via Card item: `TODO-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `TODO-ALPHA-034-0.0.10` — Permissions subsystem
-- Related via Card item: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-051-0.1.5`. -> `TODO-BETA-051-0.1.5` — Fakeshop GraphQL schema activation
-- Related via Card item: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `WIP-ALPHA-030-0.0.9`) -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Blocked by: blocked on `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Related: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` — Filtering subsystem
+- Related: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` — Ordering subsystem
+- Related: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-046-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-046-0.1.2` — `Meta.search_fields` support
+- Related: `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Related: `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections. -> `DONE-027-0.0.8` — Filtering subsystem
+- Related: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` — Ordering subsystem
+- Related: `WIP-ALPHA-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `WIP-ALPHA-033-0.0.9` — Connection-aware optimizer planning
+- Related: `TODO-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `TODO-ALPHA-034-0.0.10` — Permissions subsystem
+- Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-051-0.1.5`. -> `TODO-BETA-051-0.1.5` — Fakeshop GraphQL schema activation
+- Related: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `WIP-ALPHA-030-0.0.9`) -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="connection_aware_optimizer_planning"></a>
 ### [WIP-ALPHA-033-0.0.9 — Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
@@ -409,7 +407,7 @@ planned
 
 #### Card references
 
-- Related via Card item: gated on `WIP-ALPHA-030-0.0.9` / Relay decisions. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Related: gated on `WIP-ALPHA-030-0.0.9` / Relay decisions. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 ## To Do - Alpha (0.1.0)
 
@@ -483,7 +481,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 #### Card references
 
-- Dependency via Dependencies section: future `DjangoConnectionField` -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Dependency: future `DjangoConnectionField` -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="mutations_auto_generated_input_types"></a>
 ### [TODO-ALPHA-035-0.0.11 — Mutations + auto-generated Input types](KANBAN.html#mutations_auto_generated_input_types)
@@ -541,13 +539,13 @@ needs spec
 
 #### Card references
 
-- Dependency via Dependencies section: `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution. -> `DONE-018-0.0.6` — Multiple DjangoTypes per model with `Meta.primary`
-- Dependency via Dependencies section: `TODO-ALPHA-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`. -> `TODO-ALPHA-034-0.0.10` — Permissions subsystem
-- Related via Card item: Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`. -> `DONE-010-0.0.4` — 0.0.4 foundation slice (definition-order independence)
-- Related via Card item: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-038-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-036-0.0.11` — Upload scalar and file / image field mapping
-- Related via Card item: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-038-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-037-0.0.11` — Form-based mutations (Django Forms / ModelForms)
-- Related via Card item: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-038-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-038-0.0.11` — DRF serializer mutations (`SerializerMutation`)
-- Related via Card item: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 031 / 032 / 033. -> `DONE-027-0.0.8` — Filtering subsystem
+- Dependency: `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution. -> `DONE-018-0.0.6` — Multiple DjangoTypes per model with `Meta.primary`
+- Related: Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`. -> `DONE-010-0.0.4` — 0.0.4 foundation slice (definition-order independence)
+- Dependency: `TODO-ALPHA-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`. -> `TODO-ALPHA-034-0.0.10` — Permissions subsystem
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-038-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-036-0.0.11` — Upload scalar and file / image field mapping
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-038-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-037-0.0.11` — Form-based mutations (Django Forms / ModelForms)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-038-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-038-0.0.11` — DRF serializer mutations (`SerializerMutation`)
+- Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 031 / 032 / 033. -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="upload_scalar_and_file_image_field_mapping"></a>
 ### [TODO-ALPHA-036-0.0.11 — Upload scalar and file / image field mapping](KANBAN.html#upload_scalar_and_file_image_field_mapping)
@@ -591,8 +589,8 @@ planned
 
 #### Card references
 
-- Related via Card item: Mutation input-type generation (`TODO-ALPHA-035-0.0.11`) maps the same fields to Strawberry's `Upload` scalar. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
-- Related via Card item: pairs with `TODO-ALPHA-035-0.0.11` for the write side. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+- Related: Mutation input-type generation (`TODO-ALPHA-035-0.0.11`) maps the same fields to Strawberry's `Upload` scalar. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+- Related: pairs with `TODO-ALPHA-035-0.0.11` for the write side. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
 
 <a id="form_based_mutations_django_forms_modelforms"></a>
 ### [TODO-ALPHA-037-0.0.11 — Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
@@ -649,9 +647,9 @@ needs spec
 
 #### Card references
 
-- Dependency via Dependencies section: `TODO-ALPHA-035-0.0.11` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
-- Related via Card item: Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `TODO-ALPHA-035-0.0.11`, populated from `form.errors`. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
-- Related via Card item: Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `TODO-ALPHA-035-0.0.11`. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+- Dependency: `TODO-ALPHA-035-0.0.11` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+- Related: Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `TODO-ALPHA-035-0.0.11`, populated from `form.errors`. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+- Related: Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `TODO-ALPHA-035-0.0.11`. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
 
 <a id="drf_serializer_mutations_serializermutation"></a>
 ### [TODO-ALPHA-038-0.0.11 — DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
@@ -709,8 +707,8 @@ needs spec
 
 #### Card references
 
-- Dependency via Dependencies section: `TODO-ALPHA-035-0.0.11` — general mutation infrastructure (including the shared `errors` envelope). -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
-- Related via Card item: Validation errors surface through the shared `errors: list[FieldError]` envelope from `TODO-ALPHA-035-0.0.11`, populated from `serializer.errors`. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+- Dependency: `TODO-ALPHA-035-0.0.11` — general mutation infrastructure (including the shared `errors` envelope). -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+- Related: Validation errors surface through the shared `errors: list[FieldError]` envelope from `TODO-ALPHA-035-0.0.11`, populated from `serializer.errors`. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
 
 <a id="auth_mutations_login_logout_register"></a>
 ### [TODO-ALPHA-039-0.0.11 — Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
@@ -747,7 +745,7 @@ planned
 
 #### Card references
 
-- Related via Card item: depends on `TODO-ALPHA-035-0.0.11`. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+- Related: depends on `TODO-ALPHA-035-0.0.11`. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
 
 <a id="channels_asgi_router_migration_aid"></a>
 ### [TODO-ALPHA-040-0.0.12 — Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
@@ -767,7 +765,7 @@ planned
 - [ ] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
 - [ ] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
 - [ ] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
-- [ ] Migration guide (`TODO-BETA-053-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+- [ ] Migration guide (`TODO-BETA-054-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
 
 #### Verified in upstream
 
@@ -776,7 +774,7 @@ planned
 #### Architectural posture
 
 - The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
-- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-053-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-054-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
 
 #### Why it matters
 
@@ -791,8 +789,8 @@ planned
 
 #### Card references
 
-- Related via Card item: Migration guide (`TODO-BETA-053-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-053-0.1.6` — Migration and adoption guides
-- Related via Card item: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-053-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-053-0.1.6` — Migration and adoption guides
+- Related: Migration guide (`TODO-BETA-054-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-054-0.1.6` — Migration and adoption guides
+- Related: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-054-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-054-0.1.6` — Migration and adoption guides
 
 <a id="debug_toolbar_middleware"></a>
 ### [TODO-ALPHA-041-0.0.12 — Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
@@ -899,9 +897,9 @@ planned
 
 #### Card references
 
-- Dependency via Dependencies section: `TODO-ALPHA-036-0.0.11` (Upload scalar) — the file-upload helper path lights up once Upload-scalar inputs exist; the helper itself ships without it but gains a tested path here. -> `TODO-ALPHA-036-0.0.11` — Upload scalar and file / image field mapping
-- Related via Card item: Multipart file-upload support on `request()` so consumers can drive `Upload`-scalar mutations from the same helper once `TODO-ALPHA-036-0.0.11` ships. -> `TODO-ALPHA-036-0.0.11` — Upload scalar and file / image field mapping
-- Related via Card item: **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `TODO-ALPHA-036-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls. -> `TODO-ALPHA-036-0.0.11` — Upload scalar and file / image field mapping
+- Dependency: `TODO-ALPHA-036-0.0.11` (Upload scalar) — the file-upload helper path lights up once Upload-scalar inputs exist; the helper itself ships without it but gains a tested path here. -> `TODO-ALPHA-036-0.0.11` — Upload scalar and file / image field mapping
+- Related: Multipart file-upload support on `request()` so consumers can drive `Upload`-scalar mutations from the same helper once `TODO-ALPHA-036-0.0.11` ships. -> `TODO-ALPHA-036-0.0.11` — Upload scalar and file / image field mapping
+- Related: **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `TODO-ALPHA-036-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls. -> `TODO-ALPHA-036-0.0.11` — Upload scalar and file / image field mapping
 
 <a id="response_extensions_debug_middleware"></a>
 ### [TODO-ALPHA-043-0.0.12 — Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
@@ -967,10 +965,10 @@ planned
 
 #### Card references
 
-- Related via Card item: Documented as the response-side counterpart to `TODO-ALPHA-041-0.0.12`. -> `TODO-ALPHA-041-0.0.12` — Debug-toolbar middleware
-- Related via Card item: `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-ALPHA-041-0.0.12` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive. -> `TODO-ALPHA-041-0.0.12` — Debug-toolbar middleware
-- Related via Card item: `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `TODO-ALPHA-041-0.0.12`); this card is graphene-django parity only. -> `TODO-ALPHA-041-0.0.12` — Debug-toolbar middleware
-- Related via Card item: distinct from `TODO-ALPHA-041-0.0.12` (Django debug toolbar). -> `TODO-ALPHA-041-0.0.12` — Debug-toolbar middleware
+- Related: Documented as the response-side counterpart to `TODO-ALPHA-041-0.0.12`. -> `TODO-ALPHA-041-0.0.12` — Debug-toolbar middleware
+- Related: `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-ALPHA-041-0.0.12` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive. -> `TODO-ALPHA-041-0.0.12` — Debug-toolbar middleware
+- Related: `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `TODO-ALPHA-041-0.0.12`); this card is graphene-django parity only. -> `TODO-ALPHA-041-0.0.12` — Debug-toolbar middleware
+- Related: distinct from `TODO-ALPHA-041-0.0.12` (Django debug toolbar). -> `TODO-ALPHA-041-0.0.12` — Debug-toolbar middleware
 
 ## To Do - Beta (1.0.0)
 
@@ -1128,13 +1126,13 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 
 #### Card references
 
-- Dependency via Dependencies section: `DONE-027-0.0.8` (Filtering subsystem) — the argument factory is shared. -> `DONE-027-0.0.8` — Filtering subsystem
-- Dependency via Dependencies section: `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
-- Dependency via Planning note: planned; gated on `DONE-027-0.0.8` (Filtering) and `WIP-ALPHA-030-0.0.9` (DjangoConnectionField) -> `DONE-027-0.0.8` — Filtering subsystem
-- Dependency via Planning note: planned; gated on `DONE-027-0.0.8` (Filtering) and `WIP-ALPHA-030-0.0.9` (DjangoConnectionField) -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
-- Related via Card item: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-049-0.1.3`). -> `TODO-BETA-049-0.1.3` — Layer 3 Meta key promotion
-- Related via Card item: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-051-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-051-0.1.5` — Fakeshop GraphQL schema activation
-- Related via Card item: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` — Filtering subsystem
+- Dependency: planned; gated on `DONE-027-0.0.8` (Filtering) and `WIP-ALPHA-030-0.0.9` (DjangoConnectionField) -> `DONE-027-0.0.8` — Filtering subsystem
+- Dependency: `DONE-027-0.0.8` (Filtering subsystem) — the argument factory is shared. -> `DONE-027-0.0.8` — Filtering subsystem
+- Related: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-049-0.1.3`). -> `TODO-BETA-049-0.1.3` — Layer 3 Meta key promotion
+- Dependency: planned; gated on `DONE-027-0.0.8` (Filtering) and `WIP-ALPHA-030-0.0.9` (DjangoConnectionField) -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Dependency: `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Related: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-051-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-051-0.1.5` — Fakeshop GraphQL schema activation
+- Related: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="postgres_full_text_search_filter_primitives"></a>
 ### [TODO-BETA-047-0.1.2 — Postgres full-text search filter primitives](KANBAN.html#postgres_full_text_search_filter_primitives)
@@ -1195,12 +1193,12 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 
 #### Card references
 
-- Dependency via Dependencies section: `TODO-BETA-046-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface. -> `TODO-BETA-046-0.1.2` — `Meta.search_fields` support
-- Dependency via Dependencies section: `DONE-027-0.0.8` (Filtering subsystem) -- the filter-argument-factory machinery is shared. -> `DONE-027-0.0.8` — Filtering subsystem
-- Dependency via Planning note: Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-046-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery. -> `TODO-BETA-046-0.1.2` — `Meta.search_fields` support
-- Dependency via Planning note: Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-046-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery. -> `DONE-027-0.0.8` — Filtering subsystem
-- Related via Card item: `Meta.search_fields` (`TODO-BETA-046-0.1.2`) only covers OR'd `icontains`; ranked / weighted / similarity search is a distinct capability the cookbook ships and basic search does not. -> `TODO-BETA-046-0.1.2` — `Meta.search_fields` support
-- Related via Card item: The only cookbook filter-surface gap found in the 0.0.7 DRY-cycle kwarg-parity audit; every other `django_graphene_filters` filter primitive is already shipped in `DONE-027-0.0.8`. -> `DONE-027-0.0.8` — Filtering subsystem
+- Dependency: `TODO-BETA-046-0.1.2` (`Meta.search_fields`) -- basic search lands first; this is the advanced full-text surface. -> `TODO-BETA-046-0.1.2` — `Meta.search_fields` support
+- Dependency: Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-046-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery. -> `TODO-BETA-046-0.1.2` — `Meta.search_fields` support
+- Related: `Meta.search_fields` (`TODO-BETA-046-0.1.2`) only covers OR'd `icontains`; ranked / weighted / similarity search is a distinct capability the cookbook ships and basic search does not. -> `TODO-BETA-046-0.1.2` — `Meta.search_fields` support
+- Dependency: `DONE-027-0.0.8` (Filtering subsystem) -- the filter-argument-factory machinery is shared. -> `DONE-027-0.0.8` — Filtering subsystem
+- Dependency: Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-046-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery. -> `DONE-027-0.0.8` — Filtering subsystem
+- Related: The only cookbook filter-surface gap found in the 0.0.7 DRY-cycle kwarg-parity audit; every other `django_graphene_filters` filter primitive is already shipped in `DONE-027-0.0.8`. -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="aggregation_subsystem"></a>
 ### [TODO-BETA-048-0.1.3 — Aggregation subsystem](KANBAN.html#aggregation_subsystem)
@@ -1254,7 +1252,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 
 #### Card references
 
-- Related via Card item: full subsystem, parallel to Ordering: reuses `DONE-027-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-aggregates.md` + tests. -> `DONE-027-0.0.8` — Filtering subsystem
+- Related: full subsystem, parallel to Ordering: reuses `DONE-027-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-aggregates.md` + tests. -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="layer_3_meta_key_promotion"></a>
 ### [TODO-BETA-049-0.1.3 — Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
@@ -1344,8 +1342,8 @@ blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (La
 
 #### Card references
 
-- Blocked by via Planning note: blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion). -> `WIP-ALPHA-032-0.0.9` — Full Relay story (Node + Connection + Root + validation)
-- Blocked by via Planning note: blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-049-0.1.3` — Layer 3 Meta key promotion
+- Blocked by: blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion). -> `WIP-ALPHA-032-0.0.9` — Full Relay story (Node + Connection + Root + validation)
+- Blocked by: blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-049-0.1.3` — Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
 ### [TODO-BETA-052-0.1.5 — Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
@@ -1364,8 +1362,68 @@ blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (La
 - In-process `schema.execute_sync` tests still go under `examples/fakeshop/tests/`.
 - bounded test suite: live `/graphql/` acceptance tests for the activated product-catalog schema, reusing the library app's placement + schema-reload pattern.
 
+<a id="mutation_transactions_and_idempotency"></a>
+### [TODO-BETA-053-0.1.6 — Mutation transactions and idempotency](KANBAN.html#mutation_transactions_and_idempotency)
+
+- Priority: High
+- Severity: Major
+- Status: Needs spec
+- Relative size: S
+
+#### Planning note
+
+Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutation surface exists and before migration/adoption docs lock the pre-1.0 story.
+
+#### Dependencies
+
+- `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+
+#### Scope
+
+- Add mutation-level `Meta.atomic = True` so generated create/update/delete mutation resolvers can run inside `transaction.atomic()` without every consumer hand-wrapping the resolver.
+- Add `Meta.idempotency_key = "request_id"` and `Meta.idempotency_ttl = 86400` support backed by `django.core.cache`, returning the first successful response for duplicate keys inside the TTL.
+- Cache only successful atomic-mode responses; validation, permission, and database failures roll back and skip the idempotency write so client retries naturally re-execute.
+- Keep the surface DRF-shaped and mutation-local: declaration lives on each `DjangoMutation.Meta`, with safe defaults and no global setting required.
+
+#### Definition of done
+
+- [ ] New or amended mutation spec documents the atomic/idempotency Meta keys, cache-key shape, TTL behavior, retry semantics, and failure rollback rules.
+- [ ] Implementation wraps the real generated mutation execution path in `transaction.atomic()` when enabled and leaves non-atomic mutations behavior-compatible.
+- [ ] Idempotency cache entries are scoped by mutation class, key value, authenticated principal or anonymous scope, and operation arguments so unrelated calls do not collide.
+- [ ] Tests cover successful replay, validation failure retry, exception rollback, TTL expiration, cache backend errors failing loudly, and sync/async mutation paths where supported.
+- [ ] Live `/graphql/` coverage exercises a real fakeshop mutation twice with the same idempotency key and proves the second response does not double-write.
+
+#### Foundation-slice seam
+
+- `TODO-ALPHA-035-0.0.11` owns the base `DjangoMutation` class, generated input types, and shared `errors: list[FieldError]` envelope; this card layers safety semantics onto that lifecycle instead of inventing a separate mutation primitive.
+- DRF serializer and Form-based mutation cards inherit the same atomic/idempotency implementation through the shared mutation base once their adapters land.
+
+#### Files likely touched
+
+- `django_strawberry_framework/mutations/` or the mutation package introduced by `TODO-ALPHA-035-0.0.11`.
+- `tests/mutations/` plus live fakeshop GraphQL mutation tests.
+- `docs/GLOSSARY.md` and the mutation spec when the feature ships.
+
+#### Why it matters
+
+- Stripe-style idempotency is production table stakes for payment, order, and inventory writes, but Django GraphQL packages leave it to each app.
+- Combining `transaction.atomic()` with keyed response replay makes generated mutations safe by default for retries, client timeouts, and duplicate submissions.
+
+#### Dependencies
+
+- Builds on the core DjangoMutation lifecycle and generated input envelope from TODO-ALPHA-035.
+
+#### Other
+
+- Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 3/10; bang-for-buck score 26.67.
+- Neither graphene-django nor strawberry-graphql-django ships mutation idempotency; this is a differentiator rather than an upstream-parity card.
+
+#### Card references
+
+- Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from TODO-ALPHA-035. -> `TODO-ALPHA-035-0.0.11` — Mutations + auto-generated Input types
+
 <a id="migration_and_adoption_guides"></a>
-### [TODO-BETA-053-0.1.6 — Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
+### [TODO-BETA-054-0.1.6 — Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
 - Severity: Medium
@@ -1399,7 +1457,7 @@ planned
 - Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
 
 <a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
-### [TODO-BETA-054-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
+### [TODO-BETA-055-0.1.7 — Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
 - Severity: Medium
@@ -1438,10 +1496,10 @@ planned
 
 #### Card references
 
-- Related via Card item: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` — Filtering subsystem
+- Related: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="optimizer_explain_mode"></a>
-### [TODO-BETA-055-0.1.7 — Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
+### [TODO-BETA-056-0.1.7 — Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
 
 - Priority: High
 - Severity: Medium
@@ -1491,7 +1549,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 - Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 2/10; bang-for-buck score 40.0.
 
 <a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
-### [TODO-STABLE-056-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
+### [TODO-STABLE-057-1.0.0 — Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
 - Severity: Major
@@ -1504,7 +1562,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Definition of done
 
-- [ ] Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-053-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`.
+- [ ] Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-054-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`.
 - [ ] API surface audit: top-level `__all__` confirmed stable; every public symbol documented; no `# experimental` markers in shipped code; no `_private` symbols accidentally referenced from docs.
 - [ ] SemVer policy committed in CHANGELOG header: every release after `1.0.0` follows MAJOR / MINOR / PATCH rules strictly; pre-`0.1.0` deprecation shims removed entirely.
 - [ ] Full async + sync coverage matrix validated; no `sync_to_async` workarounds remain on any resolver path.
@@ -1535,10 +1593,10 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Card references
 
-- Related via Card item: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-053-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-045-0.1.1` — `FieldSet`
-- Related via Card item: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-053-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-053-0.1.6` — Migration and adoption guides
-- Related via Card item: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-053-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-049-0.1.3` — Layer 3 Meta key promotion
-- Related via Card item: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-053-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-052-0.1.5` — Product-catalog Layer 3 HTTP GraphQL tests
+- Related: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-054-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-045-0.1.1` — `FieldSet`
+- Related: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-054-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-054-0.1.6` — Migration and adoption guides
+- Related: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-054-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-049-0.1.3` — Layer 3 Meta key promotion
+- Related: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-054-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-052-0.1.5` — Product-catalog Layer 3 HTTP GraphQL tests
 
 ## Done
 
@@ -1640,7 +1698,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 #### Card references
 
-- Dependency via Dependencies section: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `WIP-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
+- Dependency: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `WIP-ALPHA-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField`
 
 <a id="ordering_subsystem"></a>
 ### [DONE-028-0.0.8 — Ordering subsystem](KANBAN.html#ordering_subsystem)
@@ -1721,8 +1779,8 @@ shipped
 
 #### Card references
 
-- Related via Card item: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField #"order_by"` — connection field accepts an `order_by` argument that composes through `django_filters.OrderingFilter` declared on the FilterSet. Graphene has no separate ordering primitive; ⚛️ parity is met by the filter subsystem (`DONE-027-0.0.8`) rather than this card. -> `DONE-027-0.0.8` — Filtering subsystem
-- Related via Card item: second-largest `0.0.8` card. A leaner mirror of `DONE-027-0.0.8`: five of the six lazy-resolution layers carry over, no operator-bag/lookup surface, 🍓-only parity. New `orders/` subpackage + `docs/spec-028-orders-0_0_8.md` + mirrored tests. Layer 6 (dynamic OrderSet generation) has no cookbook counterpart — the one genuinely fresh design decision. -> `DONE-027-0.0.8` — Filtering subsystem
+- Related: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField #"order_by"` — connection field accepts an `order_by` argument that composes through `django_filters.OrderingFilter` declared on the FilterSet. Graphene has no separate ordering primitive; ⚛️ parity is met by the filter subsystem (`DONE-027-0.0.8`) rather than this card. -> `DONE-027-0.0.8` — Filtering subsystem
+- Related: second-largest `0.0.8` card. A leaner mirror of `DONE-027-0.0.8`: five of the six lazy-resolution layers carry over, no operator-bag/lookup surface, 🍓-only parity. New `orders/` subpackage + `docs/spec-028-orders-0_0_8.md` + mirrored tests. Layer 6 (dynamic OrderSet generation) has no cookbook counterpart — the one genuinely fresh design decision. -> `DONE-027-0.0.8` — Filtering subsystem
 
 <a id="filtering_subsystem"></a>
 ### [DONE-027-0.0.8 — Filtering subsystem](KANBAN.html#filtering_subsystem)
@@ -2221,8 +2279,8 @@ shipped
 
 #### Card references
 
-- Related via Card item: `BigAutoField` preserved as `int` before scalar override recourse shipped in `DONE-019-0.0.6`. -> `DONE-019-0.0.6` — Consumer override semantics (scalar fields)
-- Related via Card item: The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `DONE-025-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor. -> `DONE-025-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map`
+- Related: `BigAutoField` preserved as `int` before scalar override recourse shipped in `DONE-019-0.0.6`. -> `DONE-019-0.0.6` — Consumer override semantics (scalar fields)
+- Related: The internal Strawberry deprecation about passing a class (or `NewType`) to `strawberry.scalar(...)` is suppressed at the definition site (tight `warnings.catch_warnings()` filter). The package import surface is therefore clean. Migration to a `StrawberryConfig.scalar_map`-based design is roadmapped as `DONE-025-0.0.7` — that path is a real public-API change (consumers using `BigInt` directly will merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`), not an internal-only refactor. -> `DONE-025-0.0.7` — Warning-free scalar registration via `StrawberryConfig.scalar_map`
 
 <a id="fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement"></a>
 ### [DONE-016-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement](KANBAN.html#fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement)
@@ -2494,7 +2552,7 @@ shipped
 
 #### Card references
 
-- Related via Card item: Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-019-0.0.6`. -> `DONE-019-0.0.6` — Consumer override semantics (scalar fields)
+- Related: Kept the remaining scalar override skip documented as a separate scalar-field concern under `DONE-019-0.0.6`. -> `DONE-019-0.0.6` — Consumer override semantics (scalar fields)
 
 <a id="004_foundation_slice_definition_order_independence"></a>
 ### [DONE-010-0.0.4 — 0.0.4 foundation slice (definition-order independence)](KANBAN.html#004_foundation_slice_definition_order_independence)
@@ -2970,7 +3028,7 @@ shipped
 
 #### Card references
 
-- Related via Card item: Definition-order independence is now covered by `DONE-010-0.0.4`. -> `DONE-010-0.0.4` — 0.0.4 foundation slice (definition-order independence)
+- Related: Definition-order independence is now covered by `DONE-010-0.0.4`. -> `DONE-010-0.0.4` — 0.0.4 foundation slice (definition-order independence)
 
 ## Release readiness checklist
 

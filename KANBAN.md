@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-05-28
+Last refreshed: 2026-06-06
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -71,24 +71,24 @@ demoted to a bullet under its label.
 ### In progress
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
-- `0.0.8` is the active patch and both planned subsystems have shipped: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`. No active WIP cards. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column. The last `0.0.8` card to ship owns the version bump from `0.0.7` per Decision 10 of `docs/SPECS/spec-020-list_field-0_0_7.md`.
+- `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
+- `0.0.9` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is in progress as four WIP cards — `WIP-ALPHA-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `WIP-ALPHA-031-0.0.9` (Django-model-based GlobalID encoding), `WIP-ALPHA-032-0.0.9` (the full Relay story), and `WIP-ALPHA-033-0.0.9` (connection-aware optimizer planning). The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
 
 - Layer 3 public subsystems are still planned only:
-  - `orders/`
   - `aggregates/`
   - `fieldset.py`
   - `connection.py`
   - `permissions.py`
   - `utils/queryset.py`
-- Layer 3 still needs the original goal-level contract: declarative filtering, ordering, aggregation, and permission rules configured through `Meta`, composable with each other, and introspectable from one type definition.
+- Layer 3 still needs the rest of the goal-level contract: declarative aggregation and permission rules configured through `Meta`, composing with the shipped filtering and ordering, and introspectable from one type definition.
 - Several DjangoType contract gaps remain:
   - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
-  - connection-aware planning for Relay-style nested connection selections (new card `WIP-ALPHA-030-0.0.9`)
+  - connection-aware planning for Relay-style nested connection selections (`WIP-ALPHA-033-0.0.9`)
 - Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract ([`BACKLOG.md`][backlog] item 38).
 - The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
 
@@ -98,11 +98,11 @@ demoted to a bullet under its label.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField` | No dedicated spec |
+| `WIP-ALPHA-030-0.0.9` — `DjangoConnectionField` | [spec-030-connection_field-0_0_9.md](docs/spec-030-connection_field-0_0_9.md) |
 | `WIP-ALPHA-031-0.0.9` — Django-model-based GlobalID encoding | No dedicated spec |
 | `WIP-ALPHA-032-0.0.9` — Full Relay story (Node + Connection + Root + validation) | No dedicated spec |
 | `WIP-ALPHA-033-0.0.9` — Connection-aware optimizer planning | No dedicated spec |
-| `DONE-029-0.0.9` — `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/spec-029-consumer_dx_cleanup-0_0_9.md) |
+| `DONE-029-0.0.9` — `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md) |
 | `DONE-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md) |
 | `DONE-027-0.0.8` — Filtering subsystem | [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md) |
 | `DONE-026-0.0.7` — Scalar conversion end-to-end coverage in the fakeshop example | [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md) |
@@ -144,6 +144,7 @@ No active WIP cards.
 - Severity: Major
 - Status: Planned
 - Relative size: L
+- Spec: [spec-030-connection_field-0_0_9.md](docs/spec-030-connection_field-0_0_9.md)
 
 #### Planning note
 
@@ -1549,7 +1550,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 - Severity: Medium
 - Status: Planned
 - Relative size: S-M
-- Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/spec-029-consumer_dx_cleanup-0_0_9.md)
+- Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md)
 
 #### Glossary terms
 

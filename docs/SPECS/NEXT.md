@@ -165,6 +165,50 @@ The "active" spec is the one you just authored in Step 6. Every other `spec-*.md
 >
 > Bias toward over-grepping. Missing references rot silently and only surface when a future reader follows the link. False positives are cheap to dismiss; false negatives are invisible until they bite.
 
+> **`KANBAN.md` is a GENERATED file — edit the database, not the file.** `KANBAN.md` is rendered from the `apps.kanban` Django app's database (in the fakeshop example project) by `scripts/build_kanban_md.py`; the committed `KANBAN.md` is an export, not a source. **Hand-edits to `KANBAN.md` decay** — they are silently overwritten the next time anyone re-renders the board. So the KANBAN parts of this sweep (actions 5 and 6 below) are made in the DB and then re-rendered, NOT by editing the file:
+>
+> - **Both the `## WIP / DONE spec map` table row AND a card's `Spec:` body line are rendered from the one `SpecDoc` model** (`apps/kanban/models.py::SpecDoc`: `card` one-to-one, unique `name`, `url`). `url` is a GitHub `…/blob/main/<repo-path>` URL; the renderer strips the `blob/main/` prefix to produce the in-repo link, so the path you want in `KANBAN.md` is whatever follows `blob/main/` in `SpecDoc.url`. There is no separate "spec map" data — one `SpecDoc` per card drives both surfaces.
+> - **To repoint a moved spec's link** (action 5): update that card's `SpecDoc.url` to the new path, e.g. `…/blob/main/docs/SPECS/spec-<old_NNN>-…`.
+> - **To add/fix the active card's spec reference** (action 6): `update_or_create` a `SpecDoc(card=<active card>, name="spec-<NNN>-<topic>-<0_0_X>", url="…/blob/main/docs/spec-<NNN>-<topic>-<0_0_X>.md")`. A card with no `SpecDoc` renders as `No dedicated spec`.
+> - **Make the DB edits via the example project's shell**, then re-render:
+>
+>   ```
+>   uv run python examples/fakeshop/manage.py shell -c "<ORM edit>"
+>   uv run python scripts/build_kanban_md.py     # re-export KANBAN.md from the DB
+>   ```
+>
+>   `build_kanban_md.py` rewrites the whole file from the DB, so confirm the resulting `git diff KANBAN.md` shows ONLY your intended spec-reference changes (a clean diff also proves the committed file was already in sync with the DB).
+> - **Card-body prose that mentions a spec path inside a `CardItem.text` row** (e.g. a "Requires spec: `docs/spec-…`" line buried in a Done card's Scope/DoD prose) is historical card text, NOT a `SpecDoc`-driven link. Leave it — it is out of scope per the "no card-body content changes beyond the spec-reference line" boundary, and re-rendering will preserve it verbatim.
+
+**Worked example (copy-paste, then fill the `<…>` blanks).** This is the entire KANBAN side of actions 5 + 6 — one shell call that (a) creates/updates the active card's `SpecDoc` and (b) repoints each archived spec's `SpecDoc` to `docs/SPECS/`, followed by the re-render and the clean-diff check. `Card.number` is the card's NNN (e.g. `30` for `WIP-ALPHA-030-0.0.9`). Run from the repo root:
+
+```
+uv run python examples/fakeshop/manage.py shell -c "
+from apps.kanban.models import Card, SpecDoc
+BLOB = 'https://github.com/riodw/django-strawberry-framework/blob/main'
+
+# (action 6) active WIP card -> the spec you just authored; creates the row if absent.
+SpecDoc.objects.update_or_create(
+    card=Card.objects.get(number=<NNN>),
+    defaults={
+        'name': 'spec-<NNN>-<topic>-<0_0_X>',
+        'url': f'{BLOB}/docs/spec-<NNN>-<topic>-<0_0_X>.md',
+    },
+)
+
+# (action 5) every spec you moved to docs/SPECS/ this sweep -> repoint its card's SpecDoc.
+# One (number, name-without-.md) tuple per archived spec; usually just the prior cycle's spec.
+for number, name in [(<OLD_NNN>, 'spec-<OLD_NNN>-<old_topic>-<old_version>')]:
+    sd = SpecDoc.objects.get(card__number=number)
+    sd.url = f'{BLOB}/docs/SPECS/{name}.md'
+    sd.full_clean(); sd.save()
+"
+uv run python scripts/build_kanban_md.py            # re-export KANBAN.md from the DB
+git --no-pager diff KANBAN.md                       # expect ONLY the spec-reference changes
+```
+
+The modified `examples/fakeshop/db.sqlite3` is the durable artifact — `KANBAN.md` is just its export, so the committed DB is what carries the change forward. Leave both edited together for the maintainer to commit.
+
 Concrete sequence:
 
 1. **List candidates.** Enumerate every `spec-*.md` file at the top level of `docs/` (do NOT recurse into `docs/SPECS/`, which is the destination):
@@ -199,14 +243,14 @@ Concrete sequence:
    grep -rln "spec-<old_NNN>-<old_topic>-<old_version>" docs/ README.md GOAL.md TODAY.md AGENTS.md KANBAN.md
    ```
 
-   For each hit, rewrite the path so the link still resolves after the move. Relative-path discipline: from `docs/GLOSSARY.md` the moved file is `SPECS/spec-…`; from repo-root `README.md` / `KANBAN.md` / `GOAL.md` / `TODAY.md` / `AGENTS.md` it is `docs/SPECS/spec-…`; from another spec under `docs/` it is `SPECS/spec-…`. Apply every rewrite in place — `KANBAN.md` is part of this sweep, not exempt from it.
-6. **Add or update the active WIP card's reference to the new spec.** The card you targeted in Step 3 should point at the spec file you just authored. Open `KANBAN.md` at the active WIP card body and verify it contains a link to `docs/spec-<NNN>-<topic>-<0_0_X>.md`. Three cases:
+   For each hit, rewrite the path so the link still resolves after the move. Relative-path discipline: from `docs/GLOSSARY.md` the moved file is `SPECS/spec-…`; from repo-root `README.md` / `GOAL.md` / `TODAY.md` / `AGENTS.md` it is `docs/SPECS/spec-…`; from another spec under `docs/` it is `SPECS/spec-…`. Apply each rewrite in place — **except `KANBAN.md`**: it is a generated export (see the callout above), so its spec-map row and card `Spec:` line for a moved spec are repointed by updating that card's `SpecDoc.url` in the DB (set the path after `blob/main/` to `docs/SPECS/spec-…`) and re-rendering with `uv run python scripts/build_kanban_md.py`. Do NOT hand-edit `KANBAN.md` — the edit would not survive the next render.
+6. **Add or update the active WIP card's reference to the new spec.** The card you targeted in Step 3 should point at the spec file you just authored — a `SpecDoc` row whose `url` resolves to `docs/spec-<NNN>-<topic>-<0_0_X>.md`. Because `KANBAN.md` is a generated export (see the callout above), this is a **DB edit + re-render**, not a file edit. Query the card's current `SpecDoc` (via `apps/kanban/models.py::SpecDoc`) and handle three cases:
 
-   - **No reference present** — add one. Typical placement: a `Spec:` or `Active spec:` line at the top of the card body (or under the card's existing "Files likely touched" section if the card uses that convention), with a markdown link to the new spec at its `docs/spec-<NNN>-…` path.
-   - **Reference present but pointing at a different path** (e.g., a stale `docs/SPECS/spec-…` from a prior archive cycle, or a now-renamed slug) — rewrite to point at the active path.
-   - **Reference present at the correct path** — no action.
+   - **No `SpecDoc` present** (the spec map renders `No dedicated spec`) — create one: `SpecDoc.objects.update_or_create(card=<active card>, defaults={"name": "spec-<NNN>-<topic>-<0_0_X>", "url": "https://github.com/<org>/<repo>/blob/main/docs/spec-<NNN>-<topic>-<0_0_X>.md"})`. The renderer surfaces it as both the spec-map row and a card-body `Spec:` line automatically.
+   - **`SpecDoc` present but `url` points at a different path** (e.g. a stale `docs/SPECS/spec-…` from a prior archive cycle, or a now-renamed slug) — update `SpecDoc.url` (and `name` if the slug changed) to the active path.
+   - **`SpecDoc.url` already correct** — no action.
 
-   When the active card lives in a column other than `## In progress` by the time you reach this step (e.g., the maintainer moved it to `## Done` between Step 3 and Step 8), follow the reference to the new column and update in place there. The reference belongs with the card, not with the column.
+   Make the edit via `uv run python examples/fakeshop/manage.py shell -c "<ORM edit>"`, then `uv run python scripts/build_kanban_md.py`, and confirm `git diff KANBAN.md` shows only the intended spec-reference change. The card's column is irrelevant — `SpecDoc` is keyed on the card, not its board column, so a card moved to `## Done` between Step 3 and Step 8 still resolves through the same `SpecDoc` and re-renders in its new column.
 7. **`CHANGELOG.md` stays reserved.** `CHANGELOG.md` has its own maintainer-edited protocol and is NOT rewritten by this step even when it references a moved spec. If `grep` finds matches in `CHANGELOG.md`, surface them as a one-line report at the end of the flow ("`CHANGELOG.md` references moved spec(s) at lines …; maintainer must update") and STOP — do not silently edit.
 8. **Verify every rewritten link resolves.** Before closing the step, spot-check a representative sample of the rewrites — pick 5–10 paths across the categories above (one repo-root link, one `docs/` sibling, one inter-archived-spec link, one source-file link) and confirm each target file exists at the path the rewritten link now claims. Broken links land silently; this is the only check that catches a category miss in the transformation pass.
 9. **Re-run the checker** against the new spec one more time:
@@ -227,11 +271,11 @@ The flow is complete when Step 8 finishes: only the active spec and its CSV live
 
 - Do **not** modify `CHANGELOG.md` under any circumstance during this flow — even path-update edits triggered by Step 8 must be surfaced as a maintainer-report rather than silently applied.
 - Do **not** modify `TODAY.md` except as a Step 8 path-update (rewriting a moved spec's path); content edits to `TODAY.md` outside that narrow purpose are out of scope.
-- `KANBAN.md` IS in scope for Step 8 — apply path-updates for moved specs in place, AND add or rewrite the active WIP card's spec reference per Step 8 action 5. No other edits to `KANBAN.md` (no column moves, no card-body content changes beyond the spec-reference line).
-- Do **not** modify any file other than the new spec file, its companion `*-terms.csv`, the spec files being archived under Step 8, and the cross-reference updates Step 8 prescribes in `docs/`, `README.md`, `GOAL.md`, `TODAY.md`, `AGENTS.md`, and `KANBAN.md`.
+- `KANBAN.md`'s card data IS in scope for Step 8 — repoint moved-spec links and add/fix the active WIP card's spec reference — but `KANBAN.md` is a **generated export**, so those changes are made in the `apps.kanban` DB (the `SpecDoc` rows) and re-rendered with `scripts/build_kanban_md.py`, NOT by hand-editing the file (see the Step 8 callout). The only `SpecDoc` edits in scope are spec-reference repoints/creates for the moved and active specs; no other DB changes (no column/status moves, no `CardItem.text` / card-body prose edits beyond what `SpecDoc` drives).
+- Do **not** modify any file other than the new spec file, its companion `*-terms.csv`, the spec files being archived under Step 8, the cross-reference updates Step 8 prescribes in `docs/`, `README.md`, `GOAL.md`, `TODAY.md`, and `AGENTS.md`, and — for `KANBAN.md` — the regenerated file plus the `apps.kanban` `SpecDoc` rows it is rendered from.
 - Do **not** commit.
-- Do **not** run pytest, ruff, or any other tooling unless Step 7 or Step 8 prescribes it (the `scripts/check_spec_glossary.py` run including its `--auto-link` rewrite, and the `git mv` / `grep` invocations Step 8 names, are all part of the flow) or you need to settle a question inside the spec.
-- The artifacts this flow produces: the new spec file, its companion `*-terms.csv`, the moves of every prior `spec-*.md` (and companion CSV) from `docs/` to `docs/SPECS/`, path-only cross-reference updates in every doc that pointed at a moved spec, and the active WIP card's spec-reference line in `KANBAN.md`.
+- Do **not** run pytest, ruff, or any other tooling unless Step 7 or Step 8 prescribes it (the `scripts/check_spec_glossary.py` run including its `--auto-link` rewrite, the `git mv` / `grep` invocations Step 8 names, and — for the `KANBAN.md` spec-reference edits — the `examples/fakeshop/manage.py shell` ORM edit plus the `scripts/build_kanban_md.py` re-render are all part of the flow) or you need to settle a question inside the spec.
+- The artifacts this flow produces: the new spec file, its companion `*-terms.csv`, the moves of every prior `spec-*.md` (and companion CSV) from `docs/` to `docs/SPECS/`, path-only cross-reference updates in every doc that pointed at a moved spec, and — for the active WIP card's spec reference and any moved-spec links in `KANBAN.md` — the `apps.kanban` `SpecDoc` rows plus the regenerated `KANBAN.md` they export to.
 - The flow is not complete until (a) `scripts/check_spec_glossary.py` exits 0 against the new spec and its CSV, (b) Step 8 has run and no `spec-*.md` other than the active one remains at `docs/` top-level, AND (c) the active WIP card in `KANBAN.md` carries a link to `docs/spec-<NNN>-<topic>-<0_0_X>.md`.
 - If the WIP card's body conflicts with something you read in Step 1, prefer the card and call out the conflict as an entry in the spec's `Risks and open questions` section — do not silently reconcile.
 - Reading source files, existing specs, or test files during Step 6 is allowed and expected. The boundary is on **writes**, not reads.

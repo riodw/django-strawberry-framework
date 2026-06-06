@@ -5,6 +5,7 @@ DjangoListField,djangolistfield,The shipped non-Relay list[T] sibling whose fact
 DjangoNodeField,djangonodefield,Planned root single-node lookup; NOT this card (lands with the Full Relay story, WIP-032); shares the finalizer auto-trigger seam Decision 12 declines.
 Relay Node integration,relay-node-integration,The shipped 0.0.5 foundation (Meta.interfaces relay.Node, injected resolve_* defaults, id GlobalID!) a connection field is only meaningful over.
 Meta.interfaces,metainterfaces,Declares relay.Node; Decision 8 rejects Meta.connection on a type whose interfaces omit relay.Node.
+Meta.connection,metaconnection,The new type-level Relay connection options key; 0.0.9 accepts {"total_count": bool}, requires Meta.interfaces relay.Node, and drives the per-target connection class shape.
 FilterSet,filterset,The shipped filter subsystem the connection field's filter: argument is auto-derived from; reuses apply_sync / apply_async.
 filter_input_type,filter_input_type,The shipped resolver-argument helper whose lazy Annotated machinery and orphan-validation ledger the connection field's filter: argument reuses (Decision 6).
 Meta.filterset_class,metafilterset_class,The per-type sidecar key driving the filter: argument generation.
@@ -28,6 +29,16 @@ DjangoType,djangotype,The model-backed type the connection field wraps.
 Meta.primary,metaprimary,Multi-DjangoType-per-model rule; a connection field may wrap a secondary type, and the relation-as-connection upgrade (WIP-032) must choose the primary.
 SyncMisuseError,syncmisuseerror,The typed marker the Relay-foundation get_queryset helpers raise when a sync resolver context meets an async get_queryset; the connection field inherits the contract (Decision 10).
 strawberry_config,strawberry_config,The scalar-map factory every example schema passes to strawberry.Schema alongside the singleton-factory optimizer extension.
+Public exports,public-exports,The top-level package import surface Slice 4 promotes DjangoConnectionField and DjangoConnection into once live usage proves them.
+Definition-order independence,definition-order-independence,The finalize-time type-collection model behind the no-auto-finalize posture and the existing finalize_django_types synchronization contract.
+Meta.model,metamodel,The baseline DjangoType model binding shown in every connection-field example.
+Meta.fields,metafields,The baseline DjangoType field-selection key shown in the connection-field example and used to frame the new Meta.connection key.
+Meta.exclude,metaexclude,The sibling baseline field-selection key in ALLOWED_META_KEYS that helps orient the new Meta.connection validation work.
+Meta.name,metaname,The shipped GraphQL type-name override that implementers must consider when deriving stable concrete connection class names.
+Meta.description,metadescription,The shipped GraphQL type-description key in the baseline Meta surface that the new Meta.connection key joins.
+Meta.nullable_overrides,metanullable_overrides,The shipped 0.0.9 baseline Meta key in ALLOWED_META_KEYS that frames Meta.connection as another direct key rather than deferred promotion.
+Meta.required_overrides,metarequired_overrides,The companion 0.0.9 baseline Meta key in ALLOWED_META_KEYS that frames Meta.connection as another direct key rather than deferred promotion.
+Relation handling,relation-handling,The current relation-list behavior that WIP-032 upgrades to relation-as-Connection after this card lands.
 Meta.search_fields,metasearch_fields,0.1.2 surface; the search: connection argument is absent in 0.0.9 (out of scope).
 FieldSet,fieldset,0.1.1 Layer-3 sidecar; field-selection composition layers on after the connection field (out of scope).
 Meta.fields_class,metafields_class,0.1.1 key wiring FieldSet; out of scope.

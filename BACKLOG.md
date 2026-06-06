@@ -54,35 +54,6 @@ The package's Relay Node foundation deliberately stays limited to `Meta.interfac
 - Resolve how Node lookup chooses a GraphQL type once `Meta.primary` permits multiple `DjangoType`s for the same Django model.
 - Revisit whether one model can expose multiple Relay IDs for different public/admin/list/detail variants without breaking client cache identity.
 
-### 23. Mutation transactions and idempotency
-
-**Realistic**: 10/10 — `transaction.atomic()` is one line; idempotency-key cache lookup is a standard pattern.
-
-**Impact**: 8/10 — Stripe-style mutation safety nobody in Django + GraphQL ships; production-table-stakes for payment / order / inventory APIs.
-
-**Difficulty**: 3/10 — Two `Meta` keys; small slice; ~30 lines of new code once the mutation surface exists.
-
-**What `graphene-django` does**: nothing — `transaction.atomic` is consumer responsibility; idempotency is unaddressed.
-
-**What `strawberry-graphql-django` does**: same.
-
-**What Stripe and similar production systems do**: every state-changing API has an idempotency-key header; retried requests within a TTL return the cached first response instead of double-executing.
-
-**What we'd do**: two complementary `Meta` keys:
-
-```python path=null start=null
-class CreatePayment(DjangoMutation):
-    class Meta:
-        model = Payment
-        atomic = True                      # wrap resolver in transaction.atomic()
-        idempotency_key = "request_id"     # input-field name carrying the client-supplied key
-        idempotency_ttl = 86400            # seconds; default 24h
-```
-
-A second mutation with the same `request_id` within the TTL returns the cached first response without re-executing. Backing store: `django.core.cache` (works with `locmem` / `redis` / `memcached` / database). Atomic-mode failures roll back the database AND skip the idempotency cache write, so retries naturally re-execute.
-
-**Why it matters**: Stripe-style idempotency is table stakes for payment, order, and inventory mutations — exactly the kinds of Django apps that adopt GraphQL. Nobody in the Django + GraphQL ecosystem ships it. Combined with atomic transactions, this makes mutations *safe by default* rather than *safe by careful resolver authorship*. The atomic part is one line; the idempotency part is ~30 lines once a cache lookup helper exists.
-
 ### 10. Persisted queries with Django cache integration
 
 **Realistic**: 10/10 — `django.core.cache` is mature; query hashing is a well-known pattern; Apollo Persisted Queries conventions already exist to follow.
@@ -1418,7 +1389,7 @@ const result = await client.batch([
 
 `$order.id` references the first mutation's result; the batch executor resolves the dependency graph before execution. Batch responses carry the shared `errors: list[FieldError]` envelope (item 19) and `extensions["dst.invalidations"]` block (item 20) so client invalidation still works.
 
-**Why it matters**: *"Mutations don't compose / don't transact"* is one of the most-cited GraphQL critiques. REST's *"one transaction per route"* handles this naturally; tRPC users compose calls inside a single procedure with database transactions; GraphQL's *"each mutation is independent"* model has no answer. Owning a transactional batch endpoint gives consumers the most-requested missing GraphQL feature in a Django-native way — `transaction.atomic()` is already the Django convention, we just wire it through. Pairs with item 23 (single-mutation transactions and idempotency).
+**Why it matters**: *"Mutations don't compose / don't transact"* is one of the most-cited GraphQL critiques. REST's *"one transaction per route"* handles this naturally; tRPC users compose calls inside a single procedure with database transactions; GraphQL's *"each mutation is independent"* model has no answer. Owning a transactional batch endpoint gives consumers the most-requested missing GraphQL feature in a Django-native way — `transaction.atomic()` is already the Django convention, we just wire it through. Pairs with [Mutation transactions and idempotency][card-mutation-transactions-and-idempotency].
 
 ### 30. Resumable streaming downloads for large querysets
 
@@ -1893,6 +1864,7 @@ If a `BACKLOG.md` item turns out to be wrong (the upstream packages ship it, rea
 [card-full-relay-story-node-connection-root-validation]: KANBAN.md#full_relay_story_node_connection_root_validation
 [card-multi-database-cooperation-contract]: KANBAN.md#multi_database_cooperation_contract
 [card-multiple-djangotypes-per-model-with-metaprimary]: KANBAN.md#multiple_djangotypes_per_model_with_metaprimary
+[card-mutation-transactions-and-idempotency]: KANBAN.md#mutation_transactions_and_idempotency
 [kanban]: KANBAN.md
 
 <!-- docs/ -->

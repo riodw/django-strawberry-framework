@@ -95,12 +95,6 @@ class CardReferenceKindFilter(FilterSet):
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
-class CardReferenceSourceFilter(FilterSet):
-    class Meta:
-        model = models.CardReferenceSource
-        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
-
-
 class BoardDocKindFilter(FilterSet):
     class Meta:
         model = models.BoardDocKind
@@ -135,7 +129,6 @@ class CardItemFilter(FilterSet):
 
 class CardReferenceFilter(FilterSet):
     kind = RelatedFilter(CardReferenceKindFilter, field_name="kind")
-    source = RelatedFilter(CardReferenceSourceFilter, field_name="source")
 
     class Meta:
         model = models.CardReference
@@ -215,7 +208,6 @@ __all__ = (
     "ParityLevelFilter",
     "SectionFilter",
     "CardReferenceKindFilter",
-    "CardReferenceSourceFilter",
     "BoardDocKindFilter",
     "TargetVersionFilter",
     "LabelFilter",

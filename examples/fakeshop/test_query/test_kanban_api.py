@@ -99,11 +99,6 @@ def _seed_board():
         label="Dependency",
         order=0,
     )
-    planning_note = models.CardReferenceSource.objects.create(
-        key="planning_note",
-        label="Planning note",
-        order=0,
-    )
     reference_doc = models.BoardDocKind.objects.create(
         key="reference",
         label="Reference",
@@ -183,7 +178,6 @@ def _seed_board():
         source_card=conn_card,
         target_card=filters_card,
         kind=dependency,
-        source=planning_note,
         raw_text="planned; gated on `DONE-021-0.0.8`",
         order=0,
     )
@@ -448,7 +442,7 @@ def test_filter_cards_by_self_referential_dependency():
 
 @pytest.mark.django_db
 def test_filter_and_select_normalized_card_references():
-    """Card references expose the parsed source/kind instead of only prose."""
+    """Card references expose the parsed kind instead of only prose."""
     _seed_board()
     _assert_graphql_data(
         """
@@ -458,7 +452,6 @@ def test_filter_and_select_normalized_card_references():
             outgoingReferences {
               targetCard { title }
               kind { key }
-              source { key }
               rawText
               order
             }
@@ -473,7 +466,6 @@ def test_filter_and_select_normalized_card_references():
                         {
                             "targetCard": {"title": "Filtering subsystem"},
                             "kind": {"key": "dependency"},
-                            "source": {"key": "planning_note"},
                             "rawText": "planned; gated on `DONE-021-0.0.8`",
                             "order": 0,
                         },
@@ -584,7 +576,6 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
           allKanbanParityLevels { key }
           allKanbanSections { key }
           allKanbanReferenceKinds { key }
-          allKanbanReferenceSources { key }
           allKanbanBoardDocKinds { key docs { key } }
         }
         """,
@@ -614,7 +605,6 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
             "allKanbanParityLevels": [{"key": "required"}, {"key": "adjacent"}],
             "allKanbanSections": [{"key": "scope"}],
             "allKanbanReferenceKinds": [{"key": "dependency"}],
-            "allKanbanReferenceSources": [{"key": "planning_note"}],
             "allKanbanBoardDocKinds": [{"key": "reference", "docs": [{"key": "snapshot"}]}],
         },
     )

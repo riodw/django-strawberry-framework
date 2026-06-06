@@ -16,8 +16,6 @@ from apps.kanban import models
 
 DEFAULT_REFERENCE_KIND_KEY = "dependency"
 DEFAULT_REFERENCE_KIND_LABEL = "Dependency"
-DEFAULT_REFERENCE_SOURCE_KEY = "dependencies_section"
-DEFAULT_REFERENCE_SOURCE_LABEL = "Dependencies section"
 DONE_STATUS_KEY = "done"
 DONE_CARD_SPEC_ERROR = "Done kanban cards require a linked spec doc."
 DONE_CARD_GLOSSARY_ERROR = "Done kanban cards require at least one glossary link."
@@ -48,7 +46,6 @@ UUID_LINKED_MODELS = (
     models.ParityLevel,
     models.Section,
     models.CardReferenceKind,
-    models.CardReferenceSource,
     models.BoardDocKind,
     models.TargetVersion,
     models.SpecDoc,
@@ -346,7 +343,7 @@ def _prepare_card_order(
 
     max_number = _highest_card_number(using)
     if card.pk is None:
-        _validate_card_number(requested_number)
+        _validate_card_number(requested_number, limit=max_number + 1)
         if requested_number <= max_number:
             _set_card_order_request(
                 card,
@@ -358,7 +355,7 @@ def _prepare_card_order(
 
     old_number = _stored_card_number(card.pk, using)
     if old_number is None:
-        _validate_card_number(requested_number)
+        _validate_card_number(requested_number, limit=max_number + 1)
         if requested_number <= max_number:
             _set_card_order_request(
                 card,
@@ -370,7 +367,7 @@ def _prepare_card_order(
     if requested_number == old_number:
         return
 
-    _validate_card_number(requested_number)
+    _validate_card_number(requested_number, limit=max_number)
     _validate_card_move_dependency_order(card.pk, old_number, requested_number, using)
     _set_card_order_request(
         card,
@@ -505,29 +502,6 @@ def _default_reference_kind(using: str | None) -> models.CardReferenceKind:
     return kind
 
 
-def _default_reference_source(using: str | None) -> models.CardReferenceSource:
-    source, _ = _manager(models.CardReferenceSource, using).get_or_create(
-        key=DEFAULT_REFERENCE_SOURCE_KEY,
-        defaults={"label": DEFAULT_REFERENCE_SOURCE_LABEL},
-    )
-    return source
-
-
-def _next_reference_order(
-    source_card: models.Card,
-    source: models.CardReferenceSource,
-    using: str | None,
-) -> int:
-    max_order = (
-        _manager(models.CardReference, using)
-        .filter(source_card=source_card, source=source)
-        .aggregate(Max("order"))["order__max"]
-    )
-    if max_order is None:
-        return 0
-    return max_order + 1
-
-
 def _ensure_reference_for_dependency(
     source_card: models.Card,
     target_card: models.Card,
@@ -536,14 +510,12 @@ def _ensure_reference_for_dependency(
     if _dependency_reference_exists(source_card.pk, target_card.pk, using):
         return
     kind = _default_reference_kind(using)
-    source = _default_reference_source(using)
+    # ``order`` is assigned per ``source_card`` by ``CardReference.save()``.
     _manager(models.CardReference, using).create(
         source_card=source_card,
         target_card=target_card,
         kind=kind,
-        source=source,
         raw_text=f"Manual dependency: `{_card_identifier(target_card)}`.",
-        order=_next_reference_order(source_card, source, using),
     )
 
 
@@ -553,18 +525,12 @@ def _delete_default_references(
     using: str | None,
 ) -> None:
     kind = _manager(models.CardReferenceKind, using).filter(key=DEFAULT_REFERENCE_KIND_KEY).first()
-    source = (
-        _manager(models.CardReferenceSource, using)
-        .filter(key=DEFAULT_REFERENCE_SOURCE_KEY)
-        .first()
-    )
-    if kind is None or source is None:
+    if kind is None:
         return
     _manager(models.CardReference, using).filter(
         source_card_id=source_card_id,
         target_card_id=target_card_id,
         kind=kind,
-        source=source,
     ).delete()
 
 

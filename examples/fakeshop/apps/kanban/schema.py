@@ -124,6 +124,7 @@ class RelativeSizeType(DjangoType):
             "label",
             "order",
             "rank",
+            "description",
             "created_date",
             "updated_date",
             "uuid",
@@ -221,23 +222,6 @@ class CardReferenceKindType(DjangoType):
         orderset_class = orders.CardReferenceKindOrder
 
 
-class CardReferenceSourceType(DjangoType):
-    class Meta:
-        model = models.CardReferenceSource
-        fields = (
-            "id",
-            "key",
-            "label",
-            "order",
-            "created_date",
-            "updated_date",
-            "uuid",
-            "card_references",
-        )
-        filterset_class = filters.CardReferenceSourceFilter
-        orderset_class = orders.CardReferenceSourceOrder
-
-
 class BoardDocKindType(DjangoType):
     class Meta:
         model = models.BoardDocKind
@@ -298,6 +282,7 @@ class SpecDocType(DjangoType):
 class CardType(DjangoType):
     slug: str
     is_blocked: bool
+    card_id: str
 
     class Meta:
         model = models.Card
@@ -349,7 +334,6 @@ class CardReferenceType(DjangoType):
             "source_card",
             "target_card",
             "kind",
-            "source",
             "raw_text",
             "order",
             "created_date",
@@ -642,20 +626,6 @@ class Query:
             queryset = filters.CardReferenceKindFilter.apply_sync(filter, queryset, info)
         if order_by is not None:
             queryset = orders.CardReferenceKindOrder.apply_sync(order_by, queryset, info)
-        return queryset
-
-    @strawberry.field
-    def all_kanban_reference_sources(
-        self,
-        info: Info,
-        filter: filter_input_type(filters.CardReferenceSourceFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.CardReferenceSourceOrder)] | None = None,
-    ) -> list[CardReferenceSourceType]:
-        queryset = models.CardReferenceSource.objects.order_by("order")
-        if filter is not None:
-            queryset = filters.CardReferenceSourceFilter.apply_sync(filter, queryset, info)
-        if order_by is not None:
-            queryset = orders.CardReferenceSourceOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field

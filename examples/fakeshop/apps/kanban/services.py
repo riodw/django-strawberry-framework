@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from django.db import models as django_models
 from django.db import transaction
@@ -10,9 +11,15 @@ from django.db.models import Max
 
 from apps.kanban import models
 
+DEFAULT_PLANNING_STATE_KEY = "planned"
+DEFAULT_STATUS_KEY = "todo"
 DEPENDENCY_NOTE_SECTION_KEY = "dependencies_note"
 DEPENDENCY_REFERENCE_KIND_KEY = "dependency"
-DEPENDENCY_REFERENCE_SOURCE_KEY = "dependencies_section"
+DONE_STATUS_KEY = "done"
+
+
+class KanbanServiceError(ValueError):
+    """A caller-correctable kanban workflow error."""
 
 
 @dataclass(frozen=True)
@@ -35,7 +42,59 @@ def _database_alias(*instances: django_models.Model) -> str | None:
 
 
 def _lookup(model: type[django_models.Model], key: str, using: str | None):
-    return _manager(model, using).get(key=key)
+    return _lookup_by(model, key, using, field="key")
+
+
+def _lookup_by(
+    model: type[django_models.Model],
+    key: str,
+    using: str | None,
+    *,
+    field: str,
+):
+    try:
+        return _manager(model, using).get(**{field: key})
+    except model.DoesNotExist:
+        valid = ", ".join(
+            sorted(_manager(model, using).values_list(field, flat=True).distinct()),
+        )
+        raise KanbanServiceError(
+            f"Unknown {model.__name__} {field}={key!r}. Valid values: {valid}",
+        ) from None
+
+
+def _require_fields(spec: dict[str, Any], fields: tuple[str, ...]) -> None:
+    for field in fields:
+        if not spec.get(field):
+            raise KanbanServiceError(f'Card is missing required field "{field}".')
+
+
+def resolve_card(identifier: object, *, using: str | None = None) -> models.Card:
+    """Resolve a card by exact title, then by integer board number."""
+    card_manager = _manager(models.Card, using)
+    if isinstance(identifier, str):
+        card = card_manager.filter(title=identifier).first()
+        if card is not None:
+            return card
+    if isinstance(identifier, int) or (isinstance(identifier, str) and identifier.isdigit()):
+        card = card_manager.filter(number=int(identifier)).first()
+        if card is not None:
+            return card
+    raise KanbanServiceError(
+        f"Cannot resolve card reference: {identifier!r} (use the card title).",
+    )
+
+
+def _target_number(spec: dict[str, Any], using: str | None) -> int:
+    if spec.get("number") is not None:
+        try:
+            return int(spec["number"])
+        except (TypeError, ValueError) as error:
+            raise KanbanServiceError('"number" must be an integer when provided.') from error
+    if spec.get("after") is not None:
+        return resolve_card(spec["after"], using=using).number + 1
+    highest = _manager(models.Card, using).order_by("-number").first()
+    return (highest.number + 1) if highest else 1
 
 
 def _order_or_empty(order: int | None) -> int:
@@ -49,19 +108,6 @@ def _next_card_item_order(card: models.Card, section: models.Section, using: str
         .aggregate(value=Max("order"))["value"]
     )
     return _order_or_empty(max_order) + 1
-
-
-def _next_card_reference_order(
-    card: models.Card,
-    source: models.CardReferenceSource,
-    using: str | None,
-) -> int:
-    max_reference_order = (
-        _manager(models.CardReference, using)
-        .filter(source_card=card, source=source)
-        .aggregate(value=Max("order"))["value"]
-    )
-    return _order_or_empty(max_reference_order) + 1
 
 
 def append_card_item(
@@ -88,35 +134,16 @@ def append_card_reference(
     source_card: models.Card,
     target_card: models.Card,
     kind: models.CardReferenceKind,
-    source: models.CardReferenceSource,
     *,
     raw_text: str = "",
-    order: int | None = None,
 ) -> models.CardReference:
-    """Create a card reference, appending within the source when order is omitted."""
-    using = _database_alias(source_card, target_card, kind, source)
-    reference_order = (
-        _next_card_reference_order(source_card, source, using) if order is None else order
-    )
+    """Create a card reference; ``order`` is assigned per source_card by ``save()``."""
+    using = _database_alias(source_card, target_card, kind)
     return _manager(models.CardReference, using).create(
         source_card=source_card,
         target_card=target_card,
         kind=kind,
-        source=source,
-        order=reference_order,
         raw_text=raw_text,
-    )
-
-
-def _next_dependency_note_order(
-    card: models.Card,
-    source: models.CardReferenceSource,
-    section: models.Section,
-    using: str | None,
-) -> int:
-    return max(
-        _next_card_reference_order(card, source, using),
-        _next_card_item_order(card, section, using),
     )
 
 
@@ -127,28 +154,153 @@ def add_dependency_note(
     *,
     order: int | None = None,
 ) -> DependencyNote:
-    """Create a dependency reference and its rendered prose bullet."""
+    """Create a dependency reference and its rendered prose bullet.
+
+    The reference's ``order`` is assigned per source_card by
+    ``CardReference.save()``; the prose item appends within its section.
+    """
     using = _database_alias(card, target_card)
     kind = _lookup(models.CardReferenceKind, DEPENDENCY_REFERENCE_KIND_KEY, using)
-    source = _lookup(models.CardReferenceSource, DEPENDENCY_REFERENCE_SOURCE_KEY, using)
     section = _lookup(models.Section, DEPENDENCY_NOTE_SECTION_KEY, using)
-    note_order = (
-        _next_dependency_note_order(card, source, section, using) if order is None else order
-    )
 
     with transaction.atomic(using=using):
         reference = append_card_reference(
             source_card=card,
             target_card=target_card,
             kind=kind,
-            source=source,
             raw_text=note,
-            order=note_order,
         )
         item = append_card_item(
             card=card,
             section=section,
             text=note,
-            order=note_order,
+            order=order,
         )
     return DependencyNote(reference=reference, item=item)
+
+
+def _create_labels(card: models.Card, labels: list[str], using: str | None) -> None:
+    for label_key in labels:
+        card.labels.add(_lookup(models.Label, label_key, using))
+
+
+def _create_parity_claims(
+    card: models.Card,
+    parity_claims: list[dict[str, str]],
+    using: str | None,
+) -> None:
+    for claim in parity_claims:
+        _manager(models.ParityClaim, using).create(
+            card=card,
+            upstream=_lookup(models.Upstream, claim["upstream"], using),
+            level=_lookup(models.ParityLevel, claim["level"], using),
+        )
+
+
+def _create_sections(
+    card: models.Card,
+    sections: dict[str, list[str | dict[str, Any]]],
+    using: str | None,
+) -> None:
+    for section_key, bullets in sections.items():
+        section = _lookup(models.Section, section_key, using)
+        for order, bullet in enumerate(bullets):
+            if isinstance(bullet, dict):
+                text = bullet.get("text", "")
+                done = bool(bullet.get("done", False))
+            else:
+                text = bullet
+                done = False
+            append_card_item(
+                card=card,
+                section=section,
+                text=text,
+                order=order,
+                is_complete=done,
+            )
+
+
+def _create_dependencies(
+    card: models.Card,
+    dependencies: list[dict[str, str]],
+    using: str | None,
+) -> None:
+    for order, dependency in enumerate(dependencies):
+        add_dependency_note(
+            card=card,
+            target_card=resolve_card(dependency["card"], using=using),
+            note=dependency.get("note", ""),
+            order=order,
+        )
+
+
+def _create_references(
+    card: models.Card,
+    references: list[dict[str, str]],
+    using: str | None,
+) -> None:
+    for reference in references:
+        append_card_reference(
+            source_card=card,
+            target_card=resolve_card(reference["target"], using=using),
+            kind=_lookup(models.CardReferenceKind, reference.get("kind", "related"), using),
+            raw_text=reference.get("text", ""),
+        )
+
+
+def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> models.Card:
+    """Create a kanban card and all child rows from a structured card spec."""
+    _require_fields(spec, ("title", "target_version", "relative_size"))
+    title = spec["title"]
+    if _manager(models.Card, using).filter(title=title).exists():
+        raise KanbanServiceError(f"A card titled {title!r} already exists.")
+    if isinstance(spec.get("sections"), dict) and "dependencies" in spec["sections"]:
+        raise KanbanServiceError(
+            'Put dependencies under the top-level "dependencies" key, not "sections".',
+        )
+
+    status_key = spec.get("status", DEFAULT_STATUS_KEY)
+    if status_key == DONE_STATUS_KEY:
+        raise KanbanServiceError(
+            'Kanban card creation cannot create "done" cards because done cards require '
+            "a linked spec doc. Import the card before marking it done.",
+        )
+
+    with transaction.atomic(using=using):
+        target_version = _lookup_by(
+            models.TargetVersion,
+            spec["target_version"],
+            using,
+            field="number",
+        )
+        size_high = None
+        if spec.get("relative_size_high"):
+            size_high = _lookup(models.RelativeSize, spec["relative_size_high"], using)
+
+        card = _manager(models.Card, using).create(
+            title=title,
+            number=_target_number(spec, using),
+            status=_lookup(models.Status, status_key, using),
+            milestone=target_version.milestone,
+            target_version=target_version,
+            priority=_lookup(models.Priority, spec["priority"], using)
+            if spec.get("priority")
+            else None,
+            severity=_lookup(models.Severity, spec["severity"], using)
+            if spec.get("severity")
+            else None,
+            relative_size=_lookup(models.RelativeSize, spec["relative_size"], using),
+            relative_size_high=size_high,
+            planning_state=_lookup(
+                models.PlanningState,
+                spec.get("planning_state", DEFAULT_PLANNING_STATE_KEY),
+                using,
+            ),
+            planning_note=spec.get("planning_note", ""),
+        )
+        _create_labels(card, spec.get("labels", []), using)
+        _create_parity_claims(card, spec.get("parity", []), using)
+        _create_sections(card, spec.get("sections", {}), using)
+        _create_dependencies(card, spec.get("dependencies", []), using)
+        _create_references(card, spec.get("references", []), using)
+    return card

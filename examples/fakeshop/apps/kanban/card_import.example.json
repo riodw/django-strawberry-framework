@@ -53,7 +53,6 @@
         {
           "target": "Filtering subsystem",
           "kind": "related",
-          "source": "card_item",
           "text": "Optional extra cross-reference for token rewriting."
         }
       ]

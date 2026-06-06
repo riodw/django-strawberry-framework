@@ -229,6 +229,15 @@ def test_card_insert_rejects_number_gap():
 
 
 @pytest.mark.django_db
+def test_sparse_source_card_numbers_can_be_materialized_directly():
+    first = _make_card(number=21, title="Source row 21")
+    second = _make_card(number=24, title="Source row 24")
+
+    assert first.number == 21
+    assert second.number == 24
+
+
+@pytest.mark.django_db
 def test_card_move_rejects_number_gap():
     card = _make_card(number=1, title="First")
     _make_card(number=2, title="Second")

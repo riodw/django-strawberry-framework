@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from django.core.exceptions import ValidationError
 from django.db import models as django_models
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Count, Max
 from django.db.models.signals import m2m_changed, post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
 from django.utils import timezone
@@ -185,9 +185,13 @@ def _normalize_card_number(number: int | str | None) -> int:
         raise ValidationError(CARD_NUMBER_REQUIRED_ERROR) from None
 
 
-def _highest_card_number(using: str | None) -> int:
-    highest = _manager(models.Card, using).aggregate(max_number=Max("number"))["max_number"]
-    return highest or 0
+def _card_number_state(using: str | None) -> tuple[int, bool]:
+    state = _manager(models.Card, using).aggregate(
+        count=Count("number"),
+        max_number=Max("number"),
+    )
+    max_number = state["max_number"] or 0
+    return max_number, max_number == 0 or state["count"] != max_number
 
 
 def _stored_card_number(card_id: int, using: str | None) -> int | None:
@@ -341,9 +345,10 @@ def _prepare_card_order(
     requested_number = _normalize_card_number(card.number)
     card.number = requested_number
 
-    max_number = _highest_card_number(using)
+    max_number, accepts_sparse_numbers = _card_number_state(using)
+    new_card_limit = None if accepts_sparse_numbers else max_number + 1
     if card.pk is None:
-        _validate_card_number(requested_number, limit=max_number + 1)
+        _validate_card_number(requested_number, limit=new_card_limit)
         if requested_number <= max_number:
             _set_card_order_request(
                 card,
@@ -355,7 +360,7 @@ def _prepare_card_order(
 
     old_number = _stored_card_number(card.pk, using)
     if old_number is None:
-        _validate_card_number(requested_number, limit=max_number + 1)
+        _validate_card_number(requested_number, limit=new_card_limit)
         if requested_number <= max_number:
             _set_card_order_request(
                 card,

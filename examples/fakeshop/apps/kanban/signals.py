@@ -6,6 +6,7 @@ from contextlib import contextmanager
 
 from django.core.exceptions import ValidationError
 from django.db import models as django_models
+from django.db import transaction
 from django.db.models import Max
 from django.db.models.signals import m2m_changed, post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
@@ -27,6 +28,13 @@ DONE_CARD_GLOSSARY_REASSIGN_ERROR = "Cannot move the last glossary link away fro
 DONE_CARD_GLOSSARY_DELETE_ERROR = "Cannot delete the last glossary link from a done card."
 DEPENDENCY_REFERENCE_KIND_KEYS = models.DEPENDENCY_REFERENCE_KIND_KEYS
 DEPENDENCY_SYNC_FLAG = "_kanban_syncing_dependency_edges"
+CARD_ORDER_SYNC_FLAG = "_kanban_syncing_card_order"
+CARD_ORDER_REQUESTED_NUMBER_ATTR = "_kanban_requested_card_number"
+CARD_ORDER_OLD_NUMBER_ATTR = "_kanban_old_card_number"
+CARD_NUMBER_REQUIRED_ERROR = "Kanban cards require a board number."
+CARD_NUMBER_POSITIVE_ERROR = "Kanban card number must be at least 1."
+CARD_NUMBER_RANGE_ERROR = "Kanban card number must be between 1 and {limit}."
+CARD_DEPENDENCY_ORDER_ERROR = "Kanban card dependencies must appear before dependent cards."
 
 
 UUID_LINKED_MODELS = (
@@ -171,11 +179,97 @@ def _has_reference_path(
     return False
 
 
+def _normalize_card_number(number: int | str | None) -> int:
+    if number is None:
+        raise ValidationError(CARD_NUMBER_REQUIRED_ERROR)
+    try:
+        return int(number)
+    except (TypeError, ValueError):
+        raise ValidationError(CARD_NUMBER_REQUIRED_ERROR) from None
+
+
+def _highest_card_number(using: str | None) -> int:
+    highest = _manager(models.Card, using).aggregate(max_number=Max("number"))["max_number"]
+    return highest or 0
+
+
+def _stored_card_number(card_id: int, using: str | None) -> int | None:
+    return _manager(models.Card, using).filter(pk=card_id).values_list("number", flat=True).first()
+
+
+def _validate_card_number(number: int, *, limit: int | None = None) -> None:
+    if number < 1:
+        raise ValidationError(CARD_NUMBER_POSITIVE_ERROR)
+    if limit is not None and number > limit:
+        raise ValidationError(CARD_NUMBER_RANGE_ERROR.format(limit=limit))
+
+
+def _project_neighbor_number(number: int, old_number: int, requested_number: int) -> int:
+    if requested_number < old_number and requested_number <= number < old_number:
+        return number + 1
+    if old_number < requested_number and old_number < number <= requested_number:
+        return number - 1
+    return number
+
+
+def _validate_card_move_dependency_order(
+    card_id: int,
+    old_number: int,
+    requested_number: int,
+    using: str | None,
+) -> None:
+    card_manager = _manager(models.Card, using)
+    dependency_numbers = card_manager.filter(dependents__pk=card_id).values_list(
+        "number",
+        flat=True,
+    )
+    for dependency_number in dependency_numbers:
+        final_dependency_number = _project_neighbor_number(
+            dependency_number,
+            old_number,
+            requested_number,
+        )
+        if final_dependency_number >= requested_number:
+            raise ValidationError(CARD_DEPENDENCY_ORDER_ERROR)
+
+    dependent_numbers = card_manager.filter(dependencies__pk=card_id).values_list(
+        "number",
+        flat=True,
+    )
+    for dependent_number in dependent_numbers:
+        final_dependent_number = _project_neighbor_number(
+            dependent_number,
+            old_number,
+            requested_number,
+        )
+        if final_dependent_number <= requested_number:
+            raise ValidationError(CARD_DEPENDENCY_ORDER_ERROR)
+
+
+def _validate_dependency_order(
+    source_card_id: int,
+    target_card_id: int,
+    using: str | None,
+) -> None:
+    numbers = dict(
+        _manager(models.Card, using)
+        .filter(pk__in={source_card_id, target_card_id})
+        .values_list("pk", "number"),
+    )
+    source_number = numbers.get(source_card_id)
+    target_number = numbers.get(target_card_id)
+    if source_number is None or target_number is None:
+        return
+    if source_number <= target_number:
+        raise ValidationError(CARD_DEPENDENCY_ORDER_ERROR)
+
+
 def _validate_dependency_edge(source_card_id: int, target_card_id: int, using: str | None) -> None:
     if source_card_id == target_card_id:
         raise ValidationError("A kanban card cannot depend on itself.")
     if _has_dependency_path(target_card_id, source_card_id, using):
         raise ValidationError("Kanban card dependencies cannot contain cycles.")
+    _validate_dependency_order(source_card_id, target_card_id, using)
 
 
 def _validate_reference_edge(
@@ -197,6 +291,157 @@ def _validate_reference_edge(
         exclude_reference_id=exclude_reference_id,
     ):
         raise ValidationError("Kanban card references cannot contain cycles.")
+    _validate_dependency_order(source_card_id, target_card_id, using)
+
+
+@contextmanager
+def _card_order_sync(card: models.Card):
+    previous = getattr(card, CARD_ORDER_SYNC_FLAG, None)
+    setattr(card, CARD_ORDER_SYNC_FLAG, True)
+    try:
+        yield
+    finally:
+        if previous is None:
+            delattr(card, CARD_ORDER_SYNC_FLAG)
+        else:
+            setattr(card, CARD_ORDER_SYNC_FLAG, previous)
+
+
+def _is_card_order_sync(instance: models.Card) -> bool:
+    return bool(getattr(instance, CARD_ORDER_SYNC_FLAG, False))
+
+
+def _set_card_order_request(
+    card: models.Card,
+    *,
+    requested_number: int,
+    old_number: int | None,
+) -> None:
+    setattr(card, CARD_ORDER_REQUESTED_NUMBER_ATTR, requested_number)
+    setattr(card, CARD_ORDER_OLD_NUMBER_ATTR, old_number)
+
+
+def _clear_card_order_request(card: models.Card) -> None:
+    for attribute in (CARD_ORDER_REQUESTED_NUMBER_ATTR, CARD_ORDER_OLD_NUMBER_ATTR):
+        if hasattr(card, attribute):
+            delattr(card, attribute)
+
+
+def _save_card_number(card: models.Card, number: int, using: str | None) -> None:
+    card.number = number
+    with _card_order_sync(card):
+        card.save(update_fields=["number", "updated_date"], using=using)
+
+
+def _prepare_card_order(
+    card: models.Card,
+    update_fields: frozenset[str] | None,
+    using: str | None,
+) -> None:
+    if update_fields is not None and "number" not in update_fields:
+        return
+
+    requested_number = _normalize_card_number(card.number)
+    card.number = requested_number
+
+    max_number = _highest_card_number(using)
+    if card.pk is None:
+        _validate_card_number(requested_number)
+        if requested_number <= max_number:
+            _set_card_order_request(
+                card,
+                requested_number=requested_number,
+                old_number=None,
+            )
+            card.number = max_number + 2
+        return
+
+    old_number = _stored_card_number(card.pk, using)
+    if old_number is None:
+        _validate_card_number(requested_number)
+        if requested_number <= max_number:
+            _set_card_order_request(
+                card,
+                requested_number=requested_number,
+                old_number=None,
+            )
+            card.number = max_number + 2
+        return
+    if requested_number == old_number:
+        return
+
+    _validate_card_number(requested_number)
+    _validate_card_move_dependency_order(card.pk, old_number, requested_number, using)
+    _set_card_order_request(
+        card,
+        requested_number=requested_number,
+        old_number=old_number,
+    )
+    card.number = max_number + 1
+
+
+def _shift_cards_after_insert(
+    inserted_card: models.Card,
+    requested_number: int,
+    using: str | None,
+) -> None:
+    queryset = (
+        _manager(models.Card, using)
+        .filter(number__gte=requested_number)
+        .exclude(pk=inserted_card.pk)
+        .order_by("-number")
+    )
+    for card in queryset:
+        _save_card_number(card, card.number + 1, using)
+
+
+def _shift_cards_after_move(
+    moved_card: models.Card,
+    old_number: int,
+    requested_number: int,
+    using: str | None,
+) -> None:
+    card_manager = _manager(models.Card, using).exclude(pk=moved_card.pk)
+    if requested_number < old_number:
+        queryset = card_manager.filter(
+            number__gte=requested_number,
+            number__lt=old_number,
+        ).order_by("-number")
+        delta = 1
+    else:
+        queryset = card_manager.filter(
+            number__gt=old_number,
+            number__lte=requested_number,
+        ).order_by("number")
+        delta = -1
+    for card in queryset:
+        _save_card_number(card, card.number + delta, using)
+
+
+def _sync_card_order_after_save(card: models.Card, using: str | None) -> None:
+    if _is_card_order_sync(card):
+        return
+
+    requested_number = getattr(card, CARD_ORDER_REQUESTED_NUMBER_ATTR, None)
+    if requested_number is None:
+        return
+    old_number = getattr(card, CARD_ORDER_OLD_NUMBER_ATTR, None)
+
+    try:
+        with transaction.atomic(using=using):
+            if old_number is None:
+                _shift_cards_after_insert(card, requested_number, using)
+            else:
+                _shift_cards_after_move(card, old_number, requested_number, using)
+            _save_card_number(card, requested_number, using)
+    finally:
+        _clear_card_order_request(card)
+
+
+def _compact_card_numbers_after_delete(card: models.Card, using: str | None) -> None:
+    queryset = _manager(models.Card, using).filter(number__gt=card.number).order_by("number")
+    for shifted_card in queryset:
+        _save_card_number(shifted_card, shifted_card.number - 1, using)
 
 
 @contextmanager
@@ -377,10 +622,19 @@ def _dependency_edges_for_clear(
 
 
 @receiver(pre_save, sender=models.Card, dispatch_uid="kanban_prepare_card_save")
-def prepare_card_save(sender, instance: models.Card, using: str | None, **kwargs) -> None:
+def prepare_card_save(
+    sender,
+    instance: models.Card,
+    update_fields: frozenset[str] | None,
+    using: str | None,
+    **kwargs,
+) -> None:
+    if _is_card_order_sync(instance):
+        return
     instance.milestone_id = _target_milestone_id(instance, using)
     _validate_done_card_has_spec(instance, using)
     _validate_done_card_has_glossary_link(instance, using)
+    _prepare_card_order(instance, update_fields, using)
 
 
 @receiver(pre_save, sender=models.SpecDoc, dispatch_uid="kanban_validate_spec_doc_card")
@@ -476,6 +730,10 @@ def sync_card_after_save(
     using: str | None,
     **kwargs,
 ) -> None:
+    if _is_card_order_sync(instance):
+        return
+
+    _sync_card_order_after_save(instance, using)
     if (
         update_fields is not None
         and {"target_version", "target_version_id"} & set(update_fields)
@@ -485,6 +743,16 @@ def sync_card_after_save(
             milestone_id=instance.milestone_id,
             updated_date=timezone.now(),
         )
+
+
+@receiver(post_delete, sender=models.Card, dispatch_uid="kanban_compact_card_order_after_delete")
+def compact_card_order_after_delete(
+    sender,
+    instance: models.Card,
+    using: str | None,
+    **kwargs,
+) -> None:
+    _compact_card_numbers_after_delete(instance, using)
 
 
 @receiver(pre_save, sender=models.CardReference, dispatch_uid="kanban_prepare_card_reference")

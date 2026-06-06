@@ -12,6 +12,7 @@ raw ``Model.objects.create`` calls because that is exactly what they assert.
 import uuid as uuid_module
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
 from apps.glossary import factories as gf
@@ -84,14 +85,14 @@ def test_card_target_version_is_required():
 @pytest.mark.django_db
 def test_card_number_is_required():
     """A card cannot be stored without its board sequence number."""
-    with pytest.raises(IntegrityError), transaction.atomic():
+    with pytest.raises(ValidationError, match="require"), transaction.atomic():
         models.Card.objects.create(title="No number", **_card_required_parts())
 
 
 @pytest.mark.django_db
 def test_card_number_must_be_positive():
     """A card sequence number starts at one, not zero."""
-    with pytest.raises(IntegrityError), transaction.atomic():
+    with pytest.raises(ValidationError, match="at least 1"), transaction.atomic():
         models.Card.objects.create(title="Zero number", number=0, **_card_required_parts())
 
 
@@ -107,14 +108,16 @@ def test_card_milestone_is_required():
 
 @pytest.mark.django_db
 def test_card_number_is_globally_unique():
-    """The NNN sequence cannot be reused across statuses or target versions."""
-    kf.make_card(number=1, status=kf.make_status("todo"), target_version=kf.make_target_version())
+    """The stored NNN sequence still has a DB backstop for signal-bypassing writes."""
+    parts = _card_required_parts()
+    parts["milestone"] = parts["target_version"].milestone
 
     with pytest.raises(IntegrityError), transaction.atomic():
-        kf.make_card(
-            number=1,
-            status=kf.make_status("wip"),
-            target_version=kf.make_target_version(),
+        models.Card.objects.bulk_create(
+            [
+                models.Card(title="Duplicate one", number=1, **parts),
+                models.Card(title="Duplicate two", number=1, **parts),
+            ],
         )
 
 

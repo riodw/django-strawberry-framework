@@ -249,3 +249,59 @@ def test_inspect_consumer_annotation_over_unsupported_field():
     assert "String!" in myfield_row
     assert "consumer annotation (scalar)" in myfield_row
     assert "SCALAR_MAP" not in myfield_row
+
+
+def test_inspect_unresolved_forward_ref_relation_raises_command_error():
+    """An annotation-only relation forward ref ``finalize`` can't resolve raises CommandError.
+
+    ``CatType.items: list["ItemType"]`` is an annotation-only relation override.
+    Both types are defined in this function's local scope, so the ``"ItemType"``
+    forward reference is absent from the type's module globals; Strawberry leaves
+    ``field.type`` as its ``UNRESOLVED`` sentinel after ``finalize_django_types()``
+    alone (constructing a ``strawberry.Schema`` would force resolution). The
+    command must refuse to print the sentinel as a real GraphQL type -- which is
+    exactly the field Strawberry itself rejects at schema-build time -- and raise
+    ``CommandError`` with a recovery hint instead.
+    """
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    class CatType(DjangoType):
+        items: list["ItemType"]
+
+        class Meta:
+            model = Category
+            fields = ("id", "items")
+
+    finalize_django_types()
+    with pytest.raises(CommandError, match=r"unresolved Strawberry forward reference"):
+        call_command("inspect_django_type", "CatType")
+
+
+def test_inspect_consumer_annotation_plus_assigned_field_labels_both():
+    """A field that is BOTH annotated and assigned is labelled as the overlap.
+
+    ``name: str = strawberry.field(resolver=...)`` records ``name`` in both the
+    annotated set (the ``: str`` fixes the GraphQL type) and the assigned set (the
+    ``strawberry.field`` supplies the resolver). The converter column must name
+    both rows that contributed -- ``consumer annotation + strawberry.field
+    (scalar)`` -- rather than hiding the assignment behind an annotation-only label.
+    """
+
+    class BothOverrideType(DjangoType):
+        name: str = strawberry.field(resolver=lambda root: "x")
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    out = StringIO()
+    call_command("inspect_django_type", "BothOverrideType", stdout=out)
+
+    name_row = _field_row(out.getvalue(), "name")
+    assert "String!" in name_row
+    assert "consumer annotation + strawberry.field (scalar)" in name_row

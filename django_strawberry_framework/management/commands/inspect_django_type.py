@@ -2,12 +2,23 @@
 
 Diagnostic command that walks a finalized ``DjangoTypeDefinition`` and prints,
 per selected field, the Django field name, the Django field type, the resolved
-GraphQL type, its nullability, and which converter row fired. It is a strict
-reader of the existing introspection surface — it reads the resolved GraphQL
-annotation from ``origin.__annotations__`` (the authoritative post-finalize
-record that already reflects ``Meta.nullable_overrides`` / ``required_overrides``
-and consumer-authored annotations) rather than re-running ``convert_scalar``,
-and re-walks ``SCALAR_MAP`` only to NAME which converter row fired.
+GraphQL type, its nullability, and which converter row fired. It reads the
+existing introspection surface rather than re-deriving types, and the
+authoritative record differs by field origin:
+
+- **Auto-synthesized fields** read the resolved GraphQL annotation from
+  ``origin.__annotations__`` (the post-finalize record that already reflects
+  ``Meta.nullable_overrides`` / ``required_overrides``) rather than re-running
+  ``convert_scalar``, and re-walk ``SCALAR_MAP`` only to NAME which converter
+  row fired.
+- **Consumer-authored fields** (an annotation or ``strawberry.field`` override)
+  read the resolved type from the finalized Strawberry field metadata
+  (``origin.__strawberry_definition__``). That is authoritative for both override
+  kinds and resolves forward references, whereas ``origin.__annotations__`` holds
+  a ``StrawberryAnnotation`` for an assigned field and an unresolved forward-ref
+  string for an annotated relation. A forward reference that ``finalize_django_types()``
+  could not resolve surfaces as Strawberry's ``UNRESOLVED`` sentinel and raises
+  ``CommandError`` rather than printing a bogus type.
 
 The positional ``type`` argument dispatches by shape: a dotted object path
 (``apps.library.schema.BookType``) resolves via Django's ``import_string`` and a
@@ -30,6 +41,7 @@ from django.db import models
 from django.utils.module_loading import import_string
 from strawberry import relay
 from strawberry.types.base import StrawberryList, StrawberryOptional
+from strawberry.types.field import UNRESOLVED
 from strawberry.utils.importer import import_module_symbol
 
 from django_strawberry_framework.registry import registry
@@ -241,9 +253,25 @@ class Command(BaseCommand):
         whereas ``origin.__annotations__`` holds a ``StrawberryAnnotation`` for an
         assigned field and an unresolved forward-reference string for an annotated
         relation — neither renderable here.
+
+        An annotation-only relation whose forward reference is not resolvable from
+        the type's module namespace stays Strawberry's ``UNRESOLVED`` sentinel after
+        ``finalize_django_types()`` alone (``finalize`` does not force field-type
+        resolution; building a ``strawberry.Schema`` does). Reporting the sentinel as
+        a GraphQL type would be a lie — Strawberry itself raises on it at schema-build
+        time — so it raises ``CommandError`` with a concrete recovery hint instead.
         """
         strawberry_fields = definition.origin.__strawberry_definition__.fields
         field_type = next(sf.type for sf in strawberry_fields if sf.python_name == field.name)
+        if field_type is UNRESOLVED:
+            raise CommandError(
+                f"{definition.origin.__name__}.{field.name} is a consumer-authored field whose "
+                "annotation is an unresolved Strawberry forward reference; "
+                "finalize_django_types() does not force forward-reference resolution. Pass "
+                "--schema <your project schema dotted path> so the schema is constructed (which "
+                "resolves the reference), or make the referenced type importable at the "
+                "annotation's module scope, then re-run.",
+            )
         graphql_type = _render_strawberry_type(field_type)
         nullable = _consumer_nullable(field_type)
         converter = _consumer_converter_label(definition, field.name)
@@ -322,14 +350,28 @@ def _consumer_converter_label(definition: object, name: str) -> str:
     definition (see ``types/base._consumer_assigned_fields``). This is the row
     that actually fired: NOT the relation auto-converter and NOT a ``SCALAR_MAP``
     entry, both of which ``_build_annotations`` skipped for this name.
+
+    The two authoring styles are NOT mutually exclusive: the idiom
+    ``name: str = strawberry.field(resolver=...)`` is recorded in BOTH the
+    annotated and the assigned set (the annotation fixes the type, the
+    ``strawberry.field`` supplies the resolver), so the overlap is labelled
+    ``annotation + strawberry.field`` rather than hiding the assignment.
     """
     annotated = name in (
         definition.consumer_annotated_scalar_fields | definition.consumer_annotated_relation_fields
     )
+    assigned = name in (
+        definition.consumer_assigned_scalar_fields | definition.consumer_assigned_relation_fields
+    )
     is_relation = name in (
         definition.consumer_annotated_relation_fields | definition.consumer_assigned_relation_fields
     )
-    source = "annotation" if annotated else "strawberry.field"
+    if annotated and assigned:
+        source = "annotation + strawberry.field"
+    elif annotated:
+        source = "annotation"
+    else:
+        source = "strawberry.field"
     kind = "relation" if is_relation else "scalar"
     return f"consumer {source} ({kind})"
 

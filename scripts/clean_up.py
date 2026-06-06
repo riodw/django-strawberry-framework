@@ -78,7 +78,9 @@ def _glob_files(directory: Path, pattern: str) -> Iterable[Path]:
     """Yield files and symlinks matching ``pattern`` directly under ``directory``."""
     if not directory.exists():
         return ()
-    return (path for path in sorted(directory.glob(pattern)) if path.is_file() or path.is_symlink())
+    return (
+        path for path in sorted(directory.glob(pattern)) if path.is_file() or path.is_symlink()
+    )
 
 
 def _worker_memory_directories() -> Iterable[Path]:

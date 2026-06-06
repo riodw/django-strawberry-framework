@@ -466,7 +466,9 @@ def _dependency_edge_exists(
     target_card: models.Card,
     using: str | None,
 ) -> bool:
-    return _manager(models.Card, using).filter(pk=source_card.pk, dependencies=target_card).exists()
+    return (
+        _manager(models.Card, using).filter(pk=source_card.pk, dependencies=target_card).exists()
+    )
 
 
 def _kind_is_dependency_reference(kind_id: int | None, using: str | None) -> bool:
@@ -545,10 +547,16 @@ def _ensure_reference_for_dependency(
     )
 
 
-def _delete_default_references(source_card_id: int, target_card_id: int, using: str | None) -> None:
+def _delete_default_references(
+    source_card_id: int,
+    target_card_id: int,
+    using: str | None,
+) -> None:
     kind = _manager(models.CardReferenceKind, using).filter(key=DEFAULT_REFERENCE_KIND_KEY).first()
     source = (
-        _manager(models.CardReferenceSource, using).filter(key=DEFAULT_REFERENCE_SOURCE_KEY).first()
+        _manager(models.CardReferenceSource, using)
+        .filter(key=DEFAULT_REFERENCE_SOURCE_KEY)
+        .first()
     )
     if kind is None or source is None:
         return

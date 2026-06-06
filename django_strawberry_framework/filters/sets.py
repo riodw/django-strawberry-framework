@@ -1005,7 +1005,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             if branch_value is None:
                 continue
             children = (
-                [branch_value] if _wire_key == "not" else list(branch_value) if branch_value else []
+                [branch_value]
+                if _wire_key == "not"
+                else list(branch_value)
+                if branch_value
+                else []
             )
             for child_input in children:
                 if child_input is None or child_input is UNSET:
@@ -1676,7 +1680,10 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                shape mirrors how Django wraps consumer sync hooks on its
                own async paths.
         """
-        child_qs_by_branch = await cls._derive_related_visibility_querysets_async(input_value, info)
+        child_qs_by_branch = await cls._derive_related_visibility_querysets_async(
+            input_value,
+            info,
+        )
         nested_qs_by_branch_id = await cls._collect_nested_visibility_querysets_async(
             input_value,
             info,

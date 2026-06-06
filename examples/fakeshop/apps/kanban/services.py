@@ -42,11 +42,7 @@ def _order_or_empty(order: int | None) -> int:
     return -1 if order is None else order
 
 
-def _next_card_item_order(
-    card: models.Card,
-    section: models.Section,
-    using: str | None,
-) -> int:
+def _next_card_item_order(card: models.Card, section: models.Section, using: str | None) -> int:
     max_order = (
         _manager(models.CardItem, using)
         .filter(card=card, section=section)

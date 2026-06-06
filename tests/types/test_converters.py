@@ -25,7 +25,12 @@ import pytest
 import strawberry
 from django.db import models
 
-from django_strawberry_framework import BigInt, DjangoType, finalize_django_types, strawberry_config
+from django_strawberry_framework import (
+    BigInt,
+    DjangoType,
+    finalize_django_types,
+    strawberry_config,
+)
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
@@ -206,7 +211,9 @@ def test_choice_member_name_sanitization():
     assert _sanitize_member_name("") == "MEMBER_"
 
 
-def test_choice_enum_with_graphql_reserved_and_non_ascii_values_builds_schema(choice_fixture_model):
+def test_choice_enum_with_graphql_reserved_and_non_ascii_values_builds_schema(
+    choice_fixture_model,
+):
     """Reserved, non-ASCII, and introspection-prefixed values produce GraphQL-safe enum members."""
     field = choice_fixture_model._meta.get_field("status")
     original = field.choices

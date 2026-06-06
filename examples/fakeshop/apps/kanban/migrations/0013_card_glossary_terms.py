@@ -314,7 +314,10 @@ class Migration(migrations.Migration):
                                             ),
                                             "+",
                                             models.Case(
-                                                models.When(cardglossaryterm__isnull=False, then=1),
+                                                models.When(
+                                                    cardglossaryterm__isnull=False,
+                                                    then=1,
+                                                ),
                                                 default=0,
                                                 output_field=models.IntegerField(),
                                             ),

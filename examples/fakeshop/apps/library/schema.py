@@ -257,7 +257,9 @@ class Query:
 
     @strawberry.field
     def all_library_prefetched_books(self) -> list[BookType]:
-        return models.Book.objects.select_related("shelf").prefetch_related("genres").order_by("id")
+        return (
+            models.Book.objects.select_related("shelf").prefetch_related("genres").order_by("id")
+        )
 
     @strawberry.field
     def all_library_nullability_override_books(self) -> list[NullabilityOverrideBookType]:

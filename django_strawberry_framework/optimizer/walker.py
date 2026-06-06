@@ -556,7 +556,10 @@ def _prefetch_hint_for_path(
     )
 
 
-def _merge_child_plan_metadata(parent_plan: OptimizationPlan, child_plan: OptimizationPlan) -> None:
+def _merge_child_plan_metadata(
+    parent_plan: OptimizationPlan,
+    child_plan: OptimizationPlan,
+) -> None:
     """Propagate resolver metadata from a child queryset plan to the root plan."""
     for key in child_plan.fk_id_elisions:
         append_unique(parent_plan.fk_id_elisions, key)

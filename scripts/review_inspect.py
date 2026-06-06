@@ -452,7 +452,12 @@ def _strip_string_literals(source: str) -> str:
                 fstring_depth -= 1
                 if fstring_depth == 0 and fstring_start is not None:
                     ranges.append(
-                        _TokenRange(fstring_start[0], fstring_start[1], token.end[0], token.end[1]),
+                        _TokenRange(
+                            fstring_start[0],
+                            fstring_start[1],
+                            token.end[0],
+                            token.end[1],
+                        ),
                     )
                     fstring_start = None
             continue
@@ -493,7 +498,10 @@ def _remove_docstring_statements(source: str, tree: ast.AST) -> str:
 def _docstring_statement_ranges(tree: ast.AST) -> list[_LineRange]:
     ranges: list[_LineRange] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+        if not isinstance(
+            node,
+            ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef,
+        ):
             continue
         expr = _docstring_expr(node)
         if expr is not None:
@@ -699,14 +707,20 @@ def _render_markers(records: Sequence[_MarkerRecord]) -> str:
     ]
     lines.extend(
         _with_truncation_notice(
-            [f"- line {record.lineno}: `{record.marker}` in `{record.text}`" for record in records],
+            [
+                f"- line {record.lineno}: `{record.marker}` in `{record.text}`"
+                for record in records
+            ],
             limit=50,
         ),
     )
     return "\n".join(lines)
 
 
-def _interesting_calls(records: Sequence[_CallRecord], markers: Sequence[str]) -> list[_CallRecord]:
+def _interesting_calls(
+    records: Sequence[_CallRecord],
+    markers: Sequence[str],
+) -> list[_CallRecord]:
     return [
         record
         for record in records

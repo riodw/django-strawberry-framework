@@ -291,7 +291,11 @@ class Migration(migrations.Migration):
                 ("body", models.TextField(blank=True, default="")),
                 (
                     "dependencies",
-                    models.ManyToManyField(blank=True, related_name="dependents", to="kanban.card"),
+                    models.ManyToManyField(
+                        blank=True,
+                        related_name="dependents",
+                        to="kanban.card",
+                    ),
                 ),
                 (
                     "labels",

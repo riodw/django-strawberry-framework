@@ -8,7 +8,9 @@ def copy_target_version_milestones(apps, schema_editor):
     Card = apps.get_model("kanban", "Card")
     db_alias = schema_editor.connection.alias
     for card in (
-        Card.objects.using(db_alias).filter(milestone__isnull=True).select_related("target_version")
+        Card.objects.using(db_alias)
+        .filter(milestone__isnull=True)
+        .select_related("target_version")
     ):
         card.milestone_id = card.target_version.milestone_id
         card.save(update_fields=["milestone"])

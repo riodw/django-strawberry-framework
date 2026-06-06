@@ -207,7 +207,9 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--package-dir",
         default=DEFAULT_PACKAGE_DIR,
-        help=(f"Repo-relative directory to scan recursively. Defaults to {DEFAULT_PACKAGE_DIR!r}."),
+        help=(
+            f"Repo-relative directory to scan recursively. Defaults to {DEFAULT_PACKAGE_DIR!r}."
+        ),
     )
     return parser.parse_args(argv)
 

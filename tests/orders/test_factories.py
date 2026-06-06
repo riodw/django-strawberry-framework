@@ -286,7 +286,8 @@ def test_factory_dedupes_double_enqueued_target_via_seen_check():
     factory.arguments  # must not raise; the pop-time guard fires.
     # The target was built exactly once (the registry has one entry).
     assert (
-        OrderArgumentsFactory._type_orderset_registry["ChildOrderDedupInputType"] is ChildOrderDedup
+        OrderArgumentsFactory._type_orderset_registry["ChildOrderDedupInputType"]
+        is ChildOrderDedup
     )
 
 

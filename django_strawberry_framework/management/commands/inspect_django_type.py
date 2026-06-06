@@ -364,7 +364,8 @@ def _consumer_converter_label(definition: object, name: str) -> str:
         definition.consumer_assigned_scalar_fields | definition.consumer_assigned_relation_fields
     )
     is_relation = name in (
-        definition.consumer_annotated_relation_fields | definition.consumer_assigned_relation_fields
+        definition.consumer_annotated_relation_fields
+        | definition.consumer_assigned_relation_fields
     )
     if annotated and assigned:
         source = "annotation + strawberry.field"

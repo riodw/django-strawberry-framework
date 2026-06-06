@@ -79,7 +79,8 @@ def test_project_schema_traverses_products_relations():
     ):
         expected_category_items[category_name].append(item_name)
     got_category_items = {
-        row["name"]: sorted(i["name"] for i in row["items"]) for row in result.data["allCategories"]
+        row["name"]: sorted(i["name"] for i in row["items"])
+        for row in result.data["allCategories"]
     }
     assert got_category_items == {
         name: sorted(items) for name, items in expected_category_items.items()

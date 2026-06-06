@@ -1158,7 +1158,12 @@ def test_plan_force_select_hint_uses_select_recursion():
     )
     try:
         plan = plan_optimizations(
-            [_sel("category", selections=[_sel("name"), _sel("items", selections=[_sel("name")])])],
+            [
+                _sel(
+                    "category",
+                    selections=[_sel("name"), _sel("items", selections=[_sel("name")])],
+                ),
+            ],
             Item,
         )
     finally:

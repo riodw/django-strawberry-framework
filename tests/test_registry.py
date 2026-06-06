@@ -1289,7 +1289,8 @@ def test_unregister_of_primary_leaves_state_that_audit_rejects():
     assert "ItemTypeB" in msg
     assert "ItemTypeC" in msg
     assert (
-        "Declare Meta.primary = True on exactly one of the registered DjangoType subclasses." in msg
+        "Declare Meta.primary = True on exactly one of the registered DjangoType subclasses."
+        in msg
     )
 
 

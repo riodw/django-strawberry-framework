@@ -223,7 +223,9 @@ class Command(BaseCommand):
         if options["dry_run"]:
             self.stdout.write(f"Would import glossary terms for {len(plans)} done card(s):")
             for plan in plans:
-                self.stdout.write(f"  {plan.card}: {len(plan.rows)} term(s) from {plan.terms_path}")
+                self.stdout.write(
+                    f"  {plan.card}: {len(plan.rows)} term(s) from {plan.terms_path}",
+                )
             return
 
         with transaction.atomic():

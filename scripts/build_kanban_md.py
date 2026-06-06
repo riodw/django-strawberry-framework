@@ -244,7 +244,9 @@ def render_spec_map(dashboard_data: dict[str, Any]) -> list[str]:
     ]
     for card in cards:
         specs = spec_paths_for_card(card)
-        spec_text = "<br>".join(spec_link(path) for path in specs) if specs else "No dedicated spec"
+        spec_text = (
+            "<br>".join(spec_link(path) for path in specs) if specs else "No dedicated spec"
+        )
         lines.append(f"| `{card_key(card)}` — {card['title']} | {spec_text} |")
     lines.append("")
     return lines
@@ -333,7 +335,10 @@ def render_card(card: dict[str, Any]) -> list[str]:
             ],
         )
 
-    dependencies = sorted(card.get("dependencies", []), key=lambda dependency: dependency["number"])
+    dependencies = sorted(
+        card.get("dependencies", []),
+        key=lambda dependency: dependency["number"],
+    )
     if dependencies:
         lines.extend(["#### Dependencies", ""])
         for dependency in dependencies:

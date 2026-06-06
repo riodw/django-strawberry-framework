@@ -400,7 +400,11 @@ def test_library_consumer_prefetched_queryset_cooperates_with_optimizer_over_htt
     assert response.json() == {
         "data": {
             "allLibraryPrefetchedBooks": [
-                {"title": "Kindred", "shelf": {"code": "A-1"}, "genres": [{"name": "Speculative"}]},
+                {
+                    "title": "Kindred",
+                    "shelf": {"code": "A-1"},
+                    "genres": [{"name": "Speculative"}],
+                },
             ],
         },
     }

@@ -274,7 +274,10 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         return value
 
     @classmethod
-    def _iter_active_related_branches(cls, input_value: Any) -> list[tuple[str, RelatedOrder, Any]]:
+    def _iter_active_related_branches(
+        cls,
+        input_value: Any,
+    ) -> list[tuple[str, RelatedOrder, Any]]:
         """List ``(field_name, related_order, child_input)`` for present branches.
 
         Active-branch scoping (spec-028 Decision 8 step 6 / Revision 4

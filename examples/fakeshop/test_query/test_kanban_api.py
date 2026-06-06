@@ -892,7 +892,10 @@ def test_reverse_m2m_from_upstream_to_cards():
             "allKanbanUpstreams": [
                 {
                     "key": "strawberry_django",
-                    "cards": [{"title": "Filtering subsystem"}, {"title": "DjangoConnectionField"}],
+                    "cards": [
+                        {"title": "Filtering subsystem"},
+                        {"title": "DjangoConnectionField"},
+                    ],
                 },
             ],
         },
@@ -989,7 +992,8 @@ def test_order_kanban_statuses_by_key_desc():
     """``orderBy: [{ key: DESC }]`` reorders the statuses list (DONE-028 order wiring)."""
     _seed_board()
     expected = [
-        {"key": key} for key in models.Status.objects.order_by("-key").values_list("key", flat=True)
+        {"key": key}
+        for key in models.Status.objects.order_by("-key").values_list("key", flat=True)
     ]
     _assert_graphql_data(
         "query { allKanbanStatuses(orderBy: [{ key: DESC }]) { key } }",

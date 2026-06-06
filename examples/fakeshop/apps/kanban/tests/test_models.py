@@ -36,7 +36,9 @@ def test_uuidmodel_accepts_exactly_one_link():
     status = kf.make_status("z")
     row = status.uuid
     assert isinstance(row.id, uuid_module.UUID)
-    set_links = [name for name in models._UUID_LINK_NAMES if getattr(row, f"{name}_id") is not None]
+    set_links = [
+        name for name in models._UUID_LINK_NAMES if getattr(row, f"{name}_id") is not None
+    ]
     assert set_links == ["status"]
 
 

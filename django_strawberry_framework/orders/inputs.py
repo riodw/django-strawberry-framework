@@ -193,7 +193,10 @@ def convert_order_field_to_input_annotation(
     return Ordering | None
 
 
-def build_input_class(name: str, field_specs: list[tuple[str, Any, dict[str, Any] | None]]) -> type:
+def build_input_class(
+    name: str,
+    field_specs: list[tuple[str, Any, dict[str, Any] | None]],
+) -> type:
     """Construct a ``@strawberry.input``-decorated dataclass.
 
     ``field_specs`` is a list of ``(python_attr, annotation, field_kwargs)``

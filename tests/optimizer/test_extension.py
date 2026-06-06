@@ -2071,7 +2071,9 @@ def test_optimizer_hint_force_prefetch(django_assert_num_queries):
 
 
 @pytest.mark.django_db
-def test_optimizer_hint_force_select_does_not_bypass_custom_get_queryset(django_assert_num_queries):
+def test_optimizer_hint_force_select_does_not_bypass_custom_get_queryset(
+    django_assert_num_queries,
+):
     """B4+O6: ``force_select`` downgrades when the target type filters visibility."""
     from django.db.models import Prefetch
 

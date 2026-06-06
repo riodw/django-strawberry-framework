@@ -554,7 +554,9 @@ def _normalize_range_value(
         else raw_value.get("start")
     )
     end = (
-        getattr(raw_value, "end", None) if not isinstance(raw_value, dict) else raw_value.get("end")
+        getattr(raw_value, "end", None)
+        if not isinstance(raw_value, dict)
+        else raw_value.get("end")
     )
     # Drop ``None``-valued axes so partial-range inputs surface only the
     # supplied positional key. Django's ``RangeWidget.value_from_datadict``
@@ -587,7 +589,10 @@ def _owner_type_name(owner_definition: DjangoTypeDefinition | None) -> str | Non
 # ---------------------------------------------------------------------------
 
 
-def build_input_class(name: str, field_specs: list[tuple[str, Any, dict[str, Any] | None]]) -> type:
+def build_input_class(
+    name: str,
+    field_specs: list[tuple[str, Any, dict[str, Any] | None]],
+) -> type:
     """Construct a ``@strawberry.input``-decorated dataclass.
 
     ``field_specs`` is a list of ``(python_attr, annotation, field_kwargs)``
@@ -712,7 +717,11 @@ def _build_input_fields(
         # relation. Such paths are reachable through the nested branch already;
         # hide them when ``HIDE_FLAT_FILTERS`` is set (upstream parity:
         # ``connection_field.py:238-242``).
-        if hide_flat_filters and "__" in top_name and top_name.split("__", 1)[0] in related_filters:
+        if (
+            hide_flat_filters
+            and "__" in top_name
+            and top_name.split("__", 1)[0] in related_filters
+        ):
             continue
         python_attr = top_name.replace("__", "_")
         graphql_name = _camel_case(python_attr)

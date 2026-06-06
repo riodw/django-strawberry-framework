@@ -1,86 +1,58 @@
-# Review - last commit `513b269`
+# Review - last commit `47a3c75`
 
 ## Findings
 
-### P1 - `inspect_django_type` does not handle consumer-authored selected fields
+### P2 - Annotation-only relation forward refs can still render as `UNRESOLVED!`
 
-`django_strawberry_framework/management/commands/inspect_django_type.py::Command._resolve_row`
-still routes every selected relation through `_relation_row` and every selected scalar through
-`_scalar_row` unless it is the Relay-suppressed pk. It never checks
-`DjangoTypeDefinition.consumer_authored_fields`.
+`django_strawberry_framework/management/commands/inspect_django_type.py::Command._consumer_authored_row #"field_type = next(sf.type"` now reads consumer-authored fields from `origin.__strawberry_definition__.fields`, which fixes assigned relation/scalar overrides and direct-class annotation overrides. It does not handle the annotation-only relation forward-ref case.
 
-That is not just a labeling nit. `django_strawberry_framework/types/base.py::_build_annotations`
-intentionally skips auto-synthesis for consumer-authored relation and scalar fields, and
-`django_strawberry_framework/types/base.py::_consumer_assigned_fields` documents this as a
-four-corner public override contract. Existing tests already pin the dangerous shape:
-`tests/types/test_definition_order.py::test_assigned_scalar_field_override_keeps_consumer_resolver`
-asserts that an assigned scalar override does **not** appear in `CategoryType.__annotations__`.
+That corner is part of the existing public override contract: `tests/types/test_definition_order.py::test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is_accepted` and `tests/types/test_definition_order.py::test_consumer_non_id_scalar_override_on_relay_node_type_is_accepted` already exercise unresolved sibling annotations / forward-ref relation annotations at type-definition time. After `finalize_django_types()` alone, Strawberry can still leave the field metadata type as its unresolved sentinel; the command then prints `UNRESOLVED!` as if it were a resolved GraphQL type.
 
-Result: a valid finalized `DjangoType` can make the new command fail or lie:
+I reproduced the shape with a synthetic finalized type:
 
-- Consumer-assigned scalar field, e.g. `@strawberry.field def name(...) -> str`: `_scalar_row`
-  indexes `origin.__annotations__["name"]`, but that annotation is deliberately absent, so the
-  command raises `KeyError`.
-- Consumer-assigned relation field, e.g. `@strawberry.field def items(...) -> list[ItemType]`:
-  `_relation_row` has the same `origin.__annotations__[field.name]` assumption.
-- Consumer-annotated scalar field, e.g. `description: int` over a `TextField`: the command may print
-  the resolved annotation correctly, but the converter column still reports `SCALAR_MAP[TextField]`
-  even though no `SCALAR_MAP` converter fired.
-- Unsupported model fields with a consumer-authored annotation can reach the new
-  `_matched_scalar_key` fallback on a finalized type, contrary to that helper's docstring claim that
-  the fallback is unreachable for finalized types.
+```python
+class ItemType(DjangoType): ...
+class CatType(DjangoType):
+    items: list["ItemType"]
+    class Meta:
+        model = Category
+        fields = ("id", "items")
 
-This violates the Slice 2 command contract: the command is supposed to print every selected field
-with the resolved GraphQL type and the row that produced it. For consumer-authored fields, the row is
-not `SCALAR_MAP` or the relation auto-converter; it is the consumer override.
+finalize_django_types()
+call_command("inspect_django_type", "CatType")
+```
 
-Recommended fix: branch on `field.name in definition.consumer_authored_fields` before the relation /
-scalar converter branches in `_resolve_row`. Use the existing definition metadata to label the
-converter accurately, for example `consumer annotation` vs `consumer strawberry.field`, with scalar
-vs relation detail if helpful. For annotation-only overrides, `origin.__annotations__` is usable. For
-assigned-field overrides, read the finalized Strawberry field metadata instead of assuming
-`origin.__annotations__` contains the field. Add package or example command coverage for at least:
-assigned scalar, assigned relation, annotation-only scalar whose annotation differs from the Django
-field converter, and annotation-only unsupported scalar field.
+The `items` row prints `UNRESOLVED!`. If a Strawberry schema is built, Strawberry raises an unresolved-field error instead, which confirms this is not a valid resolved GraphQL type. The command should not silently report it as a field type.
 
-### P3 - `bld-final.md` still ends with the old red-gate summary
+Recommended fix: detect Strawberry's unresolved sentinel in `_consumer_authored_row` / `_render_strawberry_type` and raise `CommandError` with a concrete hint to import a schema via `--schema` or make the forward ref globally resolvable. If the intended contract is "the command only works after a Strawberry schema has been constructed," then tighten the command's validation and docs accordingly; `definition.finalized is True` is not sufficient for this corner. Add a package test for an annotation-only relation forward ref so this does not regress.
 
-`docs/builder/bld-final.md #"The final gate is green on every command except"` still says the final
-gate is green except for the pre-existing kanban failures. The post-feedback section at the top says
-the kanban failures are resolved and the new full gate is `1391 passed, 3 skipped, 0 failed`.
+### P3 - Combined annotation plus `strawberry.field` is labeled as annotation-only
 
-The historical failed gate table is fine because the new top note explicitly labels it as the
-`2d1f296` snapshot. The bottom summary should be updated to match the current state: the follow-up
-gate is fully green, and the old kanban failures are historical/resolved.
+`django_strawberry_framework/management/commands/inspect_django_type.py::_consumer_converter_label #"source = \"annotation\" if annotated else \"strawberry.field\""` treats any field present in the annotated set as `consumer annotation`, even when the field is also in the assigned-`strawberry.field` set.
 
-### P3 - New code comment uses a non-symbol-qualified source reference
+That can happen with the normal Strawberry idiom:
 
-`examples/fakeshop/test_query/test_kanban_api.py #"apps/kanban/signals.py:"` adds a source reference
-split across two comment lines. Repo convention asks code comments to use symbol-qualified source
-references, so this should be rewritten as something like
-`examples/fakeshop/apps/kanban/signals.py::_validate_done_card_has_glossary_link`.
+```python
+class BothType(DjangoType):
+    name: str = strawberry.field(resolver=lambda root: "x")
+```
 
-This is low severity, but it is exactly the kind of small reference drift the standing-doc/source
-reference rule is trying to prevent.
+The command renders the row as `consumer annotation (scalar)`, hiding the assigned `strawberry.field` override. This is not a runtime break, but the converter column is supposed to name the row that produced the field. Prefer `consumer annotation + strawberry.field (scalar)` for the overlap, or prioritize the assigned-field label when a `StrawberryField` is present. Add a small unit test for the overlap case.
+
+### P3 - The command module docstring is now stale
+
+`django_strawberry_framework/management/commands/inspect_django_type.py #"origin.__annotations__"` still says the command reads the resolved GraphQL annotation from `origin.__annotations__` as the authoritative record. That is no longer true for consumer-authored assigned fields; the new implementation correctly reads those from finalized Strawberry field metadata.
+
+Update the module docstring so future work does not reintroduce the old assumption. The current code comments in `_consumer_authored_row` are accurate; the top-level contract text just needs to catch up.
 
 ## What Looks Correct
 
-- The kanban fixture fix is the right direction. The signal invariant stays in production code, and
-  the tests now seed the glossary link before flipping a card to `done`.
-- The `transaction.atomic()` placement in
-  `examples/fakeshop/apps/kanban/tests/test_signals.py::test_done_card_last_glossary_link_cannot_be_deleted_or_moved`
-  is correct: `pytest.raises` enters first and the atomic savepoint exits first, so the expected
-  `ValidationError` rolls back before the next protected operation runs.
-- The `--schema` cold-path test now evicts cached schema modules before clearing the registry, which
-  exercises the real import-time registration/finalization path instead of relying on an already
-  imported module.
-- The added command failure tests cover the previously unhit `--schema` import failure and bare-name
-  registry-miss branches.
-- `_RELATION_KIND_LABELS` matches the current internal `relation_kind` tokens: `"many"`,
-  `"forward_single"`, `"reverse_many_to_one"`, and `"reverse_one_to_one"`. Existing relation-kind
-  tests also pin those tokens.
-- The MRO scalar label improvement is correct for auto-synthesized scalar fields: a subclass of
-  `TextField` should report the matched `TextField` `SCALAR_MAP` row, not the subclass name.
+- The previous P1 is substantially fixed for assigned scalar, assigned relation, annotation-only scalar, optional scalar, and unsupported-field scalar override cases.
+- The dispatch order in `Command._resolve_row` is right: Relay-suppressed pk first, then consumer-authored fields, then auto relation/scalar rows.
+- The live `BranchType.shelves` smoke output is correct: `[ShelfType!]!`, `no (list)`, `consumer strawberry.field (relation)`.
+- Normal auto rows still render correctly for `BookType`: scalar rows use matched `SCALAR_MAP` keys, choice rows use `choice enum`, and relation rows use the friendly relation labels.
+- The `bld-final.md` closing summary now matches the resolved full-gate state instead of repeating the old kanban failure exception as current.
+- The kanban fixture comment now uses a symbol-qualified source reference.
 
 ## Review Scope
 
@@ -89,11 +61,13 @@ Reviewed `HEAD~1..HEAD` for:
 - `django_strawberry_framework/management/commands/inspect_django_type.py`
 - `tests/management/test_inspect_django_type.py`
 - `examples/fakeshop/tests/test_inspect_django_type.py`
-- `examples/fakeshop/apps/kanban/tests/test_signals.py`
 - `examples/fakeshop/test_query/test_kanban_api.py`
 - `docs/builder/bld-final.md`
-- `docs/builder/build-029-consumer_dx_cleanup-0_0_9.md`
 
-I did not run pytest or the full gate during this review. The commit message records the full gate as
-green, but the P1 above is a missing valid-shape test case rather than a failure in the tested happy
-paths.
+Validation I ran:
+
+- `uv run python examples/fakeshop/manage.py inspect_django_type BranchType --schema config.schema`
+- `uv run python examples/fakeshop/manage.py inspect_django_type BookType --schema config.schema`
+- two ad hoc `manage.py shell -c` command checks for the forward-ref relation and annotation-plus-assignment label cases
+
+I did not run pytest or the full gate during this review.

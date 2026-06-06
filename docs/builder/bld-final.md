@@ -22,6 +22,16 @@ A second maintainer review flagged one functional defect (P1) plus two doc/comme
 - **P3 — `bld-final.md` closing summary — FIXED** (this section + the rewritten "Summary" below): the old "green except for kanban failures" summary now reads as fully-green with the kanban failures labelled historical/resolved.
 - **P3 — non-symbol-qualified comment ref — FIXED:** the `test_query/test_kanban_api.py` source reference is now `examples/fakeshop/apps/kanban/signals.py::_validate_done_card_has_glossary_link`.
 
+### Third review follow-up — 2026-06-05 (review of `47a3c75` in `docs/feedback.md`)
+
+A third review of the consumer-authored-field work flagged one functional gap (P2) plus two P3s. All fixed (foundational P2 first):
+
+- **P2 — annotation-only relation forward refs could render as `UNRESOLVED!` — FIXED.** When an annotation-only relation override's forward reference is not resolvable from the type's module namespace (e.g. a type defined in a non-importable scope, with no `strawberry.Schema` built), Strawberry leaves `field.type` as its `UNRESOLVED` sentinel after `finalize_django_types()` alone — and `_consumer_authored_row` printed `UNRESOLVED!` as if it were a real type (the same field Strawberry rejects at schema-build time). Fix: `_consumer_authored_row` now detects `field_type is UNRESOLVED` and raises `CommandError` with a concrete recovery hint (pass `--schema` so the schema is constructed, or make the referenced type importable at module scope). Pinned by a package test using a function-local forward ref.
+- **P3 — combined `annotation` + `strawberry.field` mislabeled — FIXED.** The idiom `name: str = strawberry.field(resolver=...)` records the field in BOTH the annotated set (type) and the assigned set (resolver); `_consumer_converter_label` labelled it `consumer annotation (scalar)`, hiding the assignment. It now emits `consumer annotation + strawberry.field (scalar)` for the overlap. Pinned by a package unit test.
+- **P3 — stale module docstring — FIXED.** The `inspect_django_type.py` module docstring still claimed `origin.__annotations__` was the single authoritative source. It now describes the dual-source behavior: auto-synthesized fields read `origin.__annotations__`; consumer-authored fields read the finalized Strawberry field metadata (`origin.__strawberry_definition__`), with the `UNRESOLVED` corner noted.
+
+Command module remains at 100% (158 statements); 22 inspect-command tests pass across the package + example tiers.
+
 ## Gate commands
 
 | Command | Result |

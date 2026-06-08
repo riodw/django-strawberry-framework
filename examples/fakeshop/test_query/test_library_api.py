@@ -613,6 +613,50 @@ def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_htt
     assert names == {"ManagerResolver West", "ManagerResolver East"}
 
 
+@pytest.mark.django_db
+def test_library_branches_via_djangolistfield_nullable_outer_renders_and_resolves():
+    """A ``list[BranchType] | None`` DjangoListField renders nullable-outer and still resolves.
+
+    Live counterpart of the (removed) package test
+    ``tests/test_list_field.py::test_djangolistfield_nullable_outer_via_consumer_annotation``,
+    promoted to this tier per ``test_query/README.md`` (the shape is reachable from a live
+    ``/graphql/`` introspection query). The consumer's ``list[BranchType] | None`` class
+    annotation — NOT a constructor argument — must drive the rendered GraphQL type to
+    ``[BranchType!]`` (a ``LIST`` whose outer ``NON_NULL`` wrapper is ABSENT, vs the sibling
+    non-nullable field's ``NON_NULL`` outer). ``DjangoListField`` itself has no
+    outer-nullability branch, so the same ``list_field.py`` lines stay pinned by the
+    package companion ``test_djangolistfield_non_nullable_outer_default_via_consumer_annotation``;
+    this live test adds the real-stack pressure the throwaway-schema package test lacked —
+    introspection over the *composed* schema plus an end-to-end resolve over the wire.
+    """
+    # Introspection over the real composed schema: outer LIST is nullable (no NON_NULL
+    # wrapper); the inner item stays NON_NULL.
+    introspection = _post_graphql(
+        '{ __type(name: "Query") { fields { name type '
+        "{ kind ofType { kind ofType { kind name } } } } } }",
+    )
+    assert introspection.status_code == 200
+    ibody = introspection.json()
+    assert "errors" not in ibody, ibody
+    fields = {f["name"]: f["type"] for f in ibody["data"]["__type"]["fields"]}
+    nullable = fields["allLibraryBranchesViaListFieldNullable"]
+    assert nullable["kind"] == "LIST"  # outer NON_NULL absent -> nullable list
+    assert nullable["ofType"]["kind"] == "NON_NULL"
+    assert nullable["ofType"]["ofType"]["kind"] == "OBJECT"
+    assert nullable["ofType"]["ofType"]["name"] == "BranchType"
+    # Load-bearing contrast: the sibling non-nullable field DOES wrap the list in NON_NULL.
+    assert fields["allLibraryBranchesViaListField"]["kind"] == "NON_NULL"
+
+    # End-to-end resolve: the nullable-outer field still returns a real list over the wire.
+    _seed_branch_with_two_shelves("Nullable West")
+    response = _post_graphql("query { allLibraryBranchesViaListFieldNullable { id name } }")
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    names = {b["name"] for b in body["data"]["allLibraryBranchesViaListFieldNullable"]}
+    assert "Nullable West" in names
+
+
 def _decode_global_id(global_id: str) -> tuple[str, str]:
     """Decode a Strawberry Relay ``GlobalID`` string into ``(type_name, node_id)``.
 

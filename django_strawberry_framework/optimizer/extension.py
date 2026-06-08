@@ -66,7 +66,12 @@ _MAX_PLAN_CACHE_SIZE = 256
 # keep working without a churn pass.  Canonical implementation lives in
 # ``optimizer/_context.py`` for cross-subpackage reuse with the read-side
 # ``get_context_value`` (consumed by ``types/resolvers.py``).
-__all__ = ("CacheInfo", "DjangoOptimizerExtension", "_stash_on_context")
+__all__ = (
+    "CacheInfo",
+    "DjangoOptimizerExtension",
+    "_stash_on_context",
+    "apply_connection_optimization",
+)
 
 
 def _collect_directive_var_names(
@@ -282,6 +287,21 @@ class CacheInfo(NamedTuple):
 _optimizer_active: ContextVar[bool] = ContextVar(
     "django_strawberry_framework_optimizer_active",
     default=False,
+)
+
+
+# The active ``DjangoOptimizerExtension`` instance for the operation's
+# lifetime, published by ``on_execute`` so the connection field's
+# ``apply_connection_optimization`` helper can discover it and SHARE the
+# instance-bound plan cache (Decision 11). ``None`` (the default) means
+# either no optimizer is installed for this execution or the helper is being
+# called outside an ``on_execute`` lifecycle; the helper then falls back to a
+# cache-less plan build + apply, which is correctness-safe (the plan cache is
+# a hit-rate optimization, not a correctness requirement — see
+# ``DjangoOptimizerExtension.cache_info``).
+_active_optimizer: "ContextVar[DjangoOptimizerExtension | None]" = ContextVar(
+    "django_strawberry_framework_active_optimizer",
+    default=None,
 )
 
 
@@ -522,11 +542,15 @@ class DjangoOptimizerExtension(SchemaExtension):
     def on_execute(self) -> Any:  # type: ignore[override]
         """Mark the optimizer as active and seed the per-execution AST memo."""
         active_token = _optimizer_active.set(True)
+        # Publish this instance so ``apply_connection_optimization`` can
+        # discover it and share the instance-bound plan cache (Decision 11).
+        instance_token = _active_optimizer.set(self)
         ast_token = _printed_ast_cache.set({})
         try:
             yield
         finally:
             _printed_ast_cache.reset(ast_token)
+            _active_optimizer.reset(instance_token)
             _optimizer_active.reset(active_token)
 
     def resolve(
@@ -562,7 +586,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         return self._optimize(result, info)
 
     def _optimize(self, result: Any, info: Any) -> Any:
-        """Apply the O2 walker's plan to a root-level ``QuerySet``.
+        """Apply the O2 walker's plan to a root-level ``QuerySet`` (middleware path).
 
         Steps:
 
@@ -572,13 +596,15 @@ class DjangoOptimizerExtension(SchemaExtension):
            manager's ``.all()`` returns a fresh unevaluated ``QuerySet``;
            no rows are fetched at this step.
         2. Non-``QuerySet`` results pass through unchanged.
-        3. Trace the graphql-core return type to a Django model.
-        4. Build (or fetch from cache) an ``OptimizationPlan`` via
-           ``_get_or_build_plan``.
-        5. Publish the plan + strictness sentinels to ``info.context``
-           via ``_publish_plan_to_context``.
-        6. Reconcile against the consumer's existing queryset
-           optimizations and apply.
+        3. Trace the graphql-core return type to a Django ``(origin, model)``.
+        4. Delegate the plan-build-and-apply tail to :meth:`apply_to`, passing
+           the resolved ``origin`` / ``model`` explicitly — the SAME helper
+           the connection field's ``apply_connection_optimization`` calls, so
+           the two share one plan-application implementation (Decision 11).
+           The middleware path is behavior-identical: ``_optimize`` only adds
+           the return-type resolution the connection field does NOT need
+           (the connection field's return type is the connection type, not the
+           node type).
         """
         if isinstance(result, models.Manager):
             result = result.all()
@@ -592,9 +618,38 @@ class DjangoOptimizerExtension(SchemaExtension):
                 info.field_name,
             )
             return result
-        origin, target_model = resolved.origin, resolved.model
+        return self.apply_to(resolved.origin, resolved.model, result, info)
+
+    def apply_to(
+        self,
+        target_type: type | None,
+        target_model: type,
+        queryset: models.QuerySet,
+        info: Any,
+    ) -> models.QuerySet:
+        """Build and apply the O2 plan to ``queryset`` given ``target_type`` / ``target_model``.
+
+        The plan-build-and-apply tail extracted from ``_optimize`` (Decision
+        11). Takes the node type / model **directly** rather than inferring
+        them from ``info.return_type`` — the connection field's root return
+        type is the connection type, not the node type, so the inference the
+        middleware path uses would resolve the wrong model.
+
+        Steps:
+
+        1. Build (or fetch from cache) an ``OptimizationPlan`` via
+           ``_get_or_build_plan`` (passing ``target_type`` as ``origin`` so
+           plans cache-separate by node type exactly as middleware plans do).
+        2. Publish the plan + strictness sentinels to ``info.context`` via
+           ``_publish_plan_to_context``.
+        3. Reconcile against the consumer's existing queryset optimizations
+           and apply.
+
+        Returns ``queryset`` unchanged when there are no root field nodes or
+        the plan is empty.
+        """
         if not info.field_nodes:
-            return result
+            return queryset
         # The O2 walker expects the children of the root field, so we
         # build the Strawberry-shaped selection list from field_nodes
         # via ``convert_selections``.  Imported lazily because Strawberry
@@ -608,21 +663,21 @@ class DjangoOptimizerExtension(SchemaExtension):
             _root_child_selections(selections),
             target_model,
             info,
-            origin,
+            target_type,
         )
         self._publish_plan_to_context(plan, info)
         if plan.is_empty:
-            return result
+            return queryset
         # B8: reconcile the plan against optimizations the consumer has
-        # already applied to ``result``. Drops exact-match entries,
+        # already applied to ``queryset``. Drops exact-match entries,
         # avoids "lookup already seen" errors when the consumer's
         # prefetch chain descends past the optimizer's path, and
         # losslessly upgrades a consumer's plain ``"items"`` string to
         # the optimizer's richer ``Prefetch("items", queryset=...)``.
         # Returns a fresh plan and (when an upgrade was applied) a
         # rewritten queryset; B1's cached plan is never mutated.
-        plan, result = diff_plan_for_queryset(plan, result)
-        return plan.apply(result)
+        plan, queryset = diff_plan_for_queryset(plan, queryset)
+        return plan.apply(queryset)
 
     def _get_or_build_plan(
         self,
@@ -818,3 +873,48 @@ class DjangoOptimizerExtension(SchemaExtension):
         the walker should materialize this relation on the parent queryset.
         """
         return plan_relation(field, target_type, info)
+
+
+def apply_connection_optimization(
+    target_type: type,
+    queryset: models.QuerySet,
+    info: Any,
+) -> models.QuerySet:
+    """Apply the optimizer plan to a connection field's pre-slice queryset.
+
+    The connection field's own optimizer cooperation point (Decision 11).
+    Strawberry's ``ConnectionExtension`` returns a connection object, so the
+    schema middleware (``DjangoOptimizerExtension.resolve``) never sees the
+    pre-slice queryset and cannot optimize it; the connection resolver calls
+    this helper as the last pipeline step before handing the queryset to
+    ``ConnectionExtension`` for slicing.
+
+    Resolves ``target_model`` from ``target_type``'s registered definition
+    (NOT from ``info.return_type``, which is the connection type) and delegates
+    to ``DjangoOptimizerExtension.apply_to``. The active extension instance is
+    discovered from the ``_active_optimizer`` ``ContextVar`` published by
+    ``on_execute`` so the connection field shares the instance-bound plan
+    cache; when no optimizer is installed for this execution (the
+    ``ContextVar`` is ``None``), a throwaway extension applies the plan
+    cache-less. The cache is a hit-rate optimization, not a correctness
+    requirement (see ``DjangoOptimizerExtension.cache_info``), so the
+    cache-less fallback is correctness-safe and the middleware path is
+    untouched either way.
+
+    Returns ``queryset`` unchanged when ``target_type`` has no registered
+    model (nothing to plan).
+    """
+    target_model = registry.model_for_type(target_type)
+    if target_model is None:
+        return queryset
+    # The connection resolver receives Strawberry's wrapped ``Info``; the plan
+    # machinery (``_build_cache_key`` / ``convert_selections`` / the
+    # ``info.context`` stash) expects the raw graphql-core ``GraphQLResolveInfo``
+    # the middleware path uses. ``Info._raw_info`` is that object; the
+    # ``getattr`` fallback keeps the helper usable when a caller already passes
+    # a raw info (e.g. a direct test).
+    raw_info = getattr(info, "_raw_info", info)
+    optimizer = _active_optimizer.get()
+    if optimizer is None:
+        optimizer = DjangoOptimizerExtension()
+    return optimizer.apply_to(target_type, target_model, queryset, raw_info)

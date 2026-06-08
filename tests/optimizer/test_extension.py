@@ -3179,3 +3179,116 @@ def test_model_for_type_reverse_lookup_works_for_secondary_type():
     assert resolved is not None
     assert resolved.origin is AdminItemType
     assert resolved.model is Item
+
+
+# ---------------------------------------------------------------------------
+# Slice 2 — ``apply_connection_optimization`` helper extraction (no-regression)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_optimizer_helper_extraction_no_regression():
+    """Extracting ``apply_to`` from ``_optimize`` leaves the middleware path identical.
+
+    Spec Slice 2 / Decision 11: the plan-build-and-apply tail was extracted into
+    ``DjangoOptimizerExtension.apply_to`` (shared with the connection field's
+    ``apply_connection_optimization``). The existing B1–B8 suite in this module
+    is the broad regression guard; this focused test pins that a non-connection
+    root field still has its plan built and applied (``select_related`` lands)
+    and that ``_optimize`` delegates to ``apply_to``.
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension(strictness="raise")
+    delegations: list[tuple] = []
+    real_apply_to = ext.apply_to
+
+    def _spy_apply_to(
+        target_type,
+        target_model,
+        queryset,
+        info,
+    ):
+        delegations.append((target_type, target_model))
+        return real_apply_to(target_type, target_model, queryset, info)
+
+    ext.apply_to = _spy_apply_to
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+    ctx = SimpleNamespace()
+    result = schema.execute_sync("{ allItems { category { name } } }", context_value=ctx)
+
+    assert result.errors is None
+    # The plan was built and applied (the forward FK is select_related-ed) — the
+    # middleware behavior is unchanged by the extraction.
+    assert ctx.dst_optimizer_plan.select_related == ("category",)
+    # ``_optimize`` delegated to ``apply_to`` with the resolved (origin, model),
+    # NOT inferred inside the helper.
+    assert delegations == [(ItemType, Item)]
+
+
+@pytest.mark.django_db
+def test_apply_connection_optimization_uses_active_optimizer_cache():
+    """``apply_connection_optimization`` shares the active extension's plan cache.
+
+    Decision 11 plan-cache-reuse route: ``on_execute`` publishes the active
+    extension on the ``_active_optimizer`` ``ContextVar``; the connection helper
+    discovers it so connection-field plans hit the SAME instance-bound cache the
+    middleware uses (rather than a throwaway cache-less extension).
+    """
+    from django_strawberry_framework.optimizer.extension import (
+        _active_optimizer,
+        apply_connection_optimization,
+    )
+
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+    captured: dict = {}
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self, info: strawberry.types.Info) -> list[ItemType]:
+            # Inside a resolver the ``on_execute`` lifecycle has published the
+            # active extension; the helper must discover it (not build a
+            # throwaway). Apply twice so the second call is a cache hit on the
+            # SAME instance.
+            qs = Item.objects.all()
+            apply_connection_optimization(ItemType, qs, info)
+            captured["active"] = _active_optimizer.get()
+            return qs
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+    result = schema.execute_sync("{ allItems { id } }")
+    assert result.errors is None
+    # The helper saw the installed extension instance via the ContextVar.
+    assert captured["active"] is ext

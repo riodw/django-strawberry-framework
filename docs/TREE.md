@@ -200,6 +200,7 @@ django_strawberry_framework/
 ├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6: primary_for, types_for, models_with_multiple_types; unregister test-fixture helper)
 ├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
 ├── list_field.py            # DjangoListField (non-Relay list[T] factory for root Query fields; shipped in 0.0.7)
+├── connection.py            # DjangoConnectionField / DjangoConnection (Relay connection factory; shipped in 0.0.9)
 ├── management/              # Django management commands (shipped in 0.0.7)
 │   ├── __init__.py
 │   └── commands/
@@ -345,6 +346,7 @@ tests/                       # Package-internal tests (current state)
 │   ├── test_export_schema.py  # ← export_schema Command — happy paths + failure modes
 │   └── test_inspect_django_type.py  # ← inspect_django_type Command — failure modes
 ├── test_apps.py             # AppConfig (single-file Layer-3 module)
+├── test_connection.py       # DjangoConnectionField / DjangoConnection (single-file Layer-3 module)
 ├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
 ├── test_registry.py         # model→type registry
 ├── testing/                 # mirrors django_strawberry_framework/testing/

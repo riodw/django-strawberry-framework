@@ -17,6 +17,7 @@ logger = logging.getLogger("django_strawberry_framework")
 
 from strawberry import auto  # noqa: E402  # logger must exist before subpackage imports
 
+from .connection import DjangoConnection, DjangoConnectionField  # noqa: E402
 from .list_field import DjangoListField  # noqa: E402
 from .optimizer import DjangoOptimizerExtension  # noqa: E402
 from .optimizer.hints import OptimizerHint  # noqa: E402
@@ -27,6 +28,8 @@ __version__ = "0.0.8"
 
 __all__ = (
     "BigInt",
+    "DjangoConnection",
+    "DjangoConnectionField",
     "DjangoListField",
     "DjangoOptimizerExtension",
     "DjangoType",

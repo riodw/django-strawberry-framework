@@ -293,6 +293,100 @@ def test_meta_filterset_class_accepts_filterset_subclass():
     assert definition.filterset_class is CategoryFilter
 
 
+def test_meta_connection_in_allowed_meta_keys():
+    """``Meta.connection`` ships in spec-030 Slice 1 — a net-new ALLOWED key.
+
+    Net-new ALLOWED, NOT a DEFERRED_META_KEYS promotion (spec-030 Decision 8;
+    mirrors the filterset/orderset precedent).
+    """
+    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
+
+    assert "connection" in ALLOWED_META_KEYS
+    assert "connection" not in DEFERRED_META_KEYS
+
+
+def test_meta_connection_non_dict_raises():
+    """``Meta.connection`` must be a dict; a non-dict value raises ``ConfigurationError``."""
+    from strawberry import relay
+
+    with pytest.raises(ConfigurationError, match="must be a dict"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                connection = "nope"
+
+
+def test_meta_connection_unknown_subkey_raises():
+    """An unrecognized ``Meta.connection`` sub-key raises (typo guard)."""
+    from strawberry import relay
+
+    with pytest.raises(ConfigurationError, match="unknown sub-keys"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                connection = {"total_count": True, "bogus": 1}
+
+
+def test_meta_connection_non_bool_total_count_raises():
+    """``Meta.connection['total_count']`` must be a bool; a non-bool raises."""
+    from strawberry import relay
+
+    with pytest.raises(ConfigurationError, match="must be a bool"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                connection = {"total_count": "yes"}
+
+
+def test_meta_connection_non_relay_type_raises():
+    """``Meta.connection`` on a type whose ``interfaces`` omits ``relay.Node`` raises."""
+    with pytest.raises(ConfigurationError, match="relay.Node"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                connection = {"total_count": True}
+
+
+def test_meta_connection_stored_on_definition():
+    """The normalized ``Meta.connection`` value lands on ``definition.connection``."""
+    from strawberry import relay
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            interfaces = (relay.Node,)
+            connection = {"total_count": True}
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.connection == {"total_count": True}
+
+
+def test_meta_connection_absent_leaves_definition_none():
+    """A type without ``Meta.connection`` leaves ``definition.connection`` at its ``None`` default."""
+    from strawberry import relay
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            interfaces = (relay.Node,)
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.connection is None
+
+
 def test_meta_rejects_unknown_key():
     """Typo guard: keys outside the allowed/deferred sets raise."""
     with pytest.raises(ConfigurationError, match="Unknown Meta keys"):

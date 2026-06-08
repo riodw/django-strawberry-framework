@@ -24,6 +24,8 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 ### Added
 - Added the `inspect_django_type` management command — `manage.py inspect_django_type <Type> [--schema <selector>]` prints the per-field GraphQL resolution table (Django field → resolved GraphQL type → nullability → converter row) for a finalized `DjangoType`. Reads the resolved annotation from `origin.__annotations__` (so it reflects consumer-authored annotations and overrides) rather than re-running `convert_scalar`. The positional `type` argument dispatches by shape (dotted path via `import_string`; bare name via a unique registry lookup), `--schema` imports the project schema first so a cold CLI process registers + finalizes every type, and the Relay-Node-suppressed primary key reports the interface-supplied `GlobalID!`.
 - Added `Meta.nullable_overrides` and `Meta.required_overrides` — two net-new tuple-set `Meta` keys that decouple a scalar field's GraphQL nullability from its Django column (force `T!`→`T` or `T`→`T!`) without an `AlterField` migration or a consumer-authored annotation. Validated at type-creation time (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision raise `ConfigurationError`); scalar-only scope; the override flips a choice field's generated enum nullability for free.
+- **`DjangoConnectionField` (Relay connection field).** [`DjangoConnectionField`][glossary-djangoconnectionfield] and the generic [`DjangoConnection`][glossary-djangoconnection]`[T]` return alias now ship under [`django_strawberry_framework/connection.py`][connection]. The factory wraps a Relay-Node-shaped [`DjangoType`][glossary-djangotype], emits `edges` / `node` / `pageInfo` cursor pagination on Strawberry's native `relay.connection()` / `ListConnection`, and injects `filter:` / `orderBy:` arguments derived from the wrapped type's `Meta.filterset_class` / `Meta.orderset_class` sidecars via a synthesized resolver signature — no hand-written list resolver, no parallel argument declarations. The composition pipeline runs `get_queryset` visibility → `filter` → `orderBy` → default deterministic pk-ordering → optimizer-plan → cursor slice, and the field owns its own optimizer cooperation point (the plan-application logic extracted from `DjangoOptimizerExtension._optimize`) because Strawberry's connection slicing hides the pre-slice queryset from the schema middleware. A package-owned guard rejects `first` + `last` together with a `GraphQLError`.
+- **`Meta.connection` opt-in `totalCount`.** The net-new type-level [`Meta.connection`][glossary-metaconnection] key (`{"total_count": bool}`, valid only when [`Meta.interfaces`][glossary-metainterfaces] includes `relay.Node`) is validated at type-creation time and stored on the `DjangoType` definition. When `total_count` is enabled, the connection resolves through a generated per-target `<TypeName>Connection` class exposing `totalCount: Int!` — counted on the post-filter pre-slice queryset, selection-gated (no count query runs unless `totalCount` is selected), and carried per connection instance so two aliases with different `filter:` values report independent counts.
 
 ## [0.0.8] - 2026-06-03
 ### Added
@@ -245,10 +247,14 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-bigint-scalar]: docs/GLOSSARY.md#bigint-scalar
 [glossary-configurationerror]: docs/GLOSSARY.md#configurationerror
 [glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
+[glossary-djangoconnection]: docs/GLOSSARY.md#djangoconnection
+[glossary-djangoconnectionfield]: docs/GLOSSARY.md#djangoconnectionfield
 [glossary-djangotype]: docs/GLOSSARY.md#djangotype
 [glossary-filterset]: docs/GLOSSARY.md#filterset
+[glossary-metaconnection]: docs/GLOSSARY.md#metaconnection
 [glossary-metafields]: docs/GLOSSARY.md#metafields
 [glossary-metafilterset_class]: docs/GLOSSARY.md#metafilterset_class
+[glossary-metainterfaces]: docs/GLOSSARY.md#metainterfaces
 [glossary-metaorderset_class]: docs/GLOSSARY.md#metaorderset_class
 [glossary-multi-database-cooperation]: docs/GLOSSARY.md#multi-database-cooperation
 [glossary-ordering]: docs/GLOSSARY.md#ordering
@@ -271,6 +277,7 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 
 <!-- django_strawberry_framework/ -->
 [apps]: django_strawberry_framework/apps.py
+[connection]: django_strawberry_framework/connection.py
 [converters]: django_strawberry_framework/types/converters.py
 [django-patches]: django_strawberry_framework/_django_patches.py
 [filters]: django_strawberry_framework/filters/

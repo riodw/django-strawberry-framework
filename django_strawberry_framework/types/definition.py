@@ -60,6 +60,13 @@ class DjangoTypeDefinition:
           ``DjangoTypeDefinition`` on the OrderSet and to materialize
           the generated Strawberry input class as a module global of
           ``django_strawberry_framework.orders.inputs``.
+        - ``connection`` is the normalized ``Meta.connection`` value
+          (``{"total_count": bool} | None``) populated by
+          ``DjangoType.__init_subclass__`` from the validated ``Meta``
+          (spec-030 Decision 8); consumed by
+          ``connection.py::_connection_type_for`` to decide whether to
+          emit the per-target ``<TypeName>Connection`` carrying the
+          opt-in ``totalCount`` field.
         - ``related_target_for(field_name)`` resolves the
           ``(target_definition, model_field)`` pair the Decision-4
           owner-aware FK/PK conditional consults; the lookup walks
@@ -92,6 +99,7 @@ class DjangoTypeDefinition:
     # base injection.
     filterset_class: type | None = None
     orderset_class: type | None = None
+    connection: dict | None = None
     finalized: bool = False
     # Per-instance memoization of ``related_target_for(field_name)``
     # results. Cache stores the full

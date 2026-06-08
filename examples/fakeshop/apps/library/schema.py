@@ -7,7 +7,13 @@ from strawberry import relay
 from strawberry.types import Info
 
 from apps.library import filters, filters_genre, models, orders, orders_genre
-from django_strawberry_framework import DjangoListField, DjangoType, OptimizerHint
+from django_strawberry_framework import (
+    DjangoConnection,
+    DjangoConnectionField,
+    DjangoListField,
+    DjangoType,
+    OptimizerHint,
+)
 from django_strawberry_framework.filters import filter_input_type
 from django_strawberry_framework.orders import order_input_type
 
@@ -147,6 +153,7 @@ class GenreType(DjangoType):
         interfaces = (relay.Node,)
         filterset_class = filters_genre.GenreFilter
         orderset_class = orders_genre.GenreOrder
+        connection = {"total_count": True}
 
 
 class BranchType(DjangoType):
@@ -292,6 +299,14 @@ class Query:
         if order_by is not None:
             queryset = orders_genre.GenreOrder.apply_sync(order_by, queryset, info)
         return queryset
+
+    # Relay connection field over the Relay-Node-shaped ``GenreType`` (spec-030
+    # Slice 4 / Decision 14). Additive alongside the ``all_library_genres`` list
+    # resolver above so both surfaces stay tested; ``filter:`` / ``orderBy:`` and
+    # the opt-in ``totalCount`` are all Meta-derived (Decision 5) from
+    # ``GenreType.Meta`` (``filterset_class`` / ``orderset_class`` /
+    # ``connection = {"total_count": True}``). Imported from the public surface.
+    all_library_genres_connection: DjangoConnection[GenreType] = DjangoConnectionField(GenreType)
 
     @strawberry.field
     def all_library_patrons(

@@ -2029,3 +2029,230 @@ def test_nullability_override_acceptance_api_is_queryable():
     rows = payload["data"]["allLibraryNullabilityOverrideBooks"]
     # Only the non-null-subtitle row survives the resolver's exclude().
     assert rows == [{"title": "Parable of the Sower", "subtitle": "Earthseed"}]
+
+
+# ---------------------------------------------------------------------------
+# spec-030 Slice 4 — live DjangoConnectionField HTTP coverage.
+#
+# ``allLibraryGenresConnection`` is the root ``DjangoConnectionField(GenreType)``
+# field (``Meta.connection = {"total_count": True}``, ``GenreFilter`` /
+# ``GenreOrder`` sidecars). These tests exercise the Relay surface end-to-end
+# through the sync ``/graphql/`` view: cursor pagination + ordering + filter +
+# the pre-slice post-filter ``totalCount``, the ``first`` + ``last`` guard, the
+# ``first: 0`` empty-window shape, ``totalCount`` selection-gating, and the
+# per-instance count across two aliases.
+# ---------------------------------------------------------------------------
+
+
+def _seed_genres(*names: str) -> None:
+    """Seed library ``Genre`` rows inline (library inline-create rule, no services)."""
+    for name in names:
+        models.Genre.objects.create(name=name)
+
+
+@pytest.mark.django_db
+def test_genre_connection_full_round_trip():
+    """(a) filter + orderBy + first + after round-trip with pre-slice totalCount.
+
+    Seeds five genres; the ``icontains: "a"`` filter matches four of them
+    (``Alpha`` / ``Gamma`` / ``Delta`` / ``Banana``) and excludes ``Echo``, so
+    ``totalCount`` (the unpaginated post-filter count) is 4 — distinct from both
+    the grand total (5) and the page size (2). Page 1 (``first: 2``) returns the
+    first two in ``name ASC`` order; ``after: <page-1 endCursor>`` advances to the
+    next two with no overlap.
+    """
+    _seed_genres("Alpha", "Gamma", "Echo", "Delta", "Banana")
+    # Post-filter (``icontains "a"``) set in name-ASC order:
+    # Alpha, Banana, Delta, Gamma (Echo excluded).
+
+    page_one = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection(
+            filter: { name: { iContains: "a" } }
+            orderBy: [{ name: ASC }]
+            first: 2
+          ) {
+            edges { node { id name } }
+            pageInfo { hasNextPage endCursor }
+            totalCount
+          }
+        }
+        """,
+    )
+    assert page_one.status_code == 200
+    payload_one = page_one.json()
+    assert "errors" not in payload_one, payload_one
+    conn_one = payload_one["data"]["allLibraryGenresConnection"]
+
+    names_one = [edge["node"]["name"] for edge in conn_one["edges"]]
+    assert names_one == ["Alpha", "Banana"]
+    # ``node.id`` is a decodable GenreType GlobalID, not the raw pk.
+    for edge in conn_one["edges"]:
+        type_name, node_id = _decode_global_id(edge["node"]["id"])
+        assert type_name == "GenreType"
+        assert node_id.isdigit()
+    assert conn_one["pageInfo"]["hasNextPage"] is True
+    end_cursor = conn_one["pageInfo"]["endCursor"]
+    assert isinstance(end_cursor, str) and end_cursor
+    # ``totalCount`` counts the unpaginated post-filter set (4), NOT the page
+    # size (2) and NOT the grand total (5).
+    assert conn_one["totalCount"] == 4
+
+    page_two = _post_graphql(
+        f"""
+        query {{
+          allLibraryGenresConnection(
+            filter: {{ name: {{ iContains: "a" }} }}
+            orderBy: [{{ name: ASC }}]
+            first: 2
+            after: "{end_cursor}"
+          ) {{
+            edges {{ node {{ name }} }}
+            pageInfo {{ hasNextPage }}
+            totalCount
+          }}
+        }}
+        """,
+    )
+    assert page_two.status_code == 200
+    payload_two = page_two.json()
+    assert "errors" not in payload_two, payload_two
+    conn_two = payload_two["data"]["allLibraryGenresConnection"]
+
+    names_two = [edge["node"]["name"] for edge in conn_two["edges"]]
+    # Next page advances with no overlap with page 1.
+    assert names_two == ["Delta", "Gamma"]
+    assert set(names_two).isdisjoint(set(names_one))
+    assert conn_two["pageInfo"]["hasNextPage"] is False
+    assert conn_two["totalCount"] == 4
+
+
+@pytest.mark.django_db
+def test_genre_connection_first_and_last_rejected():
+    """(b) supplying both ``first`` and ``last`` surfaces the package guard error.
+
+    The package's own ``first`` + ``last`` mutual-exclusivity guard
+    (``connection.py::_guard_first_and_last``) lands as a GraphQL ``errors``
+    entry on a 200 response, NOT a non-200 HTTP status (Decision 3).
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection(first: 1, last: 1) {
+            edges { node { id } }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    messages = " ".join(error["message"] for error in payload["errors"])
+    assert "mutually exclusive" in messages
+
+
+@pytest.mark.django_db
+def test_genre_connection_first_zero_empty_edges():
+    """(c) ``first: 0`` yields empty edges + valid pageInfo, count still pre-slice.
+
+    ``pageInfo`` is delegated to Strawberry's ``ListConnection``; against the
+    locked ``0.316.0`` a zero window over a non-empty set overfetches one row,
+    drops it, and reports ``hasNextPage: True`` with a null ``endCursor`` (empty
+    edges). ``totalCount`` is the pre-slice count, so ``first: 0`` does not zero
+    it (the count is selected here, so it runs).
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection(first: 0) {
+            edges { node { id } }
+            pageInfo { hasNextPage endCursor }
+            totalCount
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenresConnection"]
+    assert conn["edges"] == []
+    # ListConnection's real first:0-over-rows shape: more rows exist beyond the
+    # zero window, so hasNextPage is True; endCursor is null (no edges).
+    assert conn["pageInfo"]["hasNextPage"] is True
+    assert conn["pageInfo"]["endCursor"] is None
+    # Pre-slice count is unaffected by the zero window.
+    assert conn["totalCount"] == 3
+
+
+@pytest.mark.django_db
+def test_genre_connection_total_count_omitted_no_count():
+    """(d) omitting ``totalCount`` returns a correct count-less response (gating).
+
+    Selection-gating (Decision 4): when ``totalCount`` is not selected, no count
+    query runs and the response carries no count field. The ``CaptureQueriesContext``
+    assertion is the strongest proof — no ``COUNT(`` SQL is issued — and is robust
+    here because the genre connection's only queries are the row fetch and (when
+    selected) the count.
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryGenresConnection(first: 2) {
+                edges { node { id name } }
+                pageInfo { hasNextPage }
+              }
+            }
+            """,
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenresConnection"]
+    names = [edge["node"]["name"] for edge in conn["edges"]]
+    assert names == ["Alpha", "Beta"]
+    assert "totalCount" not in conn
+    # Selection-gating: no COUNT query is issued when totalCount is unselected.
+    assert not any("COUNT(" in query["sql"].upper() for query in captured.captured_queries)
+
+
+@pytest.mark.django_db
+def test_genre_connection_two_aliases_independent_total_counts():
+    """(e) two aliases with different filters yield independent totalCounts.
+
+    The count rides the per-connection-instance attribute, NOT a shared
+    ``info.context`` stash (Decision 4): ``matchA`` (``icontains "a"``) and
+    ``matchZ`` (``icontains "z"``) in one request must report their own filtered
+    counts.
+    """
+    _seed_genres("Alpha", "Banana", "Cobra", "Zephyr")
+    # "a": Alpha, Banana, Cobra -> 3; "z": Zephyr -> 1.
+
+    response = _post_graphql(
+        """
+        query {
+          matchA: allLibraryGenresConnection(filter: { name: { iContains: "a" } }) {
+            totalCount
+            edges { node { name } }
+          }
+          matchZ: allLibraryGenresConnection(filter: { name: { iContains: "z" } }) {
+            totalCount
+            edges { node { name } }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    data = payload["data"]
+    assert data["matchA"]["totalCount"] == 3
+    assert data["matchZ"]["totalCount"] == 1

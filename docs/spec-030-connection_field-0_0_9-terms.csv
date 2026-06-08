@@ -29,7 +29,6 @@ DjangoType,djangotype,The model-backed type the connection field wraps.
 Meta.primary,metaprimary,Multi-DjangoType-per-model rule; a connection field may wrap a secondary type, and the relation-as-connection upgrade (WIP-032) must choose the primary.
 SyncMisuseError,syncmisuseerror,The typed marker the Relay-foundation get_queryset helpers raise when a sync resolver context meets an async get_queryset; the connection field inherits the contract (Decision 10).
 strawberry_config,strawberry_config,The scalar-map factory every example schema passes to strawberry.Schema alongside the singleton-factory optimizer extension.
-Public exports,public-exports,The top-level package import surface Slice 4 promotes DjangoConnectionField and DjangoConnection into once live usage proves them.
 Definition-order independence,definition-order-independence,The finalize-time type-collection model behind the no-auto-finalize posture and the existing finalize_django_types synchronization contract.
 Meta.model,metamodel,The baseline DjangoType model binding shown in every connection-field example.
 Meta.fields,metafields,The baseline DjangoType field-selection key shown in the connection-field example and used to frame the new Meta.connection key.

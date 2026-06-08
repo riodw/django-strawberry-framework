@@ -52,6 +52,7 @@ DEFERRED_META_KEYS: frozenset[str] = frozenset(
 
 ALLOWED_META_KEYS: frozenset[str] = frozenset(
     {
+        "connection",
         "description",
         "exclude",
         "fields",
@@ -66,10 +67,11 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "required_overrides",
     },
 )
-# ``nullable_overrides`` / ``required_overrides`` are net-new ALLOWED keys
-# (spec-029 Decision 6), NOT a DEFERRED_META_KEYS promotion — their feature
-# ships in the same card that adds them, so they were never reserved-but-
-# nonfunctional. DEFERRED_META_KEYS stays unchanged.
+# ``nullable_overrides`` / ``required_overrides`` (spec-029 Decision 6) and
+# ``connection`` (spec-030 Decision 8) are net-new ALLOWED keys, NOT
+# DEFERRED_META_KEYS promotions — each one's feature ships in the same card
+# that adds it, so they were never reserved-but-nonfunctional.
+# DEFERRED_META_KEYS stays unchanged.
 
 
 def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
@@ -124,6 +126,48 @@ def _validate_orderset_class(meta: type, orderset_class: Any) -> type | None:
             f"got {orderset_class!r}",
         )
     return orderset_class
+
+
+def _validate_connection(meta: type, connection: Any, interfaces: tuple[type, ...]) -> dict | None:
+    """Validate ``Meta.connection`` shape and the Relay-Node requirement.
+
+    Structurally modeled on ``_validate_filterset_class`` (spec-030 Decision
+    8): ``None``-short-circuits when unset, otherwise shape-checks the dict and
+    enforces that the owning type declares ``relay.Node`` in ``Meta.interfaces``
+    (a connection is only meaningful over a Relay-Node-shaped type). The
+    Relay-Node check reuses the ``issubclass(i, relay.Node)`` half of
+    ``_is_relay_shaped`` — that predicate needs ``cls``, which is not yet usable
+    at ``_validate_meta`` time, and ``_validate_interfaces`` already guarantees
+    every entry is a Strawberry interface class.
+
+    For ``0.0.9`` the only recognized sub-key is ``{"total_count": bool}``;
+    unknown sub-keys and non-dict / non-bool values raise. Returns the
+    normalized dict, stored on ``DjangoTypeDefinition.connection`` and read by
+    ``connection.py::_connection_type_for``.
+    """
+    if connection is None:
+        return None
+    if not isinstance(connection, dict):
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.connection must be a dict; got {connection!r}",
+        )
+    unknown = sorted(set(connection) - {"total_count"})
+    if unknown:
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.connection has unknown sub-keys: {unknown}. "
+            "Only 'total_count' is recognized in 0.0.9.",
+        )
+    if "total_count" in connection and not isinstance(connection["total_count"], bool):
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.connection['total_count'] must be a bool; "
+            f"got {connection['total_count']!r}",
+        )
+    if not any(issubclass(i, relay.Node) for i in interfaces):
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.connection requires Meta.interfaces to include "
+            "strawberry.relay.Node; a connection is only meaningful over a Relay-Node type.",
+        )
+    return connection
 
 
 # Token-shaped NodeID matcher used by the string-form arm of
@@ -332,6 +376,7 @@ class DjangoType:
             primary=validated.primary,
             filterset_class=validated.filterset_class,
             orderset_class=validated.orderset_class,
+            connection=validated.connection,
         )
         registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
         for pending_relation in pending:
@@ -617,6 +662,7 @@ class _ValidatedMeta(NamedTuple):
     exclude_spec: tuple[str, ...] | None
     filterset_class: type | None
     orderset_class: type | None
+    connection: dict | None
     nullable_overrides: frozenset[str]
     required_overrides: frozenset[str]
 
@@ -695,6 +741,7 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
     interfaces = _validate_interfaces(meta)
     filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
     orderset_class = _validate_orderset_class(meta, getattr(meta, "orderset_class", None))
+    connection = _validate_connection(meta, getattr(meta, "connection", None), interfaces)
     # Override shape stage (spec-029 Decision 8 step 1): the two tuple-set
     # keys reuse the ``Meta.exclude`` non-string-sequence guard
     # (``_normalize_sequence_spec``), then normalize to ``frozenset``. The
@@ -725,6 +772,7 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
         exclude_spec=exclude_spec,
         filterset_class=filterset_class,
         orderset_class=orderset_class,
+        connection=connection,
         nullable_overrides=nullable_overrides,
         required_overrides=required_overrides,
     )

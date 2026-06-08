@@ -234,9 +234,8 @@ Relation traversal into a type with a custom `get_queryset` is handled by the op
 
 ## What products is still waiting for
 
-Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today.
+Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today. `DjangoConnectionField` (Relay connections) is **not** on this list either — it shipped in `0.0.9`; products lights it up at fakeshop activation (`TODO-BETA-051-0.1.5`).
 
-- `DjangoConnectionField` — Relay connections (`0.0.9`, in progress: `WIP-ALPHA-030-0.0.9`)
 - permissions / `apply_cascade_permissions` (`0.0.10`: `TODO-ALPHA-033-0.0.10`) — activates the commented cascade `get_queryset` hooks in `products/schema.py`
 - `Meta.fields_class` — `FieldSet` (`0.1.1`)
 - `Meta.search_fields` (`0.1.2`)

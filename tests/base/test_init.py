@@ -34,6 +34,8 @@ def test_public_api_surface_is_pinned():
     # maintainer-commanded and do not imply public-surface widening.
     assert django_strawberry_framework.__all__ == (
         "BigInt",
+        "DjangoConnection",
+        "DjangoConnectionField",
         "DjangoListField",
         "DjangoOptimizerExtension",
         "DjangoType",

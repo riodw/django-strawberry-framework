@@ -56,8 +56,8 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Debug-toolbar middleware](#debug-toolbar-middleware) | planned for `0.0.12` |
 | [Definition-order independence](#definition-order-independence) | shipped (`0.0.4`) |
 | [Django `AppConfig`](#django-appconfig) | shipped (`0.0.7`) |
-| [`DjangoConnection`](#djangoconnection) | planned for `0.0.9` |
-| [`DjangoConnectionField`](#djangoconnectionfield) | planned for `0.0.9` |
+| [`DjangoConnection`](#djangoconnection) | shipped (`0.0.9`) |
+| [`DjangoConnectionField`](#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoFileType`](#djangofiletype) | planned for `0.0.11` |
 | [`DjangoFormMutation`](#djangoformmutation) | planned for `0.0.11` |
 | [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) | planned for `0.0.12` |
@@ -80,6 +80,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Input type generation](#input-type-generation) | planned for `0.0.11` |
 | [`Meta.aggregate_class`](#metaaggregate_class) | planned for `0.1.3` |
 | [`Meta.choice_enum_names`](#metachoice_enum_names) | planned for `0.1.4` |
+| [`Meta.connection`](#metaconnection) | shipped (`0.0.9`) |
 | [`Meta.description`](#metadescription) | shipped |
 | [`Meta.exclude`](#metaexclude) | shipped |
 | [`Meta.fields`](#metafields) | shipped |
@@ -129,7 +130,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 
 For readers exploring rather than looking up a specific term:
 
-- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
+- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.connection`](#metaconnection) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
 - **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [`Meta.choice_enum_names`](#metachoice_enum_names).
 - **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 - **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`Meta.filterset_class`](#metafilterset_class).
@@ -138,7 +139,7 @@ For readers exploring rather than looking up a specific term:
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
 - **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [Per-field permission hooks](#per-field-permission-hooks).
-- **Relay:** [Relay Node integration](#relay-node-integration) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
+- **Relay:** [Relay Node integration](#relay-node-integration) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
@@ -272,7 +273,7 @@ Validation that a manual relation annotation matches the Django relation cardina
 
 ## `DjangoConnection`
 
-**Status:** planned for `0.0.9`.
+**Status:** shipped (`0.0.9`).
 
 Generic return-type alias `DjangoConnection[T]` for fields that produce Relay connections. Used as the return annotation for [`DjangoConnectionField`](#djangoconnectionfield) declarations.
 
@@ -280,9 +281,11 @@ Generic return-type alias `DjangoConnection[T]` for fields that produce Relay co
 
 ## `DjangoConnectionField`
 
-**Status:** planned for `0.0.9`.
+**Status:** shipped (`0.0.9`).
 
-Relay-style connection field with `edges` / `node` / `pageInfo` / `totalCount`, cursor-based pagination, and `filter` / `orderBy` / `search` arguments that flow into the connection's `DjangoType`'s [`filterset_class`](#metafilterset_class) / [`orderset_class`](#metaorderset_class) / [`search_fields`](#metasearch_fields). Composes with the optimizer for nested-selection planning. Works at root fields and at nested relation fields.
+Relay-style connection field with `edges` / `node` / `pageInfo` / `totalCount`, cursor-based pagination, and `filter:` / `orderBy:` arguments derived from the wrapped `DjangoType`'s [`filterset_class`](#metafilterset_class) / [`orderset_class`](#metaorderset_class) sidecars via a synthesized resolver signature (no hand-written list resolver, no parallel argument declarations). Opt-in `totalCount` via [`Meta.connection`](#metaconnection)`= {"total_count": True}` resolves through a generated per-target `<TypeName>Connection` class — counted on the post-filter pre-slice queryset, selection-gated, per connection instance. The composition pipeline runs `get_queryset` visibility -> `filter` -> `orderBy` -> default deterministic pk-ordering -> optimizer-plan -> cursor slice, and a package-owned guard rejects `first` + `last` together with a `GraphQLError`. The `search:` argument is reserved for `Meta.search_fields` (`0.1.2`) and is not generated in `0.0.9`.
+
+The field owns its own optimizer cooperation point (the plan-application logic extracted from [`DjangoOptimizerExtension`](#djangooptimizerextension)`._optimize`) because Strawberry's connection slicing hides the pre-slice queryset from the schema middleware. In `0.0.9` the derived plan is **empty** — the flat optimizer walker is connection-unaware, so nested `edges { node }` planning lands with [Connection-aware optimizer planning](#connection-aware-optimizer-planning) (`WIP-ALPHA-033-0.0.9`), which plugs into this seam. A [Strictness mode](#strictness-mode) `"raise"` run surfaces an unplanned nested-connection access as an N+1 (no silent cap).
 
 **See also:** [`DjangoConnection`](#djangoconnection) · [`DjangoNodeField`](#djangonodefield) · [Relay Node integration](#relay-node-integration) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 
@@ -594,6 +597,24 @@ class GalaxyType(DjangoType):
 `Meta.choice_enum_names = {"status": "ItemStatusEnum"}` overrides the first-`DjangoType`-wins enum-naming behavior that ships today. Pins a stable contract for renaming generated choice enums.
 
 **See also:** [Choice enum generation](#choice-enum-generation).
+
+## `Meta.connection`
+
+**Status:** shipped (`0.0.9`).
+
+Relay-connection options for a `DjangoType`. In `0.0.9`, the accepted shape is `{"total_count": bool}` and the key is valid only when [`Meta.interfaces`](#metainterfaces) includes `strawberry.relay.Node`.
+
+When `total_count` is true, [`DjangoConnectionField`](#djangoconnectionfield) resolves the type through a concrete per-target connection class exposing `totalCount`; otherwise it uses [`DjangoConnection`](#djangoconnection)`[T]` without that field. The option is type-level, not per field, so a node type has one stable connection shape.
+
+```python
+class GenreType(DjangoType):
+    class Meta:
+        model = Genre
+        interfaces = (relay.Node,)
+        connection = {"total_count": True}
+```
+
+**See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [Relay Node integration](#relay-node-integration) · [`Meta.interfaces`](#metainterfaces).
 
 ## `Meta.description`
 

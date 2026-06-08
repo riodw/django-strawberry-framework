@@ -109,10 +109,11 @@ A quick summary:
 - `manage.py export_schema` — Django management command that prints or writes the GraphQL SDL for a `strawberry.Schema` symbol (positional dotted path, optional `--path`); migration-parity with `strawberry-django`'s command of the same name. See [`GLOSSARY.md#schema-export-management-command`][glossary-schema-export-management-command].
 - filtering subsystem (new in `0.0.8`) — `FilterSet` declarative filter classes with `Meta.fields` (dict / `"__all__"` shorthand) and the full `django-filter` lookup surface; `RelatedFilter` for cross-relation traversal (class / absolute import path / unqualified-name); `Meta.filterset_class` consumer wiring; the `filter_input_type` resolver-argument helper; finalizer phase-2.5 binding with orphan validation; per-field `check_*_permission` denial gates with active-input-only scope; clean composition with `get_queryset` visibility and the optimizer. See [`GLOSSARY.md#filterset`][glossary-filterset].
 - ordering subsystem (new in `0.0.8`) — `OrderSet` declarative ordering classes with `Meta.fields` (list form or `"__all__"` shorthand for every column-backed model field); `RelatedOrder` cross-relation ordering traversal (class / absolute import path / unqualified-name); `Meta.orderset_class` consumer wiring (promoted out of `DEFERRED_META_KEYS`); the public `Ordering` enum (six members with NULLS positioning); the `order_input_type` resolver-argument helper; finalizer phase-2.5 binding with orphan validation; per-field `check_*_permission` denial gates with active-input-only scope plus active-branch dispatch on `RelatedOrder` branches; clean composition with the shipped filter subsystem and the optimizer. See [`GLOSSARY.md#orderset`][glossary-orderset].
+- `DjangoConnectionField` (new in `0.0.9`) — Relay connection field over a Relay-Node-shaped `DjangoType`: `edges` / `node` / `pageInfo` cursor pagination on Strawberry's native `relay.connection()`, with `filter:` / `orderBy:` arguments derived from the wrapped type's `Meta.filterset_class` / `Meta.orderset_class` sidecars (no hand-written list resolver, no parallel argument declarations) and an opt-in `totalCount` via `Meta.connection = {"total_count": True}` (counted on the post-filter pre-slice queryset, selection-gated, per connection instance). Composition pipeline runs `get_queryset` visibility → `filter` → `orderBy` → default deterministic pk-ordering → optimizer-plan → cursor slice; the field owns its own optimizer cooperation point. `DjangoConnection[T]` is the generic return-type alias. See [`GLOSSARY.md#djangoconnectionfield`][glossary-djangoconnectionfield].
 
 
 **Coming next — remaining alpha (`0.0.9` → `0.0.12`):**
-- `0.0.9` *(in progress)* — `DjangoConnectionField` (Relay connection), the full Relay story (Node + Connection + Root + validation), connection-aware optimizer planning, and a `DjangoType` consumer-DX cleanup pass
+- `0.0.9` *(in progress)* — the full Relay story (Node + Connection + Root + validation), connection-aware optimizer planning, and a `DjangoType` consumer-DX cleanup pass (`DjangoConnectionField` shipped above)
 - `0.0.10` — permissions / cascade-permissions subsystem
 - `0.0.11` — mutations + auto-generated `Input` types (form-based and DRF-`SerializerMutation` flavors), the `Upload` scalar + file/image field mapping, and auth mutations (`login` / `logout` / `register`)
 - `0.0.12` — Channels ASGI router, debug-toolbar middleware, test-client helper, response-extensions debug middleware
@@ -259,6 +260,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 
 <!-- docs/ -->
 [glossary]: GLOSSARY.md
+[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
 [glossary-filterset]: GLOSSARY.md#filterset
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation

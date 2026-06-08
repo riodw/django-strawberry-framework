@@ -1,0 +1,963 @@
+"""Tests for ``django_strawberry_framework.connection`` (Slices 1 + 2).
+
+Spec: ``docs/spec-030-connection_field-0_0_9.md`` (Slice 1 / Slice 2 checklists;
+Test plan Slice 1 / Slice 2 sections). Package tests; system-under-test is
+``django_strawberry_framework`` itself. The flat file mirrors the flat
+``connection.py`` module per ``docs/TREE.md`` and the ``tests/test_list_field.py``
+precedent.
+
+The ``DjangoConnectionField`` factory (Slice 2) is not yet reachable from a live
+``/graphql/`` query (live usage is Slice 4), so its surface is exercised here
+through an in-process Strawberry schema (the real ``info`` / slicing path). The
+``first`` + ``last`` guard is driven at the ``resolve_connection`` classmethod
+directly (the guard runs before any ``info`` use). This is the correct home per
+the ``AGENTS.md`` real-query-priority rule — the path is genuinely unreachable
+from a live ``/graphql/`` query at this slice.
+"""
+
+import gc
+import warnings
+from collections.abc import Iterable
+from types import SimpleNamespace
+
+import pytest
+import strawberry
+from apps.products import services
+from apps.products.models import Category, Item
+from django.http import HttpRequest
+from graphql import GraphQLError
+from strawberry import relay
+
+from django_strawberry_framework import (
+    DjangoOptimizerExtension,
+    DjangoType,
+    finalize_django_types,
+    strawberry_config,
+)
+from django_strawberry_framework.connection import (
+    DjangoConnection,
+    DjangoConnectionField,
+    _attach_count_async,
+    _connection_type_cache,
+    _connection_type_for,
+    _total_count_requested,
+)
+from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.filters import FilterSet, _helper_referenced_filtersets
+from django_strawberry_framework.orders import OrderSet, _helper_referenced_ordersets
+from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.relay import SyncMisuseError
+
+
+@pytest.fixture(autouse=True)
+def _isolate_global_registry():
+    """Clear the global registry and the connection-type cache around each test.
+
+    Connection classes are cached on ``target_type`` identity; function-scope
+    ``DjangoType`` fixtures are recreated fresh each test, so clearing the cache
+    keeps a discarded class from leaking into a later test's identity check.
+    """
+    registry.clear()
+    _connection_type_cache.clear()
+    yield
+    registry.clear()
+    _connection_type_cache.clear()
+
+
+def _make_node_type(name: str, *, total_count: bool | None) -> type:
+    """Build a Relay-Node-shaped ``DjangoType`` over ``Category`` for a test.
+
+    ``total_count`` controls the opt-in: ``True`` / ``False`` declares
+    ``Meta.connection = {"total_count": ...}``; ``None`` omits the key.
+    """
+    meta_attrs = {
+        "model": Category,
+        "fields": ("id", "name"),
+        "interfaces": (relay.Node,),
+        "name": name,
+    }
+    if total_count is not None:
+        meta_attrs["connection"] = {"total_count": total_count}
+    return type(name, (DjangoType,), {"Meta": type("Meta", (), meta_attrs)})
+
+
+def _schema_for(node_type: type) -> strawberry.Schema:
+    """Build an in-process schema exposing ``items`` as a connection over ``node_type``.
+
+    The connection type comes from ``_connection_type_for`` so the schema
+    exercises whichever shape (bare or generated ``<TypeName>Connection``) the
+    node type's ``Meta.connection`` selects, through the real Strawberry relay
+    slicing / ``info`` path.
+    """
+    connection_type = _connection_type_for(node_type)
+
+    def items_resolver() -> Iterable[node_type]:
+        return Category.objects.all().order_by("pk")
+
+    query_namespace = {
+        "__annotations__": {"items": connection_type},
+        "items": relay.connection(connection_type, resolver=items_resolver),
+    }
+    query_cls = strawberry.type(type("Query", (), query_namespace))
+    finalize_django_types()
+    return strawberry.Schema(query=query_cls, config=strawberry_config())
+
+
+# =============================================================================
+# DjangoConnection base shape + first/last guard
+# =============================================================================
+
+
+def test_django_connection_is_listconnection_subclass():
+    """``DjangoConnection`` is a ``ListConnection`` subclass with no ``total_count`` field."""
+    assert issubclass(DjangoConnection, relay.ListConnection)
+    assert "total_count" not in getattr(DjangoConnection, "__annotations__", {})
+
+    # The parametrized form is a generic alias whose origin is ``DjangoConnection``.
+    node_type = _make_node_type("GuardNode", total_count=None)
+    specialized = DjangoConnection[node_type]
+    assert specialized.__origin__ is DjangoConnection
+
+
+def test_first_and_last_raises_graphql_error():
+    """``resolve_connection`` with both ``first`` and ``last`` raises ``GraphQLError``.
+
+    The package's own guard — Strawberry's ``SliceMetadata.from_arguments`` does
+    not reject the combination. Driven at the classmethod directly with a
+    sentinel ``info`` (the guard runs before any ``info`` use).
+    """
+    with pytest.raises(GraphQLError, match="mutually exclusive"):
+        DjangoConnection.resolve_connection([], info=object(), first=1, last=1)
+
+
+def test_first_and_last_guard_on_generated_subclass():
+    """The generated ``<TypeName>Connection`` shares the ``first`` + ``last`` guard."""
+    node_type = _make_node_type("GuardCountNode", total_count=True)
+    connection_type = _connection_type_for(node_type)
+
+    with pytest.raises(GraphQLError, match="mutually exclusive"):
+        connection_type.resolve_connection([], info=object(), first=1, last=1)
+
+
+# =============================================================================
+# _connection_type_for: generation + caching + presence-by-opt-in
+# =============================================================================
+
+
+def test_connection_type_for_caches_per_target():
+    """``_connection_type_for`` returns one cached class object per node type."""
+    node_type = _make_node_type("CacheNode", total_count=True)
+
+    first = _connection_type_for(node_type)
+    second = _connection_type_for(node_type)
+    assert first is second
+
+
+def test_connection_type_for_generates_named_subclass_when_opted_in():
+    """A ``total_count``-enabled type yields ``<TypeName>Connection`` declaring ``total_count``."""
+    node_type = _make_node_type("OptedNode", total_count=True)
+
+    connection_type = _connection_type_for(node_type)
+    assert connection_type.__name__ == "OptedNodeConnection"
+    assert "total_count" in connection_type.__annotations__
+    assert issubclass(connection_type, DjangoConnection)
+
+
+def test_connection_type_for_returns_bare_connection_without_opt_in():
+    """A non-opted Relay-Node type yields the bare ``DjangoConnection[T]`` generic alias."""
+    node_type = _make_node_type("BareNode", total_count=None)
+
+    connection_type = _connection_type_for(node_type)
+    # The bare path is the generic alias (used as a GraphQL type annotation),
+    # not a generated concrete class; its origin is ``DjangoConnection`` and it
+    # carries no ``total_count``.
+    assert connection_type.__origin__ is DjangoConnection
+    assert "total_count" not in getattr(connection_type, "__annotations__", {})
+
+
+def test_connection_type_for_returns_bare_connection_when_total_count_false():
+    """``connection = {"total_count": False}`` does not generate the ``totalCount`` variant."""
+    node_type = _make_node_type("FalseNode", total_count=False)
+
+    connection_type = _connection_type_for(node_type)
+    assert connection_type.__origin__ is DjangoConnection
+    assert "total_count" not in getattr(connection_type, "__annotations__", {})
+
+
+def test_total_count_present_only_when_opted_in():
+    """``totalCount`` is in the SDL for an opted-in type and absent for a bare one."""
+    opted_schema = _schema_for(_make_node_type("PresentOpted", total_count=True))
+    assert "totalCount" in str(opted_schema)
+
+    registry.clear()
+    _connection_type_cache.clear()
+
+    bare_schema = _schema_for(_make_node_type("PresentBare", total_count=None))
+    assert "totalCount" not in str(bare_schema)
+
+
+# =============================================================================
+# _total_count_requested selection-gating (unit)
+# =============================================================================
+
+
+def _selection(name: str, selections=()):
+    """A minimal selection double exposing ``.name`` / ``.selections``."""
+    return SimpleNamespace(name=name, selections=list(selections))
+
+
+def _info_with_selection(*field_names: str):
+    """An ``info`` double whose connection selection set carries ``field_names``."""
+    inner = [_selection(name) for name in field_names]
+    return SimpleNamespace(selected_fields=[_selection("connectionField", inner)])
+
+
+def test_total_count_requested_true_when_selected():
+    """``_total_count_requested`` is True when ``totalCount`` is in the selection set."""
+    assert _total_count_requested(_info_with_selection("edges", "totalCount")) is True
+
+
+def test_total_count_requested_false_when_absent():
+    """``_total_count_requested`` is False when ``totalCount`` is not selected."""
+    assert _total_count_requested(_info_with_selection("edges", "pageInfo")) is False
+
+
+# =============================================================================
+# totalCount counting + selection-gating through a real schema query
+# =============================================================================
+
+
+@pytest.mark.django_db
+def test_total_count_counts_post_filter_pre_slice_when_selected():
+    """A query selecting ``totalCount`` counts the full pre-slice queryset.
+
+    ``first: 1`` slices ``edges`` to one entry, but ``totalCount`` reflects the
+    whole (post-filter, pre-slice) set — the Decision 4 / Decision 7 contract.
+    """
+    services.seed_data(3)
+    expected = Category.objects.count()
+    assert expected > 1
+
+    schema = _schema_for(_make_node_type("SelectedCountNode", total_count=True))
+    result = schema.execute_sync(
+        "{ items(first: 1) { edges { node { id } } totalCount } }",
+    )
+    assert result.errors is None
+    assert len(result.data["items"]["edges"]) == 1
+    assert result.data["items"]["totalCount"] == expected
+
+
+@pytest.mark.django_db
+def test_total_count_not_counted_when_not_selected():
+    """A query that omits ``totalCount`` resolves correctly without a count.
+
+    The field resolver returns ``None`` (no count was captured) — selection
+    gating means ``resolve_connection`` ran no count query.
+    """
+    services.seed_data(2)
+    schema = _schema_for(_make_node_type("UnselectedCountNode", total_count=True))
+
+    # The connection resolves fine when totalCount is omitted.
+    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
+    assert result.errors is None
+    assert len(result.data["items"]["edges"]) == 1
+
+    # When totalCount IS selected on the same schema, the count is present —
+    # proving the field exists and gating is per-query, not type-wide.
+    counted = schema.execute_sync("{ items { totalCount } }")
+    assert counted.errors is None
+    assert counted.data["items"]["totalCount"] == Category.objects.count()
+
+
+@pytest.mark.django_db
+def test_first_and_last_graphql_error_through_schema():
+    """A query supplying both ``first`` and ``last`` surfaces the guard in ``errors``."""
+    services.seed_data(2)
+    schema = _schema_for(_make_node_type("BothArgsNode", total_count=True))
+
+    result = schema.execute_sync(
+        "{ items(first: 1, last: 1) { edges { node { id } } } }",
+    )
+    assert result.errors is not None
+    assert any("mutually exclusive" in str(err.message) for err in result.errors)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_total_count_async_path_counts_via_acount():
+    """The async execution path counts via ``.acount()`` and attaches it to the instance."""
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(services.seed_data)(2)
+    expected = await Category.objects.acount()
+
+    schema = await sync_to_async(_schema_for)(_make_node_type("AsyncCountNode", total_count=True))
+    result = await schema.execute(
+        "{ items(first: 1) { edges { node { id } } totalCount } }",
+    )
+    assert result.errors is None
+    assert result.data["items"]["totalCount"] == expected
+
+
+# =============================================================================
+# Slice 2 — DjangoConnectionField factory + pipeline + sidecar args
+# =============================================================================
+
+
+class _CategoryFilter(FilterSet):
+    class Meta:
+        model = Category
+        fields = {"name": ["exact", "icontains"]}
+
+
+class _CategoryOrder(OrderSet):
+    class Meta:
+        model = Category
+        fields = ["name"]
+
+
+def _make_sidecar_node_type(
+    name: str,
+    *,
+    total_count: bool = False,
+    filterset: type | None = _CategoryFilter,
+    orderset: type | None = _CategoryOrder,
+    get_queryset=None,
+) -> type:
+    """Build a Relay-Node ``DjangoType`` over ``Category`` with optional sidecars.
+
+    ``filterset`` / ``orderset`` default to the module fixtures; pass ``None`` to
+    omit a sidecar. ``get_queryset`` (when given) is installed as a method so the
+    visibility hook / ``SyncMisuseError`` paths can be exercised.
+    """
+    meta_attrs: dict = {
+        "model": Category,
+        "fields": ("id", "name"),
+        "interfaces": (relay.Node,),
+        "name": name,
+    }
+    if filterset is not None:
+        meta_attrs["filterset_class"] = filterset
+    if orderset is not None:
+        meta_attrs["orderset_class"] = orderset
+    if total_count:
+        meta_attrs["connection"] = {"total_count": True}
+    namespace: dict = {"Meta": type("Meta", (), meta_attrs)}
+    if get_queryset is not None:
+        namespace["get_queryset"] = classmethod(get_queryset)
+    return type(name, (DjangoType,), namespace)
+
+
+def _field_schema(node_type: type, *, resolver=None, optimizer=None) -> strawberry.Schema:
+    """Build an in-process schema exposing ``items`` via ``DjangoConnectionField``."""
+    conn_type = _connection_type_for(node_type)
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"items": conn_type},
+                "items": DjangoConnectionField(node_type, resolver=resolver),
+            },
+        ),
+    )
+    finalize_django_types()
+    extensions = [lambda: optimizer] if optimizer is not None else []
+    return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
+
+
+def _capture_info(node_type: type):
+    """Return a real resolver ``Info`` captured from an in-process execution.
+
+    The composition-pipeline helpers (``_pipeline_sync`` / ``_finalize_queryset``)
+    need a real ``Info`` (the optimizer plan reads ``info._raw_info`` for
+    ``field_nodes`` / ``operation`` / ``fragments``); a ``SimpleNamespace`` double
+    is insufficient. A hand-written ``relay.connection`` resolver stashes the
+    ``Info`` it is handed during a throwaway query.
+    """
+    conn_type = _connection_type_for(node_type)
+    captured: dict = {}
+
+    def capture(root, info: strawberry.types.Info) -> Iterable[node_type]:
+        captured["info"] = info
+        return Category.objects.all()
+
+    query_cls = strawberry.type(
+        type(
+            "CaptureQuery",
+            (),
+            {
+                "__annotations__": {"items": conn_type},
+                "items": relay.connection(conn_type, resolver=capture),
+            },
+        ),
+    )
+    finalize_django_types()
+    schema = strawberry.Schema(query=query_cls, config=strawberry_config())
+    schema.execute_sync("{ items { edges { node { id } } } }")
+    return captured["info"]
+
+
+# --- Constructor guards ------------------------------------------------------
+
+
+def test_connection_field_requires_djangotype():
+    """A non-class target raises ``ConfigurationError``."""
+    with pytest.raises(ConfigurationError, match="requires a DjangoType class"):
+        DjangoConnectionField(42)
+
+
+def test_connection_field_requires_djangotype_subclass():
+    """A non-``DjangoType`` class raises ``ConfigurationError``."""
+
+    class Plain:
+        pass
+
+    with pytest.raises(ConfigurationError, match="requires a DjangoType subclass"):
+        DjangoConnectionField(Plain)
+
+
+def test_connection_field_requires_own_class_definition():
+    """A subclass without its own ``Meta`` (inherited definition) is rejected."""
+    parent = _make_sidecar_node_type("OwnClassParent")
+
+    class Child(parent):
+        pass
+
+    with pytest.raises(ConfigurationError, match="not a registered DjangoType"):
+        DjangoConnectionField(Child)
+
+
+def test_connection_field_rejects_non_callable_resolver():
+    """A non-callable ``resolver=`` raises ``ConfigurationError``."""
+    node_type = _make_sidecar_node_type("NonCallableResolverNode")
+    with pytest.raises(ConfigurationError, match="resolver must be callable"):
+        DjangoConnectionField(node_type, resolver="not callable")
+
+
+def test_connection_field_requires_relay_node():
+    """A non-Relay ``DjangoType`` raises ``ConfigurationError`` naming ``relay.Node``."""
+    non_relay = type(
+        "NonRelayNode",
+        (DjangoType,),
+        {"Meta": type("Meta", (), {"model": Category, "fields": ("id", "name"), "name": "NRN"})},
+    )
+    with pytest.raises(ConfigurationError, match="relay.Node"):
+        DjangoConnectionField(non_relay)
+
+
+# --- Argument presence / absence by sidecar declaration ----------------------
+
+
+def test_connection_field_derives_filter_arg_from_filterset():
+    """A type with ``filterset_class`` emits a ``filter:`` argument in the SDL."""
+    schema = _field_schema(_make_sidecar_node_type("FilterArgNode", orderset=None))
+    sdl = str(schema)
+    assert "filter:" in sdl
+    assert "orderBy:" not in sdl
+
+
+def test_connection_field_derives_orderby_arg_from_orderset():
+    """A type with ``orderset_class`` emits an ``orderBy:`` argument in the SDL."""
+    schema = _field_schema(_make_sidecar_node_type("OrderArgNode", filterset=None))
+    sdl = str(schema)
+    assert "orderBy:" in sdl
+    assert "filter:" not in sdl
+
+
+def test_connection_field_omits_args_without_sidecars():
+    """A type with neither sidecar emits only the four Relay pagination args."""
+    schema = _field_schema(
+        _make_sidecar_node_type("NoSidecarNode", filterset=None, orderset=None),
+    )
+    sdl = str(schema)
+    assert "filter:" not in sdl
+    assert "orderBy:" not in sdl
+    # The four Relay pagination args are still present.
+    for arg in (
+        "before:",
+        "after:",
+        "first:",
+        "last:",
+    ):
+        assert arg in sdl
+
+
+# --- Orphan-ledger registration ----------------------------------------------
+
+
+def test_connection_field_registers_sidecars_against_orphan_ledgers():
+    """Constructing the field records the FilterSet / OrderSet in the orphan ledgers."""
+    node_type = _make_sidecar_node_type("LedgerNode")
+    _helper_referenced_filtersets.discard(_CategoryFilter)
+    _helper_referenced_ordersets.discard(_CategoryOrder)
+
+    DjangoConnectionField(node_type)
+
+    assert _CategoryFilter in _helper_referenced_filtersets
+    assert _CategoryOrder in _helper_referenced_ordersets
+
+
+# --- Four consumer-resolver cases --------------------------------------------
+
+
+@pytest.mark.django_db
+def test_consumer_resolver_manager_coerced():
+    """A ``Manager`` return is coerced to a ``QuerySet`` and runs the full pipeline."""
+    services.seed_data(2)
+
+    def resolver(root, info) -> Iterable:
+        return Category.objects  # a Manager, not a QuerySet
+
+    schema = _field_schema(_make_sidecar_node_type("ManagerNode"), resolver=resolver)
+    result = schema.execute_sync("{ items { edges { node { id } } } }")
+    assert result.errors is None
+    assert len(result.data["items"]["edges"]) == Category.objects.count()
+
+
+@pytest.mark.django_db
+def test_consumer_resolver_queryset_full_pipeline():
+    """A ``QuerySet`` return runs visibility / filter / order / default-order / optimizer."""
+    services.seed_data(2)
+
+    def resolver(root, info) -> Iterable:
+        return Category.objects.all()
+
+    schema = _field_schema(_make_sidecar_node_type("QuerySetNode"), resolver=resolver)
+    result = schema.execute_sync(
+        '{ items(filter: {name: {iContains: ""}}, orderBy: [{name: ASC}]) '
+        "{ edges { node { name } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None
+    names = [edge["node"]["name"] for edge in result.data["items"]["edges"]]
+    assert names == sorted(names)
+
+
+@pytest.mark.django_db
+def test_consumer_resolver_iterable_without_sidecar_input_paginates():
+    """A non-queryset iterable with NO sidecar input paginates normally."""
+    services.seed_data(1)
+    rows = list(Category.objects.all())
+
+    def resolver(root, info) -> Iterable:
+        return list(rows)  # a plain list
+
+    schema = _field_schema(_make_sidecar_node_type("IterableOkNode"), resolver=resolver)
+    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
+    assert result.errors is None
+    assert len(result.data["items"]["edges"]) == 1
+
+
+@pytest.mark.django_db
+def test_consumer_resolver_iterable_with_sidecar_input_raises():
+    """A non-queryset iterable WITH ``filter:`` / ``orderBy:`` input raises a package error."""
+    services.seed_data(1)
+    rows = list(Category.objects.all())
+
+    def resolver(root, info) -> Iterable:
+        return list(rows)
+
+    schema = _field_schema(_make_sidecar_node_type("IterableBadNode"), resolver=resolver)
+    result = schema.execute_sync(
+        '{ items(filter: {name: {exact: "x"}}) { edges { node { id } } } }',
+    )
+    assert result.errors is not None
+    assert any("non-queryset iterable" in str(err.message) for err in result.errors)
+
+
+@pytest.mark.django_db
+def test_consumer_resolver_iterable_with_total_count_selected_raises():
+    """M1: selecting ``totalCount`` over a non-queryset consumer return raises a package error.
+
+    NOT the engine's ``Cannot return null for non-nullable field …totalCount``
+    violation — the count helper raises a clear ``GraphQLError`` because a plain
+    iterable cannot be ``.count()``-ed into the non-null ``totalCount: Int!``.
+    """
+    services.seed_data(1)
+    rows = list(Category.objects.all())
+
+    def resolver(root, info) -> Iterable:
+        return list(rows)
+
+    schema = _field_schema(
+        _make_sidecar_node_type("IterableTotalCountNode", total_count=True),
+        resolver=resolver,
+    )
+    result = schema.execute_sync("{ items { edges { node { id } } totalCount } }")
+    assert result.errors is not None
+    messages = [str(err.message) for err in result.errors]
+    assert any("totalCount" in m and "non-queryset iterable" in m for m in messages)
+    assert not any("Cannot return null for non-nullable field" in m for m in messages)
+
+
+async def test_attach_count_async_awaits_before_guard_raises():
+    """``_attach_count_async`` awaits the connection coroutine BEFORE the M1 guard can raise.
+
+    Regression guard for the await-before-raise discipline (Decision 10, mirroring
+    ``types/relay.py::_apply_get_queryset_sync``'s close-before-raise). With the
+    pre-fix ordering (guard first), a guard-raise on the non-queryset + ``totalCount``
+    path left the queued connection coroutine unawaited → ``RuntimeWarning: coroutine
+    … was never awaited`` (a hard failure under ``-W error``). Deterministic: assert
+    the coroutine was actually awaited (``consumed``) AND that no unawaited-coroutine
+    ``RuntimeWarning`` leaks even after a forced GC.
+    """
+    consumed = {"flag": False}
+
+    async def make_conn():
+        consumed["flag"] = True
+        return SimpleNamespace()
+
+    coro = make_conn()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(GraphQLError, match="totalCount"):
+            await _attach_count_async(coro, ["not", "a", "queryset"], want_count=True)
+        gc.collect()
+        leaked = [
+            w
+            for w in caught
+            if issubclass(w.category, RuntimeWarning) and "never awaited" in str(w.message)
+        ]
+
+    assert consumed["flag"], "the connection coroutine must be awaited before the guard raises"
+    assert not leaked, (
+        f"unawaited-coroutine RuntimeWarning leaked: {[str(w.message) for w in leaked]}"
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_consumer_resolver_iterable_with_total_count_selected_raises():
+    """M1 end-to-end on the async path: a clear package error, NOT the engine non-null violation.
+
+    An ``async def`` consumer ``resolver=`` returning a non-queryset iterable while
+    ``totalCount`` is selected drives ``_attach_count_async`` through the real
+    ``resolve_connection`` async path. The guard's ``GraphQLError`` surfaces (NOT the
+    engine ``Cannot return null for non-nullable field …totalCount`` violation). The
+    deterministic no-leak assertion lives in
+    ``test_attach_count_async_awaits_before_guard_raises``.
+    """
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(services.seed_data)(1)
+    rows = await sync_to_async(lambda: list(Category.objects.all()))()
+
+    async def resolver(root, info) -> Iterable:
+        return list(rows)
+
+    schema = await sync_to_async(_field_schema)(
+        _make_sidecar_node_type("AsyncIterableTotalCountNode", total_count=True),
+        resolver=resolver,
+    )
+    result = await schema.execute("{ items { edges { node { id } } totalCount } }")
+
+    assert result.errors is not None
+    messages = [str(err.message) for err in result.errors]
+    assert any("totalCount" in m and "non-queryset iterable" in m for m in messages)
+    assert not any("Cannot return null for non-nullable field" in m for m in messages)
+
+
+# --- Default deterministic ordering ------------------------------------------
+
+
+@pytest.mark.django_db
+def test_default_ordering_applied_when_unordered():
+    """An unordered base + no ``orderBy`` gets ``order_by(pk)`` applied."""
+    from django_strawberry_framework.connection import _pipeline_sync
+
+    services.seed_data(1)
+    node_type = _make_sidecar_node_type("DefaultOrderNode")
+    info = _capture_info(node_type)
+
+    qs = _pipeline_sync(
+        node_type,
+        Category.objects.all(),
+        info,
+        filter_input=None,
+        order_by_input=None,
+    )
+    assert qs.ordered
+    assert qs.query.order_by == (Category._meta.pk.attname,)
+
+
+@pytest.mark.django_db
+def test_default_ordering_preserves_supplied_orderby():
+    """A queryset already ordered (e.g. by a supplied ``orderBy``) is NOT pk-overridden."""
+    from django_strawberry_framework.connection import _pipeline_sync
+
+    services.seed_data(1)
+    node_type = _make_sidecar_node_type("PreservedOrderNode")
+    info = _capture_info(node_type)
+
+    # A pre-ordered source stands in for a supplied ``orderBy`` / model
+    # ``Meta.ordering`` — both mark ``qs.ordered`` True before the default step.
+    qs = _pipeline_sync(
+        node_type,
+        Category.objects.order_by("name"),
+        info,
+        filter_input=None,
+        order_by_input=None,
+    )
+    assert qs.query.order_by == ("name",)
+
+
+@pytest.mark.django_db
+def test_default_ordering_preserves_meta_ordering():
+    """A queryset that is already ``ordered`` keeps its ordering (the ``Meta.ordering`` shape).
+
+    ``qs.ordered`` is the property the default-ordering step branches on; a
+    descending pre-order stands in for a model ``Meta.ordering`` — the pk default
+    must not fire because ``qs.ordered`` is already True.
+    """
+    from django_strawberry_framework.connection import _pipeline_sync
+
+    services.seed_data(1)
+    node_type = _make_sidecar_node_type("MetaOrderNode")
+    info = _capture_info(node_type)
+
+    qs = _pipeline_sync(
+        node_type,
+        Category.objects.order_by("-name"),
+        info,
+        filter_input=None,
+        order_by_input=None,
+    )
+    assert qs.query.order_by == ("-name",)
+
+
+# --- Composition order -------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_connection_resolver_composition_order():
+    """Visibility runs before filter before order before default-order before slice.
+
+    An instrumented ``get_queryset`` + filterset + orderset record their call
+    order; the query slices to ``first: 1`` while ``totalCount`` reflects the
+    full post-filter pre-slice count (so the count is captured pre-slice).
+    """
+    services.seed_data(3)
+    calls: list[str] = []
+
+    def get_queryset(cls, qs, info):
+        calls.append("visibility")
+        return qs
+
+    class _OrderedFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["icontains"]}
+
+        @classmethod
+        def apply_sync(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            calls.append("filter")
+            return super().apply_sync(input_value, queryset, info)
+
+    class _OrderedOrder(OrderSet):
+        class Meta:
+            model = Category
+            fields = ["name"]
+
+        @classmethod
+        def apply_sync(
+            cls,
+            input_value,
+            queryset,
+            info,
+        ):
+            calls.append("order")
+            return super().apply_sync(input_value, queryset, info)
+
+    node_type = _make_sidecar_node_type(
+        "CompositionNode",
+        total_count=True,
+        filterset=_OrderedFilter,
+        orderset=_OrderedOrder,
+        get_queryset=get_queryset,
+    )
+    schema = _field_schema(node_type)
+    total = Category.objects.count()
+    result = schema.execute_sync(
+        '{ items(first: 1, filter: {name: {iContains: ""}}, orderBy: [{name: ASC}]) '
+        "{ edges { node { id } } totalCount } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None
+    assert calls == ["visibility", "filter", "order"]
+    assert len(result.data["items"]["edges"]) == 1
+    # totalCount counts the full post-filter pre-slice set, not the sliced page.
+    assert result.data["items"]["totalCount"] == total
+
+
+# --- Sync + async dispatch + SyncMisuseError ---------------------------------
+
+
+@pytest.mark.django_db
+def test_connection_resolver_sync_dispatch():
+    """The default resolver dispatches correctly on the sync ``execute_sync`` path."""
+    services.seed_data(2)
+    schema = _field_schema(_make_sidecar_node_type("SyncDispatchNode"))
+    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
+    assert result.errors is None
+    assert len(result.data["items"]["edges"]) == 1
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_connection_resolver_async_dispatch():
+    """The default resolver dispatches correctly on the async ``execute`` path (incl. ``.acount()``)."""
+    from asgiref.sync import sync_to_async
+
+    await sync_to_async(services.seed_data)(2)
+    expected = await Category.objects.acount()
+    schema = await sync_to_async(_field_schema)(
+        _make_sidecar_node_type("AsyncDispatchNode", total_count=True),
+    )
+    result = await schema.execute("{ items(first: 1) { edges { node { id } } totalCount } }")
+    assert result.errors is None
+    assert len(result.data["items"]["edges"]) == 1
+    assert result.data["items"]["totalCount"] == expected
+
+
+@pytest.mark.django_db
+def test_sync_context_async_get_queryset_raises_sync_misuse():
+    """An async ``get_queryset`` invoked from the sync resolver path raises ``SyncMisuseError``."""
+    services.seed_data(1)
+
+    async def get_queryset(cls, qs, info):
+        return qs
+
+    node_type = _make_sidecar_node_type(
+        "AsyncVisibilitySyncNode",
+        get_queryset=get_queryset,
+    )
+    schema = _field_schema(node_type)
+    result = schema.execute_sync("{ items { edges { node { id } } } }")
+    assert result.errors is not None
+    assert any(isinstance(err.original_error, SyncMisuseError) for err in result.errors)
+
+
+# =============================================================================
+# Slice 3 — optimizer cooperation point + connection-aware-planning gap guard
+# =============================================================================
+
+
+def _make_relation_node_type(name: str, *, fields: tuple[str, ...], model=Category) -> type:
+    """Build a bare Relay-Node ``DjangoType`` (no sidecars) exposing ``fields``.
+
+    Slice 3's optimizer tests reach a relation under ``edges { node }``; the
+    sidecar machinery (``_make_sidecar_node_type``) is irrelevant noise here, so
+    this builds the minimal Relay-Node shape with the relation field exposed.
+    """
+    return type(
+        name,
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": model,
+                    "fields": fields,
+                    "interfaces": (relay.Node,),
+                    "name": name,
+                },
+            ),
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_root_connection_field_queryset_is_planned():
+    """The field's OWN helper runs on the pre-slice queryset (cooperation point, Decision 11).
+
+    A root ``DjangoConnectionField`` self-optimizes by calling
+    ``apply_connection_optimization`` before ``ConnectionExtension`` slices —
+    the schema middleware (``DjangoOptimizerExtension.resolve``) cannot reach the
+    pre-slice queryset behind the connection result, so any published plan over
+    the connection IS the field's own cooperation point running (per the spec's
+    "the cooperation point the field now owns, NOT the middleware" framing).
+
+    The published plan is asserted via ``info.context.dst_optimizer_plan`` (the
+    B5 plan-introspection shape from ``tests/optimizer/test_extension.py``): its
+    presence on the context proves ``apply_to`` -> ``_publish_plan_to_context``
+    ran for the connection field, which it does ONLY through the field's helper.
+
+    SCOPE-HONEST ASSERTION (the ``WIP-ALPHA-033-0.0.9`` gap): in ``0.0.9`` the
+    flat walker is connection-unaware — it cannot descend ``edges { node }`` into
+    the node type's fields, so the plan it derives for a connection field is
+    EMPTY (no ``select_related`` / ``prefetch_related`` / ``only()``), even for a
+    direct relation like ``category``. A non-empty plan (the spec sub-check's
+    literal "``select_related`` / ``prefetch_related`` / ``only()`` applied")
+    awaits the connection-aware walker in ``WIP-ALPHA-033-0.0.9``, which plugs
+    into this exact cooperation point. This test therefore pins what ``0.0.9``
+    truthfully ships: the cooperation point is WIRED and RUNS (an empty plan is
+    published), distinguishing it from the middleware (which publishes nothing
+    for a connection field). See the build report's ``Notes for Worker 1`` —
+    asserting a non-empty plan here is a plan-vs-implementation conflict.
+    """
+    services.seed_data(2)
+    # ``ItemNode`` exposes the forward FK ``category`` — the relation a plain
+    # ``DjangoListField`` over the same type plans as ``select_related`` (the
+    # control: ``tests/optimizer/test_extension.py`` B2). Under a connection it
+    # is NOT planned, which is the gap this test pins.
+    _make_relation_node_type("PlanCatNode", fields=("id", "name"))
+    item_node = _make_relation_node_type(
+        "PlanItemNode",
+        fields=("id", "name", "category"),
+        model=Item,
+    )
+    schema = _field_schema(item_node, optimizer=DjangoOptimizerExtension())
+
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ items { edges { node { id name category { id name } } } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+    # The cooperation point ran: the field's helper published a plan to context.
+    # (The middleware never sees the pre-slice queryset behind ConnectionExtension,
+    # so this plan can only have come from the field's own helper.)
+    plan = getattr(ctx, "dst_optimizer_plan", None)
+    assert plan is not None
+    # 0.0.9 scope honesty: the flat walker cannot descend ``edges { node }``, so
+    # the plan is empty. WIP-ALPHA-033-0.0.9 (the connection-aware walker) is what
+    # makes ``category`` land as ``select_related`` here.
+    assert plan.select_related == ()
+    assert plan.prefetch_related == ()
+    assert plan.only_fields == ()
+
+
+@pytest.mark.django_db
+def test_nested_connection_unplanned_raises_under_strictness():
+    """Strictness ``"raise"`` surfaces an unplanned nested-connection access as an N+1.
+
+    Pins the seam ``WIP-ALPHA-033-0.0.9`` closes (no silent cap, spec Edge-cases
+    "Nested connection selection"). A root ``DjangoConnectionField`` over
+    ``CategoryNode`` reaches the reverse-FK many-side relation ``items`` under
+    ``edges { node { items { ... } } }`` — a nested access the connection-unaware
+    flat walker does NOT plan. Under Strictness mode ``"raise"`` the unplanned
+    relation access trips ``types/resolvers.py::_check_n1`` and surfaces as an
+    ``OptimizerError("Unplanned N+1: items")`` in ``result.errors``.
+
+    Reuses the ``tests/optimizer/test_extension.py::test_strictness_raise_*``
+    context shape (``dst_optimizer_planned=set()`` /
+    ``dst_optimizer_strictness="raise"``); no optimizer extension is installed so
+    the gap is genuine (the access really would lazy-load).
+    """
+    services.seed_data(2)
+    # ``CategoryNode`` exposes the reverse-FK ``items``; ``ItemNode`` is the leaf.
+    _make_relation_node_type("NestedGapItemNode", fields=("id", "name"), model=Item)
+    category_node = _make_relation_node_type("NestedGapCatNode", fields=("id", "name", "items"))
+    schema = _field_schema(category_node)
+
+    ctx = SimpleNamespace(dst_optimizer_planned=set(), dst_optimizer_strictness="raise")
+    result = schema.execute_sync(
+        "{ items { edges { node { id name items { id name } } } } }",
+        context_value=ctx,
+    )
+    assert result.errors is not None
+    assert any("Unplanned N+1: items" in err.message for err in result.errors)

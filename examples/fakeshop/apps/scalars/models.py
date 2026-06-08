@@ -31,6 +31,14 @@ rows resolving to ``null`` on the source-side specimen.
 ``ArrayField`` and ``HStoreField`` are deliberately absent — both are
 PostgreSQL-only and the fakeshop runs on SQLite. Their converter entries stay
 covered by ``tests/`` against package-internal fixtures.
+
+``OverrideSpecimen`` is the substrate for the consumer-authored field-override
+demonstration (spec-029): each of its columns is overridden a different way by
+``OverriddenScalarSpecimenType`` (``apps/scalars/schema.py``), and its ``token``
+column uses the deliberately-unsupported ``Base36Field`` so the consumer-
+annotation escape hatch (a type the converter table cannot auto-map) is shown
+live. ``manage.py inspect_django_type OverriddenScalarSpecimenType`` then prints
+each field's true producing row in its converter column.
 """
 
 from decimal import Decimal
@@ -164,3 +172,46 @@ class NullableScalarSpecimen(models.Model):
 
     def __str__(self):
         return self.label or f"NullableScalarSpecimen#{self.pk}"
+
+
+class Base36Field(models.Field):
+    """A deliberately *unsupported* scalar column — no ``SCALAR_MAP`` entry.
+
+    Subclasses ``models.Field`` directly (not ``CharField`` / ``TextField``), so
+    ``django_strawberry_framework/types/converters.py::convert_scalar``'s
+    ``type(field).__mro__`` walk finds no ``SCALAR_MAP`` match and auto-synthesis
+    raises ``ConfigurationError``. It exists only to demonstrate the documented
+    escape hatch: a consumer type annotation (``token: str`` on
+    ``OverriddenScalarSpecimenType``) lets an otherwise-unconvertible column
+    still surface in GraphQL. Stored as ``TEXT`` so SQLite round-trips it.
+    """
+
+    def db_type(
+        self,
+        connection,
+    ):  # noqa: ARG002
+        return "text"
+
+
+class OverrideSpecimen(models.Model):
+    """Substrate for the consumer-authored field-override demonstration (spec-029).
+
+    Every column is overridden a different way by ``OverriddenScalarSpecimenType``
+    so the four-corner consumer-override contract (annotation-only, assigned
+    ``strawberry.field``, the ``annotation + strawberry.field`` overlap idiom, and
+    an annotation escape hatch over the unsupported ``token``) is visible both at
+    the GraphQL boundary and in ``inspect_django_type``'s converter column.
+    """
+
+    # Overridden by an assigned ``@strawberry.field`` resolver.
+    label = models.TextField()
+    # Overridden by an annotation-only ``quantity: float | None`` (the
+    # ``IntegerField`` would auto-convert to ``Int!``).
+    quantity = models.IntegerField(default=0)
+    # Overridden by the ``score: int = strawberry.field(resolver=...)`` overlap.
+    score = models.IntegerField(default=0)
+    # Unsupported column; surfaced only via the consumer ``token: str`` annotation.
+    token = Base36Field()
+
+    def __str__(self):
+        return self.label

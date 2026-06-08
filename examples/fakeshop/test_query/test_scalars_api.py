@@ -1060,3 +1060,46 @@ def test_scalars_optimizer_coerces_manager_to_queryset_in_http_query():
     assert len(captured) == 1, [q["sql"] for q in captured]
     sql = captured[0]["sql"]
     assert "JOIN" in sql.upper(), sql
+
+
+@pytest.mark.django_db
+def test_override_specimen_consumer_field_overrides_resolve_over_http():
+    """The four consumer-authored override corners resolve correctly over ``/graphql/``.
+
+    ``OverriddenScalarSpecimenType`` (``apps/scalars/schema.py``) demonstrates the
+    spec-029 consumer-override matrix live: an assigned ``@strawberry.field``
+    (``label``), an annotation-only widening override (``quantity``), the
+    ``annotation + strawberry.field`` overlap (``score``), and an annotation escape
+    hatch over the unsupported ``Base36Field`` column (``token``). This pins that
+    every corner not only inspects correctly but actually resolves end to end.
+    """
+    models.OverrideSpecimen.objects.create(label="alpha", quantity=7, score=42, token="zz9")
+
+    response = _post_graphql(
+        """
+        query {
+          allOverrideSpecimens {
+            label
+            quantity
+            score
+            token
+          }
+        }
+        """,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    rows = body["data"]["allOverrideSpecimens"]
+    assert len(rows) == 1, rows
+    row = rows[0]
+    # Assigned ``@strawberry.field`` resolver ran (upper-cased), not the raw column.
+    assert row["label"] == "ALPHA"
+    # Annotation-only override: ``IntegerField`` value surfaced through the
+    # consumer's nullable ``Float`` annotation (JSON number, coerced to float).
+    assert row["quantity"] == 7.0
+    # Overlap idiom: the assigned resolver returns the column value as ``Int``.
+    assert row["score"] == 42
+    # Unsupported ``Base36Field`` surfaced via the consumer ``str`` annotation.
+    assert row["token"] == "zz9"

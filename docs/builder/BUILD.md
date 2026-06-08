@@ -100,6 +100,10 @@ Rules:
 
 When a slice's spec contract is to ship nothing in this card (e.g. "carried by sibling" because a dependent card ships first, or a slice the spec explicitly defers from this build), close it via a single Worker 1 pass that sets `Status: final-accepted` directly. No Worker 2 build, no Worker 3 review. The artifact carries one combined Plan + Final-verification block citing the spec clause that authorizes the closure. Worker 0 dispatches Worker 1 once with explicit procedural-closure framing.
 
+### Generated docs are DB-backed: edit the DB, then regenerate
+
+`KANBAN.md`, `KANBAN.html`, and `docs/GLOSSARY.md` are **generated** from the kanban/glossary tables in `examples/fakeshop/db.sqlite3` (by `scripts/build_kanban_md.py`, `scripts/build_kanban_html.py`, `scripts/build_glossary_md.py`), not hand-authored source. When a spec's doc-update or card-completion-wrap slice says "edit `KANBAN.md`" or "flip `docs/GLOSSARY.md`", it means **edit the DB via the Django ORM, then regenerate** — never hand-edit the rendered markdown (the next regenerate silently reverts a hand-edit, and a raw SQL insert skips the `post_save` side-row the render needs). Planning and building such a slice must account for this. The full DB-backed move procedure (DONE-card invariants, `import_spec_terms`, the terms-CSV anchor rule, and the byte-clean-regenerate verification) lives in [worker-0.md](worker-0.md) "Closing out a kanban card".
+
 ## Coverage is the maintainer's gate, not a worker's tool
 
 Workers do not run `pytest` with coverage flags. `--cov=...`, `--cov-report=...`, `--cov-config=...`, and equivalent invocations are forbidden in every worker pass — planning, build, apply-changes, review, re-review, final verification, integration, and the final test-run gate. `--no-cov` is permitted (and is the only permitted coverage-shaped flag) when `pytest.ini`'s `addopts` auto-applies `--cov` — `--no-cov` opts OUT of coverage entirely rather than configuring it.

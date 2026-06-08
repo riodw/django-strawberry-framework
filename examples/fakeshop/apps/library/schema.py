@@ -208,6 +208,15 @@ class Query:
         BranchType,
     )
 
+    # Nullable-outer variant: the consumer ``list[BranchType] | None`` class
+    # annotation (NOT a constructor argument) drives the rendered GraphQL type
+    # to ``[BranchType!]`` — a nullable list of non-null items. ``DjangoListField``
+    # itself has no outer-nullability branch; Strawberry reads the annotation, so
+    # this pins that the field factory leaves the consumer's annotation intact.
+    all_library_branches_via_list_field_nullable: list[BranchType] | None = DjangoListField(
+        BranchType,
+    )
+
     all_library_branches_via_list_field_manager_resolver: list[BranchType] = DjangoListField(
         BranchType,
         resolver=_branches_manager_resolver,

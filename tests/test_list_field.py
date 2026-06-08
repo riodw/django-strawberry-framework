@@ -777,41 +777,14 @@ def test_djangolistfield_at_root_position_is_optimized(django_assert_num_queries
 # -----------------------------------------------------------------------------
 
 
-def test_djangolistfield_nullable_outer_via_consumer_annotation() -> None:
-    """``list[CategoryType] | None`` renders as ``[CategoryType!]`` (nullable outer).
-
-    Pins that the consumer's class-attribute annotation drives the
-    rendered GraphQL type, NOT a constructor argument (rev2 H2,
-    spec #"`strawberry.field` in the installed Strawberry version is a function, not a class").
-    Verification uses an introspection query against
-    ``__type(name: "Query")`` (rev6 M2, spec #"pin the introspection-query mechanism" —
-    robust against SDL formatting drift); spec #"test_djangolistfield_nullable_outer_via_consumer_annotation".
-    """
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-    @strawberry.type
-    class Query:
-        all_categories: list[CategoryType] | None = DjangoListField(CategoryType)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-
-    result = schema.execute_sync(
-        '{ __type(name: "Query") { fields { name type { kind ofType { kind ofType { kind name } } } } } }',
-    )
-    assert result.errors is None
-    fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
-    field_type = fields["allCategories"]
-    # Outer ``NON_NULL`` wrapper is absent here — that is the load-bearing
-    # difference vs the non-nullable test below.
-    assert field_type["kind"] == "LIST"
-    assert field_type["ofType"]["kind"] == "NON_NULL"
-    assert field_type["ofType"]["ofType"]["kind"] == "OBJECT"
-    assert field_type["ofType"]["ofType"]["name"] == "CategoryType"
+# NOTE: the nullable-outer counterpart of the test below
+# (``list[T] | None`` -> ``[T!]``) was promoted to the live HTTP tier as
+# ``examples/fakeshop/test_query/test_library_api.py::
+# test_library_branches_via_djangolistfield_nullable_outer_renders_and_resolves``
+# per ``test_query/README.md`` (the rendered shape is reachable from a live
+# ``/graphql/`` introspection query). ``DjangoListField`` has no
+# outer-nullability branch — Strawberry reads the consumer annotation — so the
+# ``list_field.py`` lines stay fully pinned by the non-nullable companion below.
 
 
 def test_djangolistfield_non_nullable_outer_default_via_consumer_annotation() -> None:

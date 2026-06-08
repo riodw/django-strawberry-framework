@@ -117,9 +117,56 @@ class NullableScalarSpecimenType(DjangoType):
         orderset_class = orders.NullableScalarSpecimenOrder
 
 
+class OverriddenScalarSpecimenType(DjangoType):
+    """Demonstrates the four consumer-authored field-override corners (spec-029).
+
+    ``_build_annotations`` skips auto-synthesis for any consumer-authored field,
+    so ``manage.py inspect_django_type OverriddenScalarSpecimenType`` names the row
+    that actually produced each field in its converter column — a consumer
+    override, never the auto ``SCALAR_MAP`` converter:
+
+    * ``quantity`` — annotation-only override. The ``IntegerField`` would
+      auto-convert to ``Int!``; the ``float | None`` annotation forces a nullable
+      ``Float`` (``consumer annotation (scalar)``), decoupling the GraphQL type
+      from the column without a migration.
+    * ``token`` — annotation over the unsupported ``Base36Field``. The column has
+      no ``SCALAR_MAP`` entry, so the ``token: str`` annotation is the escape
+      hatch that lets it build at all (``consumer annotation (scalar)``).
+    * ``score`` — the ``name: T = strawberry.field(resolver=...)`` overlap idiom:
+      the annotation fixes the type, the assignment supplies the resolver
+      (``consumer annotation + strawberry.field (scalar)``).
+    * ``label`` — an assigned ``@strawberry.field`` resolver shadowing the column
+      (``consumer strawberry.field (scalar)``).
+    """
+
+    quantity: float | None
+    token: str
+    score: int = strawberry.field(resolver=lambda root: root.score)
+
+    @strawberry.field
+    def label(self) -> str:
+        """Assigned-resolver override; upper-cases the column so the override is observable."""
+        return self.label.upper()
+
+    class Meta:
+        model = models.OverrideSpecimen
+        fields = (
+            "id",
+            "label",
+            "quantity",
+            "score",
+            "token",
+        )
+
+
 @strawberry.type
 class Query:
     """Scalars coverage root fields."""
+
+    @strawberry.field
+    def all_override_specimens(self) -> list[OverriddenScalarSpecimenType]:
+        """Root field for the consumer-authored field-override demonstration type."""
+        return list(models.OverrideSpecimen.objects.order_by("id"))
 
     @strawberry.field
     def all_scalar_specimens(

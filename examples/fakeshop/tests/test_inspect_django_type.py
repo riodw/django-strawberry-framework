@@ -50,10 +50,13 @@ def _reload_inspect_schema() -> None:
 
     Mirrors ``test_library_api.py``'s reload pattern so bare-name resolution
     is order-independent: a test run alone behaves identically to one run after
-    a sibling package test cleared the global registry.
+    a sibling package test cleared the global registry. ``apps.scalars.schema``
+    is reloaded too so the consumer-override demonstration type
+    (``OverriddenScalarSpecimenType``) is registered + finalized for bare-name
+    inspection alongside the library types.
     """
     registry.clear()
-    for name in ("apps.library.schema", "config.schema"):
+    for name in ("apps.library.schema", "apps.scalars.schema", "config.schema"):
         module = sys.modules.get(name)
         if module is None:
             importlib.import_module(name)
@@ -179,6 +182,45 @@ def test_inspect_consumer_authored_relation_field(reload_inspect_schema):
     # the StrawberryAnnotation repr must never leak into the type column.
     assert "relation: reverse FK" not in shelves_row
     assert "StrawberryAnnotation" not in text
+
+
+def test_inspect_consumer_authored_scalar_override_matrix(reload_inspect_schema):
+    """``OverriddenScalarSpecimenType`` shows every consumer-authored scalar corner live.
+
+    The scalars app's ``OverriddenScalarSpecimenType`` (``apps/scalars/schema.py``)
+    overrides four columns four different ways; the command's converter column must
+    name the row that actually produced each field, never the auto ``SCALAR_MAP``
+    converter that ``_build_annotations`` skipped:
+
+    - ``label`` — assigned ``@strawberry.field`` -> ``consumer strawberry.field (scalar)``
+    - ``quantity`` — annotation-only widening (``Int`` column -> nullable ``Float``)
+      -> ``consumer annotation (scalar)``, exercising the ``StrawberryOptional`` path
+    - ``score`` — ``annotation + strawberry.field`` overlap idiom
+    - ``token`` — annotation escape hatch over the unsupported ``Base36Field``
+    """
+    out = StringIO()
+    call_command("inspect_django_type", "OverriddenScalarSpecimenType", stdout=out)
+    text = out.getvalue()
+
+    label_row = _field_row(text, "label")
+    assert "String!" in label_row
+    assert "consumer strawberry.field (scalar)" in label_row
+    assert "SCALAR_MAP" not in label_row
+
+    quantity_row = _field_row(text, "quantity")
+    assert "Float" in quantity_row
+    assert "Float!" not in quantity_row
+    assert " yes " in quantity_row
+    assert "consumer annotation (scalar)" in quantity_row
+
+    score_row = _field_row(text, "score")
+    assert "Int!" in score_row
+    assert "consumer annotation + strawberry.field (scalar)" in score_row
+
+    token_row = _field_row(text, "token")
+    assert "String!" in token_row
+    assert "consumer annotation (scalar)" in token_row
+    assert "SCALAR_MAP" not in token_row
 
 
 def test_inspect_relay_node_pk_row(reload_inspect_schema):

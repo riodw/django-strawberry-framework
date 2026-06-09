@@ -1,4 +1,46 @@
-# Re-review — spec-030 fixes applied (verification pass)
+# Re-review — spec-030 fixes
+
+## Round 3 — committed & re-verified (`ab17f96a`)
+
+The fixes are now committed as `ab17f96a` ("Fix cursor stability, to-many
+ordering multiplication, and totalCount scope (spec-030 review round)"). I
+diffed the committed tree against the round-2 state I verified below and the
+**code is byte-identical** — `ab17f96a` is exactly that work, committed, with no
+new code changes. So there are **no new findings** this round; this is a
+commit-state confirmation.
+
+- **Content match** — HEAD carries the P1 fix
+  (`_finalize_queryset`'s `effective = qs.query.order_by or _meta.ordering` +
+  `_ends_in_unique_column`) and the P1-B fix (`_path_traverses_to_many` +
+  `Min`/`Max` aggregate) verbatim. ✓
+- **Suite green** — the commit message records a full run: **1427 passed / 3
+  skipped / 0 failed**. That closes the round-2 certification gap (I had not run
+  pytest); the maintainer did, and it is green.
+- **Commit hygiene** — no `Co-Authored-By` / attribution footer (AGENTS.md
+  rule 32 ✓); the message body is a precise per-finding change description.
+- **Static gates re-run on HEAD** — `ruff check` clean, trailing-commas clean,
+  `check_spec_glossary` OK (50/50). `__version__` still `0.0.8` (joint-cut owned).
+
+**Still-open follow-ups (all carried from round 2, none blocking the merge):**
+1. **CHANGELOG** — the OrderSet to-many change alters a **shipped `0.0.8`**
+   `DjangoListField` behavior (multiplied rows → aggregate-ordered distinct
+   parents), but `CHANGELOG.md` is untouched. A `### Fixed` bullet under
+   `[Unreleased]` would record it. Maintainer's call (CHANGELOG-permission rule).
+2. **Mixed-term GROUP BY test** — no *executing* test exercises a mixed
+   scalar + to-many-aggregate `orderBy` (the `GROUP BY` functional-dependency
+   edge on strict backends). Today's test asserts expression shape, not a live
+   query. Forward.
+3. **033 interaction note** — the to-many-aggregate `GROUP BY` will need to
+   coexist with the connection-aware walker's `select_related` (WIP-033); worth
+   a note in that spec so it's designed, not discovered. Forward.
+
+Verdict: **ready.** Items 2–3 are forward-looking; item 1 is a small
+documentation call. The verification report below (round 2) remains accurate for
+the committed code.
+
+---
+
+# Re-review — spec-030 fixes applied (round 2 verification pass)
 
 Follow-up to the original review. The maintainer applied fixes in the working
 tree (uncommitted) for every finding. This pass re-reads each change **at the

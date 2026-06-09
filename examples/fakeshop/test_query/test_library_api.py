@@ -1518,6 +1518,70 @@ def test_library_branches_order_by_reverse_fk_relation():
 
 
 @pytest.mark.django_db
+def test_library_branches_order_by_scalar_then_to_many_aggregate_no_multiplication():
+    """Mixed scalar + to-many-aggregate ``orderBy`` executes and preserves rows (P1-B).
+
+    A mixed order input -- a scalar term (``city``) followed by a to-many
+    ``RelatedOrder`` term (``shelves: { code: ASC }``) -- compiles to
+    ``.annotate(<alias>=Min("shelves__code")).order_by("city", <alias>)``: a
+    ``GROUP BY`` on the parent that ALSO orders by a non-aggregate scalar
+    column. This live query exercises that GROUP-BY functional-dependency shape
+    end-to-end (``docs/feedback.md`` round-2 follow-up): the unit test in
+    ``tests/orders/test_sets.py`` asserts the expression SHAPE, while this
+    asserts the EXECUTED result on a real backend, and proves both terms are
+    load-bearing AND no parent row is multiplied despite multi-shelf branches.
+
+    Seed -- each branch's MIN shelf code in parentheses:
+      West  (Austin; shelves A + Z -> min A)
+      South (Austin; shelf  C      -> min C)
+      North (Boston; shelves B + D -> min B)
+
+    ``[{ city: ASC }, { shelves: { code: ASC } }]`` groups by city first
+    (Austin before Boston), then breaks the Austin tie by the min shelf code
+    (West min A before South min C)::
+
+        ["West", "South", "North"]
+
+    Aggregate-ONLY ordering would be ``["West"(A), "North"(B), "South"(C)]``, so
+    the result distinguishes the mixed order from a single-term order -- the
+    scalar term is genuinely primary. West and North each own two shelves, so a
+    raw fan-out JOIN would list each twice; the aggregate keeps every parent
+    single.
+
+    Uses staff context because ``BranchOrder.check_shelves_permission``
+    (declared in ``apps.library.orders``) denies anonymous requests that order
+    by the ``shelves`` RelatedOrder branch.
+    """
+    west = models.Branch.objects.create(name="West", city="Austin")
+    south = models.Branch.objects.create(name="South", city="Austin")
+    north = models.Branch.objects.create(name="North", city="Boston")
+    models.Shelf.objects.create(code="A", topic="general", branch=west)
+    models.Shelf.objects.create(code="Z", topic="general", branch=west)
+    models.Shelf.objects.create(code="C", topic="general", branch=south)
+    models.Shelf.objects.create(code="B", topic="general", branch=north)
+    models.Shelf.objects.create(code="D", topic="general", branch=north)
+
+    response = _post_graphql_as_staff(
+        """
+        query {
+          allLibraryBranches(orderBy: [{ city: ASC }, { shelves: { code: ASC } }]) {
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    names = [row["name"] for row in payload["data"]["allLibraryBranches"]]
+    # city ASC primary (Austin < Boston), shelf-min ASC tiebreaker within Austin
+    # (West min A < South min C) -- distinct from aggregate-only ["West","North","South"].
+    assert names == ["West", "South", "North"]
+    # No parent multiplied despite West/North each owning two shelves.
+    assert len(names) == len(set(names))
+
+
+@pytest.mark.django_db
 def test_library_books_order_by_m2m_absolute_import_path():
     """Spec-028 Slice 4 Test 5: M2M order via Layer-2 absolute-import-path.
 

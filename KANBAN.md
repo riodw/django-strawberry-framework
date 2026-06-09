@@ -98,10 +98,10 @@ demoted to a bullet under its label.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-031-0.0.9` — Django-model-based GlobalID encoding | No dedicated spec |
+| `WIP-ALPHA-031-0.0.9` — Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/spec-031-globalid_encoding-0_0_9.md) |
 | `WIP-ALPHA-032-0.0.9` — Full Relay story (Node + Connection + Root + validation) | No dedicated spec |
 | `WIP-ALPHA-033-0.0.9` — Connection-aware optimizer planning | No dedicated spec |
-| `DONE-030-0.0.9` — `DjangoConnectionField` | [spec-030-connection_field-0_0_9.md](docs/spec-030-connection_field-0_0_9.md) |
+| `DONE-030-0.0.9` — `DjangoConnectionField` | [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md) |
 | `DONE-029-0.0.9` — `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md) |
 | `DONE-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md) |
 | `DONE-027-0.0.8` — Filtering subsystem | [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md) |
@@ -143,6 +143,7 @@ demoted to a bullet under its label.
 - Status: Needs spec
 - Relative size: S-M
 - Labels: `config`, `public-api`, `registry`, `relay`, `stable-api`, `types`, `versioning`
+- Spec: [spec-031-globalid_encoding-0_0_9.md](docs/spec-031-globalid_encoding-0_0_9.md)
 
 #### Planning note
 
@@ -1587,7 +1588,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 - Status: Planned
 - Relative size: L
 - Labels: `connections`, `filters`, `optimizer`, `ordering`, `public-api`, `relay`
-- Spec: [spec-030-connection_field-0_0_9.md](docs/spec-030-connection_field-0_0_9.md)
+- Spec: [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md)
 
 #### Glossary terms
 

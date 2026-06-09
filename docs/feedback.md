@@ -1,36 +1,39 @@
-# Review - spec-031 GlobalID encoding
+# Review - spec-031 GlobalID encoding, rev2
 
 ## Findings
 
-### P1 - Callable encoder contract does not fit the chosen `resolve_typename` seam
+### P1 - Preserved `resolve_typename` overrides are not part of the decode contract
 
-The spec defines callable strategy as `my_encoder(type_cls, model, node_id, info) -> str`, but the selected Strawberry seam calls `resolve_typename(root, info)` before it calls `resolve_id(root, info=info)`. Supplying `node_id` to the callable would force the framework to call `resolve_id` from inside `resolve_typename`, then Strawberry would call it again. That is both extra work and a correctness break for async/custom `resolve_id`: Strawberry can await an awaitable `node_id` after `resolve_typename`, but `resolve_typename` itself must synchronously return `str`.
+The rev2 fixes correctly move callable strategy onto the `resolve_typename(root, info)` seam, but the spec still preserves consumer-declared `resolve_typename` overrides without defining how they interact with `decode_global_id`.
 
-This contradicts the spec's own edge-case claim that async `resolve_id` is unaffected. The root fix is to make callable match the actual seam, for example `my_encoder(type_cls, model, root, info) -> str` or `my_encoder(definition, root, info) -> str`, and explicitly validate that it returns a `str` acceptable to Strawberry's `<type_name>:<node_id>` encoding. If node-id-dependent custom type-name slots are truly required, that is not compatible with the `resolve_typename` seam without a fuller custom `id` resolver design.
+That creates a concrete self-inconsistency. A type can override `resolve_typename` and emit `"LegacyItem"` or any custom label. Because the framework skips installing its strategy closure, that custom label is what Strawberry emits. But `_resolve_globalid_strategy(definition)` still resolves from `Meta.globalid_strategy` / setting / default, usually `"model"`, and Decision 8 Step 2 then rejects the emitted type-name payload as strategy-forbidden. In other words, a preserved override can make the framework emit IDs its own decoder refuses.
 
-### P1 - Decode does not define strategy-shape enforcement
+The spec needs a first-class rule here. Best root fix: detect a consumer `resolve_typename` override during Phase 2.5 and classify that type as custom/encode-only for framework decode unless the spec adds an explicit compatibility contract. If mixing an override with `Meta.globalid_strategy` is allowed, the spec must state which one wins and add tests proving decode either rejects with a clear `ConfigurationError` or round-trips only when the override returns the exact shape the strategy promises.
 
-`decode_global_id(gid)` is specified as a payload-shape dispatcher: model-label payloads resolve through `apps.get_model(...)->registry.get(...)`, and type-name payloads resolve through the registry. Separately, the strategy table says `"model"` accepts model-label only, `"type"` accepts type-name only, and `"type+model"` accepts both. The spec never states the required second step: after a candidate type is resolved, inspect that type's effective strategy and reject payload shapes the strategy does not permit.
+### P1 - Mixed primary/secondary strategies can emit model-label IDs that Step 2 rejects
 
-Without that rule, an implementation will likely accept every resolvable model-label or type-name ID globally. That makes `type+model` indistinguishable from the default decoder behavior, lets `"model"` keep accepting old type-anchored IDs, and weakens the documented type-scoped identity use case for `"type"`.
+Decision 8 says a model-label payload resolves through `registry.get(model)` to the primary type, then Step 2 enforces the primary candidate's effective strategy. The edge-case section says a model-strategy ID for a multi-type model decodes to the primary, while a sibling can opt into `type`.
 
-The spec should require decode to resolve a candidate type first, then validate the input shape against `_resolve_globalid_strategy(candidate_definition)`: model-label only for `"model"` / `"type+model"`, type-name only for `"type"` / `"type+model"`, and callable only through an explicitly specified decoder contract. Add negative tests for model-strategy rejecting a type-name ID and type-strategy rejecting a model-label ID.
+Those two rules conflict when the primary is `type` and a secondary is left at the new default `model` (or explicitly uses `model` / `type+model`). The secondary emits `app_label.modelname:<pk>`, but decode resolves the label to the primary and rejects it because the primary's strategy is `type`. This is not exotic: the default is now `model`, so any secondary omitted from the strategy audit can mint undecodable IDs.
 
-### P1 - Type-name decode must key on GraphQL name, not class `__name__`
+The spec should choose a single invariant and test it. Reasonable root fixes are either:
 
-Decision 4 correctly says the `"type"` strategy payload is the GraphQL type name, including `Meta.name`. Decision 8 and the test plan then say type-name decode uses a `__name__` registry lookup. Those are not equivalent. A class `ItemType` with `Meta.name = "Item"` would emit `Item:<pk>` under the `"type"` strategy, but a `__name__` lookup for `Item` cannot find `ItemType`.
+- validate at finalization that if any registered type for a model can emit model-label IDs, the primary type must accept model-label decode (`model` or `type+model`), or
+- change Step 2 for model-label payloads to authorize the shape from the set of registered definitions for that model while still routing to the primary.
 
-The decode side needs a lookup by `DjangoTypeDefinition.graphql_type_name`, not by `type_cls.__name__`. The spec should name the required registry helper or index, and the Slice 3 tests should include a `Meta.name` type-strategy round-trip so this cannot regress.
+The first option is stricter and easier to reason about. Either way, add a multi-type test where the primary is `type` and a secondary is default `model`; the current prose leaves that case broken.
 
-### P2 - Callable decode is required by the test plan but left as an open question
+### P2 - Malformed string input and non-string callable output need pinned errors
 
-The risks section says callable decoder registration is still open, but Slice 3 requires callable decode paths and `test_encode_decode_round_trip_all_strategies`. That is not implementable from the current spec unless the callable happens to emit a model label or GraphQL type name.
+`decode_global_id(gid: relay.GlobalID | str)` now rejects raw payloads and accepts base64 strings, but the spec does not say what happens when the string is malformed base64 or decodes to a non-`type:id` shape. Strawberry raises `GlobalIDValueError` / `ValueError` in those paths, while the spec otherwise standardizes decode failures on `ConfigurationError`.
 
-Either remove callable from decode symmetry in this card and document it as encode-only until `032`, or specify the paired decoder API now. Leaving it as both required and unresolved will push the ambiguity into code.
+Likewise, callable strategy says the callable "must synchronously return `str`", but there is no required wrapper behavior or test for a non-string return. Without an explicit package check, Strawberry's `_id` assertion is the likely failure mode.
 
-### P3 - Decode examples blur raw payloads and encoded GlobalIDs
+Pin both as `ConfigurationError` with tests, or deliberately allow the Strawberry exceptions. The current spec leaves implementation and consumer-facing errors ambiguous.
 
-The API and test-plan examples use shorthand like `decode_global_id("products.item:42")`, but the actual input is presumably a Relay base64 GlobalID string or a `relay.GlobalID` instance. The spec should say exactly which input shapes `decode_global_id` accepts, and tests should use encoded values except where a lower-level helper is explicitly under test.
+## Resolved From Prior Pass
+
+The previous P1/P2 items are fixed in rev2: callable no longer receives `node_id`, decode now has strategy-shape enforcement, type-name lookup keys on `graphql_type_name`, callable decode is explicitly encode-only, and `decode_global_id` no longer accepts raw payload strings.
 
 ## Validation
 

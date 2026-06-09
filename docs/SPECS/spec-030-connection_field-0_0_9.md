@@ -680,108 +680,108 @@ The completion contract the card is built against. Items are grouped by slice; t
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[changelog]: ../CHANGELOG.md
-[contributing]: ../CONTRIBUTING.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[package-init]: ../django_strawberry_framework/__init__.py
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[changelog]: ../../CHANGELOG.md
+[contributing]: ../../CONTRIBUTING.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[package-init]: ../../django_strawberry_framework/__init__.py
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[feedback]: feedback.md
-[glossary]: GLOSSARY.md
-[glossary-aggregateset]: GLOSSARY.md#aggregateset
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-connection-aware-optimizer-planning]: GLOSSARY.md#connection-aware-optimizer-planning
-[glossary-cross-subsystem-invariants]: GLOSSARY.md#cross-subsystem-invariants
-[glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
-[glossary-djangoconnection]: GLOSSARY.md#djangoconnection
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
-[glossary-djangonodefield]: GLOSSARY.md#djangonodefield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fieldset]: GLOSSARY.md#fieldset
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-filter_input_type]: GLOSSARY.md#filter_input_type
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-fk-id-elision]: GLOSSARY.md#fk-id-elision
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-index]: GLOSSARY.md#index
-[glossary-metaaggregate_class]: GLOSSARY.md#metaaggregate_class
-[glossary-metaconnection]: GLOSSARY.md#metaconnection
-[glossary-metadescription]: GLOSSARY.md#metadescription
-[glossary-metaexclude]: GLOSSARY.md#metaexclude
-[glossary-metafields]: GLOSSARY.md#metafields
-[glossary-metafields_class]: GLOSSARY.md#metafields_class
-[glossary-metafilterset_class]: GLOSSARY.md#metafilterset_class
-[glossary-metainterfaces]: GLOSSARY.md#metainterfaces
-[glossary-metamodel]: GLOSSARY.md#metamodel
-[glossary-metaname]: GLOSSARY.md#metaname
-[glossary-metanullable_overrides]: GLOSSARY.md#metanullable_overrides
-[glossary-metaoptimizer_hints]: GLOSSARY.md#metaoptimizer_hints
-[glossary-metaorderset_class]: GLOSSARY.md#metaorderset_class
-[glossary-metaprimary]: GLOSSARY.md#metaprimary
-[glossary-metarequired_overrides]: GLOSSARY.md#metarequired_overrides
-[glossary-metasearch_fields]: GLOSSARY.md#metasearch_fields
-[glossary-only-projection]: GLOSSARY.md#only-projection
-[glossary-optimizerhint]: GLOSSARY.md#optimizerhint
-[glossary-ordering]: GLOSSARY.md#ordering
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-order_input_type]: GLOSSARY.md#order_input_type
-[glossary-plan-cache]: GLOSSARY.md#plan-cache
-[glossary-public-exports]: GLOSSARY.md#public-exports
-[glossary-queryset-diffing]: GLOSSARY.md#queryset-diffing
-[glossary-relatedaggregate]: GLOSSARY.md#relatedaggregate
-[glossary-relatedfilter]: GLOSSARY.md#relatedfilter
-[glossary-relatedorder]: GLOSSARY.md#relatedorder
-[glossary-relation-handling]: GLOSSARY.md#relation-handling
-[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
-[glossary-strawberry_config]: GLOSSARY.md#strawberry_config
-[glossary-strictness-mode]: GLOSSARY.md#strictness-mode
-[glossary-syncmisuseerror]: GLOSSARY.md#syncmisuseerror
-[glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
-[spec-030]: spec-030-connection_field-0_0_9.md
-[spec-030-terms]: spec-030-connection_field-0_0_9-terms.csv
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[feedback]: ../feedback.md
+[glossary]: ../GLOSSARY.md
+[glossary-aggregateset]: ../GLOSSARY.md#aggregateset
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-cross-subsystem-invariants]: ../GLOSSARY.md#cross-subsystem-invariants
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnection]: ../GLOSSARY.md#djangoconnection
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangolistfield]: ../GLOSSARY.md#djangolistfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-filter_input_type]: ../GLOSSARY.md#filter_input_type
+[glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-index]: ../GLOSSARY.md#index
+[glossary-metaaggregate_class]: ../GLOSSARY.md#metaaggregate_class
+[glossary-metaconnection]: ../GLOSSARY.md#metaconnection
+[glossary-metadescription]: ../GLOSSARY.md#metadescription
+[glossary-metaexclude]: ../GLOSSARY.md#metaexclude
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metafields_class]: ../GLOSSARY.md#metafields_class
+[glossary-metafilterset_class]: ../GLOSSARY.md#metafilterset_class
+[glossary-metainterfaces]: ../GLOSSARY.md#metainterfaces
+[glossary-metamodel]: ../GLOSSARY.md#metamodel
+[glossary-metaname]: ../GLOSSARY.md#metaname
+[glossary-metanullable_overrides]: ../GLOSSARY.md#metanullable_overrides
+[glossary-metaoptimizer_hints]: ../GLOSSARY.md#metaoptimizer_hints
+[glossary-metaorderset_class]: ../GLOSSARY.md#metaorderset_class
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-metarequired_overrides]: ../GLOSSARY.md#metarequired_overrides
+[glossary-metasearch_fields]: ../GLOSSARY.md#metasearch_fields
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-ordering]: ../GLOSSARY.md#ordering
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-order_input_type]: ../GLOSSARY.md#order_input_type
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-public-exports]: ../GLOSSARY.md#public-exports
+[glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
+[glossary-relatedaggregate]: ../GLOSSARY.md#relatedaggregate
+[glossary-relatedfilter]: ../GLOSSARY.md#relatedfilter
+[glossary-relatedorder]: ../GLOSSARY.md#relatedorder
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-strawberry_config]: ../GLOSSARY.md#strawberry_config
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
+[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-015]: SPECS/spec-015-relay_interfaces-0_0_5.md
-[spec-020]: SPECS/spec-020-list_field-0_0_7.md
-[spec-027]: SPECS/spec-027-filters-0_0_8.md
-[spec-028]: SPECS/spec-028-orders-0_0_8.md
-[spec-029]: SPECS/spec-029-consumer_dx_cleanup-0_0_9.md
+[next]: NEXT.md
+[spec-015]: spec-015-relay_interfaces-0_0_5.md
+[spec-020]: spec-020-list_field-0_0_7.md
+[spec-027]: spec-027-filters-0_0_8.md
+[spec-028]: spec-028-orders-0_0_8.md
+[spec-029]: spec-029-consumer_dx_cleanup-0_0_9.md
+[spec-030]: spec-030-connection_field-0_0_9.md
+[spec-030-terms]: spec-030-connection_field-0_0_9-terms.csv
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[base]: ../django_strawberry_framework/types/base.py
-[connection]: ../django_strawberry_framework/connection.py
-[definition]: ../django_strawberry_framework/types/definition.py
-[list-field]: ../django_strawberry_framework/list_field.py
-[optimizer-extension]: ../django_strawberry_framework/optimizer/extension.py
-[relay]: ../django_strawberry_framework/types/relay.py
+[base]: ../../django_strawberry_framework/types/base.py
+[connection]: ../../django_strawberry_framework/connection.py
+[definition]: ../../django_strawberry_framework/types/definition.py
+[list-field]: ../../django_strawberry_framework/list_field.py
+[optimizer-extension]: ../../django_strawberry_framework/optimizer/extension.py
+[relay]: ../../django_strawberry_framework/types/relay.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
-[test-connection]: ../tests/test_connection.py
-[test-extension]: ../tests/optimizer/test_extension.py
-[test-list-field]: ../tests/test_list_field.py
-[test-types-base]: ../tests/types/test_base.py
+[test-base-init]: ../../tests/base/test_init.py
+[test-connection]: ../../tests/test_connection.py
+[test-extension]: ../../tests/optimizer/test_extension.py
+[test-list-field]: ../../tests/test_list_field.py
+[test-types-base]: ../../tests/types/test_base.py
 
 <!-- examples/ -->
-[fakeshop-config-schema]: ../examples/fakeshop/config/schema.py
-[fakeshop-library-schema]: ../examples/fakeshop/apps/library/schema.py
-[fakeshop-test-library]: ../examples/fakeshop/test_query/test_library_api.py
+[fakeshop-config-schema]: ../../examples/fakeshop/config/schema.py
+[fakeshop-library-schema]: ../../examples/fakeshop/apps/library/schema.py
+[fakeshop-test-library]: ../../examples/fakeshop/test_query/test_library_api.py
 
 <!-- scripts/ -->
-[check-spec-glossary]: ../scripts/check_spec_glossary.py
+[check-spec-glossary]: ../../scripts/check_spec_glossary.py
 
 <!-- .venv/ -->
 

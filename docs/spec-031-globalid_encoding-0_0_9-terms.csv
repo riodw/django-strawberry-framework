@@ -16,6 +16,7 @@ DjangoConnection,djangoconnection,Connection return alias; nodes emit GlobalIDs 
 DjangoNodeField,djangonodefield,Planned root single-node lookup (WIP-ALPHA-032); first consumer of decode_global_id
 Connection-aware optimizer planning,connection-aware-optimizer-planning,Sibling WIP-ALPHA-033 card; orthogonal to the GlobalID payload
 DjangoListField,djangolistfield,Non-Relay list sibling; list{id} picks up the model-label payload
+Meta.fields_class,metafields_class,planned for 0.1.1; named in Non-goals / Out-of-scope as a later-version surface unrelated to identity encoding
 DjangoOptimizerExtension,djangooptimizerextension,Projects the pk as connector column for resolve_id; unchanged by the payload change
 FK-id elision,fk-id-elision,Reads the FK id off the parent into the node_id slot; type-name slot untouched
 Relation handling,relation-handling,Relation id round-trip; the two-attempt fail-loud message shape reused by decode

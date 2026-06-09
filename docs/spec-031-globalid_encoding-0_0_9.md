@@ -153,7 +153,7 @@ A true description of the repo as of this writing (the plan is written against i
 - **Public `testing/relay.py` `global_id_for(type_cls, id)` / `decode_global_id(gid)` test helpers.** Those public helpers are named in [`WIP-ALPHA-032-0.0.9`][kanban]'s Files-likely-touched list; this card ships the internal encode / decode and validates them through package tests, no public export ([Decision 11](#decision-11--module-location-encodedecode-in-typesrelaypy-no-public-export-in-009)).
 - **First-class type-rename / model-rename GlobalID migration history** (decoding old-format IDs across a rename through a recorded alias map). That is `BACKLOG.md` item 39's "type-rename GlobalID migrations"; this card's `type+model` transitional mode is the lighter-weight bridge ([Edge cases and constraints](#edge-cases-and-constraints)).
 - **Connection-aware optimizer planning** ([`WIP-ALPHA-033-0.0.9`][kanban]) and **the connection field** ([`DONE-030-0.0.9`][kanban], shipped) — orthogonal; the connection field picks up the model-label payload through the same per-node `resolve_typename` seam with no change.
-- **`search:` argument, `Meta.fields_class`, `aggregates`** — later-version surfaces unrelated to identity encoding.
+- **`search:` argument, [`Meta.fields_class`][glossary-metafields_class], `aggregates`** — later-version surfaces unrelated to identity encoding.
 - **A version bump.** Owned by the joint `0.0.9` cut ([Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-009-cut)).
 
 ## Borrowing posture
@@ -719,6 +719,7 @@ The completion contract the card is built against. Items are grouped by slice; t
 [glossary-fk-id-elision]: GLOSSARY.md#fk-id-elision
 [glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
 [glossary-metaconnection]: GLOSSARY.md#metaconnection
+[glossary-metafields_class]: GLOSSARY.md#metafields_class
 [glossary-metainterfaces]: GLOSSARY.md#metainterfaces
 [glossary-metamodel]: GLOSSARY.md#metamodel
 [glossary-metaname]: GLOSSARY.md#metaname

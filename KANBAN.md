@@ -277,6 +277,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Fakeshop product-catalog Relay activation (Goal 8)
 - Per-type `useFragment` / `useRefetchableFragment` patterns (mechanics; the schema-side `@refetchable` directive support lives in BETTER item 39 sub-feature 5)
 - Every BETTER item 39 sub-feature builds on this card's mechanics
+- Fakeshop products-app activation (`examples/fakeshop/apps/products/schema.py`): replace the four `Query` list resolvers (`all_categories` / `all_items` / `all_properties` / `all_entries`) with `DjangoConnectionField`s for the 1-to-1 `django-graphene-filters` cookbook mirror (connections-only — the cookbook Query is `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` with no list resolvers). The four `*Type` classes are already Relay-Node-shaped with `filterset_class` / `orderset_class` wired, so only the root-field shape changes; `relay.node()` / root `Node.Field` refetch is the separate root-Node goal of this card. Deferred from the `DONE-030-0.0.9` (`DjangoConnectionField`) cycle and gated on `WIP-ALPHA-033-0.0.9` (connection-aware optimizer): a `0.0.9` `DjangoConnectionField` derives an empty optimizer plan, so a connections-only products conversion must land with 033 to avoid regressing the `test_products_optimizer_*` SQL-shape coverage.
 
 #### Card references
 
@@ -332,6 +333,7 @@ planned
 - Connection-pagination-aware queryset planning (`Prefetch` downgrade for `connection { edges { node } }`, `total_count` aggregate cooperation, slice-aware projections).
 - Plan-cache key hygiene for paginated selections (skip pagination args that do not affect selection shape, hash the ones that do).
 - Strictness-mode interaction with connection paths so unplanned nested connection access still surfaces as N+1.
+- Blocks the fakeshop products connections-only conversion tracked under `WIP-ALPHA-032-0.0.9` (fakeshop activation). The products live optimizer tests (`examples/fakeshop/test_query/test_products_api.py::test_products_optimizer_*` — root-node merge, nested reverse-FK prefetch depth-2, nested forward-FK `select_related` depth-2) rely on root-list optimization. Because a `0.0.9` `DjangoConnectionField` derives an empty plan (the flat walker is connection-unaware), replacing the products list resolvers with connection fields before this card lands would turn those nested `edges { node }` selections into N+1 and regress the optimizer dogfooding. Land the products list->connection replacement together with this card.
 
 #### Card references
 

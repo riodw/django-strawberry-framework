@@ -54,6 +54,7 @@ from strawberry.utils.await_maybe import AwaitableOrValue
 from .exceptions import ConfigurationError
 from .list_field import _is_async_callable, _validate_djangotype_target
 from .optimizer.extension import apply_connection_optimization
+from .types.base import _is_relay_shaped
 from .types.relay import (
     _apply_get_queryset_async,
     _apply_get_queryset_sync,
@@ -209,8 +210,18 @@ def _build_total_count_connection(target_type: type) -> type:
         namespace["total_count"] = total_count
         namespace["resolve_connection"] = resolve_connection
 
+    # Name the generated connection from the node type's canonical GraphQL type
+    # name (``graphql_type_name`` — ``Meta.name`` when set, else the Python
+    # ``__name__``), NOT the raw Python ``__name__``. Two DjangoType classes may
+    # share a Python ``__name__`` while declaring distinct ``Meta.name`` values;
+    # naming from ``__name__`` would generate two connection classes with the
+    # SAME SDL type name, which Strawberry collapses into one — cross-wiring the
+    # two fields' ``edges`` / node types (P1, ``docs/feedback.md``).
+    # ``graphql_type_name`` is the same surface-name source the finalizer and the
+    # filter / order input types derive from.
+    definition = target_type.__django_strawberry_definition__
     generated = types.new_class(
-        f"{target_type.__name__}Connection",
+        f"{definition.graphql_type_name}Connection",
         (DjangoConnection[target_type],),
         exec_body=_populate,
     )
@@ -549,18 +560,24 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
     # helper does its own internal lookup for guard 3 and returns ``None``.
     definition = getattr(target_type, "__django_strawberry_definition__", None)
     # The fifth, connection-specific guard: a connection is only meaningful over
-    # a Relay-Node-shaped type. The check is the declared-interfaces tuple
-    # (``any(issubclass(i, relay.Node) for i in definition.interfaces)``) — the
-    # same ``issubclass(i, relay.Node)`` half ``_validate_connection`` uses —
-    # NOT the MRO-based ``implements_relay_node(target_type)`` the plan named:
-    # ``relay.Node`` is injected into ``target_type.__bases__`` only at
-    # ``finalize_django_types()`` (Phase 2.5 ``apply_interfaces``), which runs
-    # AFTER this factory at class-body time, so the MRO predicate would be
-    # ``False`` for every legitimately-declared connection target here.
-    if not any(issubclass(iface, relay.Node) for iface in definition.interfaces):
+    # a Relay-Node-shaped type. Reuse the canonical ``_is_relay_shaped(cls,
+    # interfaces)`` predicate (the single source of truth in ``types/base.py``),
+    # which accepts EITHER spelling at construction time:
+    #   * ``relay.Node`` in the declared ``Meta.interfaces`` tuple — the
+    #     Meta-driven spelling. The tuple is populated at class creation, before
+    #     ``finalize_django_types()`` (Phase 2.5 ``apply_interfaces``) injects
+    #     ``relay.Node`` into ``__bases__``, so a plain MRO check
+    #     (``implements_relay_node``) would wrongly reject it at this call site.
+    #   * direct inheritance (``class Foo(DjangoType, relay.Node)``) — ``relay.Node``
+    #     is in ``__bases__`` from class definition, so ``issubclass(target_type,
+    #     relay.Node)`` is already True here. The finalizer fully supports this
+    #     Strawberry-native spelling (it keys Relay finalization off
+    #     ``implements_relay_node``, not a non-empty ``Meta.interfaces``), so the
+    #     connection field accepts it too (``docs/feedback.md`` Open Question).
+    if not _is_relay_shaped(target_type, definition.interfaces):
         raise ConfigurationError(
             "a connection field requires a Relay-Node-shaped DjangoType; add "
-            "`relay.Node` to `Meta.interfaces`",
+            "`relay.Node` to `Meta.interfaces` (or inherit `relay.Node` directly)",
         )
     return relay.connection(
         _connection_type_for(target_type),

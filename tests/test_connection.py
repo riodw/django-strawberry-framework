@@ -163,6 +163,78 @@ def test_connection_type_for_generates_named_subclass_when_opted_in():
     assert issubclass(connection_type, DjangoConnection)
 
 
+def test_generated_connection_name_uses_graphql_type_name_not_python_name():
+    """Generated ``<Type>Connection`` names derive from ``graphql_type_name``, not ``__name__``.
+
+    P1 (``docs/feedback.md``): two DjangoType classes can share a Python
+    ``__name__`` while declaring distinct ``Meta.name`` values. Naming the
+    generated connection from ``__name__`` produces two classes with the SAME
+    SDL type name, which Strawberry collapses into one — corrupting both root
+    fields' ``edges`` / node types. Deriving from ``graphql_type_name`` (the
+    canonical surface name, ``Meta.name`` when set) keeps them distinct.
+    """
+
+    def _dup_named_node(meta_name: str, model: type) -> type:
+        # Identical Python ``__name__`` ("NodeType") for BOTH; distinct Meta.name.
+        return type(
+            "NodeType",
+            (DjangoType,),
+            {
+                "Meta": type(
+                    "Meta",
+                    (),
+                    {
+                        "model": model,
+                        "fields": ("id", "name"),
+                        "interfaces": (relay.Node,),
+                        "name": meta_name,
+                        "connection": {"total_count": True},
+                    },
+                ),
+            },
+        )
+
+    category_node = _dup_named_node("PublicCategory", Category)
+    item_node = _dup_named_node("PublicItem", Item)
+
+    cat_conn = _connection_type_for(category_node)
+    item_conn = _connection_type_for(item_node)
+
+    # Distinct classes, each named from its ``graphql_type_name`` (Meta.name) —
+    # not a single colliding ``NodeTypeConnection``.
+    assert cat_conn.__name__ == "PublicCategoryConnection"
+    assert item_conn.__name__ == "PublicItemConnection"
+    assert cat_conn is not item_conn
+
+    def _categories() -> Iterable[category_node]:
+        return Category.objects.all().order_by("pk")
+
+    def _items() -> Iterable[item_node]:
+        return Item.objects.all().order_by("pk")
+
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"categories": cat_conn, "items": item_conn},
+                "categories": relay.connection(cat_conn, resolver=_categories),
+                "items": relay.connection(item_conn, resolver=_items),
+            },
+        ),
+    )
+    finalize_django_types()
+    sdl = str(strawberry.Schema(query=query_cls, config=strawberry_config()))
+
+    # Both connection types present and distinct; no collapsed collision.
+    assert "PublicCategoryConnection" in sdl
+    assert "PublicItemConnection" in sdl
+    assert "NodeTypeConnection" not in sdl
+    # Each connection exposes its own edge type — no cross-wiring of node edges.
+    assert "PublicCategoryEdge" in sdl
+    assert "PublicItemEdge" in sdl
+
+
 def test_connection_type_for_returns_bare_connection_without_opt_in():
     """A non-opted Relay-Node type yields the bare ``DjangoConnection[T]`` generic alias."""
     node_type = _make_node_type("BareNode", total_count=None)
@@ -443,6 +515,57 @@ def test_connection_field_requires_relay_node():
     )
     with pytest.raises(ConfigurationError, match="relay.Node"):
         DjangoConnectionField(non_relay)
+
+
+def test_connection_field_accepts_direct_relay_node_inheritance():
+    """A direct ``class Foo(DjangoType, relay.Node)`` (no ``Meta.interfaces``) is accepted.
+
+    ``docs/feedback.md`` Open Question: direct ``relay.Node`` inheritance is a
+    supported, fully-finalizable Relay shape (the finalizer keys Relay wiring off
+    ``implements_relay_node``, not a non-empty ``Meta.interfaces``). The
+    connection guard reuses the canonical ``_is_relay_shaped`` predicate, so it
+    accepts this Strawberry-native spelling without a ``ConfigurationError`` —
+    even though ``definition.interfaces`` is empty.
+    """
+
+    class DirectRelayNode(DjangoType, relay.Node):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            name = "DirectRelayNode"
+
+    # ``relay.Node`` is NOT in the declared Meta-tuple; acceptance comes purely
+    # from the direct MRO inheritance (``issubclass(target_type, relay.Node)``).
+    assert relay.Node not in DirectRelayNode.__django_strawberry_definition__.interfaces
+    # Does not raise; produces a connection field over the bare connection shape.
+    field = DjangoConnectionField(DirectRelayNode)
+    assert field is not None
+
+
+def test_connection_type_for_generates_total_count_for_direct_relay_inheritance():
+    """Direct ``relay.Node`` inheritance can use the per-type ``totalCount`` opt-in (P2).
+
+    ``docs/feedback.md`` P2: once ``Meta.connection`` validation accepts direct
+    inheritance, the ``totalCount`` surface works for it too —
+    ``_connection_type_for`` generates the concrete ``<Name>Connection`` carrying
+    ``total_count`` exactly as it does for the ``Meta.interfaces`` spelling.
+    """
+
+    class DirectCountNode(DjangoType, relay.Node):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            name = "DirectCount"
+            connection = {"total_count": True}
+
+    assert relay.Node not in DirectCountNode.__django_strawberry_definition__.interfaces
+    connection_type = _connection_type_for(DirectCountNode)
+    assert connection_type.__name__ == "DirectCountConnection"
+    assert "total_count" in connection_type.__annotations__
+
+    # Schema-level: ``totalCount`` is exposed in the SDL for the direct-inheritance type.
+    sdl = str(_schema_for(DirectCountNode))
+    assert "totalCount" in sdl
 
 
 # --- Argument presence / absence by sidecar declaration ----------------------

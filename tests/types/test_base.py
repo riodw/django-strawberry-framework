@@ -358,6 +358,30 @@ def test_meta_connection_non_relay_type_raises():
                 connection = {"total_count": True}
 
 
+def test_meta_connection_accepts_direct_relay_node_inheritance():
+    """``Meta.connection`` opt-in works on a direct ``relay.Node`` subclass (P2).
+
+    ``docs/feedback.md`` P2: the Relay-shape gate for ``Meta.connection`` runs in
+    ``__init_subclass__`` using the canonical ``_is_relay_shaped`` predicate, so a
+    direct ``class Foo(DjangoType, relay.Node)`` — Relay-shaped WITHOUT
+    ``Meta.interfaces`` — can opt into ``total_count``, matching the
+    ``DjangoConnectionField`` field guard. One consistent definition of
+    "Relay-shaped" across both surfaces.
+    """
+    from strawberry import relay
+
+    class DirectCountNode(DjangoType, relay.Node):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            connection = {"total_count": True}
+
+    definition = DirectCountNode.__django_strawberry_definition__
+    # Relay-shaped via direct inheritance, not the Meta-tuple.
+    assert relay.Node not in definition.interfaces
+    assert definition.connection == {"total_count": True}
+
+
 def test_meta_connection_stored_on_definition():
     """The normalized ``Meta.connection`` value lands on ``definition.connection``."""
     from strawberry import relay

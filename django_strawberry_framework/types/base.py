@@ -128,22 +128,26 @@ def _validate_orderset_class(meta: type, orderset_class: Any) -> type | None:
     return orderset_class
 
 
-def _validate_connection(meta: type, connection: Any, interfaces: tuple[type, ...]) -> dict | None:
-    """Validate ``Meta.connection`` shape and the Relay-Node requirement.
+def _validate_connection(meta: type, connection: Any, relay_shaped: bool) -> dict | None:
+    """Validate ``Meta.connection`` shape AND the Relay-Node requirement (spec-030 Decision 8).
 
-    Structurally modeled on ``_validate_filterset_class`` (spec-030 Decision
-    8): ``None``-short-circuits when unset, otherwise shape-checks the dict and
-    enforces that the owning type declares ``relay.Node`` in ``Meta.interfaces``
-    (a connection is only meaningful over a Relay-Node-shaped type). The
-    Relay-Node check reuses the ``issubclass(i, relay.Node)`` half of
-    ``_is_relay_shaped`` — that predicate needs ``cls``, which is not yet usable
-    at ``_validate_meta`` time, and ``_validate_interfaces`` already guarantees
-    every entry is a Strawberry interface class.
-
-    For ``0.0.9`` the only recognized sub-key is ``{"total_count": bool}``;
-    unknown sub-keys and non-dict / non-bool values raise. Returns the
-    normalized dict, stored on ``DjangoTypeDefinition.connection`` and read by
+    ``None``-short-circuits when unset; otherwise shape-checks the dict (for
+    ``0.0.9`` the only recognized sub-key is ``{"total_count": bool}`` — unknown
+    sub-keys and non-dict / non-bool values raise) and then enforces that the
+    owning type is Relay-Node-shaped (a connection is only meaningful over a
+    Relay-Node type). Returns the normalized dict, stored on
+    ``DjangoTypeDefinition.connection`` and read by
     ``connection.py::_connection_type_for``.
+
+    The Relay-Node gate takes the precomputed ``relay_shaped`` bool — the
+    canonical ``_is_relay_shaped(cls, interfaces)`` value the caller
+    (``_validate_meta``) computes once ``cls`` is in hand. That predicate is
+    True for BOTH the ``Meta.interfaces`` tuple spelling AND direct inheritance
+    (``class Foo(DjangoType, relay.Node)``), so it matches the
+    ``DjangoConnectionField`` field guard — "Relay-shaped" means the same thing
+    across the whole feature. Taking the bool (not ``interfaces``) keeps the
+    predicate single-sourced and prevents the two surfaces drifting apart again
+    (``docs/feedback.md`` P2).
     """
     if connection is None:
         return None
@@ -162,10 +166,10 @@ def _validate_connection(meta: type, connection: Any, interfaces: tuple[type, ..
             f"{meta.model.__name__}.Meta.connection['total_count'] must be a bool; "
             f"got {connection['total_count']!r}",
         )
-    if not any(issubclass(i, relay.Node) for i in interfaces):
+    if not relay_shaped:
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.connection requires Meta.interfaces to include "
-            "strawberry.relay.Node; a connection is only meaningful over a Relay-Node type.",
+            f"{meta.model.__name__}.Meta.connection requires a Relay-Node-shaped type; "
+            "add `relay.Node` to `Meta.interfaces` or inherit `relay.Node` directly.",
         )
     return connection
 
@@ -277,7 +281,7 @@ class DjangoType:
                 f"finalize_django_types() already ran; cannot register {cls.__name__} "
                 "after finalization. Call registry.clear() first if this is a test.",
             )
-        validated = _validate_meta(meta)
+        validated = _validate_meta(cls, meta)
         fields = _select_fields(meta.model, validated.fields_spec, validated.exclude_spec)
         _validate_optimizer_hints(validated.optimizer_hints, fields, model=meta.model)
 
@@ -667,8 +671,13 @@ class _ValidatedMeta(NamedTuple):
     required_overrides: frozenset[str]
 
 
-def _validate_meta(meta: type) -> _ValidatedMeta:
+def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     """Validate a ``DjangoType`` subclass's nested ``Meta`` class.
+
+    Takes ``cls`` (the class object, available at ``__init_subclass__`` time)
+    so the Relay-shape predicate (``_is_relay_shaped``) the ``Meta.connection``
+    gate needs can see direct ``relay.Node`` inheritance, not only the declared
+    ``Meta.interfaces`` tuple.
 
     Validation order:
 
@@ -682,6 +691,10 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
        them.
     6. If ``Meta.interfaces`` is declared, validate it per
        ``_validate_interfaces`` (spec-011 Decision 4).
+    7. ``Meta.connection`` (if declared) is shape-checked and gated to
+       Relay-Node-shaped types via the ``relay_shaped`` bool derived from
+       ``cls`` + the validated interfaces (``docs/feedback.md`` P2), so the
+       gate accepts the same shapes as the ``DjangoConnectionField`` field guard.
 
     Returns:
         A ``_ValidatedMeta`` snapshot bundling the validated interfaces
@@ -739,9 +752,10 @@ def _validate_meta(meta: type) -> _ValidatedMeta:
     exclude_spec = _normalize_sequence_spec(getattr(meta, "exclude", None))
     optimizer_hints = _meta_optimizer_hints(meta)
     interfaces = _validate_interfaces(meta)
+    relay_shaped = _is_relay_shaped(cls, interfaces)
     filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
     orderset_class = _validate_orderset_class(meta, getattr(meta, "orderset_class", None))
-    connection = _validate_connection(meta, getattr(meta, "connection", None), interfaces)
+    connection = _validate_connection(meta, getattr(meta, "connection", None), relay_shaped)
     # Override shape stage (spec-029 Decision 8 step 1): the two tuple-set
     # keys reuse the ``Meta.exclude`` non-string-sequence guard
     # (``_normalize_sequence_spec``), then normalize to ``frozenset``. The

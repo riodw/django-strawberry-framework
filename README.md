@@ -49,6 +49,14 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 
 **`0.0.8`, single-maintainer, alpha-quality.** Fine for internal tools and prototypes; not production. The public names are stable; correctness and edge-case behavior are still hardening. Newest shipped surface: `DjangoConnectionField` (`0.0.9`) — the Relay connection field over a Relay-Node-shaped `DjangoType`, with `edges` / `node` / `pageInfo` cursor pagination, `filter:` / `orderBy:` arguments derived from the wrapped type's `Meta.filterset_class` / `Meta.orderset_class` sidecars, and an opt-in `totalCount` via `Meta.connection` (and the `DjangoConnection[T]` return alias). It builds on the ordering subsystem (`0.0.8`) — `OrderSet` declarative ordering classes, `RelatedOrder` cross-relation ordering traversal, the public `Ordering` enum (six members with NULLS positioning), the `order_input_type` consumer helper, and `Meta.orderset_class` wiring — alongside the filter symbols promoted in `DONE-027-0.0.8`'s Slice 5 (`FilterSet`, `RelatedFilter`, `filter_input_type`, `Meta.filterset_class`), all integrated through the finalizer's phase-2.5 binding pass and the optimizer / `get_queryset` visibility hook.
 
+<!--
+TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Refresh this status paragraph if it enumerates the newest GlobalID surface.
+Pseudocode:
+  - mention model-anchored Relay GlobalID default
+  - mention `Meta.globalid_strategy` / `RELAY_GLOBALID_STRATEGY`
+  - do not bump `0.0.8` or promote a release heading; the joint 0.0.9 cut owns version files
+-->
+
 For the current capability snapshot — what the package can actually do in the example project right now — see [`TODAY.md`][today]. The full shipped / planned / deferred catalog and the `0.1.0` → `1.0.0` milestone framing live in [`docs/GLOSSARY.md`][glossary]. Per-card sequencing for both releases lives in [`KANBAN.md`][kanban].
 
 ## Get started → [`docs/README.md`][readme]

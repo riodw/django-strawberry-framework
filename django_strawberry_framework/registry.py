@@ -316,6 +316,20 @@ class TypeRegistry:
         """Return the collected definition for ``type_cls``, or ``None``."""
         return self._definitions.get(type_cls)
 
+    # TODO(spec-031-globalid_encoding-0_0_9 Slice 3): Add
+    # ``definition_for_graphql_name(name)`` for GlobalID type-name decode.
+    # It must scan Relay-Node definitions only and key on
+    # ``definition.graphql_type_name`` rather than ``type_cls.__name__`` so
+    # ``Meta.name`` round-trips. Ambiguous or missing names should return
+    # ``None`` or raise the decode-facing ``ConfigurationError`` shape chosen
+    # in ``types.relay.decode_global_id``.
+    # Pseudocode:
+    #   matches = []  # noqa: ERA001
+    #   for type_cls, definition in self._definitions.items():  # noqa: ERA001
+    #       if is_relay_node(type_cls) and definition.graphql_type_name == name:  # noqa: ERA001
+    #           matches.append(definition)  # noqa: ERA001
+    #   return exactly_one(matches)  # noqa: ERA001
+
     def iter_definitions(self) -> Iterator[tuple[type, DjangoTypeDefinition]]:
         """Yield ``(type_cls, definition)`` pairs in registration order."""
         yield from self._definitions.items()

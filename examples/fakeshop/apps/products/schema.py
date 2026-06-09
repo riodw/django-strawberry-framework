@@ -90,6 +90,13 @@ class ItemType(DjangoType):
         interfaces = (relay.Node,)
         filterset_class = filters.ItemFilter
         orderset_class = orders.ItemOrder
+        # TODO(spec-031-globalid_encoding-0_0_9 Slice 4): If the live HTTP
+        # ``type``-strategy opt-out test is clearer with a schema fixture than
+        # a settings override, add ``globalid_strategy = "type"`` to one
+        # dedicated fakeshop type in the same change that updates the expected
+        # GlobalID payloads.
+        # Pseudocode:
+        #   globalid_strategy = "type"  # noqa: ERA001
         # Future Layer-3 additions — uncomment each as the relevant card ships:
         # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-039-0.1.2
         # aggregate_class = aggregates.ItemAggregate     # needs TODO-BETA-040-0.1.3 + aggregates.py

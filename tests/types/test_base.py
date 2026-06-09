@@ -103,6 +103,17 @@ def test_registry_clear_drops_types_and_enums():
 # Slice 2 — Meta validation
 # ---------------------------------------------------------------------------
 
+# TODO(spec-031-globalid_encoding-0_0_9 Slice 1): Extend this Meta-validation
+# section for ``Meta.globalid_strategy``.
+# Pseudocode:
+#   assert "globalid_strategy" in ALLOWED_META_KEYS
+#   assert "globalid_strategy" not in DEFERRED_META_KEYS
+#   class NodeType(DjangoType): Meta.globalid_strategy = "model"
+#   assert NodeType.__django_strawberry_definition__.globalid_strategy == "model"
+#   parametrize bad values: "modle", 42, async encoder, wrong-arity encoder
+#   assert each bad value raises ConfigurationError at class creation
+#   monkeypatch conf.settings.RELAY_GLOBALID_STRATEGY to prove Meta -> setting -> "model"
+
 
 def test_subclass_without_meta_passes_through():
     """Intermediate abstract subclasses (no Meta) skip the pipeline."""

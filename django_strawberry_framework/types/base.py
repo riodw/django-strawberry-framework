@@ -73,6 +73,20 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
 # that adds it, so they were never reserved-but-nonfunctional.
 # DEFERRED_META_KEYS stays unchanged.
 
+# TODO(spec-031-globalid_encoding-0_0_9 Slice 1): Add ``Meta.globalid_strategy``
+# as the next net-new ALLOWED key, validate it beside ``_validate_connection``,
+# and store the raw normalized value on ``DjangoTypeDefinition``.
+# Pseudocode:
+#   allowed += {"globalid_strategy"}  # noqa: ERA001
+#   value = getattr(meta, "globalid_strategy", None)  # noqa: ERA001
+#   normalized = _validate_globalid_strategy(meta, value, relay_shaped)  # noqa: ERA001
+#   definition.globalid_strategy = normalized  # noqa: ERA001
+# Validation contract:
+#   - None -> None.
+#   - "model" / "type" / "type+model" -> same string.
+#   - callable -> sync four-positional-argument encoder.
+#   - anything else, async callable, wrong arity, or non-Relay owner -> ConfigurationError.
+
 
 def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
     """Validate ``Meta.filterset_class`` is a package-``FilterSet`` subclass.
@@ -381,6 +395,9 @@ class DjangoType:
             filterset_class=validated.filterset_class,
             orderset_class=validated.orderset_class,
             connection=validated.connection,
+            # TODO(spec-031-globalid_encoding-0_0_9 Slice 1): Pass
+            # ``globalid_strategy=validated.globalid_strategy`` once the
+            # meta validator and definition slot exist.
         )
         registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
         for pending_relation in pending:

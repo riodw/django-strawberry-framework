@@ -52,6 +52,23 @@ def _meta(**attrs):
     return type("Meta", (), attrs)
 
 
+# TODO(spec-031-globalid_encoding-0_0_9 Slices 2-3): Extend this module with
+# the GlobalID strategy tests because it mirrors ``types/relay.py``.
+# Pseudocode:
+#   build Relay DjangoTypes for "model", "type", "type+model", callable, and custom override
+#   finalize_django_types()
+#   assert emitted ids decode to model labels for "model" and "type+model"
+#   assert "type" keeps the GraphQL type name, including Meta.name
+#   assert callable returns custom type-name slot and non-string return raises ConfigurationError
+#   assert override records effective_globalid_strategy == "custom"
+#   assert override + explicit Meta.globalid_strategy raises ConfigurationError
+#   assert model-label-routing audit rejects type-primary + model-secondary
+#   assert partial-finalize rerun does not reclassify installed framework closures as custom
+#   decode_global_id(encoded_gid) returns (type_cls, node_id) for decodable strategies
+#   assert model/type shape mismatches, callable/custom, absent strategy, and malformed input raise
+#
+
+
 # ---------------------------------------------------------------------------
 # Slice 1 — validation + storage
 # ---------------------------------------------------------------------------

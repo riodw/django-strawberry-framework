@@ -142,6 +142,19 @@ def _audit_primary_ambiguity() -> None:
     raise ConfigurationError(_format_ambiguity_error(offenders))
 
 
+# TODO(spec-031-globalid_encoding-0_0_9 Slice 2): Add a Phase-2.5
+# model-label-routing audit after every Relay type records
+# ``effective_globalid_strategy``. Scope it to
+# ``registry.models_with_multiple_types()`` because single-type models decode
+# through their lone registered type.
+# Pseudocode:
+#   for model in registry.models_with_multiple_types():  # noqa: ERA001
+#       types = registry.types_for(model)  # noqa: ERA001
+#       if any(emits_model_label(t) for t in types):  # noqa: ERA001
+#           primary = registry.primary_for(model)  # noqa: ERA001
+#           if not accepts_model_label(primary): raise ConfigurationError  # noqa: ERA001
+
+
 def finalize_django_types() -> None:
     """Resolve pending relations, attach resolvers, and finalize collected types.
 
@@ -253,6 +266,12 @@ def finalize_django_types() -> None:
         if implements_relay_node(type_cls):
             _check_composite_pk_for_relay_node(type_cls)
             install_relay_node_resolvers(type_cls)
+            # TODO(spec-031-globalid_encoding-0_0_9 Slice 2): Call
+            # ``install_globalid_typename_resolver(type_cls, definition)`` here
+            # after the existing four Relay resolver defaults. The install
+            # must record ``definition.effective_globalid_strategy`` before the
+            # model-label-routing audit runs, and must skip if that field is
+            # already set during a partial-finalize rerun.
 
     _bind_filtersets()
     _bind_ordersets()

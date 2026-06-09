@@ -4,6 +4,15 @@ This file is the detailed layout reference. It exists to preserve the package/te
 
 For install, local development, testing, and the canonical documentation map, start from [`../README.md`][readme].
 
+<!--
+TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Refresh the layout reference after the GlobalID work lands.
+Pseudocode:
+  - keep encode/decode ownership under `django_strawberry_framework/types/relay.py`
+  - mention `registry.py::TypeRegistry.definition_for_graphql_name`
+  - mention the `RELAY_GLOBALID_STRATEGY` settings read if settings keys are enumerated
+  - do not add a new module entry unless implementation creates a real new module
+-->
+
 The upstream trees are captured for reference while shaping `django-strawberry-framework`'s own subpackage layout. Filters applied: `__pycache__/` directories, package-internal `tests/` directories, `conftest.py`, and `*.pyc` files are excluded so both trees show only the library logic surface (the strawberry-django source checkout already keeps tests outside the package directory; graphene-django ships its tests inside the installed package, so they're filtered here for comparability).
 
 ## graphene_django

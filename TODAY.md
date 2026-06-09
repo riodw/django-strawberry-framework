@@ -6,6 +6,15 @@
 >
 > For the package-wide capability catalog, shipped/planned status, optimizer hints, strictness modes, and future work, see [`docs/GLOSSARY.md`][glossary].
 
+<!--
+TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Update products-centric Relay GlobalID examples.
+Pseudocode:
+  - replace type-name payload examples with `products.item:<pk>` / model labels
+  - describe the default flip as a pre-1.0 wire-format break
+  - prescribe the deployed-schema sequence: first set `RELAY_GLOBALID_STRATEGY = "type+model"`, then flip to `model`
+  - keep the document products-only; do not broaden it to library/scalars examples
+-->
+
 ## What products demonstrates today
 
 `examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.8` it exercises, end to end, the package capabilities a real consumer reaches for:

@@ -77,6 +77,15 @@ finalize_django_types()
 
 See [`GLOSSARY.md`'s Relay Node integration subsection][glossary-relay-node-integration] for the resolver list, composite-pk constraint, and the `is_type_of` injection contract.
 
+<!--
+TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Update the Relay Node docs for model-based GlobalID encoding.
+Pseudocode:
+  - state that the default Relay `GlobalID` payload is `app_label.modelname:<pk>`
+  - document `Meta.globalid_strategy` and `RELAY_GLOBALID_STRATEGY`
+  - show the `type` opt-out and the `type+model` migration mode
+  - keep the public-helper discussion out of this card; sibling 032 owns testing helpers
+-->
+
 ## What just happened?
 
 - `class Meta` tells the package which Django model and fields become a Strawberry type.

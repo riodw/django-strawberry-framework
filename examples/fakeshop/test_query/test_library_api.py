@@ -111,6 +111,18 @@ def _input_field_names(type_name: str) -> set[str]:
     return {field["name"] for field in type_info["inputFields"]}
 
 
+# TODO(spec-031-globalid_encoding-0_0_9 Slice 4): Update library live HTTP
+# assertions that inspect emitted Relay GlobalIDs. ``GenreType`` currently
+# pins the GraphQL type-name payload; after the default flip it should assert
+# the model label instead.
+# Pseudocode:
+#   _seed_library_graph()
+#   query allLibraryGenres { id name }
+#   parsed = relay.GlobalID.from_id(response_id)
+#   assert parsed.type_name == "library.genre"
+#   assert parsed.node_id == str(genre.pk)
+
+
 @pytest.mark.django_db
 def test_library_branch_shelf_book_loan_graph_over_http():
     _seed_library_graph()

@@ -67,6 +67,12 @@ class DjangoTypeDefinition:
           ``connection.py::_connection_type_for`` to decide whether to
           emit the per-target ``<TypeName>Connection`` carrying the
           opt-in ``totalCount`` field.
+        - TODO(spec-031-globalid_encoding-0_0_9 Slices 1-2):
+          ``globalid_strategy`` stores the raw ``Meta.globalid_strategy``
+          declaration, while ``effective_globalid_strategy`` records the
+          finalization-time encode/decode classification. Pseudocode:
+          ``raw = Meta.globalid_strategy | None`` and
+          ``effective = "model" | "type" | "type+model" | "callable" | "custom"``.
         - ``related_target_for(field_name)`` resolves the
           ``(target_definition, model_field)`` pair the Decision-4
           owner-aware FK/PK conditional consults; the lookup walks
@@ -100,6 +106,11 @@ class DjangoTypeDefinition:
     filterset_class: type | None = None
     orderset_class: type | None = None
     connection: dict | None = None
+    # TODO(spec-031-globalid_encoding-0_0_9 Slices 1-2): Add
+    # ``globalid_strategy: str | Callable[..., str] | None = None`` and
+    # ``effective_globalid_strategy: str | None = None`` here. The first is
+    # populated at class creation; the second is set exactly once by the
+    # Phase-2.5 typename resolver install and doubles as its re-entrancy guard.
     finalized: bool = False
     # Per-instance memoization of ``related_target_for(field_name)``
     # results. Cache stores the full

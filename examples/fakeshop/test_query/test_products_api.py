@@ -97,6 +97,21 @@ def _global_id(type_name: str, pk: int) -> str:
     return str(relay.GlobalID(type_name=type_name, node_id=str(pk)))
 
 
+# TODO(spec-031-globalid_encoding-0_0_9 Slice 4): Update products live HTTP
+# GlobalID coverage for the model-label default.
+# Pseudocode:
+#   seed_data(N)
+#   query allItems { id name } through /graphql/
+#   assert relay.GlobalID.from_id(id).type_name == "products.item"
+#   gid = relay.GlobalID(type_name="products.item", node_id=str(item.pk))
+#   query allItems(filter: { id: { exact: str(gid) } }) { id name }
+#   assert the response contains only that item
+#   set RELAY_GLOBALID_STRATEGY = "type" or add a temporary type fixture
+#   assert the opt-out emits the GraphQL type-name payload
+# Existing ``_global_id("ItemType", pk)`` expectations should move to
+# ``_global_id("products.item", pk)`` or the matching model label per type.
+
+
 @pytest.mark.django_db
 def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
     seed_data(1)

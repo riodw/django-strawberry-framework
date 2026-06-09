@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-08
+Last refreshed: 2026-06-09
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -138,9 +138,11 @@ demoted to a bullet under its label.
 ### [WIP-ALPHA-031-0.0.9 — Django-model-based GlobalID encoding](KANBAN.html#django_model_based_globalid_encoding)
 
 - Priority: High
+- Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
 - Severity: Major
 - Status: Needs spec
 - Relative size: S-M
+- Labels: `config`, `public-api`, `registry`, `relay`, `stable-api`, `types`, `versioning`
 
 #### Planning note
 
@@ -178,6 +180,11 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 - `tests/types/test_relay_interfaces.py` and related Relay tests
 - `docs/GLOSSARY.md`, `docs/README.md`, and the active Relay spec when the feature ships
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene/relay/node.py::Node.to_global_id` — graphene-django Relay nodes encode the GlobalID as base64 `<GraphQL type name>:<id>` (type-name-anchored). Tagged **parity-adjacent, not required**: the type-anchored convention itself already shipped at parity in `DONE-015-0.0.5` (the Relay-supplied `id: GlobalID!`). 031 preserves that exact convention as the opt-in `type` strategy and makes a Django-model-anchored payload (`app_label.model:id`, e.g. `products.item:42`) the new default — extending the upstream GlobalID surface with a Django-idiomatic encoding neither upstream offers.
+- `strawberry.relay.GlobalID` (consumed by strawberry-graphql-django; `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py` wires the Relay node types) encodes `to_base64(type_name, node_id)` — also type-name-anchored. Same parity-adjacent relationship: the standard convention stays available as the `type` strategy, while the model-anchored default plus the `Meta.globalid_strategy` override and the `RELAY_GLOBALID_STRATEGY` setting are the beyond-parity differentiator. Tagged `adjacent` (not `required`) for both upstreams so the Alpha cut stays parity-honest — GlobalID parity proper was met in `DONE-015-0.0.5`.
+
 #### Why it matters
 
 - The standard Relay convention bakes the GraphQL type name into durable object identity. In Django apps the model is the durable thing; the GraphQL type is a refactor-friendly facade.
@@ -201,6 +208,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 - Severity: Major
 - Status: Planned
 - Relative size: L-XL
+- Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
 
 #### Planning note
 
@@ -209,6 +217,11 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 #### Dependencies
 
 - `DONE-030-0.0.9` — `DjangoConnectionField`
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.get_node` implements the Relay `Node` interface by running `cls.get_queryset(model.objects, info).get(pk=id)`, so graphene_django's full Relay story routes single-object id lookups through the type's visibility hook — the same Node + global-id + permission-aware root surface this card assembles, hence required parity.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/utils.py::resolve_model_nodes` (and `resolve_model_node`) resolve `relay.GlobalID` values to model instances while running the type's `get_queryset` (via `run_type_get_queryset`), and `DjangoListConnection.resolve_connection` provides the connection half — together the Node + Connection + validated-root Relay story this card mirrors, so the strawberry_django parity is required.
 
 #### Other
 
@@ -301,6 +314,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Severity: Medium
 - Status: Planned
 - Relative size: M
+- Labels: `connections`, `optimizer`, `query-planning`, `relay`
 
 #### Planning note
 
@@ -320,6 +334,11 @@ planned
 - `django_strawberry_framework/optimizer/extension.py`
 - future `django_strawberry_framework/connection.py`
 - mirrored optimizer tests
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_optimize_prefetch_queryset` detects a `StrawberryDjangoConnectionExtension` on a nested field, computes a `SliceMetadata.from_arguments(first, last, before, after, max_results)`, and pushes the cursor slice into the prefetch via `apply_window_pagination` (a `RowNumber` `Window` partitioned by the related field) so each parent's connection is paginated inside one query — the connection-aware planning this card designs, making the strawberry_django parity required.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/list_connection.py::DjangoListConnection.resolve_connection` cooperates with that planner by reading `node._strawberry_total_count` / a `models.Window` annotation for `totalCount` instead of issuing a second `count()` — the per-connection total-count planning this card folds in; graphene_django ships no native connection-aware optimizer, so the claim is correctly strawberry_django-only and required.
 
 #### Other
 
@@ -351,6 +370,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Severity: Major
 - Status: Planned
 - Relative size: L
+- Labels: `optimizer`, `permissions`, `public-api`, `security`
 
 #### Planning note
 
@@ -392,6 +412,11 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - `apply_cascade_permissions(cls, queryset, info)` walks the model graph at call time; `registry.iter_definitions()` (shipped in 0.0.4) is the public iterator that walk uses to find each owner type's `get_queryset`.
 - `_attach_relation_resolvers` already accepts a `skip_field_names` set so consumer-authored fields are not clobbered; field-level permission hooks (`fields_class`) extend the same skip-set semantics.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.get_queryset` is graphene_django's per-type visibility hook, applied to related fields by `converter.py`'s `CustomField.wrap_resolve` (which routes FK/O2O resolution through `_type.get_queryset` unless `bypass_get_queryset` is set) — the same per-type visibility contract this card's `apply_cascade_permissions` automates by walking FK/O2O edges into each target type's `get_queryset`, so the graphene_django parity is required.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/utils/utils.py::bypass_get_queryset` is graphene_django's explicit per-resolver escape hatch from that visibility hook, confirming graphene_django scopes permission filtering per-relation rather than cascading it; this card's cascade walk is the required-parity superset that propagates the same `get_queryset` visibility across the model graph.
+
 #### Dependencies
 
 - `DjangoType.get_queryset`
@@ -421,6 +446,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - Severity: Major
 - Status: Planned
 - Relative size: XL
+- Labels: `graphql-api`, `mutations`, `permissions`, `public-api`
 
 #### Planning note
 
@@ -485,6 +511,7 @@ needs spec
 - Severity: Medium
 - Status: Planned
 - Relative size: S
+- Labels: `converters`, `mutations`, `scalars`, `uploads`
 
 #### Planning note
 
@@ -530,6 +557,7 @@ planned
 - Severity: Major
 - Status: Planned
 - Relative size: L
+- Labels: `forms`, `mutations`, `public-api`
 
 #### Planning note
 
@@ -589,6 +617,7 @@ needs spec
 - Severity: Major
 - Status: Planned
 - Relative size: L
+- Labels: `mutations`, `public-api`, `serializers`
 
 #### Planning note
 
@@ -648,6 +677,7 @@ needs spec
 - Severity: Medium
 - Status: Planned
 - Relative size: M
+- Labels: `auth`, `mutations`, `public-api`
 
 #### Planning note
 
@@ -685,6 +715,7 @@ planned
 - Severity: Low
 - Status: Planned
 - Relative size: S
+- Labels: `asgi`, `channels`, `django-integration`
 
 #### Planning note
 
@@ -730,6 +761,7 @@ planned
 - Severity: Low
 - Status: Planned
 - Relative size: M
+- Labels: `debugging`, `django-integration`, `middleware`
 
 #### Planning note
 
@@ -776,6 +808,7 @@ planned
 - Severity: Low
 - Status: Planned
 - Relative size: M
+- Labels: `graphql-api`, `test-client`, `tests`, `uploads`
 
 #### Planning note
 
@@ -839,6 +872,7 @@ planned
 - Severity: Low
 - Status: Planned
 - Relative size: M
+- Labels: `debugging`, `graphql-api`, `middleware`
 
 #### Planning note
 
@@ -911,6 +945,7 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 - Severity: Major
 - Status: Planned
 - Relative size: M
+- Labels: `cleanup`, `release`, `tests`
 
 #### Planning note
 
@@ -956,6 +991,7 @@ planned
 - Severity: Medium
 - Status: Needs spec
 - Relative size: M
+- Labels: `fieldsets`, `layer-3`, `public-api`
 
 #### Planning note
 
@@ -1006,6 +1042,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - Severity: Medium
 - Status: Planned
 - Relative size: M
+- Labels: `connections`, `filters`, `public-api`, `search`
 
 #### Planning note
 
@@ -1071,6 +1108,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 - Severity: Medium
 - Status: Planned
 - Relative size: M
+- Labels: `filters`, `public-api`, `search`
 
 #### Planning note
 
@@ -1137,6 +1175,7 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 - Severity: Major
 - Status: Planned
 - Relative size: L
+- Labels: `aggregations`, `filters`, `layer-3`, `public-api`
 
 #### Planning note
 
@@ -1191,6 +1230,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - Severity: Low
 - Status: Planned
 - Relative size: XS
+- Labels: `cleanup`, `layer-3`, `public-api`
 
 #### Other
 
@@ -1210,6 +1250,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - Severity: Medium
 - Status: Planned
 - Relative size: S
+- Labels: `choice-enums`, `public-api`, `schema`, `stable-api`
 
 #### Planning note
 
@@ -1246,6 +1287,7 @@ planned
 - Severity: Medium
 - Status: Planned
 - Relative size: S
+- Labels: `example-app`, `graphql-api`, `relay`, `schema`
 
 #### Planning note
 
@@ -1282,6 +1324,7 @@ blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (La
 - Severity: Medium
 - Status: Planned
 - Relative size: S
+- Labels: `example-app`, `graphql-api`, `layer-3`, `tests`
 
 #### Other
 
@@ -1299,6 +1342,7 @@ blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (La
 - Severity: Major
 - Status: Needs spec
 - Relative size: S
+- Labels: `mutations`, `performance`, `security`
 
 #### Planning note
 
@@ -1359,6 +1403,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 - Severity: Medium
 - Status: Planned
 - Relative size: M
+- Labels: `docs`, `guides`, `public-api`
 
 #### Planning note
 
@@ -1393,6 +1438,7 @@ planned
 - Severity: Medium
 - Status: Planned
 - Relative size: M
+- Labels: `adversarial-testing`, `hardening`, `tests`
 
 #### Planning note
 
@@ -1435,6 +1481,7 @@ planned
 - Severity: Medium
 - Status: Needs spec
 - Relative size: S
+- Labels: `debugging`, `developer-tools`, `graphql-api`, `optimizer`, `performance`, `query-planning`
 
 #### Planning note
 
@@ -1485,6 +1532,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 - Severity: Major
 - Status: Planned
 - Relative size: M-L
+- Labels: `cleanup`, `release`, `stable-api`, `tests`
 
 #### Planning note
 
@@ -1538,6 +1586,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 - Severity: Major
 - Status: Planned
 - Relative size: L
+- Labels: `connections`, `filters`, `optimizer`, `ordering`, `public-api`, `relay`
 - Spec: [spec-030-connection_field-0_0_9.md](docs/spec-030-connection_field-0_0_9.md)
 
 #### Glossary terms
@@ -1635,6 +1684,11 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - An auto-trigger wrapper must respect the single-threaded-setup window: either be constrained to schema-construction time, or acquire a real lock around the finalizer.
 - Connection-aware optimizer planning is its own follow-up slice (`WIP-ALPHA-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/fields.py::DjangoConnectionField.connection_resolver` is graphene_django's Relay connection field: it reads `first`/`last`/`before`/`after`, enforces the `first`-or-`last` guard, runs the type's `get_queryset` for visibility, then slices via `resolve_connection` — the exact composition (`get_queryset` -> filter -> order -> cursor slice) this card's `DjangoConnectionField` ships, so the graphene_django parity is required.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/field.py::StrawberryDjangoConnectionExtension.resolve` resolves a Django queryset and hands it to `connection_type.resolve_connection(nodes, info, before=, after=, first=, last=, max_results=)`, layering the relay pagination args on top of the field's auto-derived filter/order arguments — the Strawberry-side analogue of graphene's filter-connection field this card targets, making the strawberry_django parity required.
+
 #### Dependencies
 
 - `FilterSet` (`DONE-027-0.0.8`)
@@ -1665,6 +1719,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - Severity: Medium
 - Status: Planned
 - Relative size: S-M
+- Labels: `cleanup`, `developer-tools`, `public-api`, `types`
 - Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md)
 
 #### Glossary terms
@@ -1742,6 +1797,11 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Slice 2 reads `DjangoTypeDefinition` populated by `finalize_django_types()`; the command is a strict consumer of the existing introspection surface.
 - Slice 3 plugs into `DjangoType._build_annotations` (the converter loop in `django_strawberry_framework/types/base.py`) and the scalar-resolution path in `django_strawberry_framework/types/converters.py`. No finalizer changes — overrides apply at type-construction time, before finalization.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.__init_subclass_with_meta__` is graphene_django's consumer type-declaration surface, deriving GraphQL field nullability from the Django column (`required = not (field.blank or field.null)` in `converter.py`) and policing `Meta` keys like `fields`/`exclude`/`filterset_class` — the same `DjangoType`/`Meta` DX this card's cleanup pass refines (including the `Meta.nullable_overrides` decoupling), so the graphene_django parity is required.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py::is_optional` decides a `DjangoType` field's nullability straight from `model_field.null`/`blank`, with no consumer hook to override it independent of the column — the gap this card's `Meta.nullable_overrides` (Slice 3) closes against the strawberry_django type-definition surface, making the strawberry_django parity required.
+
 #### Dependencies
 
 - None blocking. Slice 1 should land before any new schema-construction surfaces ship in `DONE-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one.
@@ -1765,6 +1825,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Severity: Major
 - Status: Shipped
 - Relative size: L
+- Labels: `filters`, `graphql-api`, `layer-3`, `ordering`, `public-api`
 - Spec: [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md)
 
 #### Glossary terms
@@ -1830,6 +1891,11 @@ shipped
 - [x] Define interaction with filters and connection field.
 - [x] Keep ordering declarations introspectable from the owning type/query surface.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField.resolve_queryset` special-cases the `order_by` filter argument (`to_snake_case(v)` before passing it into the filterset), so graphene_django exposes ordering through django-filter's `OrderingFilter` as a first-class connection argument — the directly-comparable ordering surface this card ships, hence required parity.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/ordering.py::apply` walks an `order` type via `process_order` and emits `queryset.order_by(*args)`, where each field resolves through `Ordering.resolve` (the `ASC`/`DESC` plus `NULLS_FIRST`/`NULLS_LAST` enum) into a Django `OrderBy` — the same per-field, list-shaped ordering input this card's `orderBy` argument provides, so the strawberry_django parity is required.
+
 #### Other
 
 - Shipped the ordering subsystem in `0.0.8`. [`OrderSet`][glossary-orderset], [`RelatedOrder`][glossary-relatedorder], and [`Meta.orderset_class`][glossary-metaorderset_class] (promoted out of `DEFERRED_META_KEYS`) land at [`django_strawberry_framework/orders/`][orders] across five files (`base.py`, `sets.py`, `factories.py`, `inputs.py`, `__init__.py`); `tests/orders/` mirrors the layout. Five-layer lazy-resolution pipeline borrowed from `django-graphene-filters` with the same Strawberry-adapted Layer 5 the Filtering subsystem just shipped (`Annotated[\"TypeName\", strawberry.lazy(\"django_strawberry_framework.orders.inputs\")]` over module globals); the shared `LazyRelatedClassMixin` is reused from the neutral `sets_mixins` module via sibling import (per H1 of `docs/feedback.md` rev3 — `sets_mixins.py` carries both `LazyRelatedClassMixin` and `ClassBasedTypeNameMixin` for the set family). Layer 6 (dynamic OrderSet generation) deferred to `0.0.9` alongside `DjangoConnectionField` per Decision 12 of `docs/spec-028-orders-0_0_8.md`. The public `Ordering` enum borrowed verbatim from `strawberry-django` (six members: ASC / DESC / ASC_NULLS_FIRST / ASC_NULLS_LAST / DESC_NULLS_FIRST / DESC_NULLS_LAST) — NULLS positioning honored via Django `F(value).asc/desc(nulls_first=...)` expressions. The list-shaped `orderBy: [<T>OrderInputType!]` argument's element order IS the tie-breaker mechanism. The **resolver-facing API is the classmethod pair `OrderSet.apply_sync(input_value, queryset, info)` and `OrderSet.apply_async(input_value, queryset, info)`** (sync resolvers call the former; async resolvers await the latter), mirroring the shipped filter subsystem's shape. The apply pipeline runs `check_permissions` with **active-input-only scope** (per-field `check_<field>_permission` gates fire only when the consumer's input names the field); extracts the request from `info.context.request` (with an `isinstance(info.context, HttpRequest)` fallback); applies `queryset.order_by(*OrderBy_expressions)` after visibility scoping (`<OwnerType>.get_queryset`) and after optional filter narrowing (`<TypeName>Filter.apply_*`). The new `order_input_type(BranchOrder)` helper produces the resolver-annotation shape; the finalizer enforces orphan validation by raising `ConfigurationError` for any OrderSet referenced via `order_input_type` but never wired via `Meta.orderset_class` (tracked via `_helper_referenced_ordersets`). `registry.clear()` co-clears the order input namespace via `clear_order_input_namespace()` AND clears `_helper_referenced_ordersets` — alongside the already-shipped filter clears. Per-package input-class namespace is separate from the model-to-`DjangoType` registry AND from the filter-input namespace (`Meta.primary` design preserved). `Meta.orderset_class` promotion runs through finalizer phase 2.5 via `_bind_ordersets()` with four ordered subpasses mirroring the filter side's discipline; the phase binds `_owner_definition`, calls `get_fields()` only after all owners are bound, materializes each generated input class as a module global of `django_strawberry_framework.orders.inputs` before `strawberry.Schema(...)` runs. [`examples/fakeshop/apps/library/`][fakeshop-library] grows `orders.py` (carrying `BranchOrder` / `ShelfOrder` / `BookOrder` / `LoanOrder` / `PatronOrder`) and `orders_genre.py` (carrying `GenreOrder` — cross-module fixture for the Layer-2 absolute-import-path test) wired through `Meta.orderset_class`; root resolvers accept `order_by:` via `order_input_type(<Name>Order)` annotations and call `<OwnerType>.get_queryset(...)` then optionally `<TypeName>Filter.apply_*` then `OrderSet.apply_*`. [`examples/fakeshop/test_query/test_library_api.py`][fakeshop-test-library] grows exactly 14 live HTTP tests covering scalar ASC / scalar DESC_NULLS_LAST on `Book.subtitle` (per B3 of rev3) / forward-FK / reverse-FK with denormalized-multiplicity-pinned / M2M absolute-import-path RelatedOrder / flat-shorthand path (`shelf__code` → `shelfCode`) / filter + order composition / optimizer cooperation / root `get_queryset` honoring / split-pair active-input-only scalar `check_<field>_permission` (denies-for-active + quiet-for-inactive) / active-branch relation-level permission gate (`check_shelves_permission` per H3 of rev3) / multi-field priority via list-element ordering / empty-list no-op / null-direction no-op. Spec: `docs/spec-028-orders-0_0_8.md`. After this card moves to Done, `0.0.9` follow-up cards can start; no version files change here unless the maintainer explicitly gives the version-bump command.
@@ -1847,6 +1913,7 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: XL
+- Labels: `example-app`, `filters`, `graphql-api`, `public-api`
 - Spec: [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md)
 
 #### Glossary terms
@@ -1906,6 +1973,11 @@ shipped
 
 shipped
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField.resolve_queryset` instantiates the type's `Meta.filterset_class` with the GraphQL args as `data`, calls `filterset.is_valid()`, and returns `filterset.qs` (raising `ValidationError` from `filterset.form.errors` otherwise) — this is the same filterset-driven, validation-gated queryset narrowing this card ships, so the graphene_django parity is required.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/filters.py::apply` runs `process_filters(...)` over a strawberry filter type and applies the resulting `Q` via `queryset.filter(q)`, with `StrawberryDjangoFieldFilters.arguments` auto-deriving the `filters:` argument from the type definition — the consumer-facing filter-input surface this card mirrors, making the strawberry_django parity required.
+
 #### Other
 
 - both upstreams ship a FilterSet / filter surface; `django-graphene-filters` is the cookbook source.
@@ -1919,6 +1991,7 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: M
+- Labels: `example-app`, `graphql-api`, `scalars`, `tests`
 - Spec: [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md)
 
 #### Glossary terms
@@ -1932,6 +2005,11 @@ shipped
 #### Planning note
 
 shipped
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py` converts the full Django field set to GraphQL scalars via singledispatch: `convert_big_int_field` (`BigIntegerField → graphene.BigInt`), `convert_field_to_uuid` (`UUIDField`), `convert_json_field_to_string` (`JSONField`), `convert_datetime_to_string`/`convert_date_to_string`, `convert_field_to_decimal`. This card moves the framework's equivalent numeric/date/JSON/UUID converter rows to live `/graphql/` HTTP coverage in both nullable and non-null shapes (incl. a real `BigIntegerField` on `Patron`), a direct match against graphene-django's scalar-conversion feature, justifying the graphene_django required claim.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py::field_type_map` maps the same set (`BigIntegerField → int`, `DateField → datetime.date`, `DateTimeField → datetime.datetime`, `DecimalField → decimal.Decimal`, `UUIDField → uuid.UUID`, `JSONField → strawberry.scalars.JSON`); this card's `ScalarSpecimen`/`NullableScalarSpecimen` example app plus eight live HTTP tests exercise the framework's equivalent conversion end-to-end in both shapes, a direct match justifying the strawberry_django required claim. (Both claims pre-exist and are kept; the card is example/test coverage but the behavior under test is genuine scalar-conversion parity, not pure housekeeping.)
 
 #### Other
 
@@ -1957,6 +2035,7 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: S
+- Labels: `config`, `internal`, `public-api`, `scalar-map`, `scalars`
 - Spec: [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md)
 
 #### Glossary terms
@@ -1997,6 +2076,7 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
+- Labels: `django-integration`, `hardening`, `internal`
 - Spec: [spec-024-django_trac_37064_hardening-0_0_7.md](docs/SPECS/spec-024-django_trac_37064_hardening-0_0_7.md)
 
 #### Glossary terms
@@ -2019,9 +2099,11 @@ shipped
 ### [DONE-023-0.0.7 — Multi-database cooperation contract](KANBAN.html#multi_database_cooperation_contract)
 
 - Priority: Low
+- Parity: 🍓 strawberry-graphql-django (Parity-adjacent)
 - Severity: Low
 - Status: Shipped
 - Relative size: S
+- Labels: `multi-db`, `optimizer`, `tests`
 - Spec: [spec-023-multi_db-0_0_7.md](docs/SPECS/spec-023-multi_db-0_0_7.md)
 
 #### Glossary terms
@@ -2051,6 +2133,11 @@ shipped
 
 shipped
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py` builds N+1-avoidance plans out of `django.db.models.Prefetch` objects (imported at line 18; `prefetch_related: list[PrefetchType]`) but specifies no multi-database cooperation contract (a grep of the module for `.using(`, `_db`, `router`, `db_for_read` returns nothing). This card pins that exact seam for the framework's `Prefetch`-based optimizer — `OptimizerHint.prefetch(Prefetch(queryset=...using('shard_b')))` round-tripping with `_db` intact through plan construction (`tests/optimizer/test_multi_db.py`) — so it is adjacent: it underpins/extends the same prefetch-plan subsystem strawberry-graphql-django owns, adding a multi-DB guarantee the upstream leaves unspecified.
+- graphene-django has no comparable prefetch-plan optimizer and likewise no multi-DB handling (grep of `graphene_django/*.py` for `.using(`/`_db`/`router`/`db_for_read` returns nothing), so no graphene_django claim is honest here; the contract this card pins (`.using()` preservation, router-aware FK-id stubs, `Prefetch._db` round-trip) is purely a function of the framework's optimizer, which is the strawberry-graphql-django-comparable subsystem.
+
 #### Other
 
 - multi-DB is a Django capability neither upstream specifies a contract around (⚛️&🍓 parity-adjacent); pinning ours smooths the migrant story.
@@ -2064,6 +2151,7 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
+- Labels: `management-command`, `public-api`, `schema`
 - Spec: [spec-022-export_schema-0_0_7.md](docs/SPECS/spec-022-export_schema-0_0_7.md)
 
 #### Glossary terms
@@ -2088,6 +2176,11 @@ shipped
 
 shipped
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/management/commands/export_schema.py::Command` is the `manage.py export_schema` command: positional `schema` arg, optional `--path`, `import_module_symbol` resolution, `isinstance(..., strawberry.Schema)` guard, SDL via `print_schema`, and `CommandError` paths. This card ships the same-named command with the identical positional `schema` / `--path` / `print_schema` / `CommandError` contract, a direct feature match justifying the strawberry_django required claim.
+- graphene-django's nearest analog `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/management/commands/graphql_schema.py::Command` is a deliberately different `graphql_schema` command (`--schema`/`--out`/`--indent`/`--watch`, JSON-or-`.graphql` output via `schema.introspect()`), which the card explicitly flags as parity-adjacent and not borrowed; correctly excluded from the claim set.
+
 #### Other
 
 - strawberry-graphql-django ships `manage.py export_schema`; graphene-django's different `graphql_schema` command is parity-adjacent (deliberately not borrowed).
@@ -2097,10 +2190,11 @@ shipped
 ### [DONE-021-0.0.7 — `apps.py` and Django app config](KANBAN.html#appspy_and_django_app_config)
 
 - Priority: Medium
-- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
+- Parity: 🍓 strawberry-graphql-django (Required)
 - Severity: Low
 - Status: Shipped
 - Relative size: XS
+- Labels: `django-app`, `packaging`
 - Spec: [spec-021-apps-0_0_7.md](docs/SPECS/spec-021-apps-0_0_7.md)
 
 #### Glossary terms
@@ -2124,6 +2218,10 @@ shipped
 
 shipped
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/apps.py::StrawberryDjangoConfig` is a minimal `AppConfig` (just `name` and `verbose_name`) enabling `INSTALLED_APPS`-driven discovery; this card ships the equivalent `DjangoStrawberryFrameworkConfig` `AppConfig`, a direct feature match that justifies the strawberry_django required claim.
+
 #### Other
 
 - both upstreams ship an `apps.py` `AppConfig` for `INSTALLED_APPS`-driven discovery.
@@ -2137,6 +2235,7 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: M
+- Labels: `graphql-api`, `list-field`, `optimizer`, `public-api`
 - Spec: [spec-020-list_field-0_0_7.md](docs/SPECS/spec-020-list_field-0_0_7.md)
 
 #### Glossary terms
@@ -2172,6 +2271,11 @@ shipped
 
 shipped
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/fields.py::DjangoListField` is graphene-django's non-Relay list primitive: it wraps the underlying type in `List(NonNull(...))`, exposes `get_manager()`/`get_queryset` cooperation, and coerces `Manager`/`QuerySet` results in `list_resolver`. This card ships the same-named `DjangoListField` factory (`Manager → QuerySet` coercion, sync/async `get_queryset`, outer-list nullability) for the Strawberry stack; required because it is a direct feature match against a primitive strawberry-graphql-django does not provide.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py::field_type_map` maps only relation kinds (`ManyToManyField`, `ManyToOneRel`) to `list[DjangoModelType]` and offers no standalone consumer-facing list field; this confirms the card's premise that strawberry-graphql-django has no non-Relay list-field primitive, so the single `graphene_django` required claim is the honest sole match.
+
 #### Other
 
 - graphene-django ships `DjangoListField`; strawberry-graphql-django has no non-Relay list-field primitive.
@@ -2185,6 +2289,7 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: L
+- Labels: `public-api`, `relay`, `scalars`, `types`
 - Spec: [spec-019-consumer_overrides_scalar-0_0_6.md](docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md)
 
 #### Glossary terms
@@ -2211,6 +2316,11 @@ shipped
 
 shipped
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` only injects `strawberry.auto` for model fields lacking a consumer annotation (`for f in model_fields: if existing_annotations.get(f.name): continue`), so a consumer-authored scalar annotation is authoritative and is never overwritten by the synthesized field — exactly this card's consumer-annotation-overrides-synthesized contract — making the claim `required`; the adjacent `MAP_AUTO_ID_AS_GLOBAL_ID` guard that drops `id` from `model_fields` to avoid clobbering the relay `GlobalID` also mirrors this card's `relay.Node` `id`-collision handling.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.__init_subclass_with_meta__` yanks consumer-declared class-attribute fields via `yank_fields_from_attrs` alongside the auto-`construct_fields` model conversion, so a field a consumer declares on the type takes precedence over the auto-generated scalar — graphene_django supports the same consumer-authored scalar-override-on-a-model-type feature, so the claim is `required`.
+
 #### Other
 
 - both upstreams support consumer-authored scalar field overrides on model-backed types.
@@ -2231,9 +2341,11 @@ shipped
 ### [DONE-018-0.0.6 — Multiple DjangoTypes per model with `Meta.primary`](KANBAN.html#multiple_djangotypes_per_model_with_metaprimary)
 
 - Priority: Medium
+- Parity: 🍓 strawberry-graphql-django (Parity-adjacent)
 - Severity: Medium
 - Status: Shipped
 - Relative size: L
+- Labels: `optimizer`, `public-api`, `registry`, `types`
 - Spec: [spec-018-meta_primary-0_0_6.md](docs/SPECS/spec-018-meta_primary-0_0_6.md)
 
 #### Glossary terms
@@ -2259,6 +2371,10 @@ shipped
 #### Planning note
 
 shipped
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` gives every Django type its own `is_type_of` closure returning `isinstance(obj, (cls, model))` (with a `get_strawberry_type_cast` short-circuit) and keeps no model-to-type registry at all, so multiple types can back the same model and disambiguation rides on `is_type_of`/`strawberry.cast` rather than an explicit primary flag; this card's registry storing many types per model with an explicit `Meta.primary` selection plus a finalize-time ambiguity audit extends and formalizes that implicit upstream behavior, making the link `adjacent`. graphene_django has no equivalent — `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/registry.py::Registry.register` stores exactly one type per model (`self._registry[cls._meta.model] = cls`), so no claim is made there.
 
 #### Other
 
@@ -2289,6 +2405,7 @@ shipped
 - Severity: Medium
 - Status: Shipped
 - Relative size: M
+- Labels: `converters`, `public-api`, `scalars`
 - Spec: [spec-017-deferred_scalars-0_0_6.md](docs/SPECS/spec-017-deferred_scalars-0_0_6.md)
 
 #### Glossary terms
@@ -2315,6 +2432,11 @@ shipped
 #### Planning note
 
 shipped
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py::convert_big_int_field` maps `models.BigIntegerField` to graphene's `BigInt` scalar (defined at `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene/types/scalars.py::BigInt`), and the same module maps `models.JSONField`/`HStoreField` to `JSONString` and `ArrayField` to `List` — graphene_django ships a direct `BigIntegerField -> BigInt`-scalar conversion plus JSON/Array/HStore handlers matching this card, so the claim is `required`.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py::field_type_map` maps `json.JSONField` to `strawberry.scalars.JSON` and resolves `ArrayField` to a nested `list[...]` via `_resolve_array_field_type`, giving strawberry_django direct equivalents for this card's `JSONField -> strawberry.scalars.JSON` and `ArrayField` conversions; the same map routes `BigIntegerField`/`PositiveBigIntegerField` to plain `int` (no dedicated big-int scalar), so the JSON/Array conversion parity is the `required` anchor on this side.
 
 #### Other
 
@@ -2343,9 +2465,11 @@ shipped
 ### [DONE-016-0.0.6 — `FieldMeta` single-source-of-truth consolidation and mirror retirement](KANBAN.html#fieldmeta_single_source_of_truth_consolidation_and_mirror_retirement)
 
 - Priority: Medium
+- Parity: 🍓 strawberry-graphql-django (Parity-adjacent)
 - Severity: Medium
 - Status: Shipped
 - Relative size: M
+- Labels: `cleanup`, `field-meta`, `metadata`, `optimizer`, `types`
 - Spec: [spec-016-fieldmeta_consolidation-0_0_6.md](docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md)
 
 #### Glossary terms
@@ -2372,6 +2496,10 @@ shipped
 - `optimizer/extension.py:check_schema`
 - All `TODO(spec-fieldmeta-*)` source anchors removed.
 - 100% package coverage maintained; no consumer-visible API change.
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_get_model_hints` sources per-type optimization metadata from a single canonical place — `getattr(get_django_definition(object_definition.origin), 'store', None)` (and per-field `getattr(field, 'store', None)`), where `get_django_definition` (`/Users/riordenweber/projects/strawberry-django-main/strawberry_django/utils/typing.py::get_django_definition`) returns the one `__strawberry_django_definition__` on the type rather than any parallel copy; this card's retirement of the legacy class-attribute mirrors so the optimizer reads `FieldMeta` only from `DjangoTypeDefinition.field_map` via `registry.get_definition(...)` aligns the framework's metadata-sourcing posture with strawberry_django's single-definition design, but it is an internal SSoT refactor with no consumer-visible surface, so the link is `adjacent`, not `required`.
 
 #### Why it matters
 
@@ -2401,6 +2529,7 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
+- Labels: `public-api`, `relay`, `types`
 - Spec: [spec-015-relay_interfaces-0_0_5.md](docs/SPECS/spec-015-relay_interfaces-0_0_5.md)
 
 #### Glossary terms
@@ -2441,6 +2570,11 @@ shipped
 - `Meta.interfaces` promoted from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`.
 - Package version bumped to `0.0.5` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` injects the four relay defaults (`resolve_id`, `resolve_id_attr`, `resolve_node`, `resolve_nodes`) when `issubclass(cls, relay.Node)` and preserves a consumer-declared resolver via the `existing_resolver.__func__ is getattr(relay.Node, attr).__func__` identity test, and unconditionally installs `is_type_of` unless already in `cls.__dict__` — strawberry_django ships exactly this Node-wiring contract, so the card's `relay.Node`-default injection plus `__func__`-preserving override and unconditional `is_type_of` is `required` against it.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType` accepts a `Meta.interfaces` tuple, auto-enables a Relay `Connection` when any interface `issubclass(interface, Node)`, and provides `get_node`/`get_queryset`/`resolve_id`/`is_type_of` for Node-backed model types (with the global `id` resolved as a `GlobalID` via `graphene.relay.node.AbstractNode`) — graphene_django offers the same end-to-end `Meta.interfaces`-with-Node feature this card matches, so the claim is `required`.
+
 #### Other
 
 - both upstreams ship Relay Node interfaces; this shipped our 🍓-shaped Relay Node integration.
@@ -2472,6 +2606,7 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
+- Labels: `cleanup`, `example-app`, `internal`, `tests`
 - Spec: [spec-014-testing_shift-0_0_4.md](docs/SPECS/spec-014-testing_shift-0_0_4.md)
 
 #### Glossary terms
@@ -2513,6 +2648,7 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
+- Labels: `example-app`, `internal`, `m2m`, `tests`
 - Spec: [spec-013-real_m2m_coverage-0_0_4.md](docs/SPECS/spec-013-real_m2m_coverage-0_0_4.md)
 
 #### Glossary terms
@@ -2546,6 +2682,7 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: XS
+- Labels: `internal`, `release`, `versioning`
 - Spec: [spec-012-version_release_alignment-0_0_4.md](docs/SPECS/spec-012-version_release_alignment-0_0_4.md)
 
 #### Glossary terms
@@ -2580,6 +2717,7 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: XS
+- Labels: `cleanup`, `docs`, `internal`, `tests`
 - Spec: [spec-011-stale_placeholder_cleanup-0_0_4.md](docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md)
 
 #### Glossary terms
@@ -2615,9 +2753,11 @@ shipped
 ### [DONE-010-0.0.4 — 0.0.4 foundation slice (definition-order independence)](KANBAN.html#004_foundation_slice_definition_order_independence)
 
 - Priority: High
+- Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
 - Severity: Major
 - Status: Shipped
 - Relative size: L
+- Labels: `finalizer`, `registry`, `relations`, `types`
 - Spec: [spec-010-foundation-0_0_4.md](docs/SPECS/spec-010-foundation-0_0_4.md)
 
 #### Glossary terms
@@ -2655,6 +2795,11 @@ shipped
 - Version bump to `0.0.4` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`.
 - Deletion of `TypeRegistry.lazy_ref`; unsupported and unresolved relations now fail with explicit `ConfigurationError` messages at annotation-building or finalization time.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py::convert_onetoone_field_to_djangomodel` (and the sibling FK / M2M converters) wrap related-type resolution in `graphene.Dynamic(dynamic_type)` callables that look up `registry.get_type_for_model(model)` only when the schema is built, giving graphene definition-order independence for relations; this slice ships the equivalent capability through `finalize_django_types()`'s three-phase finalizer that resolves a `PendingRelation` registry against registered `DjangoType`s before `strawberry.type(cls)` runs, so the claim is adjacent because it matches the observable behavior via an explicit collected-types finalize gate rather than graphene's per-field deferred callables.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` achieves cross-type relation resolution by forcing relation annotations to `strawberry.auto` and clearing `StrawberryAnnotation.__resolve_cache__` so Strawberry re-evaluates forward references after all types are decorated, with no first-class pending-relation registry; this card's `PendingRelation` / `add_pending_relation` / `finalize_django_types()` foundation delivers the same definition-order-independent relation resolution but as an explicit registry-plus-finalizer mechanism with a `PendingRelationAnnotation` sentinel that errors if `strawberry.Schema(...)` is built early, so the claim is adjacent because the framework underpins and diverges from strawberry_django's implicit lazy-annotation approach rather than matching its public API at parity.
+
 #### Other
 
 - internal Layer-2 foundation (`DjangoTypeDefinition`, finalizer, pending-relation resolution) — enables the parity subsystems rather than being one itself.
@@ -2684,9 +2829,11 @@ shipped
 ### [DONE-009-0.0.4 — Rich schema architecture](KANBAN.html#rich_schema_architecture)
 
 - Priority: High
+- Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
 - Severity: Major
 - Status: Shipped
 - Relative size: L
+- Labels: `layer-3`, `public-api`, `relations`, `types`
 - Spec: [spec-009-rich_schema_architecture-0_0_4.md](docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md)
 
 #### Glossary terms
@@ -2727,6 +2874,11 @@ shipped
 - Compare Graphene, django-graphene-filters, and strawberry-graphql-django patterns against this package's DRF-shaped API.
 - Define how the 0.0.4 foundation slice becomes the base for later Layer 3 subsystems.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::type` is the public `@strawberry_django.type(model)` entrypoint that generates a Strawberry type from a Django model and (via `_process_type`) wires relations, filters, ordering, and pagination as decorator kwargs; this card lays out the package's long-term Layer-3 architecture (filters, orders, aggregates, connections, permissions, fieldsets) over a DRF-shaped API and explicitly compares strawberry_django patterns, so it is adjacent because the planned architecture extends and reshapes that upstream surface rather than matching one of its features at parity.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py::convert_field_to_list_or_connection` shows graphene's relation-to-connection/list dispatch keyed off `_type._meta.connection` / `filter_fields` / `filterset_class` on the related `DjangoObjectType`; this card's scope explicitly contrasts Graphene/django-graphene-filters patterns when defining how the foundation slice becomes the base for later connection/filter subsystems, so the claim is adjacent because the package's DRF-shaped layered architecture differs from graphene's Meta-flag dispatch rather than reaching parity with a single graphene feature.
+
 #### Other
 
 - Architecture design record paired with the narrower 0.0.4 foundation implementation spec.
@@ -2735,9 +2887,11 @@ shipped
 ### [DONE-008-0.0.4 — Definition-order independence design](KANBAN.html#definition_order_independence_design)
 
 - Priority: High
+- Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
 - Severity: Major
 - Status: Shipped
 - Relative size: M
+- Labels: `finalizer`, `registry`, `relations`, `types`
 - Spec: [spec-008-definition_order_independence-0_0_4.md](docs/SPECS/spec-008-definition_order_independence-0_0_4.md)
 
 #### Glossary terms
@@ -2765,6 +2919,11 @@ shipped
 - Compare options for preserving concrete related `DjangoType`s without import-order coupling.
 - Set the failure-mode requirements that the 0.0.4 foundation slice implements.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/converter.py::convert_field_to_djangomodel` converts every Django relation field into a `graphene.Dynamic(dynamic_type)` whose `dynamic_type` defers `registry.get_type_for_model(model)` to schema-build time (`graphene/types/dynamic.py::Dynamic.get_type`), so a related `DjangoObjectType` need not exist when the owning type is defined; this card frames the same class-definition-time relation-resolution problem but proposes an explicit pending-relation/finalizer design rather than per-field lazy callables, so the claim is adjacent (it underpins and differs from graphene's surface, not a parity match of a public feature).
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` resolves relation annotations per class at decoration time by resetting `StrawberryAnnotation.__resolve_cache__` and forcing relation fields back to `strawberry.auto` so Strawberry re-evaluates forward references later, with no global collected-types finalize gate; this card compares that import-order-coupling-avoidance approach against the package's planned design, so it is adjacent because the framework's proposed deferred-finalize architecture extends and differs from strawberry_django's lazy-annotation mechanism rather than matching it at parity.
+
 #### Other
 
 - Problem-space design record for definition-order independence.
@@ -2776,6 +2935,7 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
+- Labels: `docs`, `internal`, `release`
 - Spec: [spec-007-onboarding_docs_spec_consolidation-0_0_4.md](docs/SPECS/spec-007-onboarding_docs_spec_consolidation-0_0_4.md)
 
 #### Glossary terms
@@ -2815,6 +2975,7 @@ shipped
 - Severity: Low
 - Status: Shipped
 - Relative size: S
+- Labels: `docs`, `internal`
 - Spec: [spec-006-public_surface-0_0_3.md](docs/SPECS/spec-006-public_surface-0_0_3.md)
 
 #### Glossary terms
@@ -2852,9 +3013,11 @@ shipped
 ### [DONE-005-0.0.3 — DjangoType contract and boundary](KANBAN.html#djangotype_contract_and_boundary)
 
 - Priority: High
+- Parity: ⚛️ graphene-django (Parity-adjacent)
 - Severity: Major
 - Status: Shipped
 - Relative size: M
+- Labels: `docs`, `public-api`, `registry`, `types`
 - Spec: [spec-005-django_type_contract-0_0_3.md](docs/SPECS/spec-005-django_type_contract-0_0_3.md)
 
 #### Glossary terms
@@ -2879,6 +3042,10 @@ shipped
 - Reject unsupported or deferred `Meta` keys instead of accepting unwired surface area.
 - Remove consumer override promises that the implementation cannot honor yet.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/registry.py::Registry.register` stores one type per model (`self._registry[cls._meta.model] = cls`, last-write-wins, with the multiple-types assertion left commented out) and `types.py::validate_fields` only `warnings.warn`s when `Meta.fields`/`exclude` name unknown fields -- this card tightens both: it documents the same one-model-one-type registry constraint as a hard alpha boundary and raises (rather than warns) on unsupported/deferred `Meta` keys, so it is adjacent to graphene's looser model-to-type registry and field-validation surface, narrowing rather than matching it.
+
 #### Other
 
 - Contract companion to the 0.0.3 public-surface documentation pass.
@@ -2891,6 +3058,7 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
+- Labels: `optimizer`, `performance`, `query-planning`, `schema-audit`
 - Spec: [spec-004-optimizer_beyond-0_0_3.md](docs/SPECS/spec-004-optimizer_beyond-0_0_3.md)
 
 #### Glossary terms
@@ -2923,6 +3091,10 @@ shipped
 - B7: precomputed optimizer field metadata
 - B8: queryset diffing against consumer-applied `select_related`, `prefetch_related`, and `Prefetch`
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::optimize` is strawberry-django's optimization entry point: it short-circuits when `is_optimized(qs)` (a per-queryset already-optimized flag set via `get_queryset_config(qs).optimized`) and otherwise applies the accumulated `OptimizerStore` to the queryset -- the same production-grade extension surface this card extends, where B1's AST-keyed plan cache and B8's `diff_plan_for_queryset` per-path reconciliation against consumer `select_related`/`prefetch_related`/`Prefetch` go beyond strawberry-django's single boolean guard, so the existing required claim covers the shared apply-optimizations-once core that these beyond-slices features build on.
+
 #### Other
 
 - continuation of DONE-002's optimizer lineage (⚛️ parity-adjacent).
@@ -2942,9 +3114,11 @@ shipped
 ### [DONE-003-0.0.2 — Optimizer O4 nested prefetch chains](KANBAN.html#optimizer_o4_nested_prefetch_chains)
 
 - Priority: High
+- Parity: 🍓 strawberry-graphql-django (Required)
 - Severity: Major
 - Status: Shipped
 - Relative size: M
+- Labels: `optimizer`, `performance`, `query-planning`, `relations`
 - Spec: [spec-003-optimizer_nested_prefetch_chains-0_0_2.md](docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md)
 
 #### Glossary terms
@@ -2970,6 +3144,10 @@ shipped
 - Emit nested `Prefetch` objects for many-side branches that need shaped child querysets.
 - Recurse through single-valued relation chains with `select_related` and `only()` fields intact.
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_get_hints_from_django_relation` builds a depth>1 nested plan by recursing through `_get_model_hints(..., level=level + 1)`, rebasing the child `OptimizerStore`'s `only`/`select_related` under the relation path, and emitting `Prefetch(path, queryset=field_qs)` for many-side branches -- the identical behavior this card ships in `optimizer/walker.py` (`_build_prefetch_child_queryset` recurses one level deeper and `_plan_prefetch_relation` emits `Prefetch(full_path, queryset=child_queryset)`, while `_plan_select_relation` recurses through single-valued chains preserving `select_related` + `only()`), so O4 nested-prefetch-chain planning is required parity with strawberry-django's nested relation hinting.
+
 #### Other
 
 - Design record for the O4 slice split out from the broader optimizer foundation.
@@ -2982,6 +3160,7 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
+- Labels: `optimizer`, `performance`, `query-planning`, `relations`
 - Spec: [spec-002-optimizer-0_0_2.md](docs/SPECS/spec-002-optimizer-0_0_2.md)
 
 #### Glossary terms
@@ -3006,6 +3185,10 @@ shipped
 - `only()` projection
 - custom `get_queryset` downgrade to `Prefetch`
 
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::DjangoOptimizerExtension` is strawberry-django's N+1 solver: a `SchemaExtension` whose `resolve` walks the selection tree, builds an `OptimizerStore` (lists of `only`/`select_related`/`prefetch_related`), and applies it to the root queryset, with `_get_prefetch_queryset` running the target type's `get_queryset` inside generated `Prefetch` objects -- the same root-gated extension, selection-tree walker, `select_related`/`only()` projection, nested `Prefetch` chains, and custom-`get_queryset`-downgrade-to-`Prefetch` behavior this card's O1-O6 foundation ships, so it is required parity with strawberry-django's optimizer extension.
+
 #### Other
 
 - strawberry-graphql-django ships a heavy optimizer extension; graphene-django has only `select_related_field` (⚛️ parity-adjacent).
@@ -3026,6 +3209,7 @@ shipped
 - Severity: Major
 - Status: Shipped
 - Relative size: L
+- Labels: `public-api`, `registry`, `relations`, `scalars`, `types`
 - Spec: [spec-001-django_types-0_0_1.md](docs/SPECS/spec-001-django_types-0_0_1.md)
 
 #### Glossary terms
@@ -3068,6 +3252,11 @@ shipped
 - type registry
 - relation resolvers
 - `get_queryset` hook and `has_custom_get_queryset`
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType` is graphene's model-backed type: a nested `Meta` declares `model`/`fields`/`exclude`, `construct_fields` selects model fields, `convert_choice_field_to_enum` (`converter.py`) turns Django `choices` into GraphQL enums, `Registry.register` (`registry.py`) maps model to type, and a classmethod `get_queryset(queryset, info)` scopes visibility -- the exact surface `DjangoType` ships (base class, Meta validation, scalar/relation conversion, choice enums, registry, `get_queryset` hook), so this is required parity with graphene's canonical type-generation feature.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` is strawberry-django's adapter behind `@strawberry_django.type`: it reads `model`/`fields`/`exclude`, marks model fields `strawberry.auto`, and records a `StrawberryDjangoDefinition` in the registry, while `queryset.py::run_type_get_queryset` invokes the type's `get_queryset(qs, info)` -- the same model-to-Strawberry-type contract and same `get_queryset` visibility hook `DjangoType` implements, so this is required parity with strawberry-django's core type surface.
 
 #### Other
 
@@ -3117,6 +3306,16 @@ FilterArgumentsFactory raises TypeError on subclassing: its class-level input_ob
 Rationale: supporting subclassing would turn a currently-discouraged pattern into a real API commitment and pull in cache / lifecycle fixes (H-filters-3, M-filters-4, M-filters-5) that do not buy much without a concrete consumer need. Revisit if a real consumer need arises.
 
 Ref: spec-021 pre-merge review M-filters-3 / H-filters-3.
+
+## Decision: Alpha cards must claim upstream parity
+
+Every Alpha (`0.0.x`) card that ships a consumer-facing capability MUST carry at least one upstream parity link — a `ParityClaim` against `graphene_django` (⚛️) and/or `strawberry_django` (🍓), at `required` or `adjacent` level — AND at least one justification bullet in the card's `Verified in upstream` section grounding that link in a specific upstream `path::symbol` (decided 2026-06-09).
+
+Rationale: Alpha is the road to `0.1.0` feature parity, so an Alpha *feature* card with no parity link is either mis-scoped (it belongs in Beta as a beyond-parity differentiator) or simply untracked. Requiring the link plus a grounded justification keeps the Alpha cut honestly parity-bearing and makes each card's placement auditable against the upstreams.
+
+Exemption: pure-internal housekeeping cards — documentation, release / version alignment, cleanup, test-only coverage, and Django-core defensive hardening — have no upstream feature to match and are labeled `internal`; the rule does not apply to them. A parity link must NEVER be fabricated to satisfy the rule: if no honest upstream analog exists, the card is `internal` (or belongs in Beta), not parity-tagged.
+
+Enforcement: `scripts/check_alpha_parity.py` fails if any non-`internal` Alpha card lacks a parity link or a `Verified in upstream` justification.
 
 <!-- LINK DEFINITIONS -->
 

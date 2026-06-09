@@ -106,7 +106,7 @@ query StaticKanbanDashboard {
     dependents {
       ...CardLinkFields
     }
-    badges: labels {
+    labels {
       ...CardBadgeFields
     }
     glossaryLinks {
@@ -498,7 +498,7 @@ def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[s
 
 def fetch_dashboard_data() -> dict[str, Any]:
     """Fetch the kanban dashboard payload through the real ``/graphql/`` route."""
-    from apps.kanban import models as kanban_models
+    from apps.kanban import models
 
     data = fetch_graphql_data(
         STATIC_KANBAN_QUERY,
@@ -513,7 +513,7 @@ def fetch_dashboard_data() -> dict[str, Any]:
         "cards": data["allCards"],
         "boardDocs": data["allKanbanBoardDocs"],
         "lookups": lookups,
-        "blockingReferenceKindKeys": sorted(kanban_models.BLOCKING_REFERENCE_KIND_KEYS),
+        "blockingReferenceKindKeys": sorted(models.BLOCKING_REFERENCE_KIND_KEYS),
     }
 
 

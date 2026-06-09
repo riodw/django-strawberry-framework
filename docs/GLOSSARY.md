@@ -602,7 +602,7 @@ class GalaxyType(DjangoType):
 
 **Status:** shipped (`0.0.9`).
 
-Relay-connection options for a `DjangoType`. In `0.0.9`, the accepted shape is `{"total_count": bool}` and the key is valid only when [`Meta.interfaces`](#metainterfaces) includes `strawberry.relay.Node`.
+Relay-connection options for a `DjangoType`. In `0.0.9`, the accepted shape is `{"total_count": bool}` and the key is valid only on a Relay-Node-shaped type — when [`Meta.interfaces`](#metainterfaces) includes `strawberry.relay.Node`, or the type inherits `relay.Node` directly.
 
 When `total_count` is true, [`DjangoConnectionField`](#djangoconnectionfield) resolves the type through a concrete per-target connection class exposing `totalCount`; otherwise it uses [`DjangoConnection`](#djangoconnection)`[T]` without that field. The option is type-level, not per field, so a node type has one stable connection shape.
 

@@ -22,8 +22,10 @@ from types import SimpleNamespace
 
 import pytest
 import strawberry
+from apps.kanban.models import Status
 from apps.products import services
 from apps.products.models import Category, Item
+from django.db.models import F
 from django.http import HttpRequest
 from graphql import GraphQLError
 from strawberry import relay
@@ -40,7 +42,10 @@ from django_strawberry_framework.connection import (
     _attach_count_async,
     _connection_type_cache,
     _connection_type_for,
+    _ends_in_unique_column,
+    _finalize_queryset,
     _total_count_requested,
+    clear_connection_type_cache,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet, _helper_referenced_filtersets
@@ -292,6 +297,32 @@ def test_total_count_requested_true_when_selected():
 def test_total_count_requested_false_when_absent():
     """``_total_count_requested`` is False when ``totalCount`` is not selected."""
     assert _total_count_requested(_info_with_selection("edges", "pageInfo")) is False
+
+
+def test_total_count_requested_scoped_to_direct_children():
+    """A ``totalCount`` nested in ``edges { node { … } }`` does NOT fire the predicate (P2).
+
+    ``_total_count_requested`` checks only the connection's DIRECT children, so a
+    (future) node-level ``totalCount`` deep in the subtree must not make the
+    OUTER connection count spuriously (``docs/feedback.md`` P2). A direct-child
+    ``totalCount`` still counts.
+    """
+    # Direct-child ``totalCount`` still counts.
+    assert _total_count_requested(_info_with_selection("edges", "totalCount")) is True
+    # ``totalCount`` ONLY nested inside ``edges { node { … } }`` must NOT count:
+    # the predicate does not descend into a regular field's selections.
+    nested = SimpleNamespace(
+        selected_fields=[
+            _selection(
+                "connectionField",
+                [
+                    _selection("edges", [_selection("node", [_selection("totalCount")])]),
+                    _selection("pageInfo"),
+                ],
+            ),
+        ],
+    )
+    assert _total_count_requested(nested) is False
 
 
 # =============================================================================
@@ -1084,3 +1115,114 @@ def test_nested_connection_unplanned_raises_under_strictness():
     )
     assert result.errors is not None
     assert any("Unplanned N+1: items" in err.message for err in result.errors)
+
+
+# =============================================================================
+# Deterministic-total-order tiebreaker (P1 — docs/feedback.md)
+# =============================================================================
+
+
+def _node_over(model: type, name: str, *, fields: tuple[str, ...] = ("id", "name")) -> type:
+    """Build a minimal registered ``DjangoType`` over ``model`` (no Relay needed)."""
+    return type(
+        name,
+        (DjangoType,),
+        {"Meta": type("Meta", (), {"model": model, "fields": fields, "name": name})},
+    )
+
+
+def test_ends_in_unique_column_recognizes_unique_and_non_unique_terminals():
+    """Pin ``_ends_in_unique_column`` across ref shapes (P1)."""
+    # Unique-by-pk and unique-field string refs.
+    assert _ends_in_unique_column(("id",), Category) is True
+    assert _ends_in_unique_column(("pk",), Category) is True
+    assert _ends_in_unique_column(("name",), Category) is True  # Category.name unique=True
+    assert _ends_in_unique_column(("-name",), Category) is True  # leading '-' stripped
+    # Non-unique terminal -> needs the pk tiebreaker.
+    assert _ends_in_unique_column(("name",), Item) is False  # Item.name unique=False
+    # A relation path is not the model's own unique column.
+    assert _ends_in_unique_column(("category__name",), Item) is False
+    # An aggregate-annotation alias (no such model field) is non-unique.
+    assert _ends_in_unique_column(("_dst_order_0_books_title",), Category) is False
+    # Empty ordering.
+    assert _ends_in_unique_column((), Category) is False
+    # OrderBy / F expression terminal resolves via ``.expression.name``.
+    assert _ends_in_unique_column((F("name").asc(),), Category) is True  # unique
+    assert _ends_in_unique_column((F("name").asc(),), Item) is False  # non-unique
+
+
+def test_finalize_queryset_appends_pk_tiebreaker_to_non_unique_ordering():
+    """A queryset ordered by a NON-UNIQUE column gets the pk appended (P1).
+
+    Otherwise the connection's positional offset cursors are unstable across
+    requests when ties exist (rows silently skipped / duplicated across pages).
+    No DB query runs — ``_finalize_queryset`` only shapes the lazy queryset and
+    the optimizer cooperation point short-circuits with no optimizer installed.
+    """
+    node = _node_over(Item, "P1ItemNode")
+    result = _finalize_queryset(node, Item.objects.order_by("name"), SimpleNamespace())
+    assert tuple(result.query.order_by) == ("name", "id")
+
+
+def test_finalize_queryset_skips_pk_when_terminal_already_unique():
+    """An ordering already ending in a UNIQUE column is left alone (no double pk, P1)."""
+    node = _node_over(Category, "P1CatNode")
+    # Category.name is unique=True -> already a deterministic total order.
+    by_name = _finalize_queryset(node, Category.objects.order_by("name"), SimpleNamespace())
+    assert tuple(by_name.query.order_by) == ("name",)
+    # Ordering by the pk itself is not doubled into ``("id", "id")``.
+    by_pk = _finalize_queryset(node, Category.objects.order_by("id"), SimpleNamespace())
+    assert tuple(by_pk.query.order_by) == ("id",)
+
+
+def test_finalize_queryset_preserves_meta_ordering_and_appends_pk():
+    """A model ``Meta.ordering`` is PRESERVED + pk appended, not clobbered to pk-only (P1).
+
+    ``qs.query.order_by`` is empty when the order comes from ``Meta.ordering``
+    even though ``qs.ordered`` is True; ``_finalize_queryset`` resolves the
+    effective ordering from ``_meta.ordering`` so ``ORDER BY order`` becomes
+    ``ORDER BY order, pk`` rather than dropping to ``ORDER BY pk``
+    (``docs/feedback.md`` P1 correction). ``Status`` (kanban) declares
+    ``Meta.ordering = ["order"]`` over a non-unique ``PositiveIntegerField``.
+    """
+    node = _node_over(Status, "P1StatusNode", fields=("id",))
+    qs = Status.objects.all()
+    assert qs.ordered is True
+    assert tuple(qs.query.order_by) == ()  # order comes implicitly from Meta.ordering
+    result = _finalize_queryset(node, qs, SimpleNamespace())
+    assert tuple(result.query.order_by) == ("order", "id")
+
+
+# =============================================================================
+# Optimizer cooperation short-circuit (P3a) + connection-type-cache reset (P3b)
+# =============================================================================
+
+
+def test_apply_connection_optimization_short_circuits_without_optimizer():
+    """With no optimizer installed, the cooperation point returns the qs unchanged (P3a).
+
+    The connection field does NOT fabricate a throwaway optimizer to
+    self-optimize; outside an execution the ``_active_optimizer`` ``ContextVar``
+    is ``None`` so the helper short-circuits (``docs/feedback.md`` P3a).
+    """
+    from django_strawberry_framework.optimizer.extension import apply_connection_optimization
+
+    node = _make_node_type("P3aNode", total_count=None)
+    qs = Category.objects.all()
+    assert apply_connection_optimization(node, qs, SimpleNamespace()) is qs
+
+
+def test_clear_connection_type_cache_empties_the_cache():
+    """``clear_connection_type_cache`` drops the generated-connection-class cache (P3b)."""
+    _connection_type_for(_make_node_type("P3bDirectNode", total_count=True))
+    assert _connection_type_cache
+    clear_connection_type_cache()
+    assert not _connection_type_cache
+
+
+def test_registry_clear_also_clears_connection_type_cache():
+    """``registry.clear()`` resets the connection-type cache too (P3b wiring)."""
+    _connection_type_for(_make_node_type("P3bRegistryNode", total_count=True))
+    assert _connection_type_cache
+    registry.clear()
+    assert not _connection_type_cache

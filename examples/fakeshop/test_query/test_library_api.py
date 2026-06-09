@@ -1346,10 +1346,11 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
 def _seed_branches_with_varying_shelves():
     """Seed Alpha (shelves A, C, E) + Beta (shelf B), both ``city="Boston"``.
 
-    Load-bearing for the reverse-FK multiplicity contract per spec-028
-    Slice 4 Test 4 (M5-rev1): a Branch with N shelves appears N times
-    in the response, each instance ordered by its individual shelf's
-    code.
+    Load-bearing for the row-preserving reverse-FK ordering contract
+    (``docs/feedback.md`` P1-B): ordering by ``shelves: { code: ASC }`` orders
+    each Branch by an AGGREGATE of its shelf codes (``Min`` for ASC), so a
+    Branch with N shelves appears ONCE -- Alpha (min code A) then Beta (min code
+    B) -- not N times.
     """
     alpha = models.Branch.objects.create(name="Alpha", city="Boston")
     beta = models.Branch.objects.create(name="Beta", city="Boston")
@@ -1479,21 +1480,24 @@ def test_library_books_order_by_forward_fk_relation():
 
 @pytest.mark.django_db
 def test_library_branches_order_by_reverse_fk_relation():
-    """Spec-028 Slice 4 Test 4 (M5-rev1): reverse-FK multiplicity asserted explicitly.
+    """Spec-028 Slice 4 Test 4: reverse-FK ordering is row-preserving (aggregate).
 
-    Alpha branch has shelves A, C, E -> Alpha appears 3 times. Beta
-    branch has shelf B -> Beta appears once. Ordering by ``shelves:
-    { code: ASC }`` interleaves them alphabetically by shelf code:
-    A (Alpha), B (Beta), C (Alpha), E (Alpha).
+    Alpha branch has shelves A, C, E; Beta branch has shelf B. Ordering by
+    ``shelves: { code: ASC }`` orders each Branch by an AGGREGATE of its shelf
+    codes (``Min`` for ASC) rather than a raw fan-out JOIN, so a Branch with N
+    shelves appears ONCE, not N times: Alpha (min code A) then Beta (min code
+    B).
 
-    The denormalized JOIN+ORDER multiplicity is the SQL contract --
-    rather than dodging it via DISTINCT, the test pins it explicitly.
+    Corrected contract per ``docs/feedback.md`` P1-B. The old raw
+    ``order_by("shelves__code")`` multiplied parent rows (one per child), which
+    silently corrupted cursors / ``totalCount`` on a connection. ``OrderSet``
+    now orders to-many paths by ``Min`` / ``Max`` of the child column so the
+    parent row is not multiplied; ``DjangoListField`` (this field) and
+    ``DjangoConnectionField`` both get the row-preserving result.
 
     Uses staff context because ``BranchOrder.check_shelves_permission``
-    (declared in ``apps.library.orders``) denies anonymous requests
-    that order by the ``shelves`` RelatedOrder branch; the gate is
-    load-bearing for Test 11, and the spec's intent for Test 4 is to
-    pin the multiplicity contract.
+    (declared in ``apps.library.orders``) denies anonymous requests that order
+    by the ``shelves`` RelatedOrder branch.
     """
     _seed_branches_with_varying_shelves()
 
@@ -1510,12 +1514,7 @@ def test_library_branches_order_by_reverse_fk_relation():
     payload = response.json()
     assert "errors" not in payload, payload
     names = [row["name"] for row in payload["data"]["allLibraryBranches"]]
-    assert names == [
-        "Alpha",
-        "Beta",
-        "Alpha",
-        "Alpha",
-    ]
+    assert names == ["Alpha", "Beta"]
 
 
 @pytest.mark.django_db
@@ -2256,3 +2255,51 @@ def test_genre_connection_two_aliases_independent_total_counts():
     data = payload["data"]
     assert data["matchA"]["totalCount"] == 3
     assert data["matchZ"]["totalCount"] == 1
+
+
+@pytest.mark.django_db
+def test_genre_connection_order_by_to_many_no_node_multiplication():
+    """Ordering the connection by a to-many relation does not multiply nodes (P1-B).
+
+    ``GenreOrder.books`` is a reverse-M2M ``RelatedOrder``; ordering the genre
+    connection by ``books: { title: ASC }`` orders each Genre by an AGGREGATE of
+    its book titles (``Min`` for ASC) rather than a fan-out JOIN. A Genre with
+    several books therefore appears in ``edges`` exactly ONCE (no duplicate node,
+    no skipped distinct node under the positional cursors), and ``totalCount``
+    counts DISTINCT genres -- the ``docs/feedback.md`` P1-B contract. The old raw
+    ``order_by("books__title")`` form would have listed ``Fiction`` twice (one
+    row per book) and inflated ``totalCount``.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="S-1", topic="general", branch=branch)
+    fiction = models.Genre.objects.create(name="Fiction")
+    history = models.Genre.objects.create(name="History")
+    book_a = models.Book.objects.create(title="Aaa", shelf=shelf)
+    book_b = models.Book.objects.create(title="Bbb", shelf=shelf)
+    book_c = models.Book.objects.create(title="Ccc", shelf=shelf)
+    # Fiction has two books ("Aaa", "Ccc") -> raw JOIN would list it twice.
+    book_a.genres.add(fiction)
+    book_c.genres.add(fiction)
+    book_b.genres.add(history)
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection(orderBy: [{ books: { title: ASC } }]) {
+            edges { node { name } }
+            totalCount
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenresConnection"]
+    names = [edge["node"]["name"] for edge in conn["edges"]]
+    # Each genre appears exactly once, ordered by its MIN book title
+    # (Fiction "Aaa" < History "Bbb") -- no duplicate Fiction despite two books.
+    assert names == ["Fiction", "History"]
+    assert len(names) == len(set(names))
+    # ``totalCount`` counts DISTINCT genres, not the multiplied (genre x book) rows.
+    assert conn["totalCount"] == 2

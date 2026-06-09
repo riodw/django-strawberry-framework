@@ -452,5 +452,17 @@ class TypeRegistry:
         else:
             _helper_referenced_ordersets.clear()
 
+        # Connection-type cache clear (cycle-safe local import, same shape as
+        # the filter/order blocks above). ``connection.py`` caches one generated
+        # ``<TypeName>Connection`` class per node type, keyed on identity; the
+        # documented registry reset drops them so repeated schema reloads do not
+        # accumulate dead connection classes (``docs/feedback.md`` P3b).
+        try:
+            from .connection import clear_connection_type_cache
+        except ImportError:
+            pass
+        else:
+            clear_connection_type_cache()
+
 
 registry = TypeRegistry()

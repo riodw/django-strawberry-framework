@@ -19,7 +19,7 @@ from collections import OrderedDict
 from types import SimpleNamespace
 
 import pytest
-from apps.library.models import Book, Genre, Shelf
+from apps.library.models import Book, Branch, Genre, Shelf
 from django.db.models import F
 from django.http import HttpRequest
 from graphql import GraphQLError
@@ -640,6 +640,62 @@ def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_emp
     queryset = Book.objects.all()
     result = asyncio.run(_NoneDirectionAsyncOrder.apply_async(None, queryset, info))
     assert result is queryset
+
+
+# =============================================================================
+# Row-preserving to-many ordering — aggregate, not fan-out JOIN (P1-B,
+# docs/feedback.md)
+# =============================================================================
+
+
+def test_path_traverses_to_many_detects_multiplying_relations():
+    """``_path_traverses_to_many`` flags reverse-FK / M2M paths, not scalar / to-one (P1-B)."""
+    from django_strawberry_framework.orders.sets import _path_traverses_to_many
+
+    assert _path_traverses_to_many(Branch, "shelves__code") is True  # reverse FK
+    assert _path_traverses_to_many(Book, "genres__name") is True  # forward M2M
+    assert _path_traverses_to_many(Genre, "books__title") is True  # reverse M2M
+    assert _path_traverses_to_many(Book, "shelf__code") is False  # forward FK (to-one)
+    assert _path_traverses_to_many(Genre, "name") is False  # scalar
+    assert _path_traverses_to_many(Branch, "city") is False  # scalar
+
+
+def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
+    """A to-many term orders by a ``Min`` aggregate; a scalar term orders directly (P1-B)."""
+    from django.db.models import Min
+
+    class _MultBranchOrder(OrderSet):
+        class Meta:
+            model = Branch
+            fields = ["name"]
+
+    annotations, expressions = _MultBranchOrder._resolve_order_expressions(
+        [("shelves__code", Ordering.ASC), ("name", Ordering.DESC)],
+    )
+    # The to-many path produced exactly one aggregate annotation (``Min`` for ASC).
+    assert len(annotations) == 1
+    ((alias, aggregate),) = annotations.items()
+    assert isinstance(aggregate, Min)
+    # Two order expressions: the aggregate alias (term 0) + the direct scalar (term 1).
+    assert len(expressions) == 2
+    assert expressions[0].expression.name == alias  # orders by the annotation alias
+    assert expressions[1].expression.name == "name"  # scalar ordered directly
+
+
+def test_resolve_order_expressions_uses_max_for_descending_to_many():
+    """A DESCENDING to-many term aggregates with ``Max`` (so the parent's largest child wins)."""
+    from django.db.models import Max
+
+    class _DescBranchOrder(OrderSet):
+        class Meta:
+            model = Branch
+            fields = ["name"]
+
+    annotations, _expressions = _DescBranchOrder._resolve_order_expressions(
+        [("shelves__code", Ordering.DESC_NULLS_LAST)],
+    )
+    ((_alias, aggregate),) = annotations.items()
+    assert isinstance(aggregate, Max)
 
 
 # Keep imports active so ruff doesn't flag the F-expression / Genre import.

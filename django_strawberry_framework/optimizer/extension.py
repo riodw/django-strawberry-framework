@@ -894,18 +894,25 @@ def apply_connection_optimization(
     to ``DjangoOptimizerExtension.apply_to``. The active extension instance is
     discovered from the ``_active_optimizer`` ``ContextVar`` published by
     ``on_execute`` so the connection field shares the instance-bound plan
-    cache; when no optimizer is installed for this execution (the
-    ``ContextVar`` is ``None``), a throwaway extension applies the plan
-    cache-less. The cache is a hit-rate optimization, not a correctness
-    requirement (see ``DjangoOptimizerExtension.cache_info``), so the
-    cache-less fallback is correctness-safe and the middleware path is
-    untouched either way.
+    cache. When no optimizer extension is installed for this execution (the
+    ``ContextVar`` is ``None``), the helper short-circuits and returns the
+    queryset unoptimized — the connection field does NOT fabricate a throwaway
+    optimizer to self-optimize. This keeps the connection consistent with the
+    rest of the schema (the middleware path only optimizes when the extension
+    is installed) and makes the connection-aware future (WIP-033, once the plan
+    is non-empty) a deliberate "optimize only when an optimizer is installed"
+    contract rather than an emergent always-on one (``docs/feedback.md`` P3a).
+    In 0.0.9 the connection walker plan is empty, so the short-circuit is
+    behavior-equivalent to applying an empty plan.
 
     Returns ``queryset`` unchanged when ``target_type`` has no registered
-    model (nothing to plan).
+    model (nothing to plan) or when no optimizer extension is installed.
     """
     target_model = registry.model_for_type(target_type)
     if target_model is None:
+        return queryset
+    optimizer = _active_optimizer.get()
+    if optimizer is None:
         return queryset
     # The connection resolver receives Strawberry's wrapped ``Info``; the plan
     # machinery (``_build_cache_key`` / ``convert_selections`` / the
@@ -914,7 +921,4 @@ def apply_connection_optimization(
     # ``getattr`` fallback keeps the helper usable when a caller already passes
     # a raw info (e.g. a direct test).
     raw_info = getattr(info, "_raw_info", info)
-    optimizer = _active_optimizer.get()
-    if optimizer is None:
-        optimizer = DjangoOptimizerExtension()
     return optimizer.apply_to(target_type, target_model, queryset, raw_info)

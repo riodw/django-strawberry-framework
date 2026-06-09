@@ -43,12 +43,13 @@ from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Generic, TypeVar
 
 import strawberry
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from graphql import GraphQLError
 from strawberry import relay
 from strawberry.relay.types import NodeIterableType
 from strawberry.types import Info
-from strawberry.types.nodes import InlineFragment, Selection
+from strawberry.types.nodes import FragmentSpread, InlineFragment, Selection
 from strawberry.utils.await_maybe import AwaitableOrValue
 
 from .exceptions import ConfigurationError
@@ -89,18 +90,27 @@ def _guard_first_and_last(first: int | None, last: int | None) -> None:
 def _total_count_requested(info: Info) -> bool:
     """Return whether the query selects the connection's ``totalCount`` field.
 
-    Walks ``info.selected_fields`` recursively (a connection field's selection
-    set nests ``totalCount`` as a sibling of ``edges`` / ``pageInfo``); the
-    GraphQL field name is camelCase ``totalCount`` regardless of the Python
-    ``total_count`` attribute. Mirrors strawberry-django's
-    ``_should_optimize_total_count`` selection walk so the count query only
-    runs when the field is actually requested.
+    Checks the connection field's DIRECT children (``totalCount`` is a sibling
+    of ``edges`` / ``pageInfo``); the GraphQL field name is camelCase
+    ``totalCount`` regardless of the Python ``total_count`` attribute.
+
+    Scoped to the direct children deliberately (``docs/feedback.md`` P2): unlike
+    strawberry-django's ``_should_optimize_total_count``, which recurses through
+    the WHOLE ``edges { node { … } }`` subtree, ``_check`` recurses only THROUGH
+    fragment wrappers (``InlineFragment`` / ``FragmentSpread`` — so a
+    fragment-wrapped ``totalCount`` at the connection level still counts) and
+    does NOT descend into a regular field's selections. Once nested connections
+    land (WIP-032/033), a node-level ``totalCount`` deep inside ``edges { node
+    { … } }`` must not make the OUTER connection's predicate fire (a spurious
+    ``COUNT`` and, on a non-queryset source, a spurious M1-guard raise).
     """
 
     def _check(selection: Selection) -> bool:
-        if not isinstance(selection, InlineFragment) and selection.name == "totalCount":
-            return True
-        return any(_check(child) for child in selection.selections)
+        if isinstance(selection, (InlineFragment, FragmentSpread)):
+            # Recurse THROUGH fragment wrappers, not into regular fields.
+            # (``InlineFragment`` has no ``.name`` — check the type first.)
+            return any(_check(child) for child in selection.selections)
+        return selection.name == "totalCount"
 
     return any(
         _check(selection)
@@ -147,6 +157,19 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
 
 
 _connection_type_cache: dict[type, type] = {}
+
+
+def clear_connection_type_cache() -> None:
+    """Clear the per-target generated-connection-class cache.
+
+    Test-only — production never reloads the schema. Wired into
+    ``registry.clear()`` (the documented registry reset) so a registry-clearing
+    test or fixture also drops the generated ``<TypeName>Connection`` classes,
+    rather than accumulating dead identity-keyed entries across schema reloads
+    (``docs/feedback.md`` P3b). The cache is keyed on ``target_type`` identity,
+    so a stale entry is never *wrong* — this clear is hygiene, not correctness.
+    """
+    _connection_type_cache.clear()
 
 
 def _build_total_count_connection(target_type: type) -> type:
@@ -321,27 +344,78 @@ def _guard_sidecar_input_against_non_queryset(source: Any, *, has_sidecar_input:
         )
 
 
+def _ends_in_unique_column(effective: tuple, model: type) -> bool:
+    """Return whether the effective ordering's terminal entry is a unique total-order column.
+
+    A connection's positional offset cursors are only stable across separate
+    requests when the SQL ``ORDER BY`` is a deterministic TOTAL order. An
+    ordering whose terminal column is unique (the pk, or a ``unique=True`` model
+    field) already is one; otherwise ``_finalize_queryset`` appends the pk as a
+    terminal tiebreaker (``docs/feedback.md`` P1).
+
+    Handles both string order refs (``"name"``, ``"-name"``, ``"shelf__code"``,
+    ``"pk"``) and ``OrderBy`` / ``F`` expressions (the NULLS-positioning and the
+    to-many-aggregate paths). A relation path, an aggregate-annotation alias, or
+    any non-``F`` expression is treated as non-unique (so the pk is appended).
+    """
+    if not effective:
+        return False
+    terminal = effective[-1]
+    if isinstance(terminal, str):
+        ref: str | None = terminal.lstrip("-")
+    else:
+        ref = getattr(getattr(terminal, "expression", None), "name", None)
+    if not ref:
+        return False
+    pk = model._meta.pk
+    if ref in ("pk", pk.name, pk.attname):
+        return True
+    if "__" in ref:
+        # A relation traversal (e.g. ``shelf__code``) is not the model's own
+        # unique column; the related column's uniqueness does not make the
+        # parent ordering a total order.
+        return False
+    try:
+        field = model._meta.get_field(ref)
+    except FieldDoesNotExist:
+        # Annotation alias (e.g. a to-many aggregate) or a transform — not a
+        # model column we can call unique.
+        return False
+    return bool(getattr(field, "unique", False) or getattr(field, "primary_key", False))
+
+
 def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> models.QuerySet:
-    """Apply the color-agnostic pipeline tail: default ordering, then optimizer plan.
+    """Apply the color-agnostic pipeline tail: deterministic total order, then optimizer plan.
 
     Steps 5–6 of the Decision 7 pipeline. Single-sited so the sync and async
     resolver bodies share one implementation of the steps that do no I/O (the
     default ``order_by`` and the optimizer plan are pure queryset-method calls
     on a lazy queryset):
 
-    5. Default deterministic ordering — ``order_by(model._meta.pk.attname)``
-       when the queryset is still unordered. A supplied ``orderBy`` (step 4) or
-       a model ``Meta.ordering`` already marks ``qs.ordered`` True and is
-       preserved.
+    5. Deterministic TOTAL ordering — the connection's positional offset cursors
+       (Strawberry's ``ListConnection``) are only stable across separate
+       requests when the ``ORDER BY`` is a unique total order. So append the pk
+       as a terminal tiebreaker UNLESS the effective ordering already ends in a
+       unique column (``_ends_in_unique_column``). This covers all three cases —
+       fully unordered, a supplied ``orderBy``, and a model ``Meta.ordering`` —
+       not just the unordered one (``docs/feedback.md`` P1).
+
+       The effective ordering must NOT be read from ``qs.query.order_by`` alone:
+       that tuple is EMPTY when the order comes from model ``Meta.ordering``
+       (Django applies ``_meta.ordering`` implicitly) even though ``qs.ordered``
+       is True, so reading it in isolation would drop ``Meta.ordering`` and
+       rewrite ``ORDER BY name`` into ``ORDER BY pk``. Fall back to
+       ``_meta.ordering`` when ``qs.query.order_by`` is empty.
     6. Optimizer plan — ``apply_connection_optimization`` applies
        ``select_related`` / ``prefetch_related`` / ``only()`` using the node
        type / model explicitly (the connection field's own cooperation point,
        Decision 11), because the schema middleware never sees the pre-slice
        queryset behind ``ConnectionExtension``.
     """
-    if not qs.ordered:
-        target_model = target_type.__django_strawberry_definition__.model
-        qs = qs.order_by(target_model._meta.pk.attname)
+    target_model = target_type.__django_strawberry_definition__.model
+    effective = tuple(qs.query.order_by) or tuple(target_model._meta.ordering)
+    if not _ends_in_unique_column(effective, target_model):
+        qs = qs.order_by(*effective, target_model._meta.pk.attname)
     return apply_connection_optimization(target_type, qs, info)
 
 
@@ -550,6 +624,15 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
     ``DjangoListField``-style guards plus a Relay-Node guard, then returns
     ``relay.connection(_connection_type_for(target_type), resolver=<synthesized>,
     …)`` (Decision 6 / Decision 7).
+
+    Consumer ``resolver=`` contract: the resolver is invoked as
+    ``resolver(root, info)`` and returns only the BASE queryset / manager /
+    iterable. It never receives the ``filter:`` / ``orderBy:`` arguments — the
+    synthesized resolver consumes those and the pipeline applies them to the
+    resolver's return (the same shape as ``DjangoListField``). A resolver that
+    declares its own ``filter`` / ``order_by`` parameters will not be handed
+    them; use ``Meta.filterset_class`` / ``Meta.orderset_class`` to shape the
+    sidecar arguments.
     """
     # The four shared ``DjangoType``-target guards (see
     # ``list_field.py::_validate_djangotype_target`` for the load-bearing

@@ -137,6 +137,15 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
 
     See ``docs/SPECS/spec-020-list_field-0_0_7.md`` Decision 1 (mechanism) and
     Decision 2 (default-resolver shape) for the design contract.
+
+    Ordering contract (``docs/feedback.md``): a ``DjangoListField`` does NOT
+    guarantee row order unless the query supplies an ``orderBy`` argument or the
+    model declares ``Meta.ordering``. The default resolver returns
+    ``model._default_manager.all()`` with no tiebreaker, so the response array
+    order is database-dependent. This is intentional and asymmetric with
+    ``DjangoConnectionField``, which appends a pk tiebreaker to guarantee a
+    deterministic total order (its positional cursors require one); a flat list
+    has no cursors, so the unordered sequence is acceptable.
     """
     # Decision 5 validation guards: the four shared DjangoType-target
     # constructor checks (see ``_validate_djangotype_target`` for the

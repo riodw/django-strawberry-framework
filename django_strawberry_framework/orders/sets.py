@@ -27,16 +27,47 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from django.http import HttpRequest
 
 from ..exceptions import ConfigurationError
 from ..sets_mixins import ClassBasedTypeNameMixin
+from ..utils.relations import is_many_side_relation_kind, relation_kind
 from .base import RelatedOrder
 from .inputs import Ordering, _field_specs, normalize_input_value
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
+
+
+def _path_traverses_to_many(model: type, field_path: str) -> bool:
+    """Return whether an ORM ``field_path`` traverses a to-many relation from ``model``.
+
+    Walks the ``__``-separated path segment by segment. A segment that is a
+    to-many relation (reverse FK or forward/reverse M2M -- the
+    ``is_many_side_relation_kind`` set) means a raw ``order_by("rel__col")``
+    would add a fan-out JOIN that multiplies parent rows (one row per matching
+    child). Stops at the first non-relation segment (a terminal scalar column)
+    or an unresolvable segment (a transform / lookup), neither of which can
+    multiply. Used by ``OrderSet._resolve_order_expressions`` to decide between
+    a direct ``order_by`` and the row-preserving aggregate form.
+    """
+    current = model
+    for segment in field_path.split("__"):
+        try:
+            field = current._meta.get_field(segment)
+        except FieldDoesNotExist:
+            return False
+        if not getattr(field, "is_relation", False):
+            return False
+        if is_many_side_relation_kind(relation_kind(field)):
+            return True
+        related = getattr(field, "related_model", None)
+        if related is None:
+            return False
+        current = related
+    return False
 
 
 class OrderSetMetaclass(type):
@@ -500,6 +531,47 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         return result
 
     @classmethod
+    def _resolve_order_expressions(
+        cls,
+        flat_orders: list[tuple[str, Ordering | None]],
+    ) -> tuple[dict[str, Any], list]:
+        """Build ``(annotations, order_expressions)`` from flat ``(path, direction)`` pairs.
+
+        A term whose ``field_path`` traverses a **to-many** relation (reverse FK
+        or M2M -- ``_path_traverses_to_many``) is ordered by an AGGREGATE of the
+        child column rather than the raw fan-out path: ``Min`` for an ascending
+        direction, ``Max`` for a descending one, applied through an
+        ``.annotate(<alias>=Min/Max(path))`` and then ordered by ``<alias>``. A
+        raw ``order_by("rel__col")`` across a to-many relation adds a JOIN that
+        multiplies parent rows (one per matching child), which silently
+        duplicates / skips nodes under the connection's positional cursors and
+        inflates ``totalCount``; the aggregate keeps exactly one row per parent
+        (the annotation forces a GROUP BY on the parent), so cursors index
+        distinct nodes and ``.count()`` counts distinct parents
+        (``docs/feedback.md`` P1-B). Scalar columns and to-one relation paths
+        (forward FK / O2O, reverse O2O -- which never multiply) are ordered
+        directly, unchanged.
+
+        NULLS positioning carries onto the aggregate's ``OrderBy`` because the
+        alias is resolved through the same ``Ordering.resolve``; mixed scalar +
+        to-many terms in one ``orderBy`` annotate independently and compose.
+        """
+        model = getattr(getattr(cls, "Meta", None), "model", None)
+        annotations: dict[str, Any] = {}
+        expressions: list = []
+        for index, (field_path, direction) in enumerate(flat_orders):
+            if direction is None:
+                continue
+            if model is not None and _path_traverses_to_many(model, field_path):
+                alias = f"_dst_order_{index}_{field_path.replace('__', '_')}"
+                aggregate = models.Min if "ASC" in direction.name else models.Max
+                annotations[alias] = aggregate(field_path)
+                expressions.append(direction.resolve(alias))
+            else:
+                expressions.append(direction.resolve(field_path))
+        return annotations, expressions
+
+    @classmethod
     def apply_sync(
         cls,
         input_value: Any,
@@ -517,11 +589,15 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         3. Normalize the input into a flat
            ``[(field_path, Ordering | None), ...]`` list.
         4. Convert each ``(field_path, direction)`` pair into a Django
-           ``OrderBy`` expression via ``direction.resolve(field_path)``;
-           ``None`` directions are filtered (Spec Decision 13 -- null-
-           direction edge case).
-        5. Return ``queryset.order_by(*expressions)`` when at least one
-           expression survived; otherwise return ``queryset`` unchanged.
+           ``OrderBy`` expression via ``_resolve_order_expressions`` --
+           scalar / to-one paths order directly via
+           ``direction.resolve(field_path)``, while a to-many path orders by an
+           aggregate annotation (``Min`` / ``Max``) so the parent row is not
+           multiplied (``docs/feedback.md`` P1-B); ``None`` directions are
+           filtered (Spec Decision 13 -- null-direction edge case).
+        5. ``annotate(**annotations)`` (when any to-many term produced one) then
+           ``order_by(*expressions)`` when at least one expression survived;
+           otherwise return ``queryset`` unchanged.
         """
         request = cls._request_from_info(info)
         cls._run_permission_checks(input_value, request)
@@ -529,13 +605,11 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         if not data:
             return queryset
         flat_orders = cls.get_flat_orders(data)
-        expressions = [
-            direction.resolve(field_path)
-            for field_path, direction in flat_orders
-            if direction is not None
-        ]
+        annotations, expressions = cls._resolve_order_expressions(flat_orders)
         if not expressions:
             return queryset
+        if annotations:
+            queryset = queryset.annotate(**annotations)
         return queryset.order_by(*expressions)
 
     @classmethod
@@ -573,11 +647,9 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         if not data:
             return queryset
         flat_orders = cls.get_flat_orders(data)
-        expressions = [
-            direction.resolve(field_path)
-            for field_path, direction in flat_orders
-            if direction is not None
-        ]
+        annotations, expressions = cls._resolve_order_expressions(flat_orders)
         if not expressions:
             return queryset
+        if annotations:
+            queryset = queryset.annotate(**annotations)
         return queryset.order_by(*expressions)

@@ -15,6 +15,7 @@ the ``AGENTS.md`` real-query-priority rule — the path is genuinely unreachable
 from a live ``/graphql/`` query at this slice.
 """
 
+import asyncio
 import gc
 import warnings
 from collections.abc import Iterable
@@ -323,6 +324,39 @@ def test_total_count_requested_scoped_to_direct_children():
         ],
     )
     assert _total_count_requested(nested) is False
+
+
+def test_total_count_requested_recurses_through_fragments():
+    """``_total_count_requested`` recurses THROUGH fragment wrappers to find ``totalCount`` (P2).
+
+    A ``totalCount`` reached only via a ``FragmentSpread`` / ``InlineFragment`` on
+    the connection's direct selection set still counts -- the predicate descends
+    into fragment ``.selections`` (but not into regular fields).
+    """
+    from strawberry.types.nodes import FragmentSpread, InlineFragment
+
+    # ``totalCount`` reached only via a FragmentSpread on the connection's selections.
+    spread = FragmentSpread(
+        name="ConnFields",
+        type_condition="XConnection",
+        directives={},
+        selections=[_selection("totalCount")],
+    )
+    info = SimpleNamespace(
+        selected_fields=[_selection("connectionField", [_selection("edges"), spread])],
+    )
+    assert _total_count_requested(info) is True
+
+    # An InlineFragment WITHOUT totalCount stays False (recursion returns nothing).
+    inline = InlineFragment(
+        type_condition="XConnection",
+        selections=[_selection("pageInfo")],
+        directives={},
+    )
+    info_no_count = SimpleNamespace(
+        selected_fields=[_selection("connectionField", [inline])],
+    )
+    assert _total_count_requested(info_no_count) is False
 
 
 # =============================================================================
@@ -1210,6 +1244,83 @@ def test_apply_connection_optimization_short_circuits_without_optimizer():
     node = _make_node_type("P3aNode", total_count=None)
     qs = Category.objects.all()
     assert apply_connection_optimization(node, qs, SimpleNamespace()) is qs
+
+
+def test_apply_connection_optimization_short_circuits_when_target_has_no_model():
+    """An unregistered target type has no model to plan, so the qs is returned (P3a).
+
+    Hits the ``target_model is None`` guard before the optimizer lookup: a type the
+    registry does not know maps to no Django model, so there is nothing to optimize.
+    """
+    from django_strawberry_framework.optimizer.extension import apply_connection_optimization
+
+    class _UnregisteredNode:  # never registered -> registry.model_for_type(...) is None
+        pass
+
+    qs = Category.objects.all()
+    assert apply_connection_optimization(_UnregisteredNode, qs, SimpleNamespace()) is qs
+
+
+def test_ends_in_unique_column_false_for_unnameable_terminal():
+    """A terminal order expression with no resolvable column name is treated as non-unique (P1).
+
+    ``_ends_in_unique_column`` can only certify uniqueness when it can read a column
+    name (a string ref or an ``OrderBy(F(...))``). A bare function expression (e.g.
+    ``Lower("name")``) exposes no ``.expression.name``, so the helper conservatively
+    reports False and ``_finalize_queryset`` appends the pk tiebreaker.
+    """
+    from django.db.models.functions import Lower
+
+    assert _ends_in_unique_column((Lower("name"),), Category) is False
+
+
+@pytest.mark.django_db
+def test_pipeline_async_coerces_manager_source_and_finalizes():
+    """``_pipeline_async`` coerces a Manager to a queryset and applies the default pk ordering.
+
+    Async twin of the sync default-ordering path: a ``Manager`` source is run through
+    ``.all()``, the async ``get_queryset`` hook, then ``_finalize_queryset`` (which
+    appends the pk tiebreaker to the otherwise-unordered base).
+    """
+    from django_strawberry_framework.connection import _pipeline_async
+
+    node_type = _make_sidecar_node_type("AsyncManagerNode")
+    info = _capture_info(node_type)
+    qs = asyncio.run(
+        _pipeline_async(node_type, Category.objects, info, filter_input=None, order_by_input=None),
+    )
+    assert qs.ordered
+    assert qs.query.order_by == (Category._meta.pk.attname,)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_connection_async_pipeline_applies_filter_and_order():
+    """The async resolver runs the filter -> order -> finalize branches of ``_pipeline_async``.
+
+    A live async execution carrying both ``filter:`` and ``orderBy:`` args drives the
+    async sidecar-apply branches (``filterset_class.apply_async`` /
+    ``orderset_class.apply_async``) that the sync path covers via HTTP. ``_CategoryFilter``
+    / ``_CategoryOrder`` carry no permission gate, so an anonymous request runs through.
+    """
+    from asgiref.sync import sync_to_async
+
+    async def resolver(root, info):
+        # An async resolver forces the connection through the ASYNC pipeline; the
+        # sidecar filter:/orderBy: args are then applied to its result via *_async.
+        return Category.objects.all()
+
+    node_type = _make_sidecar_node_type("AsyncFilterOrderNode")
+    schema = await sync_to_async(_field_schema)(node_type, resolver=resolver)
+    await sync_to_async(services.seed_data)(1)
+    request = HttpRequest()
+    request.user = SimpleNamespace(is_anonymous=True, is_staff=False)
+    result = await schema.execute(
+        '{ items(filter: { name: { exact: "no-such-name" } }, '
+        "orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+        context_value=SimpleNamespace(request=request),
+    )
+    assert result.errors is None, result.errors
+    assert result.data["items"]["edges"] == []
 
 
 def test_clear_connection_type_cache_empties_the_cache():

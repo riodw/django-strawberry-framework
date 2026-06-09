@@ -19,7 +19,7 @@ from collections import OrderedDict
 from types import SimpleNamespace
 
 import pytest
-from apps.library.models import Book, Branch, Genre, Shelf
+from apps.library.models import Book, Branch, Genre, Shelf, TaggedItem
 from django.db.models import F
 from django.http import HttpRequest
 from graphql import GraphQLError
@@ -696,6 +696,61 @@ def test_resolve_order_expressions_uses_max_for_descending_to_many():
     )
     ((_alias, aggregate),) = annotations.items()
     assert isinstance(aggregate, Max)
+
+
+def test_path_traverses_to_many_returns_false_for_nonmultiplying_paths():
+    """``_path_traverses_to_many`` returns False for unresolvable / generic / all-to-one paths (P1-B).
+
+    Covers the three non-multiplying exits: an unresolvable segment
+    (``FieldDoesNotExist``), a relation field with no concrete ``related_model``
+    (a ``GenericForeignKey``), and a path that resolves entirely through to-one
+    relations without ever reaching a to-many.
+    """
+    from django_strawberry_framework.orders.sets import _path_traverses_to_many
+
+    # Unresolvable terminal / mid segment -> FieldDoesNotExist exit.
+    assert _path_traverses_to_many(Branch, "does_not_exist") is False
+    assert _path_traverses_to_many(Book, "shelf__nope") is False
+    # GenericForeignKey: is_relation, not many-side, but related_model is None.
+    assert _path_traverses_to_many(TaggedItem, "content_object") is False
+    # All-to-one chain ending on a relation (no scalar terminal, never to-many).
+    assert _path_traverses_to_many(Book, "shelf__branch") is False
+
+
+@pytest.mark.django_db
+def test_orderset_apply_async_annotates_to_many_order():
+    """``apply_async`` builds the ``Min`` aggregate annotation for a to-many order (P1-B, async path).
+
+    The sync path's annotate step is covered by the live connection test; this
+    pins the ``apply_async`` twin -- a reverse-FK (``shelves``) order flattens to
+    ``shelves__code`` and is applied as a row-preserving ``Min`` aggregate
+    annotation + ``order_by(alias)``, not a fan-out JOIN.
+    """
+    from django.db.models import Min
+
+    class ShelfOrderAgg(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class BranchOrderAgg(OrderSet):
+        shelves = RelatedOrder(ShelfOrderAgg, field_name="shelves")
+
+        class Meta:
+            model = Branch
+            fields = ["name"]
+
+    factory = OrderArgumentsFactory(BranchOrderAgg)
+    BranchInput = factory.arguments
+    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderAggInputType"]
+    input_value = [BranchInput(shelves=ShelfInput(code=Ordering.ASC))]
+    info = _make_info()
+    queryset = Branch.objects.all()
+    result = asyncio.run(BranchOrderAgg.apply_async(input_value, queryset, info))
+    # The to-many term produced a Min aggregate annotation (the async annotate branch),
+    # collapsing the reverse-FK fan-out to one row per parent.
+    assert any(isinstance(agg, Min) for agg in result.query.annotations.values())
+    assert list(result.query.order_by)
 
 
 # Keep imports active so ruff doesn't flag the F-expression / Genre import.

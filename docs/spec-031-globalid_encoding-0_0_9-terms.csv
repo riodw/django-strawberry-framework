@@ -19,6 +19,7 @@ DjangoListField,djangolistfield,Non-Relay list sibling; list{id} picks up the mo
 DjangoOptimizerExtension,djangooptimizerextension,Projects the pk as connector column for resolve_id; unchanged by the payload change
 FK-id elision,fk-id-elision,Reads the FK id off the parent into the node_id slot; type-name slot untouched
 Relation handling,relation-handling,Relation id round-trip; the two-attempt fail-loud message shape reused by decode
+RelatedFilter,relatedfilter,Cross-relation filter traversal; its expanded child filters share the GlobalID type_name validation that Decision 13 makes strategy-aware
 Scalar field conversion,scalar-field-conversion,Maps an auto-pk to GlobalID when relay.Node is declared; this card changes the payload not the converter row
 Multi-database cooperation,multi-database-cooperation,FK-id elision router.db_for_read stub-routing is the multi-DB analogue of model-label-to-model routing
 BigInt scalar,bigint-scalar,A BigAutoField pk stringifies into the node_id slot; PositiveBigIntegerField 0.0.6 breaking-wire-format precedent

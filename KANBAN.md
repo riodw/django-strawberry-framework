@@ -166,6 +166,14 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 - [ ] Relay helper tests prove old type-name IDs can be accepted in transitional mode while new emitted IDs use the model-label strategy.
 - [ ] Standing docs describe the default, the opt-out path, and the pre-1.0 compatibility implications.
 
+<!--
+TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Complete the card wrap after implementation and docs land.
+Pseudocode:
+  - move WIP-ALPHA-031-0.0.9 to the next DONE-NNN-0.0.9 slot
+  - keep the spec reference pointing at docs/spec-031-globalid_encoding-0_0_9.md
+  - do not edit version files; the joint 0.0.9 cut owns the bump
+-->
+
 #### Foundation-slice seam
 
 - Builds on the shipped Relay Node foundation (`Meta.interfaces = (relay.Node,)`, default `resolve_*` methods, and synthesized-id suppression).

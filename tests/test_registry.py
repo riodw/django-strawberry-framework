@@ -39,6 +39,18 @@ def _isolate_global_registry():
     registry.clear()
 
 
+# TODO(spec-031-globalid_encoding-0_0_9 Slice 3): Add direct tests for
+# ``TypeRegistry.definition_for_graphql_name`` once the helper exists.
+# Pseudocode:
+#   register ItemType with Meta.name = "Product"
+#   assert definition_for_graphql_name("Product") is ItemType definition
+#   assert definition_for_graphql_name("ItemType") is None
+#   register a non-Relay DjangoType with matching name
+#   assert decode-facing lookup ignores the non-Relay candidate
+#   register duplicate Relay GraphQL names
+#   assert ambiguous lookup raises or returns the uniform ConfigurationError path
+
+
 def test_register_and_get_round_trips(fresh_registry):
     """``register(model, type_cls)`` makes ``get(model)`` return ``type_cls``."""
 

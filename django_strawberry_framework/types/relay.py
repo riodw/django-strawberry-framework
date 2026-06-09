@@ -315,6 +315,33 @@ def _model_for(cls: type) -> type[models.Model]:
     return cls.__django_strawberry_definition__.model
 
 
+# TODO(spec-031-globalid_encoding-0_0_9 Slices 1-3): Keep the GlobalID
+# strategy helpers in this Relay foundation module; do not create a parallel
+# public module for 0.0.9. The public testing helpers belong to the sibling
+# Full Relay card.
+# Pseudocode:
+#   strategy = definition.globalid_strategy  # noqa: ERA001
+#   if strategy is None:  # noqa: ERA001
+#       strategy = conf.settings.RELAY_GLOBALID_STRATEGY or "model"  # noqa: ERA001
+#   validate strategy in {"model", "type", "type+model"} or callable  # noqa: ERA001
+#   return strategy  # noqa: ERA001
+#
+# Encode install:
+#   if definition.effective_globalid_strategy is not None: return  # noqa: ERA001
+#   if consumer_overrode_resolve_typename(type_cls):  # noqa: ERA001
+#       reject explicit Meta.globalid_strategy, record "custom", install nothing  # noqa: ERA001
+#   elif strategy in {"model", "type+model"}:  # noqa: ERA001
+#       install classmethod returning definition.model._meta.label_lower  # noqa: ERA001
+#   elif strategy == "callable": install checked callable wrapper  # noqa: ERA001
+#   elif strategy == "type": leave Strawberry default in place  # noqa: ERA001
+#
+# Decode:
+#   gid = relay.GlobalID.from_id(gid) if isinstance(gid, str) else gid  # noqa: ERA001
+#   candidate, shape = resolve model-label first, then graphql type name  # noqa: ERA001
+#   enforce candidate.effective_globalid_strategy permits shape  # noqa: ERA001
+#   return candidate.origin, gid.node_id  # noqa: ERA001
+
+
 def _initial_queryset(cls: type) -> models.QuerySet:
     """Return ``model._default_manager.all()`` for the declared model.
 

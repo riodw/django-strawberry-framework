@@ -19,6 +19,16 @@ Companion files:
 
 Current package version: `0.0.8`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
+<!--
+TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Add the GlobalID strategy glossary surface.
+Pseudocode:
+  - add Index rows for `Meta.globalid_strategy` and `RELAY_GLOBALID_STRATEGY`
+  - add Browse-by-category links under Type generation and Relay
+  - add entries marked shipped (`0.0.9`)
+  - extend Relay Node integration with model-label default, four strategies, and precedence
+  - keep links reference-style if the edit introduces cross-file links
+-->
+
 ## Public exports
 
 Symbols re-exported from `django_strawberry_framework`:

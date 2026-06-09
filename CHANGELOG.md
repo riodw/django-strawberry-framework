@@ -18,6 +18,15 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 
 ## [Unreleased]
 
+<!--
+TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Add the GlobalID encoding release notes under [Unreleased].
+Pseudocode:
+  - `### Changed`: model-anchored Relay GlobalID default is a breaking wire-format change
+  - include the migration sequence: set `RELAY_GLOBALID_STRATEGY = "type+model"` first, then flip to `model`
+  - `### Added`: `Meta.globalid_strategy` and `RELAY_GLOBALID_STRATEGY`
+  - do not promote a 0.0.9 heading; the joint cut owns the version bump
+-->
+
 ### Changed
 - Migrated `extensions=[DjangoOptimizerExtension()]` to the module-level-singleton factory form (`extensions=[lambda: _optimizer]`): preserves the instance-bound plan cache and removes Strawberry 0.316.0's instance-form `DeprecationWarning`.
 

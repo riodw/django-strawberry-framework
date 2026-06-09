@@ -1393,3 +1393,36 @@ def test_clear_tolerates_unimportable_order_submodules(fresh_registry):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+
+
+def test_clear_tolerates_unimportable_connection_submodule(fresh_registry):
+    """The connection-cache ``except ImportError`` guard in ``clear()`` is best-effort.
+
+    Connection twin of ``test_clear_tolerates_unimportable_order_submodules``. The
+    connection-type-cache co-clear (``clear_connection_type_cache``) uses a
+    cycle-safe local import (``docs/feedback.md`` P3b). If ``connection.py`` cannot
+    be imported (forced here by poisoning ``sys.modules``), ``clear()`` skips that
+    block and still clears the registry's own state rather than raising.
+    """
+    import sys
+
+    connection_name = "django_strawberry_framework.connection"
+    saved = {connection_name: sys.modules.get(connection_name)}
+
+    class CategoryType:
+        pass
+
+    try:
+        # ``None`` in ``sys.modules`` makes ``from .connection import ...`` raise
+        # ImportError, exercising the connection-cache guard.
+        sys.modules[connection_name] = None
+        fresh_registry.register(Category, CategoryType)
+        # Must not raise even though connection.py cannot be imported.
+        fresh_registry.clear()
+        assert fresh_registry.get(Category) is None
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module

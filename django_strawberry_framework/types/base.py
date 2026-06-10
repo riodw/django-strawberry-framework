@@ -159,8 +159,7 @@ def _validate_connection(meta: type, connection: Any, relay_shaped: bool) -> dic
     (``class Foo(DjangoType, relay.Node)``), so it matches the
     ``DjangoConnectionField`` field guard - "Relay-shaped" means the same thing
     across the whole feature. Taking the bool (not ``interfaces``) keeps the
-    predicate single-sourced and prevents the two surfaces drifting apart again
-    (``docs/feedback.md`` P2).
+    predicate single-sourced and prevents the two surfaces drifting apart again.
     """
     if connection is None:
         return None
@@ -214,7 +213,7 @@ def _validate_globalid_strategy(
     (via ``types/relay.py::_resolve_globalid_strategy``) - spec-031 Decisions
     6/7's "one validator, two sources, source-specific error text" rule. The
     callable arity / sync-ness check lives here once so it is never duplicated
-    across the two call sites (``docs/feedback.md`` P2).
+    across the two call sites.
 
     Structurally modeled on ``_validate_connection``: ``None``-short-circuits
     when unset; a string must be in ``STRING_GLOBALID_STRATEGIES`` (typo guard);
@@ -264,8 +263,7 @@ def _is_async_globalid_callable(value: object) -> bool:
     """Return whether ``value`` is (or wraps) an async GlobalID encoder.
 
     ``inspect.iscoroutinefunction`` returns ``True`` only for the value it is
-    handed directly - it does NOT see through two realistic wrapper shapes
-    (``docs/feedback.md`` P2):
+    handed directly - it does NOT see through two realistic wrapper shapes:
 
     1. A callable *instance* whose ``__call__`` is ``async def`` - the instance
        itself is not a coroutine function, so its ``__call__`` is checked too.
@@ -294,7 +292,7 @@ def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None
     """Reject a wrong-arity or async GlobalID encoder at validation time.
 
     ``inspect.signature`` must bind the four positional ``_GLOBALID_CALLABLE_PARAMS``
-    and the encoder must be sync (spec-031 Decision 6, ``docs/feedback.md`` P2).
+    and the encoder must be sync (spec-031 Decision 6).
     The sync-ness test (``_is_async_globalid_callable``) sees through callable
     instances with an ``async def __call__`` and ``functools.partial`` wrappers
     around either an ``async def`` function or such an instance - all of which
@@ -838,7 +836,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
        ``_validate_interfaces`` (spec-011 Decision 4).
     7. ``Meta.connection`` (if declared) is shape-checked and gated to
        Relay-Node-shaped types via the ``relay_shaped`` bool derived from
-       ``cls`` + the validated interfaces (``docs/feedback.md`` P2), so the
+       ``cls`` + the validated interfaces, so the
        gate accepts the same shapes as the ``DjangoConnectionField`` field guard.
 
     Returns:

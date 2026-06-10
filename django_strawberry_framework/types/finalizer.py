@@ -158,9 +158,13 @@ def _format_model_label_routing_error(
     module so the finalize-time error strings stay grep-stable. Each offender is
     ``(model, emitter_type, primary_strategy)``: a multi-type model whose
     primary's effective strategy cannot decode the model-label IDs an emitter
-    type mints (spec-031 Decision 8, ``docs/feedback.md`` P1). The fix sentence
-    points the consumer at the two resolutions: make the primary model-label
-    decodable, or move the emitter off the model strategies onto ``type``.
+    type mints (spec-031 Decision 8). The fix sentence branches on the
+    primary's recorded strategy: a recorded string strategy can be re-declared
+    to a model-label-decodable one, but a ``None`` primary is not
+    Relay-Node-shaped at all - ``Meta.globalid_strategy`` is rejected on a
+    non-Relay type, so telling the consumer to set it would prescribe an
+    impossible fix. Both branches also offer moving the emitter(s) onto the
+    ``type`` strategy.
     """
     parts = [
         f"  {model.__name__}: {emitter.__name__} emits model-label GlobalIDs but the "
@@ -168,13 +172,26 @@ def _format_model_label_routing_error(
         for model, emitter, primary_strategy in offenders
     ]
     body = "\n".join(parts)
+    fixes = []
+    if any(strategy is not None for _model, _emitter, strategy in offenders):
+        fixes.append(
+            "Set the primary's Meta.globalid_strategy to 'model' or 'type+model' so the "
+            "model-label IDs route correctly, or move the emitting type(s) to the 'type' "
+            "strategy so their IDs stay type-scoped.",
+        )
+    if any(strategy is None for _model, _emitter, strategy in offenders):
+        fixes.append(
+            "A primary whose strategy is None is not Relay-Node-shaped, so it cannot "
+            "declare Meta.globalid_strategy; make the primary Relay-Node-shaped (or "
+            "re-declare Meta.primary on a Relay-Node-shaped type), or move the emitting "
+            "type(s) to the 'type' strategy so their IDs stay type-scoped.",
+        )
+    fix_sentence = " ".join(fixes)
     return (
         "Models whose registered DjangoTypes emit model-label GlobalIDs but whose "
         "primary cannot decode them:\n"
         f"{body}\n\n"
-        "Set the primary's Meta.globalid_strategy to 'model' or 'type+model' so the "
-        "model-label IDs route correctly, or move the emitting type(s) to the 'type' "
-        "strategy so their IDs stay type-scoped."
+        f"{fix_sentence}"
     )
 
 
@@ -189,7 +206,7 @@ def _audit_model_label_routing(multi_type_models: tuple[type[models.Model], ...]
     cannot decode it would reject IDs a secondary emitted.
 
     Iterates the same pre-materialized multi-type-model list the Phase-1
-    ``_audit_primary_ambiguity`` audit consumed (``docs/feedback.md`` P3):
+    ``_audit_primary_ambiguity`` audit consumed:
     a single-type model trivially satisfies the invariant (its lone type both
     emits and decodes) and has no declared primary. For multi-type models the
     Phase-1 ``_audit_primary_ambiguity`` has already guaranteed a primary exists,
@@ -358,7 +375,7 @@ def finalize_django_types() -> None:
     # Runs after the Relay loop has recorded EVERY type's
     # ``effective_globalid_strategy`` (so it reads complete data) and before
     # Phase 3 flips ``finalized`` - a Phase-2.5 raise here is recoverable via the
-    # install step's re-entrancy guard (spec-031 Decision 8/10, feedback P1).
+    # install step's re-entrancy guard (spec-031 Decision 8/10).
     # Reuses the multi-type-model tuple materialized at the top of this finalize.
     _audit_model_label_routing(multi_type_models)
 

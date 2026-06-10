@@ -80,7 +80,7 @@ class DjangoTypeDefinition:
           ``"callable"`` / ``"custom"``), distinct from the raw
           ``globalid_strategy`` slot above (a raw callable value and the resolved
           ``"callable"`` classification string are different things - spec-031
-          Decision 10 / ``docs/feedback.md`` P2). It is set exactly once by the
+          Decision 10). It is set exactly once by the
           Phase-2.5 ``install_globalid_typename_resolver`` step
           (``types/relay.py``), read by ``decode_global_id`` and the
           strategy-aware ``GlobalID`` filter, and doubles as that step's

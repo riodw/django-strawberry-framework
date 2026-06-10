@@ -260,15 +260,23 @@ def _validate_globalid_strategy(
 
 
 def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None:
-    """Reject a wrong-arity or ``async def`` GlobalID encoder at validation time.
+    """Reject a wrong-arity or async GlobalID encoder at validation time.
 
     ``inspect.signature`` must bind the four positional ``_GLOBALID_CALLABLE_PARAMS``
-    and ``inspect.iscoroutinefunction`` must be ``False`` (spec-031 Decision 6,
-    ``docs/feedback.md`` P2). A callable that survives both checks is returned to
-    the caller untouched; the per-call non-``str`` return guard lives in the
-    Slice-2 install closure.
+    and the encoder must be sync (spec-031 Decision 6, ``docs/feedback.md`` P2).
+    "Sync" is checked on BOTH the value itself (catches ``async def`` functions)
+    and its ``__call__`` (catches callable *instances* whose ``__call__`` is
+    ``async def`` — ``inspect.iscoroutinefunction`` returns ``False`` for the
+    instance even though invoking it yields a coroutine). Without the ``__call__``
+    arm such an object survives validation, then ``types/relay.py::encode_typename``
+    invokes it synchronously, gets a coroutine, raises the non-``str`` guard, and
+    leaks an unawaited-coroutine warning — violating the build-time fail-loud rule.
+    A callable that survives both checks is returned to the caller untouched; the
+    per-call non-``str`` return guard lives in the Slice-2 install closure.
     """
-    if inspect.iscoroutinefunction(value):
+    if inspect.iscoroutinefunction(value) or inspect.iscoroutinefunction(
+        getattr(value, "__call__", None),
+    ):
         raise ConfigurationError(
             f"{subject} callable encoder must be sync; "
             f"got an `async def`. Expected `(type_cls, model, root, info) -> str`.",

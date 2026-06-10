@@ -529,6 +529,37 @@ def test_meta_globalid_strategy_async_callable_raises():
                 globalid_strategy = encode
 
 
+def test_meta_globalid_strategy_async_callable_object_raises():
+    """A callable *instance* whose ``__call__`` is ``async def`` is rejected too.
+
+    ``inspect.iscoroutinefunction`` returns ``False`` for the instance itself, so
+    without the ``__call__`` arm of the sync-ness check this object would survive
+    validation and only blow up at first encode (a coroutine return + an unawaited
+    -coroutine warning) instead of failing loud at type creation
+    (``docs/feedback.md`` P2).
+    """
+    from strawberry import relay
+
+    class Encoder:
+        async def __call__(
+            self,
+            type_cls,
+            model,
+            root,
+            info,
+        ):
+            return "custom.label"
+
+    with pytest.raises(ConfigurationError, match="must be sync"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                globalid_strategy = Encoder()
+
+
 def test_meta_globalid_strategy_stored_on_definition():
     """The normalized string strategy lands on ``definition.globalid_strategy``."""
     from strawberry import relay

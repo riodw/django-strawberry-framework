@@ -14,10 +14,10 @@ def _user(info):
 def _resolve_date(dt, info, perm):
     """Tiered date visibility via truncated datetime objects.
 
-    Staff         → full datetime (as-is)
-    view_<model>  → day precision (time zeroed)
-    Authenticated → month precision (day=1, time zeroed)
-    Anonymous     → year precision (month=1, day=1, time zeroed)
+    Staff         -> full datetime (as-is)
+    view_<model>  -> day precision (time zeroed)
+    Authenticated -> month precision (day=1, time zeroed)
+    Anonymous     -> year precision (month=1, day=1, time zeroed)
     """
     user = _user(info)
     if user and user.is_staff:
@@ -65,7 +65,7 @@ class CategoryFieldSet(fieldsets.AdvancedFieldSet):
 
     def resolve_updated_date(self, root, info):
         """Tiered updated_date. If gate denied (anonymous), this still runs
-        as fallback for non-nullable fields — returns year precision.
+        as fallback for non-nullable fields - returns year precision.
         """
         return _resolve_date(root.updated_date, info, "products.view_category")
 
@@ -170,7 +170,7 @@ class EntryFieldSet(fieldsets.AdvancedFieldSet):
         """Permission + content in one method (no check_ gate).
 
         Demonstrates that resolve_ can handle denial directly:
-        anonymous → None (nullable) or raise (non-nullable).
+        anonymous -> None (nullable) or raise (non-nullable).
         Since updatedDate is non-nullable DateTime!, we use
         _resolve_date which returns year-precision for anonymous.
         """

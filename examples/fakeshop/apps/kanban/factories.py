@@ -1,13 +1,13 @@
 """Test-data factories for the kanban app.
 
-Plain ``faker``-backed factory functions (the repo convention — see
+Plain ``faker``-backed factory functions (the repo convention - see
 ``apps.products.services``; no ``factory_boy`` dependency). Each ``make_*``
 returns a saved instance:
 
-- **Lookup factories** (``make_status``, ``make_section`` …) ``get_or_create`` by
+- **Lookup factories** (``make_status``, ``make_section`` ...) ``get_or_create`` by
   ``key`` so repeated calls reuse the one canonical row, exactly like the live
   board. Pass a ``key`` to get a specific row.
-- **Domain factories** (``make_card``, ``make_card_item`` …) create a new row
+- **Domain factories** (``make_card``, ``make_card_item`` ...) create a new row
   each call, auto-filling required FKs by calling the relevant lookup/domain
   factory when one is not supplied, and computing unique ``number`` / ``order``
   values. Override any field with a keyword argument.
@@ -19,7 +19,7 @@ Example::
     card = make_card(title="My card")
     make_card_item(card=card, text="A scope bullet")
 
-The ``UUIDModel`` side-table is intentionally not factoried — the
+The ``UUIDModel`` side-table is intentionally not factoried - the
 ``create_uuid_row`` signal materializes it on first save of every linked model.
 """
 

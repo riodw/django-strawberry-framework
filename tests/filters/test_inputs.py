@@ -709,7 +709,7 @@ def test_camel_case_lowercases_head_and_pascals_rest():
 
 
 # ---------------------------------------------------------------------------
-# _scalar_from_form_field — form-field -> Python scalar mapping
+# _scalar_from_form_field - form-field -> Python scalar mapping
 # ---------------------------------------------------------------------------
 
 
@@ -718,7 +718,7 @@ def test_scalar_from_form_field_maps_each_recognized_shape():
 
     Regression pin for the ``django.forms`` hierarchy trap: ``FloatField``
     and ``DecimalField`` BOTH subclass ``IntegerField``, so they must be
-    matched before the ``IntegerField`` catch — otherwise a float/decimal
+    matched before the ``IntegerField`` catch - otherwise a float/decimal
     filter mis-maps to ``int``.
     """
     import datetime
@@ -742,7 +742,7 @@ def test_scalar_from_form_field_maps_each_recognized_shape():
 
 
 # ---------------------------------------------------------------------------
-# _scalar_from_model_field — model-field -> Python scalar mapping
+# _scalar_from_model_field - model-field -> Python scalar mapping
 # ---------------------------------------------------------------------------
 
 
@@ -852,7 +852,7 @@ def test_model_field_for_filter_returns_none_for_unknown_field_name():
 
 
 # ---------------------------------------------------------------------------
-# _build_input_fields — RelatedFilter with an unresolved (None) target
+# _build_input_fields - RelatedFilter with an unresolved (None) target
 # ---------------------------------------------------------------------------
 
 
@@ -874,7 +874,7 @@ def test_build_input_fields_skips_related_filter_with_none_target():
 
 
 # ---------------------------------------------------------------------------
-# _build_input_fields — HIDE_FLAT_FILTERS toggle (django-graphene-filters parity)
+# _build_input_fields - HIDE_FLAT_FILTERS toggle (django-graphene-filters parity)
 # ---------------------------------------------------------------------------
 
 
@@ -943,7 +943,7 @@ def test_build_input_fields_hides_flat_relational_when_hide_flat_filters_true(se
 def test_build_input_fields_hides_deep_multi_hop_flat_relational_when_true(settings):
     """``HIDE_FLAT_FILTERS=True`` hides flat traversal at EVERY depth, not just one hop.
 
-    A two-hop chain (Branch → shelves → books → title) produces a flat
+    A two-hop chain (Branch -> shelves -> books -> title) produces a flat
     ``shelves_books_title`` field when shown; the ``is_expanded_child`` guard keys on
     the first path segment, so it drops the path at any depth. The relation stays
     reachable through the chained nested branches.
@@ -1002,7 +1002,7 @@ def test_build_input_fields_keeps_non_relatedfilter_flat_traversal_visible_when_
 
 
 # ---------------------------------------------------------------------------
-# clear_filter_input_namespace — cycle-safe import guards
+# clear_filter_input_namespace - cycle-safe import guards
 # ---------------------------------------------------------------------------
 
 
@@ -1029,7 +1029,7 @@ def test_clear_filter_input_namespace_tolerates_unimportable_submodules():
 
 
 # ---------------------------------------------------------------------------
-# _iter_filterset_subclasses — diamond dedup
+# _iter_filterset_subclasses - diamond dedup
 # ---------------------------------------------------------------------------
 
 

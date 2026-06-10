@@ -1,12 +1,12 @@
 """Test-data factories for the glossary app.
 
-Plain ``faker``-backed factory functions (the repo convention — see
+Plain ``faker``-backed factory functions (the repo convention - see
 ``apps.products.services``; no ``factory_boy`` dependency). Each ``make_*``
 returns a saved instance:
 
-- **Lookup factories** (``make_glossary_status`` …) ``get_or_create`` by ``key``
+- **Lookup factories** (``make_glossary_status`` ...) ``get_or_create`` by ``key``
   so repeated calls reuse the one canonical row.
-- **Domain factories** (``make_glossary_term`` …) create a new row each call,
+- **Domain factories** (``make_glossary_term`` ...) create a new row each call,
   auto-filling required FKs and computing unique ``anchor`` / ``order`` values.
   Override any field with a keyword argument.
 

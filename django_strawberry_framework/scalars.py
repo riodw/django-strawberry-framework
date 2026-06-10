@@ -4,11 +4,11 @@ Today: ``BigInt``. Future scalars (e.g. ``Upload`` per TODO-ALPHA-035-0.0.11) la
 
 ``BigInt`` is a JSON-safe scalar typically used to map Django's 64-bit
 integer fields (``BigIntegerField``, ``PositiveBigIntegerField``). It is
-technically arbitrary-precision — serialized as a decimal string via Python
+technically arbitrary-precision - serialized as a decimal string via Python
 ``str(int_value)`` so values past GraphQL's signed 32-bit ``Int`` boundary
 survive transit without truncation. The strict parser and serializer keep the
 wire-level input and output sides symmetric (decimal string in, decimal string
-out), even though the in-Python accept-sets differ — the parser additionally
+out), even though the in-Python accept-sets differ - the parser additionally
 accepts ``int`` for direct-call sites while the serializer rejects ``str`` so a
 schema cannot emit a value the parser would reject.
 """
@@ -35,14 +35,14 @@ def _parse_bigint(value: Any) -> int:
         - Decimal integer strings matching ``^(0|-?[1-9][0-9]*)$``.
 
     Rejects (with ValueError):
-        - bool (True / False) — bool subclasses int; explicit reject
-        - float (1.9, 0.0, -1.0) — would otherwise truncate via int()
+        - bool (True / False) - bool subclasses int; explicit reject
+        - float (1.9, 0.0, -1.0) - would otherwise truncate via int()
         - empty / whitespace-padded strings
         - underscore-separated digits ("1_000")
         - leading-plus strings ("+1")
         - leading-zero strings ("01", "007")
         - "-0" (regex permits "0" only)
-        - Unicode decimal digits ("１２")
+        - Unicode (e.g. fullwidth) decimal digit strings
         - non-decimal strings ("abc", "1.9", "1e3", "0x10")
         - None and other types
     """
@@ -72,10 +72,10 @@ def _serialize_bigint(value: Any) -> str:
         - Python int (excluding bool)
 
     Rejects (with TypeError):
-        - bool (True / False) — bool subclasses int; explicit reject
+        - bool (True / False) - bool subclasses int; explicit reject
         - float, str, Decimal, None, custom objects, anything else
 
-    Strict on the output side too because BigInt is a public scalar — a
+    Strict on the output side too because BigInt is a public scalar - a
     permissive ``serialize=str`` would let a schema emit values the parser
     rejects, breaking the input/output symmetry contract.
     """

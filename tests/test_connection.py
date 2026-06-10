@@ -11,7 +11,7 @@ The ``DjangoConnectionField`` factory (Slice 2) is not yet reachable from a live
 through an in-process Strawberry schema (the real ``info`` / slicing path). The
 ``first`` + ``last`` guard is driven at the ``resolve_connection`` classmethod
 directly (the guard runs before any ``info`` use). This is the correct home per
-the ``AGENTS.md`` real-query-priority rule — the path is genuinely unreachable
+the ``AGENTS.md`` real-query-priority rule - the path is genuinely unreachable
 from a live ``/graphql/`` query at this slice.
 """
 
@@ -128,7 +128,7 @@ def test_django_connection_is_listconnection_subclass():
 def test_first_and_last_raises_graphql_error():
     """``resolve_connection`` with both ``first`` and ``last`` raises ``GraphQLError``.
 
-    The package's own guard — Strawberry's ``SliceMetadata.from_arguments`` does
+    The package's own guard - Strawberry's ``SliceMetadata.from_arguments`` does
     not reject the combination. Driven at the classmethod directly with a
     sentinel ``info`` (the guard runs before any ``info`` use).
     """
@@ -175,7 +175,7 @@ def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     P1 (``docs/feedback.md``): two DjangoType classes can share a Python
     ``__name__`` while declaring distinct ``Meta.name`` values. Naming the
     generated connection from ``__name__`` produces two classes with the SAME
-    SDL type name, which Strawberry collapses into one — corrupting both root
+    SDL type name, which Strawberry collapses into one - corrupting both root
     fields' ``edges`` / node types. Deriving from ``graphql_type_name`` (the
     canonical surface name, ``Meta.name`` when set) keeps them distinct.
     """
@@ -206,7 +206,7 @@ def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     cat_conn = _connection_type_for(category_node)
     item_conn = _connection_type_for(item_node)
 
-    # Distinct classes, each named from its ``graphql_type_name`` (Meta.name) —
+    # Distinct classes, each named from its ``graphql_type_name`` (Meta.name) -
     # not a single colliding ``NodeTypeConnection``.
     assert cat_conn.__name__ == "PublicCategoryConnection"
     assert item_conn.__name__ == "PublicItemConnection"
@@ -236,7 +236,7 @@ def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     assert "PublicCategoryConnection" in sdl
     assert "PublicItemConnection" in sdl
     assert "NodeTypeConnection" not in sdl
-    # Each connection exposes its own edge type — no cross-wiring of node edges.
+    # Each connection exposes its own edge type - no cross-wiring of node edges.
     assert "PublicCategoryEdge" in sdl
     assert "PublicItemEdge" in sdl
 
@@ -301,7 +301,7 @@ def test_total_count_requested_false_when_absent():
 
 
 def test_total_count_requested_scoped_to_direct_children():
-    """A ``totalCount`` nested in ``edges { node { … } }`` does NOT fire the predicate (P2).
+    """A ``totalCount`` nested in ``edges { node { ... } }`` does NOT fire the predicate (P2).
 
     ``_total_count_requested`` checks only the connection's DIRECT children, so a
     (future) node-level ``totalCount`` deep in the subtree must not make the
@@ -310,7 +310,7 @@ def test_total_count_requested_scoped_to_direct_children():
     """
     # Direct-child ``totalCount`` still counts.
     assert _total_count_requested(_info_with_selection("edges", "totalCount")) is True
-    # ``totalCount`` ONLY nested inside ``edges { node { … } }`` must NOT count:
+    # ``totalCount`` ONLY nested inside ``edges { node { ... } }`` must NOT count:
     # the predicate does not descend into a regular field's selections.
     nested = SimpleNamespace(
         selected_fields=[
@@ -369,7 +369,7 @@ def test_total_count_counts_post_filter_pre_slice_when_selected():
     """A query selecting ``totalCount`` counts the full pre-slice queryset.
 
     ``first: 1`` slices ``edges`` to one entry, but ``totalCount`` reflects the
-    whole (post-filter, pre-slice) set — the Decision 4 / Decision 7 contract.
+    whole (post-filter, pre-slice) set - the Decision 4 / Decision 7 contract.
     """
     services.seed_data(3)
     expected = Category.objects.count()
@@ -388,7 +388,7 @@ def test_total_count_counts_post_filter_pre_slice_when_selected():
 def test_total_count_not_counted_when_not_selected():
     """A query that omits ``totalCount`` resolves correctly without a count.
 
-    The field resolver returns ``None`` (no count was captured) — selection
+    The field resolver returns ``None`` (no count was captured) - selection
     gating means ``resolve_connection`` ran no count query.
     """
     services.seed_data(2)
@@ -399,7 +399,7 @@ def test_total_count_not_counted_when_not_selected():
     assert result.errors is None
     assert len(result.data["items"]["edges"]) == 1
 
-    # When totalCount IS selected on the same schema, the count is present —
+    # When totalCount IS selected on the same schema, the count is present -
     # proving the field exists and gating is per-query, not type-wide.
     counted = schema.execute_sync("{ items { totalCount } }")
     assert counted.errors is None
@@ -436,7 +436,7 @@ async def test_total_count_async_path_counts_via_acount():
 
 
 # =============================================================================
-# Slice 2 — DjangoConnectionField factory + pipeline + sidecar args
+# Slice 2 - DjangoConnectionField factory + pipeline + sidecar args
 # =============================================================================
 
 
@@ -589,7 +589,7 @@ def test_connection_field_accepts_direct_relay_node_inheritance():
     supported, fully-finalizable Relay shape (the finalizer keys Relay wiring off
     ``implements_relay_node``, not a non-empty ``Meta.interfaces``). The
     connection guard reuses the canonical ``_is_relay_shaped`` predicate, so it
-    accepts this Strawberry-native spelling without a ``ConfigurationError`` —
+    accepts this Strawberry-native spelling without a ``ConfigurationError`` -
     even though ``definition.interfaces`` is empty.
     """
 
@@ -611,7 +611,7 @@ def test_connection_type_for_generates_total_count_for_direct_relay_inheritance(
     """Direct ``relay.Node`` inheritance can use the per-type ``totalCount`` opt-in (P2).
 
     ``docs/feedback.md`` P2: once ``Meta.connection`` validation accepts direct
-    inheritance, the ``totalCount`` surface works for it too —
+    inheritance, the ``totalCount`` surface works for it too -
     ``_connection_type_for`` generates the concrete ``<Name>Connection`` carrying
     ``total_count`` exactly as it does for the ``Meta.interfaces`` spelling.
     """
@@ -757,8 +757,8 @@ def test_consumer_resolver_iterable_with_sidecar_input_raises():
 def test_consumer_resolver_iterable_with_total_count_selected_raises():
     """M1: selecting ``totalCount`` over a non-queryset consumer return raises a package error.
 
-    NOT the engine's ``Cannot return null for non-nullable field …totalCount``
-    violation — the count helper raises a clear ``GraphQLError`` because a plain
+    NOT the engine's ``Cannot return null for non-nullable field ...totalCount``
+    violation - the count helper raises a clear ``GraphQLError`` because a plain
     iterable cannot be ``.count()``-ed into the non-null ``totalCount: Int!``.
     """
     services.seed_data(1)
@@ -784,8 +784,8 @@ async def test_attach_count_async_awaits_before_guard_raises():
     Regression guard for the await-before-raise discipline (Decision 10, mirroring
     ``types/relay.py::_apply_get_queryset_sync``'s close-before-raise). With the
     pre-fix ordering (guard first), a guard-raise on the non-queryset + ``totalCount``
-    path left the queued connection coroutine unawaited → ``RuntimeWarning: coroutine
-    … was never awaited`` (a hard failure under ``-W error``). Deterministic: assert
+    path left the queued connection coroutine unawaited -> ``RuntimeWarning: coroutine
+    ... was never awaited`` (a hard failure under ``-W error``). Deterministic: assert
     the coroutine was actually awaited (``consumed``) AND that no unawaited-coroutine
     ``RuntimeWarning`` leaks even after a forced GC.
     """
@@ -820,7 +820,7 @@ async def test_async_consumer_resolver_iterable_with_total_count_selected_raises
     An ``async def`` consumer ``resolver=`` returning a non-queryset iterable while
     ``totalCount`` is selected drives ``_attach_count_async`` through the real
     ``resolve_connection`` async path. The guard's ``GraphQLError`` surfaces (NOT the
-    engine ``Cannot return null for non-nullable field …totalCount`` violation). The
+    engine ``Cannot return null for non-nullable field ...totalCount`` violation). The
     deterministic no-leak assertion lives in
     ``test_attach_count_async_awaits_before_guard_raises``.
     """
@@ -877,7 +877,7 @@ def test_default_ordering_preserves_supplied_orderby():
     info = _capture_info(node_type)
 
     # A pre-ordered source stands in for a supplied ``orderBy`` / model
-    # ``Meta.ordering`` — both mark ``qs.ordered`` True before the default step.
+    # ``Meta.ordering`` - both mark ``qs.ordered`` True before the default step.
     qs = _pipeline_sync(
         node_type,
         Category.objects.order_by("name"),
@@ -893,7 +893,7 @@ def test_default_ordering_preserves_meta_ordering():
     """A queryset that is already ``ordered`` keeps its ordering (the ``Meta.ordering`` shape).
 
     ``qs.ordered`` is the property the default-ordering step branches on; a
-    descending pre-order stands in for a model ``Meta.ordering`` — the pk default
+    descending pre-order stands in for a model ``Meta.ordering`` - the pk default
     must not fire because ``qs.ordered`` is already True.
     """
     from django_strawberry_framework.connection import _pipeline_sync
@@ -1029,7 +1029,7 @@ def test_sync_context_async_get_queryset_raises_sync_misuse():
 
 
 # =============================================================================
-# Slice 3 — optimizer cooperation point + connection-aware-planning gap guard
+# Slice 3 - optimizer cooperation point + connection-aware-planning gap guard
 # =============================================================================
 
 
@@ -1063,7 +1063,7 @@ def test_root_connection_field_queryset_is_planned():
     """The field's OWN helper runs on the pre-slice queryset (cooperation point, Decision 11).
 
     A root ``DjangoConnectionField`` self-optimizes by calling
-    ``apply_connection_optimization`` before ``ConnectionExtension`` slices —
+    ``apply_connection_optimization`` before ``ConnectionExtension`` slices -
     the schema middleware (``DjangoOptimizerExtension.resolve``) cannot reach the
     pre-slice queryset behind the connection result, so any published plan over
     the connection IS the field's own cooperation point running (per the spec's
@@ -1075,7 +1075,7 @@ def test_root_connection_field_queryset_is_planned():
     ran for the connection field, which it does ONLY through the field's helper.
 
     SCOPE-HONEST ASSERTION (the ``WIP-ALPHA-033-0.0.9`` gap): in ``0.0.9`` the
-    flat walker is connection-unaware — it cannot descend ``edges { node }`` into
+    flat walker is connection-unaware - it cannot descend ``edges { node }`` into
     the node type's fields, so the plan it derives for a connection field is
     EMPTY (no ``select_related`` / ``prefetch_related`` / ``only()``), even for a
     direct relation like ``category``. A non-empty plan (the spec sub-check's
@@ -1084,11 +1084,11 @@ def test_root_connection_field_queryset_is_planned():
     into this exact cooperation point. This test therefore pins what ``0.0.9``
     truthfully ships: the cooperation point is WIRED and RUNS (an empty plan is
     published), distinguishing it from the middleware (which publishes nothing
-    for a connection field). See the build report's ``Notes for Worker 1`` —
+    for a connection field). See the build report's ``Notes for Worker 1`` -
     asserting a non-empty plan here is a plan-vs-implementation conflict.
     """
     services.seed_data(2)
-    # ``ItemNode`` exposes the forward FK ``category`` — the relation a plain
+    # ``ItemNode`` exposes the forward FK ``category`` - the relation a plain
     # ``DjangoListField`` over the same type plans as ``select_related`` (the
     # control: ``tests/optimizer/test_extension.py`` B2). Under a connection it
     # is NOT planned, which is the gap this test pins.
@@ -1126,7 +1126,7 @@ def test_nested_connection_unplanned_raises_under_strictness():
     Pins the seam ``WIP-ALPHA-033-0.0.9`` closes (no silent cap, spec Edge-cases
     "Nested connection selection"). A root ``DjangoConnectionField`` over
     ``CategoryNode`` reaches the reverse-FK many-side relation ``items`` under
-    ``edges { node { items { ... } } }`` — a nested access the connection-unaware
+    ``edges { node { items { ... } } }`` - a nested access the connection-unaware
     flat walker does NOT plan. Under Strictness mode ``"raise"`` the unplanned
     relation access trips ``types/resolvers.py::_check_n1`` and surfaces as an
     ``OptimizerError("Unplanned N+1: items")`` in ``result.errors``.
@@ -1152,7 +1152,7 @@ def test_nested_connection_unplanned_raises_under_strictness():
 
 
 # =============================================================================
-# Deterministic-total-order tiebreaker (P1 — docs/feedback.md)
+# Deterministic-total-order tiebreaker (P1 - docs/feedback.md)
 # =============================================================================
 
 
@@ -1190,7 +1190,7 @@ def test_finalize_queryset_appends_pk_tiebreaker_to_non_unique_ordering():
 
     Otherwise the connection's positional offset cursors are unstable across
     requests when ties exist (rows silently skipped / duplicated across pages).
-    No DB query runs — ``_finalize_queryset`` only shapes the lazy queryset and
+    No DB query runs - ``_finalize_queryset`` only shapes the lazy queryset and
     the optimizer cooperation point short-circuits with no optimizer installed.
     """
     node = _node_over(Item, "P1ItemNode")

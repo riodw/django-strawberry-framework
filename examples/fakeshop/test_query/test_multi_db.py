@@ -3,31 +3,31 @@
 Scope (per spec Goals item 3 + Test plan ``### examples/fakeshop/test_query/test_multi_db.py``):
 two live ``/graphql/`` HTTP tests against the sharded fakeshop layout.
 
-- Test 1 — seeding rows on ``shard_b`` and reading them through ``/graphql/``
+- Test 1 - seeding rows on ``shard_b`` and reading them through ``/graphql/``
   via a ``.using("shard_b")`` root resolver returns the seeded rows.
-- Test 2 — cross-shard isolation: a chain seeded on ``default`` is NOT
+- Test 2 - cross-shard isolation: a chain seeded on ``default`` is NOT
   visible through a ``using("shard_b")`` resolver.
 
 Critical contract pins (do not violate without an explicit spec revision):
 
 - Module-level ``pytest.skip(allow_module_level=True)`` gate per Decision 6
-  (NOT ``pytest.mark.skipif`` — the env var changes ``config.settings.DATABASES``
+  (NOT ``pytest.mark.skipif`` - the env var changes ``config.settings.DATABASES``
   at module import time; mark evaluation happens after import).
 - ``@pytest.mark.django_db(databases=["default", "shard_b"])`` per rev2 H8
   on each test (pytest-django blocks non-default-DB access otherwise).
-- Full ``Branch → Shelf → Book`` chain per alias via ``_seed_book_chain``
+- Full ``Branch -> Shelf -> Book`` chain per alias via ``_seed_book_chain``
   per rev2 H9 (``Book.shelf`` and ``Shelf.branch`` are non-null FKs).
 - Live ``/graphql/`` HTTP exclusively via ``django.test.Client.post(...)``
-  per rev2 H7 — NO in-process ``execute_sync(...)`` alternative.
+  per rev2 H7 - NO in-process ``execute_sync(...)`` alternative.
 - Schema built INSIDE a per-test fixture that runs AFTER the autouse
-  reload (rev3 R4) — the holder pattern below defers schema construction
+  reload (rev3 R4) - the holder pattern below defers schema construction
   past the registry clear so the test sees freshly-reloaded ``BookType``.
 - ``override_settings(ROOT_URLCONF=__name__)`` per rev3 R5 with
   ``clear_url_caches()`` on enter AND in teardown.
 """
 
 # Top-block imports support the autouse reload fixture per Decision 7 +
-# rev4 V6 — sys.modules.get(...), importlib.reload(...) /
+# rev4 V6 - sys.modules.get(...), importlib.reload(...) /
 # importlib.import_module(...). os is the env-var gate.
 
 import importlib
@@ -43,7 +43,7 @@ if os.environ.get("FAKESHOP_SHARDED") != "1":
     )
 
 # Below this line, FAKESHOP_SHARDED=1 is set and ``shard_b`` is in DATABASES.
-# These imports run only after the skip check passes — otherwise
+# These imports run only after the skip check passes - otherwise
 # ``from apps.library import models`` would crash in single-DB mode where
 # ``shard_b`` is not registered in DATABASES.
 
@@ -115,7 +115,7 @@ urlpatterns = [path("graphql/", _graphql_view)]
 
 
 # ---------------------------------------------------------------------------
-# Per-test schema fixture (runs AFTER the autouse reload — rev3 R4)
+# Per-test schema fixture (runs AFTER the autouse reload - rev3 R4)
 # ---------------------------------------------------------------------------
 
 
@@ -123,7 +123,7 @@ urlpatterns = [path("graphql/", _graphql_view)]
 def _build_test_schema(_reload_project_schema_for_acceptance_tests):
     """Build the per-test schema against the freshly-reloaded ``BookType``."""
     # IMPORTANT: import ``BookType`` HERE (inside the fixture body), not at
-    # module top — module-level imports of ``apps.library.schema.BookType``
+    # module top - module-level imports of ``apps.library.schema.BookType``
     # would hold stale class objects after each autouse reload cycle
     # (per the ``examples/fakeshop/test_query/test_library_api.py::_reload_project_schema_for_acceptance_tests #"tests must not module-level import classes"``
     # invariant). The fixture's
@@ -150,12 +150,12 @@ def _build_test_schema(_reload_project_schema_for_acceptance_tests):
 
 
 # ---------------------------------------------------------------------------
-# Seed helper — full Branch → Shelf → Book chain per alias (rev2 H9)
+# Seed helper - full Branch -> Shelf -> Book chain per alias (rev2 H9)
 # ---------------------------------------------------------------------------
 
 
 def _seed_book_chain(alias: str, *, title: str) -> "models.Book":
-    """Seed a full ``Branch → Shelf → Book`` chain on ``alias``.
+    """Seed a full ``Branch -> Shelf -> Book`` chain on ``alias``.
 
     ``Branch.name`` is ``unique=True`` (``examples/fakeshop/apps/library/models.py::Branch #"name = models.TextField(unique=True)"``), so the
     branch / shelf field values are varied by ``title`` to keep two calls on
@@ -178,7 +178,7 @@ def _seed_book_chain(alias: str, *, title: str) -> "models.Book":
 
 
 # ---------------------------------------------------------------------------
-# Tests — live /graphql/ HTTP against the sharded layout
+# Tests - live /graphql/ HTTP against the sharded layout
 # ---------------------------------------------------------------------------
 
 

@@ -1,4 +1,4 @@
-"""``DjangoListField`` — non-Relay ``list[T]`` field for root Query fields.
+"""``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
 
 Spec: ``docs/SPECS/spec-020-list_field-0_0_7.md``.
 Target release: ``0.0.7``.
@@ -25,16 +25,16 @@ __all__ = ("DjangoListField",)
 
 # Consumer-resolver post-processing helpers (rev6 H2: module-scope placement,
 # rev6 H3: ``_consumer`` suffix). The default-resolver path bypasses these
-# because ``qs`` is already known to be a ``QuerySet`` from ``Manager.all()`` —
+# because ``qs`` is already known to be a ``QuerySet`` from ``Manager.all()`` -
 # no Manager-to-QuerySet coercion or isinstance branching is needed there.
 
 
 def _post_process_consumer_sync(target_type: type, result: Any, info: Info) -> Any:
     if isinstance(result, models.Manager):
-        result = result.all()  # field-wrapper Manager → QuerySet coercion (rev4 M1).
+        result = result.all()  # field-wrapper Manager -> QuerySet coercion (rev4 M1).
     if isinstance(result, models.QuerySet):
         return _apply_get_queryset_sync(target_type, result, info)
-    return result  # Python list / generator — pass through (rev2 H1).
+    return result  # Python list / generator - pass through (rev2 H1).
 
 
 async def _post_process_consumer_async(target_type: type, result: Any, info: Info) -> Any:
@@ -54,10 +54,10 @@ def _is_async_callable(fn: Any) -> bool:
     ``django_strawberry_framework/types/base.py::_is_async_globalid_callable``).
     Two checks on that target then cover the practical resolver shapes:
 
-    - ``inspect.iscoroutinefunction(target)`` — catches ``async def`` functions
-      (and, with the partial unwrapped, a ``functools.partial`` around one —
+    - ``inspect.iscoroutinefunction(target)`` - catches ``async def`` functions
+      (and, with the partial unwrapped, a ``functools.partial`` around one -
       though ``inspect`` also looks through partials of plain functions natively).
-    - ``inspect.iscoroutinefunction(target.__call__)`` — catches callable
+    - ``inspect.iscoroutinefunction(target.__call__)`` - catches callable
       instances whose ``__call__`` is ``async def``. ``iscoroutinefunction``
       checks the function flag of the immediate argument, so a callable instance
       is False; descending into ``__call__`` recovers the async flag. Without
@@ -77,14 +77,14 @@ def _is_async_callable(fn: Any) -> bool:
     and ``test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied``.
 
     Resolvers whose sync entry point returns an awaitable (e.g., a plain ``def``
-    that produces a coroutine from somewhere else) remain undetected — the
+    that produces a coroutine from somewhere else) remain undetected - the
     contract is that resolvers signal sync-vs-async through the standard
     coroutine-function flag, not through opaque awaitable returns.
     """
     target = fn.func if isinstance(fn, functools.partial) else fn
     if inspect.iscoroutinefunction(target):
         return True
-    # Inspecting ``__call__``'s async-ness, not testing callability — so
+    # Inspecting ``__call__``'s async-ness, not testing callability - so
     # ``callable()`` (what B004 suggests) is the wrong tool here.
     call = getattr(target, "__call__", None)  # noqa: B004
     return call is not None and inspect.iscoroutinefunction(call)
@@ -105,13 +105,13 @@ def _validate_djangotype_target(
     checks fail at the line that wrote ``<field>(...)`` rather than at
     finalize-time.
 
-    Order is load-bearing — each target-type check assumes the previous one
+    Order is load-bearing - each target-type check assumes the previous one
     passed. The third (own-class registration) check is the strict invariant:
     ``__django_strawberry_definition__`` is assigned by
     ``DjangoType.__init_subclass__`` (``types/base.py::DjangoType.__init_subclass__``)
     only for concrete subclasses carrying their own ``Meta`` with a ``model``.
     The attribute is inherited via MRO, so ``hasattr`` would accept a subclass
-    that omits its own ``Meta`` — binding the field to a target whose
+    that omits its own ``Meta`` - binding the field to a target whose
     definition, ``Meta.primary`` state, and model belong to the parent.
     ``definition.origin is target_type`` is the strict own-class invariant
     (NOT ``hasattr``).
@@ -139,7 +139,7 @@ def _validate_djangotype_target(
         raise ConfigurationError(f"{field} resolver must be callable.")
 
 
-def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — consumer usage is `DjangoListField(BranchType)`
+def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoListField(BranchType)`
     target_type: type,
     *,
     resolver: Callable | None = None,
@@ -166,7 +166,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
     # load-bearing ordering and the own-class registration invariant).
     _validate_djangotype_target(target_type, resolver, field="DjangoListField")
     # Async-detection asymmetry (rev5 H2; see spec Decision 2,
-    # "Async-detection asymmetry — intentional, not a harmonization candidate"):
+    # "Async-detection asymmetry - intentional, not a harmonization candidate"):
     # ``_default`` uses runtime ``in_async_context()`` per-call so the same
     # factory output dispatches correctly under both ``schema.execute_sync``
     # and ``await schema.execute``. The consumer-wrapper branch below commits

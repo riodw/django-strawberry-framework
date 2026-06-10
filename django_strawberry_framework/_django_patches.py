@@ -5,18 +5,18 @@ consumers of ``django-strawberry-framework`` in multi-database setups.
 The patches are applied once from the package's
 :meth:`apps.DjangoStrawberryFrameworkConfig.ready`, so consumers get
 them automatically by having ``"django_strawberry_framework"`` in
-``INSTALLED_APPS`` — no opt-in boilerplate (no ``conftest.py``
+``INSTALLED_APPS`` - no opt-in boilerplate (no ``conftest.py``
 workaround, no test-case base class to inherit) is required on the
 consumer side.
 
 Currently implemented
 ---------------------
 
-- :func:`_patched_remove_databases_failures` — defensive replacement
+- :func:`_patched_remove_databases_failures` - defensive replacement
   for :meth:`django.test.testcases.SimpleTestCase._remove_databases_failures`.
   Django defines the method on ``SimpleTestCase`` so a single patch
   covers every test-case class in Django's hierarchy
-  (``SimpleTestCase`` → ``TransactionTestCase`` → ``TestCase``).
+  (``SimpleTestCase`` -> ``TransactionTestCase`` -> ``TestCase``).
   Adds an ``isinstance(method, _DatabaseFailure)`` guard before the
   unwrap step, so any code path that replaced a connection method
   between ``setUpClass`` and ``tearDownClass`` no longer crashes the
@@ -63,19 +63,19 @@ cannot adopt the cache-panel sentinel approach for
 available at this layer is the combined guard strategy:
 
 * **Wrap-time prevention** (debug-toolbar SQL panel's flavor, and this
-  package's ``safe_wrap_connection_method`` helper) — each well-behaved
+  package's ``safe_wrap_connection_method`` helper) - each well-behaved
   wrap-party declines to clobber Django's wrapper when it sees one
   already installed. This is the cheapest path because it avoids
   installing another wrapper at all.
 
-* **Unwrap-time recovery** (this package's automatic patch) — Django's
+* **Unwrap-time recovery** (this package's automatic patch) - Django's
   teardown becomes robust to wrappers having been replaced anyway. This
   is necessary because this package cannot force every third-party
   wrapper to participate in the wrap-time protocol.
 
 The two guards don't fix the underlying multi-party mutation design,
-but together they protect against the worst observable symptom —
-crashes during ``tearDownClass`` — at the two lifecycle sites this
+but together they protect against the worst observable symptom -
+crashes during ``tearDownClass`` - at the two lifecycle sites this
 package can influence.
 
 This package does NOT wrap any connection method itself, so it has
@@ -142,7 +142,7 @@ def _patched_remove_databases_failures(cls: type) -> None:
     ``tearDownClass`` crashes the cleanup loop with
     ``AttributeError: 'function' object has no attribute 'wrapped'``.
 
-    The patch is strictly defensive — it never makes Django's behaviour
+    The patch is strictly defensive - it never makes Django's behaviour
     worse:
 
     * When the original wrapper is still in place, the ``isinstance``
@@ -180,7 +180,7 @@ def _patch_is_installed() -> bool:
     Encapsulates the ``__func__`` unwrap so ``apply()`` does not need to
     know that Django stores the method as a ``classmethod`` descriptor
     on the class. Used by ``apply()`` to enforce the "ensure current
-    state" contract — if a third party reverted the class attribute
+    state" contract - if a third party reverted the class attribute
     after a prior ``apply()`` call, the next ``apply()`` re-installs.
     """
     installed = SimpleTestCase.__dict__.get("_remove_databases_failures")
@@ -198,7 +198,7 @@ def apply() -> None:
     from
     :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`
     at Django startup (which may itself fire more than once under some
-    Django test runners — the ``_patch_is_installed()`` check below
+    Django test runners - the ``_patch_is_installed()`` check below
     handles both the re-entrant case and a third-party revert);
     exposed at the module level so the regression tests can drive the
     apply-and-revert cycle without spinning up a second AppConfig.
@@ -216,7 +216,7 @@ def apply() -> None:
     if _DatabaseFailure is None:
         if not _missing_symbol_logged:
             logger.info(
-                "django-strawberry-framework: skipping _remove_databases_failures patch — "
+                "django-strawberry-framework: skipping _remove_databases_failures patch - "
                 "Django's private _DatabaseFailure symbol is unavailable at this Django "
                 "version. The Trac #37064 backstop will not be installed.",
             )

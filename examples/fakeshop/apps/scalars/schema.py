@@ -9,11 +9,11 @@ here vs. in ``tests/``.
 
 The two models are linked via ``NullableScalarSpecimen.partner`` (cross-
 model nullable FK with ``on_delete=SET_NULL``) so a single GraphQL query
-can traverse both shapes — and ``ScalarSpecimen.nullable_partners`` exposes
+can traverse both shapes - and ``ScalarSpecimen.nullable_partners`` exposes
 the reverse side for composite queries.
 
 ``scalar_specimen_by_signed_big`` accepts a ``BigInt!`` argument so the
-input-position parser (``BigInt.parse_value``) is exercised end-to-end —
+input-position parser (``BigInt.parse_value``) is exercised end-to-end -
 both for the decimal-string literal form and the JSON-int literal form.
 
 ``ScalarSpecimenTagType`` declares a custom ``get_queryset(cls, queryset,
@@ -122,20 +122,20 @@ class OverriddenScalarSpecimenType(DjangoType):
 
     ``_build_annotations`` skips auto-synthesis for any consumer-authored field,
     so ``manage.py inspect_django_type OverriddenScalarSpecimenType`` names the row
-    that actually produced each field in its converter column — a consumer
+    that actually produced each field in its converter column - a consumer
     override, never the auto ``SCALAR_MAP`` converter:
 
-    * ``quantity`` — annotation-only override. The ``IntegerField`` would
+    * ``quantity`` - annotation-only override. The ``IntegerField`` would
       auto-convert to ``Int!``; the ``float | None`` annotation forces a nullable
       ``Float`` (``consumer annotation (scalar)``), decoupling the GraphQL type
       from the column without a migration.
-    * ``token`` — annotation over the unsupported ``Base36Field``. The column has
+    * ``token`` - annotation over the unsupported ``Base36Field``. The column has
       no ``SCALAR_MAP`` entry, so the ``token: str`` annotation is the escape
       hatch that lets it build at all (``consumer annotation (scalar)``).
-    * ``score`` — the ``name: T = strawberry.field(resolver=...)`` overlap idiom:
+    * ``score`` - the ``name: T = strawberry.field(resolver=...)`` overlap idiom:
       the annotation fixes the type, the assignment supplies the resolver
       (``consumer annotation + strawberry.field (scalar)``).
-    * ``label`` — an assigned ``@strawberry.field`` resolver shadowing the column
+    * ``label`` - an assigned ``@strawberry.field`` resolver shadowing the column
       (``consumer strawberry.field (scalar)``).
     """
 
@@ -190,7 +190,7 @@ class Query:
         ``return Model.objects.all()``. Both shapes are equivalent for
         Strawberry's default resolver path, but the optimizer's
         ``isinstance(QuerySet)`` gate must coerce the Manager via
-        ``.all()`` before the plan can be applied — otherwise the
+        ``.all()`` before the plan can be applied - otherwise the
         Manager passes through unoptimized and the consumer pays N+1 on
         any forward-FK selection. This field exposes that coercion path
         end-to-end (no ``DjangoListField`` wrapping involved).

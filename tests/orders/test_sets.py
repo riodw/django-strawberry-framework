@@ -133,7 +133,7 @@ def test_orderset_is_expanding_fields_default_false():
 
 
 def test_orderset_meta_fields_list_form():
-    """List entries become ``key → None`` per cookbook line 280."""
+    """List entries become ``key -> None`` per cookbook line 280."""
 
     class BookOrder(OrderSet):
         class Meta:
@@ -224,7 +224,7 @@ def test_orderset_meta_fields_none_returns_only_related_orders():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — additional cookbook-parity __all__ shapes
+# Slice 2 - additional cookbook-parity __all__ shapes
 # ---------------------------------------------------------------------------
 
 
@@ -241,7 +241,7 @@ def test_orderset_meta_fields_all_raises_configurationerror_without_meta_model()
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — Slice 2 apply_sync / apply_async / permissions fixtures
+# Slice 2 - Slice 2 apply_sync / apply_async / permissions fixtures
 # ---------------------------------------------------------------------------
 
 
@@ -280,7 +280,7 @@ def _book_order_with_factory():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — apply_async
+# Slice 2 - apply_async
 # ---------------------------------------------------------------------------
 
 
@@ -319,7 +319,7 @@ def test_orderset_apply_async_runs_check_permission_in_sync_to_async():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — active-input-only + active-branch double-dispatch + dedup
+# Slice 2 - active-input-only + active-branch double-dispatch + dedup
 # ---------------------------------------------------------------------------
 
 
@@ -360,7 +360,7 @@ def test_orderset_check_permission_dedups_repeated_list_entries():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — _request_from_info shapes
+# Slice 2 - _request_from_info shapes
 # ---------------------------------------------------------------------------
 
 
@@ -398,7 +398,7 @@ def test_orderset_request_from_info_raises_when_info_context_is_none():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — get_flat_orders walker
+# Slice 2 - get_flat_orders walker
 # ---------------------------------------------------------------------------
 
 
@@ -420,7 +420,7 @@ def test_orderset_get_flat_orders_applies_prefix():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — _normalize_input delegate (smoke; full coverage in test_inputs)
+# Slice 2 - _normalize_input delegate (smoke; full coverage in test_inputs)
 # ---------------------------------------------------------------------------
 
 
@@ -440,7 +440,7 @@ def test_orderset_normalize_input_delegates_to_module_helper():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — check_permissions instance method (cookbook compatibility)
+# Slice 2 - check_permissions instance method (cookbook compatibility)
 # ---------------------------------------------------------------------------
 
 
@@ -643,7 +643,7 @@ def test_orderset_apply_async_returns_queryset_when_all_directions_filter_to_emp
 
 
 # =============================================================================
-# Row-preserving to-many ordering — aggregate, not fan-out JOIN (P1-B,
+# Row-preserving to-many ordering - aggregate, not fan-out JOIN (P1-B,
 # docs/feedback.md)
 # =============================================================================
 

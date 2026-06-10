@@ -23,7 +23,7 @@ decoration touches a consumer-facing class:
   Relay interface expects. ``_bind_filtersets`` then runs four ordered
   subpasses (bind owners, expand filtersets, materialize input classes,
   reject orphan ``filter_input_type`` references) per spec-027 Decision 6
-  / H1 of rev8 — every subpass MUST complete across all wired types
+  / H1 of rev8 - every subpass MUST complete across all wired types
   before the next subpass starts so cross-filterset references resolve
   against bound owners regardless of registration order. Runs before
   Phase 3 so the ``strawberry.type`` decorator sees the mutated bases
@@ -132,7 +132,7 @@ def _audit_primary_ambiguity(multi_type_models: tuple[type[models.Model], ...]) 
     Runs exactly once per build, inside ``finalize_django_types()`` after the
     ``registry.is_finalized()`` short-circuit and before pending-relation
     resolution. The pre-resolution placement (M1) is what makes Phase 1
-    failure-atomic — an ambiguity raise leaves every collected class intact
+    failure-atomic - an ambiguity raise leaves every collected class intact
     and the pending-relation list preserved for a re-call. The once-per-build
     guarantee for the underlying ``registry.models_with_multiple_types()``
     generator now lives in ``finalize_django_types``, which materializes the
@@ -254,7 +254,7 @@ def finalize_django_types() -> None:
     Partial-failure recovery: if ``strawberry.type`` (or any earlier
     Phase 2/2.5 step) raises mid-iteration, the call is partially
     applied. Calling ``finalize_django_types()`` again is safe and
-    resumes from the failing entry — the per-entry
+    resumes from the failing entry - the per-entry
     ``if definition.finalized: continue`` guard at the head of each
     phase loop skips already-decorated types on the rerun, and
     ``apply_interfaces`` re-mutating ``__bases__`` is a no-op because
@@ -275,8 +275,8 @@ def finalize_django_types() -> None:
 
     # Materialize the multi-type-model walk ONCE per finalize. Both audits
     # (Phase-1 ambiguity, Phase-2.5 model-label routing) consume this same
-    # tuple, so ``registry.models_with_multiple_types()`` — a one-shot lazy
-    # generator (registry.py) — is invoked exactly once per build rather than
+    # tuple, so ``registry.models_with_multiple_types()`` - a one-shot lazy
+    # generator (registry.py) - is invoked exactly once per build rather than
     # once per audit. This is a pure read; computing it before
     # ``_audit_primary_ambiguity`` does not disturb Phase 1's failure-atomic
     # contract.
@@ -357,7 +357,7 @@ def finalize_django_types() -> None:
 
     # Runs after the Relay loop has recorded EVERY type's
     # ``effective_globalid_strategy`` (so it reads complete data) and before
-    # Phase 3 flips ``finalized`` — a Phase-2.5 raise here is recoverable via the
+    # Phase 3 flips ``finalized`` - a Phase-2.5 raise here is recoverable via the
     # install step's re-entrancy guard (spec-031 Decision 8/10, feedback P1).
     # Reuses the multi-type-model tuple materialized at the top of this finalize.
     _audit_model_label_routing(multi_type_models)
@@ -384,7 +384,7 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
     H2-rev8 strict-equality check across the two owner-dependent axes:
 
     1. **Own-PK Relay identity.** A filterset's own primary key resolves
-       to a Relay ``GlobalID`` typed to the *owner* — keyed on
+       to a Relay ``GlobalID`` typed to the *owner* - keyed on
        ``owner.origin``'s Relay-node-ness and its ``graphql_type_name``.
        Two owners that disagree on either would make the shared
        filterset's ``id`` filter resolve to a different (or
@@ -403,7 +403,7 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
 
     Scope note: ``related_target_for`` resolves a relation's target via the
     process-global ``registry.primary_for(target_model)`` lookup keyed on
-    the TARGET model — NOT on the owner — so for two legitimate owners
+    the TARGET model - NOT on the owner - so for two legitimate owners
     (which necessarily share the filterset's ``Meta.model``) the relation
     targets are invariant and cannot diverge. The own-PK identity is the
     real owner-dependent axis. Widening the relation walk to every FK / PK
@@ -413,13 +413,13 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
     """
     previous: DjangoTypeDefinition | None = getattr(filterset_cls, "_owner_definition", None)
     if previous is None:
-        # First binding — reject a ``Meta.filterset_class`` whose own
+        # First binding - reject a ``Meta.filterset_class`` whose own
         # ``Meta.model`` is unrelated to this owner's model BEFORE storing
         # it. ``definition.model`` must BE the filterset's model or derive
         # from it (proxy / multi-table-inheritance owners carry every field
         # the filterset's lookups reference); otherwise the filterset's
         # lookups would run against a queryset of the wrong model. Catching
-        # it here — at finalize, on the FIRST bind — replaces the opaque
+        # it here - at finalize, on the FIRST bind - replaces the opaque
         # query-time ``FieldError`` the mismatch would otherwise raise far
         # from its cause (H-core-3 of the pre-merge review).
         filterset_model = filterset_cls._meta.model
@@ -435,7 +435,7 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
         return
     if previous is definition:
         return
-    # Axis 1 — own-PK Relay identity. ``owner.origin`` Relay-node-ness and
+    # Axis 1 - own-PK Relay identity. ``owner.origin`` Relay-node-ness and
     # ``graphql_type_name`` are the only owner-dependent inputs to the
     # filterset's own-PK GlobalID resolution; a divergence here means the
     # shared ``id`` filter would resolve ambiguously across owners.
@@ -447,7 +447,7 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
         raise ConfigurationError(
             _format_owner_pk_mismatch_error(filterset_cls, previous, definition),
         )
-    # Axis 2 — declared relation targets.
+    # Axis 2 - declared relation targets.
     related_filters = getattr(filterset_cls, "related_filters", {}) or {}
     for field_name in related_filters:
         prev_target = previous.related_target_for(field_name)
@@ -541,9 +541,9 @@ def _format_owner_model_mismatch_error(filterset_cls: type, owner: DjangoTypeDef
 
     Fires on the FIRST owner binding when a ``Meta.filterset_class`` is
     keyed on a model unrelated to its owner type's model. Surfacing it at
-    finalize — rather than as the opaque query-time ``FieldError`` the
+    finalize - rather than as the opaque query-time ``FieldError`` the
     mismatch would otherwise raise once a lookup runs against the wrong
-    model's queryset — names both models so the consumer can realign the
+    model's queryset - names both models so the consumer can realign the
     wiring. Grep-stable alongside the other ``_format_*`` finalize-error
     helpers (H-core-3 of the pre-merge review).
     """
@@ -551,7 +551,7 @@ def _format_owner_model_mismatch_error(filterset_cls: type, owner: DjangoTypeDef
         f"FilterSet {filterset_cls.__qualname__} is declared as the filterset_class "
         f"of {owner.origin.__qualname__} (model {owner.model.__name__}), but its own "
         f"Meta.model is {filterset_cls._meta.model.__name__}. A filterset's Meta.model "
-        f"must be its owner's model — or a base the owner derives from — so the "
+        f"must be its owner's model - or a base the owner derives from - so the "
         f"filterset's lookups resolve against the owner's queryset. Key "
         f"{filterset_cls.__qualname__} on {owner.model.__name__}, or attach it to a "
         f"{filterset_cls._meta.model.__name__} type."
@@ -849,20 +849,20 @@ def _bind_ordersets() -> None:
 def _bind_filtersets() -> None:
     """Run the four ordered phase-2.5 subpasses for filterset binding.
 
-    Subpass 1 — bind every owner. Walks every wired definition and
+    Subpass 1 - bind every owner. Walks every wired definition and
     binds ``filterset_cls._owner_definition`` via
     ``_bind_filterset_owner``. The H2-rev8 strict-equality check
     rejects diverging multi-owner reuse before any subsequent subpass
     runs.
 
-    Subpass 2 — expand every filterset. Calls
+    Subpass 2 - expand every filterset. Calls
     ``filterset_cls.get_filters()`` so Layer-4 expansion resolves lazy
     ``RelatedFilter`` refs and cycle guards apply uniformly. Owner
     binding from subpass 1 is visible to every filterset's owner-aware
     ``filter_for_field`` / ``filter_for_lookup`` overrides regardless
     of which type-cls is iterated first.
 
-    Subpass 3 — orphan validation. Compares the FilterSets passed to
+    Subpass 3 - orphan validation. Compares the FilterSets passed to
     ``filter_input_type(...)`` (per Decision 11) against the set of
     FilterSets wired via ``Meta.filterset_class``. Orphans raise
     ``ConfigurationError`` per spec-027 #"Bind the owner." with the actionable
@@ -873,7 +873,7 @@ def _bind_filtersets() -> None:
     of ``finalize_django_types()`` after fixing the orphan would see
     stale ledger entries from the prior failed attempt.
 
-    Subpass 4 — materialize input classes. Reads the
+    Subpass 4 - materialize input classes. Reads the
     ``FilterArgumentsFactory(filterset_cls).arguments`` property
     (triggers BFS build, idempotent through the factory's class-level
     cache) and materializes EVERY built class from the factory's

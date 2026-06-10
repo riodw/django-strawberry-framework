@@ -10,7 +10,7 @@ User-provided settings live in a top-level Django settings dict named
 Missing keys raise ``AttributeError``.  Whenever Django's
 ``setting_changed`` signal fires (for example, in tests using
 ``pytest-django``'s ``settings`` fixture), the singleton ``settings``
-instance is mutated in place — the module global is *not* rebound — so
+instance is mutated in place - the module global is *not* rebound - so
 references bound via ``from .conf import settings`` see the change
 immediately.
 
@@ -29,7 +29,7 @@ value raises ``ConfigurationError`` through
 old ``or {}`` collapse that silently absorbed every falsy value.
 Reflective shape reads off Strawberry / graphql-core / Django
 descriptors (``getattr(obj, name, None) or {}`` and friends in the
-optimizer subpackage) are a *separate* case — there the upstream
+optimizer subpackage) are a *separate* case - there the upstream
 contract genuinely allows the attribute to be absent or ``None`` on
 legitimate shapes, and coercion is unconditionally correct. Do not
 unify the two.
@@ -141,7 +141,7 @@ class Settings:
         malformed ``DJANGO_STRAWBERRY_FRAMEWORK`` value (non-mapping) makes
         the lazy ``self.user_settings`` read raise ``ConfigurationError``,
         which propagates through ``hasattr`` and ``getattr(default=...)``
-        probes by design — bad configuration should fail loud rather than
+        probes by design - bad configuration should fail loud rather than
         masquerade as a missing attribute.
         """
         if name in {"user_settings", "_user_settings", "reload"} or name.startswith("__"):

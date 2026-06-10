@@ -11,7 +11,7 @@ parallel unwrap loops.
 from typing import Any, get_args, get_origin
 
 # A GraphQL type-wrapper stack (``GraphQLNonNull`` / ``GraphQLList`` / a
-# Strawberry ``of_type`` object) nests only as deep as the declared type —
+# Strawberry ``of_type`` object) nests only as deep as the declared type -
 # realistically a handful of layers. This ceiling sits far above any real type,
 # so the only way to exceed it is a cyclic or corrupt ``of_type`` chain. Capping
 # the peel gives the loop a fixed, statically-checkable upper bound (NASA

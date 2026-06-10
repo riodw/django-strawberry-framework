@@ -335,7 +335,7 @@ class Card(TimeStampedModel):
         ]
 
     def __str__(self):
-        return f"{self.card_id} — {self.title}"
+        return f"{self.card_id} - {self.title}"
 
     @property
     def card_id(self) -> str:
@@ -504,7 +504,7 @@ class CardGlossaryTerm(TimeStampedModel):
 
 
 class ParityClaim(TimeStampedModel):
-    """A ``Card`` ↔ ``Upstream`` edge carrying the parity ``level``."""
+    """A ``Card`` <-> ``Upstream`` edge carrying the parity ``level``."""
 
     card = models.ForeignKey(Card, related_name="parity_claims", on_delete=models.CASCADE)
     upstream = models.ForeignKey(Upstream, related_name="parity_claims", on_delete=models.PROTECT)
@@ -559,7 +559,7 @@ class CardItem(TimeStampedModel):
         ]
 
     def __str__(self):
-        return f"{self.card.title} · {self.section.label}: {self.text[:40]}"
+        return f"{self.card.title} \u00b7 {self.section.label}: {self.text[:40]}"
 
 
 class Label(TimeStampedModel):

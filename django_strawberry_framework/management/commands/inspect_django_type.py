@@ -1,4 +1,4 @@
-"""manage.py inspect_django_type — print a DjangoType's per-field GraphQL resolution table.
+"""manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
 
 Diagnostic command that walks a finalized ``DjangoTypeDefinition`` and prints,
 per selected field, the Django field name, the Django field type, the resolved
@@ -26,7 +26,7 @@ dotted import failure raises ``CommandError`` carrying the original error; a bar
 name (``BookType``) resolves via a unique ``__name__`` registry lookup. The
 optional ``--schema <selector>`` is imported first (via Strawberry's
 ``import_module_symbol``, mirroring ``export_schema``) to register and finalize
-every type before resolution — required for a cold CLI process.
+every type before resolution - required for a cold CLI process.
 """
 
 import datetime
@@ -64,7 +64,7 @@ _RELATION_KIND_LABELS: dict[str, str] = {
     "reverse_one_to_one": "reverse O2O",
 }
 _UNFINALIZED_HINT = (
-    "finalize_django_types() has not run — pass "
+    "finalize_django_types() has not run - pass "
     "--schema <your project schema dotted path> so all types register and finalize"
 )
 
@@ -121,7 +121,7 @@ class Command(BaseCommand):
         self._print_table(definition)
 
     def _resolve_type(self, arg: str) -> object:
-        """Resolve the ``type`` argument by shape — dotted path vs bare registered name."""
+        """Resolve the ``type`` argument by shape - dotted path vs bare registered name."""
         if "." in arg:
             try:
                 return import_string(arg)
@@ -147,7 +147,7 @@ class Command(BaseCommand):
                 for type_cls in matches
             )
             raise CommandError(
-                f"{name} is ambiguous — {len(matches)} registered types share this name: "
+                f"{name} is ambiguous - {len(matches)} registered types share this name: "
                 f"{candidates}. Pass a fully-dotted object path to disambiguate.",
             )
         return matches[0]
@@ -177,7 +177,7 @@ class Command(BaseCommand):
 
         Dispatch is most-specific first:
 
-        1. A Relay-Node-suppressed pk wins over everything — its
+        1. A Relay-Node-suppressed pk wins over everything - its
            ``id: GlobalID!`` is interface-supplied, so it is absent from
            ``origin.__annotations__`` and must not be read there (a relation pk
            on a Relay type, e.g. ``OneToOneField(primary_key=True)``, would
@@ -186,7 +186,7 @@ class Command(BaseCommand):
            is next: ``_build_annotations`` deliberately skips auto-synthesis for
            it (the four-corner override contract in ``types/base.py``), so
            neither the relation auto-converter nor a ``SCALAR_MAP`` row produced
-           it — the consumer's annotation / ``strawberry.field`` did.
+           it - the consumer's annotation / ``strawberry.field`` did.
         3. Only then do the auto-synthesized relation / scalar branches apply.
         """
         field_meta = definition.field_map[snake_case(field.name)]
@@ -234,7 +234,7 @@ class Command(BaseCommand):
         graphql_type = _render_annotation(annotation)
         nullable = _yes_no(_annotation_is_optional(annotation))
         # ``choice enum`` for a choice field; otherwise name the SCALAR_MAP row
-        # that fired — the matched MRO ancestor (Decision 4) — so a consumer
+        # that fired - the matched MRO ancestor (Decision 4) - so a consumer
         # subclass of a supported field reports the ancestor row (e.g.
         # ``TextField``) rather than its own concrete class name.
         converter = "choice enum" if field.choices else f"SCALAR_MAP[{_matched_scalar_key(field)}]"
@@ -252,14 +252,14 @@ class Command(BaseCommand):
         record for BOTH override kinds and already resolves forward references,
         whereas ``origin.__annotations__`` holds a ``StrawberryAnnotation`` for an
         assigned field and an unresolved forward-reference string for an annotated
-        relation — neither renderable here.
+        relation - neither renderable here.
 
         An annotation-only relation whose forward reference is not resolvable from
         the type's module namespace stays Strawberry's ``UNRESOLVED`` sentinel after
         ``finalize_django_types()`` alone (``finalize`` does not force field-type
         resolution; building a ``strawberry.Schema`` does). Reporting the sentinel as
-        a GraphQL type would be a lie — Strawberry itself raises on it at schema-build
-        time — so it raises ``CommandError`` with a concrete recovery hint instead.
+        a GraphQL type would be a lie - Strawberry itself raises on it at schema-build
+        time - so it raises ``CommandError`` with a concrete recovery hint instead.
         """
         strawberry_fields = definition.origin.__strawberry_definition__.fields
         field_type = next(sf.type for sf in strawberry_fields if sf.python_name == field.name)
@@ -295,11 +295,11 @@ def _matched_scalar_key(field: models.Field) -> str:
 
     ``convert_scalar`` resolves a scalar field by walking ``type(field).__mro__``
     against ``SCALAR_MAP``, so a consumer subclass of a supported field is
-    converted by its nearest supported ancestor — ``MyTextField(TextField)``
+    converted by its nearest supported ancestor - ``MyTextField(TextField)``
     fires the ``TextField`` row, not a ``MyTextField`` row. Report that ancestor
     so the converter column names the row that actually fired. Falls back to the
     concrete class name, only reachable for a field with no ``SCALAR_MAP``
-    ancestor — and this helper only ever sees an *auto-synthesized* scalar
+    ancestor - and this helper only ever sees an *auto-synthesized* scalar
     (``_resolve_row`` routes every consumer-authored field, including an
     annotation override of an unsupported column, to ``_consumer_authored_row``
     first), whose scalar necessarily resolved at construction. So the fallback is
@@ -345,7 +345,7 @@ def _consumer_converter_label(definition: object, name: str) -> str:
     """Name the override row that produced a consumer-authored field.
 
     ``annotation`` vs ``strawberry.field`` distinguishes the two authoring styles
-    and the ``(scalar)`` / ``(relation)`` suffix names the column kind — both
+    and the ``(scalar)`` / ``(relation)`` suffix names the column kind - both
     facts come straight from the four-corner override sets recorded on the
     definition (see ``types/base._consumer_assigned_fields``). This is the row
     that actually fired: NOT the relation auto-converter and NOT a ``SCALAR_MAP``

@@ -11,7 +11,7 @@ repos:
   - repo: local
     hooks:
       - id: source-layout
-        name: source layout (py trailing commas; md link-def scaffold; json/graphql brace explosion)
+        name: source layout (py trailing commas + ascii-only; md link-def scaffold; json/graphql brace explosion)
         entry: uv run python scripts/check_trailing_commas.py --fix
         language: system
         files: \.(py|md|json|graphql|gql)$

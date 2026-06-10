@@ -68,7 +68,7 @@ _DECIMAL_VALUE = Decimal("12345.6789")
 # (key present, value is ``None``), and a nested dict carrying a bool. Pins
 # the round-trip shape that the migrated package test
 # ``test_json_field_round_trips_dict_via_schema_execution`` formerly covered
-# with ``{"k1": "v1", "k2": 2, "k3": [1, 2, 3], "k4": None}`` — the
+# with ``{"k1": "v1", "k2": 2, "k3": [1, 2, 3], "k4": None}`` - the
 # JSON-internal-``null`` case is the unique one (distinct from the column
 # itself being NULL, which is exercised by
 # ``test_nullable_scalar_specimen_all_null_wire_format_over_http``).
@@ -156,27 +156,27 @@ def test_scalar_specimen_every_field_wire_format_over_http():
     _seed_specimen()
     row = _query_one_specimen()
 
-    # ``str`` collapses (label) — sanity anchor.
+    # ``str`` collapses (label) - sanity anchor.
     assert row["label"] == "demo"
-    # ``bool`` — JSON boolean.
+    # ``bool`` - JSON boolean.
     assert row["flag"] is True
-    # ``float`` — JSON number.
+    # ``float`` - JSON number.
     assert row["score"] == 1.5
-    # ``Decimal`` — Strawberry serializes as string.
+    # ``Decimal`` - Strawberry serializes as string.
     assert row["price"] == "12345.6789"
-    # ``date`` — ISO 8601 date.
+    # ``date`` - ISO 8601 date.
     assert row["occurredOn"] == "2026-05-27"
-    # ``datetime`` — ISO 8601 with UTC offset.
+    # ``datetime`` - ISO 8601 with UTC offset.
     assert row["occurredAt"] == "2026-05-27T12:34:56+00:00"
-    # ``time`` — ISO 8601 time.
+    # ``time`` - ISO 8601 time.
     assert row["occurredTime"] == "12:34:56"
-    # ``JSON`` — passes through verbatim.
+    # ``JSON`` - passes through verbatim.
     assert row["payload"] == _JSON_PAYLOAD
-    # ``UUID`` — string form.
+    # ``UUID`` - string form.
     assert row["externalId"] == "12345678-1234-5678-1234-567812345678"
-    # ``BigInt`` — decimal-string serialization, signed variant.
+    # ``BigInt`` - decimal-string serialization, signed variant.
     assert row["signedBig"] == "9223372036854775000"
-    # ``BigInt`` — decimal-string serialization, unsigned variant.
+    # ``BigInt`` - decimal-string serialization, unsigned variant.
     assert row["unsignedBig"] == "9223372036854775001"
 
 
@@ -284,7 +284,7 @@ def _introspect_field_types(type_name: str) -> dict:
 
 @pytest.mark.django_db
 def test_scalar_specimen_introspects_bigint_scalar_for_both_fields():
-    """Both halves of the ``BigInt`` converter table entry — signed and unsigned —
+    """Both halves of the ``BigInt`` converter table entry - signed and unsigned -
     introspect correctly in both shapes (``NON_NULL`` and nullable ``SCALAR``).
 
     Migrated from these tests in ``tests/types/test_converters.py``:
@@ -343,10 +343,10 @@ def test_nullable_scalar_specimen_all_null_wire_format_over_http():
     """Every nullable scalar serializes as JSON ``null`` when the column is NULL.
 
     Pins the nullable-branch wire format for every entry in
-    ``django_strawberry_framework/types/converters.py::SCALAR_MAP`` —
+    ``django_strawberry_framework/types/converters.py::SCALAR_MAP`` -
     ``BooleanField``, ``FloatField``, ``DecimalField``, ``DateField``,
     ``DateTimeField``, ``TimeField``, ``JSONField``, ``UUIDField``,
-    ``BigIntegerField``, ``PositiveBigIntegerField`` — over a live
+    ``BigIntegerField``, ``PositiveBigIntegerField`` - over a live
     ``/graphql/`` request. Counterpart to
     ``test_scalar_specimen_every_field_wire_format_over_http`` which pins the
     non-null branch.
@@ -402,7 +402,7 @@ def test_nullable_scalar_specimen_partner_fk_linkage_over_http():
     """Cross-model FK round-trip: ``NullableScalarSpecimen.partner -> ScalarSpecimen``.
 
     Exercises forward-FK selection across a model boundary inside the same
-    app — distinct from the intra-model ``parent`` self-FK on ``ScalarSpecimen``.
+    app - distinct from the intra-model ``parent`` self-FK on ``ScalarSpecimen``.
     Asserts the nullable forward FK populates correctly when a target exists.
     """
     target = _seed_specimen(label="target", signed_big=42, unsigned_big=42)
@@ -473,12 +473,12 @@ def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
     ``NullableScalarSpecimen.partner`` FK) end-to-end. The
     setup-trigger-observe shape uses live ``/graphql/`` requests for the
     consumer-visible halves (BEFORE the delete and AFTER) and a plain
-    ORM ``target.delete()`` call for the trigger — same pattern every
+    ORM ``target.delete()`` call for the trigger - same pattern every
     seed call uses, just on the other end of the row lifecycle.
 
     Asserts three things the post-delete query must prove:
     1. ``partner`` resolves to ``None`` after the cascade (the optimizer's
-       prefetched row reflects post-delete state — no stale cache, no
+       prefetched row reflects post-delete state - no stale cache, no
        orphaned FK-id stub).
     2. The source ``NullableScalarSpecimen`` row itself survives (cascade
        is ``SET_NULL``, not ``CASCADE``).
@@ -489,7 +489,7 @@ def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
     target = _seed_specimen(label="target")
     nullable = _seed_nullable_specimen(label="linked", partner=target)
 
-    # BEFORE — the link is live.
+    # BEFORE - the link is live.
     response = _post_graphql(
         """
         query {
@@ -507,12 +507,12 @@ def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
         {"label": "linked", "partner": {"label": "target"}},
     ]
 
-    # TRIGGER — delete the partner target via ORM (mutations aren't in the
+    # TRIGGER - delete the partner target via ORM (mutations aren't in the
     # example schema yet; deletion goes through the same path every seed
     # uses, just in reverse).
     target.delete()
 
-    # AFTER — SET_NULL fired, the link is gone, but the source row survives.
+    # AFTER - SET_NULL fired, the link is gone, but the source row survives.
     response = _post_graphql(
         """
         query {
@@ -530,8 +530,8 @@ def test_scalars_set_null_ondelete_detaches_partner_in_http_query():
         {"label": "linked", "partner": None},
     ]
 
-    # Sanity — the source row survived and the FK column was cleared
-    # (not the relation hidden from GraphQL — actually nulled at the DB
+    # Sanity - the source row survived and the FK column was cleared
+    # (not the relation hidden from GraphQL - actually nulled at the DB
     # level).
     nullable.refresh_from_db()
     assert nullable.pk is not None
@@ -600,7 +600,7 @@ def test_scalar_specimen_bigint_input_int_literal_argument_over_http():
     assert response.status_code == 200
     body = response.json()
     assert "errors" not in body, body
-    # The outbound wire format is still the decimal string — even for
+    # The outbound wire format is still the decimal string - even for
     # small values that JSON could represent as a bare number. That's
     # the BigInt scalar's contract: consumers must always parse the
     # response as a string. Anything else would be a wire-format leak.
@@ -612,7 +612,7 @@ def test_scalars_optimizer_select_related_on_self_fk_in_http_query():
     """Forward self-FK selection collapses to one SQL query under the optimizer.
 
     Pins ``DjangoOptimizerExtension``'s ``select_related`` plan against a
-    self-referential FK (``ScalarSpecimen.parent`` -> ``ScalarSpecimen``) —
+    self-referential FK (``ScalarSpecimen.parent`` -> ``ScalarSpecimen``) -
     a distinct shape from the cross-model FK select_related already covered
     by ``test_library_api.py::test_library_optimizer_selects_book_shelf_in_http_query``
     (book -> shelf). Proves the walker's planner does not loop or
@@ -655,7 +655,7 @@ def test_scalars_optimizer_prefetch_related_on_reverse_self_fk_in_http_query():
     """Reverse self-FK selection collapses to two SQL queries via ``prefetch_related``.
 
     Pins the ``DjangoOptimizerExtension`` ``prefetch_related`` plan against
-    ``ScalarSpecimen.children`` — the reverse side of a self-referential FK.
+    ``ScalarSpecimen.children`` - the reverse side of a self-referential FK.
     Distinct from the cross-model reverse-FK ``prefetch_related`` already
     covered by
     ``test_library_api.py::test_library_reverse_fk_and_m2m_prefetch_sql_shape_over_http``
@@ -695,7 +695,7 @@ def test_scalars_optimizer_fk_id_elision_for_self_fk_in_http_query():
 
     Pins the ``B2`` FK-id elision behavior end-to-end against a self-
     referential FK. An id-only forward-FK selection should NOT issue a
-    JOIN — Django already has the FK column (``parent_id``) on the source
+    JOIN - Django already has the FK column (``parent_id``) on the source
     row, so the optimizer plans the query with ``only(..., "parent_id")``
     and synthesizes the stub at resolver time. Distinct from the
     cross-model FK case; previously unreachable from any HTTP test.
@@ -749,7 +749,7 @@ def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_q
 
     Pins B2's "elision opt-out" rule end-to-end: as soon as the consumer
     selects ANY target scalar besides ``id``, the optimizer must NOT elide
-    the relation — it must plan ``select_related("parent")`` and issue a
+    the relation - it must plan ``select_related("parent")`` and issue a
     JOIN. Otherwise the resolver-time FK-id stub would carry only the id
     and the extra scalar would resolve to ``None``. Exercised against the
     self-FK ``ScalarSpecimen.parent``. Behavioral half of the migration from
@@ -778,11 +778,11 @@ def test_scalars_optimizer_no_fk_id_elision_when_extra_scalar_selected_in_http_q
     assert "errors" not in body, body
     rows = {row["label"]: row for row in body["data"]["allScalarSpecimens"]}
     assert rows["root"]["parent"] is None
-    # Both ``id`` AND ``label`` must populate from the JOINed row — proving
+    # Both ``id`` AND ``label`` must populate from the JOINed row - proving
     # the optimizer did NOT elide and that the ``parent`` stub is the real
     # joined row, not the fk-id-only stub.
     assert rows["child"]["parent"] == {"id": root.id, "label": "root"}
-    # Still 1 query — but via JOIN, not via the elision shortcut.
+    # Still 1 query - but via JOIN, not via the elision shortcut.
     assert len(captured) == 1, [q["sql"] for q in captured]
     sql = captured[0]["sql"]
     assert "JOIN" in sql.upper(), sql
@@ -796,7 +796,7 @@ def test_scalars_optimizer_fk_id_elision_for_each_alias_in_http_query():
     GraphQL field aliases must still elide to a single FK-column SELECT
     with no JOIN, and both aliases must surface the same id value at
     resolve time. Exercised against the self-FK
-    (``ScalarSpecimen.parent``) — distinct from the cross-model case. The
+    (``ScalarSpecimen.parent``) - distinct from the cross-model case. The
     plan-state assertions (``plan.fk_id_elisions`` covering BOTH alias
     keys, ``plan.only_fields == ("parent_id",)``) remain pinned by
     ``tests/optimizer/test_extension.py::test_optimizer_elides_forward_fk_id_only_selection_for_each_alias_plan_shape``.
@@ -922,11 +922,11 @@ def test_scalars_optimizer_o6_downgrade_to_prefetch_for_custom_get_queryset_in_h
     # 2 queries: SELECT scalars_scalarspecimen + a prefetched SELECT for
     # scalars_scalarspecimentag (filtered to ``active=True`` by the custom
     # get_queryset). Without the O6 downgrade this would either JOIN
-    # (1 query) or elide entirely — both incorrect because the consumer's
+    # (1 query) or elide entirely - both incorrect because the consumer's
     # filter would be silently bypassed.
     assert len(captured) == 2, [q["sql"] for q in captured]
     main_sql = captured[0]["sql"]
-    # Main query must NOT JOIN — that would be the un-downgraded path.
+    # Main query must NOT JOIN - that would be the un-downgraded path.
     assert "scalarspecimentag" not in main_sql.lower(), main_sql
     # Prefetch SELECT must hit the tag table and carry the ``active`` filter.
     tag_sql = captured[1]["sql"]
@@ -1023,7 +1023,7 @@ def test_scalars_optimizer_coerces_manager_to_queryset_in_http_query():
     deliberately returns the bare Manager so the live HTTP query
     exercises this path end-to-end. Behavioral half of the migration
     from ``tests/optimizer/test_extension.py::test_optimize_coerces_manager_through_all``;
-    the cache-state half (``ext.cache_info().misses == 1`` — proof the
+    the cache-state half (``ext.cache_info().misses == 1`` - proof the
     plan was actually built) stays package-internal in the slimmed
     sibling test.
 
@@ -1054,8 +1054,8 @@ def test_scalars_optimizer_coerces_manager_to_queryset_in_http_query():
     assert "errors" not in body, body
     # 1 query: SELECT scalarspecimen ... LEFT OUTER JOIN scalarspecimen
     # via select_related("parent"). Without the optimizer's Manager
-    # coercion this would be 1 + 3 = 4 queries — one per child's parent
-    # lookup — proving the gate would have let the Manager pass through
+    # coercion this would be 1 + 3 = 4 queries - one per child's parent
+    # lookup - proving the gate would have let the Manager pass through
     # unoptimized.
     assert len(captured) == 1, [q["sql"] for q in captured]
     sql = captured[0]["sql"]

@@ -91,7 +91,7 @@ def install_is_type_of(type_cls: type) -> None:
     class" and is overwritten by the framework default.
 
     The upstream ``get_strawberry_type_cast`` branch is intentionally
-    omitted — our package does not yet expose ``strawberry.cast(...)``
+    omitted - our package does not yet expose ``strawberry.cast(...)``
     integration anywhere else, and adding it now would couple this slice
     to a Strawberry surface we have not committed to. If a future adopter
     needs ``strawberry.cast(...)`` support, a focused follow-up slice can
@@ -178,7 +178,7 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
 
 
 def _resolve_id_attr_default(cls: type) -> str:
-    """Default ``Node.resolve_id_attr`` — falls back to ``"pk"``.
+    """Default ``Node.resolve_id_attr`` - falls back to ``"pk"``.
 
     Calls ``super(cls, cls).resolve_id_attr()`` so a consumer
     ``id: relay.NodeID[...]`` annotation on the class wins; on
@@ -253,7 +253,7 @@ async def _apply_get_queryset_async(cls: type, qs: models.QuerySet, info: Any) -
 
     Sync ``get_queryset`` returns the queryset directly and is passed
     through. Async ``get_queryset`` returns a coroutine which is awaited
-    here before the id filter runs — the Decision 9 contract that the
+    here before the id filter runs - the Decision 9 contract that the
     previous implementation broke (it called the hook synchronously then
     invoked ``.filter`` on a coroutine).
     """
@@ -327,12 +327,12 @@ def _resolve_globalid_strategy(
     """Resolve a type's effective raw GlobalID strategy by the three-tier precedence.
 
     Precedence (spec-031 Decision 5): the per-type ``Meta.globalid_strategy``
-    override (already validated at type creation) → the schema-wide
-    ``RELAY_GLOBALID_STRATEGY`` setting (read defensively as "absent → package
-    default") → the ``DEFAULT_GLOBALID_STRATEGY`` (``"model"``) package default.
+    override (already validated at type creation) -> the schema-wide
+    ``RELAY_GLOBALID_STRATEGY`` setting (read defensively as "absent -> package
+    default") -> the ``DEFAULT_GLOBALID_STRATEGY`` (``"model"``) package default.
 
     The setting branch is validated through the SAME ``_validate_globalid_strategy``
-    rule the ``Meta`` path uses (one validator, two sources — spec-031 Decisions
+    rule the ``Meta`` path uses (one validator, two sources - spec-031 Decisions
     6/7), so an unknown string, a wrong-arity callable, or an ``async def``
     callable in ``RELAY_GLOBALID_STRATEGY`` raises ``ConfigurationError`` naming
     the setting rather than failing opaquely from the installed closure
@@ -348,8 +348,8 @@ def _resolve_globalid_strategy(
     """
     # In-function imports: ``base.py`` imports ``install_is_type_of`` from this
     # module at module top, so a module-top ``relay.py -> base.py`` import would
-    # close the load cycle. This resolver is only called at finalization — well
-    # after module load — so the local import resolves cheaply. Same cycle-dodge
+    # close the load cycle. This resolver is only called at finalization - well
+    # after module load - so the local import resolves cheaply. Same cycle-dodge
     # justification ``base.py`` documents for its ``FilterSet`` / ``OrderSet``
     # in-function imports. Do NOT hoist either import to module top.
     from ..conf import settings as conf_settings
@@ -380,7 +380,7 @@ def _resolve_globalid_strategy(
 # reference rather than re-typing ``{"model", "type+model"}`` / ``{"type",
 # "type+model"}`` at each site. ``callable`` and ``custom`` are intentionally in
 # neither set: they are encode-only in 0.0.9 (no decode path), so the decoder's
-# "no decode for these" contract IS their absence from both memberships — there
+# "no decode for these" contract IS their absence from both memberships - there
 # is deliberately no ``{"callable", "custom"}`` literal.
 MODEL_LABEL_STRATEGIES = frozenset({"model", "type+model"})
 TYPE_NAME_STRATEGIES = frozenset({"type", "type+model"})
@@ -399,8 +399,8 @@ def _emits_model_label(effective_strategy: str | None) -> bool:
 def _accepts_model_label_decode(effective_strategy: str | None) -> bool:
     """Return whether a recorded effective strategy can decode a model-label slot.
 
-    Identical membership to ``_emits_model_label`` — ``model`` and ``type+model``
-    both decode model labels — but named distinctly because the audit's
+    Identical membership to ``_emits_model_label`` - ``model`` and ``type+model``
+    both decode model labels - but named distinctly because the audit's
     ``accepts_model_label(primary)`` predicate and the Slice-3 decode-Step-2
     enforcement read the *acceptance* side. Encode and decode acceptance of the
     model-label shape coincide for the framework strategies, so one frozenset
@@ -434,18 +434,18 @@ def encode_typename(
     The single per-strategy slot computation (spec-031 Decision 4), invoked by
     the installed ``resolve_typename`` closure:
 
-    - ``model`` / ``type+model`` → ``definition.model._meta.label_lower``
+    - ``model`` / ``type+model`` -> ``definition.model._meta.label_lower``
       (Django's canonical ``"app_label.modelname"``, e.g. ``products.item``).
-    - ``type`` → ``definition.graphql_type_name`` (matches Strawberry's
+    - ``type`` -> ``definition.graphql_type_name`` (matches Strawberry's
       ``info.path.typename`` default; the framework installs nothing for
       ``type``, so this branch exists only for a single dispatch surface).
-    - callable → the consumer callable's ``(type_cls, model, root, info) -> str``
+    - callable -> the consumer callable's ``(type_cls, model, root, info) -> str``
       return, validated non-empty ``str``. A non-``str`` or empty return raises
       ``ConfigurationError`` naming the type and the contract, rather than
       letting Strawberry's ``Node._id`` ``assert isinstance(type_name, str)``
       fire as an opaque ``AssertionError`` (spec-031 Decision 4/10,
       ``docs/feedback.md`` P2). The callable's arity / sync-ness were already
-      validated at type creation (Slice 1) — this is ONLY the per-call
+      validated at type creation (Slice 1) - this is ONLY the per-call
       return-value check.
     """
     if callable(strategy):
@@ -467,7 +467,7 @@ def _consumer_overrode_resolve_typename(type_cls: type) -> bool:
     """Return whether ``type_cls`` declares its own ``resolve_typename``.
 
     MRO-aware ``existing.__func__ is relay.Node.resolve_typename.__func__``
-    identity test — the same discriminator ``install_relay_node_resolvers``
+    identity test - the same discriminator ``install_relay_node_resolvers``
     uses for the four ``resolve_*`` defaults. ``resolve_typename`` is a
     ``@classmethod`` on ``relay.Node`` so it carries ``__func__`` exactly like
     those. A method inherited unchanged from ``relay.Node`` (or absent) is NOT
@@ -487,7 +487,7 @@ def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDef
 
     0. **Re-entrancy guard.** If ``definition.effective_globalid_strategy`` is
        already set, this type was processed in a prior (possibly partial)
-       finalize run — skip override-detection, recording, and install, leaving
+       finalize run - skip override-detection, recording, and install, leaving
        the recorded classification and any installed closure intact
        (``docs/feedback.md`` P1). Load-bearing: a Phase-2.5 raise (including the
        model-label-routing audit) leaves every type ``finalized = False``, so a
@@ -496,8 +496,8 @@ def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDef
        misclassify the type ``custom``.
     1. **Override detection.** If the consumer overrode ``resolve_typename``:
        declaring an explicit ``Meta.globalid_strategy`` too is a both-declared
-       conflict → ``ConfigurationError`` (the schema-wide
-       ``RELAY_GLOBALID_STRATEGY`` setting is NOT a conflict — only the per-type
+       conflict -> ``ConfigurationError`` (the schema-wide
+       ``RELAY_GLOBALID_STRATEGY`` setting is NOT a conflict - only the per-type
        ``Meta`` key collides); otherwise the effective strategy is ``custom``,
        install nothing (the override owns the slot).
     2. **No override.** Resolve the raw strategy via
@@ -508,7 +508,7 @@ def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDef
        pre-0.0.9).
     3. **Record** the classification string (``model`` / ``type`` /
        ``type+model`` / ``callable`` / ``custom``) on
-       ``definition.effective_globalid_strategy`` — the single value decode and
+       ``definition.effective_globalid_strategy`` - the single value decode and
        the strategy-aware filter read, and the step-0 sentinel.
     """
     if definition.effective_globalid_strategy is not None:
@@ -559,8 +559,8 @@ def decode_global_id(gid: relay.GlobalID | str) -> tuple[type, str]:
 
     The decode half of the GlobalID-encoding feature (spec-031 Decision 8). It is
     the forward-looking piece root ``node(id:)`` / ``nodes(ids:)``
-    (``WIP-ALPHA-032-0.0.9``) will consume — no shipped ``0.0.9`` path calls it
-    yet — so it is validated directly by package tests.
+    (``WIP-ALPHA-032-0.0.9``) will consume - no shipped ``0.0.9`` path calls it
+    yet - so it is validated directly by package tests.
 
     Because its eventual caller feeds it arbitrary client-controlled input, every
     failure mode surfaces ONE uniform ``ConfigurationError`` (the
@@ -577,19 +577,19 @@ def decode_global_id(gid: relay.GlobalID | str) -> tuple[type, str]:
       ``GlobalIDValueError``). An empty ``type_name`` or empty ``node_id`` is
       rejected (``from_id`` does not enforce non-empty slots; the encoder never
       emits an empty type-name slot and the package has no blank-string pks).
-    - **Step 1 — resolve a candidate.** A model-label slot (the ``type_name``
+    - **Step 1 - resolve a candidate.** A model-label slot (the ``type_name``
       contains a dot, ``"app_label.modelname"``) resolves via
-      ``apps.get_model`` → ``registry.get(model)`` (the primary / lone type,
+      ``apps.get_model`` -> ``registry.get(model)`` (the primary / lone type,
       honoring ``Meta.primary``). A GraphQL-type-name slot (no dot) resolves via
       ``registry.definition_for_graphql_name`` (keyed on ``graphql_type_name``,
       Relay-Node definitions only).
-    - **Step 2 — enforce the recorded strategy permits the payload shape.** Reads
+    - **Step 2 - enforce the recorded strategy permits the payload shape.** Reads
       the candidate's stamped ``effective_globalid_strategy``: a model-label
       payload is permitted iff ``_accepts_model_label_decode`` (``model`` /
       ``type+model``); a type-name payload iff ``_accepts_type_name_decode``
       (``type`` / ``type+model``). ``callable`` / ``custom`` are in neither
       membership (encode-only in ``0.0.9``), and an absent (``None``) strategy
-      (a non-Relay-Node ``DjangoType`` or a mid-state type) is rejected — so a
+      (a non-Relay-Node ``DjangoType`` or a mid-state type) is rejected - so a
       crafted ID cannot resolve to a type that cannot be a Node.
 
     Returns ``(target_type, node_id)`` where ``target_type`` is the resolved
@@ -598,7 +598,7 @@ def decode_global_id(gid: relay.GlobalID | str) -> tuple[type, str]:
     """
     # ``registry`` is reached in-function: ``registry.py`` imports
     # ``implements_relay_node`` from this module in-function, and ``relay.py``
-    # must not import ``registry`` at module top — the same cycle-dodge
+    # must not import ``registry`` at module top - the same cycle-dodge
     # ``_resolve_globalid_strategy`` above documents for its ``conf`` / ``base``
     # imports. Decode runs well after module load, so the local import is cheap.
     from ..registry import registry
@@ -692,11 +692,11 @@ def _order_nodes(
 
     Mirrors ``strawberry_django/relay/utils.py::resolve_model_nodes #"def map_results"``: build an index
     keyed on ``str(getattr(obj, id_attr))`` (so the dict lookup matches
-    the ``coerced_keys`` shape — both are ``str``) and emit one entry per
+    the ``coerced_keys`` shape - both are ``str``) and emit one entry per
     requested key.
 
     ``required=True`` raises the model's ``DoesNotExist`` for any missing
-    key — homogeneous with ``_resolve_node_default``'s ``qs.get()`` so
+    key - homogeneous with ``_resolve_node_default``'s ``qs.get()`` so
     consumers writing visibility-aware exception handling can catch a
     single exception type for the "required missing id" semantic.
     ``required=False`` emits ``None`` for missing keys.
@@ -724,7 +724,7 @@ def _resolve_node_default(
     info: Any,
     required: bool = False,
 ) -> Any:
-    """Default ``Node.resolve_node`` — ``get_queryset`` aware.
+    """Default ``Node.resolve_node`` - ``get_queryset`` aware.
 
     Signature mirrors ``strawberry.relay.Node.resolve_node`` after
     ``classmethod`` binding: ``(cls, node_id, *, info, required=False)``.
@@ -781,7 +781,7 @@ def _resolve_nodes_default(
     node_ids: Any = None,
     required: bool = False,
 ) -> Any:
-    """Default ``Node.resolve_nodes`` — order-preserving, missing-aware.
+    """Default ``Node.resolve_nodes`` - order-preserving, missing-aware.
 
     Signature mirrors ``strawberry.relay.Node.resolve_nodes`` after
     ``classmethod`` binding: ``(cls, *, info, node_ids, required=False)``.
@@ -872,7 +872,7 @@ def install_relay_node_resolvers(type_cls: type) -> None:
     (the ``if issubclass(cls, relay.Node)`` branch). The ``__func__``
     discriminator is structurally distinct from Slice 2's ``__dict__``
     membership discriminator (``is_type_of`` injection) and Slice 3's
-    tuple-membership discriminator (``relay.Node in interfaces``) — the
+    tuple-membership discriminator (``relay.Node in interfaces``) - the
     three answer different questions at three lifecycle phases.
     """
     for attr, default_impl in _RELAY_RESOLVER_DEFAULTS:

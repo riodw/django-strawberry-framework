@@ -3,10 +3,10 @@
 Covers the cardinality-aware relation resolvers attached by
 ``DjangoType.__init_subclass__`` via ``_attach_relation_resolvers``:
 
-- Forward FK / OneToOne — ``getattr(root, name)`` returns the related instance.
-- Reverse FK / M2M (many-side) — ``list(getattr(root, name).all())`` so
+- Forward FK / OneToOne - ``getattr(root, name)`` returns the related instance.
+- Reverse FK / M2M (many-side) - ``list(getattr(root, name).all())`` so
   Strawberry sees an iterable instead of a Django ``RelatedManager``.
-- Reverse OneToOne (``one_to_one`` and ``auto_created``) — try/except
+- Reverse OneToOne (``one_to_one`` and ``auto_created``) - try/except
   ``DoesNotExist`` so a missing reverse row collapses to ``None``.
 
 Mix of integration tests (real Strawberry schema execution against
@@ -322,7 +322,7 @@ def test_check_n1_warns_for_unplanned_lazy_load(caplog):
 
 
 def test_check_n1_planned_absent_is_silent():
-    """B3 branch: no planned sentinel on context → optimizer is not engaged."""
+    """B3 branch: no planned sentinel on context -> optimizer is not engaged."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _check_n1
@@ -331,13 +331,13 @@ def test_check_n1_planned_absent_is_silent():
         pass
 
     fake_info = SimpleNamespace(context={}, path=_path("allItems", 0, "category"))
-    # No exception, no log, no side effect — strictness is irrelevant when the
+    # No exception, no log, no side effect - strictness is irrelevant when the
     # optimizer never set DST_OPTIMIZER_PLANNED.
     _check_n1(fake_info, SimpleNamespace(), "category", ItemType, kind="forward")
 
 
 def test_check_n1_planned_hit_is_silent():
-    """B3 branch: planned key present → resolver is a no-op regardless of strictness."""
+    """B3 branch: planned key present -> resolver is a no-op regardless of strictness."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.types.resolvers import _check_n1
@@ -370,7 +370,7 @@ def test_check_n1_default_strictness_off_is_silent_on_lazy_load():
 
 
 def test_check_n1_raise_strictness_raises_on_lazy_load():
-    """B3 branch: strictness=raise + unplanned + lazy → OptimizerError."""
+    """B3 branch: strictness=raise + unplanned + lazy -> OptimizerError."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.exceptions import OptimizerError
@@ -407,7 +407,7 @@ def test_check_n1_many_side_kind_treats_consumer_set_attribute_as_lazy(kind):
         context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
         path=_path("allCategories", 0, "items"),
     )
-    # ``items`` is set directly on the root — that would short-circuit the
+    # ``items`` is set directly on the root - that would short-circuit the
     # single-valued cache check via ``__dict__`` membership but must NOT
     # short-circuit the many-side check.
     root = SimpleNamespace(items=["not-a-real-prefetch"])
@@ -429,7 +429,7 @@ def test_check_n1_many_kind_respects_prefetched_objects_cache():
         path=_path("allCategories", 0, "items"),
     )
     root = SimpleNamespace(_prefetched_objects_cache={"items": []})
-    # No raise — the relation is prefetched, so the strictness branch is skipped.
+    # No raise - the relation is prefetched, so the strictness branch is skipped.
     _check_n1(fake_info, root, "items", CategoryType, kind="many")
 
 
@@ -519,10 +519,10 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
 
 
 # ---------------------------------------------------------------------------
-# Multi-database cooperation — spec-019 Slice 1 (rev4)
+# Multi-database cooperation - spec-019 Slice 1 (rev4)
 # ---------------------------------------------------------------------------
 #
-# TODO(spec-019 Slice 1, tests/types/test_resolvers.py extension — append-only):
+# TODO(spec-019 Slice 1, tests/types/test_resolvers.py extension - append-only):
 # pre-staged scaffold per ``docs/spec-023-multi_db-0_0_7.md`` Slice 1. Worker 2
 # replaces the ``raise NotImplementedError`` body in each test below with the
 # pseudocode that follows it.
@@ -564,13 +564,13 @@ def test_o1_query_count_is_1_plus_n_without_optimizer(django_assert_num_queries)
 # Fixture row pattern: the FK-id elision path needs a ``root`` with the
 # FK ``attname`` populated (so ``getattr(root, field_meta.attname)`` is
 # non-None). The minimum shape is a ``SimpleNamespace`` or a synthetic
-# Django-model-shaped object — mirror the existing test-double pattern
+# Django-model-shaped object - mirror the existing test-double pattern
 # in this file's earlier tests (``test_o4_*`` and friends use
 # ``SimpleNamespace`` constructions).
 
 
 def test_fk_id_elision_stub_sets_state_db_via_router_db_for_read(monkeypatch):
-    """Decision 3 axis 1 — stub's ``_state.db`` is set via ``router.db_for_read``."""
+    """Decision 3 axis 1 - stub's ``_state.db`` is set via ``router.db_for_read``."""
     from unittest.mock import Mock
 
     import django_strawberry_framework.types.resolvers as resolvers_module
@@ -599,7 +599,7 @@ def test_fk_id_elision_stub_sets_state_db_via_router_db_for_read(monkeypatch):
 
 
 def test_fk_id_elision_router_call_passes_parent_row_as_instance(monkeypatch):
-    """Decision 3 axis 1 — router.db_for_read receives ``instance=<parent_row>`` when parent has ``_state``."""
+    """Decision 3 axis 1 - router.db_for_read receives ``instance=<parent_row>`` when parent has ``_state``."""
     from unittest.mock import Mock
 
     import django_strawberry_framework.types.resolvers as resolvers_module
@@ -621,13 +621,13 @@ def test_fk_id_elision_router_call_passes_parent_row_as_instance(monkeypatch):
 
     _build_fk_id_stub(parent_row, field_meta)
 
-    # ``instance=`` is load-bearing — a regression switching it to ``instance=None``
+    # ``instance=`` is load-bearing - a regression switching it to ``instance=None``
     # would silently break consumer routers that consult the parent row's ``_state.db``.
     mock_router.db_for_read.assert_called_once_with(Category, instance=parent_row)
 
 
 def test_fk_id_elision_router_call_passes_none_instance_when_parent_lacks_state(monkeypatch):
-    """Decision 3 axis 1 — router.db_for_read receives ``instance=None`` when parent lacks ``_state``."""
+    """Decision 3 axis 1 - router.db_for_read receives ``instance=None`` when parent lacks ``_state``."""
     from types import SimpleNamespace
     from unittest.mock import Mock
 
@@ -660,7 +660,7 @@ def test_fk_id_elision_router_call_passes_none_instance_when_parent_lacks_state(
 
 
 def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(monkeypatch):
-    """Decision 3 axis 1 — null FK takes the early-return branch BEFORE the router is consulted."""
+    """Decision 3 axis 1 - null FK takes the early-return branch BEFORE the router is consulted."""
     from types import SimpleNamespace
     from unittest.mock import Mock
 
@@ -681,7 +681,7 @@ def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(monkeyp
     )
 
     # ``django_strawberry_framework/types/resolvers.py::_build_fk_id_stub #"if related_id is None"``
-    # — early ``return None`` before reaching the
+    # - early ``return None`` before reaching the
     # router. Rev2 H5: split from the parent-lacks-``_state`` case because
     # the two branches are distinct and a regression in either is a
     # different bug class.
@@ -692,7 +692,7 @@ def test_fk_id_elision_returns_none_for_null_fk_and_does_not_call_router(monkeyp
 
 
 def test_strictness_check_is_connection_agnostic_under_non_default_alias():
-    """Decision 3 axis 4 — strictness mode raises ``OptimizerError`` regardless of ``_state.db``."""
+    """Decision 3 axis 4 - strictness mode raises ``OptimizerError`` regardless of ``_state.db``."""
     from types import SimpleNamespace
 
     from django_strawberry_framework.exceptions import OptimizerError

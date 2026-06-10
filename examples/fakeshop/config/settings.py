@@ -92,14 +92,14 @@ TEMPLATES = [
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
-# Database mode — additive
+# Database mode - additive
 # ---------------------------------------------------------------------------
 # Two modes, toggled by the ``FAKESHOP_SHARDED`` env var:
 #
-#   unset       — single-DB.  Only ``default`` (→ ``db.sqlite3``) exists.
+#   unset       - single-DB.  Only ``default`` (-> ``db.sqlite3``) exists.
 #
-#   "1"         — sharded.    ``default`` (→ ``db.sqlite3``, same file as
-#                 single-DB mode) plus ``shard_b`` (→ ``db_shard_b.sqlite3``).
+#   "1"         - sharded.    ``default`` (-> ``db.sqlite3``, same file as
+#                 single-DB mode) plus ``shard_b`` (-> ``db_shard_b.sqlite3``).
 #                 The two modes share the same ``default`` file, so a single
 #                 dev workflow (``manage.py seed_data``, etc.) populates the
 #                 ``default`` alias in both modes; sharded mode only ADDS the
@@ -110,7 +110,7 @@ TEMPLATES = [
 # without ``.using(...)`` land on the default file; explicit
 # ``.using("shard_b")`` targets the secondary shard SQLite file.
 #
-# The library itself is agnostic to this layout — it simply honours
+# The library itself is agnostic to this layout - it simply honours
 # whatever alias the caller queryset carries via ``queryset.db``.
 #
 # Usage:
@@ -170,5 +170,5 @@ STATIC_URL = "/static/"
 # ---------------------------------------------------------------------------
 
 DJANGO_STRAWBERRY_FRAMEWORK = {
-    # No settings yet — placeholder for future options.
+    # No settings yet - placeholder for future options.
 }

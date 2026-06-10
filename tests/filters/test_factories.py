@@ -364,12 +364,12 @@ def test_make_cache_key_structurally_equivalent_metas_share_a_slot():
     key_dict_b = _make_cache_key({"model": Category, "fields": {"name": ("exact", "icontains")}})
     assert key_dict_a == key_dict_b
 
-    # 2. ``fields`` dict key order does not matter — sorted output.
+    # 2. ``fields`` dict key order does not matter - sorted output.
     key_order_a = _make_cache_key({"model": Category, "fields": {"a": ["exact"], "b": ["exact"]}})
     key_order_b = _make_cache_key({"model": Category, "fields": {"b": ["exact"], "a": ["exact"]}})
     assert key_order_a == key_order_b
 
-    # 3. ``extras`` insertion order does not matter — sorted output.
+    # 3. ``extras`` insertion order does not matter - sorted output.
     key_extra_a = _make_cache_key(
         {
             "model": Category,

@@ -2,29 +2,29 @@
 
 Public surface:
 
-- ``convert_scalar(field, type_name)`` — scalar columns
+- ``convert_scalar(field, type_name)`` - scalar columns
   (``CharField`` -> ``str`` etc.). Walks ``type(field).__mro__`` against
   ``SCALAR_MAP``, then delegates to ``convert_choices_to_enum`` when
   ``field.choices`` is set, then widens to ``T | None`` on ``field.null``.
-- ``convert_choices_to_enum(field, type_name)`` — generate (or fetch
+- ``convert_choices_to_enum(field, type_name)`` - generate (or fetch
   cached) Strawberry ``Enum`` from a Django choice field; called from
   ``convert_scalar`` when ``field.choices`` is set and also importable
   directly for tests / custom resolvers.
 - ``resolved_relation_annotation(field, target_type, *, field_meta=None)``
-  — render the final relation annotation for ``field`` pointing at a
+  - render the final relation annotation for ``field`` pointing at a
   resolved ``DjangoType`` (``target_type``). Cardinality / null widening
   is sourced from ``FieldMeta``; reused by ``types/finalizer.py``'s
   deferred-resolution path.
-- ``SCALAR_MAP`` — module-level ``dict[type[models.Field], Any]`` mapping
+- ``SCALAR_MAP`` - module-level ``dict[type[models.Field], Any]`` mapping
   Django field classes to their Python / Strawberry scalar. Mutable,
   last-write-wins, read on every ``convert_scalar`` call (no caching), so
   post-``finalize_django_types()`` mutations remain visible. The canonical
   extension path for a third-party / consumer field is to **subclass** a
-  supported Django field — ``convert_scalar``'s MRO walk picks up the
+  supported Django field - ``convert_scalar``'s MRO walk picks up the
   parent's scalar without registration. ``SCALAR_MAP[FieldCls] = py_type``
   is the non-subclass extension hook (e.g. unrelated third-party fields
   that store to a non-mapped column type). Notably absent from the
-  default map: ``DurationField`` (no first-party Strawberry scalar — a
+  default map: ``DurationField`` (no first-party Strawberry scalar - a
   consumer must register a custom scalar via ``SCALAR_MAP[DurationField]
   = MyDurationScalar``) and ``BinaryField`` (no first-party Strawberry
   scalar either; ``strawberry.scalars.Base64`` is the conventional plug:
@@ -181,7 +181,7 @@ def convert_scalar(
             inner choice-bearing element resolves under the outer field's
             name.
         force_nullable: Keyword-only nullability override tri-state.
-            ``None`` (default) honors ``field.null`` — identical to the
+            ``None`` (default) honors ``field.null`` - identical to the
             pre-override behavior, so every existing call site is
             unaffected. ``True`` emits ``T | None`` regardless of the
             column (force nullable). ``False`` emits ``T`` regardless (force
@@ -194,18 +194,18 @@ def convert_scalar(
     Raises:
         ConfigurationError: triggered by any of the following:
 
-            - ``Unsupported Django field type`` — no class in
+            - ``Unsupported Django field type`` - no class in
               ``type(field).__mro__`` is in ``SCALAR_MAP``.
-            - ``Nested ArrayField on ...`` — ``ArrayField`` whose
+            - ``Nested ArrayField on ...`` - ``ArrayField`` whose
               ``base_field`` is itself an ``ArrayField`` (multi-dim arrays
               are not supported).
-            - ``ArrayField on ... declares choices on the outer field`` —
+            - ``ArrayField on ... declares choices on the outer field`` -
               outer-array ``choices`` are ambiguous at the GraphQL
               boundary; declare choices on ``base_field`` instead.
-            - ``HStoreField on ... declares choices`` — ``HStoreField``
+            - ``HStoreField on ... declares choices`` - ``HStoreField``
               stores a ``dict[str, str | None]`` with no enum-able shape
               at the GraphQL boundary.
-            - ``<Model>.<field> uses Django's grouped-choices form`` —
+            - ``<Model>.<field> uses Django's grouped-choices form`` -
               raised from ``convert_choices_to_enum`` for nested-tuple
               choice declarations.
     """
@@ -318,7 +318,7 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
     Raises:
         ConfigurationError: triggered by any of the following:
 
-            - ``field.choices`` is empty — declared but the sequence is
+            - ``field.choices`` is empty - declared but the sequence is
               empty.
             - ``field.choices`` contains nested tuples (Django's
               grouped-choices form). Only the flat ``(value, label)``
@@ -339,7 +339,7 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
         # ``(group_label, [(value, label), ...])``. In the flat form the
         # second element is always a label string; in the grouped form it
         # is a sequence of (value, label) pairs. Detecting on ``label``
-        # rather than ``value`` is the load-bearing distinction — in the
+        # rather than ``value`` is the load-bearing distinction - in the
         # grouped form the *value* slot is the human-readable group name
         # (a string), so checking it produces a false negative.
         if isinstance(label, (list, tuple)):

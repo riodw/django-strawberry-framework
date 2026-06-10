@@ -57,8 +57,8 @@ class Ordering(enum.Enum):
     True-or-None semantics).
 
     Portability note (``docs/feedback.md``): a bare ``ASC`` / ``DESC`` over a
-    NULLABLE column defers NULL placement to the backend — SQLite sorts NULLs
-    first on ``ASC``, Postgres / MySQL sort them last — so the NULL partition
+    NULLABLE column defers NULL placement to the backend - SQLite sorts NULLs
+    first on ``ASC``, Postgres / MySQL sort them last - so the NULL partition
     (and thus the page boundaries of a connection paged over a nullable column)
     differs across databases, and the test suite runs on SQLite. This does NOT
     break cursor stability WITHIN one backend (positional cursors only need a

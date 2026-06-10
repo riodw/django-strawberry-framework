@@ -167,7 +167,7 @@ def test_materialize_input_class_raises_on_collision(_materialization_cleanup):
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — convert_order_field_to_input_annotation
+# Slice 2 - convert_order_field_to_input_annotation
 # ---------------------------------------------------------------------------
 
 
@@ -193,7 +193,7 @@ def test_convert_order_field_to_input_annotation_returns_ordering_or_none():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — normalize_input_value
+# Slice 2 - normalize_input_value
 # ---------------------------------------------------------------------------
 
 
@@ -296,7 +296,7 @@ def test_normalize_input_value_returns_empty_for_none_input():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — build_input_class
+# Slice 2 - build_input_class
 # ---------------------------------------------------------------------------
 
 
@@ -324,7 +324,7 @@ def test_build_input_class_handles_python_attr_to_graphql_alias_mapping():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — _build_input_fields populates _field_specs
+# Slice 2 - _build_input_fields populates _field_specs
 # ---------------------------------------------------------------------------
 
 
@@ -396,7 +396,7 @@ def test_field_specs_populated_by_build_input_fields_for_relatedorder():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — clear_order_input_namespace
+# Slice 2 - clear_order_input_namespace
 # ---------------------------------------------------------------------------
 
 
@@ -503,7 +503,7 @@ def test_clear_order_input_namespace_resets_orderset_subclass_binding_state(_nam
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — order_input_type consumer helper
+# Slice 2 - order_input_type consumer helper
 # ---------------------------------------------------------------------------
 
 

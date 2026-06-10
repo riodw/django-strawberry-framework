@@ -68,9 +68,9 @@ class TypeRegistry:
     def _already_registered(label: str, name: str, existing_name: str) -> ConfigurationError:
         """Build the canonical "already registered" ``ConfigurationError``.
 
-        Centralizes the phrasing for the two cross-key collision sites —
+        Centralizes the phrasing for the two cross-key collision sites -
         ``register``'s reverse-collision (same ``type_cls`` for a different
-        model) and ``register_enum``'s ``(model, field_name)`` collision —
+        model) and ``register_enum``'s ``(model, field_name)`` collision -
         so consumer error matching stays grep-stable. The inline
         ``ConfigurationError(...)`` raises in ``register``'s primary-flip
         and duplicate-primary branches and in ``register_definition`` use
@@ -148,7 +148,7 @@ class TypeRegistry:
         ``_models``, ``_primaries`` (when ``type_cls`` was the primary),
         ``_definitions``, and any pending relation whose ``source_type``
         is ``type_cls``. No-op when ``type_cls`` is not registered AND the
-        registry has not been finalized — the ``_check_mutable()`` guard
+        registry has not been finalized - the ``_check_mutable()`` guard
         fires before the registration check, so post-finalize calls raise
         ``ConfigurationError`` even for unknown types. Test teardown that
         wants "clean up if present" semantics must run before
@@ -166,7 +166,7 @@ class TypeRegistry:
         registry's public mutators.
 
         When ``type_cls`` is the primary for its model, the model loses
-        its primary even if siblings remain — the caller is responsible
+        its primary even if siblings remain - the caller is responsible
         for re-declaring a primary via a fresh registration cycle.
         """
         self._check_mutable()
@@ -263,7 +263,7 @@ class TypeRegistry:
 
         Asymmetry note: ``type_cls`` is not required to be present in
         ``_types``/``_models`` first.  The caller (``DjangoType.__init_subclass__``
-        in ``types/base.py``) is responsible for ordering — it calls
+        in ``types/base.py``) is responsible for ordering - it calls
         ``register`` before ``register_definition`` for every concrete
         ``DjangoType`` subclass.  Definitions for un-modelled wrapper
         classes are not a supported entry point.
@@ -289,7 +289,7 @@ class TypeRegistry:
         Snapshots ``_primaries[model]`` before calling ``register`` and
         captures whether that call appended state.  If
         ``register_definition`` then raises, only state added by THIS
-        call is rolled back — a pre-existing registration (idempotent
+        call is rolled back - a pre-existing registration (idempotent
         same-type re-register) survives a re-register-with-different-
         definition failure intact. ``DjangoType.__init_subclass__`` is
         the only intended caller; see ``types/base.py``.
@@ -322,7 +322,7 @@ class TypeRegistry:
         The GlobalID type-name decode entry point (spec-031 Decision 8 Step 1,
         type-name branch). Inverts the ``type`` strategy's encode (which emits
         ``definition.graphql_type_name``) by scanning ``iter_definitions()`` for a
-        unique ``graphql_type_name`` match over **Relay-Node definitions only** —
+        unique ``graphql_type_name`` match over **Relay-Node definitions only** -
         a non-Node type can never be the target of a ``GlobalID``.
 
         Keyed on ``definition.graphql_type_name`` (which honors ``Meta.name``),
@@ -438,7 +438,7 @@ class TypeRegistry:
     def clear(self) -> None:
         """Drop all registered types and enums.
 
-        Test-only — production code should never need to call this.
+        Test-only - production code should never need to call this.
         Wire into ``pytest`` autouse fixtures so each registry-using test
         starts with a clean registry. ``_check_mutable`` is intentionally
         not called so test teardown can reset a finalized registry; this
@@ -454,7 +454,7 @@ class TypeRegistry:
 
         # Filter-input namespace clear (cycle-safe local import per
         # spec-021 Decision 9, M5 of rev3 + M4 of rev8). Two independent
-        # try/except blocks — one per cleared cache — so a partial-
+        # try/except blocks - one per cleared cache - so a partial-
         # rollback build state where one cache is reachable and the
         # other is not still clears whatever IS reachable. Both blocks
         # follow the same "best-effort, skip and continue" shape so the

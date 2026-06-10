@@ -13,7 +13,7 @@ code path that replaces a connection method between ``setUpClass`` and
 ``AttributeError: 'function' object has no attribute 'wrapped'``.
 Django defines the classmethod on ``SimpleTestCase`` itself, so a
 single patch on the base class covers ``TransactionTestCase`` and
-``TestCase`` via normal inheritance — including direct
+``TestCase`` via normal inheritance - including direct
 ``SimpleTestCase`` subclasses, which ``TransactionTestCase`` is NOT in
 the MRO of.
 
@@ -25,7 +25,7 @@ one-alias multi-DB scenario is enough to exercise both branches of
 the patched loop. (The end-to-end demo shape from
 <https://github.com/riodw/django-remove_databases_failures-demo> runs
 under vanilla ``manage.py test`` rather than pytest-django and cannot
-be reproduced 1:1 under our test runner — pytest-django's per-test
+be reproduced 1:1 under our test runner - pytest-django's per-test
 flush calls ``connection.cursor()`` mid-lifecycle and crashes on the
 swapped cursor before reaching ``tearDownClass``. The unit tests
 below isolate the bug class from that machinery.)
@@ -67,7 +67,7 @@ def test_apply_reinstalls_when_class_attribute_reverted():
     Without this, a misbehaving test that swapped
     ``SimpleTestCase._remove_databases_failures`` without restoring
     would leave the class permanently in the unpatched state for the
-    rest of the process — and the next ``apply()`` call would silently
+    rest of the process - and the next ``apply()`` call would silently
     decline to re-install.
     """
     _django_patches.apply()
@@ -108,7 +108,7 @@ def test_patch_is_installed_on_simple_test_case():
 
 def test_patch_is_inherited_by_transaction_test_case():
     """``TransactionTestCase`` inherits ``_remove_databases_failures``
-    from ``SimpleTestCase`` — patching the base class covers the
+    from ``SimpleTestCase`` - patching the base class covers the
     subclass for free.
     """
     assert (
@@ -119,7 +119,7 @@ def test_patch_is_inherited_by_transaction_test_case():
 
 def test_patch_is_inherited_by_test_case():
     """``TestCase`` inherits ``_remove_databases_failures`` from
-    ``SimpleTestCase`` (via ``TransactionTestCase``) — one patch
+    ``SimpleTestCase`` (via ``TransactionTestCase``) - one patch
     covers the whole Django test-case hierarchy.
     """
     assert (
@@ -172,7 +172,7 @@ def test_patched_remove_databases_failures_unwraps_a_real_wrapper():
     connection.cursor = wrapper
     try:
         _NarrowTest._remove_databases_failures()
-        # Wrapper unwrapped → method now equals the sentinel.
+        # Wrapper unwrapped -> method now equals the sentinel.
         assert connection.cursor is sentinel
     finally:
         connection.cursor = original_cursor
@@ -184,7 +184,7 @@ def test_patched_remove_databases_failures_skips_non_wrapper_methods():
     restoring the wrapper), the patched method leaves it alone instead
     of crashing on ``method.wrapped``.
 
-    This is the load-bearing assertion of the whole patch — without
+    This is the load-bearing assertion of the whole patch - without
     the ``isinstance`` guard, the same setup raises
     ``AttributeError: 'function' object has no attribute 'wrapped'``.
     The companion test
@@ -213,8 +213,8 @@ def test_patched_remove_databases_failures_skips_non_wrapper_methods():
 
 
 def test_patched_remove_databases_failures_covers_direct_simple_test_case_subclass():
-    """Direct ``SimpleTestCase`` subclasses — ``TransactionTestCase``
-    is NOT in their MRO — must also get the unwrap-time protection.
+    """Direct ``SimpleTestCase`` subclasses - ``TransactionTestCase``
+    is NOT in their MRO - must also get the unwrap-time protection.
 
     Pins that the patch is installed on ``SimpleTestCase`` itself, not
     only on ``TransactionTestCase``. Without this coverage, the patch

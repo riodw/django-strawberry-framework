@@ -1,4 +1,4 @@
-"""``FieldMeta`` — precomputed Django field metadata for the optimizer walker.
+"""``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
 
 ``FieldMeta`` is the canonical single source of truth for relation
 shape across the package: ``is_relation``, cardinality flags
@@ -60,7 +60,7 @@ class FieldMeta:
         nullable: Single-relation nullability rule, cardinality-gated.
             Many-side cardinalities (forward M2M, reverse FK, reverse
             M2M) short-circuit to ``False`` because a manager / queryset
-            is never ``None`` — the rendered GraphQL annotation is
+            is never ``None`` - the rendered GraphQL annotation is
             ``list[target_type]`` regardless of any underlying Django
             ``null`` flag. Reverse OneToOne short-circuits to ``True``
             because the related row may legitimately be absent. Every
@@ -148,25 +148,25 @@ class FieldMeta:
         that the input exposes the field-shaped attribute surface
         (``name`` plus the ``getattr``-defaulted cardinality / target /
         related-model attributes); they differ only in how
-        ``is_relation`` is determined — ``from_django_field`` reads
+        ``is_relation`` is determined - ``from_django_field`` reads
         ``bool(field.is_relation)``, the resolver-side fallback fires
         only when the field lacks the ``is_relation`` attribute and the
         caller is by definition asking about a relation (``True``).
 
-        The cardinality-gated nullable rule (many-side → ``False``;
-        reverse OneToOne → ``True``; otherwise ``field.null``) and the
+        The cardinality-gated nullable rule (many-side -> ``False``;
+        reverse OneToOne -> ``True``; otherwise ``field.null``) and the
         nine ``getattr``-defaulted reads (``one_to_one``,
         ``related_model``, ``attname``, ``target_field_name`` /
         ``target_field_attname`` from a single ``target_field`` read,
         ``reverse_connector_attname``, ``auto_created``) live here so
         the two call sites cannot drift.
         """
-        # Read ``target_field`` once — it is consulted twice below to
+        # Read ``target_field`` once - it is consulted twice below to
         # extract both ``name`` and ``attname``.
         target_field = getattr(field, "target_field", None)
         is_m2m = bool(getattr(field, "many_to_many", False))
         is_o2m = bool(getattr(field, "one_to_many", False))
-        # Cardinality-gated nullable rule — see ``nullable`` field docstring above for the full rationale.
+        # Cardinality-gated nullable rule - see ``nullable`` field docstring above for the full rationale.
         if is_m2m or is_o2m:
             nullable = False
         else:

@@ -172,7 +172,7 @@ def test_related_target_for_resolves_to_primary_when_two_types_share_target_mode
 
     Pins the consolidation contract relied upon at
     ``django_strawberry_framework/types/definition.py``
-    ``DjangoTypeDefinition.related_target_for`` — the call site is
+    ``DjangoTypeDefinition.related_target_for`` - the call site is
     ``target_type = registry.get(target_model)``, NOT the historical
     ``registry.primary_for(target_model) or registry.get(target_model)``
     chain. The collapse is safe only because ``registry.get`` itself
@@ -205,7 +205,7 @@ def test_related_target_for_resolves_to_primary_when_two_types_share_target_mode
     assert pair is not None
     shelf_definition, _shelf_field = pair
     # The primary (``AdminShelfType``) wins over the non-primary sibling
-    # (``ShelfType``) — ``registry.get(Shelf)`` returns ``AdminShelfType``
+    # (``ShelfType``) - ``registry.get(Shelf)`` returns ``AdminShelfType``
     # because ``_primaries[Shelf] is AdminShelfType``.
     assert shelf_definition is AdminShelfType.__django_strawberry_definition__
 

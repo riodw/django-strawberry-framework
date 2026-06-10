@@ -91,7 +91,7 @@ class OrderSetMetaclass(type):
         new_class = super().__new__(cls, name, bases, attrs)
 
         # Start with inherited related_orders from base classes (in MRO order,
-        # with later bases overriding earlier ones — matches Python's method
+        # with later bases overriding earlier ones - matches Python's method
         # resolution). Cookbook lines 30-33.
         inherited: OrderedDict = OrderedDict()
         for base in reversed(bases):
@@ -138,7 +138,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     operator bag.
     """
 
-    # Binding seam — populated by ``finalize_django_types`` phase 2.5 in
+    # Binding seam - populated by ``finalize_django_types`` phase 2.5 in
     # Slice 3 per spec-028 Decision 6. The slot's existence is the Slice 1
     # contract; the binding write lands in Slice 3. Same shape as the
     # filter side's ``FilterSet._owner_definition``.

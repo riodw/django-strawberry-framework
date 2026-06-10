@@ -5,7 +5,7 @@ Consumers (or third-party libraries) that need to replace a method on
 ``django.db.connections[alias]`` between ``setUpClass`` and
 ``tearDownClass`` use :func:`safe_wrap_connection_method` to install
 their wrapper. The helper refuses to wrap when Django's
-``_DatabaseFailure`` is already in place — mirroring the pattern
+``_DatabaseFailure`` is already in place - mirroring the pattern
 ``django-debug-toolbar`` ships in
 :func:`debug_toolbar.panels.sql.tracking.wrap_cursor`.
 
@@ -57,7 +57,7 @@ def safe_wrap_connection_method(
     ``setUp``) overwrites that ``_DatabaseFailure`` with a plain
     callable, the upstream teardown crashes with
     ``AttributeError: 'function' object has no attribute 'wrapped'``
-    (Django Trac #37064, closed ``wontfix`` —
+    (Django Trac #37064, closed ``wontfix`` -
     <https://code.djangoproject.com/ticket/37064>).
 
     Using this helper is the wrap-time half of the package's
@@ -108,7 +108,7 @@ def safe_wrap_connection_method(
                 super().tearDown()
 
     The package's unwrap-time backstop (Trac #37064 patch) makes
-    omitting the ``tearDown`` restoration non-fatal — but restoring
+    omitting the ``tearDown`` restoration non-fatal - but restoring
     on your own is still good hygiene and lets debug-toolbar-style
     wrap-time-isinstance checks in OTHER libraries find a clean slot
     on the next ``setUpClass``.
@@ -131,7 +131,7 @@ def safe_wrap_connection_method(
     Raises:
         TypeError: If ``wrapper`` is not callable. Validated at the
             wrap site so a typo (e.g. passing ``connection.cursor()``
-            — the cursor object, not a callable — instead of
+            - the cursor object, not a callable - instead of
             ``lambda: connection.cursor()``) surfaces here rather than
             as a delayed ``TypeError`` deep inside Django's ORM
             machinery at the next ``connection.<method>()`` call.

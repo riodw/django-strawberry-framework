@@ -52,7 +52,7 @@ def card_key(card: dict[str, Any]) -> str:
 
     Reads the ``cardId`` GraphQL field (sourced from ``Card.card_id`` in the
     model layer) instead of recomputing the ``<STATUS>[-<MILESTONE>]-NNN-X.Y.Z``
-    format here — single source of truth shared with ``Card.__str__`` and the
+    format here - single source of truth shared with ``Card.__str__`` and the
     KANBAN.html renderer.
     """
     return card["cardId"]
@@ -202,7 +202,7 @@ def render_relative_size_scale(dashboard_data: dict[str, Any]) -> str:
         key=lambda size: size.get("rank", 0),
     )
     return "\n".join(
-        f"- **{size['label']}** — {size['description']}"
+        f"- **{size['label']}** - {size['description']}"
         for size in sizes
         if size.get("description")
     )
@@ -212,7 +212,7 @@ def compute_tokens(dashboard_data: dict[str, Any]) -> dict[str, str]:
     """Derive the board-wide computed placeholders from the card/doc data.
 
     These are facts the DB already knows, so the prose stores a ``{{token}}``
-    placeholder instead of a frozen literal — the renderer fills it from the
+    placeholder instead of a frozen literal - the renderer fills it from the
     live data and it can never go stale. The KANBAN.html Vue app resolves the
     same tokens client-side, so both exports stay consistent.
     """
@@ -291,7 +291,7 @@ def render_spec_map(dashboard_data: dict[str, Any]) -> list[str]:
         spec_text = (
             "<br>".join(spec_link(path) for path in specs) if specs else "No dedicated spec"
         )
-        lines.append(f"| `{card_key(card)}` — {card['title']} | {spec_text} |")
+        lines.append(f"| `{card_key(card)}` - {card['title']} | {spec_text} |")
     lines.append("")
     return lines
 
@@ -324,7 +324,7 @@ def render_card(card: dict[str, Any]) -> list[str]:
     slug = card["slug"]
     lines = [
         f'<a id="{slug}"></a>',
-        f"### [{card_key(card)} — {card['title']}]({card_url(card)})",
+        f"### [{card_key(card)} - {card['title']}]({card_url(card)})",
         "",
     ]
 
@@ -376,7 +376,7 @@ def render_card(card: dict[str, Any]) -> list[str]:
     if dependencies:
         lines.extend(["#### Dependencies", ""])
         for dependency in dependencies:
-            lines.append(f"- `{card_key(dependency)}` — {dependency['title']}")
+            lines.append(f"- `{card_key(dependency)}` - {dependency['title']}")
         lines.append("")
 
     item_groups = defaultdict(lambda: {"section": None, "items": []})
@@ -414,7 +414,7 @@ def render_card(card: dict[str, Any]) -> list[str]:
         lines.extend(["#### Card references", ""])
         for reference in references:
             target_card = reference["targetCard"]
-            target = f"`{card_key(target_card)}` — {target_card['title']}"
+            target = f"`{card_key(target_card)}` - {target_card['title']}"
             kind = reference["kind"]["label"]
             text = resolve_card_text(
                 reference.get("rawText", "").strip(),

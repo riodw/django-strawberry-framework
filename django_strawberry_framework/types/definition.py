@@ -79,13 +79,13 @@ class DjangoTypeDefinition:
           classification string (``"model"`` / ``"type"`` / ``"type+model"`` /
           ``"callable"`` / ``"custom"``), distinct from the raw
           ``globalid_strategy`` slot above (a raw callable value and the resolved
-          ``"callable"`` classification string are different things — spec-031
+          ``"callable"`` classification string are different things - spec-031
           Decision 10 / ``docs/feedback.md`` P2). It is set exactly once by the
           Phase-2.5 ``install_globalid_typename_resolver`` step
           (``types/relay.py``), read by ``decode_global_id`` and the
           strategy-aware ``GlobalID`` filter, and doubles as that step's
           re-entrancy guard (a non-``None`` value means "already processed in a
-          prior partial finalize — skip"). ``None`` means "not a
+          prior partial finalize - skip"). ``None`` means "not a
           framework-decodable Relay-Node type" (the install step runs for Relay
           types only): decode rejects such a candidate (spec-031 Decision 8) and
           the filter falls back to node-id-only validation (spec-031 Decision 13).
@@ -127,7 +127,7 @@ class DjangoTypeDefinition:
     # Unlike the raw ``globalid_strategy`` slot above (populated at class
     # creation), it is set exactly once by the Phase-2.5 typename resolver
     # install (``types/relay.py::install_globalid_typename_resolver``) and
-    # doubles as its re-entrancy guard. ``None`` ⇒ not a framework-decodable
+    # doubles as its re-entrancy guard. ``None`` => not a framework-decodable
     # Relay-Node type.
     effective_globalid_strategy: str | None = None
     finalized: bool = False
@@ -138,7 +138,7 @@ class DjangoTypeDefinition:
     # sentinel is required). Populated lazily on first call. Definitions are
     # created fresh by ``DjangoType.__init_subclass__`` after every
     # ``registry.clear()`` so stale-cache contamination is bounded to
-    # consumer code holding references to discarded definitions —
+    # consumer code holding references to discarded definitions -
     # which would surface the same staleness on any direct attribute
     # read.
     _related_target_cache: dict[str, Any] = field(default_factory=dict, repr=False)
@@ -150,7 +150,7 @@ class DjangoTypeDefinition:
         Strawberry derives the surface name as ``self.name`` when set,
         falling back to ``self.origin.__name__``. Centralized here so
         every call site that needs the same derivation rule reads from
-        one source — the alternative was three inline copies in
+        one source - the alternative was three inline copies in
         ``finalizer.py``, ``filters/base.py``, and ``filters/inputs.py``
         which would silently diverge across renames.
         """
@@ -167,9 +167,9 @@ class DjangoTypeDefinition:
         ``FieldDoesNotExist``) and ``None`` when the resolved field is
         not a relation. For a relation, resolves the target model via
         ``field.related_model`` (the canonical attribute on every
-        Django relation field — forward FK / OneToOne / M2M, reverse FK
+        Django relation field - forward FK / OneToOne / M2M, reverse FK
         / OneToOne / M2M). The target ``DjangoType`` is resolved via
-        ``registry.get(target_model)`` — the registry's own first
+        ``registry.get(target_model)`` - the registry's own first
         return state honors ``Meta.primary`` declarations, and the
         fallback path preserves the single-type-no-primary rule.
         Returns ``None`` when no ``DjangoType`` is registered for the

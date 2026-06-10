@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.apps`` — Django AppConfig."""
+"""Tests for ``django_strawberry_framework.apps`` - Django AppConfig."""
 
 import django.apps
 
@@ -26,7 +26,7 @@ def test_djangostrawberryframeworkconfig_resolves_through_django_app_registry():
 
 
 def test_djangostrawberryframeworkconfig_defines_no_extra_appconfig_attributes():
-    # ``ready`` IS allowed (and present) — the package ships a
+    # ``ready`` IS allowed (and present) - the package ships a
     # ``ready()`` body to apply the Django Trac #37064 patch via
     # ``django_strawberry_framework._django_patches.apply``. The
     # spec-017 "no ready() body in 0.0.7" stance is deliberately

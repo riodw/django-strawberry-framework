@@ -230,7 +230,7 @@ def test_library_patron_bigint_lifetime_fines_over_http():
     proves the converter row keeps working on a real-domain model and not
     just the dedicated coverage app.
     """
-    # 2**53 + 12345 — past JS safe-integer (``2**53 - 1``) so a numeric
+    # 2**53 + 12345 - past JS safe-integer (``2**53 - 1``) so a numeric
     # round-trip would lose precision; the only correct wire format is the
     # decimal string.
     large_value = 9007199254752336
@@ -281,7 +281,7 @@ def test_library_optimizer_selects_book_shelf_in_http_query():
     # Slice 4 added ShelfType.get_queryset for the H1-rev4 nested-visibility
     # contract; the optimizer correctly downgrades select_related("shelf") to
     # Prefetch so the visibility hook applies before the join surfaces hidden
-    # rows. Two queries — one for the books, one prefetch for shelves through
+    # rows. Two queries - one for the books, one prefetch for shelves through
     # the visibility-scoped queryset.
     assert len(captured) == 2
     book_sql = captured[0]["sql"]
@@ -530,7 +530,7 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
     ``tests/test_list_field.py::test_djangolistfield_at_root_position_is_optimized``
     (rev2 M3, spec-016 #"Pinned by `test_djangolistfield_at_root_position_is_optimized`").
 
-    Query count derivation (rev6 M6, spec-016 #"pin the assertion to exact query count" — exact ``assertNumQueries(N)``):
+    Query count derivation (rev6 M6, spec-016 #"pin the assertion to exact query count" - exact ``assertNumQueries(N)``):
       * 1 SELECT for the ``Branch`` root queryset (the ``DjangoListField``
         default resolver returns ``Branch._default_manager.all()``; the
         root-gated ``DjangoOptimizerExtension`` plans
@@ -568,7 +568,7 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
     payload = response.json()
     assert "errors" not in payload, payload
     branches = payload["data"]["allLibraryBranchesViaListField"]
-    # Order-agnostic comparison: the new field has no ``order_by`` (rev2 M1 —
+    # Order-agnostic comparison: the new field has no ``order_by`` (rev2 M1 -
     # the add-only posture deliberately does NOT inherit ``order_by("id")``
     # from the sibling ``all_library_branches`` resolver because the new field
     # exercises the default-resolver code path, not a consumer resolver).
@@ -585,9 +585,9 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
 
 @pytest.mark.django_db
 def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http():
-    """End-to-end ``Manager → QuerySet`` coercion via a sync consumer ``resolver=``.
+    """End-to-end ``Manager -> QuerySet`` coercion via a sync consumer ``resolver=``.
 
-    Pins ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"result = result.all()"`` — the field-wrapper's
+    Pins ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"result = result.all()"`` - the field-wrapper's
     ``_post_process_consumer_sync`` ``Manager.all()`` coercion before
     ``_apply_get_queryset_sync`` runs (rev4 M1). The fakeshop resolver
     ``apps.library.schema._branches_manager_resolver`` returns
@@ -621,12 +621,12 @@ def test_library_branches_via_djangolistfield_nullable_outer_renders_and_resolve
     ``tests/test_list_field.py::test_djangolistfield_nullable_outer_via_consumer_annotation``,
     promoted to this tier per ``test_query/README.md`` (the shape is reachable from a live
     ``/graphql/`` introspection query). The consumer's ``list[BranchType] | None`` class
-    annotation — NOT a constructor argument — must drive the rendered GraphQL type to
+    annotation - NOT a constructor argument - must drive the rendered GraphQL type to
     ``[BranchType!]`` (a ``LIST`` whose outer ``NON_NULL`` wrapper is ABSENT, vs the sibling
     non-nullable field's ``NON_NULL`` outer). ``DjangoListField`` itself has no
     outer-nullability branch, so the same ``list_field.py`` lines stay pinned by the
     package companion ``test_djangolistfield_non_nullable_outer_default_via_consumer_annotation``;
-    this live test adds the real-stack pressure the throwaway-schema package test lacked —
+    this live test adds the real-stack pressure the throwaway-schema package test lacked -
     introspection over the *composed* schema plus an end-to-end resolve over the wire.
     """
     # Introspection over the real composed schema: outer LIST is nullable (no NON_NULL
@@ -703,7 +703,7 @@ def test_library_relay_node_global_id_round_trips():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 — live HTTP filter coverage (spec-021 L1044-1057).
+# Slice 4 - live HTTP filter coverage (spec-021 L1044-1057).
 # ---------------------------------------------------------------------------
 
 
@@ -973,7 +973,7 @@ def test_library_branches_filter_by_reverse_fk_lookup():
     branch_with = models.Branch.objects.create(name="With Match", city="Boston")
     branch_without = models.Branch.objects.create(name="Without Match", city="Boston")
     # ``BranchFilter.shelves`` carries the explicit ``queryset=Shelf.objects.filter(
-    # topic="permanent collection")`` constraint per spec-021 L1051 — seed both
+    # topic="permanent collection")`` constraint per spec-021 L1051 - seed both
     # shelves under that topic so only the per-shelf code clause narrows the
     # result; the topic-scope test (#8) inverts this pattern.
     models.Shelf.objects.create(code="A-Main", topic="permanent collection", branch=branch_with)
@@ -1079,7 +1079,7 @@ def test_library_books_filter_preserves_optimizer_cooperation():
     # Optimizer plans the relations under filter cooperation: a root book
     # SELECT, a ``select_related("shelf")`` JOINed pull, and the
     # ``prefetch_related("genres")`` SELECT. The filter clause itself
-    # adds no additional queries — the count survives ``.filter(...)``
+    # adds no additional queries - the count survives ``.filter(...)``
     # per spec-021 L1050.
     assert len(captured) == 3
     joined_sql = "\n".join(query["sql"] for query in captured)
@@ -1111,7 +1111,7 @@ def test_library_branches_filter_respects_related_queryset_boundary_on_parent():
     payload = response.json()
     assert "errors" not in payload, payload
     rows = payload["data"]["allLibraryBranches"]
-    # (a) ``branch_B`` is EXCLUDED — no shelf with ``topic="permanent collection"``.
+    # (a) ``branch_B`` is EXCLUDED - no shelf with ``topic="permanent collection"``.
     assert [row["name"] for row in rows] == ["Branch A"]
     # (b) and (c) ``branch_A`` is INCLUDED and its consumer-authored ``shelves``
     # resolver returns BOTH shelves (the constraint scopes the parent
@@ -1151,7 +1151,7 @@ def test_nested_related_filter_honors_target_get_queryset():
     nested visibility hook on ``ShelfType.get_queryset`` is the only gate
     being exercised. ``BranchFilter.shelves`` carries an explicit
     ``queryset=Shelf.objects.filter(topic="permanent collection")``
-    constraint that test #8 pins separately — running both contracts
+    constraint that test #8 pins separately - running both contracts
     through the same query path would double up the gates.
     """
     branch = models.Branch.objects.create(name="Branch", city="Cambridge")
@@ -1354,7 +1354,7 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 — live HTTP order coverage (spec-028 Slice 4 — 14 acceptance tests).
+# Slice 4 - live HTTP order coverage (spec-028 Slice 4 - 14 acceptance tests).
 # ---------------------------------------------------------------------------
 
 
@@ -2020,7 +2020,7 @@ def test_library_branches_order_empty_list_and_null_direction_no_op():
 
 
 # ---------------------------------------------------------------------------
-# spec-029 Slice 3 — Meta.nullable_overrides / Meta.required_overrides
+# spec-029 Slice 3 - Meta.nullable_overrides / Meta.required_overrides
 #
 # Live HTTP coverage against the acceptance-only ``NullabilityOverrideBookType``
 # secondary type on ``library.Book``: the SDL flip (title String! -> String,
@@ -2110,7 +2110,7 @@ def test_nullability_override_acceptance_api_is_queryable():
 
 
 # ---------------------------------------------------------------------------
-# spec-030 Slice 4 — live DjangoConnectionField HTTP coverage.
+# spec-030 Slice 4 - live DjangoConnectionField HTTP coverage.
 #
 # ``allLibraryGenresConnection`` is the root ``DjangoConnectionField(GenreType)``
 # field (``Meta.connection = {"total_count": True}``, ``GenreFilter`` /
@@ -2134,7 +2134,7 @@ def test_genre_connection_full_round_trip():
 
     Seeds five genres; the ``icontains: "a"`` filter matches four of them
     (``Alpha`` / ``Gamma`` / ``Delta`` / ``Banana``) and excludes ``Echo``, so
-    ``totalCount`` (the unpaginated post-filter count) is 4 — distinct from both
+    ``totalCount`` (the unpaginated post-filter count) is 4 - distinct from both
     the grand total (5) and the page size (2). Page 1 (``first: 2``) returns the
     first two in ``name ASC`` order; ``after: <page-1 endCursor>`` advances to the
     next two with no overlap.
@@ -2275,7 +2275,7 @@ def test_genre_connection_total_count_omitted_no_count():
 
     Selection-gating (Decision 4): when ``totalCount`` is not selected, no count
     query runs and the response carries no count field. The ``CaptureQueriesContext``
-    assertion is the strongest proof — no ``COUNT(`` SQL is issued — and is robust
+    assertion is the strongest proof - no ``COUNT(`` SQL is issued - and is robust
     here because the genre connection's only queries are the row fetch and (when
     selected) the count.
     """

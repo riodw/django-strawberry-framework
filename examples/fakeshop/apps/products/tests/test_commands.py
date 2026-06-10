@@ -162,7 +162,7 @@ def test_seed_shards_command_raises_when_shard_alias_missing(settings):
     """When ``shard_b`` isn't declared in DATABASES, the command must raise CommandError.
 
     Forces ``shard_b`` absence via the ``settings`` fixture so the test is
-    environment-independent — it passes both under default and under
+    environment-independent - it passes both under default and under
     ``FAKESHOP_SHARDED=1``. Under the env-var case ``shard_b`` would
     otherwise be present in ``DATABASES`` and the command would proceed
     past the alias-missing guard into real ``migrate`` / seeding (which
@@ -185,7 +185,7 @@ def test_seed_shards_command_runs_when_shard_alias_present(settings, monkeypatch
         "shard_b": settings.DATABASES["default"],  # alias both to the same test DB
     }
 
-    # Patch SHARD_ALIASES so we only operate against ``default`` — pytest's transactional DB
+    # Patch SHARD_ALIASES so we only operate against ``default`` - pytest's transactional DB
     # only reaches ``default`` and we don't want to mutate production-style files.
     from apps.products.management.commands import seed_shards as seed_shards_module
 

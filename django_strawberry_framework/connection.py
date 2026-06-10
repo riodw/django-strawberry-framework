@@ -1,15 +1,15 @@
-"""``DjangoConnection[T]`` + ``DjangoConnectionField`` — the Relay connection surface.
+"""``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay connection surface.
 
 Spec: ``docs/spec-030-connection_field-0_0_9.md``.
 Target release: ``0.0.9``.
 
 Slice 1's surface (Decision 3 / Decision 4):
 
-- ``DjangoConnection[NodeType]`` — a generic ``strawberry.relay.ListConnection``
+- ``DjangoConnection[NodeType]`` - a generic ``strawberry.relay.ListConnection``
   subclass that owns the package's ``first`` + ``last`` mutual-exclusivity
   guard (which Strawberry's ``SliceMetadata.from_arguments`` does NOT provide)
   and nothing else. It carries no ``total_count`` field.
-- ``_connection_type_for(target_type)`` — resolves and caches the connection
+- ``_connection_type_for(target_type)`` - resolves and caches the connection
   class for a node type: the bare ``DjangoConnection[target_type]`` when the
   type does not opt into ``totalCount``, or a generated concrete
   ``<TypeName>Connection`` subclass declaring ``total_count`` when it does.
@@ -18,15 +18,15 @@ Slice 1's surface (Decision 3 / Decision 4):
 
 Slice 2's surface (Decision 5 / Decision 6 / Decision 7 / Decision 10):
 
-- ``DjangoConnectionField(target_type, *, resolver=None, …)`` — the PascalCase
+- ``DjangoConnectionField(target_type, *, resolver=None, ...)`` - the PascalCase
   factory: validates the target (the four ``DjangoListField``-style guards plus
   a Relay-Node guard), synthesizes a resolver whose ``__signature__`` carries
   the ``filter`` / ``order_by`` parameters derived from the type's sidecars
   (so Strawberry's native resolver-argument derivation emits ``filter:`` /
   ``orderBy:``), and returns ``relay.connection(_connection_type_for(target_type),
-  resolver=<synthesized>, …)``.
+  resolver=<synthesized>, ...)``.
 - The synthesized resolver runs the composition pipeline
-  (visibility → filter → orderBy → default-order → optimizer-plan) before
+  (visibility -> filter -> orderBy -> default-order -> optimizer-plan) before
   ``ConnectionExtension`` slices the queryset, with the ``Manager`` / ``QuerySet``
   / non-queryset-iterable consumer-``resolver=`` contract.
 
@@ -76,7 +76,7 @@ def _guard_first_and_last(first: int | None, last: int | None) -> None:
 
     The package's own pagination guard (Decision 3): Strawberry's
     ``SliceMetadata.from_arguments`` applies ``first`` then ``last`` without a
-    mutual-exclusivity check, so the package enforces it here — a query-runtime
+    mutual-exclusivity check, so the package enforces it here - a query-runtime
     error landing in the GraphQL ``errors`` array, NOT a construction-time
     ``ConfigurationError``. Single-sited so the literal lives once and both the
     base and the generated ``<TypeName>Connection`` reuse it.
@@ -96,19 +96,19 @@ def _total_count_requested(info: Info) -> bool:
 
     Scoped to the direct children deliberately (``docs/feedback.md`` P2): unlike
     strawberry-django's ``_should_optimize_total_count``, which recurses through
-    the WHOLE ``edges { node { … } }`` subtree, ``_check`` recurses only THROUGH
-    fragment wrappers (``InlineFragment`` / ``FragmentSpread`` — so a
+    the WHOLE ``edges { node { ... } }`` subtree, ``_check`` recurses only THROUGH
+    fragment wrappers (``InlineFragment`` / ``FragmentSpread`` - so a
     fragment-wrapped ``totalCount`` at the connection level still counts) and
     does NOT descend into a regular field's selections. Once nested connections
     land (WIP-032/033), a node-level ``totalCount`` deep inside ``edges { node
-    { … } }`` must not make the OUTER connection's predicate fire (a spurious
+    { ... } }`` must not make the OUTER connection's predicate fire (a spurious
     ``COUNT`` and, on a non-queryset source, a spurious M1-guard raise).
     """
 
     def _check(selection: Selection) -> bool:
         if isinstance(selection, (InlineFragment, FragmentSpread)):
             # Recurse THROUGH fragment wrappers, not into regular fields.
-            # (``InlineFragment`` has no ``.name`` — check the type first.)
+            # (``InlineFragment`` has no ``.name`` - check the type first.)
             return any(_check(child) for child in selection.selections)
         return selection.name == "totalCount"
 
@@ -162,12 +162,12 @@ _connection_type_cache: dict[type, type] = {}
 def clear_connection_type_cache() -> None:
     """Clear the per-target generated-connection-class cache.
 
-    Test-only — production never reloads the schema. Wired into
+    Test-only - production never reloads the schema. Wired into
     ``registry.clear()`` (the documented registry reset) so a registry-clearing
     test or fixture also drops the generated ``<TypeName>Connection`` classes,
     rather than accumulating dead identity-keyed entries across schema reloads
     (``docs/feedback.md`` P3b). The cache is keyed on ``target_type`` identity,
-    so a stale entry is never *wrong* — this clear is hygiene, not correctness.
+    so a stale entry is never *wrong* - this clear is hygiene, not correctness.
     """
     _connection_type_cache.clear()
 
@@ -234,11 +234,11 @@ def _build_total_count_connection(target_type: type) -> type:
         namespace["resolve_connection"] = resolve_connection
 
     # Name the generated connection from the node type's canonical GraphQL type
-    # name (``graphql_type_name`` — ``Meta.name`` when set, else the Python
+    # name (``graphql_type_name`` - ``Meta.name`` when set, else the Python
     # ``__name__``), NOT the raw Python ``__name__``. Two DjangoType classes may
     # share a Python ``__name__`` while declaring distinct ``Meta.name`` values;
     # naming from ``__name__`` would generate two connection classes with the
-    # SAME SDL type name, which Strawberry collapses into one — cross-wiring the
+    # SAME SDL type name, which Strawberry collapses into one - cross-wiring the
     # two fields' ``edges`` / node types (P1, ``docs/feedback.md``).
     # ``graphql_type_name`` is the same surface-name source the finalizer and the
     # filter / order input types derive from.
@@ -257,8 +257,8 @@ def _guard_total_count_countable(nodes: Any, *, want_count: bool) -> None:
     The M1 carry-forward (Decision 7): ``totalCount`` renders ``Int!``, and a
     non-queryset iterable cannot be ``.count()``-ed. Rather than skip the count
     and let the ``Int!`` field return ``None`` (which surfaces as the engine's
-    opaque ``Cannot return null for non-nullable field …totalCount`` violation),
-    raise a clear package error — symmetric with the sidecar-input rule in
+    opaque ``Cannot return null for non-nullable field ...totalCount`` violation),
+    raise a clear package error - symmetric with the sidecar-input rule in
     ``_post_process_consumer_*``. Single-sited so the sync and async count
     helpers share one rule.
     """
@@ -285,7 +285,7 @@ async def _attach_count_async(conn_awaitable: Any, nodes: Any, *, want_count: bo
     # ``types/relay.py::_apply_get_queryset_sync``, Decision 10): resolve the
     # queued connection coroutine BEFORE the guard can raise, so a guard-raise
     # never leaves ``conn_awaitable`` unawaited (which would emit a
-    # ``RuntimeWarning`` — a hard failure under ``-W error``). The guard's
+    # ``RuntimeWarning`` - a hard failure under ``-W error``). The guard's
     # decision depends only on ``nodes`` / ``want_count``, never on ``conn``,
     # so awaiting first is side-effect-safe.
     conn = await conn_awaitable
@@ -302,7 +302,7 @@ def _connection_type_for(target_type: type) -> type:
     ``Meta.connection`` value): when it opts into ``total_count`` the generated
     ``<TypeName>Connection`` is returned; otherwise the bare
     ``DjangoConnection[target_type]`` is returned. Cached on ``target_type``
-    identity — one connection shape per node type, no per-field override
+    identity - one connection shape per node type, no per-field override
     (Decision 5), so the generated name is unique and regeneration is avoided.
     """
     cached = _connection_type_cache.get(target_type)
@@ -320,7 +320,7 @@ def _connection_type_for(target_type: type) -> type:
 
 
 # =============================================================================
-# DjangoConnectionField — factory, synthesized-signature resolver, pipeline
+# DjangoConnectionField - factory, synthesized-signature resolver, pipeline
 # =============================================================================
 
 
@@ -378,7 +378,7 @@ def _ends_in_unique_column(effective: tuple, model: type) -> bool:
     try:
         field = model._meta.get_field(ref)
     except FieldDoesNotExist:
-        # Annotation alias (e.g. a to-many aggregate) or a transform — not a
+        # Annotation alias (e.g. a to-many aggregate) or a transform - not a
         # model column we can call unique.
         return False
     return bool(getattr(field, "unique", False) or getattr(field, "primary_key", False))
@@ -387,17 +387,17 @@ def _ends_in_unique_column(effective: tuple, model: type) -> bool:
 def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> models.QuerySet:
     """Apply the color-agnostic pipeline tail: deterministic total order, then optimizer plan.
 
-    Steps 5–6 of the Decision 7 pipeline. Single-sited so the sync and async
+    Steps 5-6 of the Decision 7 pipeline. Single-sited so the sync and async
     resolver bodies share one implementation of the steps that do no I/O (the
     default ``order_by`` and the optimizer plan are pure queryset-method calls
     on a lazy queryset):
 
-    5. Deterministic TOTAL ordering — the connection's positional offset cursors
+    5. Deterministic TOTAL ordering - the connection's positional offset cursors
        (Strawberry's ``ListConnection``) are only stable across separate
        requests when the ``ORDER BY`` is a unique total order. So append the pk
        as a terminal tiebreaker UNLESS the effective ordering already ends in a
-       unique column (``_ends_in_unique_column``). This covers all three cases —
-       fully unordered, a supplied ``orderBy``, and a model ``Meta.ordering`` —
+       unique column (``_ends_in_unique_column``). This covers all three cases -
+       fully unordered, a supplied ``orderBy``, and a model ``Meta.ordering`` -
        not just the unordered one (``docs/feedback.md`` P1).
 
        The effective ordering must NOT be read from ``qs.query.order_by`` alone:
@@ -406,7 +406,7 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
        is True, so reading it in isolation would drop ``Meta.ordering`` and
        rewrite ``ORDER BY name`` into ``ORDER BY pk``. Fall back to
        ``_meta.ordering`` when ``qs.query.order_by`` is empty.
-    6. Optimizer plan — ``apply_connection_optimization`` applies
+    6. Optimizer plan - ``apply_connection_optimization`` applies
        ``select_related`` / ``prefetch_related`` / ``only()`` using the node
        type / model explicitly (the connection field's own cooperation point,
        Decision 11), because the schema middleware never sees the pre-slice
@@ -431,8 +431,8 @@ def _pipeline_sync(
 
     ``source`` is the base value (the consumer ``resolver=`` return or the
     default ``_initial_queryset``). A ``Manager`` is coerced to a ``QuerySet``;
-    a ``QuerySet`` receives steps 2–6 (visibility → filter → orderBy →
-    default-order → optimizer); a non-queryset iterable is passed through
+    a ``QuerySet`` receives steps 2-6 (visibility -> filter -> orderBy ->
+    default-order -> optimizer); a non-queryset iterable is passed through
     unchanged after the sidecar-input guard rejects ``filter:`` / ``orderBy:``.
     """
     definition = target_type.__django_strawberry_definition__
@@ -458,7 +458,7 @@ async def _pipeline_async(
     filter_input: Any,
     order_by_input: Any,
 ) -> Any:
-    """Async sibling of ``_pipeline_sync`` — awaits the colored visibility / filter / order steps."""
+    """Async sibling of ``_pipeline_sync`` - awaits the colored visibility / filter / order steps."""
     definition = target_type.__django_strawberry_definition__
     if isinstance(source, models.Manager):
         source = source.all()
@@ -485,7 +485,7 @@ def _synthesized_signature(target_type: type) -> tuple[inspect.Signature, dict[s
     ``Annotated`` shapes a hand-written filter/order resolver uses. Calling
     those helpers ALSO registers the FilterSet / OrderSet against the
     ``_helper_referenced_filtersets`` / ``_helper_referenced_ordersets`` orphan
-    ledgers, so ``finalize_django_types`` orphan validation stays honest — no
+    ledgers, so ``finalize_django_types`` orphan validation stays honest - no
     separate ``.add(...)`` is needed or wanted. The ``search:`` argument is NOT
     generated (search is ``0.1.2``).
     """
@@ -547,7 +547,7 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
     committed per-construction (Decision 10), because Strawberry freezes a
     field's resolver sync/async handling at schema-build time AND, unlike a plain
     field, ``ConnectionExtension`` only awaits an awaitable inner-resolver return
-    when the field is async (``ConnectionExtension.resolve`` — the sync path —
+    when the field is async (``ConnectionExtension.resolve`` - the sync path -
     passes the resolver return straight to ``resolve_connection`` without
     awaiting; only ``resolve_async`` awaits). So a per-call coroutine return from
     a sync resolver (the ``DjangoListField`` shape) would NOT be awaited here:
@@ -555,14 +555,14 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
     - **Default branch** (``resolver is None``) and the **sync consumer-resolver**
       branch are sync resolvers running ``_pipeline_sync``, which returns a LAZY
       queryset. A lazy queryset works under BOTH ``execute_sync`` and
-      ``await execute`` — ``resolve_connection`` / ``ListConnection`` materialize
+      ``await execute`` - ``resolve_connection`` / ``ListConnection`` materialize
       it with ``.count()`` (sync) or ``.acount()`` (async) per the runtime
       context, so async counting still happens for the default field. A sync
       pipeline meeting an async ``get_queryset`` raises ``SyncMisuseError`` (the
       Relay-foundation contract); to drive an async ``get_queryset`` hook through
       a connection, supply an ``async def`` ``resolver=`` (below).
     - **Async consumer-resolver** branch (``_is_async_callable(resolver)``) is an
-      ``async def`` resolver running ``_pipeline_async`` — being ``async def``
+      ``async def`` resolver running ``_pipeline_async`` - being ``async def``
       makes the field async, so ``ConnectionExtension.resolve_async`` awaits its
       return and the async ``get_queryset`` / ``apply_async`` hooks run on the
       async path.
@@ -607,7 +607,7 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
     return _resolve
 
 
-def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parity — consumer usage is `DjangoConnectionField(GenreType)`
+def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoConnectionField(GenreType)`
     target_type: type,
     *,
     resolver: Callable | None = None,
@@ -619,15 +619,15 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
 
     Meta-only derivation (Decision 5): the ``filter:`` / ``orderBy:`` arguments
     come from the type's ``Meta.filterset_class`` / ``Meta.orderset_class``, the
-    ``totalCount`` opt-in from ``Meta.connection`` — there are no ``filters=`` /
+    ``totalCount`` opt-in from ``Meta.connection`` - there are no ``filters=`` /
     ``order=`` / ``total_count=`` keyword arguments. Runs the four
     ``DjangoListField``-style guards plus a Relay-Node guard, then returns
     ``relay.connection(_connection_type_for(target_type), resolver=<synthesized>,
-    …)`` (Decision 6 / Decision 7).
+    ...)`` (Decision 6 / Decision 7).
 
     Consumer ``resolver=`` contract: the resolver is invoked as
     ``resolver(root, info)`` and returns only the BASE queryset / manager /
-    iterable. It never receives the ``filter:`` / ``orderBy:`` arguments — the
+    iterable. It never receives the ``filter:`` / ``orderBy:`` arguments - the
     synthesized resolver consumes those and the pipeline applies them to the
     resolver's return (the same shape as ``DjangoListField``). A resolver that
     declares its own ``filter`` / ``order_by`` parameters will not be handed
@@ -646,12 +646,12 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
     # a Relay-Node-shaped type. Reuse the canonical ``_is_relay_shaped(cls,
     # interfaces)`` predicate (the single source of truth in ``types/base.py``),
     # which accepts EITHER spelling at construction time:
-    #   * ``relay.Node`` in the declared ``Meta.interfaces`` tuple — the
+    #   * ``relay.Node`` in the declared ``Meta.interfaces`` tuple - the
     #     Meta-driven spelling. The tuple is populated at class creation, before
     #     ``finalize_django_types()`` (Phase 2.5 ``apply_interfaces``) injects
     #     ``relay.Node`` into ``__bases__``, so a plain MRO check
     #     (``implements_relay_node``) would wrongly reject it at this call site.
-    #   * direct inheritance (``class Foo(DjangoType, relay.Node)``) — ``relay.Node``
+    #   * direct inheritance (``class Foo(DjangoType, relay.Node)``) - ``relay.Node``
     #     is in ``__bases__`` from class definition, so ``issubclass(target_type,
     #     relay.Node)`` is already True here. The finalizer fully supports this
     #     Strawberry-native spelling (it keys Relay finalization off

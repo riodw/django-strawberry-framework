@@ -1,4 +1,4 @@
-"""``DjangoOptimizerExtension`` — Strawberry schema extension solving N+1.
+"""``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1.
 
 Opt-in at schema construction::
 
@@ -13,7 +13,7 @@ operation's **root resolver** (detected via ``info.path.prev is None``)
 it walks the entire selection tree once using the O2 walker, builds an
 ``OptimizationPlan``, and applies ``select_related`` /
 ``prefetch_related`` to the root queryset. Non-root resolvers pass
-through untouched — Django's ``prefetch_related`` with ``__``-chained
+through untouched - Django's ``prefetch_related`` with ``__``-chained
 paths handles nested optimization in a single pass.
 
 Load-bearing rule (O6): when a related field's target ``DjangoType``
@@ -23,7 +23,7 @@ defines a non-default ``get_queryset``, generate a
 strawberry-graphql-django #572 / #583. We copy the behaviour, not the
 API.
 
-Architecture modeled on ``strawberry_django/optimizer.py`` — same
+Architecture modeled on ``strawberry_django/optimizer.py`` - same
 root-gate pattern, same ``ContextVar`` lifecycle, same recursive
 type-tracing through graphql-core wrappers.
 """
@@ -104,14 +104,14 @@ def _walk_directives(
     """Recursive helper: descend into selections and collect directive var names.
 
     Handles four AST shapes:
-    1. **Directives on the current node** — collect ``@skip``/``@include``
+    1. **Directives on the current node** - collect ``@skip``/``@include``
        variable references.
-    2. **Selection-set children** — recurse so directives on inner fields
+    2. **Selection-set children** - recurse so directives on inner fields
        are collected.
-    3. **FragmentSpreadNode children** — also recurse into the named
+    3. **FragmentSpreadNode children** - also recurse into the named
        fragment's definition (looked up in ``fragments``) so directives
        inside the spread fragment are included in the cache key.
-    4. **InlineFragmentNode / regular field children** — handled by the
+    4. **InlineFragmentNode / regular field children** - handled by the
        same selection-set recursion in shape 2.
     """
     for directive in getattr(node, "directives", ()) or ():
@@ -163,7 +163,7 @@ def _unvisited_fragment_definition(
     fragment in the same walk is a no-op. Returns ``None`` when
     ``node`` is not a fragment spread, when the spread has no name,
     when the fragment name is already visited, or when the document
-    does not define the named fragment (defensive — graphql-core's
+    does not define the named fragment (defensive - graphql-core's
     validation would normally reject the operation before the optimizer
     sees it). Mutates ``visited_fragments`` on success so callers share
     the same cycle-detection set across recursive descents in both the
@@ -297,7 +297,7 @@ _optimizer_active: ContextVar[bool] = ContextVar(
 # either no optimizer is installed for this execution or the helper is being
 # called outside an ``on_execute`` lifecycle; the helper then falls back to a
 # cache-less plan build + apply, which is correctness-safe (the plan cache is
-# a hit-rate optimization, not a correctness requirement — see
+# a hit-rate optimization, not a correctness requirement - see
 # ``DjangoOptimizerExtension.cache_info``).
 _active_optimizer: "ContextVar[DjangoOptimizerExtension | None]" = ContextVar(
     "django_strawberry_framework_active_optimizer",
@@ -344,8 +344,8 @@ def _collect_schema_reachable_types(schema: Any) -> set[type]:
     ``subscription_type`` through their field return types recursively,
     descending into object fields, union members, and the concrete
     implementations of any interface type encountered (so a
-    ``DjangoType`` reachable only via an interface-typed root field —
-    e.g. ``relay.Node`` implementers — still participates in the
+    ``DjangoType`` reachable only via an interface-typed root field -
+    e.g. ``relay.Node`` implementers - still participates in the
     ``check_schema`` audit).  Only types reachable from a root
     operation are included; orphan types passed via ``types=[]`` at
     schema construction are excluded to avoid false-positive audit
@@ -469,7 +469,7 @@ def _resolve_model_from_return_type(info: Any) -> _OriginAndModel | None:
 class DjangoOptimizerExtension(SchemaExtension):
     """Strawberry schema extension that optimizes Django querysets per request.
 
-    Pass a module-level singleton wrapped in a factory — that preserves
+    Pass a module-level singleton wrapped in a factory - that preserves
     the instance-bound plan cache (Strawberry runs the callable per
     request and gets the same instance back) and emits no deprecation
     warning (the entry is a callable, not an instance)::
@@ -483,14 +483,14 @@ class DjangoOptimizerExtension(SchemaExtension):
     The plan cache is correctness-safe under concurrent / async access
     (a missed insert or a double-evict only reduces hit rate; it cannot
     return wrong data), but the hit-rate and counter introspection
-    exposed via ``cache_info()`` is best-effort — see ``cache_info``
+    exposed via ``cache_info()`` is best-effort - see ``cache_info``
     for the full caveat.
 
     Hooks:
 
-    - ``on_execute`` — sets a ``ContextVar`` marking the optimizer as
+    - ``on_execute`` - sets a ``ContextVar`` marking the optimizer as
       active for the operation's lifetime.
-    - ``resolve`` — gates on ``info.path.prev is None`` (root resolver
+    - ``resolve`` - gates on ``info.path.prev is None`` (root resolver
       only). Calls ``_next``, checks ``isinstance(QuerySet)``, traces
       the Django model from the graphql-core return type, runs the O2
       walker, applies the plan.
@@ -529,7 +529,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         or async access the hit/miss counters and the reported ``size``
         are best-effort: two threads racing ``+= 1`` can drop a count,
         and two concurrent inserts at the eviction threshold can evict
-        twice. The cache itself is correctness-neutral — a missed insert
+        twice. The cache itself is correctness-neutral - a missed insert
         or a double-evict only reduces hit rate; it cannot return wrong
         data.
         """
@@ -565,7 +565,7 @@ class DjangoOptimizerExtension(SchemaExtension):
 
         Only root-level resolvers (``info.path.prev is None``) trigger
         the optimization pass. All other resolvers pass through
-        unchanged — the prefetch chain applied at the root handles
+        unchanged - the prefetch chain applied at the root handles
         nested relations via Django's ``__``-chain support.
 
         Handles both sync and async resolvers: when ``_next`` returns a
@@ -598,7 +598,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         2. Non-``QuerySet`` results pass through unchanged.
         3. Trace the graphql-core return type to a Django ``(origin, model)``.
         4. Delegate the plan-build-and-apply tail to :meth:`apply_to`, passing
-           the resolved ``origin`` / ``model`` explicitly — the SAME helper
+           the resolved ``origin`` / ``model`` explicitly - the SAME helper
            the connection field's ``apply_connection_optimization`` calls, so
            the two share one plan-application implementation (Decision 11).
            The middleware path is behavior-identical: ``_optimize`` only adds
@@ -631,7 +631,7 @@ class DjangoOptimizerExtension(SchemaExtension):
 
         The plan-build-and-apply tail extracted from ``_optimize`` (Decision
         11). Takes the node type / model **directly** rather than inferring
-        them from ``info.return_type`` — the connection field's root return
+        them from ``info.return_type`` - the connection field's root return
         type is the connection type, not the node type, so the inference the
         middleware path uses would resolve the wrong model.
 
@@ -695,7 +695,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         ``origin`` carries the resolver's actual Strawberry return type
         so primary-return and secondary-return resolvers on the same
         model do not share a cached plan. The extension's ``_plan_cache``
-        is root-only — this helper is the sole insertion site, so
+        is root-only - this helper is the sole insertion site, so
         ``origin`` always receives the concrete root origin in
         production; ``None`` is reserved for direct/test-only callers
         that deliberately build a plan without an origin.
@@ -751,7 +751,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         ``OptimizerHint.SKIP``). Returns a list of warning strings for
         relations whose target model has no registered ``DjangoType``.
 
-        Always returns warnings — never raises. The caller decides
+        Always returns warnings - never raises. The caller decides
         whether to raise based on the extension's ``strictness``.
         """
         reachable = _collect_schema_reachable_types(schema)
@@ -760,7 +760,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         # type after spec-018 Slice 1, so a model with multiple types whose
         # field maps overlap on the same unregistered-target relation would
         # otherwise produce one identical warning per registered type. The
-        # dedupe is a multi-type artifact, not generic defensiveness — every
+        # dedupe is a multi-type artifact, not generic defensiveness - every
         # reachable type is still audited (we cannot skip secondaries, since
         # a secondary may expose a relation the primary hides).
         seen: set[tuple[type[models.Model], str]] = set()
@@ -805,7 +805,7 @@ class DjangoOptimizerExtension(SchemaExtension):
            reachable fragment definitions are appended to keep same-shaped
            operation bodies with different fragment bodies from sharing a
            plan.  Multi-operation documents (``query A {...} query B {...}``)
-           still never collide — using the raw source body would, because
+           still never collide - using the raw source body would, because
            ``loc.source.body`` is the entire document.  We store the printed
            string (not its ``hash``) to eliminate the rare-but-real chance of
            two distinct document shapes sharing a 64-bit hash and silently
@@ -896,7 +896,7 @@ def apply_connection_optimization(
     ``on_execute`` so the connection field shares the instance-bound plan
     cache. When no optimizer extension is installed for this execution (the
     ``ContextVar`` is ``None``), the helper short-circuits and returns the
-    queryset unoptimized — the connection field does NOT fabricate a throwaway
+    queryset unoptimized - the connection field does NOT fabricate a throwaway
     optimizer to self-optimize. This keeps the connection consistent with the
     rest of the schema (the middleware path only optimizes when the extension
     is installed) and makes the connection-aware future (WIP-033, once the plan

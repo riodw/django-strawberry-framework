@@ -37,7 +37,7 @@ from ..sets_mixins import LazyRelatedClassMixin
 
 # ``filters -> types`` is the documented safe (acyclic) import direction:
 # ``types/relay.py`` module-top imports are stdlib/django/strawberry/``..exceptions``
-# only — it reaches into ``filters`` / ``registry`` solely via in-function imports —
+# only - it reaches into ``filters`` / ``registry`` solely via in-function imports -
 # so a module-top ``filters/base.py -> types/relay.py`` import does not close a load
 # cycle (spec-031 Slice 2 plan). These are the single source of truth for the
 # strategy->payload-shape mapping shared with the encoder and the Slice-3 decoder.
@@ -77,7 +77,7 @@ class ArrayFilter(TypedFilter):
     Port of `graphene_django/filter/filters/array_filter.py::ArrayFilter`.
     The custom `method` setter swaps in `ArrayFilterMethod` so a
     consumer-supplied `method=` callable does not short-circuit on
-    empty-list input — the empty list is a valid filter value here, unlike
+    empty-list input - the empty list is a valid filter value here, unlike
     the default `FilterMethod` contract.
 
     Empty-list contract:
@@ -186,9 +186,9 @@ def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | No
     1. **Own-PK branch.** When ``filter_instance.field_name`` matches the
        owning model's PK column name (``_meta.pk.name``), the relevant
        definition is the owning ``DjangoType`` (the OWNER itself is the
-       Relay node — its PK gets a GlobalID).
+       Relay node - its PK gets a GlobalID).
     2. **Relation branch.** Otherwise the field name resolves through
-       ``owner_definition.related_target_for(<base_field>)`` — where
+       ``owner_definition.related_target_for(<base_field>)`` - where
        ``<base_field>`` is the parent-relation prefix in expanded child
        filter names like ``"genres__id"`` (the ``RelatedFilter`` expansion
        contract per spec-027 L988); the relevant definition is the target
@@ -221,19 +221,19 @@ def _accepted_globalid_type_names(definition: DjangoTypeDefinition | None) -> se
     """Return the accepted ``type_name`` payload(s) for a resolved definition's strategy.
 
     Strategy-aware target validation keyed on the resolved owner/target
-    definition's recorded ``effective_globalid_strategy`` (spec-031 Decision 13) —
+    definition's recorded ``effective_globalid_strategy`` (spec-031 Decision 13) -
     the same field decode reads, so encode, decode, and filter validation all
     agree on one contract:
 
-    - ``model`` → the model label only (``definition.model._meta.label_lower``).
-    - ``type`` → the ``graphql_type_name`` only (pre-0.0.9 behavior).
-    - ``type+model`` → either the model label or the ``graphql_type_name``.
+    - ``model`` -> the model label only (``definition.model._meta.label_lower``).
+    - ``type`` -> the ``graphql_type_name`` only (pre-0.0.9 behavior).
+    - ``type+model`` -> either the model label or the ``graphql_type_name``.
     - ``callable`` / ``custom`` (the framework cannot compute the label), or an
       unbound owner / unresolvable target (``definition is None``), or an absent
       (``None``) ``effective_globalid_strategy`` (a non-finalized / non-Relay
-      definition) → ``None`` (node-id-only fallback; the ``type_name`` guard is
+      definition) -> ``None`` (node-id-only fallback; the ``type_name`` guard is
       skipped). The filter is defense-in-depth, not the uniform-error contract
-      decode owns, so it never raises for an unknown/absent strategy — it falls
+      decode owns, so it never raises for an unknown/absent strategy - it falls
       back to node-id-only, mirroring the existing unbound-owner fallback.
     """
     if definition is None:
@@ -411,12 +411,12 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
             ``types/finalizer.py::_bind_filterset_owner`` (subpass 1 of
             finalizer phase 2.5's ``_bind_filtersets`` umbrella; H2-rev8
             check), so a real divergent-owner reuse still surfaces a
-            ``ConfigurationError`` with both owners named — just not at
+            ``ConfigurationError`` with both owners named - just not at
             class-creation time.
 
         Unqualified-string caveat:
             ``bound_filterset`` is the resolution scope for an UNQUALIFIED
-            string target (``RelatedFilter("ShelfFilter")``) — the
+            string target (``RelatedFilter("ShelfFilter")``) - the
             ``.filterset`` property resolves the name against
             ``bound_filterset.__module__``. Because re-bind is a no-op, a
             single ``RelatedFilter`` INSTANCE shared across two subclasses
@@ -453,7 +453,7 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
 
         When no explicit `queryset=` was supplied at construction time,
         falls back to `target_filterset._meta.model._default_manager.all()`
-        — the cookbook's documented auto-derivation contract. An explicit
+        - the cookbook's documented auto-derivation contract. An explicit
         queryset is preserved verbatim.
         """
         queryset = super().get_queryset(request)

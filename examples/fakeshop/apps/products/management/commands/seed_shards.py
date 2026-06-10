@@ -11,14 +11,14 @@ I/O being the bottleneck.
 Mode isolation
 --------------
 Under ``FAKESHOP_SHARDED=1`` ``config.settings`` ADDS the ``shard_b``
-alias on top of the existing single-DB layout — the ``default`` alias
+alias on top of the existing single-DB layout - the ``default`` alias
 keeps pointing at ``db.sqlite3`` in both modes, so a single dev workflow
 populates ``default`` either way.  This command only owns the secondary
 shard:
 
-* ``default``  → ``db.sqlite3`` (the existing dev DB; populated via
-                 ``manage.py seed_data`` in either mode — NOT this command)
-* ``shard_b``  → ``db_shard_b.sqlite3`` (secondary shard; populated by
+* ``default``  -> ``db.sqlite3`` (the existing dev DB; populated via
+                 ``manage.py seed_data`` in either mode - NOT this command)
+* ``shard_b``  -> ``db_shard_b.sqlite3`` (secondary shard; populated by
                  this command)
 
 What this command does (on ``shard_b``)
@@ -39,7 +39,7 @@ the ``shard_b`` alias::
 
     FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards
 
-Re-run at any time — every step is idempotent (migrations no-op,
+Re-run at any time - every step is idempotent (migrations no-op,
 create_users is idempotent by username, seed_data only creates the
 shortfall).
 
@@ -86,7 +86,7 @@ SHARD_ALIASES = ("shard_b",)
 class Command(BaseCommand):
     help = (
         "Migrate, create users, and seed the secondary shard SQLite DB "
-        "(shard_b → db_shard_b.sqlite3). Requires FAKESHOP_SHARDED=1 in the environment."
+        "(shard_b -> db_shard_b.sqlite3). Requires FAKESHOP_SHARDED=1 in the environment."
     )
 
     def add_arguments(self, parser) -> None:

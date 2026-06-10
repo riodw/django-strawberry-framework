@@ -263,16 +263,6 @@ async def _apply_get_queryset_async(cls: type, qs: models.QuerySet, info: Any) -
     return result
 
 
-# TODO(spec-027-filters-0_0_8 Slice 1): Reuse these sync/async visibility
-# helpers from FilterSet's related-branch scoping so parent-row filtering
-# cannot bypass a target DjangoType.get_queryset hook.
-# Pseudocode:
-#   child_base = child_model._default_manager.all()  # noqa: ERA001
-#   child_qs = _apply_get_queryset_sync(target_type, child_base, info)  # noqa: ERA001
-#   child_qs = child_qs & related_filter.queryset if constraint exists
-#   parent_qs = parent_qs.filter(**{f"{relation_name}__in": child_qs})  # noqa: ERA001
-
-
 def _coerce_node_id(node_id: Any) -> Any:
     return node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
 
@@ -335,9 +325,9 @@ def _resolve_globalid_strategy(
     rule the ``Meta`` path uses (one validator, two sources - spec-031 Decisions
     6/7), so an unknown string, a wrong-arity callable, or an ``async def``
     callable in ``RELAY_GLOBALID_STRATEGY`` raises ``ConfigurationError`` naming
-    the setting rather than failing opaquely from the installed closure
-    (``docs/feedback.md`` P2). ``conf.py`` is a thin reader that does not
-    validate domain values, so the validation belongs here.
+    the setting rather than failing opaquely from the installed closure.
+    ``conf.py`` is a thin reader that does not validate domain values, so the
+    validation belongs here.
 
     Returns the resolved raw strategy (a string in ``STRING_GLOBALID_STRATEGIES``
     or a validated callable); never ``None``.
@@ -437,14 +427,16 @@ def encode_typename(
     - ``model`` / ``type+model`` -> ``definition.model._meta.label_lower``
       (Django's canonical ``"app_label.modelname"``, e.g. ``products.item``).
     - ``type`` -> ``definition.graphql_type_name`` (matches Strawberry's
-      ``info.path.typename`` default; the framework installs nothing for
-      ``type``, so this branch exists only for a single dispatch surface).
+      ``info.path.typename`` default; the framework installs a ``type`` closure
+      only when shadowing a framework closure inherited from a concrete Relay
+      parent - see ``install_globalid_typename_resolver`` step 2 - so this
+      branch is the live implementation for exactly that shape).
     - callable -> the consumer callable's ``(type_cls, model, root, info) -> str``
       return, validated non-empty ``str``. A non-``str`` or empty return raises
       ``ConfigurationError`` naming the type and the contract, rather than
       letting Strawberry's ``Node._id`` ``assert isinstance(type_name, str)``
-      fire as an opaque ``AssertionError`` (spec-031 Decision 4/10,
-      ``docs/feedback.md`` P2). The callable's arity / sync-ness were already
+      fire as an opaque ``AssertionError`` (spec-031 Decision 4/10).
+      The callable's arity / sync-ness were already
       validated at type creation (Slice 1) - this is ONLY the per-call
       return-value check.
     """
@@ -463,6 +455,33 @@ def encode_typename(
     return definition.graphql_type_name
 
 
+# Sentinel attribute stamped on every framework-installed ``resolve_typename``
+# closure (``_install_typename_closure``). The override test below keys on it
+# so a framework closure inherited from a CONCRETE Relay parent through the MRO
+# is never mistaken for a consumer override - without the marker, a concrete
+# Relay child of a concrete Relay parent would see the parent's installed
+# closure fail the ``__func__`` identity test and be misclassified ``custom``
+# (silently encode-only, audit-blind, and spuriously both-declared when the
+# child carries its own ``Meta.globalid_strategy``). The attribute lives on the
+# plain function so it survives ``classmethod.__func__`` retrieval.
+_FRAMEWORK_CLOSURE_MARKER = "_dsf_globalid_framework_closure"
+
+
+def _inherits_framework_closure(type_cls: type) -> bool:
+    """Return whether ``type_cls``'s MRO-resolved ``resolve_typename`` is a framework closure.
+
+    True when the attribute (own or inherited) is a closure
+    ``_install_typename_closure`` stamped with ``_FRAMEWORK_CLOSURE_MARKER``.
+    Read by ``install_globalid_typename_resolver`` to decide whether a
+    ``type``-classified type must install its OWN closure: inheriting a
+    parent's framework closure would otherwise shadow Strawberry's default and
+    emit the PARENT's payload (the parent ``definition`` is captured in the
+    inherited closure).
+    """
+    existing_func = getattr(getattr(type_cls, "resolve_typename", None), "__func__", None)
+    return getattr(existing_func, _FRAMEWORK_CLOSURE_MARKER, False)
+
+
 def _consumer_overrode_resolve_typename(type_cls: type) -> bool:
     """Return whether ``type_cls`` declares its own ``resolve_typename``.
 
@@ -471,12 +490,23 @@ def _consumer_overrode_resolve_typename(type_cls: type) -> bool:
     uses for the four ``resolve_*`` defaults. ``resolve_typename`` is a
     ``@classmethod`` on ``relay.Node`` so it carries ``__func__`` exactly like
     those. A method inherited unchanged from ``relay.Node`` (or absent) is NOT
-    an override; only a consumer-declared one is.
+    an override - and neither is a framework closure installed on a concrete
+    Relay PARENT and inherited through the MRO (discriminated by
+    ``_FRAMEWORK_CLOSURE_MARKER``; the step-0 re-entrancy guard protects the
+    same definition across finalize re-runs, but only the marker protects a
+    DIFFERENT definition inheriting the installed closure). A consumer override
+    inherited from an abstract base lacks the marker, so it still classifies
+    ``custom`` - the intended semantics. Only a consumer-declared method is an
+    override.
     """
     existing = getattr(type_cls, "resolve_typename", None)
     existing_func = getattr(existing, "__func__", None)
+    if existing is None or existing_func is None:
+        return False
+    if getattr(existing_func, _FRAMEWORK_CLOSURE_MARKER, False):
+        return False
     node_func = getattr(relay.Node.resolve_typename, "__func__", None)
-    return existing is not None and existing_func is not None and existing_func is not node_func
+    return existing_func is not node_func
 
 
 def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDefinition) -> None:
@@ -489,7 +519,7 @@ def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDef
        already set, this type was processed in a prior (possibly partial)
        finalize run - skip override-detection, recording, and install, leaving
        the recorded classification and any installed closure intact
-       (``docs/feedback.md`` P1). Load-bearing: a Phase-2.5 raise (including the
+       (spec-031 Decision 10). Load-bearing: a Phase-2.5 raise (including the
        model-label-routing audit) leaves every type ``finalized = False``, so a
        re-run re-enters the finalizer loop; without this guard the ``__func__``
        test would re-run against the *now-installed framework closure* and
@@ -505,7 +535,11 @@ def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDef
        ``model`` / ``type+model`` / ``callable`` (the closure validates a
        non-empty ``str`` callable return); install NOTHING for ``type``
        (Strawberry's default returns ``info.path.typename``, byte-identical to
-       pre-0.0.9).
+       pre-0.0.9) - UNLESS the MRO-resolved attribute is a framework closure
+       inherited from a concrete Relay parent, in which case ``type`` installs
+       its own closure too (``encode_typename``'s ``type`` branch): the
+       inherited closure captured the PARENT's definition and would otherwise
+       keep shadowing Strawberry's default, emitting the parent's payload.
     3. **Record** the classification string (``model`` / ``type`` /
        ``type+model`` / ``callable`` / ``custom``) on
        ``definition.effective_globalid_strategy`` - the single value decode and
@@ -528,7 +562,7 @@ def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDef
     strategy = _resolve_globalid_strategy(definition)
     classification = "callable" if callable(strategy) else strategy
 
-    if classification != "type":
+    if classification != "type" or _inherits_framework_closure(type_cls):
         _install_typename_closure(type_cls, definition, strategy)
     definition.effective_globalid_strategy = classification
 
@@ -544,13 +578,18 @@ def _install_typename_closure(
     installed via ``setattr(type_cls, "resolve_typename", classmethod(...))``.
     The strategy is resolved once here (at finalization), not per request, so the
     ``id``-resolution hot path does no strategy lookup (spec-031 Decision 5).
-    Only ``model`` / ``type+model`` / ``callable`` reach here; ``type`` keeps
-    Strawberry's default.
+    ``model`` / ``type+model`` / ``callable`` always reach here; ``type``
+    reaches here only when shadowing a framework closure inherited from a
+    concrete Relay parent (otherwise ``type`` keeps Strawberry's default). The
+    closure is stamped with ``_FRAMEWORK_CLOSURE_MARKER`` so the override test
+    never mistakes it - inherited through a subclass's MRO - for a consumer
+    override.
     """
 
     def resolve_typename(cls: type, root: Any, info: Any) -> str:
         return encode_typename(definition, strategy, cls, root, info)
 
+    setattr(resolve_typename, _FRAMEWORK_CLOSURE_MARKER, True)
     type_cls.resolve_typename = classmethod(resolve_typename)
 
 

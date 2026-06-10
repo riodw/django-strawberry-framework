@@ -1719,6 +1719,218 @@ def test_finalize_rerun_after_audit_raise_preserves_recorded_strategy():
     assert _definition_of(secondary).effective_globalid_strategy == recorded[secondary]
 
 
+def test_routing_audit_non_relay_primary_remediation_names_relay_shape():
+    """A non-Relay primary (strategy ``None``) gets the Relay-shape remediation.
+
+    ``Meta.globalid_strategy`` is rejected on a non-Relay type, so the default
+    "Set the primary's Meta.globalid_strategy ..." fix sentence would prescribe
+    an impossible fix; the formatter branches on ``primary_strategy is None``.
+    """
+
+    class PlainPrimary(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            primary = True
+            name = "PlainPrimaryItem"
+
+    class EmitterNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "EmitterItem"
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        finalize_django_types()
+    message = str(excinfo.value)
+    assert "EmitterNode" in message
+    assert "is None" in message
+    assert "not Relay-Node-shaped" in message
+    assert "make the primary Relay-Node-shaped" in message
+    # The impossible remediation is absent: there is no string-strategy offender.
+    assert "Set the primary's Meta.globalid_strategy" not in message
+
+
+# --- inherited framework closures (concrete Relay child of a concrete parent)
+
+
+def _framework_closure_func(type_cls):
+    """Return the ``__func__`` of ``type_cls``'s OWN resolve_typename, or None."""
+    own = type_cls.__dict__.get("resolve_typename")
+    return getattr(own, "__func__", None)
+
+
+def test_concrete_relay_child_of_concrete_parent_records_own_strategy():
+    """A concrete Relay child inheriting a framework closure is NOT ``custom``.
+
+    The parent's installed closure carries the framework marker, so the
+    override test never mistakes it for a consumer override; the child resolves
+    and records its OWN strategy and installs its OWN closure.
+    """
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            primary = True
+            name = "PrimaryItem"
+
+    class AdminItemNode(ItemNode):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "AdminItem"
+
+    finalize_django_types()
+    assert _definition_of(ItemNode).effective_globalid_strategy == "model"
+    assert _definition_of(AdminItemNode).effective_globalid_strategy == "model"
+    # The child carries its OWN framework closure (not the parent's, which
+    # captured the parent's definition).
+    child_func = _framework_closure_func(AdminItemNode)
+    assert child_func is not None
+    assert child_func is not _framework_closure_func(ItemNode)
+    assert _emitted_typename(AdminItemNode) == "products.item"
+
+
+def test_concrete_relay_child_with_meta_strategy_finalizes_cleanly():
+    """A child declaring ``Meta.globalid_strategy`` is NOT a both-declared conflict.
+
+    Pre-fix, the parent's inherited framework closure was misclassified a
+    consumer ``resolve_typename`` override and the child's legitimate ``Meta``
+    key tripped the both-declared ``ConfigurationError`` - with nothing for the
+    consumer to remove.
+    """
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            primary = True
+            name = "PrimaryItem"
+
+    class TypedChild(ItemNode):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "TypedItem"
+            globalid_strategy = "type+model"
+
+    finalize_django_types()  # no both-declared raise
+    assert _definition_of(TypedChild).effective_globalid_strategy == "type+model"
+    assert _emitted_typename(TypedChild) == "products.item"
+
+
+def test_type_strategy_child_shadows_inherited_framework_closure():
+    """A ``type``-strategy child under a ``model`` parent emits ITS type name.
+
+    ``type`` normally installs nothing (Strawberry's default already returns
+    the GraphQL type name) - but here the inherited attribute is the parent's
+    framework closure, which captured the PARENT's definition and would emit
+    the model label. The child must install its own ``type`` closure to shadow
+    it (``encode_typename``'s ``type`` branch goes live for exactly this shape).
+    """
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            primary = True
+            name = "PrimaryItem"
+
+    class TypeScopedChild(ItemNode):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "TypeScopedItem"
+            globalid_strategy = "type"
+
+    finalize_django_types()
+    assert _definition_of(TypeScopedChild).effective_globalid_strategy == "type"
+    assert _framework_closure_func(TypeScopedChild) is not None
+    assert _emitted_typename(TypeScopedChild) == "TypeScopedItem"
+    # The parent keeps emitting the model label through its own closure.
+    assert _emitted_typename(ItemNode) == "products.item"
+
+
+def test_routing_audit_sees_child_true_recorded_strategy():
+    """A child emitting model-label IDs through inheritance is audit-visible.
+
+    Pre-fix the child was recorded ``custom`` (audit-blind), so a ``type``
+    primary that cannot decode the child's model-label IDs finalized cleanly.
+    The child's true ``model`` recording must trip the routing audit.
+    """
+
+    def encoder(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return "custom-payload"
+
+    class PrimaryNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            primary = True
+            name = "PrimaryItem"
+            globalid_strategy = "type"
+
+    class CallableParent(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CallableItem"
+            globalid_strategy = encoder
+
+    class DefaultChild(CallableParent):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "DefaultChildItem"
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        finalize_django_types()
+    message = str(excinfo.value)
+    # The child - not the (callable, non-emitting) parent - is the named emitter.
+    assert "DefaultChild" in message
+    assert _definition_of(DefaultChild).effective_globalid_strategy == "model"
+
+
+def test_plain_function_resolve_typename_is_not_classified_override():
+    """A plain-function ``resolve_typename`` (no ``__func__``) is not an override.
+
+    Such an override is already broken under Strawberry's classmethod call
+    shape, so the framework classifies "no override" and installs its closure
+    over it - pinned here so the marker-based discrimination stays explicit.
+    """
+
+    def resolve_typename(root, info):
+        return "PlainFunction"
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    CategoryNode.resolve_typename = resolve_typename
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "model"
+    assert _framework_closure_func(CategoryNode) is not None
+    assert _emitted_typename(CategoryNode) == "products.category"
+
+
 # --- the RELAY_GLOBALID_STRATEGY setting path (callable arity/sync reuse) ----
 
 

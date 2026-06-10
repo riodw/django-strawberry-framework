@@ -541,7 +541,7 @@ def test_resolve_node_applies_get_queryset():
             interfaces = (relay.Node,)
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.filter(is_private=False)
 
     finalize_django_types()
@@ -791,7 +791,7 @@ def _build_seeded_category_node_with_async_get_queryset():
             interfaces = (relay.Node,)
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        async def get_queryset(cls, queryset, info, **kwargs):
             return queryset.filter(is_private=False)
 
     finalize_django_types()
@@ -880,7 +880,7 @@ def test_resolve_node_sync_with_async_get_queryset_raises():
             interfaces = (relay.Node,)
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        async def get_queryset(cls, queryset, info, **kwargs):
             return queryset
 
     finalize_django_types()
@@ -912,7 +912,7 @@ def test_sync_misuse_raises_sync_misuse_error_subclass():
             interfaces = (relay.Node,)
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        async def get_queryset(cls, queryset, info, **kwargs):
             return queryset
 
     finalize_django_types()
@@ -936,7 +936,7 @@ def test_resolve_nodes_sync_with_async_get_queryset_raises():
             interfaces = (relay.Node,)
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        async def get_queryset(cls, queryset, info, **kwargs):
             return queryset
 
     finalize_django_types()
@@ -960,7 +960,7 @@ async def test_consumer_async_resolve_node_wins():
             info,
             node_id,
             required=False,
-        ):  # noqa: ARG003
+        ):
             return sentinel
 
     finalize_django_types()
@@ -996,7 +996,7 @@ def test_consumer_resolve_id_wins():
             interfaces = (relay.Node,)
 
         @classmethod
-        def resolve_id(cls, root, info) -> str:  # noqa: ARG003
+        def resolve_id(cls, root, info) -> str:
             return sentinel_id
 
     finalize_django_types()
@@ -1019,7 +1019,7 @@ def test_consumer_resolve_node_wins():
             info,
             node_id,
             required=False,
-        ):  # noqa: ARG003
+        ):
             return sentinel
 
     finalize_django_types()
@@ -1042,7 +1042,7 @@ def test_consumer_resolve_nodes_wins():
             info,
             node_ids=None,
             required=False,
-        ):  # noqa: ARG003
+        ):
             return sentinel
 
     finalize_django_types()

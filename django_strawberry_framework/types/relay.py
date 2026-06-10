@@ -101,7 +101,7 @@ def install_is_type_of(type_cls: type) -> None:
         return
     model = _model_for(type_cls)
 
-    def is_type_of(obj: object, info: object) -> bool:
+    def is_type_of(obj: object, info: object) -> bool:  # noqa: ARG001
         return isinstance(obj, (type_cls, model))
 
     type_cls.is_type_of = is_type_of
@@ -191,7 +191,7 @@ def _resolve_id_attr_default(cls: type) -> str:
         return "pk"
 
 
-def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:
+def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:  # noqa: ARG001
     """Default ``Node.resolve_id`` with a ``__dict__`` cache check.
 
     Signature mirrors ``strawberry.relay.Node.resolve_id`` after

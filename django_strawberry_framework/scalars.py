@@ -47,7 +47,11 @@ def _parse_bigint(value: Any) -> int:
         - None and other types
     """
     if isinstance(value, bool):
-        raise ValueError("BigInt does not accept boolean values")
+        # TRY004 is suppressed on the raise: this parser uniformly raises
+        # ValueError for every invalid BigInt input; bool is rejected here
+        # (before the int check, since bool is an int subclass) as an invalid
+        # *value*, matching the GraphQL scalar parse_value contract.
+        raise ValueError("BigInt does not accept boolean values")  # noqa: TRY004
     if isinstance(value, int):
         return value
     if isinstance(value, str):

@@ -1,4 +1,3 @@
-# ruff: noqa: ERA001
 """Order input namespace, direction enum, and input-data adapters.
 
 Generated order input classes MUST become real globals of this module

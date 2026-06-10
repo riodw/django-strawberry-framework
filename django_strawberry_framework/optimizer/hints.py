@@ -66,7 +66,7 @@ class OptimizerHint:
 
     # Populated after the class body via ``OptimizerHint(skip=True)``.
     # Declared here as a ClassVar so the dataclass decorator ignores it.
-    SKIP: ClassVar[OptimizerHint]  # noqa: N815
+    SKIP: ClassVar[OptimizerHint]
 
     def __post_init__(self) -> None:
         """Reject conflicting flag combinations at construction time.

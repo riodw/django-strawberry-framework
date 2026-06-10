@@ -116,7 +116,7 @@ class LazyRelatedClassMixin:
                 return import_string(class_ref)
             except ImportError:
                 if bound_class:
-                    path = ".".join([bound_class.__module__, class_ref])
+                    path = f"{bound_class.__module__}.{class_ref}"
                     return import_string(path)
                 raise
         elif callable(class_ref) and not isinstance(class_ref, type):

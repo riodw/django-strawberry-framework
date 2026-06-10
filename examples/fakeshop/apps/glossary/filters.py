@@ -108,14 +108,14 @@ class GlossaryTermFilter(FilterSet):
 
 
 __all__ = (
-    "GlossaryStatusFilter",
-    "GlossaryCategoryFilter",
     "GlossaryAliasFilter",
-    "GlossaryTermLinkKindFilter",
-    "GlossaryTermLinkFilter",
+    "GlossaryCategoryFilter",
     "GlossaryCategoryMembershipFilter",
-    "GlossarySpecMentionFilter",
-    "GlossarySourceLinkFilter",
     "GlossaryDocumentFilter",
+    "GlossarySourceLinkFilter",
+    "GlossarySpecMentionFilter",
+    "GlossaryStatusFilter",
     "GlossaryTermFilter",
+    "GlossaryTermLinkFilter",
+    "GlossaryTermLinkKindFilter",
 )

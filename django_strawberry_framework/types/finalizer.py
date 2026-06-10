@@ -80,12 +80,11 @@ def _format_unresolved_targets_error(unresolved: list[PendingRelation]) -> str:
     ``Meta.optimizer_hints`` error strings. If consumer-surface ``Meta.*`` keys
     are renamed or supplemented, update the formatters together.
     """
-    lines = []
-    for pending in unresolved:
-        lines.append(
-            f"  - {pending.source_model.__name__}.{pending.field_name} -> "
-            f"{pending.related_model.__name__} (no registered DjangoType)",
-        )
+    lines = [
+        f"  - {pending.source_model.__name__}.{pending.field_name} -> "
+        f"{pending.related_model.__name__} (no registered DjangoType)"
+        for pending in unresolved
+    ]
     body = "\n".join(lines)
     return (
         "Cannot finalize Django types: the following relation targets are unresolved.\n"
@@ -139,10 +138,11 @@ def _audit_primary_ambiguity(multi_type_models: tuple[type[models.Model], ...]) 
     generator now lives in ``finalize_django_types``, which materializes the
     walk once and passes it to both audits.
     """
-    offenders: list[tuple[type[models.Model], tuple[type, ...]]] = []
-    for model in multi_type_models:
-        if registry.primary_for(model) is None:
-            offenders.append((model, registry.types_for(model)))
+    offenders: list[tuple[type[models.Model], tuple[type, ...]]] = [
+        (model, registry.types_for(model))
+        for model in multi_type_models
+        if registry.primary_for(model) is None
+    ]
     if not offenders:
         return
     offenders.sort(key=lambda entry: entry[0].__name__)
@@ -803,11 +803,13 @@ def _bind_ordersets() -> None:
     # from unresolved RelatedOrder('...') rewraps as ConfigurationError
     # with __cause__ preserved" lands in subpass 2.
     for orderset_cls in wired:
+        # PERF203 (try/except in a loop) is intentional: the per-iteration try
+        # attributes the failure to this specific orderset_cls.
         try:
             orderset_cls.get_fields()
             for related in getattr(orderset_cls, "related_orders", {}).values():
                 _ = related.orderset
-        except ImportError as exc:
+        except ImportError as exc:  # noqa: PERF203
             raise ConfigurationError(
                 f"Cannot finalize Django types: orderset "
                 f"{orderset_cls.__qualname__} references an unresolved "
@@ -912,9 +914,11 @@ def _bind_filtersets() -> None:
     # all raise ``ConfigurationError`` at finalize time); the original
     # ``ImportError`` is preserved via ``__cause__``.
     for filterset_cls in wired:
+        # PERF203 (try/except in a loop) is intentional: the per-iteration try
+        # attributes the failure to this specific filterset_cls.
         try:
             filterset_cls.get_filters()
-        except ImportError as exc:
+        except ImportError as exc:  # noqa: PERF203
             raise ConfigurationError(
                 f"Cannot finalize Django types: filterset "
                 f"{filterset_cls.__qualname__} references an unresolved "

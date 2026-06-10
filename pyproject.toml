@@ -80,6 +80,7 @@ select = [
     "I",      # isort
     "ANN",    # flake8-annotations
     "A",      # flake8-builtins
+    "ARG",    # flake8-unused-arguments (contractual resolver/fixture args carry noqa)
     "ASYNC",  # flake8-async: async/await antipatterns (blocking calls in async, etc.)
     "B",      # flake8-bugbear: likely bugs (mutable defaults, bad except order, etc.)
     "N",      # pep8-naming
@@ -87,8 +88,15 @@ select = [
     "COM812", # flake8-commas: missing-trailing-comma (pairs with magic trailing comma in formatter)
     "D",      # pydocstyle
     "ERA",    # eradicate
+    "FLY",    # flake8-flynt: static str .join() -> f-string
+    "ISC003", # explicit-str-concat only (ISC001/002 conflict with the formatter)
+    "PERF",   # Perflint: perf antipatterns (try/except in loop, manual comprehension)
+    "PLE",    # Pylint errors only (E-level; PLR/PLW/PLC excluded as noisy/opinionated)
     "Q",      # flake8-quotes
+    "RSE",    # flake8-raise: raise hygiene (no redundant parens on bare raise)
+    "RUF",    # Ruff-specific: unused-noqa (RUF100), mutable-class-default (RUF012), ...
     "SIM",    # flake8-simplify
+    "TRY004", # tryceratops: raise TypeError (not a vanilla error) on a type-check failure
     "UP",     # pyupgrade
 ]
 ignore = [
@@ -97,18 +105,38 @@ ignore = [
     "ANN401", # Any type annotation
     "D107",   # Missing docstring in __init__
     "D417",   # Missing argument description in docstring
+    "RUF001", # ambiguous-unicode in strings — em-dashes/arrows are intentional here
+    "RUF002", # ambiguous-unicode in docstrings — ditto
+    "RUF003", # ambiguous-unicode in comments — ditto
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-# B018 (useless-expression) is an idiomatic test pattern here: a bare
-# ``factory.arguments`` access triggers the lazy build/raise under test.
-"tests/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "N802", "N806", "B018"]
-"examples/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "UP031", "N806", "B018"]
+# B018 (useless-expression): bare ``factory.arguments`` triggers the lazy
+# build/raise under test. RUF012 (mutable-class-default): test/example fixture
+# classes use mutable attrs idiomatically. PERF: perf of test/example code is
+# irrelevant. ARG: in test code an "unused argument" is almost always an
+# injected pytest fixture (used for its side effect) or a framework-fixed
+# resolver/hook signature — both are required to be present, so ARG is noise
+# here; it stays enforced on the PACKAGE, where an unused named arg is a real
+# signal. RUF043 (pytest match= metacharacters): plain `match="...with a
+# period..."` is the dominant convention (147 vs 20 raw) and matches error
+# substrings fine; forcing raw strings would tax every test.
+"tests/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "N802", "N806", "B018", "RUF012", "PERF", "RUF043", "ARG"]
+"examples/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "UP031", "N806", "B018", "RUF012", "PERF", "RUF043", "ARG"]
+# PERF: one-shot build/maintenance scripts are not a performance surface.
+"scripts/**/*.py" = ["PERF"]
 "**/migrations/*.py" = ["D100", "D101", "D104"]
 "**/views.py" = ["D101"]
 "**/urls.py" = ["D100"]
 "**/admin.py" = ["D101"]
+
+[tool.ruff.lint.flake8-unused-arguments]
+# Unused ``*args`` / ``**kwargs`` are signature padding for protocol/forward
+# compatibility (Django ``handle(self, *args, **options)``, ``get_queryset(...,
+# **kwargs)``, signal receivers), not a real smell — don't flag them. ARG then
+# only fires on unused *named* args, where it carries signal.
+ignore-variadic-names = true
 
 [tool.ruff.lint.isort]
 known-first-party = ["django_strawberry_framework"]

@@ -18,7 +18,7 @@ shipped in this slice (see the TODO anchor at the bottom of the file).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from ..exceptions import ConfigurationError
 from .inputs import _build_input_fields, _input_type_name_for, build_input_class
@@ -60,7 +60,7 @@ class OrderArgumentsFactory:
     """
 
     # Cache for storing input object types, keyed by class-derived name.
-    input_object_types: dict[str, type] = {}
+    input_object_types: ClassVar[dict[str, type]] = {}
 
     # Tracks which orderset class built each cached type name. Under
     # class-based naming, a collision means two distinct classes share a
@@ -68,7 +68,7 @@ class OrderArgumentsFactory:
     # Decision 9 names this map's role explicitly (source-class collision
     # detection vs the materialization ledger's ``name -> input class``
     # keying in ``orders/inputs.py::_materialized_names``).
-    _type_orderset_registry: dict[str, type] = {}
+    _type_orderset_registry: ClassVar[dict[str, type]] = {}
 
     def __init_subclass__(cls) -> None:
         """Reject subclassing -- the class-level caches are not subclass-safe.

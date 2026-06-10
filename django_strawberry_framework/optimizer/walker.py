@@ -58,8 +58,13 @@ def plan_optimizations(
     return plan.finalize()
 
 
-def plan_relation(field: Any, target_type: type | None, info: Any | None) -> tuple[str, str]:
-    """Return relation traversal kind without constructing querysets."""
+def plan_relation(field: Any, target_type: type | None, info: Any | None) -> tuple[str, str]:  # noqa: ARG001
+    """Return relation traversal kind without constructing querysets.
+
+    ``info`` is unused by this default planner but kept to mirror the
+    ``DjangoOptimizerExtension.plan_relation`` override seam, whose subclasses
+    may plan on ``info`` — hence the ARG001 noqa rather than dropping the param.
+    """
     if _target_has_custom_get_queryset(target_type):
         logger.debug(
             "Optimizer: will downgrade %s to Prefetch because %s overrides get_queryset.",
@@ -292,7 +297,7 @@ def _walk_selections(
 def _plan_select_relation(
     sel: Any,
     django_field: Any,
-    django_name: str,
+    django_name: str,  # noqa: ARG001 - signature parity with _plan_prefetch_relation (which uses it)
     target_type: type | None,
     plan: OptimizationPlan,
     prefix: str,

@@ -234,7 +234,7 @@ def test_build_input_fields_emits_lookup_name_override_only_when_python_attr_dif
     # Find the `name` field's bag class and walk its Strawberry fields.
     name_annotation = by_attr["name"][0]
     # `bag_class | None` -> strip None to get the bag class.
-    bag = [arg for arg in get_args(name_annotation) if arg is not type(None)][0]
+    bag = next(arg for arg in get_args(name_annotation) if arg is not type(None))
     bag_fields = {
         field.python_name: field.graphql_name for field in bag.__strawberry_definition__.fields
     }
@@ -247,7 +247,7 @@ def test_build_input_fields_emits_lookup_name_override_only_when_python_attr_dif
     assert bag_fields["is_null"] == "isNull"
 
     id_annotation = by_attr["id"][0]
-    id_bag = [arg for arg in get_args(id_annotation) if arg is not type(None)][0]
+    id_bag = next(arg for arg in get_args(id_annotation) if arg is not type(None))
     id_fields = {
         field.python_name: field.graphql_name for field in id_bag.__strawberry_definition__.fields
     }

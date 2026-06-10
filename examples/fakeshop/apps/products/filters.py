@@ -108,7 +108,7 @@ class EntryFilter(FilterSet):
 
 __all__ = (
     "CategoryFilter",
+    "EntryFilter",
     "ItemFilter",
     "PropertyFilter",
-    "EntryFilter",
 )

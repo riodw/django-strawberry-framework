@@ -1896,7 +1896,7 @@ def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_syn
             fields = ("id", "code")
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        async def get_queryset(cls, queryset, info, **kwargs):
             # Async-only hook: pre-merge ``_q_for_branch`` would raise
             # ``SyncMisuseError`` when its sync derive walked into this.
             return await sync_to_async(lambda: queryset)()
@@ -1948,7 +1948,7 @@ def test_apply_async_runs_permission_checks_off_event_loop_thread():
             model = Category
             fields = {"name": ["exact"]}
 
-        def check_name_permission(self, request):  # noqa: ARG002
+        def check_name_permission(self, request):
             captured["permission_thread"] = threading.get_ident()
 
     async def _run() -> int:

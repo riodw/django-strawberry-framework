@@ -144,7 +144,7 @@ def test_filter_arguments_factory_dedupes_target_enqueued_twice():
 def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_name():
     """Two distinct `FilterSet`s named `DupFilter` in different modules -> ConfigurationError."""
 
-    class DupFilter(FilterSet):  # noqa: F811 — first declaration
+    class DupFilter(FilterSet):
         class Meta:
             model = library_models.Branch
             fields = {"name": ["exact"]}

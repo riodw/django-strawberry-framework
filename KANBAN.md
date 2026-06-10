@@ -146,6 +146,8 @@ To complete the Alpha (pre-0.1.0) milestone: **72.1%**.
 
 ## In progress
 
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
+
 <a id="full_relay_story_node_connection_root_validation"></a>
 ### [WIP-ALPHA-032-0.0.9 - Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
 
@@ -1524,6 +1526,8 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 - Related: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-054-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-052-0.1.5` - Product-catalog Layer 3 HTTP GraphQL tests
 
 ## Done
+
+Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
 <a id="django_model_based_globalid_encoding"></a>
 ### [DONE-031-0.0.9 - Django-model-based GlobalID encoding](KANBAN.html#django_model_based_globalid_encoding)

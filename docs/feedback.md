@@ -1,125 +1,82 @@
-# Review — spec-031 GlobalID encoding, fix-verification pass (`django_strawberry_framework/` only)
+# Review - spec-032 Full Relay build plan
 
-Second pass over the package source after the fix commit
-(`356e6709`). Every prior finding was re-verified against the working tree;
-the P1 fix was **re-reproduced with the same script shapes** that demonstrated
-the bug, plus the two new shapes the fix introduces. No P1 or P2 findings
-remain — three P3 residuals below.
+Reviewed `docs/spec-032-full_relay-0_0_9.md` against the current package source,
+the shipped `spec-030` / `spec-031` contracts, and the locked Strawberry relay
+behavior. The document is mostly internally coherent, but I found three contract
+issues worth fixing before implementation starts.
 
-## Prior findings — all verified fixed
+## Findings
 
-| # | Was | Verdict | Evidence |
-| - | --- | --- | --- |
-| 1 | P1 inherited-closure misclassification | **FIXED** (root-cause, as recommended) | See behavioral re-verification below |
-| 2 | P2 raw `spec-027 L<NN>` line refs in rewritten docstrings | **FIXED** | All `L<NN>` refs in `filters/base.py` replaced with `#"unique substring"` pinpoints; zero raw line refs remain in any spec-031-touched file |
-| 3 | P3 `docs/feedback.md` citations in spec-031 files | **FIXED (one straggler — see residual 1)** | `types/relay.py`, `types/base.py`, `types/definition.py`, `types/finalizer.py`, `filters/base.py` all cleaned; spec-Decision halves retained |
-| 4 | P3 stale `TODO(spec-027 Slice 1)` anchor | **FIXED** | Anchor + pseudocode block deleted from `types/relay.py` |
-| 5 | P3 routing-audit remediation impossible for a non-Relay primary | **FIXED** | `_format_model_label_routing_error` branches the fix sentence on `strategy is None` (both branches kept grep-stable); `test_routing_audit_non_relay_primary_remediation_names_relay_shape` pins it |
-| 6 | P3 `encode_typename` `type` branch production-dead | **FIXED** (retired by the P1 fix, as predicted) | The `type` branch is now the live implementation for the inherited-closure shadow case; docstring updated to say so |
+### P1 - Stale `after` cursor behavior is false for Strawberry offset cursors
 
-### P1 fix — behavioral re-verification (script run against the working tree)
+`docs/spec-032-full_relay-0_0_9.md::Decision 9` and the Test plan require
+`test_stale_after_cursor_falls_through`, described as: an `after` cursor whose
+row was deleted "falls through to the next existing row, no error."
 
-The implemented fix is exactly the recommended root-cause shape:
-`_FRAMEWORK_CLOSURE_MARKER` stamped on the closure function in
-`_install_typename_closure` (surviving `classmethod.__func__` retrieval),
-`_consumer_overrode_resolve_typename` returning False for marked functions,
-and `install_globalid_typename_resolver` installing the type's **own** closure
-for the `type` classification when `_inherits_framework_closure(type_cls)` —
-so an inherited parent closure (which captured the parent's `definition`) can
-never keep shadowing Strawberry's default.
+That is not the behavior of the delegated cursor engine this same decision says
+we keep. In the locked Strawberry source,
+`.venv/lib/python3.14/site-packages/strawberry/relay/utils.py::SliceMetadata.from_arguments`
+decodes `after` and sets `start = int(after_parsed) + 1`. The cursor encodes an
+offset, not a row identity. If the row at or before that offset disappears
+between page requests, the next query starts from the numeric offset in the new
+sequence and can skip or duplicate rows. `spec-030` already corrected this exact
+claim in its Revision 2 / Edge cases language: offset-cursor queries should not
+error, but stability under inserts/deletes is not guaranteed until stable
+column-keyed cursors land.
 
-```text
-1 parent: model | child: model | child own closure: True        (was: child "custom", no own closure)
-2 finalize OK   | child: type+model                              (was: spurious both-declared ConfigurationError)
-3 child effective: type | own closure: True | emits: TypeChild   (shadow case: emits own GraphQL name, not parent label)
-4 abstract-override child: custom                                (consumer override semantics preserved)
-```
+Fix the spec to match `spec-030`: keep a no-error test for stale-looking cursors
+if useful, but do not assert "next existing row" or "falls through" semantics.
+The conformance suite should pin the guaranteed behavior of opaque offset
+cursors, not a keyset-cursor property the implementation deliberately defers.
 
-The grandchild chain also holds by construction: a `type` child's own closure
-carries the marker, so a grandchild sees a framework closure (not a consumer
-override) and installs its own — the discrimination is transitive.
+### P2 - `testing.relay` round-trip test is wrong for secondary model-label emitters
 
-New package tests cover all the review-requested cases:
-`test_concrete_relay_child_of_concrete_parent_records_own_strategy`,
-`test_concrete_relay_child_with_meta_strategy_finalizes_cleanly`,
-`test_type_strategy_child_shadows_inherited_framework_closure`,
-`test_routing_audit_sees_child_true_recorded_strategy`,
-`test_routing_audit_non_relay_primary_remediation_names_relay_shape`, and the
-defensive `test_plain_function_resolve_typename_is_not_classified_override`.
-Placement in `tests/types/test_relay_interfaces.py` is correct per AGENTS —
-registry-lifecycle shapes are unreachable from a live query.
+`docs/spec-032-full_relay-0_0_9.md::Decision 10` says
+`global_id_for(type_cls, id)` returns the id a finalized type emits. The Edge
+cases correctly note that a model-label id for a secondary type decodes through
+the model primary, not back to the secondary. But the Slice 5 test plan says
+`decode_global_id(global_id_for(T, pk)) == (T, str(pk))` for the decodable
+strategies.
 
-Hygiene: `ruff check` and `ruff format --check` pass clean over the package
-(the COM812 formatter-conflict warning is pre-existing config, not this
-change).
+Those cannot both be true. For a secondary Relay type using `model` or
+`type+model`, `global_id_for(SecondaryType, pk)` should emit the same
+`app_label.modelname:<pk>` payload the live type emits, and
+`decode_global_id(...)` must resolve that payload via `registry.get(model)` to
+the primary type. Expecting `(SecondaryType, pk)` would either fail the test or
+pressure the helper into minting an id the type does not actually emit.
 
----
+Tighten the helper contract/tests: round-trip to `(T, pk)` only for lone/primary
+model-label types and for type-name payloads. Add an explicit secondary
+model-label case asserting decode returns the primary, or state that
+`global_id_for` rejects secondary model-label emitters if that is the intended
+public helper boundary.
 
-## Residual findings (all P3)
+### P2 - Root-field nullability contract contradicts itself
 
-### P3 — One `docs/feedback.md` citation straggler in a spec-031 file
+The Slice 2 checklist and DoD say `DjangoNodeField` / `DjangoNodesField` return
+`null` for hidden and missing rows through one shared `resolve_node(s)` path.
+`docs/spec-032-full_relay-0_0_9.md::Decision 5` repeats that visibility /
+existence failures become `null` for bare and typed forms. But the User-facing
+API section also says a non-optional annotation renders `Node!` and "a missing
+row then surfaces the model's `DoesNotExist` as a GraphQL error."
 
-`registry.py::definition_for_graphql_name #"(``docs/feedback.md`` P1)"` — the
-helper is new spec-031 code and was in scope for the citation sweep, but this
-one docstring kept its feedback half. Drop it; the surrounding sentence
-already cites the durable rule ("Keyed on `definition.graphql_type_name` …
-NOT `type_cls.__name__`"), and spec-031 Decision 8 owns it. (The
-`registry.py::TypeRegistry.clear #"P3b"` citation and the ones in
-`connection.py` / `list_field.py` / `optimizer/extension.py` / `orders/` are
-spec-030-era pre-existing — sweep candidates, unchanged, still out of this
-card's obligation.)
+That latter sentence only holds if the root resolver inspects the field's final
+nullability and calls the shipped `resolve_node(..., required=True)` /
+`resolve_nodes(..., required=True)` path. The rest of the spec describes an
+always-null-on-missing contract. If the resolver always uses `required=False`,
+a non-null annotation would surface as Strawberry's generic non-null violation,
+not the model's `DoesNotExist`.
 
-### P3 — Two replacement pinpoint anchors are not unique in spec-027
+Pick one contract and make the implementation plan/test names match it. The
+lower-risk choice is to keep the Relay root fields nullable-by-contract and
+delete the `DoesNotExist` promise, because the spec already centers the
+no-existence-oracle `null` path. If annotation-sensitive `required=True` is
+intentional, add it as source work and cover both singular and batch item
+nullability explicitly.
 
-The AGENTS source-ref rule prescribes `#"unique substring"`. Of the six new
-pinpoints in `filters/base.py`, four are unique in
-`docs/SPECS/spec-027-filters-0_0_8.md`, but two are not:
+## Checks run
 
-- `#"GlobalID type mismatch"` — 4 occurrences.
-- `#"offending index named in the error"` — 2 occurrences.
-
-They still land a reader in the right neighborhood, but they don't satisfy the
-rule's letter and an ambiguous pinpoint degrades exactly like a line number
-under future spec edits. Lengthen each to a unique span (e.g. extend
-`#"GlobalID type mismatch"` with the adjacent words from the one sentence that
-defines the error contract, and pick the spec's normative sentence for the
-index-named-in-error contract rather than the recap that repeats it).
-
-### P3 — spec-031 Decision 10 now lags the shipped behavior
-
-The fix is better than the spec: Decision 10 still says the framework
-"installs **nothing** for `type`" unconditionally and describes the override
-test as the bare `__func__` identity check. The shipped code adds the
-`_FRAMEWORK_CLOSURE_MARKER` sentinel, the marked-closure exclusion in
-`_consumer_overrode_resolve_typename`, and the `type`-classification
-shadow-install. Per the repo's spec-as-contract-record discipline (every prior
-behavior delta got a Revision entry), add a Revision 6 entry + a Decision 10
-amendment recording the marker mechanism and the shadow-install before Slice 5
-closes the card — otherwise the card ships with its contract record
-contradicting the implementation on the exact seam the last review fixed.
-
----
-
-## Summary
-
-| # | Sev | Area | One-line |
-| - | --- | --- | --- |
-| 1 | P3 | registry | Drop the lone remaining `docs/feedback.md` citation from `definition_for_graphql_name`'s docstring |
-| 2 | P3 | filters | Lengthen the two non-unique spec-027 pinpoints (`#"GlobalID type mismatch"` ×4, `#"offending index named in the error"` ×2) to unique spans |
-| 3 | P3 | docs | Amend spec-031 Decision 10 (+ Revision 6 entry) with the marker sentinel and the `type` shadow-install so the contract record matches shipped behavior |
-
-Nothing here blocks the card. The P1 surface — classification, decode, audit,
-and filter all reading one recorded strategy — is now consistent end-to-end,
-including under concrete-inheritance and finalize-re-run composition.
-
-## Validation
-
-- Re-ran the prior P1 reproduction shapes plus the two fix-introduced shapes
-  (`type` shadow-install; abstract-base consumer override) via a standalone
-  script against fakeshop models; output quoted above; script removed.
-- Confirmed zero raw `L<NN>` refs and zero `docs/feedback.md` citations in the
-  spec-031-touched files except the one registry straggler named above.
-- Verified all six new spec-027 pinpoint substrings against
-  `docs/SPECS/spec-027-filters-0_0_8.md` (four unique, two ambiguous — residual 2).
-- `uv run ruff check` / `uv run ruff format --check` over the package: clean.
-- No package file was modified by this review; pytest not run per AGENTS.
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-032-full_relay-0_0_9.md`
+  -> `OK: 38 terms`.
+- Inspected the locked Strawberry relay offset implementation via `uv run
+  python`; no pytest run per repo instructions.

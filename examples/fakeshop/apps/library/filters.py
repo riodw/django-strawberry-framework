@@ -144,7 +144,7 @@ class PatronFilter(FilterSet):
     def filter_email_must_have_at_sign(
         self,
         queryset: Any,
-        name: str,  # noqa: ARG002
+        name: str,
         value: str,
     ) -> Any:
         """Apply the declared filter once the validator has accepted the value."""

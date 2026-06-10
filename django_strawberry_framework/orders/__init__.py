@@ -86,9 +86,9 @@ def order_input_type(orderset_class: type[OrderSet]) -> object:
 
 
 __all__: tuple[str, ...] = (
-    "Ordering",
     "OrderSet",
     "OrderSetMetaclass",
+    "Ordering",
     "RelatedOrder",
     "order_input_type",
 )

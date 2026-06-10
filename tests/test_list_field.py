@@ -8,18 +8,20 @@ Package tests; system-under-test is ``django_strawberry_framework``
 single-file Layer-3 module's mirror per ``docs/TREE.md #"test_list_field.py       # DjangoListField (single-file Layer-3 module)"``.
 
 Holds the Slice-2 validation cluster (5 tests) and the Slice-3 behavior
-cluster (17 tests) — 22 total. Three of the tests are post-016 review
-additions from ``docs/feedback.md``: two are real bug fixes — the
-own-class-registration guard (High #1, rejects ``DjangoType`` subclass
-that omits its own ``Meta``) and the async-callable-object detection
-(High #2, detects ``async def __call__`` at construction time so the
-coroutine return doesn't bypass ``_post_process_consumer_async``). The
-third is a contract pin for ``functools.partial``-wrapped async
-resolvers: the post-High-#2 review note suggested an explicit ``.func``
-unwrap, but Python's ``inspect.iscoroutinefunction`` already looks
-through ``functools.partial`` natively (3.8+), so the case is correctly
-handled by the first branch of ``_is_async_callable``; the test pins
-the end-to-end behavior and guards against a future Python regression.
+cluster (17 tests) — 22 total. Four of the tests are ``docs/feedback.md``
+review additions: three are real bug fixes — the own-class-registration
+guard (High #1, rejects ``DjangoType`` subclass that omits its own
+``Meta``), the async-callable-object detection (High #2, detects
+``async def __call__`` at construction time so the coroutine return
+doesn't bypass ``_post_process_consumer_async``), and the
+``functools.partial``-wrapped async-callable-*instance* detection
+(``_is_async_callable`` now unwraps ``partial.func`` before the
+``__call__`` async check — without it that resolver was misclassified as
+sync and skipped ``get_queryset``). The fourth is a contract pin for
+``functools.partial``-wrapped async *functions*:
+``inspect.iscoroutinefunction`` looks through ``functools.partial``
+natively (3.8+), so the first branch already routes them; the test pins
+the end-to-end behavior.
 
 The spec's Slice-3 inventory at ``docs/SPECS/spec-020-list_field-0_0_7.md #"Optional ``resolver=`` constructor argument that overrides the default body"`` calls out
 "``Manager``/``QuerySet``" together for the consumer-resolver returns;
@@ -213,7 +215,7 @@ def test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_query
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
     @strawberry.type
@@ -257,7 +259,7 @@ async def test_djangolistfield_async_get_queryset_is_awaited(monkeypatch) -> Non
             fields = ("id", "name")
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        async def get_queryset(cls, queryset, info, **kwargs):
             return await sync_to_async(
                 lambda: queryset.exclude(name__startswith="a"),
             )()
@@ -310,7 +312,7 @@ async def test_djangolistfield_default_resolver_works_under_sync_and_async_schem
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
     @strawberry.type
@@ -355,7 +357,7 @@ def test_djangolistfield_sync_path_rejects_coroutine_from_get_queryset() -> None
             fields = ("id", "name")
 
         @classmethod
-        async def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        async def get_queryset(cls, queryset, info, **kwargs):
             return queryset
 
     @strawberry.type
@@ -397,10 +399,10 @@ def test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_app
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
-    def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+    def _resolver(root: Any, info: Info) -> Any:
         return Category.objects.all()
 
     @strawberry.type
@@ -442,10 +444,10 @@ def test_djangolistfield_consumer_resolver_python_list_return_passes_through() -
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
-    def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+    def _resolver(root: Any, info: Info) -> Any:
         return list(Category.objects.all())
 
     @strawberry.type
@@ -495,10 +497,10 @@ async def test_djangolistfield_async_consumer_resolver_queryset_return_gets_get_
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
-    async def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+    async def _resolver(root: Any, info: Info) -> Any:
         return await sync_to_async(lambda: Category.objects.all())()
 
     @strawberry.type
@@ -539,10 +541,10 @@ async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_q
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
-    async def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+    async def _resolver(root: Any, info: Info) -> Any:
         # Return the ``Manager`` itself, not a ``QuerySet`` — exercises
         # the coercion branch at ``django_strawberry_framework/list_field.py::_post_process_consumer_async #"result = result.all()"``.
         return Category.objects
@@ -586,11 +588,11 @@ async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
     class _AsyncResolver:
-        async def __call__(self, root: Any, info: Info) -> Any:  # noqa: ARG002
+        async def __call__(self, root: Any, info: Info) -> Any:
             return await sync_to_async(lambda: Category.objects.all())()
 
     @strawberry.type
@@ -624,11 +626,13 @@ async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_
     contract end-to-end through the field's pipeline: ``get_queryset``'s
     ``startswith("a")`` exclusion fires on the awaited QuerySet, proving the
     partial reached ``_post_process_consumer_async`` and not the sync wrapper.
-    The post-High-#2 review note in ``docs/feedback.md`` suggested the gap was
-    real and recommended an explicit ``.func`` unwrap; empirical check at the
-    review point showed ``inspect.iscoroutinefunction(partial(async_fn))`` is
-    True directly, so the unwrap would be dead code and this test guards
-    against a future Python regression that would re-open the bug.
+    The post-High-#2 review note in ``docs/feedback.md`` recommended an explicit
+    ``.func`` unwrap. For this shape (partial of a plain ``async def``)
+    ``inspect.iscoroutinefunction(partial(async_fn))`` is True directly, so the
+    first branch already routes it — but the unwrap turned out to be load-bearing
+    for the partial-of-async-*instance* shape (see
+    ``test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied``),
+    and is now in place. This test pins the function-partial path regardless.
     """
     monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
     await sync_to_async(services.seed_data)(1)
@@ -639,10 +643,10 @@ async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
-    async def _async_resolver(prefix: str, root: Any, info: Info) -> Any:  # noqa: ARG001
+    async def _async_resolver(prefix: str, root: Any, info: Info) -> Any:
         # The ``prefix`` arg makes the partial application non-trivial; the
         # remaining signature ``(root, info)`` is what Strawberry inspects.
         return await sync_to_async(lambda: Category.objects.all())()
@@ -652,6 +656,63 @@ async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_
         all_categories: list[CategoryType] = DjangoListField(
             CategoryType,
             resolver=functools.partial(_async_resolver, "ignored"),
+        )
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied(
+    monkeypatch,
+) -> None:
+    """``functools.partial`` wrapping an async callable *instance* is detected as async.
+
+    The combination the other two async-resolver tests miss: a
+    ``functools.partial`` whose ``.func`` is a callable object with
+    ``async def __call__``. ``inspect.iscoroutinefunction(partial)`` unwraps to
+    the instance (not a coroutine function -> False) and ``partial.__call__`` is
+    the partial's own ``__call__`` (also False), so before ``_is_async_callable``
+    unwrapped the partial first this resolver was misclassified as sync — its
+    coroutine return bypassed ``_post_process_consumer_async`` and silently
+    skipped ``target_type.get_queryset(...)`` (docs/feedback.md). Pins the
+    ``.func`` unwrap fix: ``get_queryset``'s ``startswith("a")`` exclusion must
+    fire on the awaited QuerySet.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.exclude(name__startswith="a")
+
+    class _AsyncResolver:
+        async def __call__(
+            self,
+            prefix: str,
+            root: Any,
+            info: Info,
+        ) -> Any:
+            # ``prefix`` makes the partial application non-trivial; the remaining
+            # ``(root, info)`` is what Strawberry inspects.
+            return await sync_to_async(lambda: Category.objects.all())()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=functools.partial(_AsyncResolver(), "ignored"),
         )
 
     finalize_django_types()
@@ -682,10 +743,10 @@ async def test_djangolistfield_async_consumer_resolver_python_list_return_passes
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
-    async def _resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+    async def _resolver(root: Any, info: Info) -> Any:
         return await sync_to_async(lambda: list(Category.objects.all()))()
 
     @strawberry.type
@@ -901,7 +962,7 @@ def test_djangolistfield_with_meta_primary_true_returns_primary_queryset() -> No
             primary = True
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
     class SecondaryCategoryType(DjangoType):
@@ -910,7 +971,7 @@ def test_djangolistfield_with_meta_primary_true_returns_primary_queryset() -> No
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="b")
 
     @strawberry.type
@@ -951,7 +1012,7 @@ def test_djangolistfield_with_secondary_target_uses_secondary_get_queryset() -> 
             primary = True
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="a")
 
     class SecondaryCategoryType(DjangoType):
@@ -960,7 +1021,7 @@ def test_djangolistfield_with_secondary_target_uses_secondary_get_queryset() -> 
             fields = ("id", "name")
 
         @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):  # noqa: ARG003
+        def get_queryset(cls, queryset, info, **kwargs):
             return queryset.exclude(name__startswith="b")
 
     @strawberry.type

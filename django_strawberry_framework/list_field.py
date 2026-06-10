@@ -6,6 +6,7 @@ Target release: ``0.0.7``.
 
 from __future__ import annotations
 
+import functools
 import inspect
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -47,34 +48,45 @@ async def _post_process_consumer_async(target_type: type, result: Any, info: Inf
 def _is_async_callable(fn: Any) -> bool:
     """True if calling ``fn`` returns a coroutine.
 
-    Two checks cover the practical resolver shapes:
+    The wrapped target is resolved first: ``functools.partial`` flattens nested
+    partials at construction, so a single ``.func`` hop reaches the underlying
+    callable (mirrors
+    ``django_strawberry_framework/types/base.py::_is_async_globalid_callable``).
+    Two checks on that target then cover the practical resolver shapes:
 
-    - ``inspect.iscoroutinefunction(fn)`` — catches ``async def`` functions
-      AND ``functools.partial`` / ``functools.partialmethod`` wrapping them.
-      Python's ``inspect`` module unwraps ``partial.func`` natively since 3.8
-      (verified at run time against the installed Python in
-      ``tests/test_list_field.py::test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied``;
-      a manual ``.func`` unwrap branch would be dead code on Python 3.10+).
-    - ``inspect.iscoroutinefunction(fn.__call__)`` — catches callable
+    - ``inspect.iscoroutinefunction(target)`` — catches ``async def`` functions
+      (and, with the partial unwrapped, a ``functools.partial`` around one —
+      though ``inspect`` also looks through partials of plain functions natively).
+    - ``inspect.iscoroutinefunction(target.__call__)`` — catches callable
       instances whose ``__call__`` is ``async def``. ``iscoroutinefunction``
-      checks the function flag of the immediate argument, so a callable
-      instance is False; descending into ``__call__`` recovers the async flag.
-      Without this branch an async-callable-object resolver would land in the
-      sync wrapper, its coroutine return would bypass
-      ``_post_process_consumer_sync``, and the awaited QuerySet would silently
-      skip ``target_type.get_queryset(...)``. The contract is pinned by
-      ``tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied``.
+      checks the function flag of the immediate argument, so a callable instance
+      is False; descending into ``__call__`` recovers the async flag. Without
+      this branch an async-callable-object resolver would land in the sync
+      wrapper, its coroutine return would bypass ``_post_process_consumer_sync``,
+      and the awaited QuerySet would silently skip ``target_type.get_queryset(...)``.
+
+    The explicit ``.func`` unwrap is load-bearing for the *combination*: a
+    ``functools.partial`` wrapping an async callable *instance*. There
+    ``inspect.iscoroutinefunction(partial)`` unwraps to the instance (not a
+    coroutine function -> False) and ``partial.__call__`` is the partial's own
+    ``__call__`` (also False), so without unwrapping first the resolver is
+    misclassified as sync. The three shapes are pinned in
+    ``tests/test_list_field.py`` by
+    ``test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied``,
+    ``test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied``,
+    and ``test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied``.
 
     Resolvers whose sync entry point returns an awaitable (e.g., a plain ``def``
     that produces a coroutine from somewhere else) remain undetected — the
     contract is that resolvers signal sync-vs-async through the standard
     coroutine-function flag, not through opaque awaitable returns.
     """
-    if inspect.iscoroutinefunction(fn):
+    target = fn.func if isinstance(fn, functools.partial) else fn
+    if inspect.iscoroutinefunction(target):
         return True
     # Inspecting ``__call__``'s async-ness, not testing callability — so
-    # ``callable(fn)`` (what B004 suggests) is the wrong tool here.
-    call = getattr(fn, "__call__", None)  # noqa: B004
+    # ``callable()`` (what B004 suggests) is the wrong tool here.
+    call = getattr(target, "__call__", None)  # noqa: B004
     return call is not None and inspect.iscoroutinefunction(call)
 
 
@@ -163,7 +175,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity — 
     # construction and freezes the sync-vs-async handling.
     if resolver is None:
 
-        def _default(root: Any, info: Info) -> Any:
+        def _default(root: Any, info: Info) -> Any:  # noqa: ARG001
             qs = _initial_queryset(target_type)
             if in_async_context():
                 # rev6 H1: return the coroutine from ``_apply_get_queryset_async``

@@ -189,12 +189,12 @@ class _StaticVisitor(ast.NodeVisitor):
         self.duplicate_literals: Counter[str] = Counter()
         self._parent_stack: list[str] = []
 
-    def visit_Module(self, node: ast.Module) -> None:  # noqa: N802
+    def visit_Module(self, node: ast.Module) -> None:
         """Record the module docstring and then visit the module body."""
         self._record_docstring(node, "<module>")
         self._visit_children_excluding_docstring(node)
 
-    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
+    def visit_Import(self, node: ast.Import) -> None:
         """Record an import statement."""
         names = ", ".join(
             alias.name if alias.asname is None else f"{alias.name} as {alias.asname}"
@@ -205,7 +205,7 @@ class _StaticVisitor(ast.NodeVisitor):
         )
         self.generic_visit(node)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         """Record a from-import statement."""
         module = "." * node.level + (node.module or "")
         names = ", ".join(
@@ -221,7 +221,7 @@ class _StaticVisitor(ast.NodeVisitor):
         )
         self.generic_visit(node)
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
         """Record a class and then visit its body."""
         self._record_symbol("class", node, "")
         self._record_docstring(node, node.name)
@@ -229,22 +229,22 @@ class _StaticVisitor(ast.NodeVisitor):
         self._visit_children_excluding_docstring(node)
         self._parent_stack.pop()
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         """Record a function and then visit its body."""
         self._visit_function("def", node)
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         """Record an async function and then visit its body."""
         self._visit_function("async def", node)
 
-    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+    def visit_Call(self, node: ast.Call) -> None:
         """Record a function call."""
         name = _call_name(node.func)
         if name is not None:
             self.calls.append(_CallRecord(node.lineno, name))
         self.generic_visit(node)
 
-    def visit_Constant(self, node: ast.Constant) -> None:  # noqa: N802
+    def visit_Constant(self, node: ast.Constant) -> None:
         """Record duplicate string literals."""
         if isinstance(node.value, str):
             stripped = node.value.strip()

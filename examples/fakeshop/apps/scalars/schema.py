@@ -45,7 +45,7 @@ class ScalarSpecimenTagType(DjangoType):
     """
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info, **kwargs: Any) -> Any:  # noqa: ARG003
+    def get_queryset(cls, queryset: Any, info: Info, **kwargs: Any) -> Any:
         return queryset.filter(active=True)
 
     class Meta:

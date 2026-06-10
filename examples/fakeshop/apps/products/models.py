@@ -129,7 +129,7 @@ class Entry(models.Model):
         blank=True,
         default="",
     )
-    property = models.ForeignKey(  # noqa: A003
+    property = models.ForeignKey(
         Property,
         related_name="entries",
         on_delete=models.CASCADE,

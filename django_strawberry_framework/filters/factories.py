@@ -16,7 +16,7 @@ build-only.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from ..exceptions import ConfigurationError
 from .inputs import (
@@ -82,12 +82,12 @@ class FilterArgumentsFactory:
     """
 
     # Cache for storing input object types, keyed by class-derived name.
-    input_object_types: dict[str, type] = {}
+    input_object_types: ClassVar[dict[str, type]] = {}
 
     # Tracks which filterset class built each cached type name. Under
     # class-based naming, a collision means two distinct classes share a
     # ``__name__`` -- always a bug. Strict raise, not warn.
-    _type_filterset_registry: dict[str, type] = {}
+    _type_filterset_registry: ClassVar[dict[str, type]] = {}
 
     def __init_subclass__(cls) -> None:
         """Reject subclassing — the class-level caches are not subclass-safe.

@@ -23,7 +23,7 @@ five parity-floor primitives (spec-027 Decision 4):
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.core.exceptions import ValidationError
 from django.forms import Field, MultipleChoiceField
@@ -133,8 +133,8 @@ def validate_range(value: Any) -> None:
 class RangeField(Field):
     """`forms.Field` whose default validator is `validate_range`."""
 
-    default_validators = [validate_range]
-    empty_values = [None]
+    default_validators: ClassVar[list] = [validate_range]
+    empty_values: ClassVar[list] = [None]
 
 
 class RangeFilter(TypedFilter):

@@ -569,7 +569,7 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
     """
     if resolver is None:
 
-        def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
+        def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:  # noqa: ARG001
             return _pipeline_sync(
                 target_type,
                 _initial_queryset(target_type),

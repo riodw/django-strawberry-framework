@@ -1,4 +1,3 @@
-# ruff: noqa: ERA001
 """Filter input namespace, lookup-name scaffolding, and shape converters.
 
 Generated input classes MUST become real globals of this module because

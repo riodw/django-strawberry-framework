@@ -537,7 +537,7 @@ class DjangoType:
     def get_queryset(
         cls,
         queryset: models.QuerySet,
-        info: Any,
+        info: Any,  # noqa: ARG003
         **kwargs: Any,
     ) -> models.QuerySet:
         """Default identity hook.

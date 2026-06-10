@@ -31,7 +31,7 @@ from django_strawberry_framework.orders import order_input_type
 # the README's "genuinely unreachable" fallback.
 
 
-def _branches_manager_resolver(root: Any, info: Info) -> Any:  # noqa: ARG001
+def _branches_manager_resolver(root: Any, info: Info) -> Any:
     return models.Branch.objects
 
 
@@ -108,7 +108,7 @@ class ShelfType(DjangoType):
     """Shelf declared before Branch to exercise FK finalization."""
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:  # noqa: ARG003
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
         """Hide ``topic="secret"`` shelves from non-staff requests (H1-rev4).
 
         Spec-021 L1053: the nested-``RelatedFilter`` visibility-scoping
@@ -165,7 +165,7 @@ class BranchType(DjangoType):
         return list(self.shelves.order_by("-code"))
 
     @classmethod
-    def get_queryset(cls, queryset: Any, info: Info) -> Any:  # noqa: ARG003
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
         """Hide ``city="restricted"`` branches from anonymous requests (M1-rev8).
 
         Spec-021 L1056: the root-resolver ordering contract relies on

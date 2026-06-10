@@ -372,7 +372,7 @@ def _run_ruff_format(files: list[Path]) -> None:
     ruff = shutil.which("ruff")
     cmd = ([ruff] if ruff else ["uv", "run", "ruff"]) + ["format", *(str(f) for f in files)]
     try:
-        result = subprocess.run(cmd, check=False)  # noqa: S603
+        result = subprocess.run(cmd, check=False)
     except FileNotFoundError:
         print("note: ruff not found on PATH; run `uv run ruff format` to reflow", file=sys.stderr)
         return
@@ -513,7 +513,7 @@ def _format_graphql(content: str) -> str | None:
         return None
     try:
         document = parse(content)
-    except Exception:  # noqa: BLE001 -- not a GraphQL document
+    except Exception:
         return None
 
     def pad(level: int) -> str:
@@ -583,7 +583,7 @@ def _format_graphql(content: str) -> str | None:
 
     try:
         return "\n\n".join(definition(d) for d in document.definitions)
-    except Exception:  # noqa: BLE001 -- unexpected node shape -> bail, never mangle
+    except Exception:
         return None
 
 

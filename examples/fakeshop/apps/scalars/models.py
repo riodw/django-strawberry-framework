@@ -189,7 +189,7 @@ class Base36Field(models.Field):
     def db_type(
         self,
         connection,
-    ):  # noqa: ARG002
+    ):
         return "text"
 
 

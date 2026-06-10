@@ -47,15 +47,15 @@ if os.environ.get("FAKESHOP_SHARDED") != "1":
 # ``from apps.library import models`` would crash in single-DB mode where
 # ``shard_b`` is not registered in DATABASES.
 
-import strawberry  # noqa: E402
-from apps.library import models  # noqa: E402
-from django.test import Client, override_settings  # noqa: E402
-from django.urls import clear_url_caches, path  # noqa: E402
-from strawberry.django.views import GraphQLView  # noqa: E402
-from strawberry.types import Info  # noqa: E402
+import strawberry
+from apps.library import models
+from django.test import Client, override_settings
+from django.urls import clear_url_caches, path
+from strawberry.django.views import GraphQLView
+from strawberry.types import Info
 
-from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config  # noqa: E402
-from django_strawberry_framework.registry import registry  # noqa: E402
+from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
+from django_strawberry_framework.registry import registry
 
 # ---------------------------------------------------------------------------
 # Autouse reload fixture (copied verbatim from

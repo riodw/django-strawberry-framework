@@ -6,6 +6,8 @@ resolver defaults (``resolve_id_attr``, ``resolve_id``, ``resolve_node``,
 ``resolve_nodes``).
 """
 
+import functools
+
 import pytest
 import strawberry
 from apps.products import services
@@ -1805,6 +1807,39 @@ def test_callable_setting_async_callable_object_raises(settings):
             return "x"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": Encoder()}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
+        finalize_django_types()
+
+
+def test_callable_setting_partial_wrapped_async_callable_raises(settings):
+    """A ``functools.partial`` around an async callable instance as the setting raises too.
+
+    Shares ``_validate_globalid_callable`` (and its partial-unwrapping sync-ness
+    check, ``docs/feedback.md`` P2) with the ``Meta`` path, so the setting path
+    inherits the fix: the wrapper is caught at finalization, not at the first
+    encode.
+    """
+
+    class Encoder:
+        async def __call__(
+            self,
+            type_cls,
+            model,
+            root,
+            info,
+        ):
+            return "x"
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {
+        "RELAY_GLOBALID_STRATEGY": functools.partial(Encoder()),
+    }
 
     class CategoryNode(DjangoType):
         class Meta:

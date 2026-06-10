@@ -8,16 +8,19 @@ plan's own methods work correctly in isolation.
 
 from types import SimpleNamespace
 
+import pytest
 from apps.products.models import Category, Entry, Item, Property
 from django.db.models import Prefetch
 
 from django_strawberry_framework.optimizer.plans import (
+    _MAX_PATH_DEPTH,
     OptimizationPlan,
     _consumer_only_fields,
     _flatten_select_related,
     diff_plan_for_queryset,
     lookup_paths,
     resolver_key,
+    runtime_path_from_path,
 )
 
 
@@ -521,3 +524,34 @@ class TestDiffPlanForQueryset:
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
         assert delta_qs._prefetch_related_lookups == (consumer_pf,)
+
+
+def _linked_path(*keys):
+    """Build a graphql-core-style ``key``/``prev`` linked response path."""
+    node = None
+    for key in keys:
+        node = SimpleNamespace(key=key, prev=node)
+    return node
+
+
+class TestRuntimePathFromPath:
+    """``runtime_path_from_path`` walks ``prev`` under a fixed, fail-loud bound."""
+
+    def test_walks_a_deep_but_finite_path(self):
+        """A path of (ceiling - 1) nodes resolves fully — the boundary that just fits."""
+        # _linked_path builds root-first; the output is that same root-first order.
+        keys = tuple(f"f{i}" for i in range(_MAX_PATH_DEPTH - 1))
+        path = _linked_path(*keys)
+        assert runtime_path_from_path(path) == keys
+
+    def test_strips_list_indexes(self):
+        """Integer (list-index) keys are skipped; string keys/aliases kept."""
+        path = _linked_path("allItems", 0, "cat")
+        assert runtime_path_from_path(path) == ("allItems", "cat")
+
+    def test_raises_on_cyclic_path(self):
+        """A self-referential ``prev`` chain hits the bound and fails loud."""
+        node = SimpleNamespace(key="loop", prev=None)
+        node.prev = node  # never bottoms out
+        with pytest.raises(RuntimeError, match="cyclic or corrupt"):
+            runtime_path_from_path(node)

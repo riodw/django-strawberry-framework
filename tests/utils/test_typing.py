@@ -3,8 +3,13 @@
 import typing
 from typing import Any
 
+import pytest
+
 from django_strawberry_framework.utils import unwrap_graphql_type
-from django_strawberry_framework.utils.typing import unwrap_return_type
+from django_strawberry_framework.utils.typing import (
+    _MAX_TYPE_WRAPPER_DEPTH,
+    unwrap_return_type,
+)
 
 
 def test_unwrap_return_type_handles_typing_list():
@@ -79,6 +84,35 @@ def test_unwrap_graphql_type_peels_all_of_type_layers():
     wrapped = NonNull(List(NonNull(Inner)))
 
     assert unwrap_graphql_type(wrapped) is Inner
+
+
+def test_unwrap_graphql_type_peels_a_deep_but_finite_stack():
+    """A stack just under the ceiling still peels to the leaf (no false overrun)."""
+
+    class Inner:
+        pass
+
+    class Wrap:
+        def __init__(self, of_type):
+            self.of_type = of_type
+
+    wrapped = Inner
+    for _ in range(_MAX_TYPE_WRAPPER_DEPTH - 1):
+        wrapped = Wrap(wrapped)
+
+    assert unwrap_graphql_type(wrapped) is Inner
+
+
+def test_unwrap_graphql_type_raises_on_cyclic_of_type_stack():
+    """A cyclic ``of_type`` chain hits the bound and fails loud instead of spinning."""
+
+    class Cyclic:
+        @property
+        def of_type(self):
+            return self  # never bottoms out
+
+    with pytest.raises(RuntimeError, match="cyclic or corrupt"):
+        unwrap_graphql_type(Cyclic())
 
 
 def test_unwrap_return_type_returns_direct_class_when_unwrapped():

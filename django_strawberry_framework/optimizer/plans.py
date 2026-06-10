@@ -179,6 +179,20 @@ def runtime_path_from_info(info: Any | None) -> tuple[str, ...]:
     return runtime_path_from_path(getattr(info, "path", None))
 
 
+# A GraphQL ``path`` linked-list is exactly the *static* selection-set nesting of
+# the query document (result-set size and data-tree depth do NOT deepen it — list
+# items are sibling paths at depth+1, not nested levels). graphql-core's executor
+# also recurses one Python frame per level, so a query deep enough to approach
+# this would hit Python's recursion limit first. This ceiling therefore sits far
+# above any real query; exceeding it means the ``prev`` chain is cyclic or corrupt.
+# The cap's only job is to catch such a cycle, which terminates in N iterations
+# regardless of N — so it is set generously (1024) to make a false positive on a
+# legitimate query effectively impossible while still turning a would-be infinite
+# hang into a loud failure with a fixed, statically-checkable upper bound (NASA
+# Power-of-Ten Rule 2).
+_MAX_PATH_DEPTH = 1024
+
+
 def runtime_path_from_path(path: Any) -> tuple[str, ...]:
     """Walk a GraphQL ``path`` linked-list and return its keys, list indexes stripped.
 
@@ -186,14 +200,26 @@ def runtime_path_from_path(path: Any) -> tuple[str, ...]:
     skipping integer keys (graphql-core's list-index entries) so the
     resulting tuple is a stable structural identity for cache-key and
     resolver-key purposes.
+
+    The walk is bounded by ``_MAX_PATH_DEPTH`` rather than looping
+    unconditionally: a ``prev`` chain is exactly the resolver nesting depth,
+    which graphql-core bounds by the validated query depth, so a chain longer
+    than that ceiling can only be cyclic or corrupt and raises ``RuntimeError``
+    instead of spinning forever.
     """
     keys: list[str] = []
-    while path is not None:
-        key = getattr(path, "key", None)
+    node = path
+    for _ in range(_MAX_PATH_DEPTH):
+        if node is None:
+            return tuple(reversed(keys))
+        key = getattr(node, "key", None)
         if not isinstance(key, int) and key is not None:
             keys.append(str(key))
-        path = getattr(path, "prev", None)
-    return tuple(reversed(keys))
+        node = getattr(node, "prev", None)
+    raise RuntimeError(
+        f"runtime_path_from_path: GraphQL path exceeded {_MAX_PATH_DEPTH} levels; "
+        "the `prev` chain is likely cyclic or corrupt.",
+    )
 
 
 def _flatten_select_related(sr: Any) -> set[str]:

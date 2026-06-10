@@ -24,6 +24,7 @@ captures the scalar-only field list used in those updated tests.
 """
 
 import datetime
+import functools
 import itertools
 
 import pytest
@@ -558,6 +559,37 @@ def test_meta_globalid_strategy_async_callable_object_raises():
                 fields = CATEGORY_SCALAR_FIELDS
                 interfaces = (relay.Node,)
                 globalid_strategy = Encoder()
+
+
+def test_meta_globalid_strategy_partial_wrapped_async_callable_raises():
+    """A ``functools.partial`` around an async callable instance is rejected too.
+
+    ``inspect.iscoroutinefunction`` only unwraps a partial whose ``.func`` is an
+    ``async def`` function — NOT a partial around an async callable *instance*, so
+    both the partial and its ``__call__`` read as sync. The validator unwraps
+    ``partial.func`` before the sync-ness check, so it fails loud at type creation
+    instead of leaking a coroutine at the first encode (``docs/feedback.md`` P2).
+    """
+    from strawberry import relay
+
+    class Encoder:
+        async def __call__(
+            self,
+            type_cls,
+            model,
+            root,
+            info,
+        ):
+            return "custom.label"
+
+    with pytest.raises(ConfigurationError, match="must be sync"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                globalid_strategy = functools.partial(Encoder())
 
 
 def test_meta_globalid_strategy_stored_on_definition():

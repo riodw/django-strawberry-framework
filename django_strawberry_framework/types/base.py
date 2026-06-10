@@ -26,6 +26,7 @@ triggers the collection pipeline, which:
    pass.
 """
 
+import functools
 import inspect
 import re
 import typing
@@ -259,24 +260,48 @@ def _validate_globalid_strategy(
     return normalized
 
 
+def _is_async_globalid_callable(value: object) -> bool:
+    """Return whether ``value`` is (or wraps) an async GlobalID encoder.
+
+    ``inspect.iscoroutinefunction`` returns ``True`` only for the value it is
+    handed directly — it does NOT see through two realistic wrapper shapes
+    (``docs/feedback.md`` P2):
+
+    1. A callable *instance* whose ``__call__`` is ``async def`` — the instance
+       itself is not a coroutine function, so its ``__call__`` is checked too.
+    2. A ``functools.partial`` around either of the above — ``iscoroutinefunction``
+       only unwraps a partial whose ``.func`` is itself an ``async def`` function,
+       NOT a partial around an async callable *instance*. So the partial's target
+       is checked instead of the partial.
+
+    A single ``.func`` hop reaches that target with no loop to bound: ``partial``
+    flattens nested partials at construction (``partial(partial(f)).func is f``),
+    so ``.func`` is never itself a ``partial`` and the traversal is provably
+    depth-1. Either wrapper, left undetected, survives validation and only fails
+    at the first ``types/relay.py::encode_typename`` call (a coroutine return that
+    trips the non-``str`` guard plus an unawaited-coroutine warning) — exactly the
+    request-time failure the build-time check exists to prevent.
+    """
+    target = value.func if isinstance(value, functools.partial) else value
+    return inspect.iscoroutinefunction(target) or inspect.iscoroutinefunction(
+        getattr(target, "__call__", None),
+    )
+
+
 def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None:
     """Reject a wrong-arity or async GlobalID encoder at validation time.
 
     ``inspect.signature`` must bind the four positional ``_GLOBALID_CALLABLE_PARAMS``
     and the encoder must be sync (spec-031 Decision 6, ``docs/feedback.md`` P2).
-    "Sync" is checked on BOTH the value itself (catches ``async def`` functions)
-    and its ``__call__`` (catches callable *instances* whose ``__call__`` is
-    ``async def`` — ``inspect.iscoroutinefunction`` returns ``False`` for the
-    instance even though invoking it yields a coroutine). Without the ``__call__``
-    arm such an object survives validation, then ``types/relay.py::encode_typename``
-    invokes it synchronously, gets a coroutine, raises the non-``str`` guard, and
-    leaks an unawaited-coroutine warning — violating the build-time fail-loud rule.
-    A callable that survives both checks is returned to the caller untouched; the
-    per-call non-``str`` return guard lives in the Slice-2 install closure.
+    The sync-ness test (``_is_async_globalid_callable``) sees through callable
+    instances with an ``async def __call__`` and ``functools.partial`` wrappers
+    around either an ``async def`` function or such an instance — all of which
+    ``inspect.iscoroutinefunction`` alone would miss, letting an async encoder
+    survive to request time. A callable that survives both checks is returned to
+    the caller untouched; the per-call non-``str`` return guard lives in the
+    Slice-2 install closure.
     """
-    if inspect.iscoroutinefunction(value) or inspect.iscoroutinefunction(
-        getattr(value, "__call__", None),
-    ):
+    if _is_async_globalid_callable(value):
         raise ConfigurationError(
             f"{subject} callable encoder must be sync; "
             f"got an `async def`. Expected `(type_cls, model, root, info) -> str`.",

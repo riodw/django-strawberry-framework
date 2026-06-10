@@ -2039,6 +2039,28 @@ def test_decode_non_node_graphql_name_raises():
         decode_global_id(relay.GlobalID("CategoryPlain", "1"))
 
 
+def test_decode_model_label_to_non_node_primary_raises():
+    """A model-label GlobalID resolving to a non-Relay primary hits the strategy-is-None guard.
+
+    The graphql-name path above raises earlier, inside ``definition_for_graphql_name``
+    (its scan is Relay-Node-only). The model-label path instead resolves
+    ``products.category`` to its sole/primary registered type and only then checks
+    the recorded strategy -- so a non-Relay primary (``effective_globalid_strategy``
+    is ``None``) reaches the absent-strategy guard in ``decode_global_id`` and
+    raises, rather than returning a non-decodable target.
+    """
+
+    class CategoryPlain(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    assert _definition_of(CategoryPlain).effective_globalid_strategy is None
+    with pytest.raises(ConfigurationError, match="no recorded GlobalID strategy"):
+        decode_global_id(relay.GlobalID("products.category", "1"))
+
+
 def test_decode_malformed_base64_raises_configuration_error():
     """A malformed base64 / non-``type:id`` string raises ``ConfigurationError``, not a leak."""
     with pytest.raises(ConfigurationError, match="not a valid GlobalID"):

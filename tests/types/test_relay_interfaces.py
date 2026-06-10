@@ -1785,6 +1785,37 @@ def test_callable_setting_async_raises(settings):
         finalize_django_types()
 
 
+def test_callable_setting_async_callable_object_raises(settings):
+    """A callable *instance* with ``async def __call__`` as the setting raises too.
+
+    The setting path shares ``_validate_globalid_callable`` with the ``Meta`` path,
+    so the ``__call__``-arm sync-ness check (``docs/feedback.md`` P2) guards both:
+    the instance is caught at finalization rather than leaking a coroutine at the
+    first encode.
+    """
+
+    class Encoder:
+        async def __call__(
+            self,
+            type_cls,
+            model,
+            root,
+            info,
+        ):
+            return "x"
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": Encoder()}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
+        finalize_django_types()
+
+
 # ---------------------------------------------------------------------------
 # spec-031 Slice 3 — the decode seam (``decode_global_id`` resolve-then-enforce:
 # Step-1 model-label / type-name resolution, Step-2 strategy-shape enforcement,

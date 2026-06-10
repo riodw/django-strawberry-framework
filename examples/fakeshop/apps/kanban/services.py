@@ -273,10 +273,6 @@ def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> 
             using,
             field="number",
         )
-        size_high = None
-        if spec.get("relative_size_high"):
-            size_high = _lookup(models.RelativeSize, spec["relative_size_high"], using)
-
         card = _manager(models.Card, using).create(
             title=title,
             number=_target_number(spec, using),
@@ -290,7 +286,6 @@ def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> 
             if spec.get("severity")
             else None,
             relative_size=_lookup(models.RelativeSize, spec["relative_size"], using),
-            relative_size_high=size_high,
             planning_state=_lookup(
                 models.PlanningState,
                 spec.get("planning_state", DEFAULT_PLANNING_STATE_KEY),

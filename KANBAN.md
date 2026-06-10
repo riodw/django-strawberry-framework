@@ -92,6 +92,18 @@ demoted to a bullet under its label.
 - Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract ([`BACKLOG.md`][backlog] item 38).
 - The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
 
+## Progress to 1.0.0
+
+**54.4% complete** toward `1.0.0` — 31 of 57 cards done (53.8% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+
+| Milestone | Cards done | Size-weighted |
+| --- | --- | --- |
+| Alpha (`0.0.x`, parity) | 31/43 (72.1%) | 68.9% |
+| Beta (`0.1.x`) | 0/13 (0.0%) | 0.0% |
+| Stable (`1.0.0` cut) | 0/1 (0.0%) | 0.0% |
+
+To the `0.1.0` parity milestone (Alpha complete): **72.1%**.
+
 ## Board columns
 
 ## WIP / DONE spec map
@@ -141,7 +153,7 @@ demoted to a bullet under its label.
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
 - Severity: Major
 - Status: Planned
-- Relative size: L-XL
+- Relative size: XL
 - Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
 
 #### Planning note
@@ -1465,7 +1477,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 - Priority: Critical
 - Severity: Major
 - Status: Planned
-- Relative size: M-L
+- Relative size: L
 - Labels: `cleanup`, `release`, `stable-api`, `tests`
 
 #### Planning note
@@ -1519,7 +1531,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 - Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
 - Severity: Major
 - Status: Needs spec
-- Relative size: S-M
+- Relative size: M
 - Labels: `config`, `public-api`, `registry`, `relay`, `stable-api`, `types`, `versioning`
 - Spec: [spec-031-globalid_encoding-0_0_9.md](docs/spec-031-globalid_encoding-0_0_9.md)
 
@@ -1755,7 +1767,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
 - Severity: Medium
 - Status: Planned
-- Relative size: S-M
+- Relative size: M
 - Labels: `cleanup`, `developer-tools`, `public-api`, `types`
 - Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md)
 

@@ -916,49 +916,6 @@ def test_select_lookup_uuid_side_table():
 
 
 @pytest.mark.django_db
-def test_relative_size_two_reverse_sets_cards_and_cards_high():
-    """A size exposes BOTH reverse sets: ``cards`` (low bound) and ``cardsHigh`` (range high)."""
-    _seed_board()
-    # A ranged card ("S–M"-style): low bound m, high bound xl.
-    xl = models.RelativeSize.objects.get(key="xl")
-    size_m = models.RelativeSize.objects.get(key="m")
-    todo = models.Status.objects.get(key="todo")
-    alpha = models.Milestone.objects.get(key="alpha")
-    version = models.TargetVersion.objects.get(number="0.0.8")
-    planned = models.PlanningState.objects.get(key="planned")
-    models.Card.objects.create(
-        title="Ordering subsystem",
-        number=22,
-        status=todo,
-        milestone=alpha,
-        target_version=version,
-        relative_size=size_m,
-        relative_size_high=xl,
-        planning_state=planned,
-    )
-    _assert_graphql_data(
-        """
-        query {
-          allKanbanRelativeSizes(filter: { key: { exact: "xl" } }) {
-            key
-            cards { title }
-            cardsHigh { title }
-          }
-        }
-        """,
-        {
-            "allKanbanRelativeSizes": [
-                {
-                    "key": "xl",
-                    "cards": [{"title": "Filtering subsystem"}],
-                    "cardsHigh": [{"title": "Ordering subsystem"}],
-                },
-            ],
-        },
-    )
-
-
-@pytest.mark.django_db
 def test_select_labels_m2m():
     """Plain M2M selection: a card's labels."""
     _seed_board()
@@ -1029,7 +986,6 @@ def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
         "priority",
         "severity",
         "relativeSize",
-        "relativeSizeHigh",
         "planningState",
     ):
         field_type = fields[name]["type"]

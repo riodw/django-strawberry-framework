@@ -98,11 +98,11 @@ demoted to a bullet under its label.
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (`0.0.x`, parity) | 31/43 (72.1%) | 68.9% |
-| Beta (`0.1.x`) | 0/13 (0.0%) | 0.0% |
-| Stable (`1.0.0` cut) | 0/1 (0.0%) | 0.0% |
+| Alpha (pre-0.1.0) | 31/43 (72.1%) | 68.9% |
+| Beta (pre-1.0.0) | 0/13 (0.0%) | 0.0% |
+| Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To the `0.1.0` parity milestone (Alpha complete): **72.1%**.
+To complete the Alpha (pre-0.1.0) milestone: **72.1%**.
 
 ## Board columns
 

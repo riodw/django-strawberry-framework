@@ -493,11 +493,7 @@ def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[s
     return data
 
 
-MILESTONE_ROWS = (
-    ("alpha", "Alpha (`0.0.x`, parity)"),
-    ("beta", "Beta (`0.1.x`)"),
-    ("stable", "Stable (`1.0.0` cut)"),
-)
+_RELEASE_VERSION = (1, 0, 0)
 
 
 def _pct(part: float, whole: float) -> float:
@@ -505,13 +501,46 @@ def _pct(part: float, whole: float) -> float:
     return round(100 * part / whole, 1) if whole else 0.0
 
 
+def _version_tuple(text: str | None) -> tuple[int, ...]:
+    """Parse a ``"X.Y.Z"`` version string to a comparable int tuple (digits only).
+
+    Tolerant of empty / suffixed segments (``"1.0.0 (stable)"`` -> ``(1, 0, 0)``);
+    a missing or empty version yields ``(0,)`` so an unbounded floor sorts low.
+    """
+    parts: list[int] = []
+    for segment in (text or "").split("."):
+        digits = "".join(ch for ch in segment if ch.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts) or (0,)
+
+
 def compute_progress_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
     """Aggregate road-to-``1.0.0`` progress from the card set.
 
-    Backlog cards are excluded (post-``1.0`` / deferred). Cards are counted raw and
+    Backlog cards are excluded (deferred / un-triaged). Cards are counted raw and
     weighted by relative size (XS=1 .. XL=5) so the figure is not skewed by many tiny
-    cards, then broken down per milestone. Pure derivation from the live board, so it
-    can never go stale -- both exports recompute it on every build.
+    cards, then broken down per milestone. Every label, ordering, and the
+    pre-/post-``1.0.0`` split are derived from the live milestone records (their
+    ``label`` / ``order`` / ``versionFloor``), so nothing here goes stale or has to be
+    re-typed when a milestone is renamed or re-versioned -- both exports recompute it on
+    every build.
+
+    Two headline scopes are reported (the board surfaces both so neither misleads):
+
+    - ``toward`` -- progress *toward* ``1.0.0``: cards whose ``targetVersion`` ships at
+      or before ``1.0.0`` (the ``1.0.0`` release card itself counts -- it is the work
+      that reaches ``1.0.0``). Card target version, not milestone, is the signal: a
+      card's milestone is derived from its target version, but the boundary case (the
+      ``1.0.0`` cut, filed under the post-``1.0.0`` ``stable`` milestone) belongs to
+      the road to ``1.0.0``.
+    - ``overall`` -- every non-backlog card regardless of target version (the full
+      picture, including any post-``1.0.0`` work).
+
+    The two coincide whenever no non-backlog card targets a post-``1.0.0`` version; the
+    headline then shows a single figure (the dual line appears only once genuinely
+    post-``1.0.0`` work is in flight).
     """
 
     def rank(card: dict[str, Any]) -> int:
@@ -521,15 +550,25 @@ def compute_progress_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
         size = card.get("relativeSize")
         return size["rank"] + 1 if size else 0
 
-    universe = [card for card in cards if (card.get("status") or {}).get("key") != "backlog"]
-    done = [card for card in universe if card["status"]["key"] == "done"]
+    def targets_by_release(card: dict[str, Any]) -> bool:
+        # The 1.0.0 release card ships exactly 1.0.0, so the boundary is inclusive
+        # (``<=``). A card with no target version is treated as pre-release work.
+        target = card.get("targetVersion") or {}
+        number = target.get("number")
+        return number is None or _version_tuple(number) <= _RELEASE_VERSION
 
-    milestones: dict[str, dict[str, int]] = {}
+    universe = [card for card in cards if (card.get("status") or {}).get("key") != "backlog"]
+
+    milestones: dict[str, dict[str, Any]] = {}
     for card in universe:
-        key = (card.get("milestone") or {}).get("key", "?")
+        milestone = card.get("milestone") or {}
+        key = milestone.get("key", "?")
         bucket = milestones.setdefault(
             key,
             {
+                "key": key,
+                "label": milestone.get("label", key),
+                "order": milestone.get("order", 0),
                 "done": 0,
                 "total": 0,
                 "rank_done": 0,
@@ -542,42 +581,66 @@ def compute_progress_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
             bucket["done"] += 1
             bucket["rank_done"] += rank(card)
 
-    rank_total = sum(rank(card) for card in universe)
-    rank_done = sum(rank(card) for card in done)
+    def scope(predicate: Any) -> dict[str, Any]:
+        members = [card for card in universe if predicate(card)]
+        done = [card for card in members if card["status"]["key"] == "done"]
+        rank_total = sum(rank(card) for card in members)
+        return {
+            "cards_done": len(done),
+            "cards_total": len(members),
+            "cards_pct": _pct(len(done), len(members)),
+            "weighted_pct": _pct(sum(rank(card) for card in done), rank_total),
+        }
+
     return {
-        "cards_done": len(done),
-        "cards_total": len(universe),
-        "cards_pct": _pct(len(done), len(universe)),
-        "weighted_pct": _pct(rank_done, rank_total),
+        "toward": scope(targets_by_release),
+        "overall": scope(lambda _card: True),
         "milestones": milestones,
     }
 
 
 def render_progress_markdown(metrics: dict[str, Any]) -> str:
     """Render the progress metrics as a markdown body (headline + per-milestone table)."""
-    cards_pct = metrics["cards_pct"]
+    toward = metrics["toward"]
+    overall = metrics["overall"]
+    cards_pct = toward["cards_pct"]
     crossed = "Past the 50% mark." if cards_pct >= 50 else "Not yet at the 50% mark."
+    headline = (
+        f"**{cards_pct}% complete** toward `1.0.0` - {toward['cards_done']} of "
+        f"{toward['cards_total']} cards done ({toward['weighted_pct']}% size-weighted)."
+    )
+    # Surface the full-board figure too whenever a post-1.0.0 milestone widens the
+    # non-backlog set beyond the toward-1.0.0 scope, so neither number misleads.
+    if overall["cards_total"] != toward["cards_total"]:
+        headline += (
+            f" Across all non-backlog cards (incl. post-`1.0.0`), {overall['cards_done']} "
+            f"of {overall['cards_total']} ({overall['cards_pct']}%, "
+            f"{overall['weighted_pct']}% size-weighted)."
+        )
+    headline += f" {crossed} Backlog excluded; size-weighted by relative size (XS=1 .. XL=5)."
+
     lines = [
-        f"**{cards_pct}% complete** toward `1.0.0` - {metrics['cards_done']} of "
-        f"{metrics['cards_total']} cards done ({metrics['weighted_pct']}% size-weighted). "
-        f"{crossed} Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).",
+        headline,
         "",
         "| Milestone | Cards done | Size-weighted |",
         "| --- | --- | --- |",
     ]
-    for key, label in MILESTONE_ROWS:
-        bucket = metrics["milestones"].get(key)
-        if not bucket:
-            continue
+    ordered = sorted(metrics["milestones"].values(), key=lambda bucket: bucket["order"])
+    for bucket in ordered:
         cards = f"{bucket['done']}/{bucket['total']} ({_pct(bucket['done'], bucket['total'])}%)"
-        lines.append(f"| {label} | {cards} | {_pct(bucket['rank_done'], bucket['rank_total'])}% |")
-    alpha = metrics["milestones"].get("alpha")
-    if alpha and alpha["total"]:
+        weighted = f"{_pct(bucket['rank_done'], bucket['rank_total'])}%"
+        lines.append(f"| {bucket['label']} | {cards} | {weighted} |")
+
+    # The first (lowest-order) milestone completing is the parity / alpha-complete
+    # gate; name it and its ceiling version from the live record rather than a
+    # hardcoded string.
+    if ordered:
+        parity = ordered[0]
         lines.extend(
             [
                 "",
-                f"To the `0.1.0` parity milestone (Alpha complete): "
-                f"**{_pct(alpha['done'], alpha['total'])}%**.",
+                f"To complete the {parity['label']} milestone: "
+                f"**{_pct(parity['done'], parity['total'])}%**.",
             ],
         )
     return "\n".join(lines)

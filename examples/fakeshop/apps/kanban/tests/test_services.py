@@ -41,7 +41,6 @@ def test_create_card_from_spec_builds_card_and_children(beta_version):
             "title": "Service card",
             "target_version": beta_version.number,
             "relative_size": "s",
-            "relative_size_high": "m",
             "priority": "medium",
             "severity": "medium",
             "labels": ["filters", "search"],
@@ -59,7 +58,6 @@ def test_create_card_from_spec_builds_card_and_children(beta_version):
     assert card.target_version == beta_version
     assert card.milestone == beta_version.milestone
     assert card.relative_size.key == "s"
-    assert card.relative_size_high.key == "m"
     assert sorted(card.labels.values_list("key", flat=True)) == ["filters", "search"]
     assert card.parity_claims.get().upstream.key == "graphene_django"
     assert card.dependencies.get() == dependency

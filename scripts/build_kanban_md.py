@@ -115,13 +115,10 @@ def sorted_column_cards(column_key: str, cards: list[dict[str, Any]]) -> list[di
 
 
 def size_label(card: dict[str, Any]) -> str:
-    """Render a card's relative-size range."""
+    """Render a card's relative size."""
     relative_size = card.get("relativeSize")
     if not relative_size:
         return ""
-    relative_size_high = card.get("relativeSizeHigh")
-    if relative_size_high:
-        return f"{relative_size['label']}-{relative_size_high['label']}"
     return relative_size["label"]
 
 

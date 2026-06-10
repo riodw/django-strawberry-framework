@@ -50,9 +50,6 @@ query StaticKanbanDashboard {
     relativeSize {
       ...RelativeSizeFields
     }
-    relativeSizeHigh {
-      ...RelativeSizeFields
-    }
     planningState {
       ...PlanningStateFields
     }
@@ -496,8 +493,134 @@ def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[s
     return data
 
 
+MILESTONE_ROWS = (
+    ("alpha", "Alpha (`0.0.x`, parity)"),
+    ("beta", "Beta (`0.1.x`)"),
+    ("stable", "Stable (`1.0.0` cut)"),
+)
+
+
+def _pct(part: float, whole: float) -> float:
+    """Percent ``part`` of ``whole``, one decimal, 0.0 when ``whole`` is 0."""
+    return round(100 * part / whole, 1) if whole else 0.0
+
+
+def compute_progress_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate road-to-``1.0.0`` progress from the card set.
+
+    Backlog cards are excluded (post-``1.0`` / deferred). Cards are counted raw and
+    weighted by relative size (XS=1 .. XL=5) so the figure is not skewed by many tiny
+    cards, then broken down per milestone. Pure derivation from the live board, so it
+    can never go stale -- both exports recompute it on every build.
+    """
+
+    def rank(card: dict[str, Any]) -> int:
+        # ``RelativeSize.rank`` is 0-indexed (XS=0 .. XL=4); weight by ``rank + 1``
+        # (XS=1 .. XL=5) so an XS card still counts as 1 unit of work rather than
+        # being invisible to the size-weighted figure.
+        size = card.get("relativeSize")
+        return size["rank"] + 1 if size else 0
+
+    universe = [card for card in cards if (card.get("status") or {}).get("key") != "backlog"]
+    done = [card for card in universe if card["status"]["key"] == "done"]
+
+    milestones: dict[str, dict[str, int]] = {}
+    for card in universe:
+        key = (card.get("milestone") or {}).get("key", "?")
+        bucket = milestones.setdefault(
+            key,
+            {
+                "done": 0,
+                "total": 0,
+                "rank_done": 0,
+                "rank_total": 0,
+            },
+        )
+        bucket["total"] += 1
+        bucket["rank_total"] += rank(card)
+        if card["status"]["key"] == "done":
+            bucket["done"] += 1
+            bucket["rank_done"] += rank(card)
+
+    rank_total = sum(rank(card) for card in universe)
+    rank_done = sum(rank(card) for card in done)
+    return {
+        "cards_done": len(done),
+        "cards_total": len(universe),
+        "cards_pct": _pct(len(done), len(universe)),
+        "weighted_pct": _pct(rank_done, rank_total),
+        "milestones": milestones,
+    }
+
+
+def render_progress_markdown(metrics: dict[str, Any]) -> str:
+    """Render the progress metrics as a markdown body (headline + per-milestone table)."""
+    cards_pct = metrics["cards_pct"]
+    crossed = "Past the 50% mark." if cards_pct >= 50 else "Not yet at the 50% mark."
+    lines = [
+        f"**{cards_pct}% complete** toward `1.0.0` — {metrics['cards_done']} of "
+        f"{metrics['cards_total']} cards done ({metrics['weighted_pct']}% size-weighted). "
+        f"{crossed} Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).",
+        "",
+        "| Milestone | Cards done | Size-weighted |",
+        "| --- | --- | --- |",
+    ]
+    for key, label in MILESTONE_ROWS:
+        bucket = metrics["milestones"].get(key)
+        if not bucket:
+            continue
+        cards = f"{bucket['done']}/{bucket['total']} ({_pct(bucket['done'], bucket['total'])}%)"
+        lines.append(f"| {label} | {cards} | {_pct(bucket['rank_done'], bucket['rank_total'])}% |")
+    alpha = metrics["milestones"].get("alpha")
+    if alpha and alpha["total"]:
+        lines.extend(
+            [
+                "",
+                f"To the `0.1.0` parity milestone (Alpha complete): "
+                f"**{_pct(alpha['done'], alpha['total'])}%**.",
+            ],
+        )
+    return "\n".join(lines)
+
+
+def progress_board_doc(
+    board_docs: list[dict[str, Any]],
+    cards: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Build the synthetic, export-time ``Progress to 1.0.0`` reference board doc.
+
+    Clones the kind / namespace / timestamps from the existing ``snapshot`` reference
+    doc so it groups with the other reference docs in both exports, and carries
+    pre-resolved numbers in its body (literal markdown -- no client-side token
+    recompute, so the KANBAN.html app renders it with no JS change). Returns ``None``
+    if there is no ``snapshot`` doc to anchor against.
+    """
+    anchor = next((doc for doc in board_docs if doc.get("key") == "snapshot"), None)
+    if anchor is None:
+        return None
+    return {
+        "id": "synthetic:progress-to-1-0-0",
+        "uuid": {"id": "synthetic:progress-to-1-0-0"},
+        "namespace": anchor.get("namespace", "kanban"),
+        "key": "progress-to-1-0-0",
+        "title": "Progress to 1.0.0",
+        "order": anchor.get("order", 3) + 0.5,
+        "body": render_progress_markdown(compute_progress_metrics(cards)),
+        "includeHeading": True,
+        "kind": anchor["kind"],
+        "createdDate": anchor.get("createdDate"),
+        "updatedDate": anchor.get("updatedDate"),
+        "cardReferences": [],
+    }
+
+
 def fetch_dashboard_data() -> dict[str, Any]:
-    """Fetch the kanban dashboard payload through the real ``/graphql/`` route."""
+    """Fetch the kanban dashboard payload through the real ``/graphql/`` route.
+
+    A synthetic ``Progress to 1.0.0`` board doc is injected right after the
+    ``snapshot`` doc so both exports surface the road-to-``1.0.0`` metrics with no
+    per-builder render change.
+    """
     from apps.kanban import models
 
     data = fetch_graphql_data(
@@ -509,9 +632,18 @@ def fetch_dashboard_data() -> dict[str, Any]:
     for graphql_name, payload_name in LOOKUP_FIELDS.items():
         lookups[payload_name] = data[graphql_name]
 
+    board_docs = data["allKanbanBoardDocs"]
+    progress = progress_board_doc(board_docs, data["allCards"])
+    if progress is not None:
+        snapshot_index = next(
+            (index for index, doc in enumerate(board_docs) if doc.get("key") == "snapshot"),
+            len(board_docs) - 1,
+        )
+        board_docs.insert(snapshot_index + 1, progress)
+
     return {
         "cards": data["allCards"],
-        "boardDocs": data["allKanbanBoardDocs"],
+        "boardDocs": board_docs,
         "lookups": lookups,
         "blockingReferenceKindKeys": sorted(models.BLOCKING_REFERENCE_KIND_KEYS),
     }

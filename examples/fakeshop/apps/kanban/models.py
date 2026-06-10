@@ -292,14 +292,6 @@ class Card(TimeStampedModel):
         related_name="cards",
         on_delete=models.PROTECT,
     )
-    # Only set for ranges ("S–M"); a second FK into the same lookup.
-    relative_size_high = models.ForeignKey(
-        RelativeSize,
-        null=True,
-        blank=True,
-        related_name="cards_high",
-        on_delete=models.SET_NULL,
-    )
     planning_state = models.ForeignKey(
         PlanningState,
         related_name="cards",

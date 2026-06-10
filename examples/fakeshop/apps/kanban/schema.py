@@ -129,7 +129,6 @@ class RelativeSizeType(DjangoType):
             "updated_date",
             "uuid",
             "cards",
-            "cards_high",
         )
         filterset_class = filters.RelativeSizeFilter
         orderset_class = orders.RelativeSizeOrder
@@ -297,7 +296,6 @@ class CardType(DjangoType):
             "priority",
             "severity",
             "relative_size",
-            "relative_size_high",
             "planning_state",
             "milestone",
             "target_version",

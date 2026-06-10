@@ -24,7 +24,6 @@ JSON schema (see ``apps/kanban/card_import.example.json`` for a filled template)
           "title": "...",                  # required, unique
           "target_version": "0.1.2",       # required, TargetVersion.number
           "relative_size": "m",            # required, RelativeSize.key
-          "relative_size_high": null,      # optional, RelativeSize.key (ranges)
           "status": "todo",                # optional (default "todo"; not "done")
           "priority": "medium",            # optional, Priority.key
           "severity": "medium",            # optional, Severity.key

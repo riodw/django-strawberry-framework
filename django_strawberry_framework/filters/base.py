@@ -265,12 +265,13 @@ def _decode_and_validate_global_id(
     versa for the `type` strategy). Raises `GraphQLError("GlobalID type
     mismatch: filter expects <expected> but received <actual>")` when the
     decoded `type_name` is not in the accepted set for the three framework
-    strategies (spec-027 #"GlobalID type mismatch", now strategy-aware per
-    spec-031 Decision 13). `callable` / `custom` types, an unbound owner,
+    strategies (spec-027 #"filter expects <expected> but received <actual>",
+    now strategy-aware per spec-031 Decision 13). `callable` / `custom` types,
+    an unbound owner,
     or an unresolvable target fall back to node-id-only (the `type_name` guard
     is skipped). `GlobalIDMultipleChoiceFilter` passes `index` so the rejected
     list element is named in the error message per spec-027
-    #"offending index named in the error".
+    #"validates every element of the list independently".
     """
     decoded = value if isinstance(value, relay.GlobalID) else relay.GlobalID.from_id(value)
     definition = _target_definition_for(filter_instance)
@@ -320,7 +321,7 @@ class _GlobalIDMultipleChoiceField(MultipleChoiceField):
     stock field rejected EVERY GlobalID at form-clean time before the
     filter's own decode/validate could run. GlobalID list elements are
     decoded and type-checked in `GlobalIDMultipleChoiceFilter.filter`
-    (per spec-027 #"offending index named in the error"), not against a
+    (per spec-027 #"validates every element of the list independently"), not against a
     fixed set, so this field accepts any submitted value and defers
     validation to the filter. Mirrors graphene-django's
     `GlobalIDMultipleChoiceField`.
@@ -335,7 +336,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
     """Multi-value sibling of `GlobalIDFilter`.
 
     Validates every list element independently per spec-027
-    #"offending index named in the error"; a single wrong-type element
+    #"validates every element of the list independently"; a single wrong-type element
     rejects the whole input with the offending index named in the error
     message.
 

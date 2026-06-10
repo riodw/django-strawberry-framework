@@ -327,8 +327,7 @@ class TypeRegistry:
 
         Keyed on ``definition.graphql_type_name`` (which honors ``Meta.name``),
         NOT ``type_cls.__name__``, so a class ``ItemType`` with ``Meta.name =
-        "Item"`` emits ``Item:<pk>`` and decodes by inverting the same function
-        (``docs/feedback.md`` P1).
+        "Item"`` emits ``Item:<pk>`` and decodes by inverting the same function.
 
         Raises:
             ConfigurationError: no Relay-Node definition matches ``name`` (the

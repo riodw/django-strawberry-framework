@@ -316,19 +316,48 @@ class TypeRegistry:
         """Return the collected definition for ``type_cls``, or ``None``."""
         return self._definitions.get(type_cls)
 
-    # TODO(spec-031-globalid_encoding-0_0_9 Slice 3): Add
-    # ``definition_for_graphql_name(name)`` for GlobalID type-name decode.
-    # It must scan Relay-Node definitions only and key on
-    # ``definition.graphql_type_name`` rather than ``type_cls.__name__`` so
-    # ``Meta.name`` round-trips. Ambiguous or missing names should return
-    # ``None`` or raise the decode-facing ``ConfigurationError`` shape chosen
-    # in ``types.relay.decode_global_id``.
-    # Pseudocode:
-    #   matches = []  # noqa: ERA001
-    #   for type_cls, definition in self._definitions.items():  # noqa: ERA001
-    #       if is_relay_node(type_cls) and definition.graphql_type_name == name:  # noqa: ERA001
-    #           matches.append(definition)  # noqa: ERA001
-    #   return exactly_one(matches)  # noqa: ERA001
+    def definition_for_graphql_name(self, name: str) -> DjangoTypeDefinition:
+        """Return the unique Relay-Node ``DjangoTypeDefinition`` for a GraphQL type ``name``.
+
+        The GlobalID type-name decode entry point (spec-031 Decision 8 Step 1,
+        type-name branch). Inverts the ``type`` strategy's encode (which emits
+        ``definition.graphql_type_name``) by scanning ``iter_definitions()`` for a
+        unique ``graphql_type_name`` match over **Relay-Node definitions only** —
+        a non-Node type can never be the target of a ``GlobalID``.
+
+        Keyed on ``definition.graphql_type_name`` (which honors ``Meta.name``),
+        NOT ``type_cls.__name__``, so a class ``ItemType`` with ``Meta.name =
+        "Item"`` emits ``Item:<pk>`` and decodes by inverting the same function
+        (``docs/feedback.md`` P1).
+
+        Raises:
+            ConfigurationError: no Relay-Node definition matches ``name`` (the
+                miss), or two or more share the same ``graphql_type_name`` (the
+                ambiguity).
+        """
+        # In-function import: ``registry.py`` is imported very early and must not
+        # couple its module top to ``types.relay``; the ``clear()`` helpers and the
+        # ``TYPE_CHECKING`` definition import follow the same in-function /
+        # type-only convention. ``definition_for_graphql_name`` is a decode-time
+        # call, well after module load, so the local import resolves cheaply.
+        from .types.relay import implements_relay_node
+
+        matches = [
+            definition
+            for type_cls, definition in self.iter_definitions()
+            if implements_relay_node(type_cls) and definition.graphql_type_name == name
+        ]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            raise ConfigurationError(
+                f"No registered Relay-Node DjangoType has GraphQL type name {name!r}",
+            )
+        colliding = ", ".join(sorted(match.origin.__name__ for match in matches))
+        raise ConfigurationError(
+            f"GraphQL type name {name!r} is ambiguous across multiple Relay-Node "
+            f"DjangoTypes ({colliding})",
+        )
 
     def iter_definitions(self) -> Iterator[tuple[type, DjangoTypeDefinition]]:
         """Yield ``(type_cls, definition)`` pairs in registration order."""

@@ -57,9 +57,12 @@ from ..utils.strings import snake_case
 from .converters import resolved_relation_annotation
 from .relations import PendingRelation
 from .relay import (
+    _accepts_model_label_decode,
     _check_composite_pk_for_relay_node,
+    _emits_model_label,
     apply_interfaces,
     implements_relay_node,
+    install_globalid_typename_resolver,
     install_relay_node_resolvers,
 )
 from .resolvers import _attach_relation_resolvers
@@ -114,26 +117,30 @@ def _format_ambiguity_error(offenders: list[tuple[type[models.Model], tuple[type
     )
 
 
-def _audit_primary_ambiguity() -> None:
+def _audit_primary_ambiguity(multi_type_models: tuple[type[models.Model], ...]) -> None:
     """Reject models with multiple registered DjangoTypes and no declared primary.
 
-    Walks ``registry.models_with_multiple_types()`` (the Slice 1 helper at
-    ``registry.py::TypeRegistry.models_with_multiple_types``); for each model
-    whose ``registry.primary_for(...)`` is ``None``, collects the offending
-    registered types via
-    ``registry.types_for(model)``. Offenders are sorted by ``model.__name__``
-    so the error body is deterministic regardless of consumer import order.
-    If the offender list is non-empty, raises ``ConfigurationError`` with the
-    canonical message built by ``_format_ambiguity_error``.
+    Walks the pre-materialized multi-type-model list (computed once per build in
+    ``finalize_django_types`` from
+    ``registry.py::TypeRegistry.models_with_multiple_types`` and shared with the
+    Phase-2.5 ``_audit_model_label_routing`` audit); for each model whose
+    ``registry.primary_for(...)`` is ``None``, collects the offending registered
+    types via ``registry.types_for(model)``. Offenders are sorted by
+    ``model.__name__`` so the error body is deterministic regardless of consumer
+    import order. If the offender list is non-empty, raises ``ConfigurationError``
+    with the canonical message built by ``_format_ambiguity_error``.
 
     Runs exactly once per build, inside ``finalize_django_types()`` after the
     ``registry.is_finalized()`` short-circuit and before pending-relation
     resolution. The pre-resolution placement (M1) is what makes Phase 1
     failure-atomic — an ambiguity raise leaves every collected class intact
-    and the pending-relation list preserved for a re-call.
+    and the pending-relation list preserved for a re-call. The once-per-build
+    guarantee for the underlying ``registry.models_with_multiple_types()``
+    generator now lives in ``finalize_django_types``, which materializes the
+    walk once and passes it to both audits.
     """
     offenders: list[tuple[type[models.Model], tuple[type, ...]]] = []
-    for model in registry.models_with_multiple_types():
+    for model in multi_type_models:
         if registry.primary_for(model) is None:
             offenders.append((model, registry.types_for(model)))
     if not offenders:
@@ -142,17 +149,88 @@ def _audit_primary_ambiguity() -> None:
     raise ConfigurationError(_format_ambiguity_error(offenders))
 
 
-# TODO(spec-031-globalid_encoding-0_0_9 Slice 2): Add a Phase-2.5
-# model-label-routing audit after every Relay type records
-# ``effective_globalid_strategy``. Scope it to
-# ``registry.models_with_multiple_types()`` because single-type models decode
-# through their lone registered type.
-# Pseudocode:
-#   for model in registry.models_with_multiple_types():  # noqa: ERA001
-#       types = registry.types_for(model)  # noqa: ERA001
-#       if any(emits_model_label(t) for t in types):  # noqa: ERA001
-#           primary = registry.primary_for(model)  # noqa: ERA001
-#           if not accepts_model_label(primary): raise ConfigurationError  # noqa: ERA001
+def _format_model_label_routing_error(
+    offenders: list[tuple[type[models.Model], type, str | None]],
+) -> str:
+    """Return the canonical model-label-routing-invariant error message.
+
+    Sibling of ``_format_ambiguity_error`` above; both live at the top of this
+    module so the finalize-time error strings stay grep-stable. Each offender is
+    ``(model, emitter_type, primary_strategy)``: a multi-type model whose
+    primary's effective strategy cannot decode the model-label IDs an emitter
+    type mints (spec-031 Decision 8, ``docs/feedback.md`` P1). The fix sentence
+    points the consumer at the two resolutions: make the primary model-label
+    decodable, or move the emitter off the model strategies onto ``type``.
+    """
+    parts = [
+        f"  {model.__name__}: {emitter.__name__} emits model-label GlobalIDs but the "
+        f"primary's strategy is {primary_strategy!r}"
+        for model, emitter, primary_strategy in offenders
+    ]
+    body = "\n".join(parts)
+    return (
+        "Models whose registered DjangoTypes emit model-label GlobalIDs but whose "
+        "primary cannot decode them:\n"
+        f"{body}\n\n"
+        "Set the primary's Meta.globalid_strategy to 'model' or 'type+model' so the "
+        "model-label IDs route correctly, or move the emitting type(s) to the 'type' "
+        "strategy so their IDs stay type-scoped."
+    )
+
+
+def _audit_model_label_routing(multi_type_models: tuple[type[models.Model], ...]) -> None:
+    """Reject multi-type models whose primary cannot decode emitted model-label IDs.
+
+    The model-label-routing invariant (spec-031 Decision 8): for any multi-type
+    model, if any registered type's effective strategy emits model-label IDs
+    (``model`` / ``type+model``), the model's primary's effective strategy must
+    also accept model-label decode (``model`` / ``type+model``). A model-label ID
+    routes through ``registry.get(model)`` (the primary), so a primary that
+    cannot decode it would reject IDs a secondary emitted.
+
+    Iterates the same pre-materialized multi-type-model list the Phase-1
+    ``_audit_primary_ambiguity`` audit consumed (``docs/feedback.md`` P3):
+    a single-type model trivially satisfies the invariant (its lone type both
+    emits and decodes) and has no declared primary. For multi-type models the
+    Phase-1 ``_audit_primary_ambiguity`` has already guaranteed a primary exists,
+    so ``primary_for(model)`` is safe. Offenders are sorted by ``model.__name__``
+    for a deterministic message. Sharing the materialized list (computed once in
+    ``finalize_django_types``) is what keeps ``models_with_multiple_types()``
+    invoked exactly once per build across both audits.
+
+    Runs in Phase 2.5 AFTER every Relay type's ``effective_globalid_strategy`` is
+    recorded and BEFORE Phase 3, so a raise leaves every type ``finalized = False``
+    and the re-entrancy guard in ``install_globalid_typename_resolver`` keeps a
+    re-run from misclassifying installed types.
+    """
+    offenders: list[tuple[type[models.Model], type, str | None]] = []
+    for model in multi_type_models:
+        emitter = _first_model_label_emitter(model)
+        if emitter is None:
+            continue
+        primary = registry.primary_for(model)
+        primary_strategy = registry.get_definition(primary).effective_globalid_strategy
+        if not _accepts_model_label_decode(primary_strategy):
+            offenders.append((model, emitter, primary_strategy))
+    if not offenders:
+        return
+    offenders.sort(key=lambda entry: entry[0].__name__)
+    raise ConfigurationError(_format_model_label_routing_error(offenders))
+
+
+def _first_model_label_emitter(model: type[models.Model]) -> type | None:
+    """Return the first registered type for ``model`` that emits model-label IDs.
+
+    Iterates ``registry.types_for(model)`` in registration order and returns the
+    first type whose recorded ``effective_globalid_strategy`` emits model-label
+    IDs, or ``None`` if none do. Single-sources the per-type strategy read so the
+    audit body stays readable.
+    """
+    for type_cls in registry.types_for(model):
+        strategy = registry.get_definition(type_cls).effective_globalid_strategy
+        if _emits_model_label(strategy):
+            return type_cls
+    return None
 
 
 def finalize_django_types() -> None:
@@ -195,7 +273,16 @@ def finalize_django_types() -> None:
     if registry.is_finalized():
         return
 
-    _audit_primary_ambiguity()
+    # Materialize the multi-type-model walk ONCE per finalize. Both audits
+    # (Phase-1 ambiguity, Phase-2.5 model-label routing) consume this same
+    # tuple, so ``registry.models_with_multiple_types()`` — a one-shot lazy
+    # generator (registry.py) — is invoked exactly once per build rather than
+    # once per audit. This is a pure read; computing it before
+    # ``_audit_primary_ambiguity`` does not disturb Phase 1's failure-atomic
+    # contract.
+    multi_type_models = tuple(registry.models_with_multiple_types())
+
+    _audit_primary_ambiguity(multi_type_models)
 
     unresolved: list[PendingRelation] = []
     resolved: list[tuple[PendingRelation, type, FieldMeta]] = []
@@ -266,12 +353,14 @@ def finalize_django_types() -> None:
         if implements_relay_node(type_cls):
             _check_composite_pk_for_relay_node(type_cls)
             install_relay_node_resolvers(type_cls)
-            # TODO(spec-031-globalid_encoding-0_0_9 Slice 2): Call
-            # ``install_globalid_typename_resolver(type_cls, definition)`` here
-            # after the existing four Relay resolver defaults. The install
-            # must record ``definition.effective_globalid_strategy`` before the
-            # model-label-routing audit runs, and must skip if that field is
-            # already set during a partial-finalize rerun.
+            install_globalid_typename_resolver(type_cls, definition)
+
+    # Runs after the Relay loop has recorded EVERY type's
+    # ``effective_globalid_strategy`` (so it reads complete data) and before
+    # Phase 3 flips ``finalized`` — a Phase-2.5 raise here is recoverable via the
+    # install step's re-entrancy guard (spec-031 Decision 8/10, feedback P1).
+    # Reuses the multi-type-model tuple materialized at the top of this finalize.
+    _audit_model_label_routing(multi_type_models)
 
     _bind_filtersets()
     _bind_ordersets()

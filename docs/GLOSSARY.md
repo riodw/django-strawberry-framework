@@ -19,16 +19,6 @@ Companion files:
 
 Current package version: `0.0.8`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
-<!--
-TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Add the GlobalID strategy glossary surface.
-Pseudocode:
-  - add Index rows for `Meta.globalid_strategy` and `RELAY_GLOBALID_STRATEGY`
-  - add Browse-by-category links under Type generation and Relay
-  - add entries marked shipped (`0.0.9`)
-  - extend Relay Node integration with model-label default, four strategies, and precedence
-  - keep links reference-style if the edit introduces cross-file links
--->
-
 ## Public exports
 
 Symbols re-exported from `django_strawberry_framework`:
@@ -96,6 +86,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Meta.fields`](#metafields) | shipped |
 | [`Meta.fields_class`](#metafields_class) | planned for `0.1.1` |
 | [`Meta.filterset_class`](#metafilterset_class) | shipped (`0.0.8`) |
+| [`Meta.globalid_strategy`](#metaglobalid_strategy) | shipped (`0.0.9`) |
 | [`Meta.interfaces`](#metainterfaces) | shipped (`0.0.5`) |
 | [`Meta.model`](#metamodel) | shipped |
 | [`Meta.name`](#metaname) | shipped |
@@ -119,6 +110,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`RelatedOrder`](#relatedorder) | shipped (`0.0.8`) |
 | [Relation handling](#relation-handling) | shipped (`0.0.1`+) |
 | [Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
+| [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) | shipped (`0.0.9`) |
 | [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.12` |
 | [`safe_wrap_connection_method`](#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Scalar field conversion](#scalar-field-conversion) | shipped (`0.0.1`+) |
@@ -140,7 +132,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 
 For readers exploring rather than looking up a specific term:
 
-- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.connection`](#metaconnection) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
+- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.connection`](#metaconnection) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
 - **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [`Meta.choice_enum_names`](#metachoice_enum_names).
 - **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 - **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`Meta.filterset_class`](#metafilterset_class).
@@ -149,7 +141,7 @@ For readers exploring rather than looking up a specific term:
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
 - **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [Per-field permission hooks](#per-field-permission-hooks).
-- **Relay:** [Relay Node integration](#relay-node-integration) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
+- **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
@@ -673,6 +665,29 @@ class GalaxyType(DjangoType):
 
 **See also:** [`FilterSet`](#filterset) · [`filter_input_type`](#filter_input_type).
 
+## `Meta.globalid_strategy`
+
+**Status:** shipped (`0.0.9`).
+
+A net-new, Relay-Node-gated `Meta` key selecting how a [`DjangoType`](#djangotype) encodes the type-name slot of its Relay `GlobalID`. Valid only when [`Meta.interfaces`](#metainterfaces) includes `strawberry.relay.Node`; declaring it on a non-Relay-Node type raises [`ConfigurationError`](#configurationerror). The four strategies:
+
+- `"model"` (the `0.0.9` default) — the Django model label `app_label.modelname:<pk>` (e.g. `products.item:42`), so renaming a GraphQL type never invalidates a cached id.
+- `"type"` — the GraphQL type name ([`Meta.name`](#metaname) or the class name), byte-identical to the pre-`0.0.9` payload; the opt-out for type-scoped auth / cache scopes and standard-Relay interop.
+- `"type+model"` — transitional: emits the model-anchored payload while decoding both old type-anchored and new model-anchored ids, the bridge for a deployed schema.
+- a callable `(type_cls, model, root, info) -> str` — a fully custom type-name slot (encode-only in `0.0.9`); arity and sync-ness are validated at type-creation time and a non-`str` return raises [`ConfigurationError`](#configurationerror).
+
+Precedence is `Meta.globalid_strategy` → [`RELAY_GLOBALID_STRATEGY`](#relay_globalid_strategy) → `"model"`, resolved once at finalization and frozen for the schema's lifetime.
+
+```python
+class ItemType(DjangoType):
+    class Meta:
+        model = Item
+        interfaces = (relay.Node,)
+        globalid_strategy = "type+model"
+```
+
+**See also:** [`RELAY_GLOBALID_STRATEGY`](#relay_globalid_strategy) · [Relay Node integration](#relay-node-integration) · [`Meta.interfaces`](#metainterfaces) · [`Meta.name`](#metaname) · [`ConfigurationError`](#configurationerror).
+
 ## `Meta.interfaces`
 
 **Status:** shipped (`0.0.5`).
@@ -1025,7 +1040,25 @@ Shipped behavior:
 
 Optimizer-extension cooperation on the per-node `resolve_node` resolver is deferred to a follow-up slice; root-level list resolvers continue to receive full [`DjangoOptimizerExtension`](#djangooptimizerextension) treatment today.
 
-**See also:** [`Meta.interfaces`](#metainterfaces) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
+As of `0.0.9` the default `GlobalID` payload is the Django **model label** (`app_label.modelname:<pk>`, e.g. `products.item:42`) rather than the GraphQL type name, so renaming a GraphQL type (or [`Meta.name`](#metaname)) no longer invalidates cached client ids. [`Meta.globalid_strategy`](#metaglobalid_strategy) (per type) and [`RELAY_GLOBALID_STRATEGY`](#relay_globalid_strategy) (schema-wide) select `model` (default), `type` (the legacy GraphQL-type-name opt-out, byte-identical to the pre-`0.0.9` payload), `type+model` (transitional decode of old type-anchored ids while emitting model-anchored ones), or a callable encoder; precedence is `Meta.globalid_strategy` → `RELAY_GLOBALID_STRATEGY` → `model`. The `node_id` slot, the FK-`id` round-trip, and the composite-pk rejection are unchanged — only the type-name slot moved.
+
+**See also:** [`Meta.interfaces`](#metainterfaces) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`RELAY_GLOBALID_STRATEGY`](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
+
+## RELAY_GLOBALID_STRATEGY
+
+**Status:** shipped (`0.0.9`).
+
+The schema-wide default Relay `GlobalID` encode strategy, read from `DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]`. It sets the project-wide default that every Relay-Node-shaped [`DjangoType`](#djangotype) inherits unless the type declares its own [`Meta.globalid_strategy`](#metaglobalid_strategy); precedence is `Meta.globalid_strategy` → `RELAY_GLOBALID_STRATEGY` → `"model"`. It accepts the same string values as the per-type key — `"model"` (default) / `"type"` / `"type+model"` — see [`Meta.globalid_strategy`](#metaglobalid_strategy) for the full strategy table and the callable form (a callable is per-type only).
+
+The setting is read through the thin `conf.py` reader and validated at finalization by the same shared validator the `Meta` key uses; an unknown value raises [`ConfigurationError`](#configurationerror). The resolved strategy is frozen at schema-build time — the `GlobalID` format is a stable schema contract, not request-scoped state.
+
+```python
+DJANGO_STRAWBERRY_FRAMEWORK = {
+    "RELAY_GLOBALID_STRATEGY": "type+model",
+}
+```
+
+**See also:** [`Meta.globalid_strategy`](#metaglobalid_strategy) · [Relay Node integration](#relay-node-integration) · [`ConfigurationError`](#configurationerror).
 
 ## Response-extensions debug middleware
 

@@ -39,16 +39,95 @@ def _isolate_global_registry():
     registry.clear()
 
 
-# TODO(spec-031-globalid_encoding-0_0_9 Slice 3): Add direct tests for
-# ``TypeRegistry.definition_for_graphql_name`` once the helper exists.
-# Pseudocode:
-#   register ItemType with Meta.name = "Product"
-#   assert definition_for_graphql_name("Product") is ItemType definition
-#   assert definition_for_graphql_name("ItemType") is None
-#   register a non-Relay DjangoType with matching name
-#   assert decode-facing lookup ignores the non-Relay candidate
-#   register duplicate Relay GraphQL names
-#   assert ambiguous lookup raises or returns the uniform ConfigurationError path
+# spec-031 Slice 3 — ``definition_for_graphql_name`` (the GlobalID type-name
+# decode entry point: a unique ``graphql_type_name`` lookup over Relay-Node
+# definitions only, raising ``ConfigurationError`` on miss / ambiguity).
+# ---------------------------------------------------------------------------
+
+
+def test_definition_for_graphql_name_returns_match():
+    """A registered Relay-Node type's ``graphql_type_name`` resolves to its definition."""
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    definition = ItemNode.__django_strawberry_definition__
+    assert registry.definition_for_graphql_name("ItemNode") is definition
+
+
+def test_definition_for_graphql_name_honors_meta_name():
+    """The lookup keys on ``graphql_type_name`` (``Meta.name``), not ``type_cls.__name__``."""
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "Item"
+
+    finalize_django_types()
+    definition = ItemNode.__django_strawberry_definition__
+    assert registry.definition_for_graphql_name("Item") is definition
+    # The class name is NOT a valid key — only ``graphql_type_name`` is.
+    with pytest.raises(ConfigurationError):
+        registry.definition_for_graphql_name("ItemNode")
+
+
+def test_definition_for_graphql_name_ignores_non_relay_definitions():
+    """A non-Relay-Node DjangoType with a matching name is ignored (Relay-only scan)."""
+
+    class ItemPlain(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    finalize_django_types()
+    # The only candidate named ``ItemPlain`` is non-Relay, so the lookup misses.
+    with pytest.raises(ConfigurationError, match="ItemPlain"):
+        registry.definition_for_graphql_name("ItemPlain")
+
+
+def test_definition_for_graphql_name_unknown_raises():
+    """An unregistered GraphQL type name raises ``ConfigurationError`` naming it."""
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    with pytest.raises(ConfigurationError, match="Nonexistent"):
+        registry.definition_for_graphql_name("Nonexistent")
+
+
+def test_definition_for_graphql_name_ambiguous_raises():
+    """Two Relay-Node definitions sharing one ``graphql_type_name`` raise, naming the collision."""
+
+    class CategoryDup(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "Dup"
+
+    class ItemDup(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "Dup"
+
+    finalize_django_types()
+    with pytest.raises(ConfigurationError, match="ambiguous") as excinfo:
+        registry.definition_for_graphql_name("Dup")
+    message = str(excinfo.value)
+    assert "CategoryDup" in message
+    assert "ItemDup" in message
 
 
 def test_register_and_get_round_trips(fresh_registry):

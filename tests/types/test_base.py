@@ -103,17 +103,6 @@ def test_registry_clear_drops_types_and_enums():
 # Slice 2 — Meta validation
 # ---------------------------------------------------------------------------
 
-# TODO(spec-031-globalid_encoding-0_0_9 Slice 1): Extend this Meta-validation
-# section for ``Meta.globalid_strategy``.
-# Pseudocode:
-#   assert "globalid_strategy" in ALLOWED_META_KEYS
-#   assert "globalid_strategy" not in DEFERRED_META_KEYS
-#   class NodeType(DjangoType): Meta.globalid_strategy = "model"
-#   assert NodeType.__django_strawberry_definition__.globalid_strategy == "model"
-#   parametrize bad values: "modle", 42, async encoder, wrong-arity encoder
-#   assert each bad value raises ConfigurationError at class creation
-#   monkeypatch conf.settings.RELAY_GLOBALID_STRATEGY to prove Meta -> setting -> "model"
-
 
 def test_subclass_without_meta_passes_through():
     """Intermediate abstract subclasses (no Meta) skip the pipeline."""
@@ -420,6 +409,199 @@ def test_meta_connection_absent_leaves_definition_none():
 
     definition = CategoryType.__django_strawberry_definition__
     assert definition.connection is None
+
+
+# ---------------------------------------------------------------------------
+# spec-031 Slice 1 — Meta.globalid_strategy + RELAY_GLOBALID_STRATEGY precedence
+# ---------------------------------------------------------------------------
+
+
+def test_meta_globalid_strategy_in_allowed_meta_keys():
+    """``Meta.globalid_strategy`` ships in spec-031 Slice 1 — a net-new ALLOWED key.
+
+    Net-new ALLOWED, NOT a ``DEFERRED_META_KEYS`` promotion (spec-031 Decision 6;
+    mirrors the connection / filterset / orderset precedent).
+    """
+    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
+
+    assert "globalid_strategy" in ALLOWED_META_KEYS
+    assert "globalid_strategy" not in DEFERRED_META_KEYS
+
+
+def test_meta_globalid_strategy_unknown_string_raises():
+    """A typo'd strategy string raises ``ConfigurationError`` (typo guard)."""
+    from strawberry import relay
+
+    with pytest.raises(ConfigurationError, match="unknown strategy"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                globalid_strategy = "modle"
+
+
+def test_meta_globalid_strategy_non_relay_type_raises():
+    """``Meta.globalid_strategy`` on a type whose ``interfaces`` omits ``relay.Node`` raises."""
+    with pytest.raises(ConfigurationError, match="relay.Node"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                globalid_strategy = "model"
+
+
+def test_meta_globalid_strategy_wrong_type_raises():
+    """A non-string, non-callable value (e.g. ``42``) raises ``ConfigurationError``."""
+    from strawberry import relay
+
+    with pytest.raises(ConfigurationError, match="must be one of"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                globalid_strategy = 42
+
+
+def test_meta_globalid_strategy_callable_accepted_and_stored():
+    """A well-formed sync four-arg encoder validates and is stored on the definition."""
+    from strawberry import relay
+
+    def encode(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return "custom"
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            interfaces = (relay.Node,)
+            globalid_strategy = encode
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.globalid_strategy is encode
+
+
+def test_meta_globalid_strategy_callable_wrong_arity_raises():
+    """A wrong-arity encoder is rejected at type creation (the ``inspect.signature`` check)."""
+    from strawberry import relay
+
+    def encode(type_cls, model):
+        return "custom"
+
+    with pytest.raises(ConfigurationError, match=r"\(type_cls, model, root, info\)"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                globalid_strategy = encode
+
+
+def test_meta_globalid_strategy_async_callable_raises():
+    """An ``async def`` encoder is rejected at type creation (the sync-ness check)."""
+    from strawberry import relay
+
+    async def encode(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return "custom"
+
+    with pytest.raises(ConfigurationError, match="must be sync"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                globalid_strategy = encode
+
+
+def test_meta_globalid_strategy_stored_on_definition():
+    """The normalized string strategy lands on ``definition.globalid_strategy``."""
+    from strawberry import relay
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            interfaces = (relay.Node,)
+            globalid_strategy = "model"
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.globalid_strategy == "model"
+
+
+def test_meta_globalid_strategy_absent_leaves_definition_none():
+    """A Relay-Node type without the key leaves the raw slot at its ``None`` default."""
+    from strawberry import relay
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            interfaces = (relay.Node,)
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert definition.globalid_strategy is None
+
+
+def test_resolve_globalid_strategy_precedence(settings):
+    """``_resolve_globalid_strategy`` applies Meta → setting → ``"model"`` default.
+
+    Also pins the unknown-setting failure: the setting path validates through
+    the same rule as the ``Meta`` path, raising ``ConfigurationError`` whose
+    message names ``RELAY_GLOBALID_STRATEGY`` (the setting framing, distinct from
+    the type-named ``Meta`` framing).
+    """
+    from strawberry import relay
+
+    from django_strawberry_framework.types.relay import _resolve_globalid_strategy
+
+    class MetaWinsType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            interfaces = (relay.Node,)
+            globalid_strategy = "type"
+
+    class NoMetaType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    meta_def = MetaWinsType.__django_strawberry_definition__
+    no_meta_def = NoMetaType.__django_strawberry_definition__
+
+    # Tier 1: Meta override beats the setting.
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type+model"}
+    assert _resolve_globalid_strategy(meta_def) == "type"
+
+    # Tier 2: setting beats the package default.
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type"}
+    assert _resolve_globalid_strategy(no_meta_def) == "type"
+
+    # Tier 3: no Meta + no setting → the "model" package default.
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
+    assert _resolve_globalid_strategy(no_meta_def) == "model"
+
+    # Unknown setting value → ConfigurationError naming the setting.
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "nonsense"}
+    with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
+        _resolve_globalid_strategy(no_meta_def)
 
 
 def test_meta_rejects_unknown_key():

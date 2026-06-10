@@ -6,21 +6,12 @@
 >
 > For the package-wide capability catalog, shipped/planned status, optimizer hints, strictness modes, and future work, see [`docs/GLOSSARY.md`][glossary].
 
-<!--
-TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Update products-centric Relay GlobalID examples.
-Pseudocode:
-  - replace type-name payload examples with `products.item:<pk>` / model labels
-  - describe the default flip as a pre-1.0 wire-format break
-  - prescribe the deployed-schema sequence: first set `RELAY_GLOBALID_STRATEGY = "type+model"`, then flip to `model`
-  - keep the document products-only; do not broaden it to library/scalars examples
--->
-
 ## What products demonstrates today
 
 `examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.8` it exercises, end to end, the package capabilities a real consumer reaches for:
 
 - **`DjangoType` schema** — four types configured entirely through `class Meta` (`model` + `fields`), with forward-FK + reverse-FK traversal and four root list resolvers (`allCategories` / `allItems` / `allProperties` / `allEntries`).
-- **Relay nodes** — every type declares `Meta.interfaces = (relay.Node,)`, so each `id` is a Relay `GlobalID` (own-PK GlobalID filtering, `node(id:)` refetch shape).
+- **Relay nodes** — every type declares `Meta.interfaces = (relay.Node,)`, so each `id` is a Relay `GlobalID` (own-PK GlobalID filtering, `node(id:)` refetch shape). As of `0.0.9` the default `GlobalID` payload is the Django model label (`products.item:<pk>`) rather than the GraphQL type name, so a `CategoryType` → `ProductCategoryType` rename no longer invalidates cached IDs; `Meta.globalid_strategy` / `RELAY_GLOBALID_STRATEGY` select `model` (default) / `type` (legacy opt-out) / `type+model` (transitional) / callable.
 - **Filtering** — `Meta.filterset_class` on every type (declared in `apps/products/filters.py`), surfaced on each root resolver via a `filter:` argument from `filter_input_type(...)`. Includes a per-field `check_name_permission` denial gate on `CategoryFilter` (active-input-only).
 - **Ordering** — `Meta.orderset_class` on every type (declared in `apps/products/orders.py`), surfaced via an `orderBy:` argument from `order_input_type(...)`. Includes the matching `check_name_permission` gate on `CategoryOrder`.
 - **Optimizer cooperation** — root resolvers return `QuerySet`s, so `DjangoOptimizerExtension` plans `select_related` / `prefetch_related` / `only()` across nested selections without per-resolver boilerplate.
@@ -195,7 +186,7 @@ Both ship in `0.0.8` and are wired on every products resolver. `filter:` narrows
     filter: {
       category: {
         id: {
-          exact: "<CategoryType GlobalID>"
+          exact: "<GlobalID: base64 of products.category:<pk>>"
         }
       }
     }
@@ -214,6 +205,14 @@ Both ship in `0.0.8` and are wired on every products resolver. `filter:` narrows
 ```
 
 `CategoryFilter` / `CategoryOrder` additionally declare a `check_name_permission` gate, so an anonymous request that filters or orders by `Category.name` is denied — the gate fires only when the input actually names the gated field (active-input-only scope).
+
+> **Breaking wire-format change in `0.0.9` (the model-anchored `GlobalID` default).** Through `0.0.8` a products `GlobalID` was the base64 of `<GraphQL type name>:<pk>` (`CategoryType:42`). As of `0.0.9` the default is the Django model label (`products.category:42`), so **every emitted products `GlobalID` changes** and the filter examples above use the model-label payload. This is parallel to the `PositiveBigIntegerField → BigInt` `0.0.6` breaking-wire-format change above; it is acceptable pre-`1.0.0` and there is a clean per-type / project-wide opt-out (`type` reproduces the byte-identical pre-`0.0.9` payload). In `0.0.9` the break is **latent** — nothing decodes a `GlobalID` until root `node(id:)` ships (`WIP-ALPHA-032-0.0.9`), so a consumer who upgrades without acting sees nothing wrong until then, at which point every old client-cached type-anchored ID is undecodable. The migration-safe upgrade sequence for a deployed schema:
+>
+> 1. Deploy `RELAY_GLOBALID_STRATEGY = "type+model"` **while the old GraphQL type names still exist** — new IDs emit model-anchored, old type-anchored IDs still decode.
+> 2. Let clients receive model-label IDs and age out the cached old type-name IDs.
+> 3. **Only then** rename GraphQL types (or `Meta.name`) or flip to `model`.
+>
+> The step-3 ordering is load-bearing: `type+model` decodes an old type-anchored ID only while its old GraphQL type name still resolves. Renaming a type / `Meta.name` *during* the window still orphans cached old-type-name IDs — `type+model` is a strategy bridge, **not** a rename-history alias map (that is `BACKLOG.md` item 39). A consumer who must rename mid-window owns a consumer alias / callable migration until then.
 
 ## Visibility filtering via `get_queryset`
 

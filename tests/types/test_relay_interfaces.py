@@ -27,6 +27,8 @@ from django_strawberry_framework.types.relay import (
     _resolve_node_default,
     _resolve_nodes_default,
     apply_interfaces,
+    decode_global_id,
+    encode_typename,
     implements_relay_node,
     install_relay_node_resolvers,
 )
@@ -50,23 +52,6 @@ def _meta(**attrs):
     """Build a throw-away ``Meta`` class with ``model=Category`` plus extras."""
     attrs.setdefault("model", Category)
     return type("Meta", (), attrs)
-
-
-# TODO(spec-031-globalid_encoding-0_0_9 Slices 2-3): Extend this module with
-# the GlobalID strategy tests because it mirrors ``types/relay.py``.
-# Pseudocode:
-#   build Relay DjangoTypes for "model", "type", "type+model", callable, and custom override
-#   finalize_django_types()
-#   assert emitted ids decode to model labels for "model" and "type+model"
-#   assert "type" keeps the GraphQL type name, including Meta.name
-#   assert callable returns custom type-name slot and non-string return raises ConfigurationError
-#   assert override records effective_globalid_strategy == "custom"
-#   assert override + explicit Meta.globalid_strategy raises ConfigurationError
-#   assert model-label-routing audit rejects type-primary + model-secondary
-#   assert partial-finalize rerun does not reclassify installed framework closures as custom
-#   decode_global_id(encoded_gid) returns (type_cls, node_id) for decodable strategies
-#   assert model/type shape mismatches, callable/custom, absent strategy, and malformed input raise
-#
 
 
 # ---------------------------------------------------------------------------
@@ -1397,3 +1382,639 @@ def test_install_relay_node_resolvers_preserves_consumer_override():
     install_relay_node_resolvers(CategoryNode)
     assert CategoryNode.__dict__["resolve_id_attr"].__func__ is consumer_func
     assert CategoryNode.resolve_id_attr() == sentinel_value
+
+
+# ---------------------------------------------------------------------------
+# spec-031 Slice 2 — the encode seam (strategy-parameterized resolve_typename,
+# the four encoders, the override -> custom classification, the
+# model-label-routing audit, the default flip, the re-entrancy guard).
+# ---------------------------------------------------------------------------
+
+
+def _emitted_typename(type_cls, *, node_id="1"):
+    """Return the GlobalID type-name slot a finalized Relay type emits.
+
+    For ``model`` / ``type+model`` / ``callable`` the framework-installed
+    ``resolve_typename`` closure ignores ``info`` (it computes the slot from the
+    definition), so a synthetic ``root`` and ``info=None`` faithfully exercise
+    the emit path without standing up a whole schema.
+    """
+
+    class _FakeRoot:
+        pass
+
+    _FakeRoot._meta = type_cls.__django_strawberry_definition__.model._meta
+    _FakeRoot.id = node_id
+    return type_cls.resolve_typename(_FakeRoot(), None)
+
+
+def _definition_of(type_cls):
+    return type_cls.__django_strawberry_definition__
+
+
+def test_globalid_model_strategy_emits_model_label():
+    """The default (``model``) emits ``app_label.modelname`` in the type-name slot."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "model"
+    assert _emitted_typename(CategoryNode) == "products.category"
+
+
+def test_globalid_type_strategy_emits_graphql_type_name():
+    """``type`` reproduces the pre-0.0.9 payload byte-identically (framework installs nothing)."""
+    node_default = relay.Node.resolve_typename.__func__
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "type"
+
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "type"
+    # No closure was installed: ``resolve_typename`` is still Strawberry's
+    # default (returns ``info.path.typename`` == the GraphQL type name), so the
+    # emitted slot is byte-identical to pre-0.0.9.
+    assert CategoryNode.resolve_typename.__func__ is node_default
+    assert _definition_of(CategoryNode).graphql_type_name == "CategoryNode"
+
+
+def test_globalid_type_plus_model_emits_model_label():
+    """``type+model`` emits the model-label payload (decodes both later)."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "type+model"
+
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "type+model"
+    assert _emitted_typename(CategoryNode) == "products.category"
+
+
+def test_globalid_callable_strategy_emits_custom():
+    """A callable returns the type-name slot and it appears in the emitted GlobalID."""
+
+    def encoder(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return f"custom:{model._meta.label_lower}"
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = encoder
+
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "callable"
+    assert _emitted_typename(CategoryNode) == "custom:products.category"
+
+
+@pytest.mark.parametrize(
+    "bad_return",
+    [
+        None,
+        42,
+        "",
+        b"bytes",
+    ],
+)
+def test_globalid_callable_non_string_return_raises(bad_return):
+    """A callable returning a non-``str`` / empty value raises ConfigurationError.
+
+    The installed closure raises (not Strawberry's ``Node._id`` ``AssertionError``).
+    """
+
+    def encoder(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return bad_return
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = encoder
+
+    finalize_django_types()
+    with pytest.raises(ConfigurationError, match="must return a non-empty string"):
+        _emitted_typename(CategoryNode)
+
+
+def test_encode_typename_helper_dispatch():
+    """``encode_typename`` computes the slot for each resolved strategy directly."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    definition = _definition_of(CategoryNode)
+    assert (
+        encode_typename(definition, "model", CategoryNode, object(), None) == "products.category"
+    )
+    assert (
+        encode_typename(definition, "type+model", CategoryNode, object(), None)
+        == "products.category"
+    )
+    assert encode_typename(definition, "type", CategoryNode, object(), None) == "CategoryNode"
+
+    def encoder(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return "from-callable"
+
+    assert encode_typename(definition, encoder, CategoryNode, object(), None) == "from-callable"
+
+
+def test_consumer_resolve_typename_override_preserved_and_recorded_custom():
+    """A consumer ``resolve_typename`` survives injection AND records ``custom``."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        def resolve_typename(cls, root, info):
+            return "ConsumerOwned"
+
+    consumer_func = CategoryNode.__dict__["resolve_typename"].__func__
+    finalize_django_types()
+    # The override is left in place (the __func__ identity test preserved it).
+    assert CategoryNode.__dict__["resolve_typename"].__func__ is consumer_func
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "custom"
+
+
+def test_resolve_typename_override_plus_meta_strategy_raises():
+    """Declaring both an override AND an explicit Meta.globalid_strategy raises."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "model"
+
+        @classmethod
+        def resolve_typename(cls, root, info):
+            return "ConsumerOwned"
+
+    with pytest.raises(ConfigurationError, match="resolve_typename override"):
+        finalize_django_types()
+
+
+def test_resolve_typename_override_plus_setting_does_not_raise(settings):
+    """An override + only the schema-wide setting is NOT a conflict (setting is a default)."""
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type"}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        def resolve_typename(cls, root, info):
+            return "ConsumerOwned"
+
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "custom"
+
+
+def test_globalid_default_is_model():
+    """No Meta key + no setting → recorded ``model`` and a model-label slot."""
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert _definition_of(ItemNode).effective_globalid_strategy == "model"
+    assert _emitted_typename(ItemNode) == "products.item"
+
+
+# --- model-label-routing audit (multi-type models) -------------------------
+
+
+def _build_multi_type(primary_strategy, secondary_strategy):
+    """Register two Relay-Node DjangoTypes on ``Item`` with given strategies.
+
+    Returns ``(PrimaryType, SecondaryType)``. The primary carries
+    ``Meta.primary = True``; both opt into ``relay.Node``.
+    """
+
+    primary_meta = {
+        "model": Item,
+        "fields": ("id", "name"),
+        "interfaces": (relay.Node,),
+        "primary": True,
+        "name": "PrimaryItem",
+    }
+    if primary_strategy is not None:
+        primary_meta["globalid_strategy"] = primary_strategy
+    secondary_meta = {
+        "model": Item,
+        "fields": ("id", "name"),
+        "interfaces": (relay.Node,),
+        "name": "SecondaryItem",
+    }
+    if secondary_strategy is not None:
+        secondary_meta["globalid_strategy"] = secondary_strategy
+
+    PrimaryType = type("PrimaryType", (DjangoType,), {"Meta": type("Meta", (), primary_meta)})
+    SecondaryType = type(
+        "SecondaryType",
+        (DjangoType,),
+        {"Meta": type("Meta", (), secondary_meta)},
+    )
+    return PrimaryType, SecondaryType
+
+
+def test_model_label_routing_audit_rejects_type_primary_with_model_secondary():
+    """A ``type``-primary + default-``model`` secondary raises naming model/emitter/strategy."""
+    _build_multi_type(primary_strategy="type", secondary_strategy=None)
+    with pytest.raises(ConfigurationError) as excinfo:
+        finalize_django_types()
+    message = str(excinfo.value)
+    assert "Item" in message
+    assert "SecondaryType" in message
+    assert "'type'" in message
+
+
+def test_model_label_routing_audit_passes_all_type_plus_model():
+    """All-``type+model`` multi-type model finalizes cleanly (primary decodes model labels)."""
+    _build_multi_type(primary_strategy="type+model", secondary_strategy="type+model")
+    finalize_django_types()  # no raise
+
+
+def test_model_label_routing_audit_passes_model_primary_with_type_secondary():
+    """A ``model`` primary + ``type`` secondary finalizes cleanly (secondary stays type-scoped)."""
+    _build_multi_type(primary_strategy="model", secondary_strategy="type")
+    finalize_django_types()  # no raise
+
+
+def test_model_label_routing_audit_single_type_model_passes():
+    """A single-type ``model`` model trivially satisfies the invariant (no primary needed)."""
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()  # no raise
+    assert _definition_of(ItemNode).effective_globalid_strategy == "model"
+
+
+def test_finalize_rerun_after_audit_raise_preserves_recorded_strategy():
+    """A finalize whose Phase-2.5 audit raises, then a bare re-run, preserves recordings.
+
+    The re-entrancy guard (step 0) keeps the re-run from re-running the
+    ``__func__`` test on the already-installed framework closure and
+    misclassifying ``model`` -> ``custom``.
+    """
+    primary, secondary = _build_multi_type(primary_strategy="type", secondary_strategy=None)
+    with pytest.raises(ConfigurationError):
+        finalize_django_types()
+    # Capture the recorded classifications after the (raising) first finalize.
+    recorded = {
+        primary: _definition_of(primary).effective_globalid_strategy,
+        secondary: _definition_of(secondary).effective_globalid_strategy,
+    }
+    assert recorded[primary] == "type"
+    assert recorded[secondary] == "model"
+    # A bare re-run on the still-bad config re-raises AND leaves recordings intact.
+    with pytest.raises(ConfigurationError):
+        finalize_django_types()
+    assert _definition_of(primary).effective_globalid_strategy == recorded[primary]
+    assert _definition_of(secondary).effective_globalid_strategy == recorded[secondary]
+
+
+# --- the RELAY_GLOBALID_STRATEGY setting path (callable arity/sync reuse) ----
+
+
+def test_callable_setting_well_formed_accepted(settings):
+    """A well-formed callable ``RELAY_GLOBALID_STRATEGY`` setting is accepted (-> ``callable``)."""
+
+    def encoder(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return "from-setting"
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "callable"
+    assert _emitted_typename(CategoryNode) == "from-setting"
+
+
+def test_callable_setting_wrong_arity_raises(settings):
+    """A wrong-arity callable setting raises at finalization, naming the setting."""
+
+    def encoder(type_cls, model):
+        return "x"
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
+        finalize_django_types()
+
+
+def test_callable_setting_async_raises(settings):
+    """An ``async def`` callable setting raises at finalization, naming the setting."""
+
+    async def encoder(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return "x"
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
+        finalize_django_types()
+
+
+# ---------------------------------------------------------------------------
+# spec-031 Slice 3 — the decode seam (``decode_global_id`` resolve-then-enforce:
+# Step-1 model-label / type-name resolution, Step-2 strategy-shape enforcement,
+# encoder/decoder symmetry, the transitional ``type+model`` accept-old-IDs path,
+# the uniform ``ConfigurationError`` for every failure mode).
+# ---------------------------------------------------------------------------
+
+
+def _emitted_type_name_slot(type_cls):
+    """Return the ``GlobalID`` type-name slot a finalized type emits.
+
+    The ``type`` strategy installs no closure (it keeps Strawberry's default,
+    which reads ``info.path.typename``), so its emitted slot is the recorded
+    ``graphql_type_name``. The closure strategies (``model`` / ``type+model`` /
+    ``callable``) compute the slot from the definition and are exercised via
+    ``_emitted_typename`` (which can pass a synthetic ``info=None``).
+    """
+    definition = _definition_of(type_cls)
+    if definition.effective_globalid_strategy == "type":
+        return definition.graphql_type_name
+    return _emitted_typename(type_cls)
+
+
+def _encoded_id(type_cls, *, node_id="1"):
+    """Return the base64 ``GlobalID`` string a finalized Relay type emits."""
+    return str(relay.GlobalID(_emitted_type_name_slot(type_cls), node_id))
+
+
+def test_decode_model_label_routes_to_primary():
+    """A model-label ID resolves via ``apps.get_model`` + ``registry.get`` to the primary."""
+    primary, _secondary = _build_multi_type(primary_strategy="model", secondary_strategy="type")
+    finalize_django_types()
+    assert decode_global_id(relay.GlobalID("products.item", "42")) == (primary, "42")
+
+
+def test_decode_type_name_routes_via_graphql_name():
+    """A type-name payload resolves via ``definition_for_graphql_name`` (graphql_type_name)."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "type"
+
+    finalize_django_types()
+    assert decode_global_id(relay.GlobalID("CategoryNode", "7")) == (CategoryNode, "7")
+
+
+def test_decode_type_strategy_honors_meta_name_round_trip():
+    """``ItemType`` with ``Meta.name = "Item"`` emits ``Item:<pk>`` and decodes back."""
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "type"
+            name = "Item"
+
+    finalize_django_types()
+    # The ``type`` strategy emits the ``graphql_type_name`` (``Item``), not ``ItemType``.
+    assert _emitted_type_name_slot(ItemType) == "Item"
+    assert decode_global_id(_encoded_id(ItemType, node_id="3")) == (ItemType, "3")
+
+
+@pytest.mark.parametrize("strategy", ["model", "type", "type+model"])
+def test_encode_decode_round_trip_decodable_strategies(strategy):
+    """Encode -> decode symmetry for the three decodable strategies (callable is encode-only)."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = strategy
+
+    finalize_django_types()
+    encoded = _encoded_id(CategoryNode, node_id="5")
+    assert decode_global_id(encoded) == (CategoryNode, "5")
+
+
+def test_type_plus_model_decodes_both():
+    """The transitional ``type+model`` mode decodes BOTH a model-label and a type-name ID."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "type+model"
+
+    finalize_django_types()
+    # New model-anchored ID (what ``type+model`` now emits).
+    assert decode_global_id(relay.GlobalID("products.category", "1")) == (CategoryNode, "1")
+    # Old type-anchored ID (still decodes during the transitional window).
+    assert decode_global_id(relay.GlobalID("CategoryNode", "1")) == (CategoryNode, "1")
+
+
+def test_decode_model_strategy_rejects_type_name_id():
+    """A type-name payload for a ``model``-strategy type raises (Step-2 direction 1)."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "model"
+
+    finalize_django_types()
+    with pytest.raises(ConfigurationError, match="not decodable"):
+        decode_global_id(relay.GlobalID("CategoryNode", "1"))
+
+
+def test_decode_type_strategy_rejects_model_label_id():
+    """A model-label payload for a ``type``-strategy type raises (Step-2 direction 2)."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "type"
+
+    finalize_django_types()
+    with pytest.raises(ConfigurationError, match="not decodable"):
+        decode_global_id(relay.GlobalID("products.category", "1"))
+
+
+def test_decode_callable_strategy_has_no_decode_path():
+    """A payload resolving to a ``callable``-strategy type raises (encode-only)."""
+
+    def encoder(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return model._meta.label_lower
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = encoder
+
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "callable"
+    # The callable emits a model label here, but ``callable`` decodes nothing.
+    with pytest.raises(ConfigurationError, match="not decodable"):
+        decode_global_id(relay.GlobalID("products.category", "1"))
+
+
+def test_decode_custom_override_type_has_no_decode_path():
+    """A payload resolving to a ``custom`` (consumer override) type raises (encode-only)."""
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        def resolve_typename(cls, root, info):
+            return "products.category"
+
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "custom"
+    with pytest.raises(ConfigurationError, match="not decodable"):
+        decode_global_id(relay.GlobalID("products.category", "1"))
+
+
+def test_decode_non_node_graphql_name_raises():
+    """A candidate whose ``effective_globalid_strategy`` is ``None`` raises (absent-strategy)."""
+
+    class CategoryPlain(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    # Non-Relay-Node type: never stamped, never matched by the Relay-only scan.
+    assert _definition_of(CategoryPlain).effective_globalid_strategy is None
+    with pytest.raises(ConfigurationError):
+        decode_global_id(relay.GlobalID("CategoryPlain", "1"))
+
+
+def test_decode_malformed_base64_raises_configuration_error():
+    """A malformed base64 / non-``type:id`` string raises ``ConfigurationError``, not a leak."""
+    with pytest.raises(ConfigurationError, match="not a valid GlobalID"):
+        decode_global_id("!!!not-base64!!!")
+
+
+@pytest.mark.parametrize(
+    "bad_input",
+    [
+        None,
+        42,
+        object(),
+        b"bytes",
+    ],
+)
+def test_decode_non_str_input_raises(bad_input):
+    """A non-``str`` / non-``GlobalID`` argument raises from the runtime input-type gate."""
+    with pytest.raises(ConfigurationError, match="relay.GlobalID or its base64 string"):
+        decode_global_id(bad_input)
+
+
+def test_decode_empty_type_name_raises():
+    """An empty ``type_name`` slot raises (package-added; ``from_id`` does not reject it)."""
+    with pytest.raises(ConfigurationError, match="empty slot"):
+        decode_global_id(str(relay.GlobalID("", "1")))
+
+
+def test_decode_empty_node_id_raises():
+    """An empty ``node_id`` slot raises (the safer root-node contract)."""
+    with pytest.raises(ConfigurationError, match="empty slot"):
+        decode_global_id(str(relay.GlobalID("products.item", "")))
+
+
+def test_decode_unresolvable_label_raises():
+    """An unknown app/model label raises ``ConfigurationError`` naming the attempt."""
+    with pytest.raises(ConfigurationError, match="nope.nope"):
+        decode_global_id(relay.GlobalID("nope.nope", "1"))
+
+
+def test_decode_model_label_unregistered_model_raises():
+    """A real model with no registered Relay-Node DjangoType raises (no decode target)."""
+    # Registry is empty (autouse clear) — ``products.item`` is a real model but
+    # has no registered type to decode to.
+    with pytest.raises(ConfigurationError, match="no registered"):
+        decode_global_id(relay.GlobalID("products.item", "1"))

@@ -28,3 +28,5 @@ apply_cascade_permissions,apply_cascade_permissions,0.0.10 permissions; decode d
 Schema introspection management command,schema-introspection-management-command,inspect_django_type reports the GlobalID! row; unaffected by the payload change
 Cross-subsystem invariants,cross-subsystem-invariants,1.0.0 freeze rule; the breaking default flip is timed before the freeze
 strawberry_config,strawberry_config,Scalar-map factory every example schema passes to strawberry.Schema(...)
+Meta.globalid_strategy,metaglobalid_strategy,Net-new Relay-Node-gated Meta key selecting the per-type encode strategy (model/type/type+model/callable)
+RELAY_GLOBALID_STRATEGY,relay_globalid_strategy,Schema-wide default GlobalID strategy setting; Meta.globalid_strategy then setting then model precedence

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -67,12 +68,27 @@ class DjangoTypeDefinition:
           ``connection.py::_connection_type_for`` to decide whether to
           emit the per-target ``<TypeName>Connection`` carrying the
           opt-in ``totalCount`` field.
-        - TODO(spec-031-globalid_encoding-0_0_9 Slices 1-2):
-          ``globalid_strategy`` stores the raw ``Meta.globalid_strategy``
-          declaration, while ``effective_globalid_strategy`` records the
-          finalization-time encode/decode classification. Pseudocode:
-          ``raw = Meta.globalid_strategy | None`` and
-          ``effective = "model" | "type" | "type+model" | "callable" | "custom"``.
+        - ``globalid_strategy`` is the raw normalized ``Meta.globalid_strategy``
+          value (``"model"`` / ``"type"`` / ``"type+model"`` / a callable /
+          ``None``) populated by ``DjangoType.__init_subclass__`` from the
+          validated ``Meta`` (spec-031 Decision 6); ``None`` means the per-type
+          opt-in is absent and the precedence resolver
+          (``types/relay.py::_resolve_globalid_strategy``) falls through to the
+          ``RELAY_GLOBALID_STRATEGY`` setting then the ``"model"`` default.
+        - ``effective_globalid_strategy`` is the finalization-time encode/decode
+          classification string (``"model"`` / ``"type"`` / ``"type+model"`` /
+          ``"callable"`` / ``"custom"``), distinct from the raw
+          ``globalid_strategy`` slot above (a raw callable value and the resolved
+          ``"callable"`` classification string are different things — spec-031
+          Decision 10 / ``docs/feedback.md`` P2). It is set exactly once by the
+          Phase-2.5 ``install_globalid_typename_resolver`` step
+          (``types/relay.py``), read by ``decode_global_id`` and the
+          strategy-aware ``GlobalID`` filter, and doubles as that step's
+          re-entrancy guard (a non-``None`` value means "already processed in a
+          prior partial finalize — skip"). ``None`` means "not a
+          framework-decodable Relay-Node type" (the install step runs for Relay
+          types only): decode rejects such a candidate (spec-031 Decision 8) and
+          the filter falls back to node-id-only validation (spec-031 Decision 13).
         - ``related_target_for(field_name)`` resolves the
           ``(target_definition, model_field)`` pair the Decision-4
           owner-aware FK/PK conditional consults; the lookup walks
@@ -106,11 +122,14 @@ class DjangoTypeDefinition:
     filterset_class: type | None = None
     orderset_class: type | None = None
     connection: dict | None = None
-    # TODO(spec-031-globalid_encoding-0_0_9 Slices 1-2): Add
-    # ``globalid_strategy: str | Callable[..., str] | None = None`` and
-    # ``effective_globalid_strategy: str | None = None`` here. The first is
-    # populated at class creation; the second is set exactly once by the
-    # Phase-2.5 typename resolver install and doubles as its re-entrancy guard.
+    globalid_strategy: str | Callable[..., str] | None = None
+    # Finalization-set encode/decode classification (spec-031 Decision 10).
+    # Unlike the raw ``globalid_strategy`` slot above (populated at class
+    # creation), it is set exactly once by the Phase-2.5 typename resolver
+    # install (``types/relay.py::install_globalid_typename_resolver``) and
+    # doubles as its re-entrancy guard. ``None`` ⇒ not a framework-decodable
+    # Relay-Node type.
+    effective_globalid_strategy: str | None = None
     finalized: bool = False
     # Per-instance memoization of ``related_target_for(field_name)``
     # results. Cache stores the full

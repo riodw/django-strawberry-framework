@@ -262,8 +262,12 @@ def test_filter_cards_by_status_key_via_related_filter():
 def test_filter_cards_by_own_pk_relay_global_id_in():
     """Own-PK Relay ``id: { in: [...] }`` accepts a list of GlobalIDs."""
     seed = _seed_board()
-    gid_filters = str(relay.GlobalID(type_name="CardType", node_id=str(seed["filters"].pk)))
-    gid_conn = str(relay.GlobalID(type_name="CardType", node_id=str(seed["conn"].pk)))
+    gid_filters = str(
+        relay.GlobalID(type_name=models.Card._meta.label_lower, node_id=str(seed["filters"].pk)),
+    )
+    gid_conn = str(
+        relay.GlobalID(type_name=models.Card._meta.label_lower, node_id=str(seed["conn"].pk)),
+    )
     _assert_graphql_data(
         f"""
         query {{

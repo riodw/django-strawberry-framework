@@ -10,6 +10,14 @@ parallel unwrap loops.
 
 from typing import Any, get_args, get_origin
 
+# A GraphQL type-wrapper stack (``GraphQLNonNull`` / ``GraphQLList`` / a
+# Strawberry ``of_type`` object) nests only as deep as the declared type —
+# realistically a handful of layers. This ceiling sits far above any real type,
+# so the only way to exceed it is a cyclic or corrupt ``of_type`` chain. Capping
+# the peel gives the loop a fixed, statically-checkable upper bound (NASA
+# Power-of-Ten Rule 2) and turns a would-be hang into a loud failure.
+_MAX_TYPE_WRAPPER_DEPTH = 64
+
 
 def unwrap_graphql_type(gql_type: Any) -> Any:
     """Peel all graphql-core / Strawberry ``of_type`` wrapper layers.
@@ -20,14 +28,23 @@ def unwrap_graphql_type(gql_type: Any) -> Any:
     wrapper to peel (including ``None`` and any object that does not
     expose ``of_type``).
 
+    The peel is bounded by ``_MAX_TYPE_WRAPPER_DEPTH`` rather than looping
+    unconditionally: a chain longer than that ceiling can only be cyclic or
+    corrupt, so it raises ``RuntimeError`` instead of spinning forever.
+
     Examples:
         ``NonNull(List(NonNull(Inner)))`` -> ``Inner``;
         ``Inner`` -> ``Inner`` (no wrapper to peel);
         ``None`` -> ``None`` (no ``of_type`` attribute).
     """
-    while hasattr(gql_type, "of_type"):
+    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+        if not hasattr(gql_type, "of_type"):
+            return gql_type
         gql_type = gql_type.of_type
-    return gql_type
+    raise RuntimeError(
+        f"unwrap_graphql_type: `of_type` wrapper stack exceeded "
+        f"{_MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
+    )
 
 
 def unwrap_return_type(rt: Any) -> Any:

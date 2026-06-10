@@ -134,7 +134,7 @@ def test_materialize_input_class_writes_to_module_global(_materialization_cleanu
 
     materialize_input_class("FooInputType", Foo)
     module = sys.modules[INPUTS_MODULE_PATH]
-    assert getattr(module, "FooInputType") is Foo
+    assert module.FooInputType is Foo
     assert _materialized_names["FooInputType"] is Foo
 
 
@@ -454,10 +454,10 @@ def test_clear_order_input_namespace_leaves_module_globals_parked(_namespace_cle
 
     materialize_input_class("FooParkedOrderInputType", FooParked)
     module = sys.modules[INPUTS_MODULE_PATH]
-    assert getattr(module, "FooParkedOrderInputType") is FooParked
+    assert module.FooParkedOrderInputType is FooParked
     clear_order_input_namespace()
     # Class object stays parked -- parking is load-bearing per B2.
-    assert getattr(module, "FooParkedOrderInputType") is FooParked
+    assert module.FooParkedOrderInputType is FooParked
 
 
 def test_clear_order_input_namespace_clears_factory_class_level_caches(_namespace_cleanup):

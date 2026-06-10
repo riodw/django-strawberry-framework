@@ -72,7 +72,9 @@ def _is_async_callable(fn: Any) -> bool:
     """
     if inspect.iscoroutinefunction(fn):
         return True
-    call = getattr(fn, "__call__", None)
+    # Inspecting ``__call__``'s async-ness, not testing callability — so
+    # ``callable(fn)`` (what B004 suggests) is the wrong tool here.
+    call = getattr(fn, "__call__", None)  # noqa: B004
     return call is not None and inspect.iscoroutinefunction(call)
 
 

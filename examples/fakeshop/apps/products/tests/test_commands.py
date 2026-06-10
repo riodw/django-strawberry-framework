@@ -154,6 +154,10 @@ def test_delete_users_command_invalid_string():
 # ---------------------------------------------------------------------------
 
 
+# Django emits an advisory UserWarning when a test overrides DATABASES; these two
+# tests do so deliberately (shard-alias setup), so the otherwise-fatal warning is
+# scoped-ignored here rather than globally (see pytest.ini filterwarnings).
+@pytest.mark.filterwarnings("ignore:Overriding setting DATABASES:UserWarning")
 def test_seed_shards_command_raises_when_shard_alias_missing(settings):
     """When ``shard_b`` isn't declared in DATABASES, the command must raise CommandError.
 
@@ -173,6 +177,7 @@ def test_seed_shards_command_raises_when_shard_alias_missing(settings):
 
 
 @pytest.mark.django_db(databases=["default"])
+@pytest.mark.filterwarnings("ignore:Overriding setting DATABASES:UserWarning")
 def test_seed_shards_command_runs_when_shard_alias_present(settings, monkeypatch):
     """When ``shard_b`` is present in DATABASES, the command runs end-to-end against ``default`` only."""
     settings.DATABASES = {

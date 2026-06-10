@@ -1,0 +1,39 @@
+term,anchor,notes
+Relay Node integration,relay-node-integration,Shipped 0.0.5 foundation; the resolve_node / resolve_nodes defaults the root fields dispatch to
+DjangoType,djangotype,The Relay-Node-shaped types the root fields resolve to and the relation upgrade walks
+DjangoNodeField,djangonodefield,This card ships it (bare interface form + typed form); glossary entry flips planned-to-shipped in Slice 7
+DjangoConnectionField,djangoconnectionfield,DONE-030 machinery the relation-as-Connection upgrade reuses; conformance suite runs against it
+DjangoConnection,djangoconnection,Generic connection base; CURSOR_PREFIX fallback named in Risks
+DjangoListField,djangolistfield,Annotation-driven factory precedent the root node fields follow
+DjangoOptimizerExtension,djangooptimizerextension,Root-gated optimization untouched; connections own their seam per spec-030 Decision 11
+Meta.interfaces,metainterfaces,Slice 1 extends its validation with the six named-helper rejections
+Meta.connection,metaconnection,Type-level totalCount opt-in the synthesized relation connections follow; shipped non-Node gate re-affirmed
+Meta.globalid_strategy,metaglobalid_strategy,Shipped DONE-031 strategy key; root fields decode whatever it emits
+RELAY_GLOBALID_STRATEGY,relay_globalid_strategy,Schema-wide strategy default; same decode contract at the root fields
+Meta.primary,metaprimary,Model-label ids route to the primary; typed-field-over-secondary edge case
+Meta.name,metaname,Type-name ids decode via the graphql_type_name lookup honoring Meta.name
+Meta.filterset_class,metafilterset_class,Sidecar driving the synthesized relation connection's filter: argument
+Meta.orderset_class,metaorderset_class,Sidecar driving the synthesized relation connection's orderBy: argument
+Meta.search_fields,metasearch_fields,search: argument stays absent until 0.1.2 (TODO-BETA-046)
+Meta.optimizer_hints,metaoptimizer_hints,Typo-guard precedent for Meta.relation_shapes key-name validation
+Meta.fields_class,metafields_class,Named in Non-goals as a later-version surface
+FilterSet,filterset,Filter sidecar; its FILTER_INVALID GraphQLError precedent shapes GLOBALID_INVALID
+OrderSet,orderset,Ordering sidecar carried onto synthesized relation connections
+filter_input_type,filter_input_type,Lazy annotation helper the synthesized signature reuses
+order_input_type,order_input_type,Lazy annotation helper the synthesized signature reuses
+finalize_django_types,finalize_django_types,Phase 2.5 hosts the relation-as-Connection synthesis and the no-Node-types ledger check
+ConfigurationError,configurationerror,Diagnostics + relation_shapes validation failure type; converted to GraphQLError at root-field boundary
+SyncMisuseError,syncmisuseerror,Sync-context async-get_queryset marker inherited unchanged by root fields and relation connections
+get_queryset visibility hook,get_queryset-visibility-hook,The permission surface behind null-for-invisible root-field semantics
+Definition-order independence,definition-order-independence,Why the synthesis runs at Phase 2.5 (targets settled) not class creation
+Relation handling,relation-handling,The many-side relation set (reverse FK / M2M) eligible for connection siblings
+Connection-aware optimizer planning,connection-aware-optimizer-planning,Parallel WIP-ALPHA-033; nested connections lazy-load until it lands
+Strictness mode,strictness-mode,A raise run surfaces the pre-033 nested-connection N+1; live tests assert behavior not SQL
+Plan cache,plan-cache,Pagination-arg key hygiene named as 033's scope in Out of scope
+apply_cascade_permissions,apply_cascade_permissions,0.0.10 permissions; root fields integrate when it lands
+Per-field permission hooks,per-field-permission-hooks,0.0.10 companion surface named in Non-goals
+strawberry_config,strawberry_config,relay_max_results passthrough caps connection pages; example schemas pass it
+TestClient,testclient,0.0.12 testing surface sharing the testing/ subpackage with testing/relay.py
+GraphQLTestCase,graphqltestcase,0.0.12 testing surface; named in Current state and Out of scope
+safe_wrap_connection_method,safe_wrap_connection_method,The testing/ subpackage's sole current export (Current state)
+Cross-subsystem invariants,cross-subsystem-invariants,Example schemas reference only shipped features; library activation honors it

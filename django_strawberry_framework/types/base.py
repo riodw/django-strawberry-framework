@@ -283,8 +283,10 @@ def _is_async_globalid_callable(value: object) -> bool:
     request-time failure the build-time check exists to prevent.
     """
     target = value.func if isinstance(value, functools.partial) else value
+    # Inspecting ``__call__``'s async-ness, not testing callability — so
+    # ``callable()`` (what B004 suggests) is the wrong tool here.
     return inspect.iscoroutinefunction(target) or inspect.iscoroutinefunction(
-        getattr(target, "__call__", None),
+        getattr(target, "__call__", None),  # noqa: B004
     )
 
 

@@ -80,6 +80,8 @@ select = [
     "I",      # isort
     "ANN",    # flake8-annotations
     "A",      # flake8-builtins
+    "ASYNC",  # flake8-async: async/await antipatterns (blocking calls in async, etc.)
+    "B",      # flake8-bugbear: likely bugs (mutable defaults, bad except order, etc.)
     "N",      # pep8-naming
     "C4",     # flake8-comprehensions
     "COM812", # flake8-commas: missing-trailing-comma (pairs with magic trailing comma in formatter)
@@ -99,8 +101,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-"tests/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "N802", "N806"]
-"examples/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "UP031", "N806"]
+# B018 (useless-expression) is an idiomatic test pattern here: a bare
+# ``factory.arguments`` access triggers the lazy build/raise under test.
+"tests/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "N802", "N806", "B018"]
+"examples/**/*.py" = ["D", "ANN", "ERA001", "F841", "SIM117", "SIM118", "E501", "UP031", "N806", "B018"]
 "**/migrations/*.py" = ["D100", "D101", "D104"]
 "**/views.py" = ["D101"]
 "**/urls.py" = ["D100"]

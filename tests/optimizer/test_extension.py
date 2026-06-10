@@ -1294,7 +1294,7 @@ def test_strictness_warn_stashes_sentinel():
     planned = getattr(ctx, "dst_optimizer_planned", None)
     assert planned is not None
     assert "ItemType.category@allItems.category" in planned
-    assert getattr(ctx, "dst_optimizer_strictness") == "warn"
+    assert ctx.dst_optimizer_strictness == "warn"
 
 
 @pytest.mark.django_db
@@ -1339,8 +1339,8 @@ def test_strictness_with_empty_plan_does_not_raise_or_warn(mode, caplog):
     )
     # Strictness sentinels are still stashed (the plan is published before the
     # is_empty short-circuit); the planned set is just empty.
-    assert getattr(ctx, "dst_optimizer_strictness") == mode
-    assert getattr(ctx, "dst_optimizer_planned") == set()
+    assert ctx.dst_optimizer_strictness == mode
+    assert ctx.dst_optimizer_planned == set()
 
 
 @pytest.mark.django_db

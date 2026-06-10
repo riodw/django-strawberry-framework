@@ -35,9 +35,19 @@ from strawberry import relay
 
 from ..sets_mixins import LazyRelatedClassMixin
 
+# ``filters -> types`` is the documented safe (acyclic) import direction:
+# ``types/relay.py`` module-top imports are stdlib/django/strawberry/``..exceptions``
+# only — it reaches into ``filters`` / ``registry`` solely via in-function imports —
+# so a module-top ``filters/base.py -> types/relay.py`` import does not close a load
+# cycle (spec-031 Slice 2 plan). These are the single source of truth for the
+# strategy->payload-shape mapping shared with the encoder and the Slice-3 decoder.
+from ..types.relay import MODEL_LABEL_STRATEGIES, TYPE_NAME_STRATEGIES
+
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.http import HttpRequest
     from django_filters.filterset import BaseFilterSet
+
+    from ..types.definition import DjangoTypeDefinition
 
 
 class TypedFilter(Filter):
@@ -166,27 +176,30 @@ class ListFilter(TypedFilter):
         return super().filter(qs, value)
 
 
-def _expected_global_id_type_name(filter_instance: Filter) -> str | None:
-    """Resolve the expected GraphQL type name for a GlobalID-aware filter.
+def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | None:
+    """Resolve the owner/target ``DjangoTypeDefinition`` for a GlobalID-aware filter.
 
     Walks the runtime ``parent.<filterset>._owner_definition`` binding that
     the finalizer's phase 2.5 wires per spec-027 L566-567 + L603 +
     L1057. Two routing branches:
 
     1. **Own-PK branch.** When ``filter_instance.field_name`` matches the
-       owning model's PK column name (``_meta.pk.name``), the expected
-       type name is the owning ``DjangoType``'s ``graphql_type_name``
-       (the OWNER itself is the Relay node — its PK gets a GlobalID).
+       owning model's PK column name (``_meta.pk.name``), the relevant
+       definition is the owning ``DjangoType`` (the OWNER itself is the
+       Relay node — its PK gets a GlobalID).
     2. **Relation branch.** Otherwise the field name resolves through
        ``owner_definition.related_target_for(<base_field>)`` — where
        ``<base_field>`` is the parent-relation prefix in expanded child
        filter names like ``"genres__id"`` (the ``RelatedFilter`` expansion
-       contract per spec-027 L988); the expected type name is the target
-       ``DjangoType``'s ``graphql_type_name``.
+       contract per spec-027 L988); the relevant definition is the target
+       ``DjangoType``.
 
     Returns ``None`` when no owner is bound (Slice-1 + Slice-2 unit-test
     contexts) or when the lookup cannot resolve a target; the filter then
     decodes the GlobalID without type-name validation per spec-027 L1057.
+    The resolution of WHICH definition (own-PK vs relation) stays single-sited
+    here so the strategy-aware acceptance check in ``_decode_and_validate_global_id``
+    consumes a single definition (spec-031 Decision 13).
     """
     parent = getattr(filter_instance, "parent", None)
     owner = getattr(parent, "_owner_definition", None) if parent is not None else None
@@ -196,12 +209,42 @@ def _expected_global_id_type_name(filter_instance: Filter) -> str | None:
     head, _sep, _tail = field_name.partition("__")
     pk_name = getattr(owner.model._meta.pk, "name", None)
     if head == pk_name or field_name == pk_name:
-        return owner.graphql_type_name
+        return owner
     target = owner.related_target_for(head)
     if target is None:
         return None
     target_definition, _model_field = target
-    return target_definition.graphql_type_name
+    return target_definition
+
+
+def _accepted_globalid_type_names(definition: DjangoTypeDefinition | None) -> set[str] | None:
+    """Return the accepted ``type_name`` payload(s) for a resolved definition's strategy.
+
+    Strategy-aware target validation keyed on the resolved owner/target
+    definition's recorded ``effective_globalid_strategy`` (spec-031 Decision 13) —
+    the same field decode reads, so encode, decode, and filter validation all
+    agree on one contract:
+
+    - ``model`` → the model label only (``definition.model._meta.label_lower``).
+    - ``type`` → the ``graphql_type_name`` only (pre-0.0.9 behavior).
+    - ``type+model`` → either the model label or the ``graphql_type_name``.
+    - ``callable`` / ``custom`` (the framework cannot compute the label), or an
+      unbound owner / unresolvable target (``definition is None``), or an absent
+      (``None``) ``effective_globalid_strategy`` (a non-finalized / non-Relay
+      definition) → ``None`` (node-id-only fallback; the ``type_name`` guard is
+      skipped). The filter is defense-in-depth, not the uniform-error contract
+      decode owns, so it never raises for an unknown/absent strategy — it falls
+      back to node-id-only, mirroring the existing unbound-owner fallback.
+    """
+    if definition is None:
+        return None
+    strategy = definition.effective_globalid_strategy
+    accepted: set[str] = set()
+    if strategy in MODEL_LABEL_STRATEGIES:
+        accepted.add(definition.model._meta.label_lower)
+    if strategy in TYPE_NAME_STRATEGIES:
+        accepted.add(definition.graphql_type_name)
+    return accepted or None
 
 
 def _decode_and_validate_global_id(
@@ -210,19 +253,27 @@ def _decode_and_validate_global_id(
     *,
     index: int | None = None,
 ) -> str:
-    """Decode `value` to a node id and validate its `type_name`.
+    """Decode `value` to a node id and validate its `type_name` per strategy.
 
     Accepts both raw `str` and `strawberry.relay.GlobalID` objects per
-    spec-027 L602. Raises `GraphQLError("GlobalID type mismatch: filter
-    expects <expected> but received <actual>")` when the decoded
-    `type_name` does not match the expected type for the filter (spec
-    L603). `GlobalIDMultipleChoiceFilter` passes `index` so the
-    rejected list element is named in the error message per spec L605.
+    spec-027 L602. The accepted `type_name` payload(s) are strategy-aware
+    (spec-031 Decision 13): under the resolved owner/target definition's
+    recorded `effective_globalid_strategy`, an emitted model-label ID
+    round-trips while the old bare GraphQL type name is rejected (and vice
+    versa for the `type` strategy). Raises `GraphQLError("GlobalID type
+    mismatch: filter expects <expected> but received <actual>")` when the
+    decoded `type_name` is not in the accepted set for the three framework
+    strategies (spec-027 L603). `callable` / `custom` types, an unbound owner,
+    or an unresolvable target fall back to node-id-only (the `type_name` guard
+    is skipped). `GlobalIDMultipleChoiceFilter` passes `index` so the rejected
+    list element is named in the error message per spec-027 L605.
     """
     decoded = value if isinstance(value, relay.GlobalID) else relay.GlobalID.from_id(value)
-    expected = _expected_global_id_type_name(filter_instance)
-    if expected is not None and decoded.type_name != expected:
+    definition = _target_definition_for(filter_instance)
+    accepted = _accepted_globalid_type_names(definition)
+    if accepted is not None and decoded.type_name not in accepted:
         suffix = "" if index is None else f" at index {index}"
+        expected = " or ".join(sorted(accepted))
         raise GraphQLError(
             f"GlobalID type mismatch: filter expects {expected} but received {decoded.type_name}{suffix}",
         )

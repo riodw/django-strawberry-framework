@@ -31,7 +31,7 @@ from apps.products import models
 from apps.products.services import create_users, seed_data
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import Client
+from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import clear_url_caches
 from strawberry import relay
@@ -39,14 +39,17 @@ from strawberry import relay
 from django_strawberry_framework.registry import registry
 
 
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
+def _reload_products_project_schema() -> None:
     """Recreate imported DjangoType classes if package tests cleared the registry.
 
-    Mirrors the ``test_library_api.py`` fixture: package tests clear the
-    global registry, while the example schema finalizes import-time
-    ``DjangoType`` classes. Reload only schema modules (not
+    Mirrors ``test_library_api.py::_reload_library_project_schema``: package
+    tests clear the global registry, while the example schema finalizes
+    import-time ``DjangoType`` classes. Reload only schema modules (not
     ``apps.products.models``) so Django model classes stay stable.
+
+    Lifted out of the autouse fixture so a test can drive the reload itself
+    after applying ``override_settings`` (e.g. the ``type``-strategy opt-out),
+    ensuring the override is active *before* the schema finalizes.
     """
     registry.clear()
     products_schema = sys.modules.get("apps.products.schema")
@@ -65,6 +68,12 @@ def _reload_project_schema_for_acceptance_tests():
     if urls is not None:
         importlib.reload(urls)
         clear_url_caches()
+
+
+@pytest.fixture(autouse=True)
+def _reload_project_schema_for_acceptance_tests():
+    """Recreate the project schema around package-test registry clears."""
+    _reload_products_project_schema()
 
 
 def _post_graphql(query: str, *, client: Client | None = None):
@@ -97,19 +106,78 @@ def _global_id(type_name: str, pk: int) -> str:
     return str(relay.GlobalID(type_name=type_name, node_id=str(pk)))
 
 
-# TODO(spec-031-globalid_encoding-0_0_9 Slice 4): Update products live HTTP
-# GlobalID coverage for the model-label default.
-# Pseudocode:
-#   seed_data(N)
-#   query allItems { id name } through /graphql/
-#   assert relay.GlobalID.from_id(id).type_name == "products.item"
-#   gid = relay.GlobalID(type_name="products.item", node_id=str(item.pk))
-#   query allItems(filter: { id: { exact: str(gid) } }) { id name }
-#   assert the response contains only that item
-#   set RELAY_GLOBALID_STRATEGY = "type" or add a temporary type fixture
-#   assert the opt-out emits the GraphQL type-name payload
-# Existing ``_global_id("ItemType", pk)`` expectations should move to
-# ``_global_id("products.item", pk)`` or the matching model label per type.
+@pytest.mark.django_db
+def test_emitted_globalid_is_model_anchored():
+    """An emitted ``node { id }`` decodes to the Django model label, not the type name.
+
+    Under the ``0.0.9`` model-label default, ``ItemType``'s ``GlobalID``
+    carries ``products.item:<pk>`` (``models.Item._meta.label_lower``), not the
+    GraphQL type name ``ItemType``. Decode the API-emitted ``id`` via
+    ``relay.GlobalID.from_id`` and assert the model-label payload.
+    """
+    seed_data(1)
+    item = models.Item.objects.order_by("id").first()
+    response = _post_graphql("query { allItems { id name } }")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    emitted = next(row for row in payload["data"]["allItems"] if row["name"] == item.name)
+    parsed = relay.GlobalID.from_id(emitted["id"])
+    assert parsed.type_name == models.Item._meta.label_lower
+    assert parsed.node_id == str(item.pk)
+
+
+@pytest.mark.django_db
+def test_globalid_filter_round_trip():
+    """THE headline ``0.0.9`` workflow: feed an emitted GlobalID straight back as a filter.
+
+    Take the model-label ``id`` the products API just emitted for one item and
+    feed it back verbatim as ``filter: { id: { exact: "<that id>" } }``; the
+    strategy-aware filter ([Decision 13]) accepts the model-label payload it now
+    emits and returns exactly that one row. Uses the API-emitted id (not a
+    reconstructed one) so the test proves true emit -> filter symmetry.
+    """
+    seed_data(1)
+    target = models.Item.objects.order_by("id").first()
+    emit_response = _post_graphql("query { allItems { id name } }")
+    assert emit_response.status_code == 200
+    emit_payload = emit_response.json()
+    assert "errors" not in emit_payload, emit_payload
+    emitted = next(row for row in emit_payload["data"]["allItems"] if row["name"] == target.name)
+    emitted_id = emitted["id"]
+
+    _assert_graphql_data(
+        f'query {{ allItems(filter: {{ id: {{ exact: "{emitted_id}" }} }}) {{ id name }} }}',
+        {"allItems": [{"id": emitted_id, "name": target.name}]},
+    )
+
+
+@pytest.mark.django_db
+def test_type_strategy_opt_out_reproduces_type_name():
+    """``RELAY_GLOBALID_STRATEGY = "type"`` opts back into the GraphQL-type-name payload.
+
+    Deterministic per ``docs/feedback.md`` P3: the override is applied *before*
+    ``_reload_products_project_schema()`` finalizes the schema (the fakeshop
+    fixtures reload at finalization, so a strategy override must precede the
+    reload or the test silently exercises the default schema). Under the ``type``
+    strategy ``ItemType``'s ``id`` reproduces the GraphQL type name ``ItemType``
+    (== ``ItemType.__name__``, no ``Meta.name``), NOT the model label. The
+    per-test autouse fixture re-reloads the default-strategy schema for siblings.
+    """
+    seed_data(1)
+    item = models.Item.objects.order_by("id").first()
+    with override_settings(
+        DJANGO_STRAWBERRY_FRAMEWORK={"RELAY_GLOBALID_STRATEGY": "type"},
+    ):
+        _reload_products_project_schema()
+        response = _post_graphql("query { allItems { id name } }")
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        emitted = next(row for row in payload["data"]["allItems"] if row["name"] == item.name)
+        parsed = relay.GlobalID.from_id(emitted["id"])
+        assert parsed.type_name == "ItemType"
+        assert parsed.node_id == str(item.pk)
 
 
 @pytest.mark.django_db
@@ -180,13 +248,13 @@ def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
     seed_data(1)
     expected = [
         {
-            "id": _global_id("EntryType", entry.pk),
+            "id": _global_id(models.Entry._meta.label_lower, entry.pk),
             "value": entry.value,
             "item": {
-                "id": _global_id("ItemType", entry.item_id),
+                "id": _global_id(models.Item._meta.label_lower, entry.item_id),
                 "name": entry.item.name,
                 "category": {
-                    "id": _global_id("CategoryType", entry.item.category_id),
+                    "id": _global_id(models.Category._meta.label_lower, entry.item.category_id),
                     "name": entry.item.category.name,
                 },
             },
@@ -293,7 +361,7 @@ def test_products_categories_filter_by_relay_own_pk_global_id_in():
     seed_data(1)
     categories = list(models.Category.objects.order_by("id")[:2])
     gids = ", ".join(
-        f'"{relay.GlobalID(type_name="CategoryType", node_id=str(category.pk))}"'
+        f'"{relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk))}"'
         for category in categories
     )
     _assert_graphql_data(
@@ -332,7 +400,9 @@ def test_products_items_filter_by_related_category_global_id():
     """``Item.category`` ``RelatedFilter`` traversal via the nested GlobalID input."""
     seed_data(1)
     category = models.Category.objects.order_by("id").first()
-    gid = str(relay.GlobalID(type_name="CategoryType", node_id=str(category.pk)))
+    gid = str(
+        relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
+    )
     expected = [
         {"name": name}
         for name in models.Item.objects.filter(category=category)
@@ -462,7 +532,9 @@ def test_products_items_filter_and_order_compose():
     """
     seed_data(1)
     category = models.Category.objects.order_by("id").first()
-    gid = str(relay.GlobalID(type_name="CategoryType", node_id=str(category.pk)))
+    gid = str(
+        relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
+    )
     expected = [
         {"name": name}
         for name in models.Item.objects.filter(category=category)

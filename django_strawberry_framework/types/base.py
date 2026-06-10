@@ -26,9 +26,10 @@ triggers the collection pipeline, which:
    pass.
 """
 
+import inspect
 import re
 import typing
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Annotated, Any, ClassVar, NamedTuple
 
 from django.db import models
@@ -57,6 +58,7 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "exclude",
         "fields",
         "filterset_class",
+        "globalid_strategy",
         "interfaces",
         "model",
         "name",
@@ -67,25 +69,21 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "required_overrides",
     },
 )
-# ``nullable_overrides`` / ``required_overrides`` (spec-029 Decision 6) and
-# ``connection`` (spec-030 Decision 8) are net-new ALLOWED keys, NOT
-# DEFERRED_META_KEYS promotions — each one's feature ships in the same card
-# that adds it, so they were never reserved-but-nonfunctional.
-# DEFERRED_META_KEYS stays unchanged.
+# ``nullable_overrides`` / ``required_overrides`` (spec-029 Decision 6),
+# ``connection`` (spec-030 Decision 8), and ``globalid_strategy`` (spec-031
+# Decision 6) are net-new ALLOWED keys, NOT DEFERRED_META_KEYS promotions —
+# each one's feature ships in the same card that adds it, so they were never
+# reserved-but-nonfunctional. DEFERRED_META_KEYS stays unchanged.
 
-# TODO(spec-031-globalid_encoding-0_0_9 Slice 1): Add ``Meta.globalid_strategy``
-# as the next net-new ALLOWED key, validate it beside ``_validate_connection``,
-# and store the raw normalized value on ``DjangoTypeDefinition``.
-# Pseudocode:
-#   allowed += {"globalid_strategy"}  # noqa: ERA001
-#   value = getattr(meta, "globalid_strategy", None)  # noqa: ERA001
-#   normalized = _validate_globalid_strategy(meta, value, relay_shaped)  # noqa: ERA001
-#   definition.globalid_strategy = normalized  # noqa: ERA001
-# Validation contract:
-#   - None -> None.
-#   - "model" / "type" / "type+model" -> same string.
-#   - callable -> sync four-positional-argument encoder.
-#   - anything else, async callable, wrong arity, or non-Relay owner -> ConfigurationError.
+# The valid string-strategy set and the package default are the single source
+# of truth for the GlobalID-encoding strategy vocabulary: ``_validate_meta`` /
+# ``_validate_globalid_strategy`` here, the Slice-2 encoder, and the Slice-3
+# decode-shape enforcement all reference these names rather than re-typing the
+# literals (spec-031 Decisions 4/5/6, build-031 "DRY-first rule"). ``callable``
+# strategies are validated separately (arity + sync-ness), so they are not part
+# of the string set.
+STRING_GLOBALID_STRATEGIES: frozenset[str] = frozenset({"model", "type", "type+model"})
+DEFAULT_GLOBALID_STRATEGY = "model"
 
 
 def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
@@ -186,6 +184,102 @@ def _validate_connection(meta: type, connection: Any, relay_shaped: bool) -> dic
             "add `relay.Node` to `Meta.interfaces` or inherit `relay.Node` directly.",
         )
     return connection
+
+
+# The four positional parameters a ``callable`` GlobalID encoder must accept.
+# Mirrors the ``resolve_typename(root, info)`` seam (spec-031 Decision 4): the
+# callable runs at encode time, BEFORE ``resolve_id``, so it never receives
+# ``node_id``. Named once so the validator's error text and the Slice-2 install
+# closure stay in lockstep.
+_GLOBALID_CALLABLE_PARAMS = (
+    "type_cls",
+    "model",
+    "root",
+    "info",
+)
+
+
+def _validate_globalid_strategy(
+    meta: type | None,
+    value: Any,
+    relay_shaped: bool,
+    *,
+    source: str = "meta",
+) -> str | Callable[..., str] | None:
+    """Validate one ``globalid_strategy``-shaped value and return the normalized form.
+
+    The single validator shared by BOTH the ``Meta.globalid_strategy`` path
+    (via ``_validate_meta``) and the ``RELAY_GLOBALID_STRATEGY`` setting path
+    (via ``types/relay.py::_resolve_globalid_strategy``) — spec-031 Decisions
+    6/7's "one validator, two sources, source-specific error text" rule. The
+    callable arity / sync-ness check lives here once so it is never duplicated
+    across the two call sites (``docs/feedback.md`` P2).
+
+    Structurally modeled on ``_validate_connection``: ``None``-short-circuits
+    when unset; a string must be in ``STRING_GLOBALID_STRATEGIES`` (typo guard);
+    a callable must accept the four positional ``_GLOBALID_CALLABLE_PARAMS`` and
+    must NOT be ``async def`` (an opaque ``TypeError`` / coroutine per request is
+    promoted to a build-time ``ConfigurationError``); any other type raises.
+
+    ``source`` selects the error framing: ``"meta"`` (the default) names the
+    offending type via ``meta.model.__name__`` and enforces the
+    Relay-Node-shape gate; ``"setting"`` names ``RELAY_GLOBALID_STRATEGY`` and
+    skips the gate (the per-type gate already ran at type creation, so the
+    setting path passes ``relay_shaped=True`` and ``meta=None``).
+    """
+    if value is None:
+        return None
+    is_meta = source == "meta"
+    subject = (
+        f"{meta.model.__name__}.Meta.globalid_strategy" if is_meta else "RELAY_GLOBALID_STRATEGY"
+    )
+    if isinstance(value, str):
+        if value not in STRING_GLOBALID_STRATEGIES:
+            raise ConfigurationError(
+                f"{subject} got unknown strategy {value!r}; "
+                f"valid strategies are {sorted(STRING_GLOBALID_STRATEGIES)} or a callable.",
+            )
+        normalized: str | Callable[..., str] = value
+    elif callable(value):
+        _validate_globalid_callable(subject, value)
+        normalized = value
+    else:
+        raise ConfigurationError(
+            f"{subject} must be one of {sorted(STRING_GLOBALID_STRATEGIES)} or a callable; "
+            f"got {value!r}.",
+        )
+    # The Relay-Node-shape gate is a ``Meta``-only concern (the setting path's
+    # per-type gate already ran at type creation); mirrors
+    # ``_validate_connection``'s gate and remediation text.
+    if is_meta and not relay_shaped:
+        raise ConfigurationError(
+            f"{subject} requires a Relay-Node-shaped type; "
+            "add `relay.Node` to `Meta.interfaces` or inherit `relay.Node` directly.",
+        )
+    return normalized
+
+
+def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None:
+    """Reject a wrong-arity or ``async def`` GlobalID encoder at validation time.
+
+    ``inspect.signature`` must bind the four positional ``_GLOBALID_CALLABLE_PARAMS``
+    and ``inspect.iscoroutinefunction`` must be ``False`` (spec-031 Decision 6,
+    ``docs/feedback.md`` P2). A callable that survives both checks is returned to
+    the caller untouched; the per-call non-``str`` return guard lives in the
+    Slice-2 install closure.
+    """
+    if inspect.iscoroutinefunction(value):
+        raise ConfigurationError(
+            f"{subject} callable encoder must be sync; "
+            f"got an `async def`. Expected `(type_cls, model, root, info) -> str`.",
+        )
+    try:
+        inspect.signature(value).bind(*_GLOBALID_CALLABLE_PARAMS)
+    except TypeError as exc:
+        raise ConfigurationError(
+            f"{subject} callable encoder must accept "
+            f"`(type_cls, model, root, info) -> str`; got an incompatible signature ({exc}).",
+        ) from exc
 
 
 # Token-shaped NodeID matcher used by the string-form arm of
@@ -395,9 +489,7 @@ class DjangoType:
             filterset_class=validated.filterset_class,
             orderset_class=validated.orderset_class,
             connection=validated.connection,
-            # TODO(spec-031-globalid_encoding-0_0_9 Slice 1): Pass
-            # ``globalid_strategy=validated.globalid_strategy`` once the
-            # meta validator and definition slot exist.
+            globalid_strategy=validated.globalid_strategy,
         )
         registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
         for pending_relation in pending:
@@ -684,6 +776,7 @@ class _ValidatedMeta(NamedTuple):
     filterset_class: type | None
     orderset_class: type | None
     connection: dict | None
+    globalid_strategy: str | Callable[..., str] | None
     nullable_overrides: frozenset[str]
     required_overrides: frozenset[str]
 
@@ -773,6 +866,11 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
     orderset_class = _validate_orderset_class(meta, getattr(meta, "orderset_class", None))
     connection = _validate_connection(meta, getattr(meta, "connection", None), relay_shaped)
+    globalid_strategy = _validate_globalid_strategy(
+        meta,
+        getattr(meta, "globalid_strategy", None),
+        relay_shaped,
+    )
     # Override shape stage (spec-029 Decision 8 step 1): the two tuple-set
     # keys reuse the ``Meta.exclude`` non-string-sequence guard
     # (``_normalize_sequence_spec``), then normalize to ``frozenset``. The
@@ -804,6 +902,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
         filterset_class=filterset_class,
         orderset_class=orderset_class,
         connection=connection,
+        globalid_strategy=globalid_strategy,
         nullable_overrides=nullable_overrides,
         required_overrides=required_overrides,
     )

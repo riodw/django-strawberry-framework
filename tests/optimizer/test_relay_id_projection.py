@@ -173,9 +173,13 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
         assert result.data == {
             "allItems": [{"id": result.data["allItems"][0]["id"], "name": "widget"}],
         }
-        # The Relay GlobalID round-trip carries the custom-pk value.
+        # The Relay GlobalID round-trip carries the custom-pk value. The
+        # type-name slot is the Django model label (``tests.custompkitem``)
+        # under the package-default ``model`` GlobalID strategy (spec-031
+        # Decision 9 default flip); derive it from the ORM rather than
+        # hardcoding so the assertion tracks the model, not a literal.
         node_id = relay.GlobalID.from_id(result.data["allItems"][0]["id"])
-        assert node_id.type_name == "CustomPKItemNode"
+        assert node_id.type_name == CustomPKItem._meta.label_lower
         assert node_id.node_id == "abc-123"
     finally:
         with connection.schema_editor() as schema_editor:

@@ -77,14 +77,7 @@ finalize_django_types()
 
 See [`GLOSSARY.md`'s Relay Node integration subsection][glossary-relay-node-integration] for the resolver list, composite-pk constraint, and the `is_type_of` injection contract.
 
-<!--
-TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Update the Relay Node docs for model-based GlobalID encoding.
-Pseudocode:
-  - state that the default Relay `GlobalID` payload is `app_label.modelname:<pk>`
-  - document `Meta.globalid_strategy` and `RELAY_GLOBALID_STRATEGY`
-  - show the `type` opt-out and the `type+model` migration mode
-  - keep the public-helper discussion out of this card; sibling 032 owns testing helpers
--->
+As of `0.0.9` the default Relay `GlobalID` payload is the Django model label (`app_label.modelname:<pk>`, e.g. `products.item:42`) rather than the GraphQL type name, so renaming a GraphQL type no longer invalidates cached IDs. `Meta.globalid_strategy` (per type) and `RELAY_GLOBALID_STRATEGY` (schema-wide) select `model` (default), `type` (the legacy GraphQL-type-name opt-out), `type+model` (transitional decode of old type-anchored IDs while emitting model-anchored ones), or a callable encoder. See [`GLOSSARY.md`'s `Meta.globalid_strategy` subsection][glossary-metaglobalid_strategy].
 
 ## What just happened?
 
@@ -272,6 +265,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
 [glossary-filterset]: GLOSSARY.md#filterset
+[glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-orderset]: GLOSSARY.md#orderset
 [glossary-plan-cache]: GLOSSARY.md#plan-cache

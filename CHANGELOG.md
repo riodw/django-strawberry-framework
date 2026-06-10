@@ -18,19 +18,12 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 
 ## [Unreleased]
 
-<!--
-TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Add the GlobalID encoding release notes under [Unreleased].
-Pseudocode:
-  - `### Changed`: model-anchored Relay GlobalID default is a breaking wire-format change
-  - include the migration sequence: set `RELAY_GLOBALID_STRATEGY = "type+model"` first, then flip to `model`
-  - `### Added`: `Meta.globalid_strategy` and `RELAY_GLOBALID_STRATEGY`
-  - do not promote a 0.0.9 heading; the joint cut owns the version bump
--->
-
 ### Changed
+- **Breaking wire-format change**: the default Relay `GlobalID` payload for a [`DjangoType`][glossary-djangotype] with `Meta.interfaces = (relay.Node,)` is now the Django **model label** (`app_label.modelname:<pk>`, e.g. `products.item:42`) instead of the GraphQL type name (`ItemType:42`). This changes **every** emitted `GlobalID` for a Relay-Node type that does not opt out, so a schema author can rename a GraphQL type (or [`Meta.name`][glossary-metaname]) without invalidating cached client IDs. Parallel to the `PositiveBigIntegerField → BigInt` `0.0.6` breaking-wire-format precedent. The break is **latent** in `0.0.9` — nothing decodes a `GlobalID` until root `node(id:)` ships (`WIP-ALPHA-032-0.0.9`), so an unprepared consumer sees nothing wrong until then, at which point every old client-cached type-anchored ID is undecodable. Opt out per type via `Meta.globalid_strategy = "type"` or schema-wide via `RELAY_GLOBALID_STRATEGY = "type"` (byte-identical to the pre-`0.0.9` payload). **Prescribed upgrade sequence for a deployed schema**: (1) deploy `RELAY_GLOBALID_STRATEGY = "type+model"` **while the old GraphQL type names still exist** — new IDs emit model-anchored, old type-anchored IDs still decode; (2) let clients age out the cached old type-name IDs; (3) **only then** rename GraphQL types / [`Meta.name`][glossary-metaname] or flip to `model`. The step-3 ordering is load-bearing: `type+model` decodes an old type-anchored ID only while its old GraphQL type name still resolves, so renaming a type / `Meta.name` *during* the window still orphans cached old-type-name IDs — `type+model` is a strategy bridge, **not** a rename-history alias map ([`BACKLOG.md`][backlog] item 39).
 - Migrated `extensions=[DjangoOptimizerExtension()]` to the module-level-singleton factory form (`extensions=[lambda: _optimizer]`): preserves the instance-bound plan cache and removes Strawberry 0.316.0's instance-form `DeprecationWarning`.
 
 ### Added
+- **`Meta.globalid_strategy` and `RELAY_GLOBALID_STRATEGY` (Relay `GlobalID` encoding strategy).** [`Meta.globalid_strategy`][glossary-metaglobalid_strategy] is a net-new `Meta` key (valid only on a Relay-Node-shaped [`DjangoType`][glossary-djangotype]) selecting the per-type `GlobalID` encode strategy: `"model"` (the new default — `app_label.modelname:<pk>`), `"type"` (the legacy GraphQL-type-name payload, byte-identical to pre-`0.0.9`), `"type+model"` (transitional — emits model-anchored IDs while decoding both old type-anchored and new model-anchored IDs), or a callable encoder `(type_cls, model, root, info) -> str`. A `callable` value is validated for arity and sync-ness at type-creation time; a non-`str` return raises [`ConfigurationError`][glossary-configurationerror] at encode. [`RELAY_GLOBALID_STRATEGY`][glossary-relay-globalid-strategy] is the schema-wide default setting on `DJANGO_STRAWBERRY_FRAMEWORK`; precedence is `Meta.globalid_strategy` → `RELAY_GLOBALID_STRATEGY` → `"model"`. The resolved strategy is frozen at schema-build time. See [`TODAY.md`][today] for the products-centric examples and the breaking-change upgrade sequence.
 - Added the `inspect_django_type` management command — `manage.py inspect_django_type <Type> [--schema <selector>]` prints the per-field GraphQL resolution table (Django field → resolved GraphQL type → nullability → converter row) for a finalized `DjangoType`. Reads the resolved annotation from `origin.__annotations__` (so it reflects consumer-authored annotations and overrides) rather than re-running `convert_scalar`. The positional `type` argument dispatches by shape (dotted path via `import_string`; bare name via a unique registry lookup), `--schema` imports the project schema first so a cold CLI process registers + finalizes every type, and the Relay-Node-suppressed primary key reports the interface-supplied `GlobalID!`.
 - Added `Meta.nullable_overrides` and `Meta.required_overrides` — two net-new tuple-set `Meta` keys that decouple a scalar field's GraphQL nullability from its Django column (force `T!`→`T` or `T`→`T!`) without an `AlterField` migration or a consumer-authored annotation. Validated at type-creation time (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision raise `ConfigurationError`); scalar-only scope; the override flips a choice field's generated enum nullability for free.
 - **`DjangoConnectionField` (Relay connection field).** [`DjangoConnectionField`][glossary-djangoconnectionfield] and the generic [`DjangoConnection`][glossary-djangoconnection]`[T]` return alias now ship under [`django_strawberry_framework/connection.py`][connection]. The factory wraps a Relay-Node-shaped [`DjangoType`][glossary-djangotype], emits `edges` / `node` / `pageInfo` cursor pagination on Strawberry's native `relay.connection()` / `ListConnection`, and injects `filter:` / `orderBy:` arguments derived from the wrapped type's `Meta.filterset_class` / `Meta.orderset_class` sidecars via a synthesized resolver signature — no hand-written list resolver, no parallel argument declarations. The composition pipeline runs `get_queryset` visibility → `filter` → `orderBy` → default deterministic pk-ordering → optimizer-plan → cursor slice, and the field owns its own optimizer cooperation point (the plan-application logic extracted from `DjangoOptimizerExtension._optimize`) because Strawberry's connection slicing hides the pre-slice queryset from the schema middleware. A package-owned guard rejects `first` + `last` together with a `GraphQLError`.
@@ -266,13 +259,16 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-metaconnection]: docs/GLOSSARY.md#metaconnection
 [glossary-metafields]: docs/GLOSSARY.md#metafields
 [glossary-metafilterset_class]: docs/GLOSSARY.md#metafilterset_class
+[glossary-metaglobalid_strategy]: docs/GLOSSARY.md#metaglobalid_strategy
 [glossary-metainterfaces]: docs/GLOSSARY.md#metainterfaces
+[glossary-metaname]: docs/GLOSSARY.md#metaname
 [glossary-metaorderset_class]: docs/GLOSSARY.md#metaorderset_class
 [glossary-multi-database-cooperation]: docs/GLOSSARY.md#multi-database-cooperation
 [glossary-ordering]: docs/GLOSSARY.md#ordering
 [glossary-orderset]: docs/GLOSSARY.md#orderset
 [glossary-relatedfilter]: docs/GLOSSARY.md#relatedfilter
 [glossary-relatedorder]: docs/GLOSSARY.md#relatedorder
+[glossary-relay-globalid-strategy]: docs/GLOSSARY.md#relay_globalid_strategy
 [glossary-safe-wrap-connection-method]: docs/GLOSSARY.md#safe_wrap_connection_method
 [glossary-specialized-scalar-conversions]: docs/GLOSSARY.md#specialized-scalar-conversions
 [glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config

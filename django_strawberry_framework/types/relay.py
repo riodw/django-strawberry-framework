@@ -26,6 +26,7 @@ import inspect
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from django.apps import apps
 from django.db import models
 from django.db.models import CompositePrimaryKey
 from strawberry import relay
@@ -315,31 +316,358 @@ def _model_for(cls: type) -> type[models.Model]:
     return cls.__django_strawberry_definition__.model
 
 
-# TODO(spec-031-globalid_encoding-0_0_9 Slices 1-3): Keep the GlobalID
-# strategy helpers in this Relay foundation module; do not create a parallel
-# public module for 0.0.9. The public testing helpers belong to the sibling
-# Full Relay card.
-# Pseudocode:
-#   strategy = definition.globalid_strategy  # noqa: ERA001
-#   if strategy is None:  # noqa: ERA001
-#       strategy = conf.settings.RELAY_GLOBALID_STRATEGY or "model"  # noqa: ERA001
-#   validate strategy in {"model", "type", "type+model"} or callable  # noqa: ERA001
-#   return strategy  # noqa: ERA001
-#
-# Encode install:
-#   if definition.effective_globalid_strategy is not None: return  # noqa: ERA001
-#   if consumer_overrode_resolve_typename(type_cls):  # noqa: ERA001
-#       reject explicit Meta.globalid_strategy, record "custom", install nothing  # noqa: ERA001
-#   elif strategy in {"model", "type+model"}:  # noqa: ERA001
-#       install classmethod returning definition.model._meta.label_lower  # noqa: ERA001
-#   elif strategy == "callable": install checked callable wrapper  # noqa: ERA001
-#   elif strategy == "type": leave Strawberry default in place  # noqa: ERA001
-#
-# Decode:
-#   gid = relay.GlobalID.from_id(gid) if isinstance(gid, str) else gid  # noqa: ERA001
-#   candidate, shape = resolve model-label first, then graphql type name  # noqa: ERA001
-#   enforce candidate.effective_globalid_strategy permits shape  # noqa: ERA001
-#   return candidate.origin, gid.node_id  # noqa: ERA001
+# Keep the GlobalID strategy helpers in this Relay foundation module; do not
+# create a parallel public module for 0.0.9 (spec-031 Decision 11). The public
+# testing helpers belong to the sibling Full Relay card.
+
+
+def _resolve_globalid_strategy(
+    definition: DjangoTypeDefinition,
+) -> str | Callable[..., str]:
+    """Resolve a type's effective raw GlobalID strategy by the three-tier precedence.
+
+    Precedence (spec-031 Decision 5): the per-type ``Meta.globalid_strategy``
+    override (already validated at type creation) → the schema-wide
+    ``RELAY_GLOBALID_STRATEGY`` setting (read defensively as "absent → package
+    default") → the ``DEFAULT_GLOBALID_STRATEGY`` (``"model"``) package default.
+
+    The setting branch is validated through the SAME ``_validate_globalid_strategy``
+    rule the ``Meta`` path uses (one validator, two sources — spec-031 Decisions
+    6/7), so an unknown string, a wrong-arity callable, or an ``async def``
+    callable in ``RELAY_GLOBALID_STRATEGY`` raises ``ConfigurationError`` naming
+    the setting rather than failing opaquely from the installed closure
+    (``docs/feedback.md`` P2). ``conf.py`` is a thin reader that does not
+    validate domain values, so the validation belongs here.
+
+    Returns the resolved raw strategy (a string in ``STRING_GLOBALID_STRATEGIES``
+    or a validated callable); never ``None``.
+
+    Called at finalization (Slice 2's ``install_globalid_typename_resolver``)
+    for a type the Relay-shape gate already accepted, so the setting-path
+    validation passes ``relay_shaped=True`` (its per-type gate does not re-run).
+    """
+    # In-function imports: ``base.py`` imports ``install_is_type_of`` from this
+    # module at module top, so a module-top ``relay.py -> base.py`` import would
+    # close the load cycle. This resolver is only called at finalization — well
+    # after module load — so the local import resolves cheaply. Same cycle-dodge
+    # justification ``base.py`` documents for its ``FilterSet`` / ``OrderSet``
+    # in-function imports. Do NOT hoist either import to module top.
+    from ..conf import settings as conf_settings
+    from .base import (
+        DEFAULT_GLOBALID_STRATEGY,
+        _validate_globalid_strategy,
+    )
+
+    strategy = definition.globalid_strategy
+    if strategy is not None:
+        return strategy
+    setting = getattr(conf_settings, "RELAY_GLOBALID_STRATEGY", None)
+    if setting is not None:
+        return _validate_globalid_strategy(
+            None,
+            setting,
+            relay_shaped=True,
+            source="setting",
+        )
+    return DEFAULT_GLOBALID_STRATEGY
+
+
+# Single source of truth for the "strategy -> payload shape" mapping (spec-031
+# Slice 2/3 plan, DRY watch point). The string constants ``STRING_GLOBALID_STRATEGIES``
+# / ``DEFAULT_GLOBALID_STRATEGY`` live in ``types/base.py`` (Slice 1); these are the
+# payload-shape memberships the encoder, the model-label-routing audit, the
+# strategy-aware filter (``filters/base.py``), and the Slice-3 decoder all
+# reference rather than re-typing ``{"model", "type+model"}`` / ``{"type",
+# "type+model"}`` at each site. ``callable`` and ``custom`` are intentionally in
+# neither set: they are encode-only in 0.0.9 (no decode path), so the decoder's
+# "no decode for these" contract IS their absence from both memberships — there
+# is deliberately no ``{"callable", "custom"}`` literal.
+MODEL_LABEL_STRATEGIES = frozenset({"model", "type+model"})
+TYPE_NAME_STRATEGIES = frozenset({"type", "type+model"})
+
+
+def _emits_model_label(effective_strategy: str | None) -> bool:
+    """Return whether a recorded effective strategy emits the model-label slot.
+
+    ``model`` and ``type+model`` both emit ``app_label.modelname`` in the
+    ``GlobalID`` type-name slot. Used by the encoder closure (which slot to
+    emit) and the model-label-routing audit (the ``emits_model_label`` half).
+    """
+    return effective_strategy in MODEL_LABEL_STRATEGIES
+
+
+def _accepts_model_label_decode(effective_strategy: str | None) -> bool:
+    """Return whether a recorded effective strategy can decode a model-label slot.
+
+    Identical membership to ``_emits_model_label`` — ``model`` and ``type+model``
+    both decode model labels — but named distinctly because the audit's
+    ``accepts_model_label(primary)`` predicate and the Slice-3 decode-Step-2
+    enforcement read the *acceptance* side. Encode and decode acceptance of the
+    model-label shape coincide for the framework strategies, so one frozenset
+    serves both; Slice 3 splits this if a divergence ever surfaces.
+    """
+    return effective_strategy in MODEL_LABEL_STRATEGIES
+
+
+def _accepts_type_name_decode(effective_strategy: str | None) -> bool:
+    """Return whether a recorded effective strategy can decode a GraphQL-type-name slot.
+
+    ``type`` and ``type+model`` both accept a bare ``graphql_type_name`` payload.
+    Sibling of ``_accepts_model_label_decode`` for the type-name shape. Read by
+    BOTH the Slice-3 decode-Step-2 enforcement (the no-dot branch) AND
+    ``filters/base.py::_accepted_globalid_type_names`` (the strategy-aware filter),
+    so the ``{"type", "type+model"}`` membership lives in one place
+    (``TYPE_NAME_STRATEGIES``) instead of being re-typed at each site.
+    """
+    return effective_strategy in TYPE_NAME_STRATEGIES
+
+
+def encode_typename(
+    definition: DjangoTypeDefinition,
+    strategy: str | Callable[..., str],
+    type_cls: type,
+    root: Any,
+    info: Any,
+) -> str:
+    """Compute the ``GlobalID`` type-name slot for one resolved strategy.
+
+    The single per-strategy slot computation (spec-031 Decision 4), invoked by
+    the installed ``resolve_typename`` closure:
+
+    - ``model`` / ``type+model`` → ``definition.model._meta.label_lower``
+      (Django's canonical ``"app_label.modelname"``, e.g. ``products.item``).
+    - ``type`` → ``definition.graphql_type_name`` (matches Strawberry's
+      ``info.path.typename`` default; the framework installs nothing for
+      ``type``, so this branch exists only for a single dispatch surface).
+    - callable → the consumer callable's ``(type_cls, model, root, info) -> str``
+      return, validated non-empty ``str``. A non-``str`` or empty return raises
+      ``ConfigurationError`` naming the type and the contract, rather than
+      letting Strawberry's ``Node._id`` ``assert isinstance(type_name, str)``
+      fire as an opaque ``AssertionError`` (spec-031 Decision 4/10,
+      ``docs/feedback.md`` P2). The callable's arity / sync-ness were already
+      validated at type creation (Slice 1) — this is ONLY the per-call
+      return-value check.
+    """
+    if callable(strategy):
+        result = strategy(type_cls, definition.model, root, info)
+        if not isinstance(result, str) or not result:
+            raise ConfigurationError(
+                f"{definition.graphql_type_name}: the Meta.globalid_strategy callable "
+                f"returned {result!r}; a (type_cls, model, root, info) -> str encoder "
+                "must return a non-empty string for the GlobalID type-name slot.",
+            )
+        return result
+    if strategy in MODEL_LABEL_STRATEGIES:
+        return definition.model._meta.label_lower
+    # ``type`` (the only remaining string strategy): the GraphQL type name.
+    return definition.graphql_type_name
+
+
+def _consumer_overrode_resolve_typename(type_cls: type) -> bool:
+    """Return whether ``type_cls`` declares its own ``resolve_typename``.
+
+    MRO-aware ``existing.__func__ is relay.Node.resolve_typename.__func__``
+    identity test — the same discriminator ``install_relay_node_resolvers``
+    uses for the four ``resolve_*`` defaults. ``resolve_typename`` is a
+    ``@classmethod`` on ``relay.Node`` so it carries ``__func__`` exactly like
+    those. A method inherited unchanged from ``relay.Node`` (or absent) is NOT
+    an override; only a consumer-declared one is.
+    """
+    existing = getattr(type_cls, "resolve_typename", None)
+    existing_func = getattr(existing, "__func__", None)
+    node_func = getattr(relay.Node.resolve_typename, "__func__", None)
+    return existing is not None and existing_func is not None and existing_func is not node_func
+
+
+def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDefinition) -> None:
+    """Inject the strategy-parameterized ``resolve_typename`` default (Phase 2.5).
+
+    Runs alongside ``install_relay_node_resolvers`` for every Relay-Node-shaped
+    type, in the ordered steps of spec-031 Decision 10:
+
+    0. **Re-entrancy guard.** If ``definition.effective_globalid_strategy`` is
+       already set, this type was processed in a prior (possibly partial)
+       finalize run — skip override-detection, recording, and install, leaving
+       the recorded classification and any installed closure intact
+       (``docs/feedback.md`` P1). Load-bearing: a Phase-2.5 raise (including the
+       model-label-routing audit) leaves every type ``finalized = False``, so a
+       re-run re-enters the finalizer loop; without this guard the ``__func__``
+       test would re-run against the *now-installed framework closure* and
+       misclassify the type ``custom``.
+    1. **Override detection.** If the consumer overrode ``resolve_typename``:
+       declaring an explicit ``Meta.globalid_strategy`` too is a both-declared
+       conflict → ``ConfigurationError`` (the schema-wide
+       ``RELAY_GLOBALID_STRATEGY`` setting is NOT a conflict — only the per-type
+       ``Meta`` key collides); otherwise the effective strategy is ``custom``,
+       install nothing (the override owns the slot).
+    2. **No override.** Resolve the raw strategy via
+       ``_resolve_globalid_strategy``; install the framework closure for
+       ``model`` / ``type+model`` / ``callable`` (the closure validates a
+       non-empty ``str`` callable return); install NOTHING for ``type``
+       (Strawberry's default returns ``info.path.typename``, byte-identical to
+       pre-0.0.9).
+    3. **Record** the classification string (``model`` / ``type`` /
+       ``type+model`` / ``callable`` / ``custom``) on
+       ``definition.effective_globalid_strategy`` — the single value decode and
+       the strategy-aware filter read, and the step-0 sentinel.
+    """
+    if definition.effective_globalid_strategy is not None:
+        return
+
+    if _consumer_overrode_resolve_typename(type_cls):
+        if definition.globalid_strategy is not None:
+            raise ConfigurationError(
+                f"{definition.graphql_type_name}: declares both a resolve_typename "
+                "override and an explicit Meta.globalid_strategy. These are two "
+                "contradictory sources for the GlobalID type-name slot; declare a "
+                "resolve_typename override OR Meta.globalid_strategy, not both.",
+            )
+        definition.effective_globalid_strategy = "custom"
+        return
+
+    strategy = _resolve_globalid_strategy(definition)
+    classification = "callable" if callable(strategy) else strategy
+
+    if classification != "type":
+        _install_typename_closure(type_cls, definition, strategy)
+    definition.effective_globalid_strategy = classification
+
+
+def _install_typename_closure(
+    type_cls: type,
+    definition: DjangoTypeDefinition,
+    strategy: str | Callable[..., str],
+) -> None:
+    """Install the framework ``resolve_typename`` classmethod capturing ``strategy``.
+
+    The closure mirrors Strawberry's ``resolve_typename(root, info)`` seam and is
+    installed via ``setattr(type_cls, "resolve_typename", classmethod(...))``.
+    The strategy is resolved once here (at finalization), not per request, so the
+    ``id``-resolution hot path does no strategy lookup (spec-031 Decision 5).
+    Only ``model`` / ``type+model`` / ``callable`` reach here; ``type`` keeps
+    Strawberry's default.
+    """
+
+    def resolve_typename(cls: type, root: Any, info: Any) -> str:
+        return encode_typename(definition, strategy, cls, root, info)
+
+    type_cls.resolve_typename = classmethod(resolve_typename)
+
+
+def decode_global_id(gid: relay.GlobalID | str) -> tuple[type, str]:
+    """Decode a ``GlobalID`` to its ``(DjangoType, node_id)`` via resolve-then-enforce.
+
+    The decode half of the GlobalID-encoding feature (spec-031 Decision 8). It is
+    the forward-looking piece root ``node(id:)`` / ``nodes(ids:)``
+    (``WIP-ALPHA-032-0.0.9``) will consume — no shipped ``0.0.9`` path calls it
+    yet — so it is validated directly by package tests.
+
+    Because its eventual caller feeds it arbitrary client-controlled input, every
+    failure mode surfaces ONE uniform ``ConfigurationError`` (the
+    ``RelatedFilter``-style fail-loud message naming the resolution attempt)
+    rather than leaking Strawberry's ``GlobalIDValueError`` or Python's
+    ``KeyError`` / ``AttributeError`` / ``TypeError``.
+
+    Steps:
+
+    - **Input gate.** A value outside ``(relay.GlobalID, str)`` (``None``, an
+      ``int``, a lazy object) is rejected up front, before any parse.
+    - **Parse.** A ``relay.GlobalID`` is read directly; a ``str`` is parsed via
+      ``relay.GlobalID.from_id`` (catching the ``ValueError`` superset that covers
+      ``GlobalIDValueError``). An empty ``type_name`` or empty ``node_id`` is
+      rejected (``from_id`` does not enforce non-empty slots; the encoder never
+      emits an empty type-name slot and the package has no blank-string pks).
+    - **Step 1 — resolve a candidate.** A model-label slot (the ``type_name``
+      contains a dot, ``"app_label.modelname"``) resolves via
+      ``apps.get_model`` → ``registry.get(model)`` (the primary / lone type,
+      honoring ``Meta.primary``). A GraphQL-type-name slot (no dot) resolves via
+      ``registry.definition_for_graphql_name`` (keyed on ``graphql_type_name``,
+      Relay-Node definitions only).
+    - **Step 2 — enforce the recorded strategy permits the payload shape.** Reads
+      the candidate's stamped ``effective_globalid_strategy``: a model-label
+      payload is permitted iff ``_accepts_model_label_decode`` (``model`` /
+      ``type+model``); a type-name payload iff ``_accepts_type_name_decode``
+      (``type`` / ``type+model``). ``callable`` / ``custom`` are in neither
+      membership (encode-only in ``0.0.9``), and an absent (``None``) strategy
+      (a non-Relay-Node ``DjangoType`` or a mid-state type) is rejected — so a
+      crafted ID cannot resolve to a type that cannot be a Node.
+
+    Returns ``(target_type, node_id)`` where ``target_type`` is the resolved
+    ``DjangoType`` class (``definition.origin``) and ``node_id`` is the parsed id
+    string.
+    """
+    # ``registry`` is reached in-function: ``registry.py`` imports
+    # ``implements_relay_node`` from this module in-function, and ``relay.py``
+    # must not import ``registry`` at module top — the same cycle-dodge
+    # ``_resolve_globalid_strategy`` above documents for its ``conf`` / ``base``
+    # imports. Decode runs well after module load, so the local import is cheap.
+    from ..registry import registry
+
+    if not isinstance(gid, (relay.GlobalID, str)):
+        raise ConfigurationError(
+            f"decode_global_id: expected a relay.GlobalID or its base64 string, got "
+            f"{type(gid).__name__}. A GlobalID must be the encoded id, not a raw payload.",
+        )
+
+    if isinstance(gid, str):
+        try:
+            decoded = relay.GlobalID.from_id(gid)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"decode_global_id: {gid!r} is not a valid GlobalID (malformed base64 or "
+                "not a 'type_name:node_id' shape).",
+            ) from exc
+    else:
+        decoded = gid
+
+    type_name = decoded.type_name
+    node_id = decoded.node_id
+    if not type_name or not node_id:
+        raise ConfigurationError(
+            f"decode_global_id: GlobalID has an empty slot (type_name={type_name!r}, "
+            f"node_id={node_id!r}); both must be non-empty.",
+        )
+
+    is_model_label = "." in type_name
+    if is_model_label:
+        app_label, model_name = type_name.split(".", 1)
+        try:
+            model = apps.get_model(app_label, model_name)
+        except LookupError as exc:
+            raise ConfigurationError(
+                f"decode_global_id: model label {type_name!r} resolves to no installed "
+                "Django model.",
+            ) from exc
+        target_type = registry.get(model)
+        if target_type is None:
+            raise ConfigurationError(
+                f"decode_global_id: model {type_name!r} has no registered (primary) "
+                "Relay-Node DjangoType to decode to.",
+            )
+        definition = registry.get_definition(target_type)
+    else:
+        definition = registry.definition_for_graphql_name(type_name)
+        target_type = definition.origin
+
+    strategy = definition.effective_globalid_strategy if definition is not None else None
+    if strategy is None:
+        raise ConfigurationError(
+            f"decode_global_id: {type_name!r} resolves to a type with no recorded GlobalID "
+            "strategy; it is not a framework-decodable Relay-Node DjangoType.",
+        )
+    permitted = (
+        _accepts_model_label_decode(strategy)
+        if is_model_label
+        else _accepts_type_name_decode(strategy)
+    )
+    if not permitted:
+        raise ConfigurationError(
+            f"decode_global_id: {type_name!r} ({'model-label' if is_model_label else 'type-name'} "
+            f"payload) is not decodable under the candidate's {strategy!r} strategy "
+            "(callable / custom strategies are encode-only in 0.0.9).",
+        )
+
+    return target_type, node_id
 
 
 def _initial_queryset(cls: type) -> models.QuerySet:

@@ -111,18 +111,6 @@ def _input_field_names(type_name: str) -> set[str]:
     return {field["name"] for field in type_info["inputFields"]}
 
 
-# TODO(spec-031-globalid_encoding-0_0_9 Slice 4): Update library live HTTP
-# assertions that inspect emitted Relay GlobalIDs. ``GenreType`` currently
-# pins the GraphQL type-name payload; after the default flip it should assert
-# the model label instead.
-# Pseudocode:
-#   _seed_library_graph()
-#   query allLibraryGenres { id name }
-#   parsed = relay.GlobalID.from_id(response_id)
-#   assert parsed.type_name == "library.genre"
-#   assert parsed.node_id == str(genre.pk)
-
-
 @pytest.mark.django_db
 def test_library_branch_shelf_book_loan_graph_over_http():
     _seed_library_graph()
@@ -707,7 +695,9 @@ def test_library_relay_node_global_id_round_trips():
     genres = payload["data"]["allLibraryGenres"]
     assert len(genres) == 1
     type_name, node_id = _decode_global_id(genres[0]["id"])
-    assert type_name == "GenreType"
+    # Under the 0.0.9 model-label default the GlobalID carries the Django model
+    # label (``library.genre``), not the GraphQL type name ``GenreType``.
+    assert type_name == models.Genre._meta.label_lower
     assert node_id == str(genre.pk)
     assert genres[0]["name"] == "Speculative"
 
@@ -901,7 +891,9 @@ def test_library_books_filter_by_relay_m2m_global_id():
     other_book = models.Book.objects.create(title="Boring", shelf=shelf)
     other_book.genres.add(other)
 
-    global_id = str(relay.GlobalID(type_name="GenreType", node_id=str(sci_fi.pk)))
+    global_id = str(
+        relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=str(sci_fi.pk)),
+    )
     _assert_graphql_data(
         f"""
         query {{
@@ -931,8 +923,12 @@ def test_library_genres_filter_by_relay_own_pk_global_id_in_list():
     fantasy = models.Genre.objects.create(name="Fantasy")
     models.Genre.objects.create(name="Mystery")
 
-    gid_sci_fi = str(relay.GlobalID(type_name="GenreType", node_id=str(sci_fi.pk)))
-    gid_fantasy = str(relay.GlobalID(type_name="GenreType", node_id=str(fantasy.pk)))
+    gid_sci_fi = str(
+        relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=str(sci_fi.pk)),
+    )
+    gid_fantasy = str(
+        relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=str(fantasy.pk)),
+    )
     _assert_graphql_data(
         f"""
         query {{
@@ -949,11 +945,13 @@ def test_library_genres_filter_by_relay_own_pk_global_id_in_list():
 def test_library_genres_filter_by_relay_own_pk_global_id_in_rejects_wrong_type():
     """A wrong-type GlobalID in the ``in`` list is rejected before the query (M1 + H5b).
 
-    Each list element is type-validated against ``GenreType``; a ``BookType``
-    GlobalID must raise rather than silently decode to a bare node id.
+    Each list element is type-validated against the ``library.genre`` model
+    label; a ``library.book`` (``BookType``) GlobalID must raise rather than
+    silently decode to a bare node id. Under the 0.0.9 model-label default the
+    wrong-model payload is the model label ``library.book``, not ``BookType``.
     """
     genre = models.Genre.objects.create(name="SciFi")
-    wrong = str(relay.GlobalID(type_name="BookType", node_id=str(genre.pk)))
+    wrong = str(relay.GlobalID(type_name=models.Book._meta.label_lower, node_id=str(genre.pk)))
     response = _post_graphql(
         f"""
         query {{
@@ -1315,8 +1313,10 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
     book = models.Book.objects.create(title="Hyperion", shelf=shelf)
     book.genres.add(sci_fi)
 
-    right_id = str(relay.GlobalID(type_name="GenreType", node_id=str(sci_fi.pk)))
-    wrong_id = str(relay.GlobalID(type_name="LoanType", node_id=str(sci_fi.pk)))
+    right_id = str(
+        relay.GlobalID(type_name=models.Genre._meta.label_lower, node_id=str(sci_fi.pk)),
+    )
+    wrong_id = str(relay.GlobalID(type_name=models.Loan._meta.label_lower, node_id=str(sci_fi.pk)))
 
     wrong_response = _post_graphql(
         f"""
@@ -1331,9 +1331,12 @@ def test_relay_global_id_filter_rejects_wrong_type_name():
     wrong_payload = wrong_response.json()
     assert "errors" in wrong_payload, wrong_payload
     message = wrong_payload["errors"][0]["message"]
+    # Under the 0.0.9 model-label default the mismatch message reports the model
+    # labels (``library.genre`` expected, ``library.loan`` received), not the
+    # GraphQL type names.
     assert "GlobalID type mismatch" in message
-    assert "GenreType" in message
-    assert "LoanType" in message
+    assert models.Genre._meta.label_lower in message
+    assert models.Loan._meta.label_lower in message
 
     right_response = _post_graphql(
         f"""
@@ -2162,10 +2165,11 @@ def test_genre_connection_full_round_trip():
 
     names_one = [edge["node"]["name"] for edge in conn_one["edges"]]
     assert names_one == ["Alpha", "Banana"]
-    # ``node.id`` is a decodable GenreType GlobalID, not the raw pk.
+    # ``node.id`` is a decodable model-label GlobalID (``library.genre``), not
+    # the raw pk, under the 0.0.9 model-label default.
     for edge in conn_one["edges"]:
         type_name, node_id = _decode_global_id(edge["node"]["id"])
-        assert type_name == "GenreType"
+        assert type_name == models.Genre._meta.label_lower
         assert node_id.isdigit()
     assert conn_one["pageInfo"]["hasNextPage"] is True
     end_cursor = conn_one["pageInfo"]["endCursor"]

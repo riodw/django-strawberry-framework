@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-09
+Last refreshed: 2026-06-10
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -72,7 +72,7 @@ demoted to a bullet under its label.
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
 - `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
-- `0.0.9` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is in progress as four WIP cards — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `WIP-ALPHA-031-0.0.9` (Django-model-based GlobalID encoding), `WIP-ALPHA-032-0.0.9` (the full Relay story), and `WIP-ALPHA-033-0.0.9` (connection-aware optimizer planning). The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
+- `0.0.9` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is in progress as four WIP cards — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), `WIP-ALPHA-032-0.0.9` (the full Relay story), and `WIP-ALPHA-033-0.0.9` (connection-aware optimizer planning). The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -98,9 +98,9 @@ demoted to a bullet under its label.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-031-0.0.9` — Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/spec-031-globalid_encoding-0_0_9.md) |
 | `WIP-ALPHA-032-0.0.9` — Full Relay story (Node + Connection + Root + validation) | No dedicated spec |
 | `WIP-ALPHA-033-0.0.9` — Connection-aware optimizer planning | No dedicated spec |
+| `DONE-031-0.0.9` — Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/spec-031-globalid_encoding-0_0_9.md) |
 | `DONE-030-0.0.9` — `DjangoConnectionField` | [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md) |
 | `DONE-029-0.0.9` — `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md) |
 | `DONE-028-0.0.8` — Ordering subsystem | [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md) |
@@ -133,81 +133,6 @@ demoted to a bullet under its label.
 | `DONE-001-0.0.1` — DjangoType core foundation | [spec-001-django_types-0_0_1.md](docs/SPECS/spec-001-django_types-0_0_1.md) |
 
 ## In progress
-
-<a id="django_model_based_globalid_encoding"></a>
-### [WIP-ALPHA-031-0.0.9 — Django-model-based GlobalID encoding](KANBAN.html#django_model_based_globalid_encoding)
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
-- Severity: Major
-- Status: Needs spec
-- Relative size: S-M
-- Labels: `config`, `public-api`, `registry`, `relay`, `stable-api`, `types`, `versioning`
-- Spec: [spec-031-globalid_encoding-0_0_9.md](docs/spec-031-globalid_encoding-0_0_9.md)
-
-#### Planning note
-
-Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but before the Full Relay story. This is the Relay identity-format decision: Django model identity should be the durable GlobalID anchor before root Node/refetch behavior and client-cache-facing Relay semantics harden.
-
-#### Scope
-
-- Switch the default Relay GlobalID payload for `DjangoType` rows from GraphQL type name + id to Django model label + id, e.g. `products.item:42`.
-- Add a per-type `Meta.globalid_strategy` override and a schema-wide `DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]` setting, with precedence `Meta` override, then setting, then package default.
-- Support the planned strategies: `model` as the new default, `type` as an opt-in legacy/standard Relay convention, `type+model` as a transitional decoder/encoder mode, and callable strategies for fully custom encodings.
-- Route decoded model-label IDs through Django's app registry and the framework registry so multiple `DjangoType`s for one model resolve through the primary type unless the consumer explicitly opts into type-scoped IDs.
-- Document the edge cases: proxy models, multi-table inheritance, slug/custom `resolve_id_attr` values, composite-primary-key rejection, and rare Django model/app rename aliases.
-
-#### Definition of done
-
-- [ ] A new or amended Relay spec records the GlobalID format decision before Full Relay root Node/refetch behavior ships.
-- [ ] Encoder and decoder tests cover `model`, `type`, `type+model`, and callable strategies.
-- [ ] Settings and `Meta.globalid_strategy` validation reject unknown strategy names loudly with `ConfigurationError`.
-- [ ] Multiple-`DjangoType` per model behavior is pinned: model-based IDs route through the primary type; type-scoped IDs remain available when consumers need disjoint auth/cache scopes.
-- [ ] Relay helper tests prove old type-name IDs can be accepted in transitional mode while new emitted IDs use the model-label strategy.
-- [ ] Standing docs describe the default, the opt-out path, and the pre-1.0 compatibility implications.
-
-<!--
-TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Complete the card wrap after implementation and docs land.
-Pseudocode:
-  - move WIP-ALPHA-031-0.0.9 to the next DONE-NNN-0.0.9 slot
-  - keep the spec reference pointing at docs/spec-031-globalid_encoding-0_0_9.md
-  - do not edit version files; the joint 0.0.9 cut owns the bump
--->
-
-#### Foundation-slice seam
-
-- Builds on the shipped Relay Node foundation (`Meta.interfaces = (relay.Node,)`, default `resolve_*` methods, and synthesized-id suppression).
-- Must land before the Full Relay story mints durable root `node(id:)` and connection/refetch IDs into the public surface.
-- The registry already knows the model-to-`DjangoType` mapping; this card changes what the encoded Relay ID points at, not how consumers declare Relay support.
-
-#### Files likely touched
-
-- `django_strawberry_framework/types/relay.py` or the local Relay helper module that owns encode/decode behavior
-- `django_strawberry_framework/types/base.py`
-- `django_strawberry_framework/conf.py`
-- `django_strawberry_framework/registry.py`
-- `tests/types/test_relay_interfaces.py` and related Relay tests
-- `docs/GLOSSARY.md`, `docs/README.md`, and the active Relay spec when the feature ships
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene/relay/node.py::Node.to_global_id` — graphene-django Relay nodes encode the GlobalID as base64 `<GraphQL type name>:<id>` (type-name-anchored). Tagged **parity-adjacent, not required**: the type-anchored convention itself already shipped at parity in `DONE-015-0.0.5` (the Relay-supplied `id: GlobalID!`). 031 preserves that exact convention as the opt-in `type` strategy and makes a Django-model-anchored payload (`app_label.model:id`, e.g. `products.item:42`) the new default — extending the upstream GlobalID surface with a Django-idiomatic encoding neither upstream offers.
-- `strawberry.relay.GlobalID` (consumed by strawberry-graphql-django; `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py` wires the Relay node types) encodes `to_base64(type_name, node_id)` — also type-name-anchored. Same parity-adjacent relationship: the standard convention stays available as the `type` strategy, while the model-anchored default plus the `Meta.globalid_strategy` override and the `RELAY_GLOBALID_STRATEGY` setting are the beyond-parity differentiator. Tagged `adjacent` (not `required`) for both upstreams so the Alpha cut stays parity-honest — GlobalID parity proper was met in `DONE-015-0.0.5`.
-
-#### Why it matters
-
-- The standard Relay convention bakes the GraphQL type name into durable object identity. In Django apps the model is the durable thing; the GraphQL type is a refactor-friendly facade.
-- Getting this right before `1.0.0` lets consumers rename GraphQL types without invalidating every cached GlobalID. Waiting until after Full Relay ships turns the same decision into migration work.
-
-#### Other
-
-- Original backlog score: Realistic 9/10, Impact 8/10, Difficulty 3/10; bang-for-buck score 24.0.
-- Legitimate legacy mode remains available: projects that intentionally scope identity by GraphQL type can opt into the `type` strategy per type or project-wide.
-
-#### Card references
-
-- Related: This card should land before Full Relay because root `node(id:)`, `nodes(ids:)`, and refetch helpers make GlobalID encoding a public durability contract. -> `WIP-ALPHA-032-0.0.9` — Full Relay story (Node + Connection + Root + validation)
-- Related: `DjangoConnectionField` can land before this card because connection pagination does not require changing the Relay GlobalID payload. -> `DONE-030-0.0.9` — `DjangoConnectionField`
 
 <a id="full_relay_story_node_connection_root_validation"></a>
 ### [WIP-ALPHA-032-0.0.9 — Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
@@ -1586,6 +1511,109 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 - Related: Every other Beta card (`TODO-BETA-045-0.1.1` through `TODO-BETA-054-0.1.6` plus `TODO-BETA-049-0.1.3` and `TODO-BETA-052-0.1.5`) is in `DONE`. -> `TODO-BETA-052-0.1.5` — Product-catalog Layer 3 HTTP GraphQL tests
 
 ## Done
+
+<a id="django_model_based_globalid_encoding"></a>
+### [DONE-031-0.0.9 — Django-model-based GlobalID encoding](KANBAN.html#django_model_based_globalid_encoding)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
+- Severity: Major
+- Status: Needs spec
+- Relative size: S-M
+- Labels: `config`, `public-api`, `registry`, `relay`, `stable-api`, `types`, `versioning`
+- Spec: [spec-031-globalid_encoding-0_0_9.md](docs/spec-031-globalid_encoding-0_0_9.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
+| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [Schema introspection management command](docs/GLOSSARY.md#schema-introspection-management-command) | shipped (`0.0.9`) |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+| [`Meta.globalid_strategy`](docs/GLOSSARY.md#metaglobalid_strategy) | shipped (`0.0.9`) |
+| [RELAY_GLOBALID_STRATEGY](docs/GLOSSARY.md#relay_globalid_strategy) | shipped (`0.0.9`) |
+
+#### Planning note
+
+Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but before the Full Relay story. This is the Relay identity-format decision: Django model identity should be the durable GlobalID anchor before root Node/refetch behavior and client-cache-facing Relay semantics harden.
+
+#### Scope
+
+- Switch the default Relay GlobalID payload for `DjangoType` rows from GraphQL type name + id to Django model label + id, e.g. `products.item:42`.
+- Add a per-type `Meta.globalid_strategy` override and a schema-wide `DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]` setting, with precedence `Meta` override, then setting, then package default.
+- Support the planned strategies: `model` as the new default, `type` as an opt-in legacy/standard Relay convention, `type+model` as a transitional decoder/encoder mode, and callable strategies for fully custom encodings.
+- Route decoded model-label IDs through Django's app registry and the framework registry so multiple `DjangoType`s for one model resolve through the primary type unless the consumer explicitly opts into type-scoped IDs.
+- Document the edge cases: proxy models, multi-table inheritance, slug/custom `resolve_id_attr` values, composite-primary-key rejection, and rare Django model/app rename aliases.
+
+#### Definition of done
+
+- [x] A new or amended Relay spec records the GlobalID format decision before Full Relay root Node/refetch behavior ships.
+- [x] Encoder and decoder tests cover `model`, `type`, `type+model`, and callable strategies.
+- [x] Settings and `Meta.globalid_strategy` validation reject unknown strategy names loudly with `ConfigurationError`.
+- [x] Multiple-`DjangoType` per model behavior is pinned: model-based IDs route through the primary type; type-scoped IDs remain available when consumers need disjoint auth/cache scopes.
+- [x] Relay helper tests prove old type-name IDs can be accepted in transitional mode while new emitted IDs use the model-label strategy.
+- [x] Standing docs describe the default, the opt-out path, and the pre-1.0 compatibility implications.
+
+#### Foundation-slice seam
+
+- Builds on the shipped Relay Node foundation (`Meta.interfaces = (relay.Node,)`, default `resolve_*` methods, and synthesized-id suppression).
+- Must land before the Full Relay story mints durable root `node(id:)` and connection/refetch IDs into the public surface.
+- The registry already knows the model-to-`DjangoType` mapping; this card changes what the encoded Relay ID points at, not how consumers declare Relay support.
+
+#### Files likely touched
+
+- `django_strawberry_framework/types/relay.py` or the local Relay helper module that owns encode/decode behavior
+- `django_strawberry_framework/types/base.py`
+- `django_strawberry_framework/conf.py`
+- `django_strawberry_framework/registry.py`
+- `tests/types/test_relay_interfaces.py` and related Relay tests
+- `docs/GLOSSARY.md`, `docs/README.md`, and the active Relay spec when the feature ships
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene/relay/node.py::Node.to_global_id` — graphene-django Relay nodes encode the GlobalID as base64 `<GraphQL type name>:<id>` (type-name-anchored). Tagged **parity-adjacent, not required**: the type-anchored convention itself already shipped at parity in `DONE-015-0.0.5` (the Relay-supplied `id: GlobalID!`). 031 preserves that exact convention as the opt-in `type` strategy and makes a Django-model-anchored payload (`app_label.model:id`, e.g. `products.item:42`) the new default — extending the upstream GlobalID surface with a Django-idiomatic encoding neither upstream offers.
+- `strawberry.relay.GlobalID` (consumed by strawberry-graphql-django; `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py` wires the Relay node types) encodes `to_base64(type_name, node_id)` — also type-name-anchored. Same parity-adjacent relationship: the standard convention stays available as the `type` strategy, while the model-anchored default plus the `Meta.globalid_strategy` override and the `RELAY_GLOBALID_STRATEGY` setting are the beyond-parity differentiator. Tagged `adjacent` (not `required`) for both upstreams so the Alpha cut stays parity-honest — GlobalID parity proper was met in `DONE-015-0.0.5`.
+
+#### Why it matters
+
+- The standard Relay convention bakes the GraphQL type name into durable object identity. In Django apps the model is the durable thing; the GraphQL type is a refactor-friendly facade.
+- Getting this right before `1.0.0` lets consumers rename GraphQL types without invalidating every cached GlobalID. Waiting until after Full Relay ships turns the same decision into migration work.
+
+#### Other
+
+- Original backlog score: Realistic 9/10, Impact 8/10, Difficulty 3/10; bang-for-buck score 24.0.
+- Legitimate legacy mode remains available: projects that intentionally scope identity by GraphQL type can opt into the `type` strategy per type or project-wide.
+
+#### Card references
+
+- Related: This card should land before Full Relay because root `node(id:)`, `nodes(ids:)`, and refetch helpers make GlobalID encoding a public durability contract. -> `WIP-ALPHA-032-0.0.9` — Full Relay story (Node + Connection + Root + validation)
+- Related: `DjangoConnectionField` can land before this card because connection pagination does not require changing the Relay GlobalID payload. -> `DONE-030-0.0.9` — `DjangoConnectionField`
 
 <a id="djangoconnectionfield"></a>
 ### [DONE-030-0.0.9 — `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)

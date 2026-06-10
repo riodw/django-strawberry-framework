@@ -4,15 +4,6 @@ This file is the detailed layout reference. It exists to preserve the package/te
 
 For install, local development, testing, and the canonical documentation map, start from [`../README.md`][readme].
 
-<!--
-TODO(spec-031-globalid_encoding-0_0_9 Slice 5): Refresh the layout reference after the GlobalID work lands.
-Pseudocode:
-  - keep encode/decode ownership under `django_strawberry_framework/types/relay.py`
-  - mention `registry.py::TypeRegistry.definition_for_graphql_name`
-  - mention the `RELAY_GLOBALID_STRATEGY` settings read if settings keys are enumerated
-  - do not add a new module entry unless implementation creates a real new module
--->
-
 The upstream trees are captured for reference while shaping `django-strawberry-framework`'s own subpackage layout. Filters applied: `__pycache__/` directories, package-internal `tests/` directories, `conftest.py`, and `*.pyc` files are excluded so both trees show only the library logic surface (the strawberry-django source checkout already keeps tests outside the package directory; graphene-django ships its tests inside the installed package, so they're filtered here for comparability).
 
 ## graphene_django
@@ -206,7 +197,7 @@ django_strawberry_framework/
 ├── apps.py                  # AppConfig
 ├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
 ├── exceptions.py            # error hierarchy
-├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6: primary_for, types_for, models_with_multiple_types; unregister test-fixture helper)
+├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6: primary_for, types_for, models_with_multiple_types; definition_for_graphql_name graphql-type-name lookup over Relay-Node definitions, 0.0.9; unregister test-fixture helper)
 ├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
 ├── list_field.py            # DjangoListField (non-Relay list[T] factory for root Query fields; shipped in 0.0.7)
 ├── connection.py            # DjangoConnectionField / DjangoConnection (Relay connection factory; shipped in 0.0.9)
@@ -226,7 +217,7 @@ django_strawberry_framework/
 │   ├── definition.py        # DjangoTypeDefinition (canonical per-type metadata with Meta.primary flag and forward-reserved Layer-3 slots)
 │   ├── finalizer.py         # finalize_django_types(): _audit_primary_ambiguity + Phase 1 unresolved-target detection + Phase 2 resolver attachment + Phase 2.5 interfaces/Relay + Phase 3 strawberry.type decoration
 │   ├── relations.py         # PendingRelationAnnotation sentinel + metaclass
-│   ├── relay.py             # Relay Node interface wiring (resolve_* defaults, id suppression, is_type_of injection)
+│   ├── relay.py             # Relay Node interface wiring (resolve_* defaults, id suppression, is_type_of injection; strategy-parameterized resolve_typename injection + decode_global_id for model-anchored GlobalID encoding, 0.0.9)
 │   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers, B3 N+1 detection
 ├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O6 + B1–B8 shipped
 │   ├── __init__.py          # re-exports DjangoOptimizerExtension

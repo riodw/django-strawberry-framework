@@ -577,7 +577,7 @@ def _owner_type_name(owner_definition: DjangoTypeDefinition | None) -> str | Non
     """Return the GraphQL type name for ``owner_definition`` (or ``None``).
 
     Delegates to ``DjangoTypeDefinition.graphql_type_name`` so the three
-    callers (this helper, ``filters/base.py::_expected_global_id_type_name``,
+    callers (this helper, ``filters/base.py::_accepted_globalid_type_names``,
     ``types/finalizer.py::_bind_filterset_owner``) share one derivation
     rule and cannot drift across renames.
     """

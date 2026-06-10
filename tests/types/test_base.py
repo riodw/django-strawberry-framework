@@ -2,10 +2,10 @@
 
 Slice scope:
 
-- Slice 1 — registry behaviour (``register``, ``get``, collision, ``clear``).
-- Slice 2 — Meta validation, scalar field synthesis, default ``get_queryset``,
+- Slice 1 - registry behaviour (``register``, ``get``, collision, ``clear``).
+- Slice 2 - Meta validation, scalar field synthesis, default ``get_queryset``,
   Strawberry finalization, ``convert_scalar`` direct unit coverage.
-- Slice 3 — relation conversion (forward FK, reverse FK, nullable widening,
+- Slice 3 - relation conversion (forward FK, reverse FK, nullable widening,
   finalization-time unregistered-target rejection); ``_build_annotations`` dispatch on
   ``field.is_relation`` rather than filtering relations out.
 
@@ -62,7 +62,7 @@ def _isolate_registry():
 
 
 # ---------------------------------------------------------------------------
-# Slice 1 — registry behaviour
+# Slice 1 - registry behaviour
 # ---------------------------------------------------------------------------
 
 
@@ -101,7 +101,7 @@ def test_registry_clear_drops_types_and_enums():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — Meta validation
+# Slice 2 - Meta validation
 # ---------------------------------------------------------------------------
 
 
@@ -230,7 +230,7 @@ def test_interfaces_is_shipped_not_deferred():
     """``interfaces`` is a shipped Meta key (in ``ALLOWED_META_KEYS``), not deferred.
 
     Guards against the prior regression where ``test_meta_rejects_each_deferred_key``
-    silently included ``"interfaces"`` and passed for the wrong reason — the
+    silently included ``"interfaces"`` and passed for the wrong reason - the
     ``_validate_interfaces`` shape error happens to contain the substring
     ``"interfaces"``, so the deferred-key ``match=`` regex was satisfied by a
     shape-validation message rather than a deferred-key message. The
@@ -247,7 +247,7 @@ def test_select_fields_signature_accepts_validated_specs():
 
     Pins the Medium fix from ``rev-types__base.md``: the function no longer
     re-runs ``_normalize_fields_spec`` / ``_normalize_sequence_spec`` (those
-    ran inside ``_validate_meta``) — it takes the model plus the two
+    ran inside ``_validate_meta``) - it takes the model plus the two
     validated specs directly. Calling with both specs ``None`` returns every
     Django field; passing a fields tuple narrows the result.
     """
@@ -295,7 +295,7 @@ def test_meta_filterset_class_accepts_filterset_subclass():
 
 
 def test_meta_connection_in_allowed_meta_keys():
-    """``Meta.connection`` ships in spec-030 Slice 1 — a net-new ALLOWED key.
+    """``Meta.connection`` ships in spec-030 Slice 1 - a net-new ALLOWED key.
 
     Net-new ALLOWED, NOT a DEFERRED_META_KEYS promotion (spec-030 Decision 8;
     mirrors the filterset/orderset precedent).
@@ -364,8 +364,8 @@ def test_meta_connection_accepts_direct_relay_node_inheritance():
 
     ``docs/feedback.md`` P2: the Relay-shape gate for ``Meta.connection`` runs in
     ``__init_subclass__`` using the canonical ``_is_relay_shaped`` predicate, so a
-    direct ``class Foo(DjangoType, relay.Node)`` — Relay-shaped WITHOUT
-    ``Meta.interfaces`` — can opt into ``total_count``, matching the
+    direct ``class Foo(DjangoType, relay.Node)`` - Relay-shaped WITHOUT
+    ``Meta.interfaces`` - can opt into ``total_count``, matching the
     ``DjangoConnectionField`` field guard. One consistent definition of
     "Relay-shaped" across both surfaces.
     """
@@ -413,12 +413,12 @@ def test_meta_connection_absent_leaves_definition_none():
 
 
 # ---------------------------------------------------------------------------
-# spec-031 Slice 1 — Meta.globalid_strategy + RELAY_GLOBALID_STRATEGY precedence
+# spec-031 Slice 1 - Meta.globalid_strategy + RELAY_GLOBALID_STRATEGY precedence
 # ---------------------------------------------------------------------------
 
 
 def test_meta_globalid_strategy_in_allowed_meta_keys():
-    """``Meta.globalid_strategy`` ships in spec-031 Slice 1 — a net-new ALLOWED key.
+    """``Meta.globalid_strategy`` ships in spec-031 Slice 1 - a net-new ALLOWED key.
 
     Net-new ALLOWED, NOT a ``DEFERRED_META_KEYS`` promotion (spec-031 Decision 6;
     mirrors the connection / filterset / orderset precedent).
@@ -565,7 +565,7 @@ def test_meta_globalid_strategy_partial_wrapped_async_callable_raises():
     """A ``functools.partial`` around an async callable instance is rejected too.
 
     ``inspect.iscoroutinefunction`` only unwraps a partial whose ``.func`` is an
-    ``async def`` function — NOT a partial around an async callable *instance*, so
+    ``async def`` function - NOT a partial around an async callable *instance*, so
     both the partial and its ``__call__`` read as sync. The validator unwraps
     ``partial.func`` before the sync-ness check, so it fails loud at type creation
     instead of leaking a coroutine at the first encode (``docs/feedback.md`` P2).
@@ -622,7 +622,7 @@ def test_meta_globalid_strategy_absent_leaves_definition_none():
 
 
 def test_resolve_globalid_strategy_precedence(settings):
-    """``_resolve_globalid_strategy`` applies Meta → setting → ``"model"`` default.
+    """``_resolve_globalid_strategy`` applies Meta -> setting -> ``"model"`` default.
 
     Also pins the unknown-setting failure: the setting path validates through
     the same rule as the ``Meta`` path, raising ``ConfigurationError`` whose
@@ -657,11 +657,11 @@ def test_resolve_globalid_strategy_precedence(settings):
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type"}
     assert _resolve_globalid_strategy(no_meta_def) == "type"
 
-    # Tier 3: no Meta + no setting → the "model" package default.
+    # Tier 3: no Meta + no setting -> the "model" package default.
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
     assert _resolve_globalid_strategy(no_meta_def) == "model"
 
-    # Unknown setting value → ConfigurationError naming the setting.
+    # Unknown setting value -> ConfigurationError naming the setting.
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "nonsense"}
     with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
         _resolve_globalid_strategy(no_meta_def)
@@ -767,7 +767,7 @@ def test_meta_optimizer_hints_with_empty_field_selection_raises_configuration_er
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — Meta.primary recognition
+# Slice 2 - Meta.primary recognition
 # ---------------------------------------------------------------------------
 
 
@@ -903,7 +903,7 @@ def test_two_primary_types_same_model_raises():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — scalar synthesis
+# Slice 2 - scalar synthesis
 # ---------------------------------------------------------------------------
 
 
@@ -959,7 +959,7 @@ def test_meta_exclude_filters_concrete_fields():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — Strawberry finalization
+# Slice 2 - Strawberry finalization
 # ---------------------------------------------------------------------------
 
 
@@ -999,7 +999,7 @@ def test_meta_description_threads_through_to_strawberry():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — default get_queryset is identity
+# Slice 2 - default get_queryset is identity
 # ---------------------------------------------------------------------------
 
 
@@ -1044,7 +1044,7 @@ def test_has_custom_get_queryset_true_when_overridden():
 def test_has_custom_get_queryset_inherits_through_intermediate_base():
     """A subclass without its own ``get_queryset`` whose parent overrides one still reports True.
 
-    The sentinel sits on the class itself — Python's normal attribute
+    The sentinel sits on the class itself - Python's normal attribute
     lookup walks the MRO, so a child that does not redeclare
     ``get_queryset`` inherits the parent's ``False`` flag through the
     class hierarchy without us writing any MRO-walking code.
@@ -1073,7 +1073,7 @@ def test_has_custom_get_queryset_inherits_through_intermediate_base():
 def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
     """A concrete subclass inherits override-detection from an abstract base that has no ``Meta``.
 
-    The abstract-shared-base pattern is documented as supported — the
+    The abstract-shared-base pattern is documented as supported - the
     ``__init_subclass__`` ``meta is None`` early return notes
     "intermediate abstract subclasses without Meta are allowed". For
     that pattern to work end-to-end with the optimizer's
@@ -1086,7 +1086,7 @@ def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
     """
 
     class TenantScopedType(DjangoType):
-        """Abstract base — no Meta, but defines ``get_queryset``."""
+        """Abstract base - no Meta, but defines ``get_queryset``."""
 
         @classmethod
         def get_queryset(cls, queryset, info, **kwargs):
@@ -1107,7 +1107,7 @@ def test_has_custom_get_queryset_inherits_through_abstract_base_without_meta():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — convert_scalar direct unit coverage
+# Slice 2 - convert_scalar direct unit coverage
 # ---------------------------------------------------------------------------
 
 
@@ -1120,7 +1120,7 @@ def test_convert_scalar_raises_on_unsupported_field_type(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 — relation conversion via _build_annotations
+# Slice 3 - relation conversion via _build_annotations
 # ---------------------------------------------------------------------------
 
 
@@ -1135,7 +1135,7 @@ def test_relation_fk_to_target_djangotype():
     class ItemType(DjangoType):
         class Meta:
             model = Item
-            # Skip ``entries`` reverse rel — Entry is unregistered in this test.
+            # Skip ``entries`` reverse rel - Entry is unregistered in this test.
             fields = ("id", "name", "category")
 
     finalize_django_types()
@@ -1277,7 +1277,7 @@ def test_resolved_relation_annotation_nullable_fk_widens_to_optional(monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# spec-029 Slice 3 — Meta.nullable_overrides / Meta.required_overrides
+# spec-029 Slice 3 - Meta.nullable_overrides / Meta.required_overrides
 #
 # Synthetic ``managed=False`` models give clean control over per-field
 # ``null`` (and a relation field) for the override-applies and validation
@@ -1363,7 +1363,7 @@ def test_override_unknown_field_raises():
 
 
 def test_override_excluded_field_raises():
-    """A name excluded from the selected set raises — distinct from unknown (Decision 8 rule 2)."""
+    """A name excluded from the selected set raises - distinct from unknown (Decision 8 rule 2)."""
     with pytest.raises(ConfigurationError, match="not in the selected set"):
         # ``note`` exists on the model but is excluded from the type.
         _make_override_type(
@@ -1385,7 +1385,7 @@ def test_override_consumer_authored_field_raises():
 
 
 def test_override_relation_field_raises():
-    """A relation field name raises — scalar-only scope (Decision 10)."""
+    """A relation field name raises - scalar-only scope (Decision 10)."""
     with pytest.raises(ConfigurationError, match="relation field"):
         _make_override_type(
             _make_override_model(),
@@ -1435,7 +1435,7 @@ def test_override_redundant_is_no_op():
 
     ``nullable_overrides`` on an already-nullable column and
     ``required_overrides`` on an already-non-null column are legitimate
-    (if redundant) declarations — pinned as a passing case (Edge cases).
+    (if redundant) declarations - pinned as a passing case (Edge cases).
     """
     # note is already nullable; text_value is already non-null.
     override_type = _make_override_type(

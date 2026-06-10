@@ -13,7 +13,7 @@ both production siblings, not just the tests.
 
 ``OptimizationPlan`` and ``plan_optimizations`` live at their dotted
 module paths (``optimizer.plans`` and ``optimizer.walker``) and are
-not re-exported here — they are internal implementation details
+not re-exported here - they are internal implementation details
 consumed by ``extension.py`` and tests, not consumer-facing API.
 
 The canonical ``logger`` is declared at the top-level package

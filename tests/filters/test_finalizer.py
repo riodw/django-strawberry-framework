@@ -69,7 +69,7 @@ def _isolate_registry():
 
 
 # ---------------------------------------------------------------------------
-# Subpass ordering — H1 of rev8.
+# Subpass ordering - H1 of rev8.
 # ---------------------------------------------------------------------------
 
 
@@ -77,7 +77,7 @@ def test_phase_2_5_binds_all_owners_before_expansion():
     """Subpass 1 must complete across both owners before any ``get_filters`` runs.
 
     Pre-declares ``GenreFilter`` so ``BookFilter`` can reference it as a
-    class object (not a forward-string — that would force resolution
+    class object (not a forward-string - that would force resolution
     against the test function's local scope which Slice 1's resolver
     cannot reach). Instruments ``GenreFilter.get_filters`` so each
     invocation records whether ``_owner_definition`` was already set.
@@ -150,7 +150,7 @@ def test_phase_2_5_binds_all_owners_before_expansion():
 
 
 # ---------------------------------------------------------------------------
-# Strict multi-owner reuse — H2 of rev8.
+# Strict multi-owner reuse - H2 of rev8.
 # ---------------------------------------------------------------------------
 
 
@@ -165,7 +165,7 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_target():
     # Both PrimaryShelfType and SecondaryShelfType are registered against
     # Shelf, but only one is primary. ``PrimaryBookType`` resolves
     # ``shelf`` to ``PrimaryShelfType``; ``SecondaryBookType`` will
-    # resolve to the same primary unless we force otherwise — to actually
+    # resolve to the same primary unless we force otherwise - to actually
     # test divergence we set the primary differently before each book
     # binds, but H2-rev8's check operates on the FilterSet's stored
     # ``_owner_definition`` vs the candidate. Simulate divergence by
@@ -226,7 +226,7 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_target():
     assert "shelf" in msg
     # Ensure the canonical name resolution surfaced in the message.
     assert "DivergedShelfType" in msg or "PrimaryShelfType" in msg
-    # Quiet the linter — fake_definition pinned for inspection.
+    # Quiet the linter - fake_definition pinned for inspection.
     assert isinstance(fake_definition.origin.__qualname__, str)
 
 
@@ -249,7 +249,7 @@ def test_phase_2_5_accepts_multi_owner_with_identical_target():
     declaration is a single ``RelatedFilter`` entry. Both owner
     definitions consult ``Book._meta.get_field("shelf").related_model``,
     which is the same ``Shelf``; ``registry.primary_for(Shelf)`` returns
-    ``ShelfType`` for both — so ``related_target_for("shelf")`` returns
+    ``ShelfType`` for both - so ``related_target_for("shelf")`` returns
     ``(ShelfDefinition, <ForeignKey>)`` from both owner contexts, the
     target ``DjangoTypeDefinition`` identity matches, and the
     ``_graphql_type_name`` strings match. Assert: no raise, and the
@@ -312,8 +312,8 @@ def test_phase_2_5_accepts_multi_owner_with_identical_target():
     primary_definition = PrimaryBookType.__django_strawberry_definition__
     secondary_definition = SecondaryBookType.__django_strawberry_definition__
     # The two owner definitions are distinct (NOT the same identity);
-    # the strict-equality walk — not the ``previous is definition``
-    # short-circuit — is what accepted the second binding.
+    # the strict-equality walk - not the ``previous is definition``
+    # short-circuit - is what accepted the second binding.
     assert primary_definition is not secondary_definition
     # The ``_owner_definition`` slot stores the FIRST binding per spec-021
     # line 665. Iteration order from ``registry.iter_definitions()`` is
@@ -360,7 +360,7 @@ def test_phase_2_5_accepts_idempotent_rebind_of_same_filterset_owner_pair():
 
 
 # ---------------------------------------------------------------------------
-# Orphan ``filter_input_type`` references — H5 of rev5.
+# Orphan ``filter_input_type`` references - H5 of rev5.
 # ---------------------------------------------------------------------------
 
 
@@ -532,7 +532,7 @@ def test_phase_2_5_orphan_validation_lists_every_orphan_filterset():
 
 
 # ---------------------------------------------------------------------------
-# Materialization & idempotency — Decision 9.
+# Materialization & idempotency - Decision 9.
 # ---------------------------------------------------------------------------
 
 
@@ -609,7 +609,7 @@ def test_materialize_input_class_rejects_collision_on_distinct_classes():
 
 
 # ---------------------------------------------------------------------------
-# Registry clear — Decision 9 lifecycle.
+# Registry clear - Decision 9 lifecycle.
 # ---------------------------------------------------------------------------
 
 
@@ -863,7 +863,7 @@ def test_phase_2_5_runs_under_relay_node_interface():
 
 
 # ---------------------------------------------------------------------------
-# _bind_filterset_owner — direct unit coverage of the binding branches.
+# _bind_filterset_owner - direct unit coverage of the binding branches.
 # ---------------------------------------------------------------------------
 
 
@@ -958,7 +958,7 @@ def test_bind_filterset_owner_rejects_diverging_own_pk_relay_node_ness():
     """A Relay-node owner and a plain owner cannot share one FilterSet (H4b).
 
     The filterset's own ``id`` resolves to a GlobalID under the Relay owner
-    but a scalar under the plain owner — an own-PK ambiguity the binding
+    but a scalar under the plain owner - an own-PK ambiguity the binding
     must reject loudly rather than silently pinning to whichever bound
     first. This is the genuine owner-dependent axis (relation targets
     resolve globally by target model and cannot diverge).

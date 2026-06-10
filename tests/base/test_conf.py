@@ -92,7 +92,7 @@ def test_reload_settings_updates_already_imported_reference(settings):
     """A reference bound via ``from .conf import settings`` must see updates.
 
     Pins the contract that ``reload_settings`` mutates the existing instance
-    rather than rebinding the module global — otherwise the docstring's
+    rather than rebinding the module global - otherwise the docstring's
     recommended import pattern breaks under ``override_settings`` /
     ``pytest-django``'s ``settings`` fixture.
     """

@@ -25,7 +25,7 @@ from django_strawberry_framework import BigInt, strawberry_config
 from django_strawberry_framework.scalars import _parse_bigint, _serialize_bigint
 
 # ---------------------------------------------------------------------------
-# Strict serializer — positive cases
+# Strict serializer - positive cases
 # ---------------------------------------------------------------------------
 
 
@@ -34,7 +34,7 @@ def test_bigint_serializes_int_as_decimal_string():
 
 
 def test_bigint_serializes_zero():
-    """``_serialize_bigint(0) == "0"`` — covers the ``int.__bool__ is False`` edge."""
+    """``_serialize_bigint(0) == "0"`` - covers the ``int.__bool__ is False`` edge."""
     assert _serialize_bigint(0) == "0"
 
 
@@ -53,7 +53,7 @@ def test_bigint_serializes_signed_int64_max():
 
 
 # ---------------------------------------------------------------------------
-# Strict serializer — negative cases (B2)
+# Strict serializer - negative cases (B2)
 # ---------------------------------------------------------------------------
 
 
@@ -66,7 +66,7 @@ def test_bigint_serialize_rejects_bool():
 
 
 def test_bigint_serialize_rejects_float():
-    """``float`` values raise ``TypeError`` — no implicit truncation via ``str(float)``."""
+    """``float`` values raise ``TypeError`` - no implicit truncation via ``str(float)``."""
     with pytest.raises(TypeError):
         _serialize_bigint(1.9)
     with pytest.raises(TypeError):
@@ -90,7 +90,7 @@ def test_bigint_serialize_rejects_non_int_types():
 
 
 # ---------------------------------------------------------------------------
-# Strict parser — positive cases
+# Strict parser - positive cases
 # ---------------------------------------------------------------------------
 
 
@@ -99,7 +99,7 @@ def test_bigint_parses_python_int():
 
 
 def test_bigint_parses_python_zero():
-    """``_parse_bigint(0) == 0`` — pins the int-zero branch."""
+    """``_parse_bigint(0) == 0`` - pins the int-zero branch."""
     assert _parse_bigint(0) == 0
 
 
@@ -112,7 +112,7 @@ def test_bigint_parses_negative_decimal_string_to_int():
 
 
 def test_bigint_parses_zero_string():
-    """``_parse_bigint("0") == 0`` — pins the regex's ``(0|...)`` first alternative."""
+    """``_parse_bigint("0") == 0`` - pins the regex's ``(0|...)`` first alternative."""
     assert _parse_bigint("0") == 0
 
 
@@ -127,7 +127,7 @@ def test_bigint_parses_signed_int64_max_string():
 
 
 # ---------------------------------------------------------------------------
-# Strict parser — negative cases
+# Strict parser - negative cases
 # ---------------------------------------------------------------------------
 
 
@@ -188,11 +188,11 @@ def test_bigint_rejects_leading_plus():
 
 
 def test_bigint_rejects_unicode_decimal_digits():
-    """ASCII-only — Unicode decimal digit strings rejected."""
+    """ASCII-only - Unicode decimal digit strings rejected."""
     with pytest.raises(ValueError):
-        _parse_bigint("１２")
+        _parse_bigint("\uff11\uff12")
     with pytest.raises(ValueError):
-        _parse_bigint("-１")
+        _parse_bigint("-\uff11")
 
 
 def test_bigint_rejects_leading_zeroes():
@@ -202,7 +202,7 @@ def test_bigint_rejects_leading_zeroes():
 
 
 def test_bigint_rejects_negative_zero():
-    """The regex permits ``"0"`` only — ``"-0"`` is rejected."""
+    """The regex permits ``"0"`` only - ``"-0"`` is rejected."""
     with pytest.raises(ValueError):
         _parse_bigint("-0")
 
@@ -226,7 +226,7 @@ def test_bigint_rejects_none():
 def test_bigint_is_importable_from_top_level():
     """Cheap insurance against an ``__init__.py`` import-order regression.
 
-    Type-shape assertions intentionally avoided — ``ScalarWrapper`` is an
+    Type-shape assertions intentionally avoided - ``ScalarWrapper`` is an
     undocumented internal Strawberry path; schema-execution tests catch
     deeper regressions with stronger signal.
     """
@@ -246,7 +246,7 @@ def test_package_import_does_not_emit_strawberry_deprecation_warning():
     the importlib.reload-doesn't-reload-submodules trap.
 
     ``sys.executable`` is the venv's Python under ``uv run pytest``, so the
-    subprocess inherits the editable package install — no PATH / PYTHONPATH
+    subprocess inherits the editable package install - no PATH / PYTHONPATH
     munging needed.
     """
     result = subprocess.run(
@@ -267,7 +267,7 @@ def test_package_import_does_not_emit_strawberry_deprecation_warning():
 
 
 # ---------------------------------------------------------------------------
-# strawberry_config() factory — scalar-map tests
+# strawberry_config() factory - scalar-map tests
 # ---------------------------------------------------------------------------
 
 
@@ -342,14 +342,14 @@ def test_strawberry_config_independent_call_returns_independent_instance():
 
 
 # ---------------------------------------------------------------------------
-# strawberry_config() factory — **config_kwargs passthrough tests
+# strawberry_config() factory - **config_kwargs passthrough tests
 # ---------------------------------------------------------------------------
 
 
 def test_strawberry_config_forwards_auto_camel_case_kwarg():
     """``auto_camel_case`` is forwarded; assert on ``name_converter.auto_camel_case``
     because ``auto_camel_case`` is a dataclass ``InitVar`` on ``StrawberryConfig``
-    (spec #"`auto_camel_case` is declared as a dataclass `InitVar`" — verified against upstream ``StrawberryConfig.__post_init__``).
+    (spec #"`auto_camel_case` is declared as a dataclass `InitVar`" - verified against upstream ``StrawberryConfig.__post_init__``).
     """
     overridden = strawberry_config(auto_camel_case=False)
     assert overridden.name_converter.auto_camel_case is False
@@ -401,7 +401,7 @@ def test_strawberry_config_unknown_kwarg_raises_typeerror_from_upstream():
 
 
 # ---------------------------------------------------------------------------
-# strawberry_config() factory — integration tests (schema round-trip)
+# strawberry_config() factory - integration tests (schema round-trip)
 # ---------------------------------------------------------------------------
 
 

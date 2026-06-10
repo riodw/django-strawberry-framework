@@ -470,7 +470,7 @@ def test_array_filter_applies_distinct_when_flagged():
 
 
 # ---------------------------------------------------------------------------
-# Strategy-aware GlobalID validation (spec-031 Decision 13) — owner/target
+# Strategy-aware GlobalID validation (spec-031 Decision 13) - owner/target
 # definition resolution + per-strategy accepted-type-name set.
 # ---------------------------------------------------------------------------
 
@@ -529,7 +529,7 @@ def _global_id_filter_with_owner(field_name, owner):
 
 
 def test_target_definition_for_returns_none_without_owner():
-    """No bound owner → no definition (node-id-only fallback in unit contexts)."""
+    """No bound owner -> no definition (node-id-only fallback in unit contexts)."""
     f = GlobalIDFilter(field_name="id")
     f.parent = _FakeParent(None)
     assert _target_definition_for(f) is None
@@ -558,7 +558,7 @@ def test_target_definition_for_relation_branch_unresolved_target():
 
 
 def test_accepted_globalid_type_names_none_definition():
-    """No definition → `None` (node-id-only fallback)."""
+    """No definition -> `None` (node-id-only fallback)."""
     assert _accepted_globalid_type_names(None) is None
 
 
@@ -574,7 +574,7 @@ def test_accepted_globalid_type_names_per_strategy():
 
 @pytest.mark.parametrize("strategy", ["callable", "custom", None])
 def test_accepted_globalid_type_names_node_id_only_strategies(strategy):
-    """`callable` / `custom` / absent strategy → `None` (node-id-only fallback)."""
+    """`callable` / `custom` / absent strategy -> `None` (node-id-only fallback)."""
     owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy=strategy)
     assert _accepted_globalid_type_names(owner) is None
 
@@ -629,7 +629,7 @@ def test_filter_callable_custom_node_id_only(strategy):
 
 
 def test_filter_unbound_owner_node_id_only():
-    """No bound owner → node-id-only fallback (the existing `None`-definition path)."""
+    """No bound owner -> node-id-only fallback (the existing `None`-definition path)."""
     f = GlobalIDFilter(field_name="id")
     f.parent = _FakeParent(None)
     encoded = relay.to_base64("WhateverType", "5")

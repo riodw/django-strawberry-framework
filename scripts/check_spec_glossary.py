@@ -8,7 +8,7 @@ Two checks per term in the spec's companion ``*-terms.csv``:
 
    - **Inline**: an ``](...GLOSSARY.md#<anchor>)`` reference (legacy /
      mixed-style support).
-   - **Reference-style** (the current convention — see ``START.md``'s
+   - **Reference-style** (the current convention - see ``START.md``'s
      "Markdown link convention" section): a ``[text][ref-id]`` use in
      the body whose matching ``[ref-id]: ...GLOSSARY.md#<anchor>`` def
      lives in the unified link-definitions block at the bottom.
@@ -26,7 +26,7 @@ Usage::
 
 Only ``--spec`` is required. ``--terms`` defaults to the spec path with
 ``-terms.csv`` appended to the stem (e.g.
-``docs/spec-018-meta_primary-0_0_6.md`` →
+``docs/spec-018-meta_primary-0_0_6.md`` ->
 ``docs/spec-018-meta_primary-0_0_6-terms.csv``). ``--glossary``
 defaults to ``docs/GLOSSARY.md`` and accepts an override for testing or
 for validating against a fork's renamed glossary.
@@ -39,7 +39,7 @@ matching ``[glossary-<anchor>]: <path>/GLOSSARY.md#<anchor>`` def under
 the ``<!-- docs/ -->`` group in the spec's link-definitions block
 (alphabetically sorted within the group). The backtick-wrapped form is
 preferred when the spec already says e.g. ``Meta.fields`` in inline
-code — the rewrite becomes ``[`Meta.fields`][glossary-metafields]``
+code - the rewrite becomes ``[`Meta.fields`][glossary-metafields]``
 with the inline-code backticks preserved inside the link label. The
 run is idempotent. ``--auto-link`` requires the spec to already carry a
 ``<!-- docs/ -->`` group in its link-definitions block; if the block
@@ -78,8 +78,8 @@ def github_anchor(heading: str) -> str:
     Drops backticks, lowercases, strips non-word characters other than
     whitespace and hyphens, then collapses whitespace runs to single
     hyphens. Underscores and existing hyphens are preserved. Matches the
-    anchor form GitHub renders for headings like ``## `Meta.primary``` →
-    ``metaprimary`` and ``## Relation handling`` → ``relation-handling``.
+    anchor form GitHub renders for headings like ``## `Meta.primary``` ->
+    ``metaprimary`` and ``## Relation handling`` -> ``relation-handling``.
     """
     text = heading.replace("`", "").lower()
     text = re.sub(r"[^\w\s\-]", "", text)
@@ -89,7 +89,7 @@ def github_anchor(heading: str) -> str:
 def load_terms(csv_path: Path) -> list[tuple[str, str]]:
     """Return ``[(term, anchor), ...]`` from the terms CSV.
 
-    Rows missing either column are silently skipped — the CSV uses a
+    Rows missing either column are silently skipped - the CSV uses a
     header row (``term,anchor,notes``); blanks in the body are tolerated
     so the file can carry trailing-comma whitespace from spreadsheet
     exports without confusing the checker.
@@ -122,7 +122,7 @@ def spec_link_anchors(spec_path: Path) -> set[str]:
 
     Recognizes two link forms:
 
-    - **Inline** ``](...GLOSSARY.md#<anchor>)`` — legacy / mixed-style.
+    - **Inline** ``](...GLOSSARY.md#<anchor>)`` - legacy / mixed-style.
     - **Reference-style** ``[text][ref-id]`` where the matching
       ``[ref-id]: ...GLOSSARY.md#<anchor>`` def at the bottom of the
       file resolves to a GLOSSARY anchor. This is the current convention
@@ -132,7 +132,7 @@ def spec_link_anchors(spec_path: Path) -> set[str]:
     anchors: set[str] = set()
     # Inline form.
     anchors.update(match.group(1) for match in LINK_PATTERN.finditer(text))
-    # Reference-style form: build the ref-id → target map from the
+    # Reference-style form: build the ref-id -> target map from the
     # link-definitions block, then resolve every `[text][ref-id]` body
     # use whose target is a GLOSSARY anchor.
     defs = {match.group(1): match.group(2).strip() for match in REF_DEF_PATTERN.finditer(text)}
@@ -164,7 +164,7 @@ def check_terms(
 def _fenced_code_ranges(text: str) -> list[tuple[int, int]]:
     """Return ``(start, end)`` byte ranges covering every fenced code block.
 
-    Toggles on each ``^```` line — odd matches open a block, even matches
+    Toggles on each ``^```` line - odd matches open a block, even matches
     close it. An unterminated fence at end-of-file extends to the end of
     the document, which is the safe default (we would rather skip than
     rewrite into a malformed block).
@@ -214,8 +214,8 @@ def _glossary_ref_id(anchor: str) -> str:
 
     The convention used by the unified link-definitions block prefixes
     every glossary ref-id with ``glossary-`` and normalizes underscores
-    in the anchor to dashes. So ``bigint-scalar`` → ``glossary-bigint-scalar``,
-    ``finalize_django_types`` → ``glossary-finalize-django-types``.
+    in the anchor to dashes. So ``bigint-scalar`` -> ``glossary-bigint-scalar``,
+    ``finalize_django_types`` -> ``glossary-finalize-django-types``.
     """
     return f"glossary-{anchor.replace('_', '-')}"
 
@@ -228,7 +228,7 @@ def _insert_glossary_ref_def(text: str, ref_id: str, target: str) -> str | None:
     materialize a link-definitions block from scratch; that is the
     initial-conversion script's job, not the glossary checker's).
 
-    Idempotent — if a def for ``ref_id`` already exists anywhere in the
+    Idempotent - if a def for ``ref_id`` already exists anywhere in the
     file, the input text is returned unchanged.
     """
     if re.search(rf"^\[{re.escape(ref_id)}\]:\s", text, re.MULTILINE):
@@ -259,7 +259,7 @@ def auto_link_terms(
 
     For each ``(term, anchor)`` in ``missing_links``:
 
-    1. Compute ``ref_id = glossary-<anchor with _ → ->`` and
+    1. Compute ``ref_id = glossary-<anchor with _ -> ->`` and
        ``ref_target = <relpath to GLOSSARY.md>#<anchor>``.
     2. Locate the first backtick-wrapped occurrence of the term outside
        fenced code blocks and existing links, and wrap it as
@@ -276,7 +276,7 @@ def auto_link_terms(
     fresh code-block / link map (cheap for spec-sized files, avoids the
     range-shifting bookkeeping after an edit).
 
-    Returns ``(linked, skipped)`` — both lists of term names. A term is
+    Returns ``(linked, skipped)`` - both lists of term names. A term is
     skipped when no valid prose occurrence exists OR the spec has no
     ``<!-- docs/ -->`` group to insert the def into.
     """
@@ -316,7 +316,7 @@ def auto_link_terms(
 def _print_section(title: str, entries: list[tuple[str, str]], hint: str) -> None:
     print(title)
     for term, anchor in entries:
-        print(f"  - {term} (anchor: {anchor}) — {hint.format(anchor=anchor)}")
+        print(f"  - {term} (anchor: {anchor}) - {hint.format(anchor=anchor)}")
     print()
 
 
@@ -407,14 +407,14 @@ def main(argv: list[str] | None = None) -> int:
         _print_section(
             f"Spec terms missing a link to {args.glossary.name}:",
             missing_links,
-            "add at least one link to anchor `{anchor}` — inline `](GLOSSARY.md#{anchor})` "
+            "add at least one link to anchor `{anchor}` - inline `](GLOSSARY.md#{anchor})` "
             "or reference-style `[text][glossary-...]` (with matching def in the link-definitions block)",
         )
 
     if missing_glossary or missing_links:
         return 1
 
-    print(f"OK: {len(terms)} terms — all have glossary entries and at least one spec link.")
+    print(f"OK: {len(terms)} terms - all have glossary entries and at least one spec link.")
     return 0
 
 

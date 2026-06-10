@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """Enforce the project's source-layout conventions across .py / .md / .json / .graphql.
 
-Three checks, all with ``--check`` (gate, exit 1) and ``--fix`` (auto-repair):
+Four checks. The first three carry both ``--check`` (gate, exit 1) and ``--fix``
+(auto-repair); the fourth (non-ASCII) is report-only in both modes:
 
 1. **Trailing-comma layout** (``.py``) -- the explode-at-threshold rule below.
 2. **Markdown link-definition scaffold** (``.md``) -- every markdown file must
@@ -19,6 +20,13 @@ Three checks, all with ``--check`` (gate, exit 1) and ``--fix`` (auto-repair):
    Detection is parse-gated: bare ``{`` in Python/JS, f-string interpolation,
    and unparseable pseudo-snippets are never touched, and the fix output is
    itself canonical (fixpoint-safe). ``.py`` string literals are out of scope.
+4. **ASCII-only source** (``.py``) -- the source must be ASCII apart from emoji
+   (the kanban example's parity markers). Em-dashes, arrows, ellipses, math
+   signs etc. drift in from editors/paste; replace them with ASCII (``--``,
+   ``->``, ``...``) or, where a non-ASCII runtime value is genuinely needed, an
+   explicit unicode escape (kept out of f-string ``{...}`` expressions, which
+   reject escapes before Python 3.12). Report-only (no safe universal auto-fix);
+   emoji and the emoji variation selector are allowed.
 
 Collection literals (list / set / dict / parenthesized tuple) and ``def`` /
 method signatures are kept exploded one-item-per-line **iff** they have at least
@@ -693,6 +701,36 @@ def iter_files(paths: list[str], suffixes: tuple[str, ...]) -> Iterator[Path]:
                 yield path
 
 
+def _is_emoji(cp: int) -> bool:
+    """Allow emoji + emoji presentation selectors; reject other non-ASCII.
+
+    The only non-ASCII permitted in ``.py`` source: the kanban example's parity
+    markers (U+1F353 STRAWBERRY, U+269B ATOM + U+FE0F). Em-dashes / arrows /
+    ellipses / math signs are NOT emoji and must be ASCII.
+    """
+    return (
+        # Bounded to the pictographic planes (Mahjong .. Symbols-and-Pictographs
+        # Extended-A) so astral CJK / Private-Use / language-tag codepoints are
+        # still flagged, while emoji (e.g. U+1F353 STRAWBERRY) pass.
+        0x1F000 <= cp <= 0x1FAFF
+        # Miscellaneous Symbols ONLY (e.g. U+269B ATOM). Deliberately excludes
+        # Dingbats (U+2700-27BF), which carry arrows (U+27A1) and math signs
+        # (U+2795-2797) that the docstring promises to reject.
+        or 0x2600 <= cp <= 0x26FF
+        or 0xFE00 <= cp <= 0xFE0F  # variation selectors (U+FE0F = emoji presentation)
+    )
+
+
+def non_ascii_violations(text: str) -> list[tuple[int, int, str]]:
+    """Return ``(lineno, col, char)`` for each disallowed non-ASCII char in ``.py`` text."""
+    hits: list[tuple[int, int, str]] = []
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for col, ch in enumerate(line, 1):
+            if ord(ch) > 0x7F and not _is_emoji(ord(ch)):
+                hits.append((lineno, col, ch))
+    return hits
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point: ``--fix`` (default) or ``--check`` (gate) over ``paths``."""
     parser = argparse.ArgumentParser(
@@ -727,6 +765,7 @@ def main(argv: list[str] | None = None) -> int:
     violations = 0
     changed: list[Path] = []
     py_changed: list[Path] = []
+    ascii_hits: list[tuple[Path, int, int, str]] = []  # non-ASCII in .py (report-only)
 
     for path in files:
         try:
@@ -738,6 +777,18 @@ def main(argv: list[str] | None = None) -> int:
         found: list[tuple[int, str]] = []
 
         if path.suffix == ".py":
+            # Lexical, parse-independent -- run BEFORE the comma analysis so a
+            # file that fails to parse still has its non-ASCII flagged (the
+            # ``continue`` below would otherwise let banned chars slip the gate).
+            ascii_hits.extend(
+                (
+                    path,
+                    ln,
+                    col,
+                    ch,
+                )
+                for ln, col, ch in non_ascii_violations(text)
+            )
             try:
                 inserts, deletes, comma_found = _analyze(text, threshold_for(path))
             except (SyntaxError, tokenize.TokenError) as exc:
@@ -783,15 +834,32 @@ def main(argv: list[str] | None = None) -> int:
             if path.suffix == ".py":
                 py_changed.append(path)
 
+    # Non-ASCII in .py is report-only (no safe universal auto-fix) and fails in
+    # BOTH modes, so the pre-commit `--fix` run catches it too, not just CI.
+    for p, ln, col, ch in ascii_hits:
+        print(
+            f"{p}:{ln}:{col}: non-ASCII U+{ord(ch):04X} {ch!r} not allowed in .py (ASCII + emoji only)",
+        )
+
     if args.check:
-        if violations:
-            print(f"\n{violations} layout violation(s); run with --fix to resolve")
+        if violations or ascii_hits:
+            if violations:
+                print(f"\n{violations} layout violation(s); run with --fix to resolve")
+            if ascii_hits:
+                print(
+                    f"{len(ascii_hits)} non-ASCII char(s) in .py; replace with ASCII (emoji allowed)",
+                )
             return 1
         return 0
 
     if py_changed:
         _run_ruff_format(py_changed)
     print(f"Fixed {len(changed)} file(s).")
+    if ascii_hits:
+        print(
+            f"{len(ascii_hits)} non-ASCII char(s) in .py need manual replacement (emoji allowed)",
+        )
+        return 1
     return 0
 
 

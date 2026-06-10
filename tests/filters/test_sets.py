@@ -188,7 +188,7 @@ def test_filterset_get_filters_resets_expansion_guard():
 
 def test_filterset_get_filters_does_not_cache_when_string_filterset_remains():
     class BranchFilter(FilterSet):
-        # Reference to a non-existent class — `expand_related_filter` raises.
+        # Reference to a non-existent class - `expand_related_filter` raises.
         bogus = RelatedFilter("DefinitelyDoesNotExistFilter", field_name="shelves")
 
         class Meta:
@@ -283,7 +283,7 @@ def test_filter_for_field_picks_global_id_multiple_choice_filter_for_relay_m2m_t
 def test_filter_for_field_picks_global_id_filter_for_relay_forward_fk_target():
     """A forward FK to a Relay-Node-shaped target maps to `GlobalIDFilter`.
 
-    Complement of the M2M case above — single-valued relations pick the
+    Complement of the M2M case above - single-valued relations pick the
     single-value Relay primitive.
     """
 
@@ -350,7 +350,7 @@ def test_filter_for_field_returns_default_when_target_model_not_registered():
 
 
 # ---------------------------------------------------------------------------
-# Apply pipeline — request extraction
+# Apply pipeline - request extraction
 # ---------------------------------------------------------------------------
 
 
@@ -393,7 +393,7 @@ def test_request_from_info_raises_for_unsupported_context_shape():
 
 
 # ---------------------------------------------------------------------------
-# Apply pipeline — normalize_input
+# Apply pipeline - normalize_input
 # ---------------------------------------------------------------------------
 
 
@@ -452,7 +452,7 @@ def test_normalize_input_signature_takes_only_input_value():
     GlobalID type-name validation happens at queryset-evaluation time
     inside the filter's ``filter()`` method, reading the owner via
     ``filter_instance.parent._owner_definition``. The normalize step
-    therefore does not need an owner parameter — passing one is dead
+    therefore does not need an owner parameter - passing one is dead
     plumbing that suggests an unfinished wiring path.
     """
     import inspect
@@ -493,7 +493,7 @@ def test_normalize_input_inner_bag_loop_skips_unset_lookups():
     ``TypeError: argument of type 'UNSET' is not iterable`` (list-like
     filters) or lands in ``data[form_key]`` as a bogus value (scalar
     filters). The common case is a consumer who supplies one lookup
-    but not the others — partially-supplied bags must not break.
+    but not the others - partially-supplied bags must not break.
     """
 
     @strawberry.input
@@ -542,7 +542,7 @@ def test_normalize_input_skips_strawberry_unset_attrs():
 
 
 # ---------------------------------------------------------------------------
-# Apply pipeline — validate_form_or_raise
+# Apply pipeline - validate_form_or_raise
 # ---------------------------------------------------------------------------
 
 
@@ -573,7 +573,7 @@ def test_validate_form_or_raise_passes_for_valid_form():
 
 
 # ---------------------------------------------------------------------------
-# Apply pipeline — permission checks
+# Apply pipeline - permission checks
 # ---------------------------------------------------------------------------
 
 
@@ -667,7 +667,7 @@ def test_run_permission_checks_recurses_into_logical_branches():
     of one top-level call; a field appearing in multiple ``or`` arms
     fires its gate ONCE per call (the gate's logic is idempotent, so
     multi-firing is functionally harmless but produces duplicate audit
-    log entries — the R4 contract dedupes to avoid that).
+    log entries - the R4 contract dedupes to avoid that).
     """
     fired: list[str] = []
 
@@ -716,7 +716,7 @@ def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
     BOTH the logical-branch recursion and the child-filterset recursion.
     So ``or: [{shelves: {...}}, {shelves: {...}}]`` enters ``ShelfFilter``
     twice (once per arm) but its ``check_code_permission`` fires only
-    once — the per-class set keyed on ``ShelfFilter`` dedups the second
+    once - the per-class set keyed on ``ShelfFilter`` dedups the second
     entry. The parent's per-branch ``check_shelves_permission`` likewise
     fires once (deduped on the parent's per-class set).
     """
@@ -746,7 +746,7 @@ def test_run_permission_checks_dedups_child_gate_across_sibling_branches():
         },
         request=HttpRequest(),
     )
-    # Parent per-branch gate fires once; child class gate fires once —
+    # Parent per-branch gate fires once; child class gate fires once -
     # NOT once per arm.
     assert fired.count("branch.shelves") == 1
     assert fired.count("shelf.code") == 1
@@ -765,7 +765,7 @@ def test_run_permission_checks_caps_logical_branch_nesting():
             model = Category
             fields = {"name": ["exact"]}
 
-    # Build a 20-deep ``and`` chain — well past the 8-level cap.
+    # Build a 20-deep ``and`` chain - well past the 8-level cap.
     deep: dict = {"name": "leaf"}
     for _ in range(20):
         deep = {"and_": [deep]}
@@ -798,7 +798,7 @@ def test_max_logic_depth_is_overridable_classvar():
     # No raise: 12 levels is under the subclass's raised cap of 32.
     DeepCategoryFilter._run_permission_checks(deep, request=HttpRequest())
 
-    # The base class still caps at 8 — the override is subclass-local.
+    # The base class still caps at 8 - the override is subclass-local.
     class ShallowCategoryFilter(FilterSet):
         class Meta:
             model = Category
@@ -837,7 +837,7 @@ def test_evaluate_logic_tree_preserves_request_context():
 
 
 # ---------------------------------------------------------------------------
-# Apply pipeline — full apply_sync path
+# Apply pipeline - full apply_sync path
 # ---------------------------------------------------------------------------
 
 
@@ -926,7 +926,7 @@ def test_apply_sync_raises_graphql_error_on_invalid_input():
 
 
 # ---------------------------------------------------------------------------
-# Apply pipeline — dispatcher catch-and-rethrow
+# Apply pipeline - dispatcher catch-and-rethrow
 # ---------------------------------------------------------------------------
 
 
@@ -982,7 +982,7 @@ def test_apply_dispatcher_propagates_other_runtime_errors():
 
 
 # ---------------------------------------------------------------------------
-# Apply pipeline — _apply_related_constraints active-branch scoping
+# Apply pipeline - _apply_related_constraints active-branch scoping
 # ---------------------------------------------------------------------------
 
 
@@ -1038,7 +1038,7 @@ def test_apply_sync_nested_or_branch_applies_related_constraint():
     the WHOLE parent queryset (every branch passed). This pins that the
     nested branch now restricts the parent to branches whose shelves
     intersect the constraint, exactly as a top-level ``{shelves: {...}}``
-    would — driving the full ``apply_sync`` pipeline so the
+    would - driving the full ``apply_sync`` pipeline so the
     ``_evaluate_logic_tree`` -> ``_q_for_branch`` recursion is exercised
     end to end.
     """
@@ -1067,7 +1067,7 @@ def test_apply_sync_nested_or_branch_applies_related_constraint():
         _make_info(),
     )
     # Only "alpha" owns a shelf in the constrained set; "beta" must NOT
-    # leak through — which it would if the nested related branch were
+    # leak through - which it would if the nested related branch were
     # dropped (the B1 bug).
     assert list(qs.values_list("name", flat=True)) == ["alpha"]
 
@@ -1165,7 +1165,7 @@ def test_apply_related_constraints_proxy_model_is_rejected():
 
 @pytest.mark.django_db
 def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
-    """H3-of-rev8 pipeline ordering — constraints land in `self.queryset`.
+    """H3-of-rev8 pipeline ordering - constraints land in `self.queryset`.
 
     `apply_sync` must apply `_apply_related_constraints` BEFORE
     constructing the `FilterSet` instance so the explicit
@@ -1232,7 +1232,7 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
 
 
 # ---------------------------------------------------------------------------
-# Apply pipeline — filter_queryset tree-form logic (Slice 4a)
+# Apply pipeline - filter_queryset tree-form logic (Slice 4a)
 # ---------------------------------------------------------------------------
 
 
@@ -1840,7 +1840,7 @@ def test_iter_visibility_steps_skips_branches_without_resolved_target_or_filters
     """``_iter_visibility_steps`` swallows the ``None`` target / filterset branches.
 
     The skip contract is what lets each derive method shrink to a tight
-    loop carrying only the two awaits — every guard lives in the
+    loop carrying only the two awaits - every guard lives in the
     helper. Without a registered ``DjangoType`` for ``Shelf`` the branch
     drops out (mirrors the sibling async skip test, but pins the
     helper directly).

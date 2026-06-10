@@ -1,9 +1,9 @@
-"""manage.py import_cards — create kanban cards from a JSON file.
+"""manage.py import_cards - create kanban cards from a JSON file.
 
 One JSON file describes one or more cards. The command resolves every lookup by
 key, derives the milestone from the target version, chooses each card's requested
 board position, and wires labels, parity, dependencies, section bullets, and card
-references — handling the card-order and dependency/reference signal sync so
+references - handling the card-order and dependency/reference signal sync so
 callers never touch the models or the DB directly.
 
 Usage::
@@ -134,7 +134,7 @@ class Command(BaseCommand):
                 if dry_run:
                     raise _DryRunRollbackError
         except _DryRunRollbackError:
-            self.stdout.write(self.style.WARNING("Dry run — rolled back. Would create:"))
+            self.stdout.write(self.style.WARNING("Dry run - rolled back. Would create:"))
             for line in created:
                 self.stdout.write(f"  {line}")
             return

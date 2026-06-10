@@ -1,9 +1,9 @@
 """Dynamic data seeding service using Faker providers.
 
 Discovers ALL Faker providers and their generator methods at runtime.
-No hardcoded provider names or method lists — fully dynamic.
+No hardcoded provider names or method lists - fully dynamic.
 
-Quick check — print the number of detected providers and methods:
+Quick check - print the number of detected providers and methods:
 
     uv run python -c "
     import django, os
@@ -74,7 +74,7 @@ def discover_providers(fake: Faker) -> dict[str, list[str]]:
 
     Returns a dict mapping provider short names to lists of callable method names.
     Each method is probed at runtime to confirm it returns a usable scalar value.
-    Nothing is hardcoded — the result is entirely driven by introspecting Faker.
+    Nothing is hardcoded - the result is entirely driven by introspecting Faker.
     """
     import faker.providers as fp
 
@@ -157,7 +157,7 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
       - Each new ``Item`` gets one ``Entry`` per ``Property``
 
     ``is_private`` for Categories and Properties alternates by sorted index
-    (even index → public, odd index → private) giving an exact 50/50 split
+    (even index -> public, odd index -> private) giving an exact 50/50 split
     that is deterministic across runs.  Items and Entries still use random
     assignment since their names vary per run.
 
@@ -206,7 +206,7 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
             if created:
                 total_properties += 1
 
-        # --- Items + Entries (random is_private — names vary per run) ---
+        # --- Items + Entries (random is_private - names vary per run) ---
         existing_count = Item.objects.using(db_alias).filter(category=category).count()
         needed = max(0, count - existing_count)
 
@@ -252,7 +252,7 @@ VIEW_PERMISSIONS = [
     "view_entry",
 ]
 
-# Shared password for all test users — makes manual login easy.
+# Shared password for all test users - makes manual login easy.
 TEST_USER_PASSWORD = "admin"
 
 
@@ -270,7 +270,7 @@ def create_users(count: int = 1, db_alias: str = "default") -> dict[str, int]:
 
     Also creates one ``staff_<n>`` superuser per unit for convenience.
 
-    The function is idempotent — existing usernames are skipped.
+    The function is idempotent - existing usernames are skipped.
 
     Args:
         count: Number of user sets to create.

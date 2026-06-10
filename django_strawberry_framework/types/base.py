@@ -1,4 +1,4 @@
-"""``DjangoType`` — Meta-class-driven Django-model-to-Strawberry-type adapter.
+"""``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
 
 Consumer surface::
 
@@ -72,7 +72,7 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
 )
 # ``nullable_overrides`` / ``required_overrides`` (spec-029 Decision 6),
 # ``connection`` (spec-030 Decision 8), and ``globalid_strategy`` (spec-031
-# Decision 6) are net-new ALLOWED keys, NOT DEFERRED_META_KEYS promotions —
+# Decision 6) are net-new ALLOWED keys, NOT DEFERRED_META_KEYS promotions -
 # each one's feature ships in the same card that adds it, so they were never
 # reserved-but-nonfunctional. DEFERRED_META_KEYS stays unchanged.
 
@@ -93,8 +93,8 @@ def _validate_filterset_class(meta: type, filterset_class: Any) -> type | None:
     Local import of ``FilterSet`` at function scope keeps ``types/base.py``
     free of a module-load cycle through ``filters.sets`` (which imports
     ``types.relay`` which imports ``types.base``). Validation runs at
-    ``_validate_meta`` time — well after both modules have completed
-    module load — so the local import resolves cheaply.
+    ``_validate_meta`` time - well after both modules have completed
+    module load - so the local import resolves cheaply.
 
     Returns ``None`` when the meta does not declare ``filterset_class``;
     raises ``ConfigurationError`` for non-``FilterSet`` values.
@@ -145,19 +145,19 @@ def _validate_connection(meta: type, connection: Any, relay_shaped: bool) -> dic
     """Validate ``Meta.connection`` shape AND the Relay-Node requirement (spec-030 Decision 8).
 
     ``None``-short-circuits when unset; otherwise shape-checks the dict (for
-    ``0.0.9`` the only recognized sub-key is ``{"total_count": bool}`` — unknown
+    ``0.0.9`` the only recognized sub-key is ``{"total_count": bool}`` - unknown
     sub-keys and non-dict / non-bool values raise) and then enforces that the
     owning type is Relay-Node-shaped (a connection is only meaningful over a
     Relay-Node type). Returns the normalized dict, stored on
     ``DjangoTypeDefinition.connection`` and read by
     ``connection.py::_connection_type_for``.
 
-    The Relay-Node gate takes the precomputed ``relay_shaped`` bool — the
+    The Relay-Node gate takes the precomputed ``relay_shaped`` bool - the
     canonical ``_is_relay_shaped(cls, interfaces)`` value the caller
     (``_validate_meta``) computes once ``cls`` is in hand. That predicate is
     True for BOTH the ``Meta.interfaces`` tuple spelling AND direct inheritance
     (``class Foo(DjangoType, relay.Node)``), so it matches the
-    ``DjangoConnectionField`` field guard — "Relay-shaped" means the same thing
+    ``DjangoConnectionField`` field guard - "Relay-shaped" means the same thing
     across the whole feature. Taking the bool (not ``interfaces``) keeps the
     predicate single-sourced and prevents the two surfaces drifting apart again
     (``docs/feedback.md`` P2).
@@ -211,7 +211,7 @@ def _validate_globalid_strategy(
 
     The single validator shared by BOTH the ``Meta.globalid_strategy`` path
     (via ``_validate_meta``) and the ``RELAY_GLOBALID_STRATEGY`` setting path
-    (via ``types/relay.py::_resolve_globalid_strategy``) — spec-031 Decisions
+    (via ``types/relay.py::_resolve_globalid_strategy``) - spec-031 Decisions
     6/7's "one validator, two sources, source-specific error text" rule. The
     callable arity / sync-ness check lives here once so it is never duplicated
     across the two call sites (``docs/feedback.md`` P2).
@@ -264,12 +264,12 @@ def _is_async_globalid_callable(value: object) -> bool:
     """Return whether ``value`` is (or wraps) an async GlobalID encoder.
 
     ``inspect.iscoroutinefunction`` returns ``True`` only for the value it is
-    handed directly — it does NOT see through two realistic wrapper shapes
+    handed directly - it does NOT see through two realistic wrapper shapes
     (``docs/feedback.md`` P2):
 
-    1. A callable *instance* whose ``__call__`` is ``async def`` — the instance
+    1. A callable *instance* whose ``__call__`` is ``async def`` - the instance
        itself is not a coroutine function, so its ``__call__`` is checked too.
-    2. A ``functools.partial`` around either of the above — ``iscoroutinefunction``
+    2. A ``functools.partial`` around either of the above - ``iscoroutinefunction``
        only unwraps a partial whose ``.func`` is itself an ``async def`` function,
        NOT a partial around an async callable *instance*. So the partial's target
        is checked instead of the partial.
@@ -279,11 +279,11 @@ def _is_async_globalid_callable(value: object) -> bool:
     so ``.func`` is never itself a ``partial`` and the traversal is provably
     depth-1. Either wrapper, left undetected, survives validation and only fails
     at the first ``types/relay.py::encode_typename`` call (a coroutine return that
-    trips the non-``str`` guard plus an unawaited-coroutine warning) — exactly the
+    trips the non-``str`` guard plus an unawaited-coroutine warning) - exactly the
     request-time failure the build-time check exists to prevent.
     """
     target = value.func if isinstance(value, functools.partial) else value
-    # Inspecting ``__call__``'s async-ness, not testing callability — so
+    # Inspecting ``__call__``'s async-ness, not testing callability - so
     # ``callable()`` (what B004 suggests) is the wrong tool here.
     return inspect.iscoroutinefunction(target) or inspect.iscoroutinefunction(
         getattr(target, "__call__", None),  # noqa: B004
@@ -297,7 +297,7 @@ def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None
     and the encoder must be sync (spec-031 Decision 6, ``docs/feedback.md`` P2).
     The sync-ness test (``_is_async_globalid_callable``) sees through callable
     instances with an ``async def __call__`` and ``functools.partial`` wrappers
-    around either an ``async def`` function or such an instance — all of which
+    around either an ``async def`` function or such an instance - all of which
     ``inspect.iscoroutinefunction`` alone would miss, letting an async encoder
     survive to request time. A callable that survives both checks is returned to
     the caller untouched; the per-call non-``str`` return guard lives in the
@@ -331,7 +331,7 @@ def _has_node_id_marker(hint: object) -> bool:
     """Return True when ``hint`` is ``Annotated[T, NodeIDPrivate()]``.
 
     In the installed Strawberry, ``relay.NodeID[T]`` IS
-    ``typing.Annotated[T, NodeIDPrivate()]`` — the explicit ``Annotated``
+    ``typing.Annotated[T, NodeIDPrivate()]`` - the explicit ``Annotated``
     form and the ``relay.NodeID`` sugar collapse to the same shape, so
     ``typing.get_origin`` returns ``typing.Annotated`` for both and the
     ``NodeIDPrivate`` instance lives in ``typing.get_args(...)``'s
@@ -345,7 +345,7 @@ def _has_node_id_marker(hint: object) -> bool:
 def _id_annotation_is_relay_node_id(cls: type) -> bool:
     r"""Return True when ``cls.__annotations__['id']`` is ``relay.NodeID[...]``.
 
-    Reads ``cls.__annotations__`` directly — no ``typing.get_type_hints``
+    Reads ``cls.__annotations__`` directly - no ``typing.get_type_hints``
     call. The result does not depend on whether other annotations on the
     class resolve (an unrelated forward reference on a sibling attribute
     cannot mask the ``id`` annotation; pinned by
@@ -353,7 +353,7 @@ def _id_annotation_is_relay_node_id(cls: type) -> bool:
     and the function's behavior is identical on every supported Python
     version (``typing.get_type_hints`` handles nested forward references
     differently across 3.10 vs 3.11+, which previously left a code branch
-    reachable only on the newer interpreter — the no-``get_type_hints``
+    reachable only on the newer interpreter - the no-``get_type_hints``
     rewrite eliminated the divergence).
 
     Two annotation forms are accepted:
@@ -361,7 +361,7 @@ def _id_annotation_is_relay_node_id(cls: type) -> bool:
     1. **String form** (``id: "relay.NodeID[int]"`` or
        ``id: "NodeID[int]"``, typical under
        ``from __future__ import annotations`` or any explicit string
-       annotation). Matched against ``(?:^|\.)NodeID\[`` — qualified and
+       annotation). Matched against ``(?:^|\.)NodeID\[`` - qualified and
        unqualified token-shaped NodeID references pass; prefixed-substring
        lookalikes (``"NotNodeID[int]"``, ``"MyNodeID[int]"``) and
        non-NodeID typos (``"MissingType"``) are rejected. Downstream
@@ -411,7 +411,7 @@ class DjangoType:
         # The ``_is_default_get_queryset`` sentinel must be stamped BEFORE the
         # ``meta is None`` early-return and the finalized-registry guard so an
         # abstract base that overrides ``get_queryset`` without declaring Meta
-        # still flips the flag — concrete subclasses inheriting from it then
+        # still flips the flag - concrete subclasses inheriting from it then
         # report ``has_custom_get_queryset() is True`` correctly. Pinned by
         # ``test_has_custom_get_queryset_inherits_through_abstract_base_without_meta``.
         has_custom_get_queryset = _detect_custom_get_queryset(cls)
@@ -446,7 +446,7 @@ class DjangoType:
                 fields,
             )
         )
-        # Four-corner consumer-override contract: relation/scalar × annotation/
+        # Four-corner consumer-override contract: relation/scalar x annotation/
         # assignment. Full enumeration of the contract lives on the
         # ``_consumer_assigned_fields`` docstring; this union is the single
         # short-circuit input read by ``_build_annotations`` to skip
@@ -477,9 +477,9 @@ class DjangoType:
                     "relay.Node-shaped type with an assigned strawberry.field. "
                     "Use @classmethod resolve_id for a custom id resolver, "
                     "id: relay.NodeID[<pk_type>] for a custom id annotation, "
-                    "or declare a resolver-backed sibling field — e.g., "
+                    "or declare a resolver-backed sibling field - e.g., "
                     "`@strawberry.field(description=...) def display_id(self) -> "
-                    "strawberry.ID: return str(self.pk)` — if you only need "
+                    "strawberry.ID: return str(self.pk)` - if you only need "
                     "GraphQL field-level metadata on a custom identifier "
                     "(a metadata-only sibling without a resolver builds but "
                     "fails at query time); "
@@ -489,7 +489,7 @@ class DjangoType:
                 raise ConfigurationError(
                     f"{cls.__name__}: cannot override the id field on a "
                     "relay.Node-shaped type without using strawberry.relay.NodeID[...]. "
-                    "The Relay interface supplies id: GlobalID! — declare the id "
+                    "The Relay interface supplies id: GlobalID! - declare the id "
                     "field via relay.NodeID[<pk_type>] if you need a different id "
                     "shape, or remove relay.Node from Meta.interfaces.",
                 )
@@ -560,7 +560,7 @@ class DjangoType:
         ``_is_default_get_queryset`` to ``False`` at class-creation time
         when the subclass declares its own ``get_queryset``; this method
         returns the negated flag for a constant-time attribute read.
-        Inheritance walks naturally — a subclass without its own
+        Inheritance walks naturally - a subclass without its own
         ``get_queryset`` whose parent declared one inherits the parent's
         ``False`` sentinel through the class hierarchy.
         """
@@ -609,20 +609,20 @@ def _consumer_assigned_fields(
     One of four collection sites that together pin the consumer-override
     contract for ``DjangoType``. The four corners are:
 
-    - **relation × annotation** — ``consumer_annotated_relation_fields``,
+    - **relation x annotation** - ``consumer_annotated_relation_fields``,
       collected at ``DjangoType.__init_subclass__`` by walking
       ``cls.__annotations__`` for names that match a selected relation
       field. Honours a consumer-written ``items: list["AdminItemType"]``-
       style annotation.
-    - **relation × assigned** — ``consumer_assigned_relation_fields``,
+    - **relation x assigned** - ``consumer_assigned_relation_fields``,
       this function's first return value. Honours a consumer-written
       ``items = strawberry.field(resolver=...)`` assignment on a relation
       column.
-    - **scalar × annotation** — ``consumer_annotated_scalar_fields``,
+    - **scalar x annotation** - ``consumer_annotated_scalar_fields``,
       collected in the same ``__init_subclass__`` walk. Honours a
       consumer-written ``description: int``-style annotation override on
       a scalar column.
-    - **scalar × assigned** — ``consumer_assigned_scalar_fields``, this
+    - **scalar x assigned** - ``consumer_assigned_scalar_fields``, this
       function's second return value. Honours a consumer-written
       ``description = strawberry.field(resolver=...)`` assignment on a
       scalar column.
@@ -689,7 +689,7 @@ def _format_unknown_fields_error(
     unknown: list[str],
     available: set[str],
 ) -> str:
-    """Return the standard "unknown fields … Available: …" error message.
+    """Return the standard "unknown fields ... Available: ..." error message.
 
     Used by every validator that points at a typo in ``Meta.fields``,
     ``Meta.exclude``, or ``Meta.optimizer_hints``.  Centralizing the
@@ -871,7 +871,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     # membership so a child Meta inheriting ``fields`` from a base Meta
     # still trips the mutual-exclusion check when it declares ``exclude``
     # (and vice versa). ``fields = None`` (or ``exclude = None``)
-    # remains "unset" — matches ``_normalize_fields_spec``'s treatment
+    # remains "unset" - matches ``_normalize_fields_spec``'s treatment
     # of ``None`` and the broader convention that an explicit ``None``
     # means "no preference".
     has_fields = getattr(meta, "fields", None) is not None
@@ -951,7 +951,7 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], mo
     1. Every hint key names a field on the model (typo guard).
     2. Every hint key is in the type's selected relation field set.
        Excluded fields and selected scalar fields would silently drop
-       optimizer intent otherwise — the walker only reads hints after
+       optimizer intent otherwise - the walker only reads hints after
        entering the relation branch.
     3. Every hint value is an ``OptimizerHint`` instance.
 
@@ -970,7 +970,7 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], mo
         model: The Django model whose ``_meta.get_fields()`` defines the
             valid hint key surface. Threaded from ``meta.model`` so the
             empty-``fields`` shape (e.g. ``Meta.exclude`` covering every
-            field) is not fatal — earlier shapes inferred the model from
+            field) is not fatal - earlier shapes inferred the model from
             ``fields[0].model`` and ``IndexError``'d here.
     """
     if not hints:
@@ -1043,7 +1043,7 @@ def _validate_nullability_override_targets(
             defines the valid-field surface (unknown-field path) and
             ``model._meta.pk.name`` the Relay-suppressed pk identity.
         selected_fields: The Meta-filtered Django field objects from
-            ``_select_fields`` — defines the selected name set (excluded path)
+            ``_select_fields`` - defines the selected name set (excluded path)
             and supplies ``field.is_relation`` for the relation-reject path.
         consumer_authored_fields: The four-corner consumer-override union; a
             name here already controls its own nullability via the annotation /
@@ -1122,7 +1122,7 @@ def _select_fields(
     The caller threads ``fields_spec`` and ``exclude_spec`` from the
     ``_ValidatedMeta`` snapshot produced by ``_validate_meta`` so the
     shape gates (``_normalize_fields_spec`` / ``_normalize_sequence_spec``)
-    run exactly once per class definition — matching the invariant the
+    run exactly once per class definition - matching the invariant the
     ``_ValidatedMeta`` docstring promises.
 
     Selection rules:
@@ -1244,7 +1244,7 @@ def _build_annotations(
     annotations: dict[str, Any] = {}
     pending: list[PendingRelation] = []
     # Suppress the synthesized scalar ``id`` annotation whenever the type will
-    # participate in the Relay ``Node`` interface — either through
+    # participate in the Relay ``Node`` interface - either through
     # ``Meta.interfaces`` (the canonical path; includes both ``relay.Node``
     # directly and any ``@strawberry.interface`` that subclasses it) or
     # through direct inheritance (``class Foo(DjangoType, relay.Node)``).
@@ -1262,8 +1262,8 @@ def _build_annotations(
     suppress_pk_annotation = _is_relay_shaped(cls, interfaces)
     # ``pk_name`` (not ``pk_attname``): ``_meta.pk.name`` is the Django
     # field NAME, not the column attname. For a relation primary key
-    # (``OneToOneField(primary_key=True)``) those differ — ``name="user"``
-    # vs. ``attname="user_id"`` — and the comparison below is against
+    # (``OneToOneField(primary_key=True)``) those differ - ``name="user"``
+    # vs. ``attname="user_id"`` - and the comparison below is against
     # ``field.name`` so the NAME is what's needed. Naming it ``pk_attname``
     # would invite a future maintainer to reuse it in a
     # ``getattr(root, pk_attname)`` context, which would lazy-load the

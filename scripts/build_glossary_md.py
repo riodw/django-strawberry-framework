@@ -183,7 +183,10 @@ def render_browse(
             term_link(membership["term"])
             for membership in sorted(bucket["memberships"], key=lambda value: value["order"])
         ]
-        lines.append(f"- **{category['label']}:** {' · '.join(links)}.")
+        # Separator lifted into a name: a backslash escape inside an f-string
+        # ``{...}`` expression is a syntax error before Python 3.12 (floor is 3.10).
+        joined = " \u00b7 ".join(links)
+        lines.append(f"- **{category['label']}:** {joined}.")
     lines.extend(["", "---", ""])
     return lines
 

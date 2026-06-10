@@ -77,7 +77,7 @@ class FilterArgumentsFactory:
     above are mutable dicts; a subclass would inherit the SAME dict
     instances rather than getting its own, so a subclass cache would
     silently cross-contaminate with the base. The factory is a leaf class
-    by contract — extend the cookbook's flow by composition (wrap an
+    by contract - extend the cookbook's flow by composition (wrap an
     instance), not by subclassing.
     """
 
@@ -90,7 +90,7 @@ class FilterArgumentsFactory:
     _type_filterset_registry: ClassVar[dict[str, type]] = {}
 
     def __init_subclass__(cls) -> None:
-        """Reject subclassing — the class-level caches are not subclass-safe.
+        """Reject subclassing - the class-level caches are not subclass-safe.
 
         ``input_object_types`` / ``_type_filterset_registry`` are mutable
         dicts SHARED with the base: a subclass inherits the same instances
@@ -191,7 +191,7 @@ def _make_hashable(v: Any) -> Any:
     """Recursively convert unhashable objects into hashable equivalents.
 
     ``dict`` and ``set`` / ``frozenset`` are *unordered* containers, so their
-    hashable form is sorted — two structurally-equal inputs must collapse to one
+    hashable form is sorted - two structurally-equal inputs must collapse to one
     cache key regardless of source iteration order. ``list`` / ``tuple`` are
     *ordered* (a list-shaped ``Meta.fields`` defines filter order), so their order
     is preserved. Both unordered branches sort by ``repr`` rather than by the
@@ -224,7 +224,7 @@ def _make_cache_key(safe_meta: dict[str, Any]) -> tuple:
     ``fields`` (e.g. set-valued lookups) are sorted into a canonical form by
     ``_make_hashable``, so structurally-equal declarations share a class. A
     *top-level* ``set``-shaped ``fields`` still keys off the set's iteration
-    order (the ``"seq"`` branch below iterates it directly) — stable within a
+    order (the ``"seq"`` branch below iterates it directly) - stable within a
     process but order-randomized across processes (``PYTHONHASHSEED``), which
     also governs the generated *filter order*. Prefer ``list`` / ``tuple`` for
     ``Meta.fields`` when filter order matters.

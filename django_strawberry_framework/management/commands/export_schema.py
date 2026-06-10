@@ -1,4 +1,4 @@
-"""manage.py export_schema — print or write the GraphQL SDL for a Strawberry schema symbol."""
+"""manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol."""
 
 import pathlib
 

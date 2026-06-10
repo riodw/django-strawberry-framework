@@ -57,7 +57,7 @@ def _meta(**attrs):
 
 
 # ---------------------------------------------------------------------------
-# Slice 1 — validation + storage
+# Slice 1 - validation + storage
 # ---------------------------------------------------------------------------
 
 
@@ -242,7 +242,7 @@ def test_relay_node_with_composite_pk_raises(monkeypatch):
 def test_composite_pk_with_explicit_node_id_annotation_is_accepted(monkeypatch):
     """A consumer ``id: relay.NodeID[str]`` escape hatch bypasses the composite-pk gate.
 
-    Regression for ``docs/feedback.md`` § "Unconditional composite PK
+    Regression for ``docs/feedback.md`` section "Unconditional composite PK
     rejection ignores explicit ``NodeID`` annotations". The gate's own
     error message advertises the remediation; honor it.
     """
@@ -261,14 +261,14 @@ def test_composite_pk_with_explicit_node_id_annotation_is_accepted(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — is_type_of injection
+# Slice 2 - is_type_of injection
 # ---------------------------------------------------------------------------
 
 
 def test_is_type_of_injected_for_all_djangotypes():
     """``is_type_of`` is installed on every concrete ``DjangoType`` subclass.
 
-    Decision 6 (spec-015 #"injection (Decision-1 borrow) is added unconditionally") is that injection is unconditional — it
+    Decision 6 (spec-015 #"injection (Decision-1 borrow) is added unconditionally") is that injection is unconditional - it
     happens for every ``DjangoType`` subclass with a ``Meta`` regardless
     of whether ``Meta.interfaces`` is declared. The non-Relay
     ``DjangoType`` here exercises that unconditional path.
@@ -306,7 +306,7 @@ def test_consumer_declared_is_type_of_is_preserved():
     ``is_type_of``, we do not overwrite it." The discriminator is
     ``cls.__dict__`` membership, matching ``strawberry_django/type.py::_process_type #"if "is_type_of" not in cls.__dict__"``.
     The sentinel return value proves the consumer's callable is the one
-    that survives — not merely that some callable named ``is_type_of``
+    that survives - not merely that some callable named ``is_type_of``
     is attached to the class.
     """
     sentinel = object()
@@ -326,7 +326,7 @@ def test_consumer_declared_is_type_of_is_preserved():
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 — id suppression
+# Slice 3 - id suppression
 # ---------------------------------------------------------------------------
 
 
@@ -363,13 +363,13 @@ def test_relay_node_strips_django_id_annotation():
 
 
 def test_extended_node_interface_subclass_suppresses_id_annotation():
-    """Regression for ``docs/feedback.md`` § extended Node interfaces.
+    """Regression for ``docs/feedback.md`` section extended Node interfaces.
 
     A consumer-defined ``@strawberry.interface`` that subclasses
     ``relay.Node`` (e.g. ``class CustomNode(relay.Node): ...`` placed in
     ``Meta.interfaces``) still requires the Relay-supplied
     ``id: GlobalID!`` field. The synthesized scalar ``id`` annotation
-    must be suppressed in that case too — otherwise Strawberry's
+    must be suppressed in that case too - otherwise Strawberry's
     ``strawberry.type(...)`` decoration sees both the inherited
     ``id: GlobalID!`` (from ``CustomNode -> relay.Node``) and the
     framework's ``id: int`` and the schema build crashes.
@@ -425,7 +425,7 @@ def test_non_relay_type_keeps_id_int():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 — interface base-class injection + Relay resolver defaults
+# Slice 4 - interface base-class injection + Relay resolver defaults
 # ---------------------------------------------------------------------------
 
 
@@ -436,7 +436,7 @@ def _build_fake_root(id_value: int):
     through the ORM, so the literal "dict-cache miss" branch of
     ``_resolve_id_default`` is not reachable with a real saved row. The
     branch IS reachable when the root is a synthetic non-model object
-    that mimics the ``__class__._meta.pk.attname`` contract — exactly the
+    that mimics the ``__class__._meta.pk.attname`` contract - exactly the
     shape ``strawberry-django`` documents as the fallback path. We build
     that shape here so the fallback branch has a faithful test.
     """
@@ -554,9 +554,9 @@ def test_resolve_node_applies_get_queryset():
 
 @pytest.mark.django_db
 def test_resolve_node_accepts_strawberry_positional_call_shape():
-    """Strawberry calls ``cls.resolve_node(node_id, info=info)`` — positional ``node_id``.
+    """Strawberry calls ``cls.resolve_node(node_id, info=info)`` - positional ``node_id``.
 
-    Pins the review-feedback regression (``feedback.md`` § High
+    Pins the review-feedback regression (``feedback.md`` section High
     ``resolve_node`` default has the wrong bound signature): Strawberry's
     Relay machinery passes ``node_id`` positionally and ``info`` as a
     keyword. With the corrected signature ``(cls, node_id, *, info,
@@ -766,7 +766,7 @@ async def test_resolve_nodes_async_context_no_ids_returns_queryset():
     queryset, then iterates with ``async for``. Pins the spec-015
     #"same for ``_resolve_nodes_default``" "node_ids=None" branch of
     Decision 9 under the corrected awaitable contract described in
-    ``feedback.md`` § High.
+    ``feedback.md`` section High.
     """
     CategoryNode = await sync_to_async(_build_seeded_category_node)()
     qs = await CategoryNode.resolve_nodes(info=None)
@@ -802,7 +802,7 @@ def _build_seeded_category_node_with_async_get_queryset():
 async def test_resolve_node_async_awaits_async_get_queryset():
     """Async ``get_queryset`` is awaited before the id filter on the async branch.
 
-    Pins the review-feedback regression (``feedback.md`` § High): the
+    Pins the review-feedback regression (``feedback.md`` section High): the
     previous implementation called ``cls.get_queryset(qs, info)``
     synchronously and then invoked ``.filter`` on the resulting
     coroutine, raising ``AttributeError``. The corrected async branch
@@ -870,7 +870,7 @@ def test_resolve_node_sync_with_async_get_queryset_raises():
     ``.filter`` blow up on a coroutine, the framework closes the
     unawaited coroutine and raises a named ``ConfigurationError``
     pointing the consumer at the async resolver path or a sync hook
-    rewrite (review feedback ``feedback.md`` § High).
+    rewrite (review feedback ``feedback.md`` section High).
     """
 
     class CategoryNode(DjangoType):
@@ -1264,7 +1264,7 @@ def test_install_relay_node_resolvers_idempotent():
 def test_direct_relay_node_inheritance_suppresses_id_annotation():
     """Direct ``class Foo(DjangoType, relay.Node)`` suppresses the synthesized pk.
 
-    Pins the review-feedback regression (``feedback.md`` § High "Direct
+    Pins the review-feedback regression (``feedback.md`` section High "Direct
     ``relay.Node`` inheritance bypasses Relay finalization"): when a
     consumer follows Strawberry's native inheritance style without
     declaring ``Meta.interfaces``, the package must still drop the
@@ -1297,7 +1297,7 @@ def test_direct_relay_node_inheritance_suppresses_id_annotation():
 def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
     """End-to-end: ``class Foo(DjangoType, relay.Node)`` finalizes the Relay shape.
 
-    Pins the review-feedback regression (``feedback.md`` § High "Direct
+    Pins the review-feedback regression (``feedback.md`` section High "Direct
     ``relay.Node`` inheritance bypasses Relay finalization"): Phase 2.5
     must run the composite-pk gate and the four ``resolve_*`` defaults
     for every class whose resolved MRO includes ``relay.Node``, not only
@@ -1315,7 +1315,7 @@ def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
 
     finalize_django_types()
     assert relay.Node in CategoryNode.__mro__
-    # ``Meta.interfaces`` was empty — the definition stores the empty tuple.
+    # ``Meta.interfaces`` was empty - the definition stores the empty tuple.
     assert CategoryNode.__django_strawberry_definition__.interfaces == ()
     # All four resolver defaults landed on the class itself.
     for attr in (
@@ -1338,7 +1338,7 @@ def test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id():
 def test_direct_relay_node_inheritance_composite_pk_raises(monkeypatch):
     """Direct ``relay.Node`` inheritance + composite pk raises at finalization.
 
-    Pins the review-feedback regression (``feedback.md`` § High): the
+    Pins the review-feedback regression (``feedback.md`` section High): the
     composite-pk gate must fire for every Relay-shaped type, including
     consumers who inherit ``relay.Node`` directly without declaring
     ``Meta.interfaces``. Detection uses Phase 2.5's
@@ -1387,7 +1387,7 @@ def test_install_relay_node_resolvers_preserves_consumer_override():
 
 
 # ---------------------------------------------------------------------------
-# spec-031 Slice 2 — the encode seam (strategy-parameterized resolve_typename,
+# spec-031 Slice 2 - the encode seam (strategy-parameterized resolve_typename,
 # the four encoders, the override -> custom classification, the
 # model-label-routing audit, the default flip, the re-entrancy guard).
 # ---------------------------------------------------------------------------
@@ -1609,7 +1609,7 @@ def test_resolve_typename_override_plus_setting_does_not_raise(settings):
 
 
 def test_globalid_default_is_model():
-    """No Meta key + no setting → recorded ``model`` and a model-label slot."""
+    """No Meta key + no setting -> recorded ``model`` and a model-label slot."""
 
     class ItemNode(DjangoType):
         class Meta:
@@ -1852,7 +1852,7 @@ def test_callable_setting_partial_wrapped_async_callable_raises(settings):
 
 
 # ---------------------------------------------------------------------------
-# spec-031 Slice 3 — the decode seam (``decode_global_id`` resolve-then-enforce:
+# spec-031 Slice 3 - the decode seam (``decode_global_id`` resolve-then-enforce:
 # Step-1 model-label / type-name resolution, Step-2 strategy-shape enforcement,
 # encoder/decoder symmetry, the transitional ``type+model`` accept-old-IDs path,
 # the uniform ``ConfigurationError`` for every failure mode).
@@ -2080,7 +2080,7 @@ def test_decode_unresolvable_label_raises():
 
 def test_decode_model_label_unregistered_model_raises():
     """A real model with no registered Relay-Node DjangoType raises (no decode target)."""
-    # Registry is empty (autouse clear) — ``products.item`` is a real model but
+    # Registry is empty (autouse clear) - ``products.item`` is a real model but
     # has no registered type to decode to.
     with pytest.raises(ConfigurationError, match="no registered"):
         decode_global_id(relay.GlobalID("products.item", "1"))

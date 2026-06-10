@@ -2,7 +2,7 @@
 
 This script intentionally targets only known generated paths:
 
-- contents of ``docs/shadow/`` (recursive) — every per-script folder
+- contents of ``docs/shadow/`` (recursive) - every per-script folder
   (``current/`` snapshot, ``old/`` ``new/`` ``diff/`` diff sides) plus any
   static-helper / bug-hunt byproducts written to the root
 - contents of ``docs/review/temp-tests/``

@@ -1,7 +1,7 @@
 """Exceptions raised by django-strawberry-framework.
 
-Lives at the bottom of the import graph — no Django, no Strawberry, no
-internal package imports — so the exception hierarchy can be raised from
+Lives at the bottom of the import graph - no Django, no Strawberry, no
+internal package imports - so the exception hierarchy can be raised from
 anywhere without circulars.
 """
 

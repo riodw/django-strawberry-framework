@@ -57,7 +57,7 @@ _EMPTY_ELISIONS: frozenset[str] = frozenset()
 def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
     """Return ``True`` if B2 marked this forward relation as FK-id elided.
 
-    Relay ``GlobalID`` handling is intentionally kept out of this path —
+    Relay ``GlobalID`` handling is intentionally kept out of this path -
     Relay id resolution lives in ``types/relay.py`` (``_resolve_id_default``
     and friends). Forward-relation FK-id elision continues to see only the
     Django primary-key column it always saw (spec-011 Decision 7 #"FK-id elision scoping").
@@ -95,7 +95,7 @@ def _will_lazy_load_single(root: Any, field_name: str) -> bool:
     also stamps ``root.__dict__`` on some access paths (e.g. when the
     related instance has been assigned). Both paths count as cached.
     Synthetic test doubles that pre-populate ``__dict__`` are therefore
-    treated as already loaded — matching the resolver's existing
+    treated as already loaded - matching the resolver's existing
     "compatibility for test doubles" contract.
     """
     if field_name in getattr(root, "__dict__", {}):
@@ -113,7 +113,7 @@ def _will_lazy_load_many(root: Any, field_name: str) -> bool:
     ``root.<field_name>`` directly does not populate any cache and
     accessing the descriptor still hits the database. The
     ``__dict__`` short-circuit used for single-valued relations is
-    intentionally NOT applied here — it would silently exempt the
+    intentionally NOT applied here - it would silently exempt the
     many-side strictness path from the optimizer's N+1 contract.
     """
     prefetch_cache = getattr(root, "_prefetched_objects_cache", {})
@@ -216,7 +216,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     - Reverse OneToOne (``one_to_one`` and ``auto_created``):
       ``getattr(root, name)`` wrapped in ``try/except DoesNotExist`` so
       the resolver returns ``None`` when the reverse row is absent.
-    - Forward FK / forward OneToOne: ``getattr(root, name)`` — returns
+    - Forward FK / forward OneToOne: ``getattr(root, name)`` - returns
       the related instance, or ``None`` if the FK is nullable and unset.
 
     B3: all resolvers now accept ``info`` (Strawberry injects it

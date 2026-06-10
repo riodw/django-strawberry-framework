@@ -1,14 +1,14 @@
-"""Shared context read/write helpers for optimizer ↔ resolver hand-off.
+"""Shared context read/write helpers for optimizer <-> resolver hand-off.
 
 Both the optimizer (write side) and the relation resolvers (read side)
 need to interact with Strawberry's ``info.context``, which can take
 several shapes:
 
-- ``None`` — Strawberry's default when no ``context_value`` is provided.
-- An object — the typical Strawberry context (attribute access).
-- A dict — consumers sometimes pass a plain dict.
-- A frozen object — ``MappingProxyType``, frozen dataclass,
-  ``pydantic`` model with ``frozen=True`` (write side only — the read
+- ``None`` - Strawberry's default when no ``context_value`` is provided.
+- An object - the typical Strawberry context (attribute access).
+- A dict - consumers sometimes pass a plain dict.
+- A frozen object - ``MappingProxyType``, frozen dataclass,
+  ``pydantic`` model with ``frozen=True`` (write side only - the read
   helper is read-only and does not need to handle TypeError).
 
 Centralizing the dispatch here means a future broadening (a new
@@ -23,7 +23,7 @@ optimizer subpackage use the pattern ``getattr(obj, name, None) or
 upstream contract genuinely allows the attribute to be absent or
 ``None`` on legitimate shapes (e.g., ``SelectedField.directives``).
 That posture is the opposite of the one taken for consumer-supplied
-input — see ``conf.py`` module docstring — and the two should not
+input - see ``conf.py`` module docstring - and the two should not
 be conflated when refactoring.
 """
 
@@ -55,7 +55,7 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
       usage and lets ``Box``-style dict subclasses that *also* expose
       attribute access still resolve through ``__getitem__`` first.
       Values stashed by code outside this module via ``setattr`` on a
-      dict subclass are intentionally invisible to this branch — the
+      dict subclass are intentionally invisible to this branch - the
       read helper preserves write/read symmetry with
       ``stash_on_context``, which routes ``dict`` writes through
       ``__setitem__``.
@@ -70,7 +70,7 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
       ``tests/optimizer/test_extension.py::test_stash_on_non_dict_mapping_reads_correctly``
       (``__slots__`` mapping shape) and
       ``tests/optimizer/test_extension.py::test_get_context_value_swallows_attribute_error_from_getitem``
-      (bridged-``AttributeError`` shape) — a future refactor that
+      (bridged-``AttributeError`` shape) - a future refactor that
       removes this fallback must trip those pins.
     - ``__getitem__`` on a missing key may raise ``KeyError``,
       ``TypeError``, or ``AttributeError`` (the last one for bridged
@@ -102,7 +102,7 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
     back to ``__setitem__`` for mapping-like objects (Strawberry's
     default context is an object; some consumers pass a plain dict).
     Frozen contexts raise on assignment; those stashes are silently
-    skipped — the optimizer's introspection surface is a nice-to-have,
+    skipped - the optimizer's introspection surface is a nice-to-have,
     not a correctness invariant, so a read-only context must not abort
     the resolver chain. The two frozen-shape error modes the dict path
     must absorb are ``TypeError`` (``MappingProxyType``, frozen
@@ -138,7 +138,7 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
             # fallback in ``get_context_value`` (the ``try`` /
             # ``except (TypeError, KeyError, AttributeError)`` block that
             # routes through ``context[key]`` when ``getattr`` returns
-            # the ``_MISSING`` sentinel) — both paths exist so the
+            # the ``_MISSING`` sentinel) - both paths exist so the
             # helper round-trips through whichever access mode the
             # context supports. The trailing dict-write ``except`` below
             # is the catch-and-return pattern; this one is the
@@ -154,7 +154,7 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
         # docstring contract; neither indicates a programming bug in the
         # optimizer. Other exception classes (``KeyError`` from a guarded
         # mapping, custom ``RuntimeError`` from a TypedDict-like wrapper)
-        # are NOT swallowed — a real ``dict`` never raises ``KeyError``
+        # are NOT swallowed - a real ``dict`` never raises ``KeyError``
         # on assignment, and a custom mapping signalling a guarded write
         # should surface rather than silently lose the stash.
         return

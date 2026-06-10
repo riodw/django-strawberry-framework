@@ -1,4 +1,4 @@
-"""``OptimizationPlan`` — the shape the walker emits and the extension consumes.
+"""``OptimizationPlan`` - the shape the walker emits and the extension consumes.
 
 The plan is a simple data class carrying optimization directives and metadata:
 
@@ -143,7 +143,7 @@ class OptimizationPlan:
     def apply(self, queryset: Any) -> Any:
         """Apply the plan to a ``QuerySet`` and return the optimized copy.
 
-        Applies in order: ``only()`` → ``select_related()`` →
+        Applies in order: ``only()`` -> ``select_related()`` ->
         ``prefetch_related()``. The order matters because
         ``select_related`` may narrow ``only()`` column lists and
         ``prefetch_related`` may carry nested ``Prefetch`` objects whose
@@ -180,13 +180,13 @@ def runtime_path_from_info(info: Any | None) -> tuple[str, ...]:
 
 
 # A GraphQL ``path`` linked-list is exactly the *static* selection-set nesting of
-# the query document (result-set size and data-tree depth do NOT deepen it — list
+# the query document (result-set size and data-tree depth do NOT deepen it - list
 # items are sibling paths at depth+1, not nested levels). graphql-core's executor
 # also recurses one Python frame per level, so a query deep enough to approach
 # this would hit Python's recursion limit first. This ceiling therefore sits far
 # above any real query; exceeding it means the ``prev`` chain is cyclic or corrupt.
 # The cap's only job is to catch such a cycle, which terminates in N iterations
-# regardless of N — so it is set generously (1024) to make a false positive on a
+# regardless of N - so it is set generously (1024) to make a false positive on a
 # legitimate query effectively impossible while still turning a would-be infinite
 # hang into a loud failure with a fixed, statically-checkable upper bound (NASA
 # Power-of-Ten Rule 2).
@@ -227,10 +227,10 @@ def _flatten_select_related(sr: Any) -> set[str]:
 
     Django stores ``select_related`` in three shapes:
 
-    - ``False`` (the default — nothing has been selected): empty set.
+    - ``False`` (the default - nothing has been selected): empty set.
     - ``True`` (the wildcard ``select_related()`` form): empty set as
       well. Django's wildcard only follows non-null FKs, so we cannot
-      treat it as covering every optimizer entry — nullable FKs in the
+      treat it as covering every optimizer entry - nullable FKs in the
       plan still need to be applied. Treating ``True`` as no overlap
       keeps optimizer entries; the consumer's wildcard will be narrowed
       by Django's subsequent ``select_related(*names)`` call, a known
@@ -238,7 +238,7 @@ def _flatten_select_related(sr: Any) -> set[str]:
       with this optimizer should be aware of.
     - ``dict`` (a nested mapping of selected field names): flattens to
       dotted lookup paths via recursive walk, e.g.
-      ``{"category": {"parent": {}}}`` → ``{"category", "category__parent"}``.
+      ``{"category": {"parent": {}}}`` -> ``{"category", "category__parent"}``.
     """
     if sr is False or sr is True:
         return set()
@@ -365,7 +365,7 @@ def _optimizer_can_absorb(
     3. Every matching consumer path is covered by the optimizer's own
        lookup tree. Otherwise the consumer has prefetches the
        optimizer would not replace, and absorbing them would silently
-       drop data — for example, optimizer
+       drop data - for example, optimizer
        ``Prefetch("items", queryset=Item.objects.only("name"))``
        cannot absorb consumer ``"items__entries"``.
     """
@@ -389,33 +389,33 @@ def diff_plan_for_queryset(plan: OptimizationPlan, queryset: Any) -> tuple[Optim
 
     Reconciliation rules:
 
-    ``select_related`` — compared as dotted lookup paths against the
+    ``select_related`` - compared as dotted lookup paths against the
     consumer's existing ``query.select_related`` dict. Exact matches
     are dropped from the plan; the wildcard form (``True``) is treated
     as no overlap so explicit nullable-FK entries still apply.
 
-    ``only_fields`` — dropped entirely when the consumer already
+    ``only_fields`` - dropped entirely when the consumer already
     applied ``.only(...)`` to the queryset (detected via
     ``query.deferred_loading`` with ``defer_flag is False`` and a
     non-empty field set). Django's ``QuerySet.only(...).only(...)``
     chaining *replaces* the previous deferred-field set rather than
     merging, so applying the optimizer's ``only_fields`` on top of a
     consumer ``.only()`` would silently drop the consumer's projection
-    — including columns the consumer may have restricted to enforce a
+    - including columns the consumer may have restricted to enforce a
     permission boundary. The conservative consumer-wins choice is to
     drop the optimizer's ``only_fields`` whenever the consumer has
     already restricted columns; ``.defer(...)`` is not treated as a
     consumer projection because ``.defer()`` and ``.only()`` compose
     cleanly in Django.
 
-    ``prefetch_related`` — compared by ``prefetch_to`` with ancestry
+    ``prefetch_related`` - compared by ``prefetch_to`` with ancestry
     awareness. For each optimizer entry we gather the consumer entries
     on the same subtree (exact path or any descendant of it) and
     decide as a group:
 
-    - **No consumer entries on the subtree** — the optimizer entry
+    - **No consumer entries on the subtree** - the optimizer entry
       passes through unchanged.
-    - **Optimizer can losslessly absorb the consumer subtree** — when
+    - **Optimizer can losslessly absorb the consumer subtree** - when
       the optimizer entry is a ``Prefetch`` carrying a queryset, every
       matching consumer entry is a bare string, *and* every matching
       consumer path is covered by the optimizer's own lookup tree
@@ -426,7 +426,7 @@ def diff_plan_for_queryset(plan: OptimizationPlan, queryset: Any) -> tuple[Optim
       ``Prefetch("items", queryset=...prefetch_related("entries"))``
       instead of raising ``ValueError: 'items' lookup was already seen
       with a different queryset``.
-    - **Consumer wins** — for any other shape (consumer's own custom
+    - **Consumer wins** - for any other shape (consumer's own custom
       ``Prefetch`` somewhere on the subtree, plain-string-vs-
       plain-string match where the optimizer has no queryset, or a
       consumer descendant the optimizer's own subtree does not cover),

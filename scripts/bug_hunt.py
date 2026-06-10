@@ -50,10 +50,10 @@ _HOW_TO_REVIEW_ONE_FILE = """## How to review a single file
 Each prompt below targets exactly one source file. Treat it as a focused
 review pass, not a tour:
 
-- Read the `.overview.md` shadow first. It is a structural index —
+- Read the `.overview.md` shadow first. It is a structural index -
   quick-scan counts, imports, symbols, control-flow hotspots, executable
   Django/ORM marker lines, calls of interest, and repeated executable
-  string literals — pulled from the AST without executing the file. Use
+  string literals - pulled from the AST without executing the file. Use
   it to plan the read, not as the source of truth.
 - Read the `.stripped.py` shadow next. Comments and docstring statements
   are removed, and other string literals are replaced, so the executable
@@ -73,7 +73,7 @@ For each confirmed defect:
 
 - Classify severity using the criteria in the dicta header above.
 - Edit the original source file directly. Stay within the file the
-  prompt names — if the fix needs sibling changes, surface that as a
+  prompt names - if the fix needs sibling changes, surface that as a
   question rather than expanding the diff unilaterally.
 - For **High**-severity fixes, add or update a test that pins the
   corrected behavior under the correct test tree per AGENTS.md
@@ -118,7 +118,7 @@ def _source_path_for(stripped_path: Path) -> str:
     """Recover the original repo-relative source path from a stripped stem.
 
     ``review_inspect._stable_stem`` joins the relative path's parts with
-    ``__``, so reversing is ``stem.split("__")`` — *not* a blind
+    ``__``, so reversing is ``stem.split("__")`` - *not* a blind
     ``replace("__", "/")``. The difference matters for paths that contain
     components starting with ``_``: ``optimizer/_context.py`` becomes
     ``optimizer___context`` (two underscores from the join plus the

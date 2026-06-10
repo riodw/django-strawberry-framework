@@ -39,7 +39,7 @@ def _isolate_global_registry():
     registry.clear()
 
 
-# spec-031 Slice 3 — ``definition_for_graphql_name`` (the GlobalID type-name
+# spec-031 Slice 3 - ``definition_for_graphql_name`` (the GlobalID type-name
 # decode entry point: a unique ``graphql_type_name`` lookup over Relay-Node
 # definitions only, raising ``ConfigurationError`` on miss / ambiguity).
 # ---------------------------------------------------------------------------
@@ -72,7 +72,7 @@ def test_definition_for_graphql_name_honors_meta_name():
     finalize_django_types()
     definition = ItemNode.__django_strawberry_definition__
     assert registry.definition_for_graphql_name("Item") is definition
-    # The class name is NOT a valid key — only ``graphql_type_name`` is.
+    # The class name is NOT a valid key - only ``graphql_type_name`` is.
     with pytest.raises(ConfigurationError):
         registry.definition_for_graphql_name("ItemNode")
 
@@ -672,7 +672,7 @@ def test_discard_pending_uses_identity_match_with_real_pending_relation(fresh_re
     record_b = PendingRelation(**common_kwargs)
     # Sanity-check: distinct objects, equal by dataclass value. This is
     # the shape that would let an equality-based ``discard_pending`` drop
-    # both — the identity contract drops only the exact instance passed.
+    # both - the identity contract drops only the exact instance passed.
     assert record_a is not record_b
     assert record_a == record_b
     fresh_registry.add_pending_relation(record_a)
@@ -790,7 +790,7 @@ def test_register_with_definition_rolls_back_register_on_definition_failure(fres
 
 
 # ---------------------------------------------------------------------------
-# Slice 1 (spec-018-meta_primary-0_0_6.md) — multi-type storage + primary
+# Slice 1 (spec-018-meta_primary-0_0_6.md) - multi-type storage + primary
 # tracking. Tests below exercise the new contract through ``register`` /
 # ``register_with_definition`` directly with plain test classes (no
 # ``DjangoType`` subclasses) per spec slice-1 paragraph at ``spec:656``.
@@ -857,7 +857,7 @@ def test_register_two_primaries_for_same_model_raises_configuration_error(fresh_
 
     Pins all three load-bearing identifiers in the error message so a future
     cosmetic refactor can't silently drop the attempt name (``AdminItemType``),
-    the model name (``Item``), or the incumbent primary (``ItemType``) — the
+    the model name (``Item``), or the incumbent primary (``ItemType``) - the
     grep-from-a-stack-trace triage path needs each one.
     """
 
@@ -952,7 +952,7 @@ def test_register_with_definition_rollback_restores_pre_existing_primary(fresh_r
     # AdminItemType was rolled back from ``_types`` and ``_models``.
     assert fresh_registry.types_for(Item) == (ItemType,)
     assert fresh_registry.model_for_type(AdminItemType) is None
-    # ``_primaries[Item]`` is still ``ItemType`` — the else-branch restore ran.
+    # ``_primaries[Item]`` is still ``ItemType`` - the else-branch restore ran.
     assert fresh_registry.primary_for(Item) is ItemType
 
 
@@ -1153,7 +1153,7 @@ def test_models_with_multiple_types_yields_only_models_with_two_or_more(fresh_re
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 (spec-018-meta_primary-0_0_6.md) — finalize-time ambiguity audit.
+# Slice 3 (spec-018-meta_primary-0_0_6.md) - finalize-time ambiguity audit.
 # Tests below cover ``_audit_primary_ambiguity()`` running inside
 # ``finalize_django_types()``. The audit-success and audit-vs-unresolved
 # tests live in ``tests/types/test_definition_order.py``; this file hosts
@@ -1236,7 +1236,7 @@ def test_audit_runs_once_per_build(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# L1 (docs/plan-registry-helpers.md) — unregister public helper. Tests below
+# L1 (docs/plan-registry-helpers.md) - unregister public helper. Tests below
 # exercise the new public surface that replaces the direct private-map
 # pokes in Slice 4 walker/extension fixtures and the older
 # check_schema-audit fixtures (types list, model index, primary slot, and
@@ -1306,7 +1306,7 @@ def test_unregister_keeps_siblings_intact_in_multi_type_case(fresh_registry):
     """``unregister`` of one type for a model leaves siblings registered.
 
     When the unregistered type was the primary, the model loses its
-    primary slot — the caller is responsible for re-declaring a primary
+    primary slot - the caller is responsible for re-declaring a primary
     via a fresh registration cycle. Siblings stay in ``types_for`` in
     their original registration order.
     """
@@ -1337,7 +1337,7 @@ def test_unregister_of_primary_leaves_state_that_audit_rejects():
 
     Pins the contract narrated by ``unregister``'s docstring at
     ``django_strawberry_framework/registry.py::TypeRegistry.unregister #"When ``type_cls`` is the primary for its model"``: when ``type_cls`` is the primary for its
-    model, the model loses its primary even if siblings remain — the
+    model, the model loses its primary even if siblings remain - the
     caller must re-declare a primary via a fresh registration cycle.
     Concretely: register three types against the same model with the
     first as primary, unregister the primary, then call

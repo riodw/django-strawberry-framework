@@ -22,7 +22,7 @@ from django_strawberry_framework.orders import order_input_type
 # ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"result = result.all()"``.
 # The README rule at ``examples/fakeshop/test_query/README.md #"Coverage rule"`` requires
 # coverage lines reachable from a live ``/graphql/`` query to land here. Returns
-# ``models.Branch.objects`` (a ``Manager``) — NOT ``.all()`` — so the field-
+# ``models.Branch.objects`` (a ``Manager``) - NOT ``.all()`` - so the field-
 # wrapper's coercion fires per rev4 M1. The async equivalent
 # (``django_strawberry_framework/list_field.py::_post_process_consumer_async #"result = result.all()"``) is genuinely unreachable from the sync ``GraphQLView``
 # mounted at ``/graphql/`` (Strawberry's sync execution rejects async resolvers
@@ -66,7 +66,7 @@ class BookType(DjangoType):
         # ``primary = True`` makes ``BookType`` the relation-resolution target
         # for ``library.Book`` so the acceptance-only ``NullabilityOverrideBookType``
         # secondary below can register on the same model without ambiguity
-        # (spec-029 Decision 5 / Edge cases — exactly one type per model is primary).
+        # (spec-029 Decision 5 / Edge cases - exactly one type per model is primary).
         primary = True
         fields = (
             "id",
@@ -87,7 +87,7 @@ class NullabilityOverrideBookType(DjangoType):
     ``nullable_overrides = ("title",)`` flips the ``NOT NULL`` ``title`` column
     from its native ``String!`` to ``String``; ``required_overrides = ("subtitle",)``
     flips the ``null=True`` ``subtitle`` column from its native ``String`` to
-    ``String!`` — both without touching the Django column (spec-029 Slice 3).
+    ``String!`` - both without touching the Django column (spec-029 Slice 3).
     ``Meta.primary = False`` keeps ``BookType`` the relation target; this type
     stays reverse-discoverable via the registry. The dedicated root resolver
     (``Query.all_library_nullability_override_books``) returns only rows with a
@@ -217,7 +217,7 @@ class Query:
 
     # Nullable-outer variant: the consumer ``list[BranchType] | None`` class
     # annotation (NOT a constructor argument) drives the rendered GraphQL type
-    # to ``[BranchType!]`` — a nullable list of non-null items. ``DjangoListField``
+    # to ``[BranchType!]`` - a nullable list of non-null items. ``DjangoListField``
     # itself has no outer-nullability branch; Strawberry reads the annotation, so
     # this pins that the field factory leaves the consumer's annotation intact.
     all_library_branches_via_list_field_nullable: list[BranchType] | None = DjangoListField(
@@ -281,7 +281,7 @@ class Query:
     def all_library_nullability_override_books(self) -> list[NullabilityOverrideBookType]:
         # ``required_overrides = ("subtitle",)`` declares ``subtitle`` as
         # ``String!`` on this type, but the column is ``null=True`` and fakeshop
-        # seeds ``subtitle=None`` rows — so exclude null-subtitle rows to keep
+        # seeds ``subtitle=None`` rows - so exclude null-subtitle rows to keep
         # the non-null GraphQL contract true at the boundary, ordered by id for
         # deterministic responses (spec-029 Slice 3 / Edge cases).
         return models.Book.objects.exclude(subtitle__isnull=True).order_by("id")

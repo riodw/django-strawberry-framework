@@ -60,7 +60,7 @@ def _make_test_module(monkeypatch, **attrs):
 
 
 def test_bad_dotted_path_raises_command_error():
-    # The original import error surfaces — it is NOT swallowed and retried as a
+    # The original import error surfaces - it is NOT swallowed and retried as a
     # registry miss.
     with pytest.raises(CommandError, match="No module named"):
         call_command("inspect_django_type", "does.not.exist.Type")

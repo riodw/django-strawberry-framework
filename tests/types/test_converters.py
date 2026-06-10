@@ -221,7 +221,7 @@ def test_choice_enum_with_graphql_reserved_and_non_ascii_values_builds_schema(
         ("true", "True"),
         ("FALSE", "False"),
         ("null", "Null"),
-        ("café", "Cafe"),
+        ("caf\u00e9", "Cafe"),
         ("__private", "Private"),
     )
     registry.clear()
@@ -467,21 +467,21 @@ def test_convert_scalar_binary_field_raises_unsupported():
 
 
 # ---------------------------------------------------------------------------
-# BigInt scalar — package-internal contract tests
+# BigInt scalar - package-internal contract tests
 #
 # The field-mapping introspection tests and the basic outbound/inbound
 # round-trip tests were migrated to live ``/graphql/`` coverage on the
 # scalars app (``examples/fakeshop/test_query/test_scalars_api.py``). What
 # remains here is unreachable from a real HTTP path:
 #
-# - ``test_big_auto_field_still_maps_to_int`` — sibling case asserting
+# - ``test_big_auto_field_still_maps_to_int`` - sibling case asserting
 #   ``BigAutoField -> Int`` (NOT BigInt). The scalars app's id columns
 #   are also ``BigAutoField`` but the example schema doesn't introspect
 #   into the synthetic ``managed=False`` shape this test needs.
 # - Four BigInt rejection / edge tests (``null`` input, bool / float
 #   argument rejection, bool return-value rejection). The strict parser
 #   / serializer error contracts surface as ``GraphQLError`` from
-#   Strawberry — reachable via HTTP in principle but the package test is
+#   Strawberry - reachable via HTTP in principle but the package test is
 #   the contract source; HTTP coverage would only re-verify what the
 #   library round-trip tests already prove for non-error inputs.
 #
@@ -585,7 +585,7 @@ def test_big_auto_field_still_maps_to_int():
 
 
 def test_bigint_in_input_position_with_null_via_schema_execution():
-    """A nullable ``BigInt`` argument accepts ``null`` — Strawberry strips it before
+    """A nullable ``BigInt`` argument accepts ``null`` - Strawberry strips it before
     the parser runs, so the resolver receives ``None``.
     """
 
@@ -1153,7 +1153,7 @@ def test_hstore_field_resolver_dict_serializes_via_schema_execution(monkeypatch)
     """Serializer-level test: a resolver returning a hand-built dict round-trips
     verbatim through the ``JSON`` scalar via ``schema.execute_sync``.
 
-    No DB persistence — SQLite cannot store HStore values; the test exercises
+    No DB persistence - SQLite cannot store HStore values; the test exercises
     only the scalar's wire-level serialization through Strawberry.
     """
     monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", _FakeHStoreField)
@@ -1188,7 +1188,7 @@ def test_hstore_field_resolver_dict_serializes_via_schema_execution(monkeypatch)
 
 def test_hstore_field_resolver_dict_with_none_value_via_schema_execution(monkeypatch):
     """A resolver returning ``{"k1": "v", "k2": None}`` round-trips with the
-    ``None`` value preserved inside the dict — mirrors ``HStoreField``'s native
+    ``None`` value preserved inside the dict - mirrors ``HStoreField``'s native
     ``dict[str, str | None]`` shape.
     """
     monkeypatch.setattr(converters, "_HSTORE_FIELD_CLS", _FakeHStoreField)
@@ -1313,7 +1313,7 @@ def test_real_hstore_field_compatible_with_strawberry():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 — multi-type relation conversion regressions (H1 always-defer)
+# Slice 4 - multi-type relation conversion regressions (H1 always-defer)
 # ---------------------------------------------------------------------------
 
 
@@ -1385,7 +1385,7 @@ def test_consumer_assigned_strawberry_field_relation_survives_always_defer():
     assert definition.consumer_authored_fields == frozenset({"items"})
     assert definition.consumer_assigned_relation_fields == frozenset({"items"})
 
-    # ``items`` is NOT in synthesized annotations — the consumer-authored
+    # ``items`` is NOT in synthesized annotations - the consumer-authored
     # short-circuit skipped it, so no PendingRelationAnnotation was recorded.
     assert "items" not in CategoryType.__annotations__
 
@@ -1525,13 +1525,13 @@ def test_relation_target_with_multiple_no_primary_surfaces_audit_error_at_finali
         finalize_django_types()
 
     msg = str(exc_info.value)
-    # The audit message is what fires — not the "no registered DjangoType"
+    # The audit message is what fires - not the "no registered DjangoType"
     # message of the unresolved-target path.
     assert "Declare Meta.primary = True" in msg
 
 
 # ---------------------------------------------------------------------------
-# spec-029 Slice 3 — convert_scalar force_nullable tri-state
+# spec-029 Slice 3 - convert_scalar force_nullable tri-state
 #
 # These are direct ``convert_scalar`` unit tests (the tri-state seam fires at
 # conversion time, unreachable from a live query without the override
@@ -1583,7 +1583,7 @@ def test_convert_scalar_force_nullable_none_honors_field_null():
     # Explicit None.
     assert convert_scalar(non_null, "OwnerType", force_nullable=None) is str
     assert convert_scalar(nullable, "OwnerType", force_nullable=None) == (str | None)
-    # Implicit default (no kwarg) — the pre-override call shape.
+    # Implicit default (no kwarg) - the pre-override call shape.
     assert convert_scalar(non_null, "OwnerType") is str
     assert convert_scalar(nullable, "OwnerType") == (str | None)
 
@@ -1593,7 +1593,7 @@ def test_convert_scalar_force_nullable_on_choice_field(choice_fixture_model):
 
     Widening sits AFTER choice substitution, so ``force_nullable=True`` on the
     non-null ``status`` column yields ``EnumType | None`` and ``False`` on the
-    nullable ``nullable_status`` column yields a bare ``EnumType`` — the enum
+    nullable ``nullable_status`` column yields a bare ``EnumType`` - the enum
     members are untouched in both directions.
     """
     registry.clear()
@@ -1615,7 +1615,7 @@ def test_convert_scalar_force_nullable_on_array_field(monkeypatch):
 
     A non-null ``ArrayField(IntegerField())`` with ``force_nullable=True``
     becomes ``list[int] | None`` (outer widened) while the inner element stays
-    ``int`` (NOT ``int | None``) — the recursive ``base_field`` conversion is
+    ``int`` (NOT ``int | None``) - the recursive ``base_field`` conversion is
     left ``force_nullable``-unset, so inner nullability follows
     ``base_field.null`` and is NOT affected by the outer override (Edge cases).
     A nullable-outer ``ArrayField(..., null=True)`` with ``force_nullable=False``

@@ -1,4 +1,4 @@
-"""``OptimizerHint`` — typed wrapper for ``Meta.optimizer_hints`` values.
+"""``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
 
 Provides a uniform API for declaring per-field optimization overrides
 in ``DjangoType.Meta.optimizer_hints``.
@@ -76,9 +76,9 @@ class OptimizerHint:
         ``ConfigurationError`` at ``OptimizerHint(...)`` time, surfacing
         the mistake at ``Meta.optimizer_hints`` build time instead of at
         query time. The walker's own priority order
-        (``skip`` → ``prefetch_obj`` → ``force_select`` → ``force_prefetch``
+        (``skip`` -> ``prefetch_obj`` -> ``force_select`` -> ``force_prefetch``
         in ``optimizer/walker.py::_apply_hint``) is therefore documentation
-        of the dispatch sequence, not collision arbitration — every
+        of the dispatch sequence, not collision arbitration - every
         conflict the priority order would have arbitrated has already
         been rejected here.
         """
@@ -150,7 +150,7 @@ def hint_is_skip(hint: OptimizerHint | None) -> bool:
     return bool(getattr(hint, "skip", False))
 
 
-# Sentinel instance — must be created after the class body so the
+# Sentinel instance - must be created after the class body so the
 # dataclass decorator has finished installing ``__init__`` and
 # ``__setattr__``.  The ``# type: ignore[misc]`` silences mypy's
 # "cannot assign to a ClassVar" warning: the ClassVar declaration is

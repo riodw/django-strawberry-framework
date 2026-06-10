@@ -21,7 +21,7 @@ class _FakeUnsupportedField(models.Field):
     """One-line Django Field subclass with no SCALAR_MAP match.
 
     Pins the unsupported-field-type bypass test for spec-015 Slice 1
-    Decision 7a — the consumer's annotation override is a recourse
+    Decision 7a - the consumer's annotation override is a recourse
     parallel to ``Meta.exclude`` for unsupported scalar field types.
     """
 
@@ -310,7 +310,7 @@ def test_relation_field_class_attribute_shadowing_raises():
     """Unsupported class attributes cannot silently shadow relation fields.
 
     The error is attributed to the consumer's ``DjangoType`` subclass
-    (``CategoryType``), not the underlying Django model — the shadow lives on
+    (``CategoryType``), not the underlying Django model - the shadow lives on
     the class attribute, which is the consumer-visible site, so a stack-trace
     grep for the offending site lands on the right class.
     """
@@ -351,7 +351,7 @@ def test_assigned_scalar_field_override_keeps_consumer_resolver():
     assert definition.consumer_assigned_scalar_fields == frozenset({"name"})
     assert "name" in definition.consumer_authored_fields
     # The synthesized scalar annotation must not shadow the consumer
-    # assignment — the field name does not appear in the generated
+    # assignment - the field name does not appear in the generated
     # annotations dict.
     assert "name" not in CategoryType.__annotations__
 
@@ -571,7 +571,7 @@ def test_annotation_override_does_not_populate_shared_enum_cache_for_co_resident
 
 
 # ---------------------------------------------------------------------------
-# Relay collision tests (Decision 7) — five reject + six accept.
+# Relay collision tests (Decision 7) - five reject + six accept.
 # ---------------------------------------------------------------------------
 
 
@@ -631,7 +631,7 @@ def test_consumer_id_unresolved_non_nodeid_string_on_relay_node_type_raises():
     with pytest.raises(ConfigurationError) as exc_info:
 
         class CategoryNode(DjangoType):
-            id: "MissingType"  # noqa: F821 — deliberately unresolved
+            id: "MissingType"  # noqa: F821 - deliberately unresolved
 
             class Meta:
                 model = Category
@@ -648,7 +648,7 @@ def test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises():
     with pytest.raises(ConfigurationError) as exc_info:
 
         class CategoryNodeNot(DjangoType):
-            id: "NotNodeID[int]"  # noqa: F821 — token regex rejects this prefix
+            id: "NotNodeID[int]"  # noqa: F821 - token regex rejects this prefix
 
             class Meta:
                 model = Category
@@ -662,7 +662,7 @@ def test_consumer_id_typo_lookalike_nodeid_string_on_relay_node_type_raises():
     with pytest.raises(ConfigurationError) as exc_info:
 
         class CategoryNodeMy(DjangoType):
-            id: "MyNodeID[int]"  # noqa: F821 — token regex rejects this prefix
+            id: "MyNodeID[int]"  # noqa: F821 - token regex rejects this prefix
 
             class Meta:
                 model = Category
@@ -753,14 +753,14 @@ def test_consumer_id_resolved_relay_nodeid_with_unresolved_sibling_annotation_is
 
     class CategoryNode(DjangoType):
         id: relay.NodeID[int]
-        items: list["AdminItemType"]  # noqa: F821 — deliberately unresolved sibling
+        items: list["AdminItemType"]  # noqa: F821 - deliberately unresolved sibling
 
         class Meta:
             model = Category
             fields = ("id", "name", "items")
             interfaces = (relay.Node,)
 
-    # Class creation succeeded — the rev6 H1 fail-soft fix accepts the
+    # Class creation succeeded - the rev6 H1 fail-soft fix accepts the
     # directly-resolved NodeID-marked id even when another annotation on
     # the same class fails to resolve.
     assert CategoryNode is not None
@@ -792,7 +792,7 @@ def test_inherited_id_annotation_on_relay_node_subclass_is_handled_by_pk_suppres
             fields = ("id", "name")
             interfaces = (relay.Node,)
 
-    # Guard did not fire — the child's own __annotations__ has no "id" key
+    # Guard did not fire - the child's own __annotations__ has no "id" key
     # because Python does not promote inherited annotations into the
     # subclass's dict.
     assert "id" not in dict(ChildRelayType.__dict__.get("__annotations__", {}))
@@ -865,7 +865,7 @@ def test_same_module_string_forward_reference_annotation_survives_finalization()
 
 
 # ---------------------------------------------------------------------------
-# Slice 3 (spec-018-meta_primary-0_0_6.md) — ambiguity-audit interaction
+# Slice 3 (spec-018-meta_primary-0_0_6.md) - ambiguity-audit interaction
 # with relation resolution. The raise-at-finalize and once-per-build
 # regression tests live in ``tests/test_registry.py``; this file hosts the
 # audit-success paths and the audit-vs-unresolved-target ordering test.

@@ -166,7 +166,7 @@ def _expand_related_filter(filter_name: str, f: RelatedFilter) -> OrderedDict[st
     per-field deep-copy avoids mutating the target filterset's
     instances when the parent rebinds `field_name` to the relation
     path. Module-level helper because the expansion has no metaclass
-    state — moving it off the metaclass keeps the call site
+    state - moving it off the metaclass keeps the call site
     (``get_filters``) free of ``cls.__class__.expand_related_filter
     (cls, ...)`` indirection that obscured the function's purpose.
     """
@@ -203,7 +203,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     conditional before owner binding lands.
     """
 
-    # Binding seam — populated by `finalize_django_types` phase 2.5.
+    # Binding seam - populated by `finalize_django_types` phase 2.5.
     _owner_definition: DjangoTypeDefinition | None = None
 
     # Cache for fully-resolved filters per Layer 4 of Decision 3.
@@ -255,7 +255,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     _field_type_suffix: str = "FilterInputType"
 
     # ------------------------------------------------------------------
-    # Layer 4 — cycle-safe filter expansion (cookbook port).
+    # Layer 4 - cycle-safe filter expansion (cookbook port).
     # ------------------------------------------------------------------
 
     @classmethod
@@ -280,7 +280,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             and once per class for the lifetime of the registry, so
             the flag's read/write is never contended at runtime.
             Parallel test runs that exercise the same FilterSet class
-            from different threads can race on the flag — the second
+            from different threads can race on the flag - the second
             thread sees ``_is_expanding_filters=True`` and short-
             circuits to ``super().get_filters()``, yielding the
             unexpanded set. Tests that need to call ``get_filters()``
@@ -330,7 +330,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
         - **Per-field ``"__all__"``** (dict form, e.g. ``{"name": "__all__"}``):
           ``django-filter`` expands only the top-level ``fields = "__all__"``
-          and passes a per-field ``"__all__"`` value through verbatim — which
+          and passes a per-field ``"__all__"`` value through verbatim - which
           is then mis-read as a literal lookup expression. We expand each such
           value to the field's concrete lookups via `_lookups_for_field`
           (transforms excluded; see that helper). This is the cookbook /
@@ -417,7 +417,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
         Own-PK branch (spec-027 L566-567 + L607): when ``field`` is the
         owning model's primary key AND the owning ``DjangoType`` itself
-        implements ``relay.Node``, the field becomes ``GlobalIDFilter`` —
+        implements ``relay.Node``, the field becomes ``GlobalIDFilter`` -
         the OWNER is the Relay node so its PK column is a GlobalID over
         the wire.
         """
@@ -510,7 +510,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
         Own-PK branch per spec-027 L566-567 + L607: when a ``FilterSet``
         whose owning ``DjangoType`` implements ``relay.Node`` filters on
-        its own primary key, the wire shape is a Relay GlobalID — so the
+        its own primary key, the wire shape is a Relay GlobalID - so the
         filter for that PK is ``GlobalIDFilter`` rather than the scalar
         upstream default. Resolves only when ``_owner_definition`` is
         bound (finalizer phase-2.5 binding) so package-internal tests
@@ -535,9 +535,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """Pick the Relay-aware filter class matching the relation cardinality.
 
         Multi-valued relations (`ManyToManyField`, reverse FK
-        `ManyToOneRel`, reverse M2M `ManyToManyRel`) — every Django
+        `ManyToOneRel`, reverse M2M `ManyToManyRel`) - every Django
         relation field that sets `many_to_many=True` or `one_to_many=True`
-        — map to `GlobalIDMultipleChoiceFilter`; single-valued relations
+        - map to `GlobalIDMultipleChoiceFilter`; single-valued relations
         (forward `ForeignKey` / `OneToOneField` and reverse `OneToOneRel`)
         map to `GlobalIDFilter`. This mirrors `django-filter`'s upstream
         choice between `ModelChoiceFilter` and `ModelMultipleChoiceFilter`
@@ -813,7 +813,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> list[tuple[str, RelatedFilter, Any]]:
         """List `(field_name, related_filter, child_input)` for present branches.
 
-        Active-branch scoping (M4 of rev3) — a `RelatedFilter` is "active"
+        Active-branch scoping (M4 of rev3) - a `RelatedFilter` is "active"
         when its key is present in the input, regardless of the inner
         value's emptiness. Inactive branches are skipped end-to-end
         (visibility derivation, constraint application, permission
@@ -896,7 +896,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """Run each active branch's target ``get_queryset(...)`` then recurse.
 
         Reuses ``django_strawberry_framework/types/relay.py::_apply_get_queryset_sync``
-        — the existing helper handles the sync-misuse detection and
+        - the existing helper handles the sync-misuse detection and
         raises ``SyncMisuseError`` (a ``ConfigurationError`` and
         ``RuntimeError`` subclass); ``apply``'s catch-and-rethrow
         translates that into a ``RuntimeError`` consumers can match
@@ -1032,9 +1032,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _target_type_for_related_filter(related_filter: RelatedFilter) -> type | None:
         """Resolve the `DjangoType` whose ``get_queryset()`` scopes the branch.
 
-        Prefer the child filterset's *bound owner* — the type the consumer
+        Prefer the child filterset's *bound owner* - the type the consumer
         explicitly wired via ``Meta.filterset_class`` (``_owner_definition``,
-        bound at finalizer phase 2.5) — over a model-only registry lookup. When a
+        bound at finalizer phase 2.5) - over a model-only registry lookup. When a
         child model has more than one registered ``DjangoType`` and the child
         filterset is bound to a non-primary one, a model-only lookup resolves the
         *primary* type and runs ITS ``get_queryset()`` against the non-primary's
@@ -1070,7 +1070,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> None:
         """Fire `check_<field>_permission(request)` for fields in the input.
 
-        Active-input-only per M2 of rev5 — a declared `check_*` gate that
+        Active-input-only per M2 of rev5 - a declared `check_*` gate that
         is not exercised by this call leaves the queryset untouched.
         Recurses into the child filterset for each active `RelatedFilter`
         branch so the cookbook's nested-permission contract holds, and
@@ -1098,12 +1098,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             ``or: [{shelves: {published: true}}, {shelves: {published:
             false}}]`` fires the parent's ``check_shelves_permission``
             once AND the child ``ShelfFilter.check_published_permission``
-            once — the per-class set keyed on the child dedups the
+            once - the per-class set keyed on the child dedups the
             re-entry from the second arm.
 
         Double-dispatch contract:
             For an active ``RelatedFilter`` branch named ``shelves``
-            both gates fire — the parent's ``check_shelves_permission``
+            both gates fire - the parent's ``check_shelves_permission``
             (the per-branch gate on the owning filterset) AND the child
             filterset's own ``check_*_permission`` gates. They live in
             different per-class dedup sets, so both fire once. That
@@ -1150,7 +1150,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 # same-class child re-entered from sibling branches still
                 # dedups) and allocates its own bare instance.
                 child_filterset._run_permission_checks(child_input, request, _fired=_fired)
-            # Per-branch permission gate on the parent — fires e.g.
+            # Per-branch permission gate on the parent - fires e.g.
             # `check_shelves_permission` when the `shelves` branch is
             # active. Child filterset's own field gates fire via the
             # recursive call above. Deduped against the parent's
@@ -1159,7 +1159,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             cls._invoke_permission_method(bare, field_name, request, fired=class_fired)
 
         # Recurse into logical branches (and, or, not) to check permissions
-        # of any nested field/lookup clauses. Same cls → reuse ``bare`` and
+        # of any nested field/lookup clauses. Same cls -> reuse ``bare`` and
         # the shared ``_fired`` map.
         and_branches = normalized.get("and") or []
         for child_input in and_branches:
@@ -1204,7 +1204,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         When ``fired`` is supplied, the method-name is recorded after a
         successful fire and subsequent calls with the same name skip the
         attribute lookup entirely. The dedup is scoped to the supplied
-        set — ``_run_permission_checks`` passes the per-class set keyed
+        set - ``_run_permission_checks`` passes the per-class set keyed
         out of its shared ``_fired`` map.
         """
         method_name = f"check_{field_path.replace('__', '_')}_permission"
@@ -1276,7 +1276,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 if callable(method):
                     method(request)
             return
-        # No explicit set supplied — fall through to the active-input
+        # No explicit set supplied - fall through to the active-input
         # variant. `_run_permission_checks` is a classmethod; route the
         # currently-bound form data (already a dict) through it.
         type(self)._run_permission_checks(self.data or {}, request)
@@ -1285,7 +1285,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _validate_form_or_raise(cls, filterset_instance: FilterSet) -> None:
         """Raise `GraphQLError` with the canonical extensions payload.
 
-        Decision 8 step 6 plus M10 of rev5 — `BaseFilterSet.qs` silently
+        Decision 8 step 6 plus M10 of rev5 - `BaseFilterSet.qs` silently
         falls through to `filter_queryset` when the form has errors, so
         the explicit `is_valid()` call here is what turns a malformed
         input into a structured GraphQL response.
@@ -1518,7 +1518,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> models.QuerySet:
         """Constrain `parent_qs` by each active branch's intersected child qs.
 
-        M4-of-rev3 + H3-of-rev8 — the explicit `RelatedFilter(queryset=...)`
+        M4-of-rev3 + H3-of-rev8 - the explicit `RelatedFilter(queryset=...)`
         constraint AND-intersects with the visibility-scoped child qs
         from step 3, then `parent_qs.filter(<rel>__in=<intersected>)` runs
         ONCE for every active branch. Inactive branches do not constrain
@@ -1547,7 +1547,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 #
                 # The comparison uses ``is`` identity because Django's
                 # own ``Query.combine`` does the same (``self.model !=
-                # rhs.model``) — proxies and multi-table-inheritance
+                # rhs.model``) - proxies and multi-table-inheritance
                 # children carry distinct ``model`` identities even
                 # though they share a database table with their
                 # concrete parent. Consumers who need to mix
@@ -1595,7 +1595,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         Captures the verbatim normalize / request / constraints / ctor /
         ``_apply_info`` stash sequence both apply paths run identically.
         The async-only ``_nested_qs_by_branch_id`` stash stays inline in
-        ``apply_async`` (no sync analog) — callers attach it on the
+        ``apply_async`` (no sync analog) - callers attach it on the
         returned instance.
         """
         data = cls._normalize_input(input_value)
@@ -1671,7 +1671,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                ``SyncMisuseError`` mid-``.qs``.
             3. Build the filterset via ``_apply_common_prelude`` (shared
                with ``apply_sync``) and stash the nested-visibility map
-               on the instance — the async-only step with no sync analog.
+               on the instance - the async-only step with no sync analog.
             4. Route ``_apply_common_finalize`` (perm check + form
                validate + ``.qs`` read) through a single
                ``sync_to_async(thread_sensitive=True)`` so a consumer's
@@ -1708,9 +1708,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         queryset: models.QuerySet,
         info: Any,
     ) -> models.QuerySet:
-        """Thin dispatcher — picks `apply_sync` and translates sync-misuse.
+        """Thin dispatcher - picks `apply_sync` and translates sync-misuse.
 
-        Decision 8 / M5 of rev6 — catches the typed ``SyncMisuseError``
+        Decision 8 / M5 of rev6 - catches the typed ``SyncMisuseError``
         raised by ``_apply_get_queryset_sync`` and rethrows as
         ``RuntimeError`` with the actionable "use apply_async instead"
         message consumers can match on. Class-based dispatch closes the

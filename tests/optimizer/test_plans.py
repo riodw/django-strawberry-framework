@@ -1,4 +1,4 @@
-"""Tests for ``optimizer/plans.py`` — ``OptimizationPlan`` data structure.
+"""Tests for ``optimizer/plans.py`` - ``OptimizationPlan`` data structure.
 
 The plan is a simple dataclass, so the test surface is small and focused
 on the ``is_empty`` property and the ``apply`` method. The walker tests
@@ -110,7 +110,7 @@ class TestOptimizationPlanApply:
 
     def test_apply_select_related(self):
         plan = OptimizationPlan(select_related=["category"])
-        # Use a model that has a FK — Item.category.
+        # Use a model that has a FK - Item.category.
         from apps.products.models import Item
 
         qs = Item.objects.all()
@@ -237,7 +237,7 @@ class TestConsumerOnlyFields:
     """``_consumer_only_fields`` defends Django's private ``deferred_loading`` contract.
 
     The function is fed real ``QuerySet`` objects from ``diff_plan_for_queryset``,
-    but the contract it reads (``query.deferred_loading`` — a private 2-tuple
+    but the contract it reads (``query.deferred_loading`` - a private 2-tuple
     of ``(field_set, defer_flag)``) is volatile across Django versions, so
     the function defends against missing-attribute, wrong-shape, defer-mode,
     and wildcard-``.only()`` inputs by returning ``None``. These pins cover
@@ -248,7 +248,7 @@ class TestConsumerOnlyFields:
         """Pins the missing-attribute branch.
 
         A ``getattr(query, "deferred_loading", None)`` lookup returns ``None``
-        when ``queryset.query`` is absent or has no ``deferred_loading`` —
+        when ``queryset.query`` is absent or has no ``deferred_loading`` -
         e.g. when the optimizer is fed a plain ``Manager`` or a test double.
         """
         assert _consumer_only_fields(object()) is None
@@ -274,7 +274,7 @@ class TestConsumerOnlyFields:
     def test_returns_none_for_wildcard_only_with_empty_field_set(self):
         """Pins the ``not field_set`` branch.
 
-        ``(set(), False)`` is not a meaningful consumer projection — Django's
+        ``(set(), False)`` is not a meaningful consumer projection - Django's
         wildcard ``.only()`` collapses to the defer-mode default
         ``(set(), True)``, so this shape is mostly synthetic, but the guard
         keeps the contract symmetric with the wildcard explanation in the
@@ -301,7 +301,7 @@ class TestDiffPlanForQueryset:
         assert delta_plan is not plan
         assert delta_plan.select_related == ()
         assert delta_qs is qs
-        # Original plan is untouched — B1 caches it across requests.
+        # Original plan is untouched - B1 caches it across requests.
         assert plan.select_related == ["category"]
 
     def test_drops_chained_select_related(self):
@@ -403,7 +403,7 @@ class TestDiffPlanForQueryset:
 
     def test_optimizer_can_absorb_consumer_path_only_when_covered(self):
         # Variant: consumer has both a covered descendant and an
-        # uncovered descendant. The uncovered one tips the decision —
+        # uncovered descendant. The uncovered one tips the decision -
         # we drop the optimizer to keep the consumer's full subtree.
         inner = Prefetch("entries", queryset=Entry.objects.only("value", "item_id"))
         outer = Prefetch("items", queryset=Item.objects.prefetch_related(inner))
@@ -493,7 +493,7 @@ class TestDiffPlanForQueryset:
 
     def test_keeps_only_fields_when_consumer_used_defer(self):
         # ``.defer()`` is not a consumer projection in the
-        # ``.only()`` sense — Django composes ``.only()`` after
+        # ``.only()`` sense - Django composes ``.only()`` after
         # ``.defer()`` cleanly. The optimizer keeps its ``only_fields``.
         plan = OptimizationPlan(only_fields=["id"])
         qs = Item.objects.defer("name")
@@ -515,7 +515,7 @@ class TestDiffPlanForQueryset:
         # When the consumer passes their own ``Prefetch`` with a custom
         # queryset, we cannot losslessly replace it.  Consumer wins,
         # optimizer is dropped (any nested optimizer work is sacrificed
-        # — the consumer chose to manage this branch explicitly).
+        # - the consumer chose to manage this branch explicitly).
         consumer_pf = Prefetch("items", queryset=Item.objects.all())
         opt_pf = Prefetch("items", queryset=Item.objects.prefetch_related("entries"))
         plan = OptimizationPlan(prefetch_related=[opt_pf])
@@ -538,7 +538,7 @@ class TestRuntimePathFromPath:
     """``runtime_path_from_path`` walks ``prev`` under a fixed, fail-loud bound."""
 
     def test_walks_a_deep_but_finite_path(self):
-        """A path of (ceiling - 1) nodes resolves fully — the boundary that just fits."""
+        """A path of (ceiling - 1) nodes resolves fully - the boundary that just fits."""
         # _linked_path builds root-first; the output is that same root-first order.
         keys = tuple(f"f{i}" for i in range(_MAX_PATH_DEPTH - 1))
         path = _linked_path(*keys)

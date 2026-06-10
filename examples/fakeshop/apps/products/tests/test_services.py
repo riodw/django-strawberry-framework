@@ -1,4 +1,4 @@
-"""Tests for products.services — Faker-driven seeding and deletion services."""
+"""Tests for products.services - Faker-driven seeding and deletion services."""
 
 from unittest.mock import patch
 
@@ -19,19 +19,19 @@ User = get_user_model()
 
 def test_is_safe_generator_returns_true_for_scalar():
     fake = Faker()
-    # ``name`` returns a str — must be accepted.
+    # ``name`` returns a str - must be accepted.
     assert services._is_safe_generator(fake, "name") is True
 
 
 def test_is_safe_generator_returns_false_when_method_raises():
     fake = Faker()
-    # A method name that doesn't exist will raise on attribute access — also a "False" path.
+    # A method name that doesn't exist will raise on attribute access - also a "False" path.
     assert services._is_safe_generator(fake, "no_such_method_xyz_123") is False
 
 
 def test_is_safe_generator_returns_false_for_non_scalar():
     fake = Faker()
-    # ``profile()`` returns a dict — non-scalar — must be rejected.
+    # ``profile()`` returns a dict - non-scalar - must be rejected.
     assert services._is_safe_generator(fake, "profile") is False
 
 

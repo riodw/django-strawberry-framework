@@ -1,4 +1,4 @@
-"""Django AppConfig — registers django-strawberry-framework with Django's app loader."""
+"""Django AppConfig - registers django-strawberry-framework with Django's app loader."""
 
 from django.apps import AppConfig
 
@@ -22,7 +22,7 @@ class DjangoStrawberryFrameworkConfig(AppConfig):
         ``ready()`` is the canonical place to perform one-time setup
         that depends on Django being fully configured. Consumers get
         the patches automatically by having
-        ``"django_strawberry_framework"`` in ``INSTALLED_APPS`` — no
+        ``"django_strawberry_framework"`` in ``INSTALLED_APPS`` - no
         opt-in boilerplate is required.
         """
         from django_strawberry_framework._django_patches import apply

@@ -416,7 +416,7 @@ def test_products_items_filter_by_related_category_global_id():
 
 
 # ---------------------------------------------------------------------------
-# Ordering (DONE-028-0.0.8) — wired in ``apps.products.schema`` via the
+# Ordering (DONE-028-0.0.8) - wired in ``apps.products.schema`` via the
 # ``orderset_class`` Meta key and the ``order_input_type(...)`` resolver
 # arguments. Expectations compare against the equivalent ORM ``order_by`` so
 # the GraphQL ``ORDER BY`` and the expected sequence share one DB collation
@@ -457,7 +457,7 @@ def test_products_categories_order_by_name_denied_for_anonymous():
     """``CategoryOrder.check_name_permission`` rejects an anonymous order-by-name.
 
     Active-input-only: the gate fires because the ``orderBy`` input names the
-    gated ``name`` field — mirroring ``CategoryFilter.check_name_permission``
+    gated ``name`` field - mirroring ``CategoryFilter.check_name_permission``
     on the filter side.
     """
     seed_data(1)
@@ -524,7 +524,7 @@ def test_products_items_order_by_related_category_name_as_staff():
 
 @pytest.mark.django_db
 def test_products_items_filter_and_order_compose():
-    """``filter:`` narrows rows then ``orderBy:`` arranges them (filter → order chain).
+    """``filter:`` narrows rows then ``orderBy:`` arranges them (filter -> order chain).
 
     Filters items to one category via the own-PK GlobalID ``RelatedFilter``
     (no gate on ``id``) and orders the survivors by ``name`` (no gate on

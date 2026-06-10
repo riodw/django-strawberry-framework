@@ -1,4 +1,4 @@
-"""Tests for B7 — precomputed optimizer field metadata.
+"""Tests for B7 - precomputed optimizer field metadata.
 
 Covers ``FieldMeta.from_django_field``, definition-backed field maps on
 ``DjangoType`` subclasses, and the walker's use of the cached map.
@@ -79,7 +79,7 @@ def test_from_django_field_reverse_fk():
     # ``null = True`` as a class-level default from ``ForeignObjectRel``
     # (which proxies the forward FK's ``null`` flag), but ``FieldMeta``
     # forces ``nullable=False`` for many-side cardinalities so the flag
-    # stays self-consistent — a future consumer that reads ``nullable``
+    # stays self-consistent - a future consumer that reads ``nullable``
     # without first gating on ``one_to_many`` / ``many_to_many`` will
     # still produce the right GraphQL annotation (``list[target_type]``,
     # not ``list[target_type] | None``).

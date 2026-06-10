@@ -1,7 +1,7 @@
 """Tests for ``django_strawberry_framework.testing._wrap``.
 
 System-under-test:
-:func:`django_strawberry_framework.testing.safe_wrap_connection_method` —
+:func:`django_strawberry_framework.testing.safe_wrap_connection_method` -
 the wrap-time half of the package's Django Trac #37064 defense-in-depth
 (the unwrap-time half lives in :mod:`django_strawberry_framework._django_patches`
 and is tested in ``tests/test_django_patches.py``).
@@ -124,7 +124,7 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
     the consumer call ``safe_wrap_connection_method`` (which declines
     because the ``_DatabaseFailure`` is in place), then exercise the
     package's patched teardown method. The wrapper is unwrapped
-    exactly as upstream would do — proving the two halves compose.
+    exactly as upstream would do - proving the two halves compose.
     """
     from django.test.testcases import TransactionTestCase
 
@@ -137,7 +137,7 @@ def test_safe_wrap_connection_method_pairs_with_unwrap_time_patch_for_defense_in
     django_wrapper = _database_failure(sentinel_original)
     connection.cursor = django_wrapper
 
-    # The consumer attempts to wrap and is correctly declined — Django
+    # The consumer attempts to wrap and is correctly declined - Django
     # already wrapped first. Wrap-time half of defense-in-depth fires.
     installed = safe_wrap_connection_method(
         connection,
@@ -168,8 +168,8 @@ def test_safe_wrap_connection_method_raises_on_non_callable_wrapper():
 
     Pins the wrap-time-vs-call-time silent-failure mode closed: the
     type annotation ``Callable[..., Any]`` is now enforced at runtime,
-    so a typo (e.g. ``connection.cursor()`` — a cursor object, not
-    callable — accidentally passed instead of
+    so a typo (e.g. ``connection.cursor()`` - a cursor object, not
+    callable - accidentally passed instead of
     ``lambda: connection.cursor()``) surfaces at the wrap site with a
     traceback pointing at the consumer's call.
     """
@@ -180,7 +180,7 @@ def test_safe_wrap_connection_method_raises_on_non_callable_wrapper():
         with pytest.raises(TypeError, match="non-callable wrapper"):
             safe_wrap_connection_method(connection, "cursor", 42)
 
-        # Connection method untouched — the early-validate raise must
+        # Connection method untouched - the early-validate raise must
         # not mutate connection state before raising.
         assert connection.cursor is original_cursor
     finally:

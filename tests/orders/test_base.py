@@ -67,7 +67,7 @@ def test_related_order_unresolved_target_raises_importerror_through_lazy_mixin()
     """Unresolvable strings surface the raw ``ImportError`` from the mixin.
 
     Pins the contract Slice 3's ``_bind_ordersets`` subpass depends on
-    — the finalizer rewraps this ``ImportError`` as ``ConfigurationError``
+    - the finalizer rewraps this ``ImportError`` as ``ConfigurationError``
     with a typed message; Slice 1's primitive raises the underlying
     error unchanged so the finalizer's wrap is observable.
     """
@@ -95,7 +95,7 @@ def test_related_order_imports_lazy_mixin_from_sets_mixins_not_filters_base():
     ``sets_mixins`` home keeps the Layer-3 packages independent.
     """
     assert sets_mixins.LazyRelatedClassMixin in RelatedOrder.__mro__
-    # The mixin lives in the neutral module — confirm by source file.
+    # The mixin lives in the neutral module - confirm by source file.
     mixin = next(base for base in RelatedOrder.__mro__ if base.__name__ == "LazyRelatedClassMixin")
     assert mixin.__module__ == "django_strawberry_framework.sets_mixins"
 

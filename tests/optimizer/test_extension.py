@@ -2,27 +2,27 @@
 
 Covers, by topic code:
 
-- **O3** — end-to-end relation traversal (forward FK ``select_related``,
+- **O3** - end-to-end relation traversal (forward FK ``select_related``,
   reverse FK ``prefetch_related``, combined), root-field gate,
   ``GraphQLNonNull`` / ``GraphQLList`` type tracing, passthrough cases,
   ``on_execute`` ContextVar lifecycle, async resolver parity.
-- **O4** — nested prefetch chains and nested select-related chains.
-- **O5** — ``only()`` projection collection.
-- **O6** — ``plan_relation`` downgrade from ``select_related`` to
+- **O4** - nested prefetch chains and nested select-related chains.
+- **O5** - ``only()`` projection collection.
+- **O6** - ``plan_relation`` downgrade from ``select_related`` to
   ``Prefetch`` for target types with custom ``get_queryset`` hooks.
-- **B1** — plan cache: hits, misses, eviction, named-fragment
+- **B1** - plan cache: hits, misses, eviction, named-fragment
   differentiation, directive-variable cache splitting, runtime-path
   inclusion.
-- **B2** — forward FK-id elision (and the guards that disable it).
-- **B3** — strictness API (``off`` / ``warn`` / ``raise``).
-- **B4** — ``Meta.optimizer_hints`` (SKIP, force_select, force_prefetch,
+- **B2** - forward FK-id elision (and the guards that disable it).
+- **B3** - strictness API (``off`` / ``warn`` / ``raise``).
+- **B4** - ``Meta.optimizer_hints`` (SKIP, force_select, force_prefetch,
   explicit ``Prefetch``).
-- **B5** — plan introspection via ``info.context`` and the read/write
+- **B5** - plan introspection via ``info.context`` and the read/write
   symmetry of the ``_context`` helpers (dict, dict-subclass, non-dict
   mapping, frozen mapping, immutable ``dict`` subclass, ``None``).
-- **B6** — schema-build-time optimization audit (``check_schema``,
+- **B6** - schema-build-time optimization audit (``check_schema``,
   ``_collect_schema_reachable_types`` including union-type descent).
-- **B8** — consumer-queryset-aware plan diffing.
+- **B8** - consumer-queryset-aware plan diffing.
 - Extension construction surface (unknown-kwarg rejection, Strawberry
   ``execution_context`` keyword).
 - ``hint_is_skip`` dispatch shapes.
@@ -96,7 +96,7 @@ def test_optimize_coerces_manager_through_all_records_cache_miss():
     ``examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_coerces_manager_to_queryset_in_http_query``.
     This test keeps the package-internal cache-state assertion that proves
     the plan was actually BUILT (cache miss recorded) rather than the
-    Manager being short-circuited by the ``isinstance(QuerySet)`` gate —
+    Manager being short-circuited by the ``isinstance(QuerySet)`` gate -
     a guarantee unreachable from the live HTTP path because the project
     schema doesn't expose its extension instance for inspection.
     """
@@ -338,7 +338,7 @@ def test_optimizer_does_not_elide_forward_fk_when_target_has_custom_get_queryset
     and ``test_scalars_custom_get_queryset_filters_inactive_tag_to_null_in_http_query``.
     This test keeps the package-internal plan-state assertions: even though
     only ``id`` is selected on the FK target, the optimizer must NOT elide
-    (``fk_id_elisions == ()``) and must NOT use ``select_related`` —
+    (``fk_id_elisions == ()``) and must NOT use ``select_related`` -
     instead it records exactly one ``Prefetch`` entry.
     """
     services.seed_data(1)
@@ -455,7 +455,7 @@ def test_optimizer_passes_through_unregistered_return_type(caplog):
     ext = DjangoOptimizerExtension()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
 
-    # Drop the registry mid-test — schema is already built, but the optimizer
+    # Drop the registry mid-test - schema is already built, but the optimizer
     # looks up the registry per resolver call, so the lookup misses.
     registry.clear()
 
@@ -621,7 +621,7 @@ def test_resolve_handles_async_root_resolver():
     result = ext.resolve(fake_next, None, info)
     # result should be a coroutine (async wrapper)
     assert asyncio.iscoroutine(result)
-    # Await it — _optimize will pass through because return_type has no name.
+    # Await it - _optimize will pass through because return_type has no name.
     resolved = asyncio.run(result)
     assert resolved is qs
 
@@ -1005,7 +1005,7 @@ def test_filter_vars_do_not_affect_cache():
 
     schema.execute_sync(query, variable_values={"limit": 5})
     schema.execute_sync(query, variable_values={"limit": 10})
-    # Same query shape, different filter var — should be 1 miss + 1 hit.
+    # Same query shape, different filter var - should be 1 miss + 1 hit.
     assert ext.cache_info().hits == 1
     assert ext.cache_info().size == 1
 
@@ -1307,7 +1307,7 @@ def test_strictness_with_empty_plan_does_not_raise_or_warn(mode, caplog):
     The invariant is that an empty plan implies no relation selections, so the
     downstream resolver path never compares against the empty planned set.  This
     test pins the invariant for the enabled-optimizer path under both ``warn``
-    and ``raise`` — a scalar-only query against a registered type produces an
+    and ``raise`` - a scalar-only query against a registered type produces an
     empty plan and must resolve cleanly with no warning emitted and no
     exception raised.
     """
@@ -1915,10 +1915,10 @@ def test_check_schema_skip_hint_suppresses_warning():
 
     finalize_django_types()
     schema = strawberry.Schema(query=Query)
-    # Clear Category so the audit would normally warn — but SKIP suppresses.
+    # Clear Category so the audit would normally warn - but SKIP suppresses.
     _force_unregister_after_finalize(CategoryType)
     warnings = DjangoOptimizerExtension.check_schema(schema)
-    # SKIP means category is intentionally unoptimized — no warning.
+    # SKIP means category is intentionally unoptimized - no warning.
     assert not any("category" in w for w in warnings)
 
 
@@ -2409,7 +2409,7 @@ def test_stash_on_immutable_dict_subclass_is_silent():
     ``__setitem__`` when locked. The dict-first dispatch in
     ``stash_on_context`` routes subclasses through the mapping write
     path, so the trailing ``except`` must catch ``AttributeError`` in
-    addition to ``TypeError`` — otherwise an immutable-``QueryDict``
+    addition to ``TypeError`` - otherwise an immutable-``QueryDict``
     context would crash the resolver chain instead of being silently
     skipped, contradicting the docstring contract ("Frozen contexts ...
     raise on assignment; those stashes are silently skipped").
@@ -2479,7 +2479,7 @@ def test_empty_plan_still_stashed():
 
 
 # ---------------------------------------------------------------------------
-# O5 — only() projection
+# O5 - only() projection
 # ---------------------------------------------------------------------------
 
 
@@ -2516,7 +2516,7 @@ def test_optimizer_applies_only_for_selected_scalars(django_assert_num_queries):
 
 
 # ---------------------------------------------------------------------------
-# O6 — get_queryset + Prefetch downgrade
+# O6 - get_queryset + Prefetch downgrade
 # ---------------------------------------------------------------------------
 
 
@@ -2680,7 +2680,7 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
     assert ext.cache_info().misses == 1
 
     # Second request hits the cache. The cached plan must still carry
-    # ["category"] — the diff must not have mutated it during request 1.
+    # ["category"] - the diff must not have mutated it during request 1.
     ctx2 = SimpleNamespace()
     result2 = schema.execute_sync(
         "{ allItems { name category { name } } }",
@@ -2738,7 +2738,7 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
     plan = ctx.dst_optimizer_plan
     assert [getattr(entry, "prefetch_to", entry) for entry in plan.prefetch_related] == ["items"]
     # The queryset that came out of ``_optimize`` carries exactly the
-    # consumer's ``Prefetch`` — the optimizer entry was diffed away.
+    # consumer's ``Prefetch`` - the optimizer entry was diffed away.
     optimized_qs = captured[0]
     lookups = optimized_qs._prefetch_related_lookups
     assert lookups == (consumer_pf,)
@@ -2868,7 +2868,7 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
     assert result.errors is None
     optimized_qs = captured[0]
     lookups = optimized_qs._prefetch_related_lookups
-    # Exactly one ``items`` lookup — the optimizer's ``Prefetch`` —
+    # Exactly one ``items`` lookup - the optimizer's ``Prefetch`` -
     # carrying the nested ``entries`` chain. The consumer's plain
     # ``"items"`` string was stripped.
     assert len(lookups) == 1
@@ -2880,7 +2880,7 @@ def test_b8_consumer_plain_string_upgraded_to_optimizer_prefetch():
 
 
 # ---------------------------------------------------------------------------
-# Construction surface — unknown kwargs raise loudly
+# Construction surface - unknown kwargs raise loudly
 # ---------------------------------------------------------------------------
 
 
@@ -2930,7 +2930,7 @@ def test_singleton_factory_extensions_form_emits_no_deprecation_warning():
 
 
 # ---------------------------------------------------------------------------
-# hint_is_skip — centralised hint-shape dispatch
+# hint_is_skip - centralised hint-shape dispatch
 # ---------------------------------------------------------------------------
 
 
@@ -2942,13 +2942,13 @@ def test_hint_is_skip_handles_sentinel_record_and_unknown_shapes():
     assert hint_is_skip(OptimizerHint.SKIP) is True
     assert hint_is_skip(OptimizerHint(skip=True)) is True
     assert hint_is_skip(OptimizerHint.select_related()) is False
-    # Unknown shape with no ``.skip`` attribute must not raise — the
+    # Unknown shape with no ``.skip`` attribute must not raise - the
     # schema audit's "never raises" contract depends on this.
     assert hint_is_skip(object()) is False
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 — H2 plan-cache origin separation + H3 multi-type audit dedupe
+# Slice 4 - H2 plan-cache origin separation + H3 multi-type audit dedupe
 # ---------------------------------------------------------------------------
 
 
@@ -3132,7 +3132,7 @@ def test_schema_audit_warning_names_the_source_type_for_multi_type_models():
 
     warnings = DjangoOptimizerExtension.check_schema(schema)
     item_category_warnings = [w for w in warnings if "Item.category" in w]
-    # Dedupe still applies — one warning per (model, field_name).
+    # Dedupe still applies - one warning per (model, field_name).
     assert len(item_category_warnings) == 1
     # The surviving warning must name the source type (the first one iterated)
     # so the consumer can identify which type's audit produced the entry.
@@ -3182,7 +3182,7 @@ def test_model_for_type_reverse_lookup_works_for_secondary_type():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 — ``apply_connection_optimization`` helper extraction (no-regression)
+# Slice 2 - ``apply_connection_optimization`` helper extraction (no-regression)
 # ---------------------------------------------------------------------------
 
 
@@ -3192,7 +3192,7 @@ def test_optimizer_helper_extraction_no_regression():
 
     Spec Slice 2 / Decision 11: the plan-build-and-apply tail was extracted into
     ``DjangoOptimizerExtension.apply_to`` (shared with the connection field's
-    ``apply_connection_optimization``). The existing B1–B8 suite in this module
+    ``apply_connection_optimization``). The existing B1-B8 suite in this module
     is the broad regression guard; this focused test pins that a non-connection
     root field still has its plan built and applied (``select_related`` lands)
     and that ``_optimize`` delegates to ``apply_to``.
@@ -3236,7 +3236,7 @@ def test_optimizer_helper_extraction_no_regression():
     result = schema.execute_sync("{ allItems { category { name } } }", context_value=ctx)
 
     assert result.errors is None
-    # The plan was built and applied (the forward FK is select_related-ed) — the
+    # The plan was built and applied (the forward FK is select_related-ed) - the
     # middleware behavior is unchanged by the extraction.
     assert ctx.dst_optimizer_plan.select_related == ("category",)
     # ``_optimize`` delegated to ``apply_to`` with the resolved (origin, model),

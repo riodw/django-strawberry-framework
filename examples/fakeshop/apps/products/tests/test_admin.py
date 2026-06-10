@@ -1,4 +1,4 @@
-"""Tests for products.admin — covers the changelist_view query-param branches."""
+"""Tests for products.admin - covers the changelist_view query-param branches."""
 
 import pytest
 from django.contrib.auth import get_user_model

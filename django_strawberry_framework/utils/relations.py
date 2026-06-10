@@ -37,18 +37,18 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
 
     Four shapes are distinguished:
 
-    - ``"many"`` — forward ``ManyToManyField`` (``many_to_many=True``).
-    - ``"reverse_many_to_one"`` — the reverse side of a ``ForeignKey``
+    - ``"many"`` - forward ``ManyToManyField`` (``many_to_many=True``).
+    - ``"reverse_many_to_one"`` - the reverse side of a ``ForeignKey``
       (Django's ``ManyToOneRel`` descriptor: ``one_to_many=True`` paired
       with ``auto_created=True``). Cardinality-wise this collapses into
       the many-side for plan building today, but the descriptor itself
       is conceptually distinct from a forward M2M and is named so
       consumers (and the registry's typed ``PendingRelation`` sentinel)
       can disambiguate.
-    - ``"reverse_one_to_one"`` — the reverse side of a
+    - ``"reverse_one_to_one"`` - the reverse side of a
       ``OneToOneField`` (``one_to_one=True`` + ``auto_created=True``).
-    - ``"forward_single"`` — every other forward single-row relation
-      (``ForeignKey``, forward ``OneToOneField`` — i.e.,
+    - ``"forward_single"`` - every other forward single-row relation
+      (``ForeignKey``, forward ``OneToOneField`` - i.e.,
       ``auto_created=False``).
 
     Any ``one_to_many=True`` shape without ``auto_created`` falls back to

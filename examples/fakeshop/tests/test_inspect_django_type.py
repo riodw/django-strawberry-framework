@@ -167,7 +167,7 @@ def test_inspect_consumer_authored_relation_field(reload_inspect_schema):
     reverse-FK column with a consumer ``@strawberry.field`` resolver, so
     ``_build_annotations`` skips auto-synthesis for it and ``origin.__annotations__``
     holds a ``StrawberryAnnotation`` (not a renderable type). The command must read
-    the resolved type from the finalized Strawberry field metadata — printing the
+    the resolved type from the finalized Strawberry field metadata - printing the
     real ``[ShelfType!]!`` list and the ``consumer strawberry.field (relation)``
     converter, NOT the auto reverse-FK label nor the ``StrawberryAnnotation`` repr.
     """
@@ -192,11 +192,11 @@ def test_inspect_consumer_authored_scalar_override_matrix(reload_inspect_schema)
     name the row that actually produced each field, never the auto ``SCALAR_MAP``
     converter that ``_build_annotations`` skipped:
 
-    - ``label`` — assigned ``@strawberry.field`` -> ``consumer strawberry.field (scalar)``
-    - ``quantity`` — annotation-only widening (``Int`` column -> nullable ``Float``)
+    - ``label`` - assigned ``@strawberry.field`` -> ``consumer strawberry.field (scalar)``
+    - ``quantity`` - annotation-only widening (``Int`` column -> nullable ``Float``)
       -> ``consumer annotation (scalar)``, exercising the ``StrawberryOptional`` path
-    - ``score`` — ``annotation + strawberry.field`` overlap idiom
-    - ``token`` — annotation escape hatch over the unsupported ``Base36Field``
+    - ``score`` - ``annotation + strawberry.field`` overlap idiom
+    - ``token`` - annotation escape hatch over the unsupported ``Base36Field``
     """
     out = StringIO()
     call_command("inspect_django_type", "OverriddenScalarSpecimenType", stdout=out)
@@ -224,7 +224,7 @@ def test_inspect_consumer_authored_scalar_override_matrix(reload_inspect_schema)
 
 
 def test_inspect_relay_node_pk_row(reload_inspect_schema):
-    """GenreType declares ``interfaces = (relay.Node,)`` — its pk is suppressed.
+    """GenreType declares ``interfaces = (relay.Node,)`` - its pk is suppressed.
 
     The pk row must report the interface-supplied ``GlobalID!`` / ``relay.Node
     id``, sourced from the interface rather than indexing
@@ -247,7 +247,7 @@ def test_inspect_reads_resolved_annotation_not_field_null(reload_inspect_schema)
     ``nullable_overrides``; ``subtitle`` is a ``null=True`` column flipped to
     ``String!`` by ``required_overrides``. The command reads the resolved
     annotation from ``origin.__annotations__`` (which the override bakes in),
-    NOT a ``convert_scalar`` re-run — a re-run would reproduce the column-native
+    NOT a ``convert_scalar`` re-run - a re-run would reproduce the column-native
     ``field.null`` and report the OPPOSITE result, so this distinguishes the two.
     """
     out = StringIO()

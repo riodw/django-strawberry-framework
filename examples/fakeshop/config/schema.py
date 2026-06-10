@@ -25,7 +25,7 @@ from django_strawberry_framework import (
 
 @strawberry.type
 class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuery):
-    """Top-level Query — extends each app's Query."""
+    """Top-level Query - extends each app's Query."""
 
 
 finalize_django_types()

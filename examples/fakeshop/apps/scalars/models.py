@@ -12,7 +12,7 @@ nullable, exercising the other half of each converter row (the
 ``NON_NULL`` wrapper vs bare ``SCALAR`` shape) under the same live HTTP path.
 A nullable forward FK ``partner`` links a ``NullableScalarSpecimen`` row to a
 ``ScalarSpecimen``, exposing both the cross-model FK shape and the reverse
-relation (``ScalarSpecimen.nullable_partners``) — distinct from the intra-
+relation (``ScalarSpecimen.nullable_partners``) - distinct from the intra-
 model ``parent`` / ``children`` self-FK on ``ScalarSpecimen``. The two
 models also let consumers compose richer example queries that span both
 all-required and all-nullable shapes in one round-trip.
@@ -24,11 +24,11 @@ forward FK from ``ScalarSpecimen.tag`` points at it. Selecting
 ``tag { ... }`` from a query against ``allScalarSpecimens`` exercises the
 optimizer's downgrade rule: a target type with custom ``get_queryset``
 must be planned as ``Prefetch(qs)`` rather than ``select_related`` so the
-consumer's filter survives — the resulting query shape is two SQL
+consumer's filter survives - the resulting query shape is two SQL
 statements (root SELECT + filtered tag SELECT), with the inactive-tag
 rows resolving to ``null`` on the source-side specimen.
 
-``ArrayField`` and ``HStoreField`` are deliberately absent — both are
+``ArrayField`` and ``HStoreField`` are deliberately absent - both are
 PostgreSQL-only and the fakeshop runs on SQLite. Their converter entries stay
 covered by ``tests/`` against package-internal fixtures.
 
@@ -53,7 +53,7 @@ class ScalarSpecimenTag(models.Model):
     ``get_queryset()`` classmethod that filters to ``active=True``. The
     optimizer's O6 rule requires that any forward FK whose target type
     declares ``get_queryset`` be planned as ``Prefetch(qs)`` rather than
-    ``select_related`` so the consumer's filter survives end-to-end —
+    ``select_related`` so the consumer's filter survives end-to-end -
     visible in the live test by an inactive tag resolving to ``null`` on
     the source specimen.
     """
@@ -136,7 +136,7 @@ class NullableScalarSpecimen(models.Model):
     each converter row in
     ``django_strawberry_framework/types/converters.py::SCALAR_MAP`` is
     exercised over a live ``/graphql/`` request. ``partner`` is a nullable
-    cross-model FK to ``ScalarSpecimen`` (``on_delete=SET_NULL``) — distinct
+    cross-model FK to ``ScalarSpecimen`` (``on_delete=SET_NULL``) - distinct
     from the intra-model self-FK on ``ScalarSpecimen.parent``, and the only
     place in the example tree that exercises ``SET_NULL`` ondelete planning
     under the optimizer.
@@ -160,7 +160,7 @@ class NullableScalarSpecimen(models.Model):
     unsigned_big = models.PositiveBigIntegerField(null=True, blank=True)
     # Cross-model link: a ``NullableScalarSpecimen`` may point at one
     # ``ScalarSpecimen``. ``SET_NULL`` so deleting a partner detaches the
-    # row instead of cascading — the only ``SET_NULL`` ondelete in the
+    # row instead of cascading - the only ``SET_NULL`` ondelete in the
     # example tree.
     partner = models.ForeignKey(
         "scalars.ScalarSpecimen",
@@ -175,7 +175,7 @@ class NullableScalarSpecimen(models.Model):
 
 
 class Base36Field(models.Field):
-    """A deliberately *unsupported* scalar column — no ``SCALAR_MAP`` entry.
+    """A deliberately *unsupported* scalar column - no ``SCALAR_MAP`` entry.
 
     Subclasses ``models.Field`` directly (not ``CharField`` / ``TextField``), so
     ``django_strawberry_framework/types/converters.py::convert_scalar``'s

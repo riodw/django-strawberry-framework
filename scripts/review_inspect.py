@@ -764,7 +764,7 @@ def _render_comments_and_docstrings(
     if docstrings:
         lines.append("Docstrings:")
         lines.extend(
-            f"- lines {record.lineno}-{record.end_lineno}: `{record.owner}` — {record.summary}"
+            f"- lines {record.lineno}-{record.end_lineno}: `{record.owner}` - {record.summary}"
             for record in docstrings
         )
     else:

@@ -558,7 +558,7 @@ def render_progress_markdown(metrics: dict[str, Any]) -> str:
     cards_pct = metrics["cards_pct"]
     crossed = "Past the 50% mark." if cards_pct >= 50 else "Not yet at the 50% mark."
     lines = [
-        f"**{cards_pct}% complete** toward `1.0.0` — {metrics['cards_done']} of "
+        f"**{cards_pct}% complete** toward `1.0.0` - {metrics['cards_done']} of "
         f"{metrics['cards_total']} cards done ({metrics['weighted_pct']}% size-weighted). "
         f"{crossed} Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).",
         "",

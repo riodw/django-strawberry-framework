@@ -2,7 +2,7 @@
 
 Layer 2 of the spec-028 six-layer plan. ``RelatedOrder`` is the collapsed
 port of the cookbook's ``django_graphene_filters/orders.py::BaseRelatedOrder``
-+ ``::RelatedOrder`` pair (per spec-028 Decision 2 — single-symbol public
++ ``::RelatedOrder`` pair (per spec-028 Decision 2 - single-symbol public
 surface). ``LazyRelatedClassMixin`` is reused from the neutral
 ``django_strawberry_framework.sets_mixins`` module via sibling import per
 spec-028 Revision 4 H1 (importing through ``filters.base`` would load the
@@ -15,7 +15,7 @@ collection step can mutate it later if needed. The consumer-facing
 ``OrderSet.Meta.fields`` surface always supplies one explicitly, so the
 relaxation is purely ergonomic.
 
-No operator-bag / form-cleaning machinery — the order side has no
+No operator-bag / form-cleaning machinery - the order side has no
 operator-bag (no ``and_`` / ``or_`` / ``not_``) and no form validation per
 spec-028 Decision 8.
 """

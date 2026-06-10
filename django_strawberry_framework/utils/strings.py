@@ -23,7 +23,7 @@ def snake_case(name: str) -> str:
     ``snake_case`` Python attributes; reversing it lets us look up the
     corresponding Django field name without an extra mapping.
 
-    Strict ``camelCase`` only — acronyms are *not* handled.  An input
+    Strict ``camelCase`` only - acronyms are *not* handled.  An input
     like ``"HTMLParser"`` becomes ``"h_t_m_l_parser"`` because each
     upper-case letter triggers a boundary; this is unreachable through
     Strawberry's documented call chain (Python attrs would already be
@@ -50,7 +50,7 @@ def pascal_case(name: str) -> str:
     keeps generated GraphQL type names stable when consumers use names
     like ``_legacy_id`` or ``status_``.
 
-    Strict ``snake_case`` only — acronyms inside a segment are *not*
+    Strict ``snake_case`` only - acronyms inside a segment are *not*
     preserved.  Per-segment ``str.capitalize()`` upper-cases the first
     character and lower-cases every interior upper-case character, so
     an input like ``"my_HTTP_response"`` becomes ``"MyHttpResponse"``

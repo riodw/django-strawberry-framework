@@ -66,7 +66,7 @@ LOOKUP_PREFIXES: dict[str, str] = {
 # `django-filter` lookup -> (python_attr, graphql_name) pair per spec-027
 # Decision 3 Layer 5 / H3 of rev4 feedback. Strawberry's auto-camel-case
 # cannot transform `icontains` to `iContains` (no underscore to split on),
-# and the Python keyword `in` cannot be a dataclass field — both are pinned
+# and the Python keyword `in` cannot be a dataclass field - both are pinned
 # here. Consumed by `FilterSet._normalize_input` (mapping Strawberry-input
 # dataclass attrs back to `django-filter`'s form-data keys),
 # `_build_input_fields` (for `strawberry.field(name=...)` emission), and
@@ -171,7 +171,7 @@ def _pascal_case(name: str) -> str:
     callers (``_input_type_name_for``, ``_build_input_fields``'s
     operator-bag class naming) route through
     ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for`` and trip
-    its sibling no-word-character guard rather than this one — so the
+    its sibling no-word-character guard rather than this one - so the
     error message below names the ``RangeFilter`` consumer specifically.
     """
     parts = [part.capitalize() for part in name.replace("__", "_").split("_") if part]
@@ -280,7 +280,7 @@ def _choice_enum_from_filter(
     ``DjangoType`` reading the same column.
 
     ``model_field`` is threaded as a parameter rather than stashed on
-    the filter instance — keeps the filter stateless and avoids the
+    the filter instance - keeps the filter stateless and avoids the
     "side-effect on a filter during input-class construction" trap.
     """
     # Local import to avoid a top-level cycle through ``types.converters``.
@@ -432,7 +432,7 @@ def normalize_input_value(
     # branches below: every branch indexes / iterates / coerces
     # ``raw_value`` and would either raise ``TypeError`` (UNSET is not
     # iterable) or silently pass the UNSET sentinel into ``data``. Every
-    # caller MUST treat UNSET as "not supplied" — same as ``None`` — so
+    # caller MUST treat UNSET as "not supplied" - same as ``None`` - so
     # this entry point is the single defensive line every future caller
     # benefits from.
     if raw_value is None or raw_value is UNSET:
@@ -494,7 +494,7 @@ def _unwrap_enum_member(value: Any) -> Any:
     un-unwrapped), and it never misfires on plain objects that merely expose a
     ``.value`` attribute (e.g. ``decimal.Decimal``).
 
-    Single-level unwrap — nested-list / nested-dict inputs are not
+    Single-level unwrap - nested-list / nested-dict inputs are not
     recursively unwrapped. No current consumer produces such shapes (the
     Django converter pipeline yields flat scalars / lists from the
     `django-filter` form-field hierarchy); a future nested-shape
@@ -863,7 +863,7 @@ def materialize_input_class(name: str, cls: type) -> None:
     ``__dict__`` slot per spec-027 Decision 9.
 
     Idempotent on the ``(name, cls)`` pair: re-materializing the same
-    class under the same name is a no-op (Decision 9 lifecycle clause —
+    class under the same name is a no-op (Decision 9 lifecycle clause -
     supports partial-finalize recovery without a sentinel pass). A
     collision against a different class under the same ``name`` raises
     ``ConfigurationError`` naming both qualified class names so the
@@ -912,7 +912,7 @@ def clear_filter_input_namespace() -> None:
     ``strawberry.lazy(...)`` LazyType held by a consumer module whose
     autouse-reload fixture did NOT also reload the holder
     (e.g., ``test_scalars_api.py``'s per-app fixture, by README
-    contract, reloads only its own app's schema — ``apps.library.schema``
+    contract, reloads only its own app's schema - ``apps.library.schema``
     keeps its cached ``filter_input_type(filters.BranchFilter)`` LazyType
     references, which would resolve to ``AttributeError`` if the
     matching module global had been deleted). Leaving the class object
@@ -921,7 +921,7 @@ def clear_filter_input_namespace() -> None:
 
     The helper short-circuits cleanly when the module is not in
     ``sys.modules`` (e.g., a process that imported ``registry`` alone
-    and never reached ``filters.inputs``) — the ledger and the
+    and never reached ``filters.inputs``) - the ledger and the
     per-filterset map still get reset so a subsequent import / build
     starts from a clean slate. The factory / FilterSet clears use
     local imports so a partial-load environment (factories / sets not
@@ -972,7 +972,7 @@ def _iter_filterset_subclasses(root: type) -> list[type]:
 
     Uses ``type.__subclasses__()`` which only yields LIVE subclasses;
     garbage-collected definitions silently drop. That is the correct
-    contract for a test-isolation clear — a definition that has
+    contract for a test-isolation clear - a definition that has
     already been collected has no state to reset. However: long-running
     test runners that keep filterset references through fixture
     lifetimes accumulate filtersets across tests; each carries

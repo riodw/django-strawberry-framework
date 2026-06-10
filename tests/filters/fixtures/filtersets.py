@@ -53,7 +53,7 @@ class BranchFilterByPath(FilterSet):
 
 
 class SelfReferentialBranchFilter(FilterSet):
-    """References itself by unqualified name — exercises the cycle guard."""
+    """References itself by unqualified name - exercises the cycle guard."""
 
     self_link = RelatedFilter("SelfReferentialBranchFilter", field_name="id")
 

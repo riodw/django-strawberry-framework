@@ -1,4 +1,4 @@
-"""Tests for ``OptimizerHint`` — the typed wrapper for ``Meta.optimizer_hints``.
+"""Tests for ``OptimizerHint`` - the typed wrapper for ``Meta.optimizer_hints``.
 
 Covers the SKIP sentinel, the three factory classmethods, frozen
 immutability, and the identity/equality contracts consumers and the
@@ -87,7 +87,7 @@ class TestPrefetchFactory:
 
 
 class TestFrozenImmutability:
-    """Hints are frozen dataclasses — mutation raises."""
+    """Hints are frozen dataclasses - mutation raises."""
 
     def test_cannot_mutate_skip(self) -> None:
         """Attempting to set an attribute raises ``FrozenInstanceError``."""

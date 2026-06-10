@@ -1,7 +1,7 @@
 """Tests for ``optimizer/walker.py``.
 
 The walker is a pure function (``plan_optimizations``) tested in
-isolation against synthetic selection objects — no Strawberry execution
+isolation against synthetic selection objects - no Strawberry execution
 required. This makes the three load-bearing details (fragments, aliases,
 ``@skip``/``@include``) each testable with a tight, focused case.
 
@@ -126,7 +126,7 @@ def _register_type_definition(
 
 
 # ---------------------------------------------------------------------------
-# plan_optimizations — cardinality dispatch
+# plan_optimizations - cardinality dispatch
 # ---------------------------------------------------------------------------
 
 
@@ -173,7 +173,7 @@ def test_plan_skips_unknown_selections():
 
 
 def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
-    """Regression for ``docs/feedback.md`` § custom-pk Relay projection.
+    """Regression for ``docs/feedback.md`` section custom-pk Relay projection.
 
     When a Relay-declared ``DjangoType`` is backed by a model whose pk
     attname is not ``"id"``, ``snake_case("id")`` does not match the
@@ -216,7 +216,7 @@ def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
 
 
 def test_plan_relay_id_projects_attname_when_pk_is_relation():
-    """Regression for ``docs/feedback.md`` § walker ``id_attr in field_map`` mismatch.
+    """Regression for ``docs/feedback.md`` section walker ``id_attr in field_map`` mismatch.
 
     When a Relay-declared ``DjangoType`` is backed by a model whose
     primary key is a relation (e.g. ``OneToOneField(primary_key=True)``
@@ -350,41 +350,41 @@ def test_plan_empty_selections_produces_empty_plan():
 
 
 # ---------------------------------------------------------------------------
-# _should_include — @skip / @include directives
+# _should_include - @skip / @include directives
 # ---------------------------------------------------------------------------
 
 
 def test_should_include_returns_true_by_default():
-    """No directives → included."""
+    """No directives -> included."""
     assert _should_include(_sel("name")) is True
 
 
 def test_should_include_skips_when_skip_true():
-    """``@skip(if: true)`` → excluded."""
+    """``@skip(if: true)`` -> excluded."""
     sel = _sel("name", directives={"skip": {"if": True}})
     assert _should_include(sel) is False
 
 
 def test_should_include_includes_when_skip_false():
-    """``@skip(if: false)`` → included."""
+    """``@skip(if: false)`` -> included."""
     sel = _sel("name", directives={"skip": {"if": False}})
     assert _should_include(sel) is True
 
 
 def test_should_include_skips_when_include_false():
-    """``@include(if: false)`` → excluded."""
+    """``@include(if: false)`` -> excluded."""
     sel = _sel("name", directives={"include": {"if": False}})
     assert _should_include(sel) is False
 
 
 def test_should_include_includes_when_include_true():
-    """``@include(if: true)`` → included."""
+    """``@include(if: true)`` -> included."""
     sel = _sel("name", directives={"include": {"if": True}})
     assert _should_include(sel) is True
 
 
 def test_should_include_treats_unresolved_variable_as_selected():
-    """A non-boolean directive value (e.g. unresolved variable) → included."""
+    """A non-boolean directive value (e.g. unresolved variable) -> included."""
     # Strawberry normally resolves variables, but if one slips through
     # as None the walker treats it as "selected" defensively.
     sel = _sel("name", directives={"skip": {"if": None}})
@@ -392,7 +392,7 @@ def test_should_include_treats_unresolved_variable_as_selected():
 
 
 def test_should_include_skip_true_beats_include_true():
-    """``@skip(if: true) @include(if: true)`` → excluded (skip wins)."""
+    """``@skip(if: true) @include(if: true)`` -> excluded (skip wins)."""
     sel = _sel(
         "name",
         directives={"skip": {"if": True}, "include": {"if": True}},
@@ -419,7 +419,7 @@ def test_plan_excludes_skip_true_relation():
 
 
 # ---------------------------------------------------------------------------
-# _is_fragment — fragment detection
+# _is_fragment - fragment detection
 # ---------------------------------------------------------------------------
 
 
@@ -502,7 +502,7 @@ def test_plan_skips_fragment_with_skip_directive():
 
 
 # ---------------------------------------------------------------------------
-# _merge_aliased_selections — alias normalization
+# _merge_aliased_selections - alias normalization
 # ---------------------------------------------------------------------------
 
 
@@ -580,7 +580,7 @@ def test_plan_merges_aliased_selections():
 
 
 # ---------------------------------------------------------------------------
-# O5 — only() projection
+# O5 - only() projection
 # ---------------------------------------------------------------------------
 
 
@@ -622,7 +622,7 @@ def test_plan_collects_related_scalar_only_fields_from_fragment():
 
 
 # ---------------------------------------------------------------------------
-# B2 — Forward-FK-id elision
+# B2 - Forward-FK-id elision
 # ---------------------------------------------------------------------------
 
 
@@ -829,7 +829,7 @@ def test_plan_does_not_elide_when_target_type_has_custom_id_resolver():
 
 
 # ---------------------------------------------------------------------------
-# O6 — get_queryset + Prefetch downgrade
+# O6 - get_queryset + Prefetch downgrade
 # ---------------------------------------------------------------------------
 
 
@@ -928,7 +928,7 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
 
 
 # ---------------------------------------------------------------------------
-# O4 — nested prefetch chains
+# O4 - nested prefetch chains
 # ---------------------------------------------------------------------------
 
 
@@ -1276,7 +1276,7 @@ def test_plan_no_flag_hint_falls_through_to_default_dispatch():
     finally:
         registry.clear()
 
-    # Forward FK with non-id-only child → default dispatch picks select_related.
+    # Forward FK with non-id-only child -> default dispatch picks select_related.
     assert plan.select_related == ("category",)
     assert plan.only_fields == ("category_id", "category__name")
 
@@ -1452,7 +1452,7 @@ def test_plan_prefetch_obj_hint_dedupes_repeat_lookups():
     try:
         # Two sibling selections of the same field; _merge_aliased_selections
         # collapses them, but the dedupe guard is the load-bearing invariant
-        # here — assert there is exactly one prefetch entry on the plan.
+        # here - assert there is exactly one prefetch entry on the plan.
         plan = plan_optimizations(
             [_sel("items", selections=[_sel("name")]), _sel("items", selections=[_sel("name")])],
             Category,
@@ -1589,8 +1589,8 @@ def test_apply_hint_prefetch_obj_misconfigured_lookup_leaves_plan_clean():
     via ``_prefetch_hint_for_path`` before recording the resolver identity
     or flipping ``plan.cacheable``. The current call path raises
     ``ConfigurationError`` out of ``plan_optimizations`` and the
-    partially-mutated plan is unreachable, but the invariant — "no plan
-    mutation on a raised validator" — must hold so any future caller
+    partially-mutated plan is unreachable, but the invariant - "no plan
+    mutation on a raised validator" - must hold so any future caller
     that catches ``ConfigurationError`` at this layer (e.g. a permissive
     mode toggle, a per-field ``try/except`` around ``_apply_hint``)
     cannot consume a plan with phantom ``planned_resolver_keys``,
@@ -1654,7 +1654,7 @@ def test_ensure_connector_only_fields_adds_reverse_o2o_connector():
 
 
 # ---------------------------------------------------------------------------
-# Slice 4 — H2 root origin-type propagation
+# Slice 4 - H2 root origin-type propagation
 # ---------------------------------------------------------------------------
 
 

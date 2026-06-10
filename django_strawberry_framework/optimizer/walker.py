@@ -38,7 +38,7 @@ def plan_optimizations(
     (``origin``). Threaded into the root ``_walk_selections`` call so the
     root ``_resolve_field_map(...)`` uses that type's ``field_map`` /
     ``optimizer_hints`` instead of ``registry.get(model)`` (which
-    returns the primary). Nested relation traversal stays unchanged —
+    returns the primary). Nested relation traversal stays unchanged -
     nested ``_walk_selections`` calls leave ``source_type`` ``None`` so
     nested targets continue to route through the primary.
     """
@@ -63,7 +63,7 @@ def plan_relation(field: Any, target_type: type | None, info: Any | None) -> tup
 
     ``info`` is unused by this default planner but kept to mirror the
     ``DjangoOptimizerExtension.plan_relation`` override seam, whose subclasses
-    may plan on ``info`` — hence the ARG001 noqa rather than dropping the param.
+    may plan on ``info`` - hence the ARG001 noqa rather than dropping the param.
     """
     if _target_has_custom_get_queryset(target_type):
         logger.debug(
@@ -95,7 +95,7 @@ def _resolve_field_map(
     used by the walker.
 
     ``source_type`` carries the root resolver's actual return type when
-    the call comes from ``plan_optimizations`` — that type's field_map /
+    the call comes from ``plan_optimizations`` - that type's field_map /
     optimizer_hints are used so a secondary-return resolver plans
     against the secondary's metadata rather than the primary's.
     Nested ``_walk_selections`` calls leave ``source_type`` ``None``,
@@ -439,7 +439,7 @@ def _apply_hint(
     ``prefetch_obj``, ``force_select``, ``force_prefetch``) plus the
     no-op empty form. Returns ``True`` when one of the configurable
     shapes is matched. Returns ``False`` for an ``OptimizerHint()`` with
-    no flag set — the caller falls back to the default cardinality
+    no flag set - the caller falls back to the default cardinality
     dispatch in that case. ``OptimizerHint.__post_init__`` already
     rejects conflicting flag combinations, so the priority order here
     is documentation, not collision arbitration.

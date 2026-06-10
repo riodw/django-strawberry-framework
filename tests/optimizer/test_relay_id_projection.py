@@ -109,10 +109,10 @@ def test_relay_resolve_id_uses_loaded_pk():
 
 @pytest.mark.django_db(transaction=True)
 def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_queries):
-    """End-to-end regression for ``docs/feedback.md`` § custom-pk Relay projection.
+    """End-to-end regression for ``docs/feedback.md`` section custom-pk Relay projection.
 
     A Relay-declared ``DjangoType`` backed by a model whose pk attname is
-    not ``"id"`` must produce exactly one query for ``{ id name }`` —
+    not ``"id"`` must produce exactly one query for ``{ id name }`` -
     the walker resolves the configured ``id_attr``, projects the real
     pk column into ``only()``, and ``_resolve_id_default`` reads the
     loaded value from ``root.__dict__`` instead of falling back to
@@ -121,7 +121,7 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
     Uses the ``managed=False`` + manual ``schema_editor`` pattern from
     ``test_walker.py::test_plan_elides_forward_fk_when_target_pk_is_not_named_id``
     so the model exists for ``_meta.pk.attname`` introspection AND the
-    table exists for a real query — no fakeshop model addition needed.
+    table exists for a real query - no fakeshop model addition needed.
     """
 
     class CustomPKItem(models.Model):
@@ -165,8 +165,8 @@ def test_relay_id_with_custom_pk_attname_avoids_lazy_load(django_assert_num_quer
         assert result.errors is None
         plan = ctx.dst_optimizer_plan
         # The walker projected the real pk attname (``uuid``), not the
-        # GraphQL literal ``id`` — this is the fix from
-        # ``docs/feedback.md`` § High "Optimizer misses projecting custom
+        # GraphQL literal ``id`` - this is the fix from
+        # ``docs/feedback.md`` section High "Optimizer misses projecting custom
         # primary keys for Relay nodes".
         assert "uuid" in plan.only_fields
         assert "id" not in plan.only_fields

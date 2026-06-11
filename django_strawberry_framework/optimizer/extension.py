@@ -29,7 +29,9 @@ type-tracing through graphql-core wrappers.
 """
 
 import inspect
+from collections.abc import Callable
 from contextvars import ContextVar
+from types import SimpleNamespace
 from typing import Any, NamedTuple
 
 from django.db import models
@@ -255,7 +257,10 @@ def _print_operation_with_reachable_fragments(operation: Any, fragments: dict[st
     return "\n".join(parts)
 
 
-def _root_child_selections(selections: list[Any]) -> list[Any]:
+SelectionExtractor = Callable[[list[Any], Any], list[Any]]
+
+
+def _root_child_selections(selections: list[Any], info: Any) -> list[Any]:  # noqa: ARG001
     """Flatten children from every converted root field node.
 
     GraphQL merges repeated root fields with the same response key
@@ -274,6 +279,103 @@ def _root_child_selections(selections: list[Any]) -> list[Any]:
     for selection in selections:
         children.extend(selection.selections)
     return children
+
+
+def _connection_node_child_selections(selections: list[Any], info: Any) -> list[Any]:
+    """Return node-level selections from a Relay connection wrapper.
+
+    Connection resolvers optimize the pre-slice node queryset, so the ORM walker
+    must see the same child selection list it would receive for a list field over
+    the node type. The GraphQL runtime path still includes ``edges`` and
+    ``node``, though, so node children carry selection-specific prefixes for
+    strictness and FK-id-elision resolver keys.
+    """
+    node_children: list[Any] = []
+    root_path = runtime_path_from_info(info)
+    for connection_selection in selections:
+        for edge_selection in _named_children(connection_selection, "edges"):
+            edge_path = (*root_path, _response_key(edge_selection))
+            for node_selection in _named_children(edge_selection, "node"):
+                node_path = (*edge_path, _response_key(node_selection))
+                node_children.extend(
+                    _node_children_with_runtime_prefix(
+                        node_selection,
+                        runtime_prefixes=(node_path,),
+                    ),
+                )
+    return node_children
+
+
+def _named_children(selection: Any, name: str) -> list[Any]:
+    """Return included direct children named ``name``, recursing through fragments."""
+    children: list[Any] = []
+    for child in getattr(selection, "selections", None) or []:
+        if not _converted_selection_included(child):
+            continue
+        if _is_converted_fragment(child):
+            for fragment_child in getattr(child, "selections", None) or []:
+                fragment_shell = SimpleNamespace(selections=[fragment_child])
+                children.extend(_named_children(fragment_shell, name))
+            continue
+        if getattr(child, "name", None) == name:
+            children.append(child)
+    return children
+
+
+def _node_children_with_runtime_prefix(
+    node_selection: Any,
+    *,
+    runtime_prefixes: tuple[tuple[str, ...], ...],
+) -> list[Any]:
+    """Clone node children with a connection-aware runtime prefix."""
+    children: list[Any] = []
+    for child in getattr(node_selection, "selections", None) or []:
+        if not _converted_selection_included(child):
+            continue
+        children.append(_with_runtime_prefix(child, runtime_prefixes))
+    return children
+
+
+def _with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...], ...]) -> Any:
+    """Clone a node-level selection carrying runtime prefixes for the walker."""
+    if _is_converted_fragment(selection):
+        return SimpleNamespace(
+            name=getattr(selection, "name", None),
+            type_condition=selection.type_condition,
+            directives=getattr(selection, "directives", None) or {},
+            selections=[
+                _with_runtime_prefix(child, runtime_prefixes)
+                for child in getattr(selection, "selections", None) or []
+            ],
+        )
+    return SimpleNamespace(
+        name=selection.name,
+        alias=getattr(selection, "alias", None),
+        directives=getattr(selection, "directives", None) or {},
+        arguments=getattr(selection, "arguments", None) or {},
+        selections=list(getattr(selection, "selections", None) or []),
+        _optimizer_runtime_prefixes=list(runtime_prefixes),
+    )
+
+
+def _converted_selection_included(selection: Any) -> bool:
+    """Evaluate converted-selection ``@skip`` / ``@include`` directives."""
+    directives = getattr(selection, "directives", None) or {}
+    skip = directives.get("skip")
+    if skip is not None and skip.get("if") is True:
+        return False
+    include = directives.get("include")
+    return include is None or include.get("if") is not False
+
+
+def _is_converted_fragment(selection: Any) -> bool:
+    """Return whether a converted Strawberry selection is a fragment wrapper."""
+    return hasattr(selection, "type_condition")
+
+
+def _response_key(selection: Any) -> str:
+    """Return the converted selection's runtime response key."""
+    return getattr(selection, "alias", None) or selection.name
 
 
 class CacheInfo(NamedTuple):
@@ -626,6 +728,8 @@ class DjangoOptimizerExtension(SchemaExtension):
         target_model: type,
         queryset: models.QuerySet,
         info: Any,
+        *,
+        selection_extractor: SelectionExtractor = _root_child_selections,
     ) -> models.QuerySet:
         """Build and apply the O2 plan to ``queryset`` given ``target_type`` / ``target_model``.
 
@@ -659,8 +763,9 @@ class DjangoOptimizerExtension(SchemaExtension):
         from strawberry.types.nodes import convert_selections
 
         selections = convert_selections(info, info.field_nodes)
+        node_selections = selection_extractor(selections, info)
         plan = self._get_or_build_plan(
-            _root_child_selections(selections),
+            node_selections,
             target_model,
             info,
             target_type,
@@ -898,12 +1003,8 @@ def apply_connection_optimization(
     ``ContextVar`` is ``None``), the helper short-circuits and returns the
     queryset unoptimized - the connection field does NOT fabricate a throwaway
     optimizer to self-optimize. This keeps the connection consistent with the
-    rest of the schema (the middleware path only optimizes when the extension
-    is installed) and makes the connection-aware future (WIP-033, once the plan
-    is non-empty) a deliberate "optimize only when an optimizer is installed"
-    contract rather than an emergent always-on one (``docs/feedback.md`` P3a).
-    In 0.0.9 the connection walker plan is empty, so the short-circuit is
-    behavior-equivalent to applying an empty plan.
+    rest of the schema: the middleware path only optimizes when the extension is
+    installed, and connection fields follow the same opt-in contract.
 
     Returns ``queryset`` unchanged when ``target_type`` has no registered
     model (nothing to plan) or when no optimizer extension is installed.
@@ -921,4 +1022,10 @@ def apply_connection_optimization(
     # ``getattr`` fallback keeps the helper usable when a caller already passes
     # a raw info (e.g. a direct test).
     raw_info = getattr(info, "_raw_info", info)
-    return optimizer.apply_to(target_type, target_model, queryset, raw_info)
+    return optimizer.apply_to(
+        target_type,
+        target_model,
+        queryset,
+        raw_info,
+        selection_extractor=_connection_node_child_selections,
+    )

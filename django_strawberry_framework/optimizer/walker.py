@@ -30,6 +30,7 @@ def plan_optimizations(
     model: type[models.Model],
     info: Any | None = None,
     *,
+    runtime_prefixes: tuple[tuple[str, ...], ...] | None = None,
     source_type: type | None = None,
 ) -> OptimizationPlan:
     """Walk the selection tree and produce an ``OptimizationPlan``.
@@ -48,7 +49,9 @@ def plan_optimizations(
         model,
         plan,
         info=info,
-        runtime_prefixes=(runtime_path_from_info(info),),
+        runtime_prefixes=(
+            runtime_prefixes if runtime_prefixes is not None else (runtime_path_from_info(info),)
+        ),
         source_type=source_type,
     )
     # Finalise at handoff: list fields become tuples so post-walker
@@ -234,9 +237,14 @@ def _walk_selections(
             continue
 
         full_path = f"{prefix}{django_name}"
+        selection_runtime_prefixes = (
+            tuple(sel._optimizer_runtime_prefixes)
+            if getattr(sel, "_optimizer_runtime_prefixes", None) is not None
+            else runtime_prefixes
+        )
         runtime_paths = tuple(
             (*runtime_prefix, response_key)
-            for runtime_prefix in runtime_prefixes
+            for runtime_prefix in selection_runtime_prefixes
             for response_key in _response_keys(sel)
         )
         resolver_identities = tuple(
@@ -743,6 +751,7 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             response_key = _response_key(sel)
             if response_key not in merged._optimizer_response_keys:
                 merged._optimizer_response_keys.append(response_key)
+            _merge_runtime_prefixes(merged, sel)
             # Today's walker ignores ``arguments``, so divergent arguments
             # between aliased selections are harmless. If a future slice
             # plans per-argument, this merge must become per-response-key
@@ -766,6 +775,7 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
                 arguments=getattr(sel, "arguments", None) or {},
                 selections=list(getattr(sel, "selections", None) or []),
                 _optimizer_response_keys=[_response_key(sel)],
+                _optimizer_runtime_prefixes=_selection_runtime_prefixes(sel),
             )
             seen[key] = merged
             result.append(merged)
@@ -782,6 +792,27 @@ def _response_keys(selection: Any) -> tuple[str, ...]:
     return tuple(
         getattr(selection, "_optimizer_response_keys", None) or (_response_key(selection),),
     )
+
+
+def _selection_runtime_prefixes(selection: Any) -> list[tuple[str, ...]] | None:
+    """Return selection-specific runtime prefixes carried by connection extraction."""
+    prefixes = getattr(selection, "_optimizer_runtime_prefixes", None)
+    if prefixes is None:
+        return None
+    return list(prefixes)
+
+
+def _merge_runtime_prefixes(merged: Any, selection: Any) -> None:
+    """Union connection-carried runtime prefixes while preserving order."""
+    incoming = _selection_runtime_prefixes(selection)
+    if incoming is None:
+        return
+    if merged._optimizer_runtime_prefixes is None:
+        merged._optimizer_runtime_prefixes = incoming
+        return
+    for prefix in incoming:
+        if prefix not in merged._optimizer_runtime_prefixes:
+            merged._optimizer_runtime_prefixes.append(prefix)
 
 
 def _is_fragment(selection: Any) -> bool:

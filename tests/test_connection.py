@@ -1136,7 +1136,7 @@ def _make_relation_node_type(name: str, *, fields: tuple[str, ...], model=Catego
 
 @pytest.mark.django_db
 def test_root_connection_field_queryset_is_planned():
-    """The field's OWN helper runs on the pre-slice queryset (cooperation point, Decision 11).
+    """The field's helper plans ``edges.node`` selections on the pre-slice queryset.
 
     A root ``DjangoConnectionField`` self-optimizes by calling
     ``apply_connection_optimization`` before ``ConnectionExtension`` slices -
@@ -1149,32 +1149,17 @@ def test_root_connection_field_queryset_is_planned():
     B5 plan-introspection shape from ``tests/optimizer/test_extension.py``): its
     presence on the context proves ``apply_to`` -> ``_publish_plan_to_context``
     ran for the connection field, which it does ONLY through the field's helper.
-
-    SCOPE-HONEST ASSERTION (the ``WIP-ALPHA-033-0.0.9`` gap): in ``0.0.9`` the
-    flat walker is connection-unaware - it cannot descend ``edges { node }`` into
-    the node type's fields, so the plan it derives for a connection field is
-    EMPTY (no ``select_related`` / ``prefetch_related`` / ``only()``), even for a
-    direct relation like ``category``. A non-empty plan (the spec sub-check's
-    literal "``select_related`` / ``prefetch_related`` / ``only()`` applied")
-    awaits the connection-aware walker in ``WIP-ALPHA-033-0.0.9``, which plugs
-    into this exact cooperation point. This test therefore pins what ``0.0.9``
-    truthfully ships: the cooperation point is WIRED and RUNS (an empty plan is
-    published), distinguishing it from the middleware (which publishes nothing
-    for a connection field). See the build report's ``Notes for Worker 1`` -
-    asserting a non-empty plan here is a plan-vs-implementation conflict.
     """
     services.seed_data(2)
     # ``ItemNode`` exposes the forward FK ``category`` - the relation a plain
-    # ``DjangoListField`` over the same type plans as ``select_related`` (the
-    # control: ``tests/optimizer/test_extension.py`` B2). Under a connection it
-    # is NOT planned, which is the gap this test pins.
+    # ``DjangoListField`` over the same type plans as ``select_related``.
     _make_relation_node_type("PlanCatNode", fields=("id", "name"))
     item_node = _make_relation_node_type(
         "PlanItemNode",
         fields=("id", "name", "category"),
         model=Item,
     )
-    schema = _field_schema(item_node, optimizer=DjangoOptimizerExtension())
+    schema = _field_schema(item_node, optimizer=DjangoOptimizerExtension(strictness="raise"))
 
     ctx = SimpleNamespace()
     result = schema.execute_sync(
@@ -1187,24 +1172,53 @@ def test_root_connection_field_queryset_is_planned():
     # so this plan can only have come from the field's own helper.)
     plan = getattr(ctx, "dst_optimizer_plan", None)
     assert plan is not None
-    # 0.0.9 scope honesty: the flat walker cannot descend ``edges { node }``, so
-    # the plan is empty. WIP-ALPHA-033-0.0.9 (the connection-aware walker) is what
-    # makes ``category`` land as ``select_related`` here.
-    assert plan.select_related == ()
+    assert plan.select_related == ("category",)
     assert plan.prefetch_related == ()
-    assert plan.only_fields == ()
+    assert plan.only_fields == (
+        "id",
+        "name",
+        "category_id",
+        "category__id",
+        "category__name",
+    )
+    assert "PlanItemNode.category@items.edges.node.category" in ctx.dst_optimizer_planned
+
+
+@pytest.mark.django_db
+def test_root_connection_field_queryset_prefetches_node_many_relation():
+    """A many-side relation under ``edges.node`` is planned as a prefetch."""
+    services.seed_data(2)
+    _make_relation_node_type("PlanPrefetchItemNode", fields=("id", "name"), model=Item)
+    category_node = _make_relation_node_type(
+        "PlanPrefetchCatNode",
+        fields=("id", "name", "items"),
+    )
+    schema = _field_schema(category_node, optimizer=DjangoOptimizerExtension(strictness="raise"))
+
+    ctx = SimpleNamespace()
+    result = schema.execute_sync(
+        "{ items { edges { node { id name items { id name } } } } }",
+        context_value=ctx,
+    )
+
+    assert result.errors is None
+    plan = getattr(ctx, "dst_optimizer_plan", None)
+    assert plan is not None
+    assert plan.select_related == ()
+    assert [getattr(entry, "prefetch_to", entry) for entry in plan.prefetch_related] == ["items"]
+    assert plan.only_fields == ("id", "name")
+    assert "PlanPrefetchCatNode.items@items.edges.node.items" in ctx.dst_optimizer_planned
 
 
 @pytest.mark.django_db
 def test_nested_connection_unplanned_raises_under_strictness():
-    """Strictness ``"raise"`` surfaces an unplanned nested-connection access as an N+1.
+    """Strictness ``"raise"`` still surfaces an unplanned connection relation access.
 
-    Pins the seam ``WIP-ALPHA-033-0.0.9`` closes (no silent cap, spec Edge-cases
-    "Nested connection selection"). A root ``DjangoConnectionField`` over
-    ``CategoryNode`` reaches the reverse-FK many-side relation ``items`` under
-    ``edges { node { items { ... } } }`` - a nested access the connection-unaware
-    flat walker does NOT plan. Under Strictness mode ``"raise"`` the unplanned
-    relation access trips ``types/resolvers.py::_check_n1`` and surfaces as an
+    A root ``DjangoConnectionField`` over ``CategoryNode`` reaches the reverse-FK
+    many-side relation ``items`` under ``edges { node { items { ... } } }``.
+    This test intentionally installs no optimizer extension and seeds an empty
+    strictness context, so the unplanned relation access trips
+    ``types/resolvers.py::_check_n1`` and surfaces as an
     ``OptimizerError("Unplanned N+1: items")`` in ``result.errors``.
 
     Reuses the ``tests/optimizer/test_extension.py::test_strictness_raise_*``

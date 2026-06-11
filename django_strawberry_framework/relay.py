@@ -36,6 +36,7 @@ is engine behavior, not package-fixable.
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Sequence
 from typing import Any
 
@@ -266,11 +267,15 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
             async def _gather() -> list[Any]:
                 per_type: dict[type, list[Any]] = {}
                 for resolved_type, pks in groups.items():
-                    per_type[resolved_type] = await resolved_type.resolve_nodes(
-                        info=info,
-                        node_ids=pks,
-                        required=False,
-                    )
+                    # ``resolve_nodes`` is AwaitableOrValue: the framework
+                    # default returns a coroutine in async context, but a valid
+                    # synchronous consumer override returns the list directly -
+                    # await only when the result is actually awaitable, never
+                    # unconditionally (spec-032 feedback P1).
+                    result = resolved_type.resolve_nodes(info=info, node_ids=pks, required=False)
+                    if inspect.isawaitable(result):
+                        result = await result
+                    per_type[resolved_type] = result
                 return _interleave(positions, per_type)
 
             return _gather()

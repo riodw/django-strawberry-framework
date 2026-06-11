@@ -264,6 +264,20 @@ def _first_model_label_emitter(model: type[models.Model]) -> type | None:
 _SYNTHESIZED_RELATION_CONNECTION_MARKER = "_dst_synthesized_relation_connection"
 
 
+def _suppress_relation_list_form(type_cls: type, name: str) -> None:
+    """Remove a relation's generated list annotation + Phase-2 resolver (tolerant).
+
+    The ``shape == "connection"`` path drops the generated ``list[T]`` form so
+    the SDL carries only the connection sibling. Removals are tolerant of
+    already-absent entries: a partial-finalize rerun (the module's recovery
+    contract) may re-enter synthesis with the field already suppressed, and
+    must not ``KeyError`` / ``AttributeError`` on the second pass.
+    """
+    type_cls.__annotations__.pop(name, None)
+    if name in type_cls.__dict__:
+        delattr(type_cls, name)
+
+
 def _synthesize_relation_connections() -> None:
     """Synthesize ``<field>_connection`` siblings for eligible many-side relations.
 
@@ -362,8 +376,15 @@ def _synthesize_relation_connections() -> None:
             generated = f"{name}_connection"
             attached = type_cls.__dict__.get(generated)
             if getattr(attached, _SYNTHESIZED_RELATION_CONNECTION_MARKER, False):
-                # Attached by a prior partial finalize - skip rather than
-                # misread our own field as a collision.
+                # Attached by a prior partial finalize. A rerun's Phase 2
+                # re-attaches the generated list resolver for this relation, so
+                # for a ``"connection"`` shape the list form must be removed
+                # AGAIN here - without this the rerun would skip on the marker
+                # and leave a reattached, now-unannotated ``items`` resolver
+                # that breaks Phase 3 (spec-032 feedback P1). Then skip rather
+                # than misread our own field as a collision.
+                if shape == "connection":
+                    _suppress_relation_list_form(type_cls, name)
                 continue
             existing = (
                 set(type_cls.__annotations__)
@@ -389,12 +410,8 @@ def _synthesize_relation_connections() -> None:
             if shape == "connection":
                 # Remove the generated list form before Phase 3 freezes the
                 # annotation set (spec-032 Edge cases): the Phase-1 resolved
-                # relation annotation and the Phase-2 list resolver. Tolerant
-                # removals so a partial-finalize rerun cannot KeyError on
-                # already-removed entries.
-                type_cls.__annotations__.pop(name, None)
-                if name in type_cls.__dict__:
-                    delattr(type_cls, name)
+                # relation annotation and the Phase-2 list resolver.
+                _suppress_relation_list_form(type_cls, name)
 
 
 def finalize_django_types() -> None:

@@ -466,6 +466,48 @@ def test_synthesis_skips_already_attached_on_refinalize():
     assert sdl.count("itemsConnection(") == 1
 
 
+def test_connection_only_relation_stays_list_suppressed_on_refinalize():
+    """A ``"connection"`` relation survives a partial-finalize rerun list-suppressed.
+
+    The first ``finalize_django_types()`` synthesizes ``itemsConnection`` and
+    removes the generated ``items`` list form, then raises in
+    ``_bind_filtersets`` (an orphan ``filter_input_type``, which runs AFTER
+    synthesis). On the rerun, Phase 2 must NOT reattach an unannotated ``items``
+    resolver (it would otherwise survive: synthesis sees its own marker and
+    skips before re-removing). The final SDL carries ``itemsConnection`` and no
+    ``items`` field (spec-032 feedback P1).
+    """
+
+    class _PropertyFilter(FilterSet):
+        class Meta:
+            model = Property
+            fields = {"name": ["exact"]}
+
+    _make_type("ItemType", Item, ("id", "name", "category"))
+    category_type = _make_type(
+        "CategoryType",
+        Category,
+        ("id", "name", "items"),
+        meta_extra={"relation_shapes": {"items": "connection"}},
+    )
+    filter_input_type(_PropertyFilter)  # Orphan: referenced but not wired.
+
+    with pytest.raises(ConfigurationError, match="filter_input_type"):
+        finalize_django_types()
+
+    # Wire the orphan, then re-finalize through the schema builder.
+    _make_type(
+        "PropertyType",
+        Property,
+        ("id", "name"),
+        node=False,
+        meta_extra={"filterset_class": _PropertyFilter},
+    )
+    sdl = str(_schema_with_root(category_type))
+    assert sdl.count("itemsConnection(") == 1
+    assert "items: [" not in sdl
+
+
 # =============================================================================
 # spec-032 Slice 4 - cursor-contract conformance on the synthesized relation
 # connection (Decision 9). The live PRIMARY matrix runs against the shipped

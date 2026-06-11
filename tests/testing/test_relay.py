@@ -16,6 +16,7 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing import relay as testing_relay
 from django_strawberry_framework.testing.relay import decode_global_id, global_id_for
+from django_strawberry_framework.types import finalizer as types_finalizer
 from django_strawberry_framework.types import relay as types_relay
 
 
@@ -203,6 +204,36 @@ def test_global_id_for_non_node_raises():
     with pytest.raises(ConfigurationError) as excinfo:
         global_id_for(object, 1)
     assert "not a registered DjangoType subclass" in str(excinfo.value)
+
+
+def test_global_id_for_strategy_stamped_but_unfinalized_raises(monkeypatch):
+    """A Phase-3 failure leaves the strategy stamped but ``finalized=False`` -> raise.
+
+    ``install_globalid_typename_resolver`` stamps ``effective_globalid_strategy``
+    in Phase 2.5, BEFORE Phase 3 flips ``finalized``. If Phase 3
+    (``strawberry.type``) raises, the type carries a non-None strategy yet is
+    not finalized; ``global_id_for`` must gate on ``finalized`` and still raise
+    the finalize-first error rather than mint an id (spec-032 feedback P2).
+    """
+    category_node = _make_node_type("CategoryNode")
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("phase-3 boom")
+
+    monkeypatch.setattr(types_finalizer.strawberry, "type", _boom)
+    with pytest.raises(RuntimeError, match="phase-3 boom"):
+        finalize_django_types()
+
+    definition = category_node.__django_strawberry_definition__
+    # The stamp landed in Phase 2.5; Phase 3 never completed.
+    assert definition.effective_globalid_strategy == "model"
+    assert definition.finalized is False
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        global_id_for(category_node, 1)
+    message = str(excinfo.value)
+    assert "CategoryNode" in message
+    assert "finalize_django_types()" in message
 
 
 # ---------------------------------------------------------------------------

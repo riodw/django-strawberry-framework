@@ -62,16 +62,22 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
             f"global_id_for: {type_cls!r} is not a registered DjangoType subclass; "
             "pass the DjangoType class whose emitted id you want to mint.",
         )
+    if not definition.finalized:
+        # Gate on ``finalized`` FIRST. The strategy stamp is written in Phase
+        # 2.5 - BEFORE Phase 3 flips ``finalized`` - so a partial-finalize
+        # failure can leave a non-``None`` strategy on an unfinalized type;
+        # reading the stamp before this gate would mint an id in violation of
+        # the helper's "finalized Relay-Node-shaped type" contract (spec-032
+        # feedback P2).
+        raise ConfigurationError(
+            f"global_id_for: {definition.graphql_type_name} is not finalized; "
+            "call finalize_django_types() (or build the schema) first - the "
+            "GlobalID strategy is stamped at finalization.",
+        )
     strategy = definition.effective_globalid_strategy
     if strategy is None:
-        # The stamp is written at finalization for every Relay-Node-shaped
-        # type, so its absence discriminates the two causes.
-        if not definition.finalized:
-            raise ConfigurationError(
-                f"global_id_for: {definition.graphql_type_name} is not finalized; "
-                "call finalize_django_types() (or build the schema) first - the "
-                "GlobalID strategy is stamped at finalization.",
-            )
+        # Finalized but never stamped -> a non-Relay-Node DjangoType (the
+        # stamp is written only for Relay-Node-shaped types).
         raise ConfigurationError(
             f"global_id_for: {definition.graphql_type_name} {_RELAY_NODE_GATE_LEAD} "
             f"{_RELAY_NODE_GATE_INHERIT_TAIL}",

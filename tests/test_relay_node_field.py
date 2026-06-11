@@ -628,6 +628,53 @@ async def test_nodes_async_context():
     ]
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_nodes_async_with_sync_consumer_resolve_nodes_override():
+    """A SYNCHRONOUS consumer ``resolve_nodes`` override works under async execution.
+
+    The batch gatherer must treat ``resolve_nodes`` as AwaitableOrValue: the
+    framework default returns a coroutine in async context, but a valid sync
+    consumer override returns the list directly. Awaiting it unconditionally
+    raised ``TypeError: 'list' object can't be awaited`` (spec-032 feedback P1).
+    """
+    await sync_to_async(services.seed_data)(1)
+    rows = {str(obj.pk): obj async for obj in Category.objects.order_by("pk")}
+
+    class SyncCategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+        @classmethod
+        def resolve_nodes(
+            cls,
+            *,
+            info,
+            node_ids,
+            required=False,
+        ):
+            # Synchronous list return (no coroutine); closes over pre-fetched
+            # rows so it issues no ORM query inside the event loop.
+            return [rows.get(str(node_id)) for node_id in node_ids]
+
+    schema = _schema_with(
+        "nodes",
+        list[relay.Node | None],
+        DjangoNodesField(),
+        extra_types=(SyncCategoryNode,),
+    )
+    target = next(iter(rows.values()))
+    query = "query ($ids: [ID!]!) { nodes(ids: $ids) { __typename ... on CategoryNode { name } } }"
+    result = await schema.execute(
+        query,
+        variable_values={"ids": [_gid("products.category", target.pk)]},
+    )
+    assert result.errors is None
+    assert result.data["nodes"] == [{"__typename": "CategoryNode", "name": target.name}]
+
+
 @pytest.mark.django_db
 def test_node_sync_async_get_queryset_raises_sync_misuse():
     """An async ``get_queryset`` under sync execution surfaces SyncMisuseError, NOT GLOBALID_INVALID.

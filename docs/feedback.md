@@ -1,154 +1,185 @@
-# Review - spec-032 Full Relay implementation (post-build code review)
+# Review - spec-032 Full Relay (logic-only pass over stripped skeletons)
 
-Reviewed the committed implementation (`3b8173dc..HEAD`, ~3,600 insertions) against
-`docs/spec-032-full_relay-0_0_9.md` Revision 7 and the prior review passes: the new
-`relay.py` / `testing/relay.py` modules in full, the diffs to `types/base.py`,
-`types/finalizer.py`, `types/definition.py`, `connection.py`, `registry.py`, both
-`__init__.py`s, the fakeshop activation, and the five test surfaces. Worker-local
-validation run: `ruff format --check` / `ruff check` clean,
-`check_spec_glossary.py` -> `OK: 40 terms`; no pytest per `AGENTS.md`.
+Method: this pass read ONLY the `*.stripped.py` snapshots in `docs/shadow/current/`
+(no source files, no tests, no scripts run). Strings/docstrings/comments are `...`,
+so everything below is reasoned from control flow, names, and types. Findings are
+phrased as **suspicions with a verification scenario** - they're gut-check grade,
+not confirmed repros. Coverage caveat: `testing/relay.py` has no snapshot in
+`docs/shadow/current/` (the snapshot run skipped the `testing/` subpackage), so the
+test-helper module is unreviewed in this pass.
 
-Verdict: this is a high-quality build. Every contract from the three review passes
-landed verbatim and is cited in-source: the `strawberry.ID` raw-string arguments
-(`relay.py` notes the `convert_argument` interception that made `relay.GlobalID`
-annotations unusable - Revision 7 P1), the narrowly-scoped `GLOBALID_INVALID`
-boundary with the discriminating `SyncMisuseError`-is-not-`GLOBALID_INVALID` test,
-the uncoercible-pk -> `null` contract with query-count pins, the whole-field
-malformed-batch failure, the per-call `in_async_context()` gathering coroutine, the
-two-stage `relation_shapes` validation, the camel-surface collision guard, the
-no-Node-types ledger with `registry.clear()` co-clear, and Decision-13 compliance
-(version untouched at `0.0.8`; CHANGELOG bullets under `[Unreleased]` only).
+Verdict on the previously-flagged items: the skeletons confirm all three prior
+fixes landed and are logically sound - `_coerce_pk_or_none` now derives its
+coercion field from `resolve_id_attr()` (pk vs `get_field`, `FieldDoesNotExist` ->
+raw passthrough), `_check_nodes_result` enforces the 1:1 length contract before
+`_interleave`, and the async gatherer is awaitable-or-value. The interleave
+machinery is correct for duplicates (`positions` indexes are allocated before the
+`pks.append`, and `_order_nodes` emits one entry per input key even when the DB
+returns one row). What follows is new.
 
-The build also surfaced and correctly fixed three bugs of its own, each pinned by a
-regression test: (1) handing the schema the generic alias
-`DjangoConnection[target]` lost the package's `resolve_connection` override at
-Strawberry's generic specialization - meaning the shipped `first`+`last` guard
-**never ran through-schema for non-`totalCount` connections** (a latent spec-030
-bug; fixed by always generating concrete `<TypeName>Connection` classes with the
-parent's SDL description preserved); (2) a partial-finalize rerun re-attached the
-Phase-2 list resolver for a `"connection"`-shaped relation, which the marker-based
-re-suppression now handles; (3) the async gatherer awaited `resolve_nodes`
-unconditionally, breaking valid synchronous consumer overrides
-(`TypeError: 'list' object can't be awaited`) - now awaitable-or-value. Findings
-below are graded against that baseline.
+## Suspicions (highest confidence first)
 
-## Findings
+### S1 - P2: inheriting one relay Node DjangoType from another likely causes infinite recursion in `resolve_id_attr`
 
-### P2 - `_coerce_pk_or_none` coerces against `model._meta.pk`, but resolution filters on `resolve_id_attr()` - breaking supported custom `relay.NodeID[...]` types
+`types/relay.py::install_relay_node_resolvers` installs a default only when the
+existing attribute is absent **or is exactly `relay.Node`'s** classmethod
+(`existing_func is node_func`). And `_resolve_id_attr_default` resolves upward via
+`super(cls, cls).resolve_id_attr()` with the **runtime** cls.
 
-`relay.py::_coerce_pk_or_none` runs `_model_for(resolved_type)._meta.pk.to_python(node_id)`
-unconditionally. But the shipped resolution path it feeds keys on a *different*
-field: `_resolve_node_default` / `_resolve_nodes_default` derive
-`id_attr = cls.resolve_id_attr()` and filter `{id_attr: <coerced>}` /
-`{id_attr}__in`. For the default (`"pk"`) the two coincide and everything here is
-correct. They diverge exactly where the package already promises support:
+Now take `class ChildType(ParentType)` where both are relay-shaped with their own
+`Meta`. At finalize, the installer inspects `ChildType.resolve_id_attr`, finds the
+framework default **inherited from ParentType**, sees it is not `relay.Node`'s
+function, and skips installation (it's misclassified as a consumer override). At
+runtime, `ChildType.resolve_id_attr()` binds `cls=ChildType`, executes
+`super(ChildType, ChildType).resolve_id_attr()`, the MRO search lands back on
+*ParentType's installed copy of the same default*, which re-binds `cls=ChildType`
+and re-executes the identical `super()` call -> `RecursionError`. Because
+`_resolve_id_default`, `_resolve_node_default`, and `_resolve_nodes_default` all
+call `cls.resolve_id_attr()`, every id emission and every refetch on the child
+type recurses - it fails loudly, at least.
 
-- `types/relay.py::_resolve_id_attr_default` explicitly honors a consumer
-  `id: relay.NodeID[...]` annotation ("a consumer NodeID annotation on the class
-  wins"), and `_resolve_id_default` emits that attribute's value as the id slot.
-- `_check_composite_pk_for_relay_node`'s error message *instructs* consumers to
-  "declare an explicit `id: relay.NodeID[...]` annotation" as the composite-pk
-  escape hatch - the one path where `_meta.pk` is a `CompositePrimaryKey` and
-  single-column `to_python` semantics do not exist at all.
+The telling asymmetry: `resolve_typename` got exactly this treatment via
+`_FRAMEWORK_CLOSURE_MARKER` - `_inherits_framework_closure` detects an inherited
+framework closure and **re-installs** a fresh one bound to the child's definition.
+The four `_RELAY_RESOLVER_DEFAULTS` have no equivalent marker, and they're the
+ones whose default uses dynamic `super(cls, cls)`.
 
-Concrete failures for a type with `code: relay.NodeID[str]` over an integer-pk
-model: `node(id:)` for code `"abc"` coerces against the int pk -> `ValidationError`
--> spurious `null` for a row that exists; code `"007"` coerces to int `7`, the
-default then filters `code=7` -> Django stringifies to `"7"` != `"007"` -> wrong
-miss. On a composite-pk model with the documented NodeID escape, every root
-refetch is broken. None of the three new test files contains a custom-NodeID case
-(grep: zero `NodeID` hits), so the gap is invisible to CI.
+**Script to confirm:** two relay-shaped DjangoTypes in an inheritance chain
+(child with its own `Meta.model`), finalize, then call
+`ChildType.resolve_id_attr()`. If it recurses, the fix is the same marker pattern
+the typename installer already uses (stamp the installed classmethods; on a
+subclass, treat an inherited stamped default as "not a consumer override" and
+re-install). If DjangoType-subclassing-DjangoType is meant to be unsupported,
+`__init_subclass__` should say so instead - `_detect_custom_get_queryset` walking
+the MRO suggests chains are anticipated.
 
-**Fix:** derive the coercion field from the same source the resolution uses -
-`id_attr = resolved_type.resolve_id_attr()`; map `"pk"` to the concrete
-`model._meta.pk`, otherwise `model._meta.get_field(id_attr)`; if the NodeID attr
-does not name a concrete model field, skip coercion and pass the raw string (the
-pre-032 default behavior, which Django handles for non-pk columns). Add
-`test_node_custom_node_id_attr_resolves` / `..._uncoercible_returns_null` package
-tests. Severity P2 not P1 because the default path (every shipped and fakeshop
-type) is correct; the broken paths are consumer-reachable but unexercised.
+### S2 - P2: untyped `node`/`nodes` on a multi-type model can resolve to the wrong `__typename`
 
-### P3 - `_interleave`'s positional 1:1 contract on consumer `resolve_nodes` overrides is load-bearing but undocumented
+The untyped `DjangoNodeField()` returns a **raw Django model instance** under the
+`Node` interface annotation. Concrete-type selection then happens in
+graphql-core's abstract-type resolution, which consults each candidate type's
+`is_type_of`. The framework's installed hook
+(`types/relay.py::install_is_type_of`) is `isinstance(obj, (type_cls, model))` -
+for a model with two registered types (say `BookType` primary, `BookAdminType`
+secondary), **both** hooks answer True for every `Book` row. Whichever type
+graphql-core happens to test first wins, regardless of which type the GlobalID
+named.
 
-`relay.py::_interleave` maps each input position to
-`per_type_results[type][within-group index]` - it requires every `resolve_nodes`
-return to be input-ordered, exactly `len(node_ids)` long, and `None`-padded for
-missing ids. The framework default guarantees that (`_resolve_nodes_default`'s
-documented 1:1 contract via `_order_nodes`), and the gatherer now correctly
-handles sync-or-async returns. But `DjangoNodesField` deliberately calls the
-*classmethod* to preserve consumer overrides, and an override written the obvious
-way (`return cls.get_queryset(...).filter(pk__in=node_ids)`) violates all three
-assumptions: unordered rows, missing ids shrink the list, and duplicates produce
-an `IndexError` (two positions index 0 and 1 of a one-row result). Strawberry's
-native batch resolver makes the same positional assumption, so the contract is
-ecosystem-consistent - but nothing consumer-facing states it.
+All the careful decode routing (`_audit_primary_ambiguity`,
+`_audit_model_label_routing`, `definition_for_graphql_name`) governs which type's
+*resolvers* fetch the row - but `_resolve(...)` drops `resolved` after fetching
+and hands the schema a bare model instance, so the routing decision never reaches
+type resolution. `node(id: <BookAdminType gid>)` could plausibly come back as
+`__typename: "BookType"` (or vice versa, ordering-dependent). Connections don't
+hit this because they're concretely typed; the Node interface refetch is the
+first abstract-resolution surface the package ships, so this is in 032's scope.
 
-**Fix (documentation-first):** one paragraph in the `DjangoNodesField` docstring
-pinning the override contract ("input-ordered, 1:1 with `node_ids`, `None` for
-missing - the `_resolve_nodes_default` shape"), plus optionally a cheap defensive
-`len(result) == len(pks)` check that raises a `ConfigurationError` naming the
-offending type instead of a bare `IndexError` / silently wrong rows.
+**Script to confirm:** one model, two registered types (one primary), an untyped
+`node: relay.Node | None = DjangoNodeField()`, query each type's gid and assert
+`__typename`. If it misroutes, candidate fixes: have the node resolvers wrap or
+annotate the instance with the decode-resolved type (e.g. a per-request
+`resolve_type` hint), or tighten `is_type_of` for non-primary types - both need
+design care, hence flagging rather than prescribing.
 
-### P3 - Synthesized relation connections have no async escape for async-`get_queryset` targets
+### S3 - P3 (inherited, widened by 032): reverse relations without `related_name` - field name vs instance accessor mismatch
 
-`connection.py::_build_relation_connection_resolver` is sync-pipeline-only by
-design (a lazy queryset works under both execution modes). The documented escape
-for an async `get_queryset` hook on a *root* connection is "supply an `async def`
-`resolver=`" (`_build_connection_resolver`'s docstring) - but a synthesized
-relation connection has no `resolver=` seam, so a Relay target whose
-`get_queryset` is `async def` makes its synthesized `<field>Connection` raise
-`SyncMisuseError` on every query, with `relation_shapes={"<field>": "list"}` as
-the only recourse. That is a defensible 0.0.9 posture (the fail-loud
-`SyncMisuseError` contract is inherited, not new), but it is currently recorded
-nowhere a consumer would look. **Fix:** a sentence in the
-`_build_relation_connection_resolver` docstring and the `Meta.relation_shapes`
-GLOSSARY entry; an async pipeline seam for synthesized connections can ride the
-`033` connection-pipeline work if demand appears.
+Synthesis seeds the relation connection with
+`_build_relation_connection_resolver(target_type, name)` where
+`name = field.name`, and the resolver does `getattr(root, accessor_name).all()`.
+For a reverse FK **without** `related_name`, Django's `ForeignObjectRel.name` is
+the related *query* name (`"book"`) while the instance accessor is
+`get_accessor_name()` (`"book_set"`) - `getattr(root, "book")` would
+`AttributeError`. The same assumption predates 032
+(`types/resolvers.py::many_resolver` uses `getattr(root, field_name)` too), which
+is why I grade it inherited - but 032 both widens the exposure (every relay node's
+many-relations now auto-synthesize connections) and bakes `field.name` into the
+generated field name and the collision guard. Notably `FieldMeta` carries a
+`reverse_connector_attname` slot, so the raw material for the correct accessor may
+already exist.
 
-## Verified sound (checked, no action)
+**Script to confirm:** a model pair with a plain `ForeignKey` (no
+`related_name`), parent type relay-shaped, query both the Phase-2 list field and
+the synthesized connection. If your fixtures all set `related_name`, this has
+been invisible to CI from the start.
 
-- **Slice 1 diagnostics:** the named-helper table matches the spec's six messages;
-  identity matching (`entry is helper`) and placement *before* the non-class
-  branch are both load-bearing and correctly reasoned - `relay.NodeID` is an
-  `Annotated` alias, not a class, so a later placement would die unnamed in the
-  generic rejection. All eight messages pinned in `tests/types/test_base.py`.
-- **Ledger lifecycle:** plain (non-try/except) import in the finalizer with the
-  contract-check-must-not-skip rationale; `registry.clear()` co-clear in the
-  established cycle-safe shape; the exact card message string.
-- **`relation_shapes` validation:** stage-1/stage-2 split mirrors the
-  `nullable_overrides` precedent; unhashable-value guard before set membership;
-  sorted deterministic messages; `dict(value)` defensive copy; consumer-authored
-  raise at creation plus the implicit-default skip at synthesis - both halves of
-  Revision 3 P2 intact.
-- **Synthesis:** eligibility via the single-source `FieldMeta.is_many_side`
-  classifier; explicit-vs-implicit non-Node-target split; collision guard on both
-  Python and default-camel-cased surfaces (recomputed per relation so earlier
-  synthesized siblings participate); list-form suppression before Phase 3;
-  ordering before `_bind_filtersets` so synthesized sidecar registrations are
-  orphan-validated in the same finalize.
-- **Decision-13 / docs:** version files untouched; `[Unreleased]` carries the
-  three `### Added` bullets; `DjangoNodesField` / `Meta.relation_shapes` GLOSSARY
-  entries exist; `test_init.py` export tuple updated.
-- **Fakeshop activation:** BookType promotion + `circulation_status="repair"`
-  hook (enum constant, staff bypass, hoisted `_user_is_staff` deduplicating three
-  copies); the full live matrix is present including
-  `test_has_next_page_correct_when_edges_unrequested`,
-  `test_node_uncoercible_pk_live`, the loans graceful-degradation proof, and the
-  hidden-row staff/anon split.
-- **Uncapped `nodes(ids:)`** is now a recorded decision (spec Edge cases + Risks),
-  matching the implementation's behavior - no code action needed.
+### S4 - question, not a defect: where does the `node`/`nodes` field type come from?
 
-## Checks run
+Both `relay.py` resolvers are annotated `-> Any` (the skeleton preserves
+annotations, so that's the real source). `strawberry.field(resolver=...)` can't
+type a field from `Any`, so the schema type must come from the consumer's class
+annotation at the assignment site (`node: BookType | None = DjangoNodeField(...)`).
+Two things to verify: (a) the documented usage always annotates the assignment;
+(b) the failure mode when a consumer writes a bare `node = DjangoNodeField()` is
+strawberry's generic missing-annotation error, with no framework-named message.
+If (b) is ugly, a one-line check or doc note is cheap. Also worth confirming the
+typed variant's annotation is checked for compatibility with `target_type` -
+nothing in the skeleton cross-validates `node: AuthorType = DjangoNodeField(BookType)`
+(`_check_typed_match` would make every query error at runtime, which is loud but
+late).
 
-- `uv run ruff format --check .` -> 241 files already formatted;
-  `uv run ruff check .` -> all checks passed.
-- `uv run python scripts/check_spec_glossary.py --spec docs/spec-032-full_relay-0_0_9.md`
-  -> `OK: 40 terms`.
-- Source reads: `relay.py` / `testing/relay.py` in full; `types/base.py`,
-  `types/finalizer.py`, `types/definition.py`, `connection.py`, `registry.py`,
-  package/testing `__init__.py` diffs; `types/relay.py` resolution internals
-  (`_resolve_id_attr_default`, `_order_nodes`, `_apply_node_filter`,
-  `_resolve_node(s)_default`); fakeshop schema diff; test-name surveys plus
-  targeted reads of the async and malformed-id suites.
-- No pytest run per repo instructions (`AGENTS.md` "Do not run pytest after
-  edits"); test execution is CI-owned.
+## Minor notes (no scripts needed unless you disagree)
+
+- `_check_nodes_result` calls `len(result)` - a consumer `resolve_nodes` override
+  returning a generator dies with a bare `TypeError` instead of the named
+  `ConfigurationError`. One `list(result)`-or-message away from airtight.
+- `decode_global_id` called before finalize (effective strategies unstamped)
+  raises `ConfigurationError`, which the root fields translate to
+  `GLOBALID_INVALID` - a configuration problem masquerading as a bad-id error.
+  Unreachable through-schema (finalize precedes serving); only odd harnesses see it.
+- The async gatherer awaits each per-type `resolve_nodes` **sequentially**.
+  Correct, and defensible given Django's per-connection serialization, but it's a
+  latency choice worth one docstring word so nobody "fixes" it into
+  `asyncio.gather` against a single shared connection.
+- Synthesized relation connections run per-parent: each parent row pays its own
+  window query (plus `COUNT` when `totalCount` is exposed) - inherent to
+  relation-seeded connections, but a nested-connection query-count pin in the
+  fakeshop tests would document the cost contract.
+- The synthesis collision guard compares against `to_camel_case` - i.e. the
+  *default* name converter. A schema configured with a custom converter could
+  collide post-guard. Fine to leave if custom converters are out of scope; worth
+  a sentence somewhere if not.
+- `registry.unregister` removes the definition but leaves
+  `_connection_type_cache` entries for the type (only full `clear()` purges).
+  Test-utility-only surface; cosmetic.
+
+## Verified sound in this pass (logic traced, no action)
+
+- **Decode boundary:** `_decode_or_graphql_error` wraps *only* the decode call;
+  `SyncMisuseError` (a `ConfigurationError` subclass) cannot arise inside decode,
+  so the narrow `except ConfigurationError` doesn't swallow it - the prior
+  contract holds structurally, not just by test pin.
+- **Interleave/dedup/duplicates:** position indexes allocated pre-append; default
+  `resolve_nodes` -> `_order_nodes` emits exactly one entry per input key (string
+  keys built from the same coerced values on both sides), so duplicate ids and
+  missing rows both produce correct positional output; `_check_nodes_result`
+  catches the override that breaks it.
+- **Finalize ordering is load-bearing and correct:** `_audit_primary_ambiguity`
+  runs before synthesis (so `registry.get(related_model)` can't return None for a
+  multi-type model with no primary), interfaces are applied before
+  `implements_relay_node` checks in the same loop, effective strategies are
+  stamped before `_audit_model_label_routing` reads them, and synthesis precedes
+  `_bind_filtersets` so sidecar registrations are orphan-validated in the same run.
+- **Re-entrancy:** the synthesized-marker branch re-suppresses the list form a
+  partial-finalize rerun re-attached; the once-discarded pendings mean the popped
+  annotation is never restored, so the re-attached Phase-2 attr is inert and then
+  deleted again - the end state is consistent for both `"connection"` and
+  `"both"` shapes.
+- **Sync/async split:** `in_async_context()` checked per call; the sync pipeline's
+  lazy QuerySet flows through `ListConnection.resolve_connection`'s
+  AsyncIterable path under ASGI (Django QuerySets are async-iterable), which is
+  exactly why the relation resolver can be sync-only; `_apply_get_queryset_sync`
+  closes the rejected coroutine before raising.
+- **Connection generation:** always-concrete classes via `types.new_class` over
+  `DjangoConnection[target]`, single cache keyed by target, `first`+`last` guard
+  ahead of `super()`, `totalCount` attach guarded by countability and computed
+  only when selected (fragment-recursive check).
+- **Validation ladders:** `relation_shapes` stage-1 (isinstance-before-membership,
+  defensive `dict()` copy) and stage-2 (unknown -> excluded -> non-relation ->
+  single-valued -> consumer-authored, sorted messages) are complete and ordered
+  so the most specific error wins; the relay `id` gate and the
+  `_RELAY_NON_INTERFACE_HELPERS` identity table sit before the generic
+  non-class rejection.
+- **Registry hygiene:** `register_with_definition` rollback restores the exact
+  pre-state including the prior primary; `clear()` co-clears the node-field
+  ledger and connection cache cycle-safely; the no-Node-types contract check uses
+  a plain import so it cannot silently skip.

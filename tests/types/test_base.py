@@ -413,6 +413,14 @@ def _declare_relation_shapes_type(
         pytest.param(
             Category,
             ("id", "name", "items"),
+            {"items": ["both"]},
+            True,
+            "got unknown shape ['both']; valid shapes are ['both', 'connection', 'list']",
+            id="unhashable-value",
+        ),
+        pytest.param(
+            Category,
+            ("id", "name", "items"),
             {"nope": "both"},
             True,
             "Meta.relation_shapes names unknown fields: ['nope']",

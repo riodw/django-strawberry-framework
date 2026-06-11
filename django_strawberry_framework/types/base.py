@@ -245,7 +245,11 @@ def _validate_relation_shapes(meta: type, value: Any, relay_shaped: bool) -> dic
                 f"{meta.model.__name__}.Meta.relation_shapes keys must be relation field "
                 f"name strings; got {key!r}.",
             )
-        if shape not in RELATION_SHAPE_VALUES:
+        # ``isinstance`` first so an unhashable value (e.g. ``{"items":
+        # ["both"]}``) raises the configured ConfigurationError rather than
+        # leaking ``TypeError: unhashable type`` from the set membership
+        # (spec-032 feedback P3).
+        if not isinstance(shape, str) or shape not in RELATION_SHAPE_VALUES:
             raise ConfigurationError(
                 f"{meta.model.__name__}.Meta.relation_shapes[{key!r}] got unknown shape "
                 f"{shape!r}; valid shapes are {sorted(RELATION_SHAPE_VALUES)}.",

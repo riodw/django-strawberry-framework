@@ -1809,3 +1809,42 @@ def test_optimizer_walker_uses_primary_for_nested_relation_target():
     only_clause = set(child_qs.query.deferred_loading[0])
     assert "id" in only_clause
     assert "name" not in only_clause
+
+
+def test_walker_resolves_relation_targets_through_definition_metadata(monkeypatch):
+    """Registered relation targets route through ``DjangoTypeDefinition.related_target_for``."""
+    registry.clear()
+
+    class CategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    class ItemType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    _register_type_definition(Category, CategoryType)
+    _register_type_definition(Item, ItemType)
+    definition = registry.get_definition(ItemType)
+    assert definition is not None
+    real_related_target_for = definition.related_target_for
+    calls: list[str] = []
+
+    def spy_related_target_for(field_name: str):
+        calls.append(field_name)
+        return real_related_target_for(field_name)
+
+    monkeypatch.setattr(definition, "related_target_for", spy_related_target_for)
+    try:
+        plan = plan_optimizations(
+            [_sel("category", selections=[_sel("name")])],
+            Item,
+            source_type=ItemType,
+        )
+    finally:
+        registry.clear()
+
+    assert calls == ["category"]
+    assert plan.select_related == ("category",)

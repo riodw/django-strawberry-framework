@@ -88,8 +88,8 @@ def _resolve_field_map(
     model: type[models.Model],
     *,
     source_type: type | None = None,
-) -> tuple[type | None, dict[str, Any]]:
-    """Return ``(registered DjangoType, field_map)`` for ``model``.
+) -> tuple[type | None, Any | None, dict[str, Any]]:
+    """Return ``(registered DjangoType, definition, field_map)`` for ``model``.
 
     Prefers the canonical ``DjangoTypeDefinition.field_map`` registered
     for the ``DjangoType`` subclass; falls back to a fresh
@@ -124,14 +124,28 @@ def _resolve_field_map(
         if definition is not None
         else {f.name: f for f in model._meta.get_fields()}
     )
-    return type_cls, field_map
+    return type_cls, definition, field_map
 
 
-def _resolve_optimizer_hints(type_cls: type | None) -> dict[str, OptimizerHint]:
-    """Return optimizer hints from the registered ``DjangoTypeDefinition``."""
-    if type_cls is None:
-        return {}
-    definition = registry.get_definition(type_cls)
+def _resolve_relation_target(
+    definition: Any | None,
+    django_name: str,
+    django_field: Any,
+) -> type | None:
+    """Return a relation target type, preferring finalized definition metadata."""
+    if definition is not None:
+        resolved = definition.related_target_for(django_name)
+        if resolved is not None:
+            target_definition, _model_field = resolved
+            return target_definition.origin
+    related_model = getattr(django_field, "related_model", None)
+    if related_model is None:
+        return None
+    return registry.get(related_model)
+
+
+def _resolve_optimizer_hints(definition: Any | None) -> dict[str, OptimizerHint]:
+    """Return optimizer hints from the resolved ``DjangoTypeDefinition``."""
     if definition is None:
         return {}
     return definition.optimizer_hints or {}
@@ -180,7 +194,8 @@ def _walk_selections(
     ``plan_optimizations`` always passes an explicit single-tuple via
     ``runtime_path_from_info(info)``.
     """
-    type_cls, field_map = _resolve_field_map(model, source_type=source_type)
+    type_cls, definition, field_map = _resolve_field_map(model, source_type=source_type)
+    hints_map = _resolve_optimizer_hints(definition)
     merged = _merge_aliased_selections(_included_field_selections(selections))
     for sel in merged:
         django_name = snake_case(sel.name)
@@ -250,13 +265,8 @@ def _walk_selections(
         resolver_identities = tuple(
             resolver_key(type_cls, django_name, runtime_path) for runtime_path in runtime_paths
         )
-        target_type = (
-            registry.get(django_field.related_model)
-            if django_field.related_model is not None
-            else None
-        )
+        target_type = _resolve_relation_target(definition, django_name, django_field)
 
-        hints_map = _resolve_optimizer_hints(type_cls)
         hint = hints_map.get(django_name)
         if hint is not None and _apply_hint(
             hint,
@@ -595,7 +605,7 @@ def _selected_scalar_names(
     # call already does. The scalar-only secondary-type regression is
     # exercised through the root _walk_selections path, not through this
     # helper. (spec-018 rev6 M1 audit invariant.)
-    _type_cls, field_map = _resolve_field_map(model)
+    _type_cls, _definition, field_map = _resolve_field_map(model)
     scalar_names: set[str] = set()
     for sel in _merge_aliased_selections(_included_field_selections(selections)):
         django_name = snake_case(sel.name)

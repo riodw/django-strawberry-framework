@@ -85,6 +85,15 @@ class FieldMeta:
             forward M2M points at, preserving non-PK ``to_field``
             connector rules; ``None`` for descriptors whose
             ``target_field`` attribute is absent.
+        target_pk_name: The related model's concrete primary-key field
+            name, or ``None`` for non-relations / unresolved relation
+            targets.
+        fk_id_elision_eligible: Whether a forward single relation can
+            satisfy an id-only child selection from the source row's
+            local FK column without loading the related object. This is
+            false for many-side relations, reverse relations, non-PK
+            ``to_field`` relations, unresolved targets, and composite
+            primary keys.
         reverse_connector_attname: For reverse FK relations, the forward
             FK column on the related model that points back to the
             parent model.
@@ -101,6 +110,8 @@ class FieldMeta:
     attname: str | None = None
     target_field_name: str | None = None
     target_field_attname: str | None = None
+    target_pk_name: str | None = None
+    fk_id_elision_eligible: bool = False
     reverse_connector_attname: str | None = None
     auto_created: bool = False
 
@@ -155,17 +166,19 @@ class FieldMeta:
 
         The cardinality-gated nullable rule (many-side -> ``False``;
         reverse OneToOne -> ``True``; otherwise ``field.null``) and the
-        nine ``getattr``-defaulted reads (``one_to_one``,
-        ``related_model``, ``attname``, ``target_field_name`` /
-        ``target_field_attname`` from a single ``target_field`` read,
-        ``reverse_connector_attname``, ``auto_created``) live here so
-        the two call sites cannot drift.
+        ``getattr``-defaulted relation-shape reads and the derived FK-id
+        elision metadata live here so the two call sites cannot drift.
         """
         # Read ``target_field`` once - it is consulted twice below to
         # extract both ``name`` and ``attname``.
         target_field = getattr(field, "target_field", None)
+        related_model = getattr(field, "related_model", None)
+        target_pk_name = _target_pk_name(related_model)
+        target_field_name = getattr(target_field, "name", None)
         is_m2m = bool(getattr(field, "many_to_many", False))
         is_o2m = bool(getattr(field, "one_to_many", False))
+        attname = getattr(field, "attname", None)
+        auto_created = bool(getattr(field, "auto_created", False))
         # Cardinality-gated nullable rule - see ``nullable`` field docstring above for the full rationale.
         if is_m2m or is_o2m:
             nullable = False
@@ -180,10 +193,34 @@ class FieldMeta:
             one_to_many=is_o2m,
             one_to_one=bool(getattr(field, "one_to_one", False)),
             nullable=nullable,
-            related_model=getattr(field, "related_model", None),
-            attname=getattr(field, "attname", None),
-            target_field_name=getattr(target_field, "name", None),
+            related_model=related_model,
+            attname=attname,
+            target_field_name=target_field_name,
             target_field_attname=getattr(target_field, "attname", None),
+            target_pk_name=target_pk_name,
+            fk_id_elision_eligible=(
+                attname is not None
+                and related_model is not None
+                and target_pk_name is not None
+                and target_field_name == target_pk_name
+                and not is_m2m
+                and not is_o2m
+                and not auto_created
+                and not _has_composite_pk(related_model)
+            ),
             reverse_connector_attname=getattr(getattr(field, "field", None), "attname", None),
-            auto_created=bool(getattr(field, "auto_created", False)),
+            auto_created=auto_created,
         )
+
+
+def _target_pk_name(model: type[models.Model] | None) -> str | None:
+    """Return ``model``'s concrete primary-key field name, or ``None``."""
+    if model is None:
+        return None
+    return model._meta.pk.name
+
+
+def _has_composite_pk(model: type[models.Model]) -> bool:
+    """Return whether ``model`` declares a Django 5.2+ composite primary key."""
+    pk_fields = getattr(model._meta, "pk_fields", None)
+    return pk_fields is not None and len(pk_fields) > 1

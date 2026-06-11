@@ -624,6 +624,9 @@ def _can_elide_fk_id(field: Any) -> bool:
     a tuple, so eliding would compare the wrong shapes and surface
     wrong data.
     """
+    stamped = getattr(field, "fk_id_elision_eligible", None)
+    if stamped is not None:
+        return stamped
     related_model = getattr(field, "related_model", None)
     target_pk_name = _target_pk_name(field)
     target_field = getattr(field, "target_field", None)
@@ -653,6 +656,9 @@ def _can_elide_fk_id(field: Any) -> bool:
 
 def _target_pk_name(field: Any) -> str | None:
     """Return the related model's concrete primary-key field name."""
+    stamped = getattr(field, "target_pk_name", None)
+    if stamped is not None:
+        return stamped
     related_model = getattr(field, "related_model", None)
     if related_model is None:
         return None

@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-10
+Last refreshed: 2026-06-11
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -19,24 +19,13 @@ For install, local development, testing, and the canonical documentation map, st
 
 ## Relative size
 
-Every card carries a `Relative size:` estimate on a five-point
-T-shirt scale **anchored to the shipped Filtering subsystem (`DONE-027-0.0.8`) =
-XL** — the largest card the package has shipped (a 1,290-line spec plus a full
-six-layer lazy-resolution pipeline). The size is a planning estimate of build
-effort, not a commitment:
+A five-point T-shirt estimate of build effort — a planning estimate, not a commitment — anchored to the shipped Filtering subsystem (`DONE-027-0.0.8`) as XL:
 
 - **XS** - trivial / mechanical; ≲½ day; one small module or a bookkeeping edit; no spec.
 - **S** - small; ~1 day; one module + tests; light or no spec.
 - **M** - moderate; a few days; multi-file, a real spec, a handful of design decisions.
 - **L** - large subsystem; ~a week; new subpackage, full spec, broad integration.
 - **XL** - very large subsystem at `DONE-027-0.0.8` scale.
-
-On `DONE` cards the size is a retrospective estimate of the build effort the
-card represented; their `Priority` and `Severity` tags are likewise best-effort
-retrospective values (neither was tracked while the work was active). Cards in
-the To-Do-Alpha column and the Done column carry the full tag block (`Priority`
-/ `Parity` / `Severity` / `Status` / `Relative size`), with any explanatory text
-demoted to a bullet under its label.
 
 ## Snapshot
 

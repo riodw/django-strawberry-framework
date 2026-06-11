@@ -2121,6 +2121,34 @@ def test_nullability_override_acceptance_api_is_queryable():
 # per-instance count across two aliases.
 # ---------------------------------------------------------------------------
 
+# TODO(spec-032-full_relay-0_0_9 Slice 4): Live PRIMARY copies of the
+# cursor-contract conformance matrix against the already-shipped
+# ``allLibraryGenresConnection`` (no Slice-6 dependency; the test_query
+# README coverage rule; every test on _reload_project_schema_for_acceptance_tests
+# and inline Model.objects.create seeding - the library inline-create rule):
+#   test_first_zero
+#     first: 0 -> edges == [] with well-formed pageInfo (hasNextPage true
+#     iff rows exist past the empty window - Strawberry overfetches by 1).
+#   test_first_overrun
+#     first: N past the remainder -> the actual remainder, hasNextPage false.
+#   test_stale_after_cursor_no_error
+#     delete the after-cursor's row; the query SUCCEEDS. Pins ONLY the
+#     no-error property - offset cursors encode a position, not row
+#     identity, so no skip/duplicate/next-row assertion (Revision 2 P1;
+#     keyset stability is BACKLOG item 39 sub-feature 3).
+#   test_first_and_last_rejected
+#     the shipped package GraphQLError (re-affirmation; Strawberry itself
+#     accepts the combination - the guard is package-owned).
+#   test_page_info_four_fields
+#     hasNextPage / hasPreviousPage / startCursor / endCursor correctness.
+#   test_has_next_page_correct_when_edges_unrequested
+#     a pageInfo-ONLY query (no edges selection) still computes hasNextPage
+#     correctly - Strawberry's should_resolve_list_connection_edges takes a
+#     distinct path when edges are absent (Revision 6 P3 rewording: an
+#     UNREQUESTED field is unobservable; this is the observable inverse).
+#   test_backward_pagination_last_before
+#     last / before honoring the Relay spec.
+
 
 def _seed_genres(*names: str) -> None:
     """Seed library ``Genre`` rows inline (library inline-create rule, no services)."""
@@ -2383,3 +2411,48 @@ def test_genre_connection_order_by_to_many_no_node_multiplication():
     assert len(names) == len(set(names))
     # ``totalCount`` counts DISTINCT genres, not the multiplied (genre x book) rows.
     assert conn["totalCount"] == 2
+
+
+# TODO(spec-032-full_relay-0_0_9 Slice 6): Fakeshop library activation - the
+# mandated live coverage home for every live-reachable root-field and
+# relation-connection path (test_query README rule; all on
+# _reload_project_schema_for_acceptance_tests; inline Model.objects.create
+# seeding - the seed_data(N)/create_users(N) convention is catalog/auth-only):
+#   test_node_refetch_genre
+#     query a genre's id, refetch via the bare node(id:), assert field
+#     equality.
+#   test_typed_node_field_live / test_typed_node_field_mismatch_live
+#     the typed genre: field resolves a genre id; a book id raises the
+#     expected/received-types GraphQLError.
+#   test_node_malformed_id_live
+#     a malformed / unresolvable id posted to /graphql/ surfaces
+#     GLOBALID_INVALID, not a 500.
+#   test_nodes_batch_mixed_types_order_and_null
+#     genre + book ids interleaved with one bogus-pk (WELL-FORMED) id; order
+#     preserved, null hole in place. (A malformed id mid-batch fails the
+#     whole field - that contract is pinned package-side in
+#     tests/test_relay_node_field.py::test_nodes_malformed_id_mid_batch.)
+#   test_nodes_duplicates_and_empty_live
+#     duplicate ids resolve per position; ids: [] returns [].
+#   test_genres_connection_cursor_round_trip / test_genres_connection_total_count
+#     endCursor -> after continuation; totalCount against the created-row
+#     count.
+#   test_genre_books_connection_behavior
+#     nested reverse-M2M booksConnection pagination + row correctness -
+#     BEHAVIOR only, never SQL shape (pre-033 posture; strictness "raise"
+#     does NOT flag the nested access until 033 wires the connection
+#     pipeline - spec-032 Decision 12).
+#   test_book_genres_connection_sidecars_and_total_count
+#     the forward-M2M genresConnection on the promoted BookType: filter: /
+#     orderBy: derive from the genre sidecars; totalCount resolves because
+#     the TARGET GenreType declares Meta.connection = {"total_count": True}.
+#   test_book_loans_relation_stays_list_only
+#     BookType.loans (reverse FK to the non-Relay LoanType) is silently
+#     list-only under the implicit default (graceful degradation, live).
+#   test_node_hidden_row_null_live
+#     refetch a circulation_status="repair" book (hidden by the new
+#     BookType.get_queryset for non-staff) via node(id:) -> null; a staff
+#     request resolves the same id to the row (visibility, not existence).
+#   Plus: update existing BookType id assertions for the Relay promotion
+#   (integer ids -> encoded model-label GlobalIDs, minted via
+#   testing.relay.global_id_for).

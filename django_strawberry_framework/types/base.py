@@ -76,6 +76,29 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
 # each one's feature ships in the same card that adds it, so they were never
 # reserved-but-nonfunctional. DEFERRED_META_KEYS stays unchanged.
 
+# TODO(spec-032-full_relay-0_0_9 Slice 3): Add ``"relation_shapes"`` as the
+# next net-new ALLOWED key (same rule as above - NOT a deferred promotion),
+# validated by ``_validate_relation_shapes(meta, value, relay_shaped,
+# consumer_authored_fields)`` modeled on ``_validate_connection`` and stored
+# on ``DjangoTypeDefinition.relation_shapes`` (Decision 7).
+# Type-creation validation contract:
+#   - absent -> None (every eligible relation defaults to "both" at the
+#     Phase-2.5 synthesis);
+#   - non-dict / non-str keys / values outside {"list", "connection", "both"}
+#     -> ConfigurationError naming the offending entry (typo guard);
+#   - declared on a non-Relay-Node type (the precomputed ``relay_shaped``
+#     bool ``Meta.connection`` uses) -> ConfigurationError with the
+#     add-relay.Node-or-remove-the-key remediation;
+#   - a key naming an unknown / non-relation / single-valued (forward FK /
+#     OneToOne) / excluded model field -> ConfigurationError naming the field
+#     and the reason (the ``Meta.optimizer_hints`` typo-guard precedent);
+#   - a key naming a CONSUMER-AUTHORED relation (``consumer_authored_fields``)
+#     -> ConfigurationError: overrides own the field's shape (Revision 3; the
+#     implicit "both" default still skips consumer-authored relations
+#     silently - only an explicit request fails loud).
+# The target-is-Node-shaped check runs at FINALIZATION, where relation
+# targets are settled (Decision 6) - not here.
+
 # The valid string-strategy set and the package default are the single source
 # of truth for the GlobalID-encoding strategy vocabulary: ``_validate_meta`` /
 # ``_validate_globalid_strategy`` here, the Slice-2 encoder, and the Slice-3
@@ -523,6 +546,9 @@ class DjangoType:
             orderset_class=validated.orderset_class,
             connection=validated.connection,
             globalid_strategy=validated.globalid_strategy,
+            # TODO(spec-032-full_relay-0_0_9 Slice 3): Pass
+            # ``relation_shapes=validated.relation_shapes`` once the meta
+            # validator and the definition slot exist (Decision 7).
         )
         registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
         for pending_relation in pending:
@@ -772,6 +798,20 @@ def _validate_interfaces(meta: type) -> tuple[type, ...]:
                 f"DjangoType subclasses (got {entry.__name__}). DjangoType is not a "
                 "Strawberry interface.",
             )
+        # TODO(spec-032-full_relay-0_0_9 Slice 1): Named-helper rejection branch
+        # fires BEFORE the generic one below (Decision 8). Each of the six
+        # strawberry.relay NON-interface helpers - GlobalID (a scalar-like id
+        # wrapper), NodeID (an annotation helper), Connection / ListConnection
+        # (generic output types; remediation names Meta.connection /
+        # DjangoConnectionField), Edge (machinery-instantiated output type),
+        # PageInfo (a generated pagination type) - raises ConfigurationError
+        # NAMING the helper, what it actually is, and what the consumer
+        # probably meant (relay.Node). All six already fail through the
+        # generic branch; the named branch upgrades the message only.
+        # Pseudocode:
+        #   named = _RELAY_NON_INTERFACE_HELPERS.get(entry)  # noqa: ERA001
+        #   if named is not None:
+        #       raise ConfigurationError(named.message(meta, entry))  # noqa: ERA001
         definition = getattr(entry, "__strawberry_definition__", None)
         if definition is None or not getattr(definition, "is_interface", False):
             raise ConfigurationError(

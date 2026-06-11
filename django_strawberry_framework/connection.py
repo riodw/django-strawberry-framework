@@ -666,6 +666,14 @@ def _build_relation_connection_resolver(target_type: type, accessor_name: str) -
     / ``DST_OPTIMIZER_PLANNED`` consultation - the connection pipeline stays
     strictness-blind and derives an empty optimizer plan until ``033`` wires
     it (spec-032 Decision 12 / Non-goals).
+
+    Async-``get_queryset`` posture (0.0.9): this is sync-pipeline-only and has
+    no ``resolver=`` seam (the documented escape a *root* connection uses for
+    an async hook), so a Relay target whose ``get_queryset`` is ``async def``
+    raises ``SyncMisuseError`` on every query of its synthesized
+    ``<field>Connection``; ``relation_shapes = {"<field>": "list"}`` is the
+    recourse until an async connection pipeline rides the ``033`` work. The
+    fail-loud ``SyncMisuseError`` is inherited from the pipeline, not new here.
     """
 
     def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:

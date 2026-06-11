@@ -41,7 +41,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import strawberry
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from graphql import GraphQLError
 from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
@@ -86,18 +86,40 @@ def _decode_or_graphql_error(gid: str) -> tuple[type, str]:
 
 
 def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
-    """Coerce ``node_id`` to the target's pk Python type; ``None`` if uncoercible.
+    """Coerce ``node_id`` to the resolution field's Python type; ``None`` if uncoercible.
 
     ``decode_global_id`` validates payload SHAPE only, so a well-formed
     ``library.genre:abc`` decodes to ``(GenreType, "abc")``; a raw
-    ``qs.filter(pk="abc")`` would leak Django's ``ValueError: Field 'id'
-    expected a number``. A coercion failure is treated as "identifies no
-    row" -> ``null`` (single) / positional ``null`` hole (batch), with no
-    query issued, so the no-existence-oracle property is unaffected
-    (Decision 5, Revision 7 P2).
+    ``qs.filter(<id_attr>="abc")`` against an integer column would leak Django's
+    ``ValueError: Field 'id' expected a number``. A coercion failure is treated
+    as "identifies no row" -> ``null`` (single) / positional ``null`` hole
+    (batch), with no query issued, so the no-existence-oracle property is
+    unaffected (Decision 5, Revision 7 P2).
+
+    The coercion field is the SAME one the resolution filters on -
+    ``resolved_type.resolve_id_attr()`` (the value
+    ``_resolve_node(s)_default`` build their ``{id_attr: ...}`` / ``__in``
+    filter from) - NOT ``model._meta.pk``. They coincide for the default
+    (``"pk"``) but diverge for a consumer ``id: relay.NodeID[...]`` annotation,
+    which makes the id slot a non-pk column (and is the documented composite-pk
+    escape hatch where ``_meta.pk`` is a ``CompositePrimaryKey`` with no
+    single-column ``to_python``). Coercing against ``_meta.pk`` there would
+    mis-type the value (``"007"`` -> ``7`` -> filters ``code=7`` !=``"007"``) or
+    spuriously reject an existing row. ``"pk"`` maps to the concrete pk field; a
+    NodeID attr that is not a concrete model field skips coercion and passes the
+    raw string (pre-032 behavior - Django handles string lookups on the column).
     """
+    model = _model_for(resolved_type)
+    id_attr = resolved_type.resolve_id_attr()
+    if id_attr == "pk":
+        field = model._meta.pk
+    else:
+        try:
+            field = model._meta.get_field(id_attr)
+        except FieldDoesNotExist:
+            return node_id
     try:
-        return _model_for(resolved_type)._meta.pk.to_python(node_id)
+        return field.to_python(node_id)
     except (ValueError, ValidationError):
         return None
 
@@ -150,11 +172,38 @@ def _interleave(
     Missing/hidden positions are already ``None`` inside each per-type list
     (``_order_nodes`` under ``required=False``). One implementation serves
     both the sync branch and the gathering coroutine.
+
+    Indexing by ``within-group index`` is what makes the per-type
+    ``resolve_nodes`` return contract load-bearing - see
+    ``_check_nodes_result`` and the ``DjangoNodesField`` override note.
     """
     return [
         None if position is None else per_type_results[position[0]][position[1]]
         for position in positions
     ]
+
+
+def _check_nodes_result(resolved_type: type, result: Any, pks: list[Any]) -> Any:
+    """Validate a ``resolve_nodes`` return is positionally 1:1 with ``pks``.
+
+    ``_interleave`` indexes each result by its within-group position, so a
+    consumer ``resolve_nodes`` override that returns an unordered, shrunk, or
+    duplicate-collapsed list (the obvious
+    ``get_queryset().filter(pk__in=node_ids)`` spelling) would otherwise yield
+    silently wrong rows or an ``IndexError``. The cheap structural length check
+    converts the shrunk / duplicate-collapsed case into a named
+    ``ConfigurationError``; the framework default's ``_order_nodes`` shape
+    always satisfies it. (Ordering itself is the documented override contract -
+    see ``DjangoNodesField`` - not re-validated here.)
+    """
+    if len(result) != len(pks):
+        raise ConfigurationError(
+            f"{resolved_type.__name__}.resolve_nodes returned {len(result)} row(s) for "
+            f"{len(pks)} requested id(s); a resolve_nodes override must return a list "
+            "input-ordered and 1:1 with node_ids (None for missing) - the "
+            "_resolve_nodes_default / _order_nodes shape.",
+        )
+    return result
 
 
 def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoNodeField(GenreType)`
@@ -223,6 +272,18 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
     ``[Node]!`` non-null nulls the enclosing ``data`` (Decision 5). Duplicate
     ids resolve per position, and resolution is batched per distinct decoded
     type (one ``resolve_nodes`` call each - Decision 4).
+
+    Consumer ``resolve_nodes`` override contract: this field calls the
+    ``resolve_nodes`` *classmethod* (preserving consumer overrides), then
+    re-assembles results by position. An override MUST return a list
+    input-ordered and 1:1 with the ``node_ids`` it received, with ``None`` for
+    missing ids - the ``_resolve_nodes_default`` / ``_order_nodes`` shape (and
+    the same positional assumption Strawberry's native batch resolver makes).
+    The obvious ``get_queryset().filter(pk__in=node_ids)`` spelling violates
+    this (unordered, shrunk for missing ids, IndexError on duplicates); the
+    ``AwaitableOrValue`` return (sync list or coroutine) is accepted, and a
+    wrong-length return is rejected with a ``ConfigurationError`` naming the
+    type rather than producing silently wrong rows.
     """
     if target_type is not None:
         _validate_node_target(target_type, field="DjangoNodesField")
@@ -275,12 +336,16 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
                     result = resolved_type.resolve_nodes(info=info, node_ids=pks, required=False)
                     if inspect.isawaitable(result):
                         result = await result
-                    per_type[resolved_type] = result
+                    per_type[resolved_type] = _check_nodes_result(resolved_type, result, pks)
                 return _interleave(positions, per_type)
 
             return _gather()
         per_type = {
-            resolved_type: resolved_type.resolve_nodes(info=info, node_ids=pks, required=False)
+            resolved_type: _check_nodes_result(
+                resolved_type,
+                resolved_type.resolve_nodes(info=info, node_ids=pks, required=False),
+                pks,
+            )
             for resolved_type, pks in groups.items()
         }
         return _interleave(positions, per_type)

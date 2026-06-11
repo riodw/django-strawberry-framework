@@ -26,6 +26,7 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.relay import _coerce_pk_or_none
 from django_strawberry_framework.types.relay import SyncMisuseError
 
 
@@ -167,6 +168,103 @@ def test_typed_node_field_mismatch_raises():
     # spec-assigned); the nullable field carries null under the error.
     assert (result.errors[0].extensions or {}).get("code") is None
     assert result.data == {"category": None}
+
+
+# ---------------------------------------------------------------------------
+# Custom relay.NodeID[...] id attribute (coercion must key on resolve_id_attr())
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_node_custom_node_id_attr_resolves():
+    """A consumer ``id: relay.NodeID[str]`` over a non-pk column resolves correctly.
+
+    Coercion must key on ``resolve_id_attr()`` (here ``name``), not
+    ``model._meta.pk``: a non-numeric name coerced against the int pk becomes
+    ``None`` -> a spurious ``null`` for a row that exists (the P2 bug). The
+    NodeID column is consumed as the ``id`` slot, so the query selects ``id`` /
+    ``__typename``, not the column itself.
+    """
+    services.seed_data(1)
+
+    class CategoryNode(DjangoType):
+        name: relay.NodeID[str]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+    schema = _schema_with(
+        "node",
+        relay.Node | None,
+        DjangoNodeField(),
+        extra_types=(CategoryNode,),
+    )
+    row = Category.objects.order_by("pk").first()
+    gid = _gid("products.category", row.name)
+    result = schema.execute_sync(
+        "query ($id: ID!) { node(id: $id) { __typename id } }",
+        variable_values={"id": gid},
+    )
+    assert result.errors is None
+    assert result.data["node"] == {"__typename": "CategoryNode", "id": gid}
+
+
+@pytest.mark.django_db
+def test_node_custom_node_id_attr_uncoercible_returns_null():
+    """An uncoercible literal for a TYPED custom NodeID column returns null (no ORM leak).
+
+    ``created_date`` is a ``DateTimeField``; an id its ``to_python`` rejects
+    coerces to ``None`` -> ``null`` with no query issued (the default-pk
+    uncoercible path's contract, now keyed on the real resolution field), and
+    no Django ``ValidationError`` leaks to the client.
+    """
+    services.seed_data(1)
+
+    class CategoryNode(DjangoType):
+        created_date: relay.NodeID[str]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+    schema = _schema_with(
+        "node",
+        relay.Node | None,
+        DjangoNodeField(),
+        extra_types=(CategoryNode,),
+    )
+    result = schema.execute_sync(
+        "query ($id: ID!) { node(id: $id) { __typename } }",
+        variable_values={"id": _gid("products.category", "not-a-datetime")},
+    )
+    assert result.errors is None
+    assert result.data == {"node": None}
+
+
+def test_coerce_pk_or_none_passes_raw_string_for_non_field_node_id():
+    """A NodeID over a non-model-field attr skips coercion and passes the raw string.
+
+    ``_coerce_pk_or_none`` keys on ``resolve_id_attr()``; when that names no
+    concrete model field (``FieldDoesNotExist``) it cannot coerce, so it
+    returns the literal unchanged (pre-032 behavior) rather than crashing.
+    """
+
+    class SlugNode(DjangoType):
+        slug: relay.NodeID[str]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "SlugNode"
+
+    finalize_django_types()
+    assert _coerce_pk_or_none(SlugNode, "abc-123") == "abc-123"
 
 
 # ---------------------------------------------------------------------------
@@ -673,6 +771,52 @@ async def test_nodes_async_with_sync_consumer_resolve_nodes_override():
     )
     assert result.errors is None
     assert result.data["nodes"] == [{"__typename": "CategoryNode", "name": target.name}]
+
+
+@pytest.mark.django_db
+def test_nodes_consumer_resolve_nodes_wrong_length_raises():
+    """A consumer ``resolve_nodes`` override returning a wrong-length list fails loudly.
+
+    ``_interleave`` indexes by within-group position, so a shrunk /
+    duplicate-collapsed return (the obvious ``filter(pk__in=node_ids)``
+    spelling) is rejected with a ``ConfigurationError`` naming the type instead
+    of yielding silently wrong rows or an ``IndexError``.
+    """
+    services.seed_data(2)
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+        @classmethod
+        def resolve_nodes(
+            cls,
+            *,
+            info,
+            node_ids,
+            required=False,
+        ):
+            return []  # wrong length: 0 rows for the requested ids.
+
+    schema = _schema_with(
+        "categories",
+        list[CategoryNode | None],
+        DjangoNodesField(CategoryNode),
+    )
+    first, second = Category.objects.order_by("pk")[:2]
+    result = schema.execute_sync(
+        _CATEGORIES_QUERY,
+        variable_values={
+            "ids": [_gid("products.category", first.pk), _gid("products.category", second.pk)],
+        },
+    )
+    assert result.errors is not None
+    message = str(result.errors[0])
+    assert "CategoryNode" in message
+    assert "resolve_nodes returned 0 row(s) for 2 requested id(s)" in message
 
 
 @pytest.mark.django_db

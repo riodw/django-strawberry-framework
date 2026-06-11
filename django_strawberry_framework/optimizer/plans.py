@@ -31,11 +31,74 @@ in a single pass once the walk completes.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Iterable, MutableSequence, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from django.db.models import Prefetch
+
+
+def _identity(value: Any) -> Any:
+    """Return ``value`` for default index keys."""
+    return value
+
+
+def _lookup_path(entry: Any) -> str:
+    """Return the prefetch lookup path for an entry (string or ``Prefetch``).
+
+    Centralizes the brittle Django-private contract for ``Prefetch.prefetch_to``
+    so a future Django rename has one fix.  Plain-string entries are
+    returned as-is (they double as their own path).
+    """
+    return getattr(entry, "prefetch_to", entry)
+
+
+class _IndexedList(list[Any]):
+    """List with a construction-time membership index for optimizer builders."""
+
+    __slots__ = ("_key", "_seen")
+
+    def __init__(self, values: Iterable[Any] = (), *, key: Any = _identity) -> None:
+        super().__init__()
+        self._key = key
+        self._seen: set[Any] = set()
+        for value in values:
+            self.append_unique(value)
+
+    def append_unique(self, value: Any) -> None:
+        """Append ``value`` once, using the sidecar index when the key is hashable."""
+        index_key = self._key(value)
+        try:
+            if index_key in self._seen:
+                return
+        except TypeError:
+            if value in self:
+                return
+        super().append(value)
+        with contextlib.suppress(TypeError):
+            self._seen.add(index_key)
+
+    def append(self, value: Any) -> None:
+        """Append directly and keep the sidecar index useful for later helper calls."""
+        super().append(value)
+        with contextlib.suppress(TypeError):
+            self._seen.add(self._key(value))
+
+    def extend(self, values: Iterable[Any]) -> None:
+        """Extend directly and keep the sidecar index useful for later helper calls."""
+        for value in values:
+            self.append(value)
+
+
+def _indexed_list() -> _IndexedList:
+    """Return an indexed list for string-like optimizer directive fields."""
+    return _IndexedList()
+
+
+def _prefetch_indexed_list() -> _IndexedList:
+    """Return an indexed list keyed by Django prefetch lookup path."""
+    return _IndexedList(key=_lookup_path)
 
 
 @dataclass
@@ -66,10 +129,10 @@ class OptimizationPlan:
     surfaces a post-finalize mutation.
     """
 
-    select_related: Sequence[str] = field(default_factory=list)
+    select_related: Sequence[str] = field(default_factory=_indexed_list)
     """Forward FK / OneToOne field names for ``QuerySet.select_related``."""
 
-    prefetch_related: Sequence[str | Prefetch] = field(default_factory=list)
+    prefetch_related: Sequence[str | Prefetch] = field(default_factory=_prefetch_indexed_list)
     """Strings or ``Prefetch`` objects for ``QuerySet.prefetch_related``.
 
     Generated relation plans use ``Prefetch`` objects so child querysets can
@@ -78,11 +141,11 @@ class OptimizationPlan:
     branches.
     """
 
-    only_fields: Sequence[str] = field(default_factory=list)
+    only_fields: Sequence[str] = field(default_factory=_indexed_list)
     """Scalar column names for ``QuerySet.only``."""
-    fk_id_elisions: Sequence[str] = field(default_factory=list)
+    fk_id_elisions: Sequence[str] = field(default_factory=_indexed_list)
     """Resolver keys elided because the source row already carries the target id."""
-    planned_resolver_keys: Sequence[str] = field(default_factory=list)
+    planned_resolver_keys: Sequence[str] = field(default_factory=_indexed_list)
     """Resolver keys for relations covered by this plan, used by B3 strictness."""
     finalized_fk_id_elisions: frozenset[str] | None = None
     """Frozen membership set for ``fk_id_elisions`` after ``finalize()``."""
@@ -278,6 +341,9 @@ def append_unique(values: MutableSequence[Any], value: Any) -> None:
     discipline is a property of the plan list shape rather than a
     walker-local convention.
     """
+    if isinstance(values, _IndexedList):
+        values.append_unique(value)
+        return
     if value not in values:
         values.append(value)
 
@@ -298,20 +364,13 @@ def append_prefetch_unique(values: MutableSequence[Any], prefetch: Prefetch) -> 
     querysets are built; this helper remains the first-seen path dedupe
     for already-built ``Prefetch`` entries.
     """
+    if isinstance(values, _IndexedList):
+        values.append_unique(prefetch)
+        return
     lookup_path = _lookup_path(prefetch)
     if any(_lookup_path(value) == lookup_path for value in values):
         return
     values.append(prefetch)
-
-
-def _lookup_path(entry: Any) -> str:
-    """Return the prefetch lookup path for an entry (string or ``Prefetch``).
-
-    Centralizes the brittle Django-private contract for ``Prefetch.prefetch_to``
-    so a future Django rename has one fix.  Plain-string entries are
-    returned as-is (they double as their own path).
-    """
-    return getattr(entry, "prefetch_to", entry)
 
 
 def _consumer_prefetch_lookups(queryset: Any) -> list[Any]:

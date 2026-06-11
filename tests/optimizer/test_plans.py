@@ -232,6 +232,34 @@ class TestPlanHelperRelocations:
         append_prefetch_unique(values, second)
         assert values == [first]
 
+    def test_plan_default_lists_use_indexed_append_unique(self):
+        from django_strawberry_framework.optimizer.plans import _IndexedList, append_unique
+
+        plan = OptimizationPlan()
+
+        append_unique(plan.only_fields, "name")
+        append_unique(plan.only_fields, "name")
+        append_unique(plan.only_fields, "id")
+
+        assert isinstance(plan.only_fields, _IndexedList)
+        assert plan.only_fields == ["name", "id"]
+
+    def test_plan_default_prefetch_list_indexes_by_lookup_path(self):
+        from django_strawberry_framework.optimizer.plans import (
+            _IndexedList,
+            append_prefetch_unique,
+        )
+
+        first = Prefetch("items", queryset=Item.objects.all())
+        second = Prefetch("items", queryset=Item.objects.filter(pk__gt=0))
+        plan = OptimizationPlan()
+
+        append_prefetch_unique(plan.prefetch_related, first)
+        append_prefetch_unique(plan.prefetch_related, second)
+
+        assert isinstance(plan.prefetch_related, _IndexedList)
+        assert plan.prefetch_related == [first]
+
 
 class TestFlattenSelectRelated:
     """``_flatten_select_related`` normalizes Django's three select_related shapes."""

@@ -68,6 +68,16 @@ class DjangoTypeDefinition:
           ``connection.py::_connection_type_for`` to decide whether to
           emit the per-target ``<TypeName>Connection`` carrying the
           opt-in ``totalCount`` field.
+        - ``relation_shapes`` is the normalized ``Meta.relation_shapes`` value
+          (``dict[str, str] | None``, values in ``{"list", "connection",
+          "both"}``) normalized by ``types/base.py::_validate_relation_shapes``
+          (plus the stage-2 target validator
+          ``_validate_relation_shape_targets``), populated by
+          ``DjangoType.__init_subclass__`` (spec-032 Decision 7); consumed by
+          the ``finalize_django_types()`` Phase-2.5 relation-as-Connection
+          synthesis (``types/finalizer.py::_synthesize_relation_connections``)
+          to resolve each eligible many-side relation's shape (absent keys
+          default to ``"both"``).
         - ``globalid_strategy`` is the raw normalized ``Meta.globalid_strategy``
           value (``"model"`` / ``"type"`` / ``"type+model"`` / a callable /
           ``None``) populated by ``DjangoType.__init_subclass__`` from the
@@ -122,12 +132,10 @@ class DjangoTypeDefinition:
     filterset_class: type | None = None
     orderset_class: type | None = None
     connection: dict | None = None
-    # TODO(spec-032-full_relay-0_0_9 Slice 3): Add the ``relation_shapes``
-    # slot - ``dict[str, str] | None = None`` - populated in
-    # ``__init_subclass__`` like ``connection`` / ``globalid_strategy`` and
-    # read by the Phase-2.5 relation-as-Connection synthesis (Decision 7).
-    # Values are pre-normalized to {"list", "connection", "both"} by
-    # ``types/base.py::_validate_relation_shapes``.
+    # Per-relation shape declaration; values pre-normalized to
+    # {"list", "connection", "both"} (spec-032 Decision 7). See the
+    # invariants docstring above.
+    relation_shapes: dict[str, str] | None = None
     globalid_strategy: str | Callable[..., str] | None = None
     # Finalization-set encode/decode classification (spec-031 Decision 10).
     # Unlike the raw ``globalid_strategy`` slot above (populated at class

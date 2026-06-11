@@ -91,9 +91,9 @@ def _schema_for(node_type: type) -> strawberry.Schema:
     """Build an in-process schema exposing ``items`` as a connection over ``node_type``.
 
     The connection type comes from ``_connection_type_for`` so the schema
-    exercises whichever shape (bare or generated ``<TypeName>Connection``) the
-    node type's ``Meta.connection`` selects, through the real Strawberry relay
-    slicing / ``info`` path.
+    exercises whichever generated ``<TypeName>Connection`` shape (with or
+    without ``totalCount``) the node type's ``Meta.connection`` selects,
+    through the real Strawberry relay slicing / ``info`` path.
     """
     connection_type = _connection_type_for(node_type)
 
@@ -241,24 +241,32 @@ def test_generated_connection_name_uses_graphql_type_name_not_python_name():
     assert "PublicItemEdge" in sdl
 
 
-def test_connection_type_for_returns_bare_connection_without_opt_in():
-    """A non-opted Relay-Node type yields the bare ``DjangoConnection[T]`` generic alias."""
+def test_connection_type_for_returns_concrete_subclass_without_opt_in():
+    """A non-opted Relay-Node type yields a generated concrete subclass without ``total_count``.
+
+    Never the ``DjangoConnection[T]`` generic alias: a generic alias handed to
+    the schema loses the ``resolve_connection`` override (and with it the
+    ``first`` + ``last`` guard) at Strawberry's generic specialization - the
+    spec-032 Slice-4 discovered bug. The non-opted path must be a concrete
+    class too, just with no ``total_count`` members.
+    """
     node_type = _make_node_type("BareNode", total_count=None)
 
     connection_type = _connection_type_for(node_type)
-    # The bare path is the generic alias (used as a GraphQL type annotation),
-    # not a generated concrete class; its origin is ``DjangoConnection`` and it
-    # carries no ``total_count``.
-    assert connection_type.__origin__ is DjangoConnection
+    assert issubclass(connection_type, DjangoConnection)
+    assert connection_type is not DjangoConnection
+    assert connection_type.__name__ == "BareNodeConnection"
     assert "total_count" not in getattr(connection_type, "__annotations__", {})
 
 
-def test_connection_type_for_returns_bare_connection_when_total_count_false():
-    """``connection = {"total_count": False}`` does not generate the ``totalCount`` variant."""
+def test_connection_type_for_returns_concrete_subclass_when_total_count_false():
+    """``connection = {"total_count": False}`` yields the concrete subclass, no ``totalCount`` variant."""
     node_type = _make_node_type("FalseNode", total_count=False)
 
     connection_type = _connection_type_for(node_type)
-    assert connection_type.__origin__ is DjangoConnection
+    assert issubclass(connection_type, DjangoConnection)
+    assert connection_type is not DjangoConnection
+    assert connection_type.__name__ == "FalseNodeConnection"
     assert "total_count" not in getattr(connection_type, "__annotations__", {})
 
 
@@ -272,6 +280,12 @@ def test_total_count_present_only_when_opted_in():
 
     bare_schema = _schema_for(_make_node_type("PresentBare", total_count=None))
     assert "totalCount" not in str(bare_schema)
+    # SDL description parity (spec-032 Slice-4 amendment): the always-concrete
+    # non-opted ``<TypeName>Connection`` must preserve the description the bare
+    # ``DjangoConnection[T]`` alias inherited from Strawberry's ``Connection``
+    # base - the production code reads it from the parent strawberry definition;
+    # the literal is pinned here so a silent drop regresses loudly.
+    assert "A connection to a list of items." in str(bare_schema)
 
 
 # =============================================================================
@@ -419,6 +433,29 @@ def test_first_and_last_graphql_error_through_schema():
     assert any("mutually exclusive" in str(err.message) for err in result.errors)
 
 
+@pytest.mark.django_db
+def test_first_and_last_graphql_error_through_schema_without_opt_in():
+    """The ``first`` + ``last`` guard fires through-schema with NO ``totalCount`` opt-in.
+
+    Deliberate near-twin of the opted sibling above: the two dispatch shapes
+    (opted ``totalCount`` subclass vs the non-opted generated subclass) are
+    exactly the contract under test. Before the spec-032 Slice-4 fix the
+    non-opted path handed the schema the bare ``DjangoConnection[T]`` alias,
+    whose ``resolve_connection`` override Strawberry's generic specialization
+    dropped - ``first: 1, last: 1`` resolved silently. This is the ROOT-level
+    pin of the fixed dispatch (the synthesized-relation pin lives in
+    ``tests/test_relay_connection.py::test_relation_connection_first_and_last_rejected``).
+    """
+    services.seed_data(2)
+    schema = _schema_for(_make_node_type("BareBothArgsNode", total_count=None))
+
+    result = schema.execute_sync(
+        "{ items(first: 1, last: 1) { edges { node { id } } } }",
+    )
+    assert result.errors is not None
+    assert any("mutually exclusive" in str(err.message) for err in result.errors)
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_total_count_async_path_counts_via_acount():
     """The async execution path counts via ``.acount()`` and attaches it to the instance."""
@@ -484,8 +521,18 @@ def _make_sidecar_node_type(
     return type(name, (DjangoType,), namespace)
 
 
-def _field_schema(node_type: type, *, resolver=None, optimizer=None) -> strawberry.Schema:
-    """Build an in-process schema exposing ``items`` via ``DjangoConnectionField``."""
+def _field_schema(
+    node_type: type,
+    *,
+    resolver=None,
+    optimizer=None,
+    config=None,
+) -> strawberry.Schema:
+    """Build an in-process schema exposing ``items`` via ``DjangoConnectionField``.
+
+    ``config`` overrides the default ``strawberry_config()`` (e.g. a
+    ``relay_max_results`` passthrough); ``None`` keeps the default.
+    """
     conn_type = _connection_type_for(node_type)
     query_cls = strawberry.type(
         type(
@@ -499,7 +546,11 @@ def _field_schema(node_type: type, *, resolver=None, optimizer=None) -> strawber
     )
     finalize_django_types()
     extensions = [lambda: optimizer] if optimizer is not None else []
-    return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
+    return strawberry.Schema(
+        query=query_cls,
+        config=config or strawberry_config(),
+        extensions=extensions,
+    )
 
 
 def _capture_info(node_type: type):
@@ -994,6 +1045,31 @@ def test_connection_resolver_sync_dispatch():
     assert len(result.data["items"]["edges"]) == 1
 
 
+@pytest.mark.django_db
+def test_relay_max_results_cap():
+    """``strawberry_config(relay_max_results=N)`` caps any single page (spec-032 Slice 4).
+
+    The one conformance-matrix entry a live fakeshop query cannot reach
+    (the project schema uses the default ``StrawberryConfig``): ``first``
+    over the cap surfaces Strawberry's own error before any row math, and
+    ``first`` at the cap succeeds. Error text source-verified against the
+    locked engine (``strawberry/relay/utils.py::SliceMetadata.from_arguments``).
+    """
+    services.seed_data(2)
+    schema = _field_schema(
+        _make_node_type("MaxResultsNode", total_count=None),
+        config=strawberry_config(relay_max_results=2),
+    )
+
+    over_cap = schema.execute_sync("{ items(first: 3) { edges { node { id } } } }")
+    assert over_cap.errors is not None
+    assert "Argument 'first' cannot be higher than 2." in str(over_cap.errors[0])
+
+    at_cap = schema.execute_sync("{ items(first: 2) { edges { node { id } } } }")
+    assert at_cap.errors is None
+    assert len(at_cap.data["items"]["edges"]) == 2
+
+
 @pytest.mark.django_db(transaction=True)
 async def test_connection_resolver_async_dispatch():
     """The default resolver dispatches correctly on the async ``execute`` path (incl. ``.acount()``)."""
@@ -1337,16 +1413,3 @@ def test_registry_clear_also_clears_connection_type_cache():
     assert _connection_type_cache
     registry.clear()
     assert not _connection_type_cache
-
-
-# TODO(spec-032-full_relay-0_0_9 Slice 4): The one conformance-matrix entry a
-# live fakeshop query cannot reach (the project schema uses the default
-# StrawberryConfig):
-#   test_relay_max_results_cap
-#     build a schema via strawberry_config(relay_max_results=N) and assert
-#     first: N+1 surfaces Strawberry's "Argument 'first' cannot be higher
-#     than N." error shape on the root connection field. The matrix's primary
-#     copies run LIVE in examples/fakeshop/test_query/test_library_api.py
-#     against allLibraryGenresConnection (the test_query README coverage
-#     rule); the synthesized-relation mirrors live in
-#     tests/test_relay_connection.py.

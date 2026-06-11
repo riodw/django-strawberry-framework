@@ -37,6 +37,8 @@ def test_public_api_surface_is_pinned():
         "DjangoConnection",
         "DjangoConnectionField",
         "DjangoListField",
+        "DjangoNodeField",
+        "DjangoNodesField",
         "DjangoOptimizerExtension",
         "DjangoType",
         "OptimizerHint",

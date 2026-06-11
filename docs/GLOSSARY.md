@@ -24,7 +24,11 @@ Current package version: `0.0.8`. Alpha-quality — suitable for internal tools 
 Symbols re-exported from `django_strawberry_framework`:
 
 - [`BigInt`](#bigint-scalar) — JSON-safe scalar for 64-bit integer fields.
+- [`DjangoConnection`](#djangoconnection) — generic Relay connection return-type alias (`DjangoConnection[T]`).
+- [`DjangoConnectionField`](#djangoconnectionfield) — Relay connection field factory over a Relay-Node-shaped `DjangoType`.
 - [`DjangoListField`](#djangolistfield) — non-Relay `list[T]` factory function for root Query fields.
+- [`DjangoNodeField`](#djangonodefield) — root Relay `node(id:)` refetch field factory (bare interface and typed forms).
+- [`DjangoNodesField`](#djangonodesfield) — root Relay `nodes(ids:)` batch refetch field factory.
 - [`DjangoType`](#djangotype) — model-backed Strawberry type base class.
 - [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
@@ -65,7 +69,8 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`DjangoListField`](#djangolistfield) | shipped (`0.0.7`) |
 | [`DjangoModelFormMutation`](#djangomodelformmutation) | planned for `0.0.11` |
 | [`DjangoMutation`](#djangomutation) | planned for `0.0.11` |
-| [`DjangoNodeField`](#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](#djangonodefield) | shipped (`0.0.9`) |
+| [`DjangoNodesField`](#djangonodesfield) | shipped (`0.0.9`) |
 | [`DjangoOptimizerExtension`](#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`DjangoType`](#djangotype) | shipped (`0.0.5`) |
 | [`FieldError` envelope](#fielderror-envelope) | planned for `0.0.11` |
@@ -94,6 +99,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Meta.optimizer_hints`](#metaoptimizer_hints) | shipped (`0.0.3`) |
 | [`Meta.orderset_class`](#metaorderset_class) | shipped (`0.0.8`) |
 | [`Meta.primary`](#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.relation_shapes`](#metarelation_shapes) | shipped (`0.0.9`) |
 | [`Meta.required_overrides`](#metarequired_overrides) | shipped (`0.0.9`) |
 | [`Meta.search_fields`](#metasearch_fields) | planned for `0.1.2` |
 | [Multi-database cooperation](#multi-database-cooperation) | shipped (`0.0.7`) |
@@ -132,7 +138,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 
 For readers exploring rather than looking up a specific term:
 
-- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.connection`](#metaconnection) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
+- **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
 - **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [`Meta.choice_enum_names`](#metachoice_enum_names).
 - **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 - **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`Meta.filterset_class`](#metafilterset_class).
@@ -141,7 +147,7 @@ For readers exploring rather than looking up a specific term:
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
 - **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [Per-field permission hooks](#per-field-permission-hooks).
-- **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
+- **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
@@ -285,11 +291,11 @@ Generic return-type alias `DjangoConnection[T]` for fields that produce Relay co
 
 **Status:** shipped (`0.0.9`).
 
-Relay-style connection field with `edges` / `node` / `pageInfo` / `totalCount`, cursor-based pagination, and `filter:` / `orderBy:` arguments derived from the wrapped `DjangoType`'s [`filterset_class`](#metafilterset_class) / [`orderset_class`](#metaorderset_class) sidecars via a synthesized resolver signature (no hand-written list resolver, no parallel argument declarations). Opt-in `totalCount` via [`Meta.connection`](#metaconnection)`= {"total_count": True}` resolves through a generated per-target `<TypeName>Connection` class — counted on the post-filter pre-slice queryset, selection-gated, per connection instance. The composition pipeline runs `get_queryset` visibility -> `filter` -> `orderBy` -> default deterministic pk-ordering -> optimizer-plan -> cursor slice, and a package-owned guard rejects `first` + `last` together with a `GraphQLError`. The `search:` argument is reserved for `Meta.search_fields` (`0.1.2`) and is not generated in `0.0.9`.
+Relay-style connection field with `edges` / `node` / `pageInfo` / `totalCount`, cursor-based pagination, and `filter:` / `orderBy:` arguments derived from the wrapped `DjangoType`'s [`filterset_class`](#metafilterset_class) / [`orderset_class`](#metaorderset_class) sidecars via a synthesized resolver signature (no hand-written list resolver, no parallel argument declarations). Opt-in `totalCount` via [`Meta.connection`](#metaconnection)`= {"total_count": True}` resolves through a generated per-target `<TypeName>Connection` class — counted on the post-filter pre-slice queryset, selection-gated, per connection instance. The composition pipeline runs `get_queryset` visibility -> `filter` -> `orderBy` -> default deterministic pk-ordering -> optimizer-plan -> cursor slice, and a package-owned guard rejects `first` + `last` together with a `GraphQLError`. The `search:` argument is reserved for `Meta.search_fields` (`0.1.2`) and is not generated in `0.0.9`. As of `0.0.9`, relations between Relay-Node-shaped types synthesize `<field>Connection` siblings through this same machinery — see [`Meta.relation_shapes`](#metarelation_shapes).
 
-The field owns its own optimizer cooperation point (the plan-application logic extracted from [`DjangoOptimizerExtension`](#djangooptimizerextension)`._optimize`) because Strawberry's connection slicing hides the pre-slice queryset from the schema middleware. In `0.0.9` the derived plan is **empty** — the flat optimizer walker is connection-unaware, so nested `edges { node }` planning lands with [Connection-aware optimizer planning](#connection-aware-optimizer-planning) (`WIP-ALPHA-033-0.0.9`), which plugs into this seam. A [Strictness mode](#strictness-mode) `"raise"` run surfaces an unplanned nested-connection access as an N+1 (no silent cap).
+The field owns its own optimizer cooperation point (the plan-application logic extracted from [`DjangoOptimizerExtension`](#djangooptimizerextension)`._optimize`) because Strawberry's connection slicing hides the pre-slice queryset from the schema middleware. In `0.0.9` the derived plan is **empty** — the flat optimizer walker is connection-unaware, so nested `edges { node }` planning lands with [Connection-aware optimizer planning](#connection-aware-optimizer-planning) (`WIP-ALPHA-033-0.0.9`), which plugs into this seam. A [Strictness mode](#strictness-mode) `"raise"` run does **not** flag an unplanned nested-connection access — `_check_n1` fires only from the generated list-relation resolvers; strictness-mode interaction with connections lands with [Connection-aware optimizer planning](#connection-aware-optimizer-planning) (`WIP-ALPHA-033-0.0.9`).
 
-**See also:** [`DjangoConnection`](#djangoconnection) · [`DjangoNodeField`](#djangonodefield) · [Relay Node integration](#relay-node-integration) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
+**See also:** [`DjangoConnection`](#djangoconnection) · [`DjangoNodeField`](#djangonodefield) · [Relay Node integration](#relay-node-integration) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`Meta.relation_shapes`](#metarelation_shapes).
 
 ## `DjangoFileType`
 
@@ -347,28 +353,19 @@ Base class for mutations with `Meta`-driven configuration; auto-generates [`Inpu
 
 ## `DjangoNodeField`
 
-**Status:** planned for `0.0.9`.
+**Status:** shipped (`0.0.9`).
 
-Root-level single-node lookup field — the `category: GalaxyNode = DjangoNodeField(GalaxyNode)` shape in [`../GOAL.md`'s astronomy showcase][goal-what-success-looks-like-in-your-code]. Resolves a single `DjangoType` instance by Relay `GlobalID`, running the target type's [`get_queryset`](#get_queryset-visibility-hook) hook.
+Root single-node refetch field, shipped in two forms: the Relay-spec bare interface form `node: relay.Node | None = DjangoNodeField()` (the literal `node(id: ID!): Node` field) and the typed form `genre: GenreType | None = DjangoNodeField(GenreType)` — both nullable-by-contract (the resolver is dispatched `required=False` unconditionally; the optional annotation is the supported spelling). The synthesized resolver declares `id: strawberry.ID` (a raw string, deliberately not `relay.GlobalID`, so malformed ids reach the package) and decodes **server-side** through the strategy-aware decode dispatch — model-label, type-name, and transitional payloads all resolve, and the client's claim of which type an id belongs to is never trusted. Resolution dispatches to the target type's `resolve_node` default, honoring [`get_queryset`](#get_queryset-visibility-hook): hidden, missing, and uncoercible-pk ids return `null` (the hidden and missing paths share one queryset code path — no existence leak); a malformed id raises `GraphQLError` with `extensions={"code": "GLOBALID_INVALID"}`; the typed form rejects an id that decodes to a different type with a `GraphQLError` naming the expected and received types. A declared node field on a registry with no Relay-Node-shaped types raises [`ConfigurationError`](#configurationerror) at finalization. A schema whose *only* root field is the interface-typed `node` must pass its concrete types via `strawberry.Schema(types=[...])` or expose them through other fields (engine behavior, documented in the field docstring).
 
-**See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [Relay Node integration](#relay-node-integration).
+**See also:** [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [Relay Node integration](#relay-node-integration) · [`Meta.globalid_strategy`](#metaglobalid_strategy).
 
-<!--
-TODO(spec-032-full_relay-0_0_9 Slice 7): Flip the `DjangoNodeField` entry above to
-"shipped (`0.0.9`)" and rewrite its body for BOTH forms (the bare Relay-spec interface
-form `node: relay.Node | None = DjangoNodeField()` and the typed form
-`genre: GenreType | None = DjangoNodeField(GenreType)` - note the entry's current
-`category: GalaxyNode = ...` example is mismatched AND non-optional; the rewrite uses
-the nullable-by-contract spelling), the null-for-invisible / GLOBALID_INVALID-for-
-malformed contract, and the interface-only-schema `strawberry.Schema(types=[...])`
-reachability note. Then ADD two net-new entries (shipped (`0.0.9`)) with Index rows and
-Browse-by-category placements:
-  ## `DjangoNodesField`   ("Relay" category - batch refetch: per-type-batched,
-     order-preserving, null holes, duplicate ids, whole-field fail on malformed ids)
-  ## `Meta.relation_shapes`   ("Relay" + "Type generation" categories - the
-     {"list", "connection", "both"} per-relation narrowing over the implicit upgrade)
-and extend the Relay Node integration / DjangoConnectionField cross-references.
--->
+## `DjangoNodesField`
+
+**Status:** shipped (`0.0.9`).
+
+Root batch refetch field — the Relay-spec `nodes(ids: [ID!]!): [Node]!` sibling of [`DjangoNodeField`](#djangonodefield), in the same two forms: bare (`nodes: list[relay.Node | None] = DjangoNodesField()`) and typed (`DjangoNodesField(GenreType)`, which additionally runs the per-id declared-target check). Ids are decoded server-side and resolved **per-type batched** (`resolve_nodes` once per distinct type, honoring [`get_queryset`](#get_queryset-visibility-hook)) with input order preserved and duplicate ids supported. Well-formed-but-invisible/missing/uncoercible-pk ids become positional `null` holes; a malformed id — or a wrong-type id in the typed form — anywhere in the batch fails the **whole field** (`GraphQLError`, `GLOBALID_INVALID` for malformed; the `[Node]!` non-null nulls the enclosing `data`). The batch is deliberately uncapped in `0.0.9` (parity with both upstreams; request-size limiting belongs to the consumer's transport layer).
+
+**See also:** [`DjangoNodeField`](#djangonodefield) · [Relay Node integration](#relay-node-integration) · [`get_queryset` visibility hook](#get_queryset-visibility-hook).
 
 ## `DjangoOptimizerExtension`
 
@@ -828,6 +825,14 @@ The already-shipped consumer relation-override paths (annotation overrides like 
 
 **See also:** [`Meta.model`](#metamodel) · [`DjangoType`](#djangotype) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
 
+## `Meta.relation_shapes`
+
+**Status:** shipped (`0.0.9`).
+
+Per-relation narrowing key for the relation-as-Connection upgrade. On a Relay-Node-shaped [`DjangoType`](#djangotype), every selected many-side relation (reverse FK, forward / reverse M2M) whose target type is also Relay-Node-shaped synthesizes a `<field>Connection` sibling at finalization Phase 2.5 by default, reusing the shipped [`DjangoConnectionField`](#djangoconnectionfield) machinery — per-target connection classes, sidecar-derived `filter:` / `orderBy:` arguments, and the target type's [`Meta.connection`](#metaconnection) `totalCount` opt-in. `Meta.relation_shapes` is a `dict[str, str]` with values `"list"` / `"connection"` / `"both"` (`"both"` is the implicit default): `"connection"` suppresses the `list[T]` field, `"list"` suppresses the connection. Validated at type creation — unknown keys / values / shapes, a key naming a non-relation / non-many-side / unselected field, a key naming a consumer-authored relation (the override owns the shape), and declaring the key on a non-Relay-Node type all raise [`ConfigurationError`](#configurationerror); an explicit shape naming a relation whose target is not Relay-Node-shaped raises at finalization, while non-Node targets degrade silently (stay list-only) under the implicit default.
+
+**See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [`Meta.connection`](#metaconnection) · [Relay Node integration](#relay-node-integration) · [`DjangoType`](#djangotype).
+
 ## `Meta.required_overrides`
 
 **Status:** shipped (`0.0.9`).
@@ -1057,9 +1062,9 @@ Shipped behavior:
 
 Optimizer-extension cooperation on the per-node `resolve_node` resolver is deferred to a follow-up slice; root-level list resolvers continue to receive full [`DjangoOptimizerExtension`](#djangooptimizerextension) treatment today.
 
-As of `0.0.9` the default `GlobalID` payload is the Django **model label** (`app_label.modelname:<pk>`, e.g. `products.item:42`) rather than the GraphQL type name, so renaming a GraphQL type (or [`Meta.name`](#metaname)) no longer invalidates cached client ids. [`Meta.globalid_strategy`](#metaglobalid_strategy) (per type) and [`RELAY_GLOBALID_STRATEGY`](#relay_globalid_strategy) (schema-wide) select `model` (default), `type` (the legacy GraphQL-type-name opt-out, byte-identical to the pre-`0.0.9` payload), `type+model` (transitional decode of old type-anchored ids while emitting model-anchored ones), or a callable encoder; precedence is `Meta.globalid_strategy` → `RELAY_GLOBALID_STRATEGY` → `model`. The `node_id` slot, the FK-`id` round-trip, and the composite-pk rejection are unchanged — only the type-name slot moved.
+As of `0.0.9` the default `GlobalID` payload is the Django **model label** (`app_label.modelname:<pk>`, e.g. `products.item:42`) rather than the GraphQL type name, so renaming a GraphQL type (or [`Meta.name`](#metaname)) no longer invalidates cached client ids. [`Meta.globalid_strategy`](#metaglobalid_strategy) (per type) and [`RELAY_GLOBALID_STRATEGY`](#relay_globalid_strategy) (schema-wide) select `model` (default), `type` (the legacy GraphQL-type-name opt-out, byte-identical to the pre-`0.0.9` payload), `type+model` (transitional decode of old type-anchored ids while emitting model-anchored ones), or a callable encoder; precedence is `Meta.globalid_strategy` → `RELAY_GLOBALID_STRATEGY` → `model`. The `node_id` slot, the FK-`id` round-trip, and the composite-pk rejection are unchanged — only the type-name slot moved. With `DONE-032-0.0.9` the root refetch surface is shipped: [`DjangoNodeField`](#djangonodefield) / [`DjangoNodesField`](#djangonodesfield) decode every emitted payload server-side and dispatch to these `resolve_node` / `resolve_nodes` defaults, and many-side relations between Relay-Node-shaped types synthesize connection siblings per [`Meta.relation_shapes`](#metarelation_shapes).
 
-**See also:** [`Meta.interfaces`](#metainterfaces) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`RELAY_GLOBALID_STRATEGY`](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoConnectionField`](#djangoconnectionfield) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
+**See also:** [`Meta.interfaces`](#metainterfaces) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`RELAY_GLOBALID_STRATEGY`](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 
 ## RELAY_GLOBALID_STRATEGY
 

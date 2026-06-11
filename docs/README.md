@@ -112,20 +112,12 @@ A quick summary:
 - filtering subsystem (new in `0.0.8`) — `FilterSet` declarative filter classes with `Meta.fields` (dict / `"__all__"` shorthand) and the full `django-filter` lookup surface; `RelatedFilter` for cross-relation traversal (class / absolute import path / unqualified-name); `Meta.filterset_class` consumer wiring; the `filter_input_type` resolver-argument helper; finalizer phase-2.5 binding with orphan validation; per-field `check_*_permission` denial gates with active-input-only scope; clean composition with `get_queryset` visibility and the optimizer. See [`GLOSSARY.md#filterset`][glossary-filterset].
 - ordering subsystem (new in `0.0.8`) — `OrderSet` declarative ordering classes with `Meta.fields` (list form or `"__all__"` shorthand for every column-backed model field); `RelatedOrder` cross-relation ordering traversal (class / absolute import path / unqualified-name); `Meta.orderset_class` consumer wiring (promoted out of `DEFERRED_META_KEYS`); the public `Ordering` enum (six members with NULLS positioning); the `order_input_type` resolver-argument helper; finalizer phase-2.5 binding with orphan validation; per-field `check_*_permission` denial gates with active-input-only scope plus active-branch dispatch on `RelatedOrder` branches; clean composition with the shipped filter subsystem and the optimizer. See [`GLOSSARY.md#orderset`][glossary-orderset].
 - `DjangoConnectionField` (new in `0.0.9`) — Relay connection field over a Relay-Node-shaped `DjangoType`: `edges` / `node` / `pageInfo` cursor pagination on Strawberry's native `relay.connection()`, with `filter:` / `orderBy:` arguments derived from the wrapped type's `Meta.filterset_class` / `Meta.orderset_class` sidecars (no hand-written list resolver, no parallel argument declarations) and an opt-in `totalCount` via `Meta.connection = {"total_count": True}` (counted on the post-filter pre-slice queryset, selection-gated, per connection instance). Composition pipeline runs `get_queryset` visibility → `filter` → `orderBy` → default deterministic pk-ordering → optimizer-plan → cursor slice; the field owns its own optimizer cooperation point. `DjangoConnection[T]` is the generic return-type alias. See [`GLOSSARY.md#djangoconnectionfield`][glossary-djangoconnectionfield].
-
-
-<!--
-TODO(spec-032-full_relay-0_0_9 Slice 7): Add shipped-surface bullets above for
-(1) the root refetch fields `DjangoNodeField` / `DjangoNodesField` (bare + typed; server-side
-decode through the strategy system; null-for-invisible / GLOBALID_INVALID-for-malformed),
-(2) the relation-as-Connection upgrade + `Meta.relation_shapes`, and
-(3) the `testing.relay` helpers (`global_id_for` / `decode_global_id`).
-Then update the `0.0.9` "Coming next" line below: the in-progress remainder shrinks to
-connection-aware optimizer planning (033).
--->
+- `DjangoNodeField` / `DjangoNodesField` (new in `0.0.9`) — root Relay refetch fields, bare interface (`node: relay.Node | None = DjangoNodeField()`, `nodes: list[relay.Node | None] = DjangoNodesField()`) and typed (`genre: GenreType | None = DjangoNodeField(GenreType)`) forms; `id: ID!` raw-string arguments decoded server-side via the strategy-aware dispatch; dispatch to the type's `resolve_node` / `resolve_nodes` honoring `get_queryset`; `null` for hidden/missing/uncoercible-pk ids (no existence leak), `GraphQLError` with `extensions={"code": "GLOBALID_INVALID"}` for malformed ids; `nodes` is per-type-batched, order-preserving, with `null` holes and duplicate-id support. See [`GLOSSARY.md#djangonodefield`][glossary-djangonodefield].
+- relation-as-Connection upgrade + `Meta.relation_shapes` (new in `0.0.9`) — every Relay-Node-shaped type's many-side relations whose target is also Relay-Node-shaped gain a `<field>Connection` sibling by default (`"both"`); `Meta.relation_shapes = {"<field>": "list" | "connection" | "both"}` narrows per relation; synthesized at finalization Phase 2.5 reusing the shipped connection machinery (per-target connection classes, sidecar `filter:` / `orderBy:` arguments, target-driven `totalCount`). See [`GLOSSARY.md#metarelation_shapes`][glossary-metarelation_shapes].
+- `testing.relay` helpers (new in `0.0.9`) — `django_strawberry_framework.testing.relay.global_id_for(type_cls, id)` (the strategy-aware encoded `GlobalID` a finalized Relay-Node-shaped type emits) and `decode_global_id(gid)` (public re-export of the decode dispatch). See the [`GLOSSARY.md#djangonodefield`][glossary-djangonodefield] cross-refs (the helpers have no own entry; the spec does not create one).
 
 **Coming next — remaining alpha (`0.0.9` → `0.0.12`):**
-- `0.0.9` *(in progress)* — the full Relay story (Node + Connection + Root + validation), connection-aware optimizer planning, and a `DjangoType` consumer-DX cleanup pass (`DjangoConnectionField` shipped above)
+- `0.0.9` *(in progress)* — connection-aware optimizer planning and a `DjangoType` consumer-DX cleanup pass (the full Relay story — root node/nodes fields, relation-as-Connection + `Meta.relation_shapes`, `testing.relay` — and `DjangoConnectionField` shipped above)
 - `0.0.10` — permissions / cascade-permissions subsystem
 - `0.0.11` — mutations + auto-generated `Input` types (form-based and DRF-`SerializerMutation` flavors), the `Upload` scalar + file/image field mapping, and auth mutations (`login` / `logout` / `register`)
 - `0.0.12` — Channels ASGI router, debug-toolbar middleware, test-client helper, response-extensions debug middleware
@@ -274,8 +266,10 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary]: GLOSSARY.md
 [glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
+[glossary-djangonodefield]: GLOSSARY.md#djangonodefield
 [glossary-filterset]: GLOSSARY.md#filterset
 [glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy
+[glossary-metarelation_shapes]: GLOSSARY.md#metarelation_shapes
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-orderset]: GLOSSARY.md#orderset
 [glossary-plan-cache]: GLOSSARY.md#plan-cache

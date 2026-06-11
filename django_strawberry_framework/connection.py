@@ -10,11 +10,14 @@ Slice 1's surface (Decision 3 / Decision 4):
   guard (which Strawberry's ``SliceMetadata.from_arguments`` does NOT provide)
   and nothing else. It carries no ``total_count`` field.
 - ``_connection_type_for(target_type)`` - resolves and caches the connection
-  class for a node type: the bare ``DjangoConnection[target_type]`` when the
-  type does not opt into ``totalCount``, or a generated concrete
-  ``<TypeName>Connection`` subclass declaring ``total_count`` when it does.
-  The opt-in is read from ``definition.connection`` (the ``Meta.connection``
-  value stored on ``DjangoTypeDefinition``), never re-parsed from ``Meta``.
+  class for a node type: always a generated concrete ``<TypeName>Connection``
+  subclass of ``DjangoConnection[target_type]``; the ``totalCount`` opt-in only
+  controls whether the ``total_count`` members are added (spec-032 Slice 4 -
+  a generic ALIAS handed to the schema loses the ``resolve_connection``
+  override at Strawberry's generic specialization, so the bare path must be
+  concrete too). The opt-in is read from ``definition.connection`` (the
+  ``Meta.connection`` value stored on ``DjangoTypeDefinition``), never
+  re-parsed from ``Meta``.
 
 Slice 2's surface (Decision 5 / Decision 6 / Decision 7 / Decision 10):
 
@@ -172,6 +175,39 @@ def clear_connection_type_cache() -> None:
     _connection_type_cache.clear()
 
 
+def _generate_connection_class(
+    target_type: type,
+    populate: Callable[[dict], None] | None = None,
+    *,
+    description: str | None = None,
+) -> type:
+    """Generate a concrete ``<TypeName>Connection`` subclass of ``DjangoConnection[target_type]``.
+
+    The single-sited generation tail shared by both ``_connection_type_for``
+    branches: ``populate`` (when given) fills the class namespace (the
+    ``totalCount`` variant's members); ``description`` is forwarded to
+    ``strawberry.type`` (the bare variant preserves the parent's inherited SDL
+    description; the opted variant ships description-less, today's SDL shape).
+
+    Name the generated connection from the node type's canonical GraphQL type
+    name (``graphql_type_name`` - ``Meta.name`` when set, else the Python
+    ``__name__``), NOT the raw Python ``__name__``. Two DjangoType classes may
+    share a Python ``__name__`` while declaring distinct ``Meta.name`` values;
+    naming from ``__name__`` would generate two connection classes with the
+    SAME SDL type name, which Strawberry collapses into one - cross-wiring the
+    two fields' ``edges`` / node types (P1, ``docs/feedback.md``).
+    ``graphql_type_name`` is the same surface-name source the finalizer and the
+    filter / order input types derive from.
+    """
+    definition = target_type.__django_strawberry_definition__
+    generated = types.new_class(
+        f"{definition.graphql_type_name}Connection",
+        (DjangoConnection[target_type],),
+        exec_body=populate,
+    )
+    return strawberry.type(generated, description=description)
+
+
 def _build_total_count_connection(target_type: type) -> type:
     """Generate the concrete ``<TypeName>Connection`` carrying ``totalCount``.
 
@@ -233,22 +269,11 @@ def _build_total_count_connection(target_type: type) -> type:
         namespace["total_count"] = total_count
         namespace["resolve_connection"] = resolve_connection
 
-    # Name the generated connection from the node type's canonical GraphQL type
-    # name (``graphql_type_name`` - ``Meta.name`` when set, else the Python
-    # ``__name__``), NOT the raw Python ``__name__``. Two DjangoType classes may
-    # share a Python ``__name__`` while declaring distinct ``Meta.name`` values;
-    # naming from ``__name__`` would generate two connection classes with the
-    # SAME SDL type name, which Strawberry collapses into one - cross-wiring the
-    # two fields' ``edges`` / node types (P1, ``docs/feedback.md``).
-    # ``graphql_type_name`` is the same surface-name source the finalizer and the
-    # filter / order input types derive from.
-    definition = target_type.__django_strawberry_definition__
-    generated = types.new_class(
-        f"{definition.graphql_type_name}Connection",
-        (DjangoConnection[target_type],),
-        exec_body=_populate,
-    )
-    return strawberry.type(generated)
+    # ``description=None`` keeps the opted variant's shipped description-less
+    # SDL shape (the bare/opted description asymmetry is shipped surface - see
+    # ``_connection_type_for``).
+    generated = _generate_connection_class(target_type, _populate, description=None)
+    return generated
 
 
 def _guard_total_count_countable(nodes: Any, *, want_count: bool) -> None:
@@ -298,12 +323,13 @@ async def _attach_count_async(conn_awaitable: Any, nodes: Any, *, want_count: bo
 def _connection_type_for(target_type: type) -> type:
     """Return (and cache) the connection class for a node ``DjangoType``.
 
-    Reads ``target_type``'s ``definition.connection`` slot (the validated
-    ``Meta.connection`` value): when it opts into ``total_count`` the generated
-    ``<TypeName>Connection`` is returned; otherwise the bare
-    ``DjangoConnection[target_type]`` is returned. Cached on ``target_type``
-    identity - one connection shape per node type, no per-field override
-    (Decision 5), so the generated name is unique and regeneration is avoided.
+    Always returns a generated concrete ``<TypeName>Connection`` subclass of
+    ``DjangoConnection[target_type]``. ``target_type``'s ``definition.connection``
+    slot (the validated ``Meta.connection`` value) only controls the shape:
+    opting into ``total_count`` adds the ``totalCount`` members; otherwise the
+    subclass adds nothing over the base. Cached on ``target_type`` identity -
+    one connection shape per node type, no per-field override (Decision 5), so
+    the generated name is unique and regeneration is avoided.
     """
     cached = _connection_type_cache.get(target_type)
     if cached is not None:
@@ -314,7 +340,20 @@ def _connection_type_for(target_type: type) -> type:
     if connection_options and connection_options.get("total_count"):
         connection_type: type = _build_total_count_connection(target_type)
     else:
-        connection_type = DjangoConnection[target_type]
+        # WHY concrete and not the ``DjangoConnection[target_type]`` alias:
+        # handing the schema a generic ALIAS loses the package's
+        # ``resolve_connection`` override - Strawberry's schema-build generic
+        # specialization copies the alias into a plain specialized class whose
+        # ``resolve_connection`` is ``ListConnection``'s, so the ``first`` +
+        # ``last`` guard never ran through-schema (the spec-032 Slice-4
+        # discovered bug). A concrete class is used as-is by the schema build,
+        # so the override survives. The description is read from the parent's
+        # strawberry definition (never copied as a package literal), preserving
+        # the previous bare-alias SDL byte-for-byte.
+        connection_type = _generate_connection_class(
+            target_type,
+            description=DjangoConnection.__strawberry_definition__.description,
+        )
     _connection_type_cache[target_type] = connection_type
     return connection_type
 
@@ -607,27 +646,41 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
     return _resolve
 
 
-# TODO(spec-032-full_relay-0_0_9 Slice 3): Relation-seeded resolver variant
-# for the Phase-2.5 synthesized relation connections (Decision 6): identical
-# pipeline tail to ``_build_connection_resolver``'s default branch, but the
-# source queryset seeds from the PARENT'S relation manager - keeping Django's
-# prefetch caches reachable as the cooperation seam WIP-ALPHA-033-0.0.9's
-# window-pagination planning will use - instead of
-# ``model._default_manager.all()``. Sync resolver returning a LAZY queryset
-# (the committed-at-construction contract above holds: lazy querysets work
-# under both execute_sync and await execute).
-# Pseudocode:
-#   def _build_relation_connection_resolver(target_type, accessor_name):
-#       def _resolve(root, info, **kwargs):
-#           qs = getattr(root, accessor_name).all()  # noqa: ERA001
-#           return _pipeline_sync(target_type, qs, info,
-#               filter_input=kwargs.get("filter"),  # noqa: ERA001
-#               order_by_input=kwargs.get("order_by"))
-#       attach _synthesized_signature(target_type) as above
-#       return _resolve  # noqa: ERA001
-# Deliberately ABSENT: any DST_OPTIMIZER_STRICTNESS / DST_OPTIMIZER_PLANNED
-# consultation - the connection pipeline stays strictness-blind until 033
-# wires it (spec-032 Decision 12 / Non-goals).
+def _build_relation_connection_resolver(target_type: type, accessor_name: str) -> Callable:
+    """Build the resolver for a Phase-2.5 synthesized relation connection (spec-032 Decision 6).
+
+    Identical pipeline tail to ``_build_connection_resolver``'s default branch,
+    but the source queryset seeds from the PARENT'S relation manager
+    (``getattr(root, accessor_name).all()``) - keeping Django's prefetch caches
+    reachable as the cooperation seam ``WIP-ALPHA-033-0.0.9``'s
+    window-pagination planning will use - instead of
+    ``model._default_manager.all()``. ``accessor_name`` is the same
+    ``field.name`` the shipped many-side list resolver reads
+    (``types/resolvers.py::many_resolver``), so the list field and its
+    connection sibling can never disagree about which manager they traverse.
+
+    Sync resolver returning a LAZY queryset by design (the
+    committed-at-construction contract on ``_build_connection_resolver`` holds
+    verbatim: a lazy queryset works under both ``execute_sync`` and
+    ``await execute``). Deliberately ABSENT: any ``DST_OPTIMIZER_STRICTNESS``
+    / ``DST_OPTIMIZER_PLANNED`` consultation - the connection pipeline stays
+    strictness-blind and derives an empty optimizer plan until ``033`` wires
+    it (spec-032 Decision 12 / Non-goals).
+    """
+
+    def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
+        return _pipeline_sync(
+            target_type,
+            getattr(root, accessor_name).all(),
+            info,
+            filter_input=kwargs.get("filter"),
+            order_by_input=kwargs.get("order_by"),
+        )
+
+    signature, annotations = _synthesized_signature(target_type)
+    _resolve.__signature__ = signature
+    _resolve.__annotations__ = annotations
+    return _resolve
 
 
 def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoConnectionField(GenreType)`

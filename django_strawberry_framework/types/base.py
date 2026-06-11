@@ -67,37 +67,38 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
         "optimizer_hints",
         "orderset_class",
         "primary",
+        "relation_shapes",
         "required_overrides",
     },
 )
 # ``nullable_overrides`` / ``required_overrides`` (spec-029 Decision 6),
-# ``connection`` (spec-030 Decision 8), and ``globalid_strategy`` (spec-031
-# Decision 6) are net-new ALLOWED keys, NOT DEFERRED_META_KEYS promotions -
-# each one's feature ships in the same card that adds it, so they were never
+# ``connection`` (spec-030 Decision 8), ``globalid_strategy`` (spec-031
+# Decision 6), and ``relation_shapes`` (spec-032 Decision 7) are net-new
+# ALLOWED keys, NOT DEFERRED_META_KEYS promotions - each one's feature ships
+# in the same card that adds it, so they were never
 # reserved-but-nonfunctional. DEFERRED_META_KEYS stays unchanged.
 
-# TODO(spec-032-full_relay-0_0_9 Slice 3): Add ``"relation_shapes"`` as the
-# next net-new ALLOWED key (same rule as above - NOT a deferred promotion),
-# validated by ``_validate_relation_shapes(meta, value, relay_shaped,
-# consumer_authored_fields)`` modeled on ``_validate_connection`` and stored
-# on ``DjangoTypeDefinition.relation_shapes`` (Decision 7).
-# Type-creation validation contract:
-#   - absent -> None (every eligible relation defaults to "both" at the
-#     Phase-2.5 synthesis);
-#   - non-dict / non-str keys / values outside {"list", "connection", "both"}
-#     -> ConfigurationError naming the offending entry (typo guard);
-#   - declared on a non-Relay-Node type (the precomputed ``relay_shaped``
-#     bool ``Meta.connection`` uses) -> ConfigurationError with the
-#     add-relay.Node-or-remove-the-key remediation;
-#   - a key naming an unknown / non-relation / single-valued (forward FK /
-#     OneToOne) / excluded model field -> ConfigurationError naming the field
-#     and the reason (the ``Meta.optimizer_hints`` typo-guard precedent);
-#   - a key naming a CONSUMER-AUTHORED relation (``consumer_authored_fields``)
-#     -> ConfigurationError: overrides own the field's shape (Revision 3; the
-#     implicit "both" default still skips consumer-authored relations
-#     silently - only an explicit request fails loud).
-# The target-is-Node-shaped check runs at FINALIZATION, where relation
-# targets are settled (Decision 6) - not here.
+# The valid relation-shape vocabulary and the package default: the single
+# source for ``_validate_relation_shapes``' typo-guard text, the finalizer's
+# Phase-2.5 synthesis default, and the consumer-visible error text
+# (spec-032 Decision 7). Mirrors the ``STRING_GLOBALID_STRATEGIES`` /
+# ``DEFAULT_GLOBALID_STRATEGY`` precedent below.
+RELATION_SHAPE_VALUES: frozenset[str] = frozenset({"list", "connection", "both"})
+DEFAULT_RELATION_SHAPE = "both"
+
+# The Relay-Node-gate lead-in shared by the three ``Meta``-key gates
+# (``Meta.connection``, ``Meta.globalid_strategy``, ``Meta.relation_shapes``).
+# The connection / globalid gates append ``_RELAY_NODE_GATE_INHERIT_TAIL``;
+# the relation_shapes gate appends the spec-pinned "or remove the key."
+# (spec-032 Decision 7). One literal, three compose sites - the
+# ``_INTERFACES_SHAPE_ERROR_LEAD_IN`` precedent.
+_RELAY_NODE_GATE_LEAD = "requires a Relay-Node-shaped type; add `relay.Node` to `Meta.interfaces`"
+# The tail shared by the connection / globalid gates here and ``global_id_for``
+# in ``testing/relay.py``: byte-identical at three compose sites (3rd-copy
+# hoist, spec-032 integration pass). The ``_validate_relation_shapes`` gate's
+# "or remove the key." tail and the parenthesized fifth-guard variants in
+# ``relay.py`` / ``connection.py`` are a different byte shape and stay inline.
+_RELAY_NODE_GATE_INHERIT_TAIL = "or inherit `relay.Node` directly."
 
 # The valid string-strategy set and the package default are the single source
 # of truth for the GlobalID-encoding strategy vocabulary: ``_validate_meta`` /
@@ -203,10 +204,58 @@ def _validate_connection(meta: type, connection: Any, relay_shaped: bool) -> dic
         )
     if not relay_shaped:
         raise ConfigurationError(
-            f"{meta.model.__name__}.Meta.connection requires a Relay-Node-shaped type; "
-            "add `relay.Node` to `Meta.interfaces` or inherit `relay.Node` directly.",
+            f"{meta.model.__name__}.Meta.connection {_RELAY_NODE_GATE_LEAD} "
+            f"{_RELAY_NODE_GATE_INHERIT_TAIL}",
         )
     return connection
+
+
+def _validate_relation_shapes(meta: type, value: Any, relay_shaped: bool) -> dict[str, str] | None:
+    """Validate ``Meta.relation_shapes`` shape AND the Relay-Node requirement (spec-032 Decision 7).
+
+    Stage 1 of the relation-shapes validation flow, structurally modeled on
+    ``_validate_connection`` and called from ``_validate_meta``:
+    ``None``-short-circuits when unset (every eligible relation defaults to
+    ``DEFAULT_RELATION_SHAPE`` at the Phase-2.5 synthesis); shape-checks the
+    dict (string keys, values in ``RELATION_SHAPE_VALUES``); then enforces the
+    Relay-Node gate with the spec-pinned "or remove the key" remediation tail.
+
+    Field-level checks (unknown / excluded / non-relation / single-valued /
+    consumer-authored) need the selected fields and the consumer-override
+    union, which do not exist at ``_validate_meta`` time - they run in stage 2,
+    ``_validate_relation_shape_targets``, from ``__init_subclass__`` (the
+    spec-029 ``nullable_overrides`` two-stage precedent). The
+    target-is-Node-shaped check runs at finalization, where relation targets
+    are settled (Decision 6).
+
+    Returns the normalized dict, stored on
+    ``DjangoTypeDefinition.relation_shapes`` and read by the Phase-2.5
+    relation-as-Connection synthesis.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.relation_shapes must be a dict mapping relation "
+            f"field names to shapes; got {value!r}",
+        )
+    for key, shape in value.items():
+        if not isinstance(key, str):
+            raise ConfigurationError(
+                f"{meta.model.__name__}.Meta.relation_shapes keys must be relation field "
+                f"name strings; got {key!r}.",
+            )
+        if shape not in RELATION_SHAPE_VALUES:
+            raise ConfigurationError(
+                f"{meta.model.__name__}.Meta.relation_shapes[{key!r}] got unknown shape "
+                f"{shape!r}; valid shapes are {sorted(RELATION_SHAPE_VALUES)}.",
+            )
+    if not relay_shaped:
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.relation_shapes {_RELAY_NODE_GATE_LEAD} "
+            "or remove the key.",
+        )
+    return dict(value)
 
 
 # The four positional parameters a ``callable`` GlobalID encoder must accept.
@@ -276,8 +325,7 @@ def _validate_globalid_strategy(
     # ``_validate_connection``'s gate and remediation text.
     if is_meta and not relay_shaped:
         raise ConfigurationError(
-            f"{subject} requires a Relay-Node-shaped type; "
-            "add `relay.Node` to `Meta.interfaces` or inherit `relay.Node` directly.",
+            f"{subject} {_RELAY_NODE_GATE_LEAD} {_RELAY_NODE_GATE_INHERIT_TAIL}",
         )
     return normalized
 
@@ -489,6 +537,13 @@ class DjangoType:
             nullable_overrides=validated.nullable_overrides,
             required_overrides=validated.required_overrides,
         )
+        _validate_relation_shape_targets(
+            model=meta.model,
+            relation_shapes=validated.relation_shapes,
+            selected_fields=fields,
+            field_map=field_map,
+            consumer_authored_fields=consumer_authored_fields,
+        )
         if relay_shaped:
             has_id_assignment = isinstance(cls.__dict__.get("id"), StrawberryField)
             has_id_annotation = "id" in cls.__annotations__
@@ -546,9 +601,7 @@ class DjangoType:
             orderset_class=validated.orderset_class,
             connection=validated.connection,
             globalid_strategy=validated.globalid_strategy,
-            # TODO(spec-032-full_relay-0_0_9 Slice 3): Pass
-            # ``relation_shapes=validated.relation_shapes`` once the meta
-            # validator and the definition slot exist (Decision 7).
+            relation_shapes=validated.relation_shapes,
         )
         registry.register_with_definition(meta.model, cls, definition, primary=validated.primary)
         for pending_relation in pending:
@@ -739,6 +792,51 @@ def _interfaces_shape_error(meta: type, got_suffix: str) -> str:
     return f"{meta.model.__name__}.{_INTERFACES_SHAPE_ERROR_LEAD_IN}, got {got_suffix}."
 
 
+# Decision-8 remediation tail shared by all six named rejections: every
+# message ends by naming what the consumer probably meant (``relay.Node``);
+# the ``Connection`` / ``ListConnection`` rows additionally name
+# ``Meta.connection`` / ``DjangoConnectionField`` in their descriptions.
+_RELAY_NON_INTERFACE_REMEDIATION = (
+    "If the goal is a Relay-Node-shaped type, add `relay.Node` to `Meta.interfaces` instead."
+)
+
+# ``relay.Connection`` and ``relay.ListConnection`` share one description
+# (spec-032 Decision 8 pins "same remediation as ``Connection``").
+_RELAY_CONNECTION_HELPER_DESCRIPTION = (
+    "a generic output type; declare `Meta.connection` / use "
+    "`DjangoConnectionField` for connection shapes"
+)
+
+# The six ``strawberry.relay`` NON-interface helpers rejected by name when
+# found in ``Meta.interfaces`` (spec-032 Decision 8). Rows are
+# ``(helper_object, display_label, what-it-is description)``; matching is by
+# identity (``entry is helper``) because ``relay.NodeID`` is a
+# ``typing.Annotated`` alias - not a class, not reliably hashable/equatable -
+# and ``Meta.interfaces`` entries can be arbitrary (even unhashable) consumer
+# objects. Single raise site in ``_validate_interfaces``.
+_RELAY_NON_INTERFACE_HELPERS: tuple[tuple[object, str, str], ...] = (
+    (
+        relay.GlobalID,
+        "relay.GlobalID",
+        "a scalar-like id wrapper, not an interface; Relay-Node-shaped types "
+        "get `id: GlobalID!` automatically from `relay.Node`",
+    ),
+    (
+        relay.NodeID,
+        "relay.NodeID",
+        "an annotation helper for custom id fields (`id: relay.NodeID[int]`), not an interface",
+    ),
+    (relay.Connection, "relay.Connection", _RELAY_CONNECTION_HELPER_DESCRIPTION),
+    (relay.ListConnection, "relay.ListConnection", _RELAY_CONNECTION_HELPER_DESCRIPTION),
+    (
+        relay.Edge,
+        "relay.Edge",
+        "a generic output type the connection machinery instantiates; not consumer-declarable",
+    ),
+    (relay.PageInfo, "relay.PageInfo", "a generated pagination type; not an interface"),
+)
+
+
 def _validate_interfaces(meta: type) -> tuple[type, ...]:
     """Validate and normalize ``Meta.interfaces`` per Decision 4.
 
@@ -757,6 +855,10 @@ def _validate_interfaces(meta: type) -> tuple[type, ...]:
       ``hasattr(entry, "__strawberry_definition__") and
       entry.__strawberry_definition__.is_interface``.
     - Rejects string entries (no lazy/forward-reference lookup).
+    - Rejects the six ``strawberry.relay`` non-interface helpers
+      (``GlobalID``, ``NodeID``, ``Connection``, ``ListConnection``,
+      ``Edge``, ``PageInfo``) by name, before the generic non-interface
+      rejection (spec-032 Decision 8).
     - Rejects ``DjangoType`` self-reference and other ``DjangoType``
       subclasses.
     - Rejects duplicates.
@@ -788,6 +890,16 @@ def _validate_interfaces(meta: type) -> tuple[type, ...]:
                 f"not strings (got {entry!r}). Lazy/forward-reference interface lookup is "
                 "deferred (no current spec home).",
             )
+        # Named-helper rejection (spec-032 Decision 8). Runs BEFORE the
+        # non-class branch below because ``relay.NodeID`` is an ``Annotated``
+        # alias, not a class - placed later it would die in the generic
+        # non-class rejection without ever being named.
+        for helper, label, description in _RELAY_NON_INTERFACE_HELPERS:
+            if entry is helper:
+                raise ConfigurationError(
+                    f"{meta.model.__name__}.Meta.interfaces entry {label} is "
+                    f"{description}. {_RELAY_NON_INTERFACE_REMEDIATION}",
+                )
         if not isinstance(entry, type):
             raise ConfigurationError(
                 f"{meta.model.__name__}.Meta.interfaces must contain interface classes, got {entry!r}.",
@@ -798,20 +910,6 @@ def _validate_interfaces(meta: type) -> tuple[type, ...]:
                 f"DjangoType subclasses (got {entry.__name__}). DjangoType is not a "
                 "Strawberry interface.",
             )
-        # TODO(spec-032-full_relay-0_0_9 Slice 1): Named-helper rejection branch
-        # fires BEFORE the generic one below (Decision 8). Each of the six
-        # strawberry.relay NON-interface helpers - GlobalID (a scalar-like id
-        # wrapper), NodeID (an annotation helper), Connection / ListConnection
-        # (generic output types; remediation names Meta.connection /
-        # DjangoConnectionField), Edge (machinery-instantiated output type),
-        # PageInfo (a generated pagination type) - raises ConfigurationError
-        # NAMING the helper, what it actually is, and what the consumer
-        # probably meant (relay.Node). All six already fail through the
-        # generic branch; the named branch upgrades the message only.
-        # Pseudocode:
-        #   named = _RELAY_NON_INTERFACE_HELPERS.get(entry)  # noqa: ERA001
-        #   if named is not None:
-        #       raise ConfigurationError(named.message(meta, entry))  # noqa: ERA001
         definition = getattr(entry, "__strawberry_definition__", None)
         if definition is None or not getattr(definition, "is_interface", False):
             raise ConfigurationError(
@@ -850,6 +948,7 @@ class _ValidatedMeta(NamedTuple):
     orderset_class: type | None
     connection: dict | None
     globalid_strategy: str | Callable[..., str] | None
+    relation_shapes: dict[str, str] | None
     nullable_overrides: frozenset[str]
     required_overrides: frozenset[str]
 
@@ -878,6 +977,10 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
        Relay-Node-shaped types via the ``relay_shaped`` bool derived from
        ``cls`` + the validated interfaces, so the
        gate accepts the same shapes as the ``DjangoConnectionField`` field guard.
+    8. ``Meta.relation_shapes`` (if declared) is shape-checked and gated to
+       Relay-Node-shaped types via ``_validate_relation_shapes`` (spec-032
+       Decision 7); the field-level target checks run later in
+       ``_validate_relation_shape_targets``.
 
     Returns:
         A ``_ValidatedMeta`` snapshot bundling the validated interfaces
@@ -944,6 +1047,11 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
         getattr(meta, "globalid_strategy", None),
         relay_shaped,
     )
+    relation_shapes = _validate_relation_shapes(
+        meta,
+        getattr(meta, "relation_shapes", None),
+        relay_shaped,
+    )
     # Override shape stage (spec-029 Decision 8 step 1): the two tuple-set
     # keys reuse the ``Meta.exclude`` non-string-sequence guard
     # (``_normalize_sequence_spec``), then normalize to ``frozenset``. The
@@ -976,6 +1084,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
         orderset_class=orderset_class,
         connection=connection,
         globalid_strategy=globalid_strategy,
+        relation_shapes=relation_shapes,
         nullable_overrides=nullable_overrides,
         required_overrides=required_overrides,
     )
@@ -1139,6 +1248,85 @@ def _validate_nullability_override_targets(
                 f"{model.__name__}.Meta nullable_overrides/required_overrides names relation "
                 f"field {name!r}; nullability overrides are scalar-only for now. Relation-field "
                 "nullability override is deferred (see spec-029 Decision 10).",
+            )
+
+
+def _validate_relation_shape_targets(
+    *,
+    model: type[models.Model],
+    relation_shapes: dict[str, str] | None,
+    selected_fields: tuple[Any, ...],
+    field_map: dict[str, FieldMeta],
+    consumer_authored_fields: frozenset[str],
+) -> None:
+    """Reject every illegal ``Meta.relation_shapes`` key at type creation.
+
+    Stage 2 of the relation-shapes validation flow (spec-032 Decision 7,
+    structurally the ``_validate_nullability_override_targets`` sibling). Runs
+    in ``__init_subclass__`` AFTER ``_select_fields`` + ``consumer_authored_fields``
+    exist, because every check here needs the selected fields, the cardinality
+    classifier, or the consumer-override union - none of which exist at
+    ``_validate_meta`` time. The shape check + Relay-Node gate already ran in
+    stage 1 (``_validate_relation_shapes``).
+
+    Check order mirrors the sibling: unknown -> excluded -> per-name checks
+    (non-relation / single-valued / consumer-authored), iterating keys sorted
+    for deterministic messages. The unknown path routes through
+    ``_format_unknown_fields_error`` so its consumer-visible shape matches the
+    ``Meta.fields`` / ``Meta.exclude`` / ``Meta.optimizer_hints`` typo guards.
+    Cardinality is read from ``FieldMeta.is_many_side`` (the same single-source
+    classifier the generated relation resolvers and the Phase-2.5 synthesis
+    key on), so the validator and the synthesis can never disagree about which
+    relations are connection-eligible.
+
+    ONLY the target-is-Node-shaped check runs at finalization (Decision 6) -
+    relation targets are not settled at type creation.
+
+    Raises:
+        ConfigurationError: any key names an unknown / excluded / non-relation
+            / single-valued / consumer-authored field.
+    """
+    if not relation_shapes:
+        return
+    model_field_names = {f.name for f in model._meta.get_fields()}
+    unknown = sorted(set(relation_shapes) - model_field_names)
+    if unknown:
+        raise ConfigurationError(
+            _format_unknown_fields_error(
+                model=model,
+                attr="relation_shapes",
+                unknown=unknown,
+                available=model_field_names,
+            ),
+        )
+    selected_by_name = {f.name: f for f in selected_fields}
+    excluded = sorted(set(relation_shapes) - set(selected_by_name))
+    if excluded:
+        raise ConfigurationError(
+            f"{model.__name__}.Meta.relation_shapes names fields not in the selected set: "
+            f"{excluded}. The entry targets a field that will not appear in the GraphQL type "
+            "(excluded via Meta.exclude or absent from a subset Meta.fields); select the field "
+            "or drop the entry.",
+        )
+    for name in sorted(relation_shapes):
+        if not selected_by_name[name].is_relation:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta.relation_shapes names non-relation field {name!r}; "
+                "only many-side relations (reverse FK, forward/reverse M2M) can take a "
+                "connection shape.",
+            )
+        if not field_map[snake_case(name)].is_many_side:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta.relation_shapes names single-valued relation {name!r} "
+                "(forward FK / OneToOne); there is nothing to paginate. Only many-side "
+                "relations (reverse FK, forward/reverse M2M) can take a connection shape.",
+            )
+        if name in consumer_authored_fields:
+            raise ConfigurationError(
+                f"{model.__name__}.Meta.relation_shapes names consumer-authored relation "
+                f"{name!r}; a consumer annotation or strawberry.field assignment owns that "
+                "field's shape (spec-032 Decision 7). Drop the entry, or remove the override "
+                "to let the framework synthesize the relation's shape.",
             )
 
 

@@ -2,12 +2,14 @@ term,anchor,notes
 Relay Node integration,relay-node-integration,Shipped 0.0.5 foundation; the resolve_node / resolve_nodes defaults the root fields dispatch to
 DjangoType,djangotype,The Relay-Node-shaped types the root fields resolve to and the relation upgrade walks
 DjangoNodeField,djangonodefield,This card ships it (bare interface form + typed form); glossary entry flips planned-to-shipped in Slice 7
+DjangoNodesField,djangonodesfield,Net-new batch refetch sibling this card ships; glossary entry created by Slice 7 of the build
 DjangoConnectionField,djangoconnectionfield,DONE-030 machinery the relation-as-Connection upgrade reuses; conformance suite runs against it
 DjangoConnection,djangoconnection,Generic connection base; CURSOR_PREFIX fallback named in Risks
 DjangoListField,djangolistfield,Annotation-driven factory precedent the root node fields follow
 DjangoOptimizerExtension,djangooptimizerextension,Root-gated optimization untouched; connections own their seam per spec-030 Decision 11
 Meta.interfaces,metainterfaces,Slice 1 extends its validation with the six named-helper rejections
 Meta.connection,metaconnection,Type-level totalCount opt-in the synthesized relation connections follow; shipped non-Node gate re-affirmed
+Meta.relation_shapes,metarelation_shapes,Net-new relation-shape narrowing key this card ships; glossary entry created by Slice 7 of the build
 Meta.globalid_strategy,metaglobalid_strategy,Shipped DONE-031 strategy key; root fields decode whatever it emits
 RELAY_GLOBALID_STRATEGY,relay_globalid_strategy,Schema-wide strategy default; same decode contract at the root fields
 Meta.primary,metaprimary,Model-label ids route to the primary; typed-field-over-secondary edge case

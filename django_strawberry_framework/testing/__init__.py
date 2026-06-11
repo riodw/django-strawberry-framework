@@ -13,6 +13,17 @@ Currently exports
   ``AttributeError: 'function' object has no attribute 'wrapped'`` at
   ``tearDownClass`` - see the patch module's docstring for the full
   framing.
+- :func:`global_id_for` / :func:`decode_global_id` - the public Relay test
+  helpers, importable at the dotted
+  ``django_strawberry_framework.testing.relay`` submodule path (NOT
+  re-exported here; the card's DoD names the submodule path). Minting the
+  strategy-aware encoded ``GlobalID`` a finalized Relay-Node-shaped type
+  emits, and decoding one back to ``(target_type, node_id)`` - see
+  :mod:`django_strawberry_framework.testing.relay` for the full contract,
+  including the secondary-emitter decode asymmetry. Keeping them out of this
+  ``__init__`` also keeps ``import django_strawberry_framework.testing``
+  light - the submodule's ``types``-package imports are paid only by suites
+  that import it.
 
 Future exports (tracked in ``docs/GLOSSARY.md``; planned for
 ``0.0.12``):
@@ -30,11 +41,3 @@ which utility lands first.
 from django_strawberry_framework.testing._wrap import safe_wrap_connection_method
 
 __all__ = ["safe_wrap_connection_method"]
-
-# TODO(spec-032-full_relay-0_0_9 Slice 5): ``testing/relay.py`` ships the
-# public ``global_id_for`` / ``decode_global_id`` helpers (Decision 10). The
-# Slice-5 edit HERE is docstring-only: add the pair to the module docstring's
-# "Currently exports" section as a pointer at the dotted
-# ``django_strawberry_framework.testing.relay`` path - the card's DoD names
-# the submodule path, so there is NO re-export from this ``__init__`` (the
-# ``TestClient`` / ``GraphQLTestCase`` "Future exports" note stays 0.0.12).

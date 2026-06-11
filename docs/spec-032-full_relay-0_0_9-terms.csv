@@ -28,7 +28,7 @@ get_queryset visibility hook,get_queryset-visibility-hook,The permission surface
 Definition-order independence,definition-order-independence,Why the synthesis runs at Phase 2.5 (targets settled) not class creation
 Relation handling,relation-handling,The many-side relation set (reverse FK / M2M) eligible for connection siblings
 Connection-aware optimizer planning,connection-aware-optimizer-planning,Parallel WIP-ALPHA-033; nested connections lazy-load until it lands
-Strictness mode,strictness-mode,A raise run surfaces the pre-033 nested-connection N+1; live tests assert behavior not SQL
+Strictness mode,strictness-mode,connection.py never consults the strictness sentinels so a raise run does not flag the synthesized nested connection until 033; live tests assert behavior not SQL
 Plan cache,plan-cache,Pagination-arg key hygiene named as 033's scope in Out of scope
 apply_cascade_permissions,apply_cascade_permissions,0.0.10 permissions; root fields integrate when it lands
 Per-field permission hooks,per-field-permission-hooks,0.0.10 companion surface named in Non-goals

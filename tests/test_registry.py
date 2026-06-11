@@ -1517,3 +1517,38 @@ def test_clear_tolerates_unimportable_connection_submodule(fresh_registry):
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = module
+
+
+def test_clear_tolerates_unimportable_relay_module(fresh_registry):
+    """The node-field-ledger ``except ImportError`` guard in ``clear()`` is best-effort.
+
+    Relay twin of ``test_clear_tolerates_unimportable_connection_submodule``.
+    The root-node-field ledger co-clear (``_node_fields_declared.clear()``,
+    spec-032 Decision 8) uses a cycle-safe local import. If the top-level
+    ``relay.py`` cannot be imported (forced here by poisoning ``sys.modules``),
+    ``clear()`` skips that block and still clears the registry's own state
+    rather than raising. The positive co-clear path is pinned by
+    ``tests/test_relay_node_field.py::test_node_field_without_node_types_raises_at_finalize``.
+    """
+    import sys
+
+    relay_name = "django_strawberry_framework.relay"
+    saved = {relay_name: sys.modules.get(relay_name)}
+
+    class CategoryType:
+        pass
+
+    try:
+        # ``None`` in ``sys.modules`` makes ``from .relay import ...`` raise
+        # ImportError, exercising the ledger guard.
+        sys.modules[relay_name] = None
+        fresh_registry.register(Category, CategoryType)
+        # Must not raise even though relay.py cannot be imported.
+        fresh_registry.clear()
+        assert fresh_registry.get(Category) is None
+    finally:
+        for name, module in saved.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module

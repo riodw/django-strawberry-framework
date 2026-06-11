@@ -189,20 +189,6 @@ django_graphene_filters/
 
 The shared infrastructure plus model/type, optimizer, filters, orders, testing, and utility subpackages are on disk: `types/`, `optimizer/`, `filters/`, `orders/`, `testing/`, and `utils/`. Every other module shown in the target package layout below — the remaining query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the full test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
 
-<!--
-TODO(spec-032-full_relay-0_0_9 Slice 7): Add to the current-layout trees below:
-  django_strawberry_framework/relay.py        (DjangoNodeField / DjangoNodesField root
-                                               refetch factories; shipped in 0.0.9)
-  django_strawberry_framework/testing/relay.py (global_id_for / decode_global_id public
-                                               test helpers; shipped in 0.0.9)
-  tests/test_relay_node_field.py              (root-field surface - card-named two-file
-                                               split, spec-032 Decision 11)
-  tests/test_relay_connection.py              (relation-upgrade + conformance surface)
-  tests/testing/test_relay.py                 (mirrors testing/relay.py one-to-one)
-The two card-named test files intentionally diverge from the strict one-file mirror
-(`tests/test_relay.py`) - the conflict is pinned in spec-032 Decision 11 / Risks.
--->
-
 The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`, `apps.scalars`, `apps.kanban`, `apps.glossary`). `apps.products` is the catalog example (Category / Item / Property / Entry); `apps.library` is the deeper relation example (Branch / Shelf / Book / Patron / Loan, with `Patron.lifetime_fines_cents` as a real-domain `BigIntegerField → BigInt` proof); `apps.scalars` is a test substrate carrying the paired `ScalarSpecimen` (every scalar non-null + self-FK) / `NullableScalarSpecimen` (every scalar nullable + cross-model FK to `ScalarSpecimen` with `on_delete=SET_NULL`) layout that pins every non-trivial converter row in both shapes via live `/graphql/` tests; `apps.kanban` is the relational source for the exported root `KANBAN.md` and owns the shared `BoardDoc` prose-section table; `apps.glossary` is the relational source for glossary terms and spec-term audit rows, while its generic prose sections share `BoardDoc` under `namespace="glossary"`. `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
 
 ```text
@@ -216,6 +202,7 @@ django_strawberry_framework/
 ├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
 ├── list_field.py            # DjangoListField (non-Relay list[T] factory for root Query fields; shipped in 0.0.7)
 ├── connection.py            # DjangoConnectionField / DjangoConnection (Relay connection factory; shipped in 0.0.9)
+├── relay.py                 # DjangoNodeField / DjangoNodesField root refetch factories (server-side GlobalID decode dispatch; shipped in 0.0.9)
 ├── management/              # Django management commands (shipped in 0.0.7)
 │   ├── __init__.py
 │   └── commands/
@@ -224,7 +211,8 @@ django_strawberry_framework/
 │       └── inspect_django_type.py  # `manage.py inspect_django_type` — per-field GraphQL resolution table (0.0.9)
 ├── testing/                 # consumer testing utilities
 │   ├── __init__.py          # safe_wrap_connection_method re-export
-│   └── _wrap.py             # cooperative connection-method wrapping for Trac #37064
+│   ├── _wrap.py             # cooperative connection-method wrapping for Trac #37064
+│   └── relay.py             # global_id_for / decode_global_id public test helpers (0.0.9)
 ├── types/                   # DjangoType subsystem (Layer 2) — shipped
 │   ├── __init__.py
 │   ├── base.py              # DjangoType, _validate_meta, _build_annotations
@@ -280,6 +268,7 @@ django_strawberry_framework/
 ├── list_field.py            # [alpha] DjangoListField (non-Relay list[T])
 ├── permissions.py           # [alpha] apply_cascade_permissions, per-field permission hooks
 ├── connection.py            # [alpha] DjangoConnectionField (Relay)
+├── relay.py                 # [alpha] DjangoNodeField / DjangoNodesField (root Relay refetch)
 ├── routers.py               # [alpha] DjangoGraphQLProtocolRouter (Channels; soft dep)
 ├── types/                   # DjangoType subsystem (Layer 2)
 │   ├── __init__.py
@@ -330,7 +319,8 @@ django_strawberry_framework/
 │   └── debug_toolbar.py     # django-debug-toolbar SQL-panel capture during /graphql/
 ├── testing/                 # [alpha] Testing utilities for consumers
 │   ├── __init__.py
-│   └── client.py            # TestClient, AsyncTestClient, GraphQLTestCase
+│   ├── client.py            # TestClient, AsyncTestClient, GraphQLTestCase
+│   └── relay.py             # global_id_for / decode_global_id public test helpers
 ├── management/              # Django management commands
 │   ├── __init__.py
 │   └── commands/
@@ -364,8 +354,11 @@ tests/                       # Package-internal tests (current state)
 ├── test_connection.py       # DjangoConnectionField / DjangoConnection (single-file Layer-3 module)
 ├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
 ├── test_registry.py         # model→type registry
+├── test_relay_connection.py # relation-as-Connection upgrade + cursor-conformance surface
+├── test_relay_node_field.py # DjangoNodeField / DjangoNodesField root-field surface (card-named two-file split, spec-032 Decision 11)
 ├── testing/                 # mirrors django_strawberry_framework/testing/
 │   ├── __init__.py
+│   ├── test_relay.py        # ← testing/relay.py global_id_for / decode_global_id
 │   └── test_wrap.py         # ← safe_wrap_connection_method consumer helper
 ├── base/                    # FROZEN: only conf and version checks
 │   ├── __init__.py
@@ -465,6 +458,8 @@ tests/                       # Package-internal tests (target as Layer-3 subsyst
 ├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
 ├── test_permissions.py      # apply_cascade_permissions, per-field hooks
 ├── test_connection.py       # DjangoConnectionField
+├── test_relay_connection.py # relation-as-Connection upgrade + cursor-conformance surface
+├── test_relay_node_field.py # DjangoNodeField / DjangoNodesField root refetch fields
 ├── types/
 │   ├── test_base.py
 │   ├── test_converters.py
@@ -493,6 +488,8 @@ tests/                       # Package-internal tests (target as Layer-3 subsyst
 ├── management/
 │   ├── test_export_schema.py
 │   └── test_inspect_django_type.py
+├── testing/
+│   └── test_relay.py        # global_id_for / decode_global_id test helpers
 └── utils/
     ├── test_relations.py
     ├── test_strings.py

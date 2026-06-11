@@ -145,10 +145,10 @@ class CelestialBodyNode(DjangoType):
 
 @strawberry.type
 class Query:
-    galaxy: GalaxyNode = DjangoNodeField(GalaxyNode)
+    galaxy: GalaxyNode | None = DjangoNodeField(GalaxyNode)
     all_galaxies: DjangoConnection[GalaxyNode] = DjangoConnectionField(GalaxyNode)
 
-    celestial_body: CelestialBodyNode = DjangoNodeField(CelestialBodyNode)
+    celestial_body: CelestialBodyNode | None = DjangoNodeField(CelestialBodyNode)
     all_celestial_bodies: DjangoConnection[CelestialBodyNode] = DjangoConnectionField(CelestialBodyNode)
 
 
@@ -160,19 +160,6 @@ schema = strawberry.Schema(
     extensions=[lambda: _optimizer],
 )
 ```
-
-<!--
-TODO(spec-032-full_relay-0_0_9 Slice 7): Flip the two typed-node showcase
-fields in the snippet above to the nullable-by-contract spelling (Revision 6
-P3 - the non-optional shape is the one spec-032 Decision 5 leaves unsupported:
-a missing/hidden row would surface Strawberry's generic non-null violation
-instead of the Relay null):
-  galaxy: GalaxyNode = DjangoNodeField(GalaxyNode)
-    -> galaxy: GalaxyNode | None = DjangoNodeField(GalaxyNode)
-  celestial_body: CelestialBodyNode = DjangoNodeField(CelestialBodyNode)
-    -> celestial_body: CelestialBodyNode | None = DjangoNodeField(CelestialBodyNode)
-No other GOAL.md claims change.
--->
 
 ### `filters.py` — declarative filters (`filterset_class`)
 

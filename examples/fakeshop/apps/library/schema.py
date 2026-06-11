@@ -11,6 +11,8 @@ from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
     DjangoListField,
+    DjangoNodeField,
+    DjangoNodesField,
     DjangoType,
     OptimizerHint,
 )
@@ -33,6 +35,19 @@ from django_strawberry_framework.orders import order_input_type
 
 def _branches_manager_resolver(root: Any, info: Info) -> Any:
     return models.Branch.objects
+
+
+def _user_is_staff(info: Info) -> bool:
+    """Unwrap ``info.context`` -> request -> user and report ``is_staff``.
+
+    The shared staff-bypass predicate for every library ``get_queryset``
+    visibility hook (Shelf / Branch / Book); hoisted so the
+    context-unwrap dance lives in exactly one place.
+    """
+    context = getattr(info, "context", None)
+    request = getattr(context, "request", None) or context
+    user = getattr(request, "user", None)
+    return user is not None and getattr(user, "is_staff", False)
 
 
 # The DjangoType declaration order is intentionally awkward. Several
@@ -58,33 +73,23 @@ class LoanType(DjangoType):
         optimizer_hints = {"book": OptimizerHint.prefetch_related(), "patron": OptimizerHint.SKIP}
 
 
-# TODO(spec-032-full_relay-0_0_9 Slice 6): Promote ``BookType`` to Relay-Node
-# shape and add the visibility hook (Decision 12):
-#   class Meta:
-#       interfaces = (relay.Node,)   # id becomes GlobalID! (model-label payload)
-#   @classmethod
-#   def get_queryset(cls, queryset, info):
-#       # Hide circulation_status="repair" books from non-staff requests -
-#       # the ShelfType topic="secret" pattern, staff bypass included. This
-#       # is the live hidden-row null test's eligible type: no fakeshop type
-#       # is currently BOTH Relay-Node-shaped AND get_queryset-filtered, and
-#       # "repair" matches no existing inline-created row, so churn stays
-#       # bounded (Risks: blast-radius entry - the filter then runs for every
-#       # relation resolving to a book: Shelf.books, Genre.books, Loan.book).
-#       if user_is_staff(info):
-#           return queryset
-#       return queryset.exclude(circulation_status="repair")
-# Consequences: GenreType.books (reverse M2M) and BookType.genres (forward
-# M2M) become eligible for the Slice-3 relation-as-Connection synthesis (the
-# implicit "both" default adds live booksConnection / genresConnection);
-# BookType.loans stays list-only because LoanType is not Relay-shaped (the
-# live graceful-degradation proof); the NullabilityOverrideBookType secondary
-# below is unaffected (the model-label-routing audit constrains emitters, and
-# the primary then both emits and decodes). Existing integer-book-id
-# assertions in test_query/test_library_api.py move to encoded model-label
-# GlobalIDs minted via testing.relay.global_id_for.
 class BookType(DjangoType):
-    """Book declared before Shelf and Genre to exercise finalization."""
+    """Book declared before Shelf and Genre to exercise finalization.
+
+    Relay-Node-shaped AND ``get_queryset``-filtered: the live hidden-row
+    ``null`` eligible type (spec-032 Decision 12).
+    """
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+        """Hide ``circulation_status="repair"`` books from non-staff requests.
+
+        The ``ShelfType`` ``topic="secret"`` pattern, staff bypass included
+        (spec-032 Decision 12).
+        """
+        if _user_is_staff(info):
+            return queryset
+        return queryset.exclude(circulation_status=models.Book.CirculationStatus.REPAIR)
 
     class Meta:
         model = models.Book
@@ -102,6 +107,7 @@ class BookType(DjangoType):
             "genres",
             "loans",
         )
+        interfaces = (relay.Node,)
         filterset_class = filters.BookFilter
         orderset_class = orders.BookOrder
 
@@ -141,10 +147,7 @@ class ShelfType(DjangoType):
         sensitive rows before the filter clause sees them. Staff requests
         bypass the gate.
         """
-        context = getattr(info, "context", None)
-        request = getattr(context, "request", None) or context
-        user = getattr(request, "user", None)
-        if user is not None and getattr(user, "is_staff", False):
+        if _user_is_staff(info):
             return queryset
         return queryset.exclude(topic="secret")
 
@@ -197,10 +200,7 @@ class BranchType(DjangoType):
         ``BranchType.get_queryset(queryset, info)`` running BEFORE
         ``BranchFilter.apply_sync(...)``. Staff requests bypass the gate.
         """
-        context = getattr(info, "context", None)
-        request = getattr(context, "request", None) or context
-        user = getattr(request, "user", None)
-        if user is not None and getattr(user, "is_staff", False):
+        if _user_is_staff(info):
             return queryset
         return queryset.exclude(city="restricted")
 
@@ -333,13 +333,13 @@ class Query:
     # ``connection = {"total_count": True}``). Imported from the public surface.
     all_library_genres_connection: DjangoConnection[GenreType] = DjangoConnectionField(GenreType)
 
-    # TODO(spec-032-full_relay-0_0_9 Slice 6): Root refetch fields (Decision
-    # 12) - imported from the package public surface once Slice 2 exports
-    # them. The annotations are the supported nullable-by-contract spellings
-    # (Decision 5: resolve_node dispatches required=False unconditionally):
-    #   node: relay.Node | None = DjangoNodeField()
-    #   nodes: list[relay.Node | None] = DjangoNodesField()
-    #   genre: GenreType | None = DjangoNodeField(GenreType)   # typed form
+    # Root Relay refetch fields (spec-032 Decision 12), imported from the
+    # package public surface. The annotations are the supported
+    # nullable-by-contract spellings (Decision 5: resolve_node dispatches
+    # required=False unconditionally).
+    node: relay.Node | None = DjangoNodeField()
+    nodes: list[relay.Node | None] = DjangoNodesField()
+    genre: GenreType | None = DjangoNodeField(GenreType)
 
     @strawberry.field
     def all_library_patrons(

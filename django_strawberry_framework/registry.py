@@ -506,12 +506,18 @@ class TypeRegistry:
         else:
             clear_connection_type_cache()
 
-        # TODO(spec-032-full_relay-0_0_9 Slice 2): Co-clear the root-node-field
-        # ledger backing the no-Node-types finalize check (Decision 8), in the
-        # same cycle-safe try/except-ImportError/else shape as the blocks
-        # above (the ``_helper_referenced_filtersets`` precedent):
-        #   from .relay import _node_fields_declared  # noqa: ERA001
-        #   _node_fields_declared.clear()  # noqa: ERA001
+        # Root-node-field ledger clear (cycle-safe local import, same shape as
+        # the blocks above - the ``_helper_referenced_filtersets`` precedent).
+        # ``relay.py``'s ``_node_fields_declared`` backs the finalize-time
+        # no-Node-types check (spec-032 Decision 8); the documented registry
+        # reset drops it so a cleared registry forgets stale root-field
+        # declarations.
+        try:
+            from .relay import _node_fields_declared
+        except ImportError:
+            pass
+        else:
+            _node_fields_declared.clear()
 
 
 registry = TypeRegistry()

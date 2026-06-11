@@ -61,7 +61,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
 - `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
-- `0.0.9` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is in progress as four WIP cards — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), `WIP-ALPHA-032-0.0.9` (the full Relay story), and `WIP-ALPHA-033-0.0.9` (connection-aware optimizer planning). The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
+- `0.0.9` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is nearly complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `WIP-ALPHA-033-0.0.9` (connection-aware optimizer planning) remains in progress. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -83,15 +83,15 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**54.4% complete** toward `1.0.0` - 31 of 57 cards done (53.8% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**56.1% complete** toward `1.0.0` - 32 of 57 cards done (56.8% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 31/43 (72.1%) | 68.9% |
+| Alpha (pre-0.1.0) | 32/43 (74.4%) | 72.7% |
 | Beta (pre-1.0.0) | 0/13 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **72.1%**.
+To complete the Alpha (pre-0.1.0) milestone: **74.4%**.
 
 ## Board columns
 
@@ -99,8 +99,8 @@ To complete the Alpha (pre-0.1.0) milestone: **72.1%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/spec-032-full_relay-0_0_9.md) |
 | `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning | No dedicated spec |
+| `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/spec-032-full_relay-0_0_9.md) |
 | `DONE-031-0.0.9` - Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md) |
 | `DONE-030-0.0.9` - `DjangoConnectionField` | [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md) |
 | `DONE-029-0.0.9` - `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md) |
@@ -136,121 +136,6 @@ To complete the Alpha (pre-0.1.0) milestone: **72.1%**.
 ## In progress
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="full_relay_story_node_connection_root_validation"></a>
-### [WIP-ALPHA-032-0.0.9 - Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Major
-- Status: Planned
-- Relative size: XL
-- Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
-- Spec: [spec-032-full_relay-0_0_9.md](docs/spec-032-full_relay-0_0_9.md)
-
-<!--
-TODO(spec-032-full_relay-0_0_9 Slice 7): Move this card to the Done column with the next
-DONE-NNN-0.0.9 id and confirm the Spec line above points at
-docs/spec-032-full_relay-0_0_9.md. KANBAN.md is a GENERATED export - the real edit is a
-SpecDoc / card-column DB change re-rendered via scripts/build_kanban_md.py, never a hand
-edit here (this staged anchor is itself removed by that re-render).
--->
-
-#### Planning note
-
-blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it.
-
-#### Dependencies
-
-- `DONE-030-0.0.9` - `DjangoConnectionField`
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.get_node` implements the Relay `Node` interface by running `cls.get_queryset(model.objects, info).get(pk=id)`, so graphene_django's full Relay story routes single-object id lookups through the type's visibility hook — the same Node + global-id + permission-aware root surface this card assembles, hence required parity.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/utils.py::resolve_model_nodes` (and `resolve_model_node`) resolve `relay.GlobalID` values to model instances while running the type's `get_queryset` (via `run_type_get_queryset`), and `DjangoListConnection.resolve_connection` provides the connection half — together the Node + Connection + validated-root Relay story this card mirrors, so the strawberry_django parity is required.
-
-#### Other
-
-- eight-goal umbrella for the complete Relay surface (Root `node`/`nodes` fields, relation-as-Connection upgrade, cursor contracts, permission integration, schema-validation diagnostics, test helpers, fakeshop activation). New `relay.py` + `test/relay.py` + finalizer changes + spec. Cursor mechanics overlap with 024; this card is the connective tissue tying it all together.
-- ~~`Meta.interfaces` design~~ — `Meta.interfaces` accepted end-to-end for any Strawberry interface; `(relay.Node,)` activates the Node foundation.
-- ~~`GlobalID` mapping decision~~ — Strawberry-supplied `id: GlobalID!` from the Relay interface replaces the synthesized `id: int!`; Django primary key remains projected as a connector column for the optimizer (Decision 2 of [`docs/SPECS/spec-015-relay_interfaces-0_0_5.md`][spec-011]).
-- ~~Default `resolve_*` injection~~ — `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` defaults injected when `relay.Node` is in `Meta.interfaces`; consumer overrides preserved via Strawberry's `__func__` identity test.
-- ~~`is_type_of` injection~~ — Unconditional on every `DjangoType`; consumer-declared `is_type_of` preserved.
-- ~~`CompositePrimaryKey` rejection~~ — Django 5.2+ composite-pk models raise `ConfigurationError` at finalization with the documented escape hatch (`id: relay.NodeID[...]` annotation).
-- `node(id: GlobalID!): Node` — single-object refetch. Decodes the GlobalID, dispatches to the type's `resolve_node`, returns the resolved object. Returns `null` if the GlobalID decodes to a type/ID the requesting user can't see (respects `get_queryset`).
-- `nodes(ids: [GlobalID!]!): [Node]!` — batch refetch. Decodes each GlobalID, dispatches per-type to `resolve_nodes` (batched), returns results in input order. Missing IDs become `null` entries (preserves positional correspondence).
-- **Implicit upgrade** (default): every `DjangoType` whose `Meta.interfaces` includes `relay.Node` automatically exposes its reverse-FK and M2M relations as Connections in addition to the existing `list[T]` shape. Field names follow a stable convention (`itemsConnection: ItemConnection` alongside `items: list[Item]`).
-- **Explicit-only**: consumers who want only Connections (or only lists) on a relation declare `Meta.relation_shapes = {"items": "connection"}` (or `"list"`, or `"both"` — `"both"` is the default for Relay types).
-- **Cursor format**: opaque base64-encoded payload by default (`b64("offset:N")`). Documented as opaque — clients must not parse it. `Meta.cursor_field` for stable column-based cursors is **out of scope** for this card; lives in BETTER item 39 sub-feature 3.
-- **Required arguments**: `first: Int`, `after: String`, `last: Int`, `before: String`. Backward pagination (`last`/`before`) is required by the Relay spec.
-- **`pageInfo`**: emits the four standard fields (`hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`) with correct semantics — including the spec-mandated *"the connection MUST resolve `hasNextPage` correctly even when the consumer didn't request it"* invariant.
-- **Edge cases**: `first: 0` returns empty edges + `pageInfo`. `first: N` with N > remaining rows returns the actual remainder. `after` cursor for a row that no longer exists falls through to the next existing row (no error). Both `first` and `last` in the same query is rejected with a typed error.
-- **`totalCount`**: an opt-in field on every Connection (`Meta.connection = {"total_count": True}`). When selected, runs `qs.count()` on the *unpaginated* queryset (post-filter, pre-slice). Documented as the canonical Relay-compatible total-count surface.
-- `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`)
-- `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`)
-- `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-046-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent)
-- decode the GlobalID server-side (never trust the client's claim of which type the ID belongs to)
-- dispatch to the resolved type's `resolve_node` (which honors `cls.get_queryset(qs, info)`)
-- return `null` for rows the user can't see (not an error — the Relay spec requires `null`, not an exception)
-- never reveal *existence* of hidden rows through error timing or status codes
-- `relay.GlobalID`, `relay.NodeID[...]`, `relay.Connection`, `relay.ListConnection`, `relay.Edge`, `relay.PageInfo` in `Meta.interfaces` → rejected with a message naming the helper and explaining it's a scalar / annotation / field-type rather than an interface.
-- Non-Strawberry-interface classes in `Meta.interfaces` → rejected at validation with the offending class name.
-- `Meta.connection = {...}` declared on a type that doesn't include `relay.Node` in `Meta.interfaces` → rejected with a message suggesting either remove the `connection` key or add `relay.Node` to interfaces.
-- A `DjangoNodeField()` query field on a schema with **no** `DjangoType`s declaring `relay.Node` → rejected at finalization with *"node lookup configured but no Node types registered."*
-- `node(id:)` and `nodes(ids:)` resolve real product / category / item / entry GlobalIDs
-- Reverse-FK and M2M relations on those types expose their Connection counterparts
-- Live HTTP tests under `examples/fakeshop/test_query/` exercise the full Relay query shape (refetch, paginated connection, cursor round-trip, `totalCount`)
-- Type-rename GlobalID migrations (Django-migrations-style history that lets old-format IDs decode alongside new)
-- Polymorphic connections (`Connection[Interface]` with auto-dispatched concrete types per edge)
-- `Meta.cursor_field` for stable cursors keyed on a deterministic column
-- Auto-upgrade reverse FK / M2M to Connection based on a row-count threshold
-- Refetchable container schema metadata for `useRefetchableFragment`
-- Permission-aware cursor decoding (cursor decode re-runs `get_queryset` so privileged cursors don't leak)
-- `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands.
-- `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
-- `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
-- `WIP-ALPHA-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
-- `TODO-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands.
-- New spec: `docs/spec-relay_connection.md` covering all eight goals above with worked examples and decision rationale.
-- `DjangoNodeField` and `DjangoNodesField` exported from the package public surface; both wired through the registry's GlobalID decode path and the per-type `get_queryset`.
-- Reverse-FK and M2M relations on `relay.Node`-implementing types expose their Connection counterparts; `Meta.relation_shapes` opt-out documented.
-- Cursor pagination math passes the Relay-spec test suite for `first`/`after`/`last`/`before`/`pageInfo` edge cases.
-- `Meta.connection = {"total_count": True}` adds a `totalCount` field that runs `qs.count()` on the unpaginated post-filter queryset.
-- Filter / order arguments accepted on Connection fields when the corresponding `*_class` is declared on the type.
-- Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
-- Six schema-validation diagnostics from Goal 6 raise `ConfigurationError` with the documented messages.
-- `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
-- The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-051-0.1.5`.
-- 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
-- `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`)
-- `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
-- `django_strawberry_framework/types/base.py` — `Meta.connection` / `Meta.relation_shapes` validation
-- `django_strawberry_framework/types/finalizer.py` — auto-upgrade reverse-FK / M2M to Connection
-- `django_strawberry_framework/testing/relay.py` (new) — test helpers
-- `tests/test_relay_node_field.py`, `tests/test_relay_connection.py` (new)
-- `examples/fakeshop/test_query/test_library_api.py` — Relay-shape HTTP tests
-- `examples/fakeshop/apps/products/schema.py` — Relay surface activation (lit up at fakeshop activation time)
-- `docs/spec-relay_connection.md` (new)
-- `docs/GLOSSARY.md` — Relay surface description
-- Relay node refetch from Apollo / Relay Compiler clients (the *"Relay just works"* end state for `1.0.0`)
-- Fakeshop product-catalog Relay activation (Goal 8)
-- Per-type `useFragment` / `useRefetchableFragment` patterns (mechanics; the schema-side `@refetchable` directive support lives in BETTER item 39 sub-feature 5)
-- Every BETTER item 39 sub-feature builds on this card's mechanics
-- Fakeshop products-app activation (`examples/fakeshop/apps/products/schema.py`): replace the four `Query` list resolvers (`all_categories` / `all_items` / `all_properties` / `all_entries`) with `DjangoConnectionField`s for the 1-to-1 `django-graphene-filters` cookbook mirror (connections-only — the cookbook Query is `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` with no list resolvers). The four `*Type` classes are already Relay-Node-shaped with `filterset_class` / `orderset_class` wired, so only the root-field shape changes; `relay.node()` / root `Node.Field` refetch is the separate root-Node goal of this card. Deferred from the `DONE-030-0.0.9` (`DjangoConnectionField`) cycle and gated on `WIP-ALPHA-033-0.0.9` (connection-aware optimizer): a `0.0.9` `DjangoConnectionField` derives an empty optimizer plan, so a connections-only products conversion must land with 033 to avoid regressing the `test_products_optimizer_*` SQL-shape coverage.
-
-#### Card references
-
-- Blocked by: blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `DONE-030-0.0.9` - `DjangoConnectionField`
-- Related: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
-- Related: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
-- Related: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-046-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-046-0.1.2` - `Meta.search_fields` support
-- Related: `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands. -> `DONE-030-0.0.9` - `DjangoConnectionField`
-- Related: `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections. -> `DONE-027-0.0.8` - Filtering subsystem
-- Related: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` - Ordering subsystem
-- Related: `WIP-ALPHA-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning
-- Related: `TODO-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `TODO-ALPHA-034-0.0.10` - Permissions subsystem
-- Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-051-0.1.5`. -> `TODO-BETA-051-0.1.5` - Fakeshop GraphQL schema activation
-- Related: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`) -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
 <a id="connection_aware_optimizer_planning"></a>
 ### [WIP-ALPHA-033-0.0.9 - Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
@@ -298,7 +183,7 @@ planned
 - Connection-pagination-aware queryset planning (`Prefetch` downgrade for `connection { edges { node } }`, `total_count` aggregate cooperation, slice-aware projections).
 - Plan-cache key hygiene for paginated selections (skip pagination args that do not affect selection shape, hash the ones that do).
 - Strictness-mode interaction with connection paths so unplanned nested connection access still surfaces as N+1.
-- Blocks the fakeshop products connections-only conversion tracked under `WIP-ALPHA-032-0.0.9` (fakeshop activation). The products live optimizer tests (`examples/fakeshop/test_query/test_products_api.py::test_products_optimizer_*` — root-node merge, nested reverse-FK prefetch depth-2, nested forward-FK `select_related` depth-2) rely on root-list optimization. Because a `0.0.9` `DjangoConnectionField` derives an empty plan (the flat walker is connection-unaware), replacing the products list resolvers with connection fields before this card lands would turn those nested `edges { node }` selections into N+1 and regress the optimizer dogfooding. Land the products list->connection replacement together with this card.
+- Blocks the fakeshop products connections-only conversion tracked under `TODO-BETA-051-0.1.5` (fakeshop activation). The products live optimizer tests (`examples/fakeshop/test_query/test_products_api.py::test_products_optimizer_*` — root-node merge, nested reverse-FK prefetch depth-2, nested forward-FK `select_related` depth-2) rely on root-list optimization. Because a `0.0.9` `DjangoConnectionField` derives an empty plan (the flat walker is connection-unaware), replacing the products list resolvers with connection fields before this card lands would turn those nested `edges { node }` selections into N+1 and regress the optimizer dogfooding. Land the products list->connection replacement together with this card.
 
 #### Card references
 
@@ -1237,11 +1122,11 @@ planned
 
 #### Planning note
 
-blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion).
+blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion).
 
 #### Dependencies
 
-- `WIP-ALPHA-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
+- `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
 - `TODO-BETA-049-0.1.3` - Layer 3 Meta key promotion
 
 #### Definition of done
@@ -1260,8 +1145,8 @@ blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (La
 
 #### Card references
 
-- Blocked by: blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion). -> `WIP-ALPHA-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
-- Blocked by: blocked on `WIP-ALPHA-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-049-0.1.3` - Layer 3 Meta key promotion
+- Blocked by: blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion). -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
+- Blocked by: blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-049-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-049-0.1.3` - Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
 ### [TODO-BETA-052-0.1.5 - Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
@@ -1526,6 +1411,161 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="full_relay_story_node_connection_root_validation"></a>
+### [DONE-032-0.0.9 - Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
+- Severity: Major
+- Status: Planned
+- Relative size: XL
+- Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
+- Spec: [spec-032-full_relay-0_0_9.md](docs/spec-032-full_relay-0_0_9.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
+| [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
+| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
+| [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
+| [`Meta.globalid_strategy`](docs/GLOSSARY.md#metaglobalid_strategy) | shipped (`0.0.9`) |
+| [RELAY_GLOBALID_STRATEGY](docs/GLOSSARY.md#relay_globalid_strategy) | shipped (`0.0.9`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
+| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
+| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
+| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
+| [`order_input_type`](docs/GLOSSARY.md#order_input_type) | shipped (`0.0.8`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.12` |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.12` |
+| [`safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) | shipped (`0.0.7`) |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
+
+#### Planning note
+
+blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it.
+
+#### Dependencies
+
+- `DONE-030-0.0.9` - `DjangoConnectionField`
+
+#### Definition of done
+
+- [x] New spec: `docs/spec-032-full_relay-0_0_9.md` covering all eight goals above with worked examples and decision rationale.
+- [x] `DjangoNodeField` and `DjangoNodesField` exported from the package public surface; both wired through the registry's GlobalID decode path and the per-type `get_queryset`.
+- [x] Reverse-FK and M2M relations on `relay.Node`-implementing types expose their Connection counterparts; `Meta.relation_shapes` opt-out documented.
+- [x] Cursor pagination math passes the Relay-spec test suite for `first`/`after`/`last`/`before`/`pageInfo` edge cases.
+- [x] `Meta.connection = {"total_count": True}` adds a `totalCount` field that runs `qs.count()` on the unpaginated post-filter queryset.
+- [x] Filter / order arguments accepted on Connection fields when the corresponding `*_class` is declared on the type.
+- [x] Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
+- [x] Six schema-validation diagnostics from Goal 6 raise `ConfigurationError` with the documented messages.
+- [x] `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
+- [x] The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-051-0.1.5`.
+- [x] 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.get_node` implements the Relay `Node` interface by running `cls.get_queryset(model.objects, info).get(pk=id)`, so graphene_django's full Relay story routes single-object id lookups through the type's visibility hook — the same Node + global-id + permission-aware root surface this card assembles, hence required parity.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/utils.py::resolve_model_nodes` (and `resolve_model_node`) resolve `relay.GlobalID` values to model instances while running the type's `get_queryset` (via `run_type_get_queryset`), and `DjangoListConnection.resolve_connection` provides the connection half — together the Node + Connection + validated-root Relay story this card mirrors, so the strawberry_django parity is required.
+
+#### Other
+
+- eight-goal umbrella for the complete Relay surface (Root `node`/`nodes` fields, relation-as-Connection upgrade, cursor contracts, permission integration, schema-validation diagnostics, test helpers, fakeshop activation). New `relay.py` + `test/relay.py` + finalizer changes + spec. Cursor mechanics overlap with 024; this card is the connective tissue tying it all together.
+- ~~`Meta.interfaces` design~~ — `Meta.interfaces` accepted end-to-end for any Strawberry interface; `(relay.Node,)` activates the Node foundation.
+- ~~`GlobalID` mapping decision~~ — Strawberry-supplied `id: GlobalID!` from the Relay interface replaces the synthesized `id: int!`; Django primary key remains projected as a connector column for the optimizer (Decision 2 of [`docs/SPECS/spec-015-relay_interfaces-0_0_5.md`][spec-011]).
+- ~~Default `resolve_*` injection~~ — `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` defaults injected when `relay.Node` is in `Meta.interfaces`; consumer overrides preserved via Strawberry's `__func__` identity test.
+- ~~`is_type_of` injection~~ — Unconditional on every `DjangoType`; consumer-declared `is_type_of` preserved.
+- ~~`CompositePrimaryKey` rejection~~ — Django 5.2+ composite-pk models raise `ConfigurationError` at finalization with the documented escape hatch (`id: relay.NodeID[...]` annotation).
+- `node(id: GlobalID!): Node` — single-object refetch. Decodes the GlobalID, dispatches to the type's `resolve_node`, returns the resolved object. Returns `null` if the GlobalID decodes to a type/ID the requesting user can't see (respects `get_queryset`).
+- `nodes(ids: [GlobalID!]!): [Node]!` — batch refetch. Decodes each GlobalID, dispatches per-type to `resolve_nodes` (batched), returns results in input order. Missing IDs become `null` entries (preserves positional correspondence).
+- **Implicit upgrade** (default): every `DjangoType` whose `Meta.interfaces` includes `relay.Node` automatically exposes its reverse-FK and M2M relations as Connections in addition to the existing `list[T]` shape. Field names follow a stable convention (`itemsConnection: ItemConnection` alongside `items: list[Item]`).
+- **Explicit-only**: consumers who want only Connections (or only lists) on a relation declare `Meta.relation_shapes = {"items": "connection"}` (or `"list"`, or `"both"` — `"both"` is the default for Relay types).
+- **Cursor format**: opaque base64-encoded payload by default (`b64("offset:N")`). Documented as opaque — clients must not parse it. `Meta.cursor_field` for stable column-based cursors is **out of scope** for this card; lives in BETTER item 39 sub-feature 3.
+- **Required arguments**: `first: Int`, `after: String`, `last: Int`, `before: String`. Backward pagination (`last`/`before`) is required by the Relay spec.
+- **`pageInfo`**: emits the four standard fields (`hasNextPage`, `hasPreviousPage`, `startCursor`, `endCursor`) with correct semantics — including the spec-mandated *"the connection MUST resolve `hasNextPage` correctly even when the consumer didn't request it"* invariant.
+- **Edge cases**: `first: 0` returns empty edges + `pageInfo`. `first: N` with N > remaining rows returns the actual remainder. `after` cursor for a row that no longer exists falls through to the next existing row (no error). Both `first` and `last` in the same query is rejected with a typed error.
+- **`totalCount`**: an opt-in field on every Connection (`Meta.connection = {"total_count": True}`). When selected, runs `qs.count()` on the *unpaginated* queryset (post-filter, pre-slice). Documented as the canonical Relay-compatible total-count surface.
+- `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`)
+- `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`)
+- `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-046-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent)
+- decode the GlobalID server-side (never trust the client's claim of which type the ID belongs to)
+- dispatch to the resolved type's `resolve_node` (which honors `cls.get_queryset(qs, info)`)
+- return `null` for rows the user can't see (not an error — the Relay spec requires `null`, not an exception)
+- never reveal *existence* of hidden rows through error timing or status codes
+- `relay.GlobalID`, `relay.NodeID[...]`, `relay.Connection`, `relay.ListConnection`, `relay.Edge`, `relay.PageInfo` in `Meta.interfaces` → rejected with a message naming the helper and explaining it's a scalar / annotation / field-type rather than an interface.
+- Non-Strawberry-interface classes in `Meta.interfaces` → rejected at validation with the offending class name.
+- `Meta.connection = {...}` declared on a type that doesn't include `relay.Node` in `Meta.interfaces` → rejected with a message suggesting either remove the `connection` key or add `relay.Node` to interfaces.
+- A `DjangoNodeField()` query field on a schema with **no** `DjangoType`s declaring `relay.Node` → rejected at finalization with *"node lookup configured but no Node types registered."*
+- `node(id:)` and `nodes(ids:)` resolve real product / category / item / entry GlobalIDs
+- Reverse-FK and M2M relations on those types expose their Connection counterparts
+- Live HTTP tests under `examples/fakeshop/test_query/` exercise the full Relay query shape (refetch, paginated connection, cursor round-trip, `totalCount`)
+- Type-rename GlobalID migrations (Django-migrations-style history that lets old-format IDs decode alongside new)
+- Polymorphic connections (`Connection[Interface]` with auto-dispatched concrete types per edge)
+- `Meta.cursor_field` for stable cursors keyed on a deterministic column
+- Auto-upgrade reverse FK / M2M to Connection based on a row-count threshold
+- Refetchable container schema metadata for `useRefetchableFragment`
+- Permission-aware cursor decoding (cursor decode re-runs `get_queryset` so privileged cursors don't leak)
+- `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands.
+- `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
+- `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
+- `WIP-ALPHA-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
+- `TODO-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands.
+- `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`)
+- `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
+- `django_strawberry_framework/types/base.py` — `Meta.connection` / `Meta.relation_shapes` validation
+- `django_strawberry_framework/types/finalizer.py` — auto-upgrade reverse-FK / M2M to Connection
+- `django_strawberry_framework/testing/relay.py` (new) — test helpers
+- `tests/test_relay_node_field.py`, `tests/test_relay_connection.py` (new)
+- `examples/fakeshop/test_query/test_library_api.py` — Relay-shape HTTP tests
+- `examples/fakeshop/apps/products/schema.py` — Relay surface activation (lit up at fakeshop activation time)
+- `docs/spec-032-full_relay-0_0_9.md` (new)
+- `docs/GLOSSARY.md` — Relay surface description
+- Relay node refetch from Apollo / Relay Compiler clients (the *"Relay just works"* end state for `1.0.0`)
+- Fakeshop product-catalog Relay activation (Goal 8)
+- Per-type `useFragment` / `useRefetchableFragment` patterns (mechanics; the schema-side `@refetchable` directive support lives in BETTER item 39 sub-feature 5)
+- Every BETTER item 39 sub-feature builds on this card's mechanics
+- Fakeshop products-app activation (`examples/fakeshop/apps/products/schema.py`): replace the four `Query` list resolvers (`all_categories` / `all_items` / `all_properties` / `all_entries`) with `DjangoConnectionField`s for the 1-to-1 `django-graphene-filters` cookbook mirror (connections-only — the cookbook Query is `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` with no list resolvers). The four `*Type` classes are already Relay-Node-shaped with `filterset_class` / `orderset_class` wired, so only the root-field shape changes; `relay.node()` / root `Node.Field` refetch is the separate root-Node goal of this card. Deferred from the `DONE-030-0.0.9` (`DjangoConnectionField`) cycle and gated on `WIP-ALPHA-033-0.0.9` (connection-aware optimizer): a `0.0.9` `DjangoConnectionField` derives an empty optimizer plan, so a connections-only products conversion must land with 033 to avoid regressing the `test_products_optimizer_*` SQL-shape coverage.
+
+#### Card references
+
+- Blocked by: blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Related: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
+- Related: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
+- Related: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-046-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-046-0.1.2` - `Meta.search_fields` support
+- Related: `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Related: `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections. -> `DONE-027-0.0.8` - Filtering subsystem
+- Related: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` - Ordering subsystem
+- Related: `WIP-ALPHA-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning
+- Related: `TODO-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `TODO-ALPHA-034-0.0.10` - Permissions subsystem
+- Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-051-0.1.5`. -> `TODO-BETA-051-0.1.5` - Fakeshop GraphQL schema activation
+- Related: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`) -> `DONE-030-0.0.9` - `DjangoConnectionField`
+
 <a id="django_model_based_globalid_encoding"></a>
 ### [DONE-031-0.0.9 - Django-model-based GlobalID encoding](KANBAN.html#django_model_based_globalid_encoding)
 
@@ -1555,7 +1595,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
@@ -1626,7 +1666,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 
 #### Card references
 
-- Related: This card should land before Full Relay because root `node(id:)`, `nodes(ids:)`, and refetch helpers make GlobalID encoding a public durability contract. -> `WIP-ALPHA-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
+- Related: This card should land before Full Relay because root `node(id:)`, `nodes(ids:)`, and refetch helpers make GlobalID encoding a public durability contract. -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
 - Related: `DjangoConnectionField` can land before this card because connection pagination does not require changing the Relay GlobalID payload. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
 <a id="djangoconnectionfield"></a>
@@ -1647,7 +1687,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
 | [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
@@ -1910,7 +1950,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 | [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
 | [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
@@ -2009,7 +2049,7 @@ shipped
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
 | [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
@@ -2300,7 +2340,7 @@ shipped
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 | [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
@@ -2592,7 +2632,7 @@ shipped
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
@@ -2819,7 +2859,7 @@ shipped
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 | [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
@@ -2897,7 +2937,7 @@ shipped
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
@@ -2952,7 +2992,7 @@ shipped
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | planned for `0.0.9` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 | [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
 | [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |

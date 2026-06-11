@@ -28,8 +28,10 @@ import functools
 import itertools
 
 import pytest
+import strawberry
 from apps.products.models import Category, Entry, Item, Property
 from django.db import models
+from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -226,32 +228,290 @@ def test_meta_orderset_class_is_promoted_to_allowed_meta_keys():
     assert "orderset_class" not in DEFERRED_META_KEYS
 
 
-# TODO(spec-032-full_relay-0_0_9 Slice 1): One named-rejection test per relay
-# helper plus the two re-affirmation pins (Decision 8; eight messages total):
-#   test_interfaces_rejects_relay_globalid_named / ..._nodeid_named /
-#   ..._connection_named / ..._listconnection_named / ..._edge_named /
-#   ..._pageinfo_named
-#     each helper in Meta.interfaces raises ConfigurationError whose message
-#     NAMES the helper, what it is (scalar-like wrapper / annotation helper /
-#     generic output type), and the remediation (relay.Node, or
-#     Meta.connection / DjangoConnectionField for connection shapes).
-#   test_interfaces_rejects_non_interface_class_named
-#     the shipped generic rejection still names the offending class (pin).
-#   test_connection_key_requires_relay_node
-#     the shipped Meta.connection gate message (pin).
+def _declare_category_type_with_interface(entry):
+    """Declare a ``DjangoType`` subclass with ``entry`` in ``Meta.interfaces``.
 
-# TODO(spec-032-full_relay-0_0_9 Slice 3): Meta.relation_shapes key
-# validation beside the other Meta validation (Decision 7):
-#   test_meta_relation_shapes_in_allowed_meta_keys
-#     in ALLOWED_META_KEYS, not in DEFERRED_META_KEYS.
-#   test_relation_shapes_validation_matrix
-#     non-dict, bad value, unknown field, non-relation field, single-valued
-#     relation, excluded field, non-Relay declaring type each raise
-#     ConfigurationError at type creation.
-#   test_relation_shapes_on_consumer_authored_relation_raises
-#     an explicit key naming a relation with a consumer annotation /
-#     strawberry.field override raises with the overrides-own-the-shape
-#     message (Revision 3; the silent-accept-then-skip path must not exist).
+    Shared boilerplate for the six named-rejection tests and the
+    non-interface-class re-affirmation pin (spec-032 Decision 8); the
+    declaration itself raises ``ConfigurationError`` for every entry these
+    tests pass.
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            interfaces = (entry,)
+
+
+def test_interfaces_rejects_relay_globalid_named():
+    """``relay.GlobalID`` in ``Meta.interfaces`` is rejected by name (Decision 8)."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_category_type_with_interface(relay.GlobalID)
+    message = str(excinfo.value)
+    assert "relay.GlobalID" in message
+    assert "scalar-like id wrapper" in message
+    assert "`id: GlobalID!` automatically from `relay.Node`" in message
+
+
+def test_interfaces_rejects_relay_nodeid_named():
+    """``relay.NodeID`` (an ``Annotated`` alias, not a class) is rejected by name."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_category_type_with_interface(relay.NodeID)
+    message = str(excinfo.value)
+    assert "relay.NodeID" in message
+    assert "annotation helper for custom id fields (`id: relay.NodeID[int]`)" in message
+    assert "add `relay.Node` to `Meta.interfaces` instead" in message
+
+
+def test_interfaces_rejects_relay_connection_named():
+    """``relay.Connection`` rejection names ``Meta.connection`` / ``DjangoConnectionField``."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_category_type_with_interface(relay.Connection)
+    message = str(excinfo.value)
+    assert "relay.Connection" in message
+    assert "generic output type" in message
+    assert "Meta.connection" in message
+    assert "DjangoConnectionField" in message
+
+
+def test_interfaces_rejects_relay_listconnection_named():
+    """``relay.ListConnection`` carries the same connection-surface remediation."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_category_type_with_interface(relay.ListConnection)
+    message = str(excinfo.value)
+    assert "relay.ListConnection" in message
+    assert "generic output type" in message
+    assert "Meta.connection" in message
+    assert "DjangoConnectionField" in message
+
+
+def test_interfaces_rejects_relay_edge_named():
+    """``relay.Edge`` rejection says the connection machinery instantiates it."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_category_type_with_interface(relay.Edge)
+    message = str(excinfo.value)
+    assert "relay.Edge" in message
+    assert "generic output type the connection machinery instantiates" in message
+    assert "not consumer-declarable" in message
+
+
+def test_interfaces_rejects_relay_pageinfo_named():
+    """``relay.PageInfo`` rejection says it is a generated pagination type."""
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_category_type_with_interface(relay.PageInfo)
+    message = str(excinfo.value)
+    assert "relay.PageInfo" in message
+    assert "generated pagination type" in message
+    assert "add `relay.Node` to `Meta.interfaces` instead" in message
+
+
+def test_interfaces_rejects_non_interface_class_named():
+    """Re-affirmation pin: a plain ``@strawberry.type`` class takes the generic branch.
+
+    No behavior change (spec-011-era rejection); pins the documented message
+    naming the offending class (spec-032 Slice 1).
+    """
+
+    @strawberry.type
+    class PlainType:
+        name: str
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_category_type_with_interface(PlainType)
+    message = str(excinfo.value)
+    assert "PlainType" in message
+    assert "is not a Strawberry interface" in message
+
+
+def test_connection_key_requires_relay_node():
+    """Re-affirmation pin: ``Meta.connection`` on a non-Relay-Node type raises.
+
+    No behavior change (spec-030 Decision 8 gate); pins the full documented
+    add-``relay.Node``-or-remove-the-key remediation (spec-032 Slice 1).
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                connection = {"total_count": True}
+
+    message = str(excinfo.value)
+    assert "requires a Relay-Node-shaped type" in message
+    assert "add `relay.Node` to `Meta.interfaces` or inherit `relay.Node` directly." in message
+
+
+def test_meta_relation_shapes_in_allowed_meta_keys():
+    """``relation_shapes`` is a shipped Meta key (spec-032 Decision 7), not deferred.
+
+    Mirrors ``test_interfaces_is_shipped_not_deferred`` below: a net-new
+    ``ALLOWED_META_KEYS`` entry, NOT a ``DEFERRED_META_KEYS`` promotion.
+    """
+    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
+
+    assert "relation_shapes" in ALLOWED_META_KEYS
+    assert "relation_shapes" not in DEFERRED_META_KEYS
+
+
+def _declare_relation_shapes_type(
+    model,
+    fields,
+    relation_shapes,
+    *,
+    relay_node=True,
+    namespace_extra=None,
+):
+    """Declare a throwaway ``DjangoType`` carrying ``Meta.relation_shapes``.
+
+    Shared by the validation-matrix and consumer-authored tests; every case
+    raises at type creation, so the class object never leaks.
+    """
+    meta_attrs = {"model": model, "fields": fields, "relation_shapes": relation_shapes}
+    if relay_node:
+        meta_attrs["interfaces"] = (relay.Node,)
+    namespace = {"Meta": type("Meta", (), meta_attrs)}
+    if namespace_extra:
+        namespace.update(namespace_extra)
+    return type("RelationShapesProbeType", (DjangoType,), namespace)
+
+
+@pytest.mark.parametrize(
+    (
+        "model",
+        "fields",
+        "relation_shapes",
+        "relay_node",
+        "expected",
+    ),
+    [
+        pytest.param(
+            Category,
+            ("id", "name", "items"),
+            "items",
+            True,
+            "Meta.relation_shapes must be a dict",
+            id="non-dict",
+        ),
+        pytest.param(
+            Category,
+            ("id", "name", "items"),
+            {1: "both"},
+            True,
+            "keys must be relation field name strings; got 1",
+            id="non-str-key",
+        ),
+        pytest.param(
+            Category,
+            ("id", "name", "items"),
+            {"items": "paginated"},
+            True,
+            "got unknown shape 'paginated'; valid shapes are ['both', 'connection', 'list']",
+            id="bad-value",
+        ),
+        pytest.param(
+            Category,
+            ("id", "name", "items"),
+            {"nope": "both"},
+            True,
+            "Meta.relation_shapes names unknown fields: ['nope']",
+            id="unknown-field",
+        ),
+        pytest.param(
+            Category,
+            ("id", "name", "items"),
+            {"name": "both"},
+            True,
+            "names non-relation field 'name'",
+            id="non-relation-field",
+        ),
+        pytest.param(
+            Item,
+            ("id", "name", "category"),
+            {"category": "both"},
+            True,
+            "names single-valued relation 'category'",
+            id="single-valued-relation",
+        ),
+        pytest.param(
+            Category,
+            ("id", "name"),
+            {"items": "both"},
+            True,
+            "names fields not in the selected set: ['items']",
+            id="excluded-field",
+        ),
+        pytest.param(
+            Category,
+            ("id", "name", "items"),
+            {"items": "both"},
+            False,
+            "requires a Relay-Node-shaped type; add `relay.Node` to `Meta.interfaces` "
+            "or remove the key.",
+            id="non-relay-declaring-type",
+        ),
+    ],
+)
+def test_relation_shapes_validation_matrix(
+    model,
+    fields,
+    relation_shapes,
+    relay_node,
+    expected,
+):
+    """Every illegal ``Meta.relation_shapes`` declaration raises at type creation.
+
+    Spec-032 Decision 7 / Error shapes: shape, key-name, and gate failures all
+    surface at type creation (only the target-is-Node-shaped check waits for
+    finalization). The non-Relay case asserts the shared Relay-Node-gate
+    lead-in with the spec-pinned "or remove the key." tail.
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_relation_shapes_type(model, fields, relation_shapes, relay_node=relay_node)
+    assert expected in str(excinfo.value)
+
+
+def test_relation_shapes_on_consumer_annotated_relation_raises():
+    """An explicit key naming a consumer-ANNOTATED relation raises at type creation.
+
+    Spec-032 Decision 7 / Revision 3 P2: the consumer annotation owns the
+    field's shape; the silent-accept-then-skip path must not exist. (The
+    implicit ``"both"`` default still skips consumer-authored relations
+    silently - only the explicit key fails loud.)
+    """
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_relation_shapes_type(
+            Category,
+            ("id", "name", "items"),
+            {"items": "connection"},
+            namespace_extra={"__annotations__": {"items": "list[str]"}},
+        )
+    message = str(excinfo.value)
+    assert "names consumer-authored relation 'items'" in message
+    assert "owns that field's shape" in message
+
+
+def test_relation_shapes_on_consumer_assigned_relation_raises():
+    """An explicit key naming a consumer-ASSIGNED relation raises at type creation.
+
+    The ``strawberry.field(resolver=...)`` corner of the four-corner override
+    contract; same overrides-own-the-shape message as the annotation corner.
+    """
+
+    def _items_resolver(root) -> list[str]:
+        return []  # Never resolved - the class raises at creation.
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        _declare_relation_shapes_type(
+            Category,
+            ("id", "name", "items"),
+            {"items": "connection"},
+            namespace_extra={"items": strawberry.field(resolver=_items_resolver)},
+        )
+    message = str(excinfo.value)
+    assert "names consumer-authored relation 'items'" in message
+    assert "owns that field's shape" in message
 
 
 def test_interfaces_is_shipped_not_deferred():

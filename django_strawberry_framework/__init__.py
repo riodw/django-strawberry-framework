@@ -21,15 +21,9 @@ from .connection import DjangoConnection, DjangoConnectionField  # noqa: E402
 from .list_field import DjangoListField  # noqa: E402
 from .optimizer import DjangoOptimizerExtension  # noqa: E402
 from .optimizer.hints import OptimizerHint  # noqa: E402
+from .relay import DjangoNodeField, DjangoNodesField  # noqa: E402
 from .scalars import BigInt, strawberry_config  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
-
-# TODO(spec-032-full_relay-0_0_9 Slice 2): Export the root refetch fields once
-# the top-level ``relay.py`` ships them (DoD items 3-4) - the import carries
-# the same ``noqa: E402`` as its siblings above:
-#   from .relay import DjangoNodeField, DjangoNodesField  # noqa: ERA001
-# and ``__all__`` below gains "DjangoNodeField" / "DjangoNodesField"
-# (alphabetical, between "DjangoListField" and "DjangoOptimizerExtension").
 
 __version__ = "0.0.8"
 
@@ -38,6 +32,8 @@ __all__ = (
     "DjangoConnection",
     "DjangoConnectionField",
     "DjangoListField",
+    "DjangoNodeField",
+    "DjangoNodesField",
     "DjangoOptimizerExtension",
     "DjangoType",
     "OptimizerHint",

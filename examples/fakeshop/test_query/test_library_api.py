@@ -14,6 +14,7 @@ from django.urls import clear_url_caches
 from strawberry import relay
 
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.testing.relay import global_id_for
 
 
 def _reload_library_project_schema() -> None:
@@ -2119,35 +2120,19 @@ def test_nullability_override_acceptance_api_is_queryable():
 # the pre-slice post-filter ``totalCount``, the ``first`` + ``last`` guard, the
 # ``first: 0`` empty-window shape, ``totalCount`` selection-gating, and the
 # per-instance count across two aliases.
+#
+# spec-032 Slice 4 - this block is also the live PRIMARY home of the
+# cursor-contract conformance matrix (Decision 9; the test_query README
+# coverage rule; no Slice-6 dependency - ``allLibraryGenresConnection`` is
+# already shipped). ``test_genre_connection_first_zero_empty_edges`` and
+# ``test_genre_connection_first_and_last_rejected`` above are the matrix's
+# ``first: 0`` and ``first`` + ``last`` pins (re-affirmed, not duplicated);
+# the five conformance tests at the end of the block (``test_first_overrun``
+# through ``test_backward_pagination_last_before``) complete the matrix. The stale-``after`` test pins ONLY the no-error
+# property (Revision 2 P1 - offset cursors encode a position, not row
+# identity). All assertions are behavior-only - never SQL shape
+# (pre-``033`` posture, Decision 12).
 # ---------------------------------------------------------------------------
-
-# TODO(spec-032-full_relay-0_0_9 Slice 4): Live PRIMARY copies of the
-# cursor-contract conformance matrix against the already-shipped
-# ``allLibraryGenresConnection`` (no Slice-6 dependency; the test_query
-# README coverage rule; every test on _reload_project_schema_for_acceptance_tests
-# and inline Model.objects.create seeding - the library inline-create rule):
-#   test_first_zero
-#     first: 0 -> edges == [] with well-formed pageInfo (hasNextPage true
-#     iff rows exist past the empty window - Strawberry overfetches by 1).
-#   test_first_overrun
-#     first: N past the remainder -> the actual remainder, hasNextPage false.
-#   test_stale_after_cursor_no_error
-#     delete the after-cursor's row; the query SUCCEEDS. Pins ONLY the
-#     no-error property - offset cursors encode a position, not row
-#     identity, so no skip/duplicate/next-row assertion (Revision 2 P1;
-#     keyset stability is BACKLOG item 39 sub-feature 3).
-#   test_first_and_last_rejected
-#     the shipped package GraphQLError (re-affirmation; Strawberry itself
-#     accepts the combination - the guard is package-owned).
-#   test_page_info_four_fields
-#     hasNextPage / hasPreviousPage / startCursor / endCursor correctness.
-#   test_has_next_page_correct_when_edges_unrequested
-#     a pageInfo-ONLY query (no edges selection) still computes hasNextPage
-#     correctly - Strawberry's should_resolve_list_connection_edges takes a
-#     distinct path when edges are absent (Revision 6 P3 rewording: an
-#     UNREQUESTED field is unobservable; this is the observable inverse).
-#   test_backward_pagination_last_before
-#     last / before honoring the Relay spec.
 
 
 def _seed_genres(*names: str) -> None:
@@ -2413,52 +2398,474 @@ def test_genre_connection_order_by_to_many_no_node_multiplication():
     assert conn["totalCount"] == 2
 
 
-# TODO(spec-032-full_relay-0_0_9 Slice 6): Fakeshop library activation - the
-# mandated live coverage home for every live-reachable root-field and
-# relation-connection path (test_query README rule; all on
-# _reload_project_schema_for_acceptance_tests; inline Model.objects.create
-# seeding - the seed_data(N)/create_users(N) convention is catalog/auth-only):
-#   test_node_refetch_genre
-#     query a genre's id, refetch via the bare node(id:), assert field
-#     equality.
-#   test_typed_node_field_live / test_typed_node_field_mismatch_live
-#     the typed genre: field resolves a genre id; a book id raises the
-#     expected/received-types GraphQLError.
-#   test_node_malformed_id_live
-#     a malformed / unresolvable id posted to /graphql/ surfaces
-#     GLOBALID_INVALID, not a 500 - and not Strawberry's upstream argument-
-#     conversion error (reachable because the field's argument is
-#     strawberry.ID, Revision 7 P1).
-#   test_node_uncoercible_pk_live
-#     a well-formed `library.genre:abc` payload (pk literal not coercible to
-#     the integer pk) resolves to null, NOT a 500 leaking Django's ValueError
-#     (Revision 7 P2).
-#   test_nodes_batch_mixed_types_order_and_null
-#     genre + book ids interleaved with one bogus-pk (WELL-FORMED) id; order
-#     preserved, null hole in place. (A malformed id mid-batch fails the
-#     whole field - that contract is pinned package-side in
-#     tests/test_relay_node_field.py::test_nodes_malformed_id_mid_batch.)
-#   test_nodes_duplicates_and_empty_live
-#     duplicate ids resolve per position; ids: [] returns [].
-#   test_genres_connection_cursor_round_trip / test_genres_connection_total_count
-#     endCursor -> after continuation; totalCount against the created-row
-#     count.
-#   test_genre_books_connection_behavior
-#     nested reverse-M2M booksConnection pagination + row correctness -
-#     BEHAVIOR only, never SQL shape (pre-033 posture; strictness "raise"
-#     does NOT flag the nested access until 033 wires the connection
-#     pipeline - spec-032 Decision 12).
-#   test_book_genres_connection_sidecars_and_total_count
-#     the forward-M2M genresConnection on the promoted BookType: filter: /
-#     orderBy: derive from the genre sidecars; totalCount resolves because
-#     the TARGET GenreType declares Meta.connection = {"total_count": True}.
-#   test_book_loans_relation_stays_list_only
-#     BookType.loans (reverse FK to the non-Relay LoanType) is silently
-#     list-only under the implicit default (graceful degradation, live).
-#   test_node_hidden_row_null_live
-#     refetch a circulation_status="repair" book (hidden by the new
-#     BookType.get_queryset for non-staff) via node(id:) -> null; a staff
-#     request resolves the same id to the row (visibility, not existence).
-#   Plus: update existing BookType id assertions for the Relay promotion
-#   (integer ids -> encoded model-label GlobalIDs, minted via
-#   testing.relay.global_id_for).
+def _genres_connection(args: str, selection: str) -> dict:
+    """Post one ``allLibraryGenresConnection`` query; return the connection dict.
+
+    Asserts the no-error envelope (HTTP 200, no ``errors`` entry) so every
+    caller pins at least the query-succeeds property.
+    """
+    response = _post_graphql(
+        f"query {{ allLibraryGenresConnection({args}) {{ {selection} }} }}",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    return payload["data"]["allLibraryGenresConnection"]
+
+
+@pytest.mark.django_db
+def test_first_overrun():
+    """``first: N`` past the remainder returns the actual remainder (Decision 9).
+
+    Three rows, ``first: 10``: exactly the three rows come back and
+    ``hasNextPage`` is false - the overrun is clamped, never an error.
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    conn = _genres_connection(
+        "first: 10",
+        "edges { node { name } } pageInfo { hasNextPage }",
+    )
+    assert [edge["node"]["name"] for edge in conn["edges"]] == ["Alpha", "Beta", "Gamma"]
+    assert conn["pageInfo"]["hasNextPage"] is False
+
+
+@pytest.mark.django_db
+def test_stale_after_cursor_no_error():
+    """An ``after`` cursor whose row was deleted does NOT error (Revision 2 P1).
+
+    Pins ONLY the no-error property: Strawberry's offset cursors encode a
+    position, not row identity, so no skip / duplicate / next-row assertion
+    is made - positional stability under deletes is deliberately NOT part of
+    the contract (keyset cursors are BACKLOG item 39 sub-feature 3).
+    """
+    _seed_genres("Alpha", "Beta", "Gamma", "Delta")
+
+    page_one = _genres_connection("first: 2", "pageInfo { endCursor }")
+    end_cursor = page_one["pageInfo"]["endCursor"]
+    # Delete the row the cursor position points at (the second row in
+    # deterministic pk order).
+    models.Genre.objects.order_by("pk")[1].delete()
+
+    # The helper's envelope assertions (200 + no ``errors``) ARE the test.
+    _genres_connection(
+        f'first: 2, after: "{end_cursor}"',
+        "edges { node { name } }",
+    )
+
+
+@pytest.mark.django_db
+def test_page_info_four_fields():
+    """All four ``pageInfo`` fields are correct across a forward page walk.
+
+    Page 1 (``first: 2`` over 3 rows): ``hasNextPage`` true, ``hasPreviousPage``
+    false, ``startCursor`` / ``endCursor`` equal to the first / last edge
+    cursors. Page 2 (``after`` page 1's ``endCursor``): ``hasNextPage`` false,
+    ``hasPreviousPage`` true (Strawberry computes it from slice start > 0).
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+    selection = "edges { cursor } pageInfo { hasNextPage hasPreviousPage startCursor endCursor }"
+
+    page_one = _genres_connection("first: 2", selection)
+    cursors = [edge["cursor"] for edge in page_one["edges"]]
+    info_one = page_one["pageInfo"]
+    assert info_one["hasNextPage"] is True
+    assert info_one["hasPreviousPage"] is False
+    assert info_one["startCursor"] == cursors[0]
+    assert info_one["endCursor"] == cursors[1]
+
+    page_two = _genres_connection(f'first: 2, after: "{info_one["endCursor"]}"', selection)
+    info_two = page_two["pageInfo"]
+    assert info_two["hasNextPage"] is False
+    assert info_two["hasPreviousPage"] is True
+
+
+@pytest.mark.django_db
+def test_has_next_page_correct_when_edges_unrequested():
+    """A ``pageInfo``-only query (no ``edges`` selection) computes ``hasNextPage``.
+
+    Strawberry's ``should_resolve_list_connection_edges`` takes a distinct
+    path when neither ``edges`` nor ``pageInfo`` is selected; a ``pageInfo``-only
+    selection must still walk the window and report the flag correctly for
+    both a windowed (true) and an exact (false) page (Revision 6 P3 - the
+    observable inverse of an unrequested field).
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    windowed = _genres_connection("first: 2", "pageInfo { hasNextPage }")
+    assert windowed["pageInfo"]["hasNextPage"] is True
+
+    exact = _genres_connection("first: 3", "pageInfo { hasNextPage }")
+    assert exact["pageInfo"]["hasNextPage"] is False
+
+
+@pytest.mark.django_db
+def test_backward_pagination_last_before():
+    """``last`` / ``before`` honor the Relay spec (row identity is the contract).
+
+    ``last: 2`` returns the final two rows in order; ``last: 2`` before the
+    last row's cursor returns the two rows immediately preceding it. Cursors
+    are fed back opaquely from a prior response - never hand-minted
+    (Decision 9's opacity contract).
+    """
+    _seed_genres("Alpha", "Beta", "Gamma", "Delta", "Echo")
+
+    tail = _genres_connection(
+        "last: 2",
+        "edges { node { name } } pageInfo { hasNextPage hasPreviousPage }",
+    )
+    assert [edge["node"]["name"] for edge in tail["edges"]] == ["Delta", "Echo"]
+    assert tail["pageInfo"]["hasPreviousPage"] is True
+    assert tail["pageInfo"]["hasNextPage"] is False
+
+    full = _genres_connection("first: 5", "edges { cursor node { name } }")
+    last_row_cursor = full["edges"][-1]["cursor"]
+    window = _genres_connection(
+        f'last: 2, before: "{last_row_cursor}"',
+        "edges { node { name } } pageInfo { hasNextPage hasPreviousPage }",
+    )
+    assert [edge["node"]["name"] for edge in window["edges"]] == ["Gamma", "Delta"]
+    # Locked-Strawberry flag values: rows exist on both sides of the window
+    # (the overfetch sees Echo; slice start > 0 sees Alpha / Beta).
+    assert window["pageInfo"]["hasNextPage"] is True
+    assert window["pageInfo"]["hasPreviousPage"] is True
+
+
+# ---------------------------------------------------------------------------
+# Slice 6 - fakeshop library activation (spec-032 Decision 12): live root
+# node(id:) / nodes(ids:) / typed genre(id:) refetch plus the synthesized
+# relation-as-Connection surfaces, the mandated live coverage home per the
+# test_query README rule. Every test rides the autouse
+# _reload_project_schema_for_acceptance_tests fixture; seeding is inline
+# Model.objects.create (library rule - no services.py); nested-connection
+# assertions are BEHAVIOR only, never SQL shape (pre-033 posture). Book ids
+# are minted via testing.relay.global_id_for over IN-TEST-BODY class imports
+# (the file-header reload invariant). The spec-named
+# test_genres_connection_cursor_round_trip / test_genres_connection_total_count
+# contracts are mapped, not duplicated: they are already live-proven by
+# test_genre_connection_full_round_trip (endCursor -> after continuation with
+# no-overlap + post-filter totalCount) and
+# test_genre_connection_first_zero_empty_edges (pre-slice totalCount) above.
+# ---------------------------------------------------------------------------
+
+
+def _seed_shelf() -> models.Shelf:
+    """Create one branch + shelf so book fixtures stay inline one-liners."""
+    branch = models.Branch.objects.create(name="Relay", city="Boston")
+    return models.Shelf.objects.create(code="R-1", topic="Relay fixtures", branch=branch)
+
+
+def _post_node(global_id: str, selection: str = "__typename") -> dict:
+    """Post one bare ``node(id:)`` query; return the full response payload.
+
+    Returns the whole payload (not ``data.node``) so callers can assert the
+    presence or absence of ``errors`` per the Decision-5 failure families.
+    Pins only the never-a-500 transport contract itself.
+    """
+    response = _post_graphql(f'query {{ node(id: "{global_id}") {{ {selection} }} }}')
+    assert response.status_code == 200
+    return response.json()
+
+
+@pytest.mark.django_db
+def test_node_refetch_genre():
+    """The bare ``node(id:)`` refetches an emitted Genre GlobalID round-trip.
+
+    The id fed back is the EMITTED wire string from a prior query, never
+    hand-minted - the opaque-id realism half of the refetch contract.
+    """
+    models.Genre.objects.create(name="Speculative")
+
+    listed = _post_graphql("query { allLibraryGenres { id name } }")
+    assert listed.status_code == 200
+    listed_payload = listed.json()
+    assert "errors" not in listed_payload, listed_payload
+    emitted = listed_payload["data"]["allLibraryGenres"][0]
+
+    refetched = _post_node(emitted["id"], "... on GenreType { id name }")
+    assert "errors" not in refetched, refetched
+    assert refetched["data"]["node"] == {"id": emitted["id"], "name": "Speculative"}
+
+
+@pytest.mark.django_db
+def test_typed_node_field_live():
+    """The typed ``genre(id:)`` field resolves a genre GlobalID to the row."""
+    from apps.library.schema import GenreType
+
+    genre = models.Genre.objects.create(name="Speculative")
+    gid = global_id_for(GenreType, genre.pk)
+
+    response = _post_graphql(f'query {{ genre(id: "{gid}") {{ id name }} }}')
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["genre"] == {"id": gid, "name": "Speculative"}
+
+
+@pytest.mark.django_db
+def test_typed_node_field_mismatch_live():
+    """A book id at the typed ``genre(id:)`` field raises the mismatch error.
+
+    The expected/received-types ``GraphQLError`` (Decision 4): a wrong-type
+    id at a typed field is a client bug surfaced loudly, not a ``null``.
+    """
+    from apps.library.schema import BookType
+
+    book = models.Book.objects.create(title="Kindred", shelf=_seed_shelf())
+    book_gid = global_id_for(BookType, book.pk)
+
+    response = _post_graphql(f'query {{ genre(id: "{book_gid}") {{ name }} }}')
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    messages = " ".join(error["message"] for error in payload["errors"])
+    assert "Wrong node type: expected a GenreType id, received a BookType id." in messages
+
+
+@pytest.mark.django_db
+def test_node_malformed_id_live():
+    """A malformed id surfaces ``GLOBALID_INVALID`` in-band, never a 500.
+
+    The package-owned conversion (Decision 5) - reachable because the field
+    argument is ``strawberry.ID``, so the raw string gets past Strawberry's
+    argument conversion to ``decode_global_id`` (Revision 7 P1).
+    """
+    payload = _post_node("not-base64!!!")
+    assert "errors" in payload, payload
+    error = payload["errors"][0]
+    assert error["extensions"]["code"] == "GLOBALID_INVALID"
+    assert error["message"].startswith("Invalid GlobalID:")
+
+
+@pytest.mark.django_db
+def test_node_uncoercible_pk_live():
+    """A well-formed payload with an uncoercible pk resolves to ``null``.
+
+    ``library.genre:abc`` decodes cleanly but ``abc`` is not an integer pk -
+    the existence-family ``null``, with no errors entry and no 500 leaking
+    Django's ``ValueError`` (Revision 7 P2).
+    """
+    gid = base64.b64encode(b"library.genre:abc").decode()
+    payload = _post_node(gid)
+    assert "errors" not in payload, payload
+    assert payload["data"]["node"] is None
+
+
+@pytest.mark.django_db
+def test_nodes_batch_mixed_types_order_and_null():
+    """``nodes(ids:)`` preserves input order across types with a ``null`` hole.
+
+    Genre + book ids interleaved with one WELL-FORMED missing-pk id; the
+    hole resolves to a positional ``null``, both real rows resolve to their
+    concrete types. (A malformed id mid-batch fails the whole field - pinned
+    package-side in tests/test_relay_node_field.py.)
+    """
+    from apps.library.schema import BookType, GenreType
+
+    genre = models.Genre.objects.create(name="Speculative")
+    book = models.Book.objects.create(title="Kindred", shelf=_seed_shelf())
+    ids = (
+        global_id_for(GenreType, genre.pk),
+        global_id_for(GenreType, 999999),
+        global_id_for(BookType, book.pk),
+    )
+    id_literals = ", ".join(f'"{gid}"' for gid in ids)
+
+    response = _post_graphql(
+        f"""
+        query {{
+          nodes(ids: [{id_literals}]) {{
+            __typename
+            ... on GenreType {{ name }}
+            ... on BookType {{ title }}
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["nodes"] == [
+        {"__typename": "GenreType", "name": "Speculative"},
+        None,
+        {"__typename": "BookType", "title": "Kindred"},
+    ]
+
+
+@pytest.mark.django_db
+def test_nodes_duplicates_and_empty_live():
+    """Duplicate ids resolve per position; ``ids: []`` returns ``[]``."""
+    from apps.library.schema import GenreType
+
+    genre = models.Genre.objects.create(name="Speculative")
+    gid = global_id_for(GenreType, genre.pk)
+
+    duplicated = _post_graphql(
+        f'query {{ nodes(ids: ["{gid}", "{gid}"]) {{ ... on GenreType {{ name }} }} }}',
+    )
+    assert duplicated.status_code == 200
+    duplicated_payload = duplicated.json()
+    assert "errors" not in duplicated_payload, duplicated_payload
+    assert duplicated_payload["data"]["nodes"] == [{"name": "Speculative"}] * 2
+
+    empty = _post_graphql("query { nodes(ids: []) { __typename } }")
+    assert empty.status_code == 200
+    empty_payload = empty.json()
+    assert "errors" not in empty_payload, empty_payload
+    assert empty_payload["data"]["nodes"] == []
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_behavior():
+    """The synthesized reverse-M2M ``booksConnection`` paginates correctly.
+
+    Behavior only (right rows, right order, no overlap) - SQL-shape
+    assertions are 033's deliverable. The ``repair`` book also proves the
+    target ``BookType.get_queryset`` runs INSIDE the nested connection for
+    an anonymous client (the Decision-12 nested visibility bonus).
+    """
+    genre = models.Genre.objects.create(name="Speculative")
+    shelf = _seed_shelf()
+    for title in ("Aurora", "Binti", "Circe"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+    hidden = models.Book.objects.create(
+        title="Withdrawn",
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+        shelf=shelf,
+    )
+    hidden.genres.add(genre)
+
+    def _books_page(args: str) -> dict:
+        response = _post_graphql(
+            f"""
+            query {{
+              allLibraryGenres {{
+                booksConnection({args}) {{
+                  edges {{ node {{ title }} }}
+                  pageInfo {{ hasNextPage endCursor }}
+                }}
+              }}
+            }}
+            """,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        return payload["data"]["allLibraryGenres"][0]["booksConnection"]
+
+    page_one = _books_page("orderBy: [{ title: ASC }], first: 2")
+    titles_one = [edge["node"]["title"] for edge in page_one["edges"]]
+    assert titles_one == ["Aurora", "Binti"]
+    assert page_one["pageInfo"]["hasNextPage"] is True
+
+    end_cursor = page_one["pageInfo"]["endCursor"]
+    page_two = _books_page(f'orderBy: [{{ title: ASC }}], first: 2, after: "{end_cursor}"')
+    titles_two = [edge["node"]["title"] for edge in page_two["edges"]]
+    # The continuation advances with no overlap, and the repair row stays
+    # hidden from the anonymous client even through the nested connection.
+    assert titles_two == ["Circe"]
+    assert page_two["pageInfo"]["hasNextPage"] is False
+    assert "Withdrawn" not in titles_one + titles_two
+
+
+@pytest.mark.django_db
+def test_book_genres_connection_sidecars_and_total_count():
+    """The forward-M2M ``genresConnection`` proves sidecars + totalCount live.
+
+    ``filter:`` / ``orderBy:`` derive from the genre sidecars; ``totalCount``
+    resolves because the TARGET ``GenreType`` declares
+    ``Meta.connection = {"total_count": True}`` (the type-level contract) and
+    counts the unpaginated post-filter set - distinct from both the page
+    size (2) and the grand total (4).
+    """
+    book = models.Book.objects.create(title="Kindred", shelf=_seed_shelf())
+    for name in (
+        "Gamma",
+        "Alpha",
+        "Banana",
+        "Echo",
+    ):
+        book.genres.add(models.Genre.objects.create(name=name))
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBooks {
+            genresConnection(
+              filter: { name: { iContains: "a" } }
+              orderBy: [{ name: ASC }]
+              first: 2
+            ) {
+              totalCount
+              edges { node { name } }
+            }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryBooks"][0]["genresConnection"]
+    # ``iContains "a"`` matches Gamma / Alpha / Banana (Echo excluded); the
+    # orderBy arranges, the first: 2 window slices.
+    assert [edge["node"]["name"] for edge in conn["edges"]] == ["Alpha", "Banana"]
+    assert conn["totalCount"] == 3
+
+
+@pytest.mark.django_db
+def test_book_loans_relation_stays_list_only():
+    """``BookType.loans`` (reverse FK to non-Relay ``LoanType``) stays list-only.
+
+    The live graceful-degradation proof: no ``loansConnection`` is
+    synthesized under the implicit ``"both"`` default because the target is
+    not Relay-shaped; ``genresConnection`` in the same field set is the
+    positive control.
+    """
+    introspected = _post_graphql('query { __type(name: "BookType") { fields { name } } }')
+    assert introspected.status_code == 200
+    introspected_payload = introspected.json()
+    assert "errors" not in introspected_payload, introspected_payload
+    field_names = {field["name"] for field in introspected_payload["data"]["__type"]["fields"]}
+    assert "loans" in field_names
+    assert "loansConnection" not in field_names
+    assert "genresConnection" in field_names
+
+    book = models.Book.objects.create(title="Kindred", shelf=_seed_shelf())
+    patron = models.Patron.objects.create(name="Ada")
+    models.Loan.objects.create(book=book, patron=patron, note="first checkout")
+    _assert_graphql_data(
+        "query { allLibraryBooks { loans { note } } }",
+        {"allLibraryBooks": [{"loans": [{"note": "first checkout"}]}]},
+    )
+
+
+@pytest.mark.django_db
+def test_node_hidden_row_null_live():
+    """A ``get_queryset``-hidden row refetches to ``null``; staff sees the row.
+
+    The Decision-5 headline contract live: the anonymous ``null`` is a
+    VISIBILITY outcome indistinguishable from a missing row (no errors
+    entry), and the same id resolves for a staff request.
+    """
+    from apps.library.schema import BookType
+
+    book = models.Book.objects.create(
+        title="Withdrawn",
+        circulation_status=models.Book.CirculationStatus.REPAIR,
+        shelf=_seed_shelf(),
+    )
+    gid = global_id_for(BookType, book.pk)
+
+    anonymous = _post_node(gid, "... on BookType { title }")
+    assert "errors" not in anonymous, anonymous
+    assert anonymous["data"]["node"] is None
+
+    staff = _post_graphql_as_staff(
+        f'query {{ node(id: "{gid}") {{ ... on BookType {{ title }} }} }}',
+    )
+    assert staff.status_code == 200
+    staff_payload = staff.json()
+    assert "errors" not in staff_payload, staff_payload
+    assert staff_payload["data"]["node"] == {"title": "Withdrawn"}

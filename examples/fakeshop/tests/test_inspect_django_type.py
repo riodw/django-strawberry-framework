@@ -75,10 +75,11 @@ def test_inspect_by_registered_name(reload_inspect_schema):
     call_command("inspect_django_type", "BookType", stdout=out)
     text = out.getvalue()
     assert "BookType" in text
-    # Non-Relay pk renders as a plain Int!, NOT GlobalID! (BookType declares no interfaces).
+    # Relay-Node pk (BookType declares ``interfaces = (relay.Node,)`` since
+    # spec-032 Slice 6): the interface-supplied GlobalID!, not a plain Int!.
     assert "id" in text
-    assert "Int!" in text
-    assert "GlobalID!" not in text
+    assert "GlobalID!" in text
+    assert "relay.Node id" in text
     # Per-row assertions so ``subtitle``'s String intent cannot false-green
     # against the ``title`` row's ``String!`` (``String`` is a substring of it).
     title_row = _field_row(text, "title")
@@ -102,7 +103,7 @@ def test_inspect_by_dotted_path(reload_inspect_schema):
     call_command("inspect_django_type", "apps.library.schema.BookType", stdout=out)
     text = out.getvalue()
     assert "BookType" in text
-    assert "Int!" in text
+    assert "GlobalID!" in text
     assert "title" in text
     assert "String!" in text
     assert "subtitle" in text

@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import pytest
 from apps.library.models import Book, Genre, Loan, Shelf
+from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.definition import DjangoTypeDefinition
+from django_strawberry_framework.types.relay import _resolve_id_default
 
 
 @pytest.fixture(autouse=True)
@@ -165,6 +168,80 @@ def test_related_target_for_caches_resolved_pair_after_finalize():
     second = book_definition.related_target_for("shelf")
     assert first is second
     assert first is not None
+
+
+def test_has_custom_id_resolver_for_caches_mro_result():
+    """Custom id resolver detection is memoized on the definition."""
+
+    class BaseType:
+        def resolve_id(self):
+            return "custom"
+
+    class BookType(BaseType):
+        pass
+
+    definition = DjangoTypeDefinition(
+        origin=BookType,
+        model=Book,
+        name=None,
+        description=None,
+        fields_spec=None,
+        exclude_spec=None,
+        selected_fields=(),
+        field_map={},
+        optimizer_hints={},
+        has_custom_get_queryset=False,
+    )
+
+    assert definition.has_custom_id_resolver_for("id") is True
+    assert definition.has_custom_id_resolver_for("uuid") is False
+    assert definition._custom_id_resolver_cache == {"id": True, "uuid": False}
+
+
+def test_has_custom_id_resolver_for_ignores_framework_relay_default():
+    """Framework-installed Relay ``resolve_id`` does not count as consumer custom."""
+
+    class BookType:
+        resolve_id = classmethod(_resolve_id_default)
+
+    definition = DjangoTypeDefinition(
+        origin=BookType,
+        model=Book,
+        name=None,
+        description=None,
+        fields_spec=None,
+        exclude_spec=None,
+        selected_fields=(),
+        field_map={},
+        optimizer_hints={},
+        has_custom_get_queryset=False,
+    )
+
+    assert definition.has_custom_id_resolver_for("id") is False
+    assert definition._custom_id_resolver_cache == {"id": False}
+
+
+def test_has_custom_id_resolver_for_ignores_inherited_relay_default():
+    """Inherited Strawberry Relay ``resolve_id`` does not count as consumer custom."""
+
+    class BookType(relay.Node):
+        pass
+
+    definition = DjangoTypeDefinition(
+        origin=BookType,
+        model=Book,
+        name=None,
+        description=None,
+        fields_spec=None,
+        exclude_spec=None,
+        selected_fields=(),
+        field_map={},
+        optimizer_hints={},
+        has_custom_get_queryset=False,
+    )
+
+    assert definition.has_custom_id_resolver_for("id") is False
+    assert definition._custom_id_resolver_cache == {"id": False}
 
 
 def test_related_target_for_resolves_to_primary_when_two_types_share_target_model():

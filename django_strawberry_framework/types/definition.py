@@ -107,6 +107,12 @@ class DjangoTypeDefinition:
           ``Meta.primary`` as its first return state, then falls back
           to the single-registered-type rule). Returns ``None`` for
           non-relation fields and for fields not present on the model.
+        - ``has_custom_id_resolver_for(pk_name)`` memoizes the
+          MRO-level custom id resolver check used by the optimizer's
+          FK-id elision guard. The lookup is based on ``origin`` class
+          attributes, ignores the framework-installed Relay
+          ``resolve_id`` default, and is stable for a definition's
+          lifetime.
     """
 
     origin: type
@@ -156,6 +162,11 @@ class DjangoTypeDefinition:
     # which would surface the same staleness on any direct attribute
     # read.
     _related_target_cache: dict[str, Any] = field(default_factory=dict, repr=False)
+    # Per-instance memoization of ``has_custom_id_resolver_for(pk_name)``.
+    # Values are keyed by concrete model primary-key field name and include
+    # negative results; use membership checks instead of ``dict.get`` so
+    # ``False`` remains a valid cached answer.
+    _custom_id_resolver_cache: dict[str, bool] = field(default_factory=dict, repr=False)
 
     @property
     def graphql_type_name(self) -> str:
@@ -236,3 +247,42 @@ class DjangoTypeDefinition:
         if cache_ok:
             self._related_target_cache[field_name] = result
         return result
+
+    def has_custom_id_resolver_for(self, pk_name: str) -> bool:
+        """Return whether ``origin`` customizes resolution for ``pk_name``."""
+        if pk_name in self._custom_id_resolver_cache:
+            return self._custom_id_resolver_cache[pk_name]
+
+        resolver_names = (pk_name, f"resolve_{pk_name}")
+        result = any(
+            _class_has_custom_id_resolver(cls, name)
+            for cls in getattr(self.origin, "__mro__", ())
+            for name in resolver_names
+        )
+        self._custom_id_resolver_cache[pk_name] = result
+        return result
+
+
+def _class_has_custom_id_resolver(type_cls: type, name: str) -> bool:
+    """Return whether ``type_cls`` defines a consumer id resolver marker."""
+    class_dict = getattr(type_cls, "__dict__", {})
+    if name not in class_dict:
+        return False
+    if name != "resolve_id":
+        return True
+    descriptor = class_dict[name]
+    return not _is_framework_relay_id_resolver(descriptor)
+
+
+def _is_framework_relay_id_resolver(value: Any) -> bool:
+    """Return whether ``value`` is the framework-installed Relay id resolver."""
+    from strawberry import relay
+
+    from .relay import _resolve_id_default
+
+    resolver_func = getattr(value, "__func__", value)
+    node_default = getattr(relay.Node, "resolve_id", None)
+    node_default_func = getattr(node_default, "__func__", None)
+    return resolver_func is _resolve_id_default or (
+        node_default_func is not None and resolver_func is node_default_func
+    )

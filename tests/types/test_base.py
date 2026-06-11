@@ -226,6 +226,34 @@ def test_meta_orderset_class_is_promoted_to_allowed_meta_keys():
     assert "orderset_class" not in DEFERRED_META_KEYS
 
 
+# TODO(spec-032-full_relay-0_0_9 Slice 1): One named-rejection test per relay
+# helper plus the two re-affirmation pins (Decision 8; eight messages total):
+#   test_interfaces_rejects_relay_globalid_named / ..._nodeid_named /
+#   ..._connection_named / ..._listconnection_named / ..._edge_named /
+#   ..._pageinfo_named
+#     each helper in Meta.interfaces raises ConfigurationError whose message
+#     NAMES the helper, what it is (scalar-like wrapper / annotation helper /
+#     generic output type), and the remediation (relay.Node, or
+#     Meta.connection / DjangoConnectionField for connection shapes).
+#   test_interfaces_rejects_non_interface_class_named
+#     the shipped generic rejection still names the offending class (pin).
+#   test_connection_key_requires_relay_node
+#     the shipped Meta.connection gate message (pin).
+
+# TODO(spec-032-full_relay-0_0_9 Slice 3): Meta.relation_shapes key
+# validation beside the other Meta validation (Decision 7):
+#   test_meta_relation_shapes_in_allowed_meta_keys
+#     in ALLOWED_META_KEYS, not in DEFERRED_META_KEYS.
+#   test_relation_shapes_validation_matrix
+#     non-dict, bad value, unknown field, non-relation field, single-valued
+#     relation, excluded field, non-Relay declaring type each raise
+#     ConfigurationError at type creation.
+#   test_relation_shapes_on_consumer_authored_relation_raises
+#     an explicit key naming a relation with a consumer annotation /
+#     strawberry.field override raises with the overrides-own-the-shape
+#     message (Revision 3; the silent-accept-then-skip path must not exist).
+
+
 def test_interfaces_is_shipped_not_deferred():
     """``interfaces`` is a shipped Meta key (in ``ALLOWED_META_KEYS``), not deferred.
 

@@ -607,6 +607,29 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
     return _resolve
 
 
+# TODO(spec-032-full_relay-0_0_9 Slice 3): Relation-seeded resolver variant
+# for the Phase-2.5 synthesized relation connections (Decision 6): identical
+# pipeline tail to ``_build_connection_resolver``'s default branch, but the
+# source queryset seeds from the PARENT'S relation manager - keeping Django's
+# prefetch caches reachable as the cooperation seam WIP-ALPHA-033-0.0.9's
+# window-pagination planning will use - instead of
+# ``model._default_manager.all()``. Sync resolver returning a LAZY queryset
+# (the committed-at-construction contract above holds: lazy querysets work
+# under both execute_sync and await execute).
+# Pseudocode:
+#   def _build_relation_connection_resolver(target_type, accessor_name):
+#       def _resolve(root, info, **kwargs):
+#           qs = getattr(root, accessor_name).all()  # noqa: ERA001
+#           return _pipeline_sync(target_type, qs, info,
+#               filter_input=kwargs.get("filter"),  # noqa: ERA001
+#               order_by_input=kwargs.get("order_by"))
+#       attach _synthesized_signature(target_type) as above
+#       return _resolve  # noqa: ERA001
+# Deliberately ABSENT: any DST_OPTIMIZER_STRICTNESS / DST_OPTIMIZER_PLANNED
+# consultation - the connection pipeline stays strictness-blind until 033
+# wires it (spec-032 Decision 12 / Non-goals).
+
+
 def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoConnectionField(GenreType)`
     target_type: type,
     *,

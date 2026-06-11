@@ -206,6 +206,15 @@ Both ship in `0.0.8` and are wired on every products resolver. `filter:` narrows
 
 `CategoryFilter` / `CategoryOrder` additionally declare a `check_name_permission` gate, so an anonymous request that filters or orders by `Category.name` is denied — the gate fires only when the input actually names the gated field (active-input-only scope).
 
+<!--
+TODO(spec-032-full_relay-0_0_9 Slice 7): Refresh the breaking-change note below - the
+"nothing decodes a `GlobalID` until root `node(id:)` ships (`WIP-ALPHA-032-0.0.9`)"
+framing becomes stale when the card lands (the latent break is then LIVE: root
+node(id:)/nodes(ids:) decode every emitted id). Keep the file products-centric - the
+products Query stays list-shaped until TODO-BETA-051-0.1.5; no products-surface claims
+change.
+-->
+
 > **Breaking wire-format change in `0.0.9` (the model-anchored `GlobalID` default).** Through `0.0.8` a products `GlobalID` was the base64 of `<GraphQL type name>:<pk>` (`CategoryType:42`). As of `0.0.9` the default is the Django model label (`products.category:42`), so **every emitted products `GlobalID` changes** and the filter examples above use the model-label payload. This is parallel to the `PositiveBigIntegerField → BigInt` `0.0.6` breaking-wire-format change above; it is acceptable pre-`1.0.0` and there is a clean per-type / project-wide opt-out (`type` reproduces the byte-identical pre-`0.0.9` payload). In `0.0.9` the break is **latent** — nothing decodes a `GlobalID` until root `node(id:)` ships (`WIP-ALPHA-032-0.0.9`), so a consumer who upgrades without acting sees nothing wrong until then, at which point every old client-cached type-anchored ID is undecodable. The migration-safe upgrade sequence for a deployed schema:
 >
 > 1. Deploy `RELAY_GLOBALID_STRATEGY = "type+model"` **while the old GraphQL type names still exist** — new IDs emit model-anchored, old type-anchored IDs still decode.

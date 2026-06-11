@@ -114,6 +114,16 @@ A quick summary:
 - `DjangoConnectionField` (new in `0.0.9`) — Relay connection field over a Relay-Node-shaped `DjangoType`: `edges` / `node` / `pageInfo` cursor pagination on Strawberry's native `relay.connection()`, with `filter:` / `orderBy:` arguments derived from the wrapped type's `Meta.filterset_class` / `Meta.orderset_class` sidecars (no hand-written list resolver, no parallel argument declarations) and an opt-in `totalCount` via `Meta.connection = {"total_count": True}` (counted on the post-filter pre-slice queryset, selection-gated, per connection instance). Composition pipeline runs `get_queryset` visibility → `filter` → `orderBy` → default deterministic pk-ordering → optimizer-plan → cursor slice; the field owns its own optimizer cooperation point. `DjangoConnection[T]` is the generic return-type alias. See [`GLOSSARY.md#djangoconnectionfield`][glossary-djangoconnectionfield].
 
 
+<!--
+TODO(spec-032-full_relay-0_0_9 Slice 7): Add shipped-surface bullets above for
+(1) the root refetch fields `DjangoNodeField` / `DjangoNodesField` (bare + typed; server-side
+decode through the strategy system; null-for-invisible / GLOBALID_INVALID-for-malformed),
+(2) the relation-as-Connection upgrade + `Meta.relation_shapes`, and
+(3) the `testing.relay` helpers (`global_id_for` / `decode_global_id`).
+Then update the `0.0.9` "Coming next" line below: the in-progress remainder shrinks to
+connection-aware optimizer planning (033).
+-->
+
 **Coming next — remaining alpha (`0.0.9` → `0.0.12`):**
 - `0.0.9` *(in progress)* — the full Relay story (Node + Connection + Root + validation), connection-aware optimizer planning, and a `DjangoType` consumer-DX cleanup pass (`DjangoConnectionField` shipped above)
 - `0.0.10` — permissions / cascade-permissions subsystem

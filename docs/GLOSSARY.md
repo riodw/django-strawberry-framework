@@ -353,6 +353,23 @@ Root-level single-node lookup field — the `category: GalaxyNode = DjangoNodeFi
 
 **See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [Relay Node integration](#relay-node-integration).
 
+<!--
+TODO(spec-032-full_relay-0_0_9 Slice 7): Flip the `DjangoNodeField` entry above to
+"shipped (`0.0.9`)" and rewrite its body for BOTH forms (the bare Relay-spec interface
+form `node: relay.Node | None = DjangoNodeField()` and the typed form
+`genre: GenreType | None = DjangoNodeField(GenreType)` - note the entry's current
+`category: GalaxyNode = ...` example is mismatched AND non-optional; the rewrite uses
+the nullable-by-contract spelling), the null-for-invisible / GLOBALID_INVALID-for-
+malformed contract, and the interface-only-schema `strawberry.Schema(types=[...])`
+reachability note. Then ADD two net-new entries (shipped (`0.0.9`)) with Index rows and
+Browse-by-category placements:
+  ## `DjangoNodesField`   ("Relay" category - batch refetch: per-type-batched,
+     order-preserving, null holes, duplicate ids, whole-field fail on malformed ids)
+  ## `Meta.relation_shapes`   ("Relay" + "Type generation" categories - the
+     {"list", "connection", "both"} per-relation narrowing over the implicit upgrade)
+and extend the Relay Node integration / DjangoConnectionField cross-references.
+-->
+
 ## `DjangoOptimizerExtension`
 
 **Status:** shipped (`0.0.2`).

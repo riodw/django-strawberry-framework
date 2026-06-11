@@ -506,5 +506,12 @@ class TypeRegistry:
         else:
             clear_connection_type_cache()
 
+        # TODO(spec-032-full_relay-0_0_9 Slice 2): Co-clear the root-node-field
+        # ledger backing the no-Node-types finalize check (Decision 8), in the
+        # same cycle-safe try/except-ImportError/else shape as the blocks
+        # above (the ``_helper_referenced_filtersets`` precedent):
+        #   from .relay import _node_fields_declared  # noqa: ERA001
+        #   _node_fields_declared.clear()  # noqa: ERA001
+
 
 registry = TypeRegistry()

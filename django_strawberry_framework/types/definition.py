@@ -122,6 +122,12 @@ class DjangoTypeDefinition:
     filterset_class: type | None = None
     orderset_class: type | None = None
     connection: dict | None = None
+    # TODO(spec-032-full_relay-0_0_9 Slice 3): Add the ``relation_shapes``
+    # slot - ``dict[str, str] | None = None`` - populated in
+    # ``__init_subclass__`` like ``connection`` / ``globalid_strategy`` and
+    # read by the Phase-2.5 relation-as-Connection synthesis (Decision 7).
+    # Values are pre-normalized to {"list", "connection", "both"} by
+    # ``types/base.py::_validate_relation_shapes``.
     globalid_strategy: str | Callable[..., str] | None = None
     # Finalization-set encode/decode classification (spec-031 Decision 10).
     # Unlike the raw ``globalid_strategy`` slot above (populated at class

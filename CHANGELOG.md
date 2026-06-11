@@ -18,6 +18,20 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 
 ## [Unreleased]
 
+<!--
+TODO(spec-032-full_relay-0_0_9 Slice 7): Add the Full Relay release notes under [Unreleased].
+Pseudocode:
+  - `### Added`: `DjangoNodeField` / `DjangoNodesField` root refetch fields (bare + typed,
+    null-for-invisible / GLOBALID_INVALID-for-malformed contract) + the package-root exports
+  - `### Added`: the implicit relation-as-Connection upgrade + `Meta.relation_shapes`
+    ("list" / "connection" / "both" per relation; Relay-Node-shaped declaring type and target)
+  - `### Added`: `django_strawberry_framework.testing.relay` (`global_id_for`, `decode_global_id`)
+  - do NOT promote a 0.0.9 heading; the joint cut owns the version bump (Decision 13)
+This staged anchor is NOT the CHANGELOG edit itself - AGENTS.md withholds CHANGELOG edits
+by default; the real bullets land only via the explicit per-card permission grant named in
+the Slice 7 maintainer prompt.
+-->
+
 ### Changed
 - **Breaking wire-format change**: the default Relay `GlobalID` payload for a [`DjangoType`][glossary-djangotype] with `Meta.interfaces = (relay.Node,)` is now the Django **model label** (`app_label.modelname:<pk>`, e.g. `products.item:42`) instead of the GraphQL type name (`ItemType:42`). This changes **every** emitted `GlobalID` for a Relay-Node type that does not opt out, so a schema author can rename a GraphQL type (or [`Meta.name`][glossary-metaname]) without invalidating cached client IDs. Parallel to the `PositiveBigIntegerField → BigInt` `0.0.6` breaking-wire-format precedent. The break is **latent** in `0.0.9` — nothing decodes a `GlobalID` until root `node(id:)` ships (`WIP-ALPHA-032-0.0.9`), so an unprepared consumer sees nothing wrong until then, at which point every old client-cached type-anchored ID is undecodable. Opt out per type via `Meta.globalid_strategy = "type"` or schema-wide via `RELAY_GLOBALID_STRATEGY = "type"` (byte-identical to the pre-`0.0.9` payload). **Prescribed upgrade sequence for a deployed schema**: (1) deploy `RELAY_GLOBALID_STRATEGY = "type+model"` **while the old GraphQL type names still exist** — new IDs emit model-anchored, old type-anchored IDs still decode; (2) let clients age out the cached old type-name IDs; (3) **only then** rename GraphQL types / [`Meta.name`][glossary-metaname] or flip to `model`. The step-3 ordering is load-bearing: `type+model` decodes an old type-anchored ID only while its old GraphQL type name still resolves, so renaming a type / `Meta.name` *during* the window still orphans cached old-type-name IDs — `type+model` is a strategy bridge, **not** a rename-history alias map ([`BACKLOG.md`][backlog] item 39).
 - Migrated `extensions=[DjangoOptimizerExtension()]` to the module-level-singleton factory form (`extensions=[lambda: _optimizer]`): preserves the instance-bound plan cache and removes Strawberry 0.316.0's instance-form `DeprecationWarning`.

@@ -372,6 +372,44 @@ def finalize_django_types() -> None:
             install_relay_node_resolvers(type_cls)
             install_globalid_typename_resolver(type_cls, definition)
 
+    # TODO(spec-032-full_relay-0_0_9 Slice 2): No-Node-types finalize check
+    # (Decision 8). The root-field factories in the new top-level ``relay.py``
+    # append to a module-level ``_node_fields_declared`` ledger
+    # (``registry.clear()`` co-clears it - the ``_helper_referenced_filtersets``
+    # precedent); when the ledger is non-empty and NO registered definition is
+    # Relay-Node-shaped, raise the documented ConfigurationError
+    # "node lookup configured but no Node types registered." The check lives
+    # at finalization (not field construction) because ``DjangoNodeField()``
+    # runs at class-body time, typically before any DjangoType imports - only
+    # the finalizer sees the settled registry. Cycle-safe local import.
+
+    # TODO(spec-032-full_relay-0_0_9 Slice 3): Relation-as-Connection
+    # synthesis lands HERE - after ``install_globalid_typename_resolver``,
+    # before Phase 3 freezes the annotation set (Decision 6). Pseudocode:
+    #   for type_cls, definition in registry.iter_definitions():
+    #       if definition.finalized: continue  # noqa: ERA001
+    #       if not implements_relay_node(type_cls): continue  # noqa: ERA001
+    #       for each selected MANY-SIDE relation (reverse FK, forward /
+    #       reverse M2M):
+    #           shape = (definition.relation_shapes or {}).get(name, "both")  # noqa: ERA001
+    #           - consumer-authored relation -> skip (implicit default only;
+    #             an explicit key already raised at type creation);
+    #           - target not Relay-Node-shaped -> silent list-only under the
+    #             default; explicit "connection"/"both" raised at validation;
+    #           - shape == "list" -> synthesize nothing;
+    #           - else guard <name>_connection collisions on BOTH Python
+    #             attribute names AND default-camel-cased GraphQL names
+    #             (Revision 3 P3; non-default name_converter falls through to
+    #             Strawberry's schema-build duplicate-field error), then
+    #             attach relay.connection(_connection_type_for(target),
+    #             resolver=<relation-manager-seeded pipeline>) - see
+    #             ``connection.py``'s Slice-3 anchor;
+    #           - shape == "connection" -> also remove the generated list
+    #             annotation/resolver (SDL never carries the list form).
+    # Strictness note: the synthesized resolver does NOT consult the
+    # DST_OPTIMIZER_* sentinels - wiring strictness into the connection
+    # pipeline is WIP-ALPHA-033-0.0.9's scope (Decision 12 / Non-goals).
+
     # Runs after the Relay loop has recorded EVERY type's
     # ``effective_globalid_strategy`` (so it reads complete data) and before
     # Phase 3 flips ``finalized`` - a Phase-2.5 raise here is recoverable via the

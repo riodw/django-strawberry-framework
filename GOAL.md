@@ -161,6 +161,19 @@ schema = strawberry.Schema(
 )
 ```
 
+<!--
+TODO(spec-032-full_relay-0_0_9 Slice 7): Flip the two typed-node showcase
+fields in the snippet above to the nullable-by-contract spelling (Revision 6
+P3 - the non-optional shape is the one spec-032 Decision 5 leaves unsupported:
+a missing/hidden row would surface Strawberry's generic non-null violation
+instead of the Relay null):
+  galaxy: GalaxyNode = DjangoNodeField(GalaxyNode)
+    -> galaxy: GalaxyNode | None = DjangoNodeField(GalaxyNode)
+  celestial_body: CelestialBodyNode = DjangoNodeField(CelestialBodyNode)
+    -> celestial_body: CelestialBodyNode | None = DjangoNodeField(CelestialBodyNode)
+No other GOAL.md claims change.
+-->
+
 ### `filters.py` — declarative filters (`filterset_class`)
 
 `FilterSet` mirrors `django-filter`'s `FilterSet`. `Meta.fields` accepts the same `{"field": [lookups]}` dict shape and the `"__all__"` shorthand. `RelatedFilter` traverses across relations — accepts a class reference, an absolute import path string, or an unqualified name for circular cases. `check_*_permission` methods are per-field gates that the framework calls before applying the filter.

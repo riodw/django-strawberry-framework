@@ -148,6 +148,14 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 - Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
 - Spec: [spec-032-full_relay-0_0_9.md](docs/spec-032-full_relay-0_0_9.md)
 
+<!--
+TODO(spec-032-full_relay-0_0_9 Slice 7): Move this card to the Done column with the next
+DONE-NNN-0.0.9 id and confirm the Spec line above points at
+docs/spec-032-full_relay-0_0_9.md. KANBAN.md is a GENERATED export - the real edit is a
+SpecDoc / card-column DB change re-rendered via scripts/build_kanban_md.py, never a hand
+edit here (this staged anchor is itself removed by that re-render).
+-->
+
 #### Planning note
 
 blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it.

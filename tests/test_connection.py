@@ -1337,3 +1337,16 @@ def test_registry_clear_also_clears_connection_type_cache():
     assert _connection_type_cache
     registry.clear()
     assert not _connection_type_cache
+
+
+# TODO(spec-032-full_relay-0_0_9 Slice 4): The one conformance-matrix entry a
+# live fakeshop query cannot reach (the project schema uses the default
+# StrawberryConfig):
+#   test_relay_max_results_cap
+#     build a schema via strawberry_config(relay_max_results=N) and assert
+#     first: N+1 surfaces Strawberry's "Argument 'first' cannot be higher
+#     than N." error shape on the root connection field. The matrix's primary
+#     copies run LIVE in examples/fakeshop/test_query/test_library_api.py
+#     against allLibraryGenresConnection (the test_query README coverage
+#     rule); the synthesized-relation mirrors live in
+#     tests/test_relay_connection.py.

@@ -669,6 +669,10 @@ def _has_custom_id_resolver(target_type: type | None, target_pk_name: str | None
     """Return ``True`` when target type customizes the selected id field."""
     if target_type is None or target_pk_name is None:
         return False
+    definition = registry.get_definition(target_type)
+    if definition is not None:
+        return definition.has_custom_id_resolver_for(target_pk_name)
+
     resolver_names = (target_pk_name, f"resolve_{target_pk_name}")
     return any(
         name in getattr(cls, "__dict__", {})

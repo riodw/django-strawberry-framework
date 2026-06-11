@@ -828,6 +828,53 @@ def test_plan_does_not_elide_when_target_type_has_custom_id_resolver():
     assert plan.only_fields == ("target_id", "target__id")
 
 
+def test_plan_uses_definition_custom_id_resolver_cache(monkeypatch):
+    """B2: custom id resolver checks route through target definition metadata."""
+
+    class CachedIdTarget(models.Model):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class CachedIdSource(models.Model):
+        target = models.ForeignKey(CachedIdTarget, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class CachedIdTargetType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    registry.clear()
+    _register_type_definition(CachedIdTarget, CachedIdTargetType)
+    definition = registry.get_definition(CachedIdTargetType)
+    assert definition is not None
+    calls = []
+
+    def has_custom_id_resolver_for(pk_name):
+        calls.append(pk_name)
+        return True
+
+    monkeypatch.setattr(definition, "has_custom_id_resolver_for", has_custom_id_resolver_for)
+    try:
+        plan = plan_optimizations(
+            [_sel("target", selections=[_sel("id")])],
+            CachedIdSource,
+        )
+    finally:
+        registry.clear()
+
+    assert calls == ["id"]
+    assert plan.select_related == ("target",)
+    assert plan.fk_id_elisions == ()
+    assert plan.only_fields == ("target_id", "target__id")
+
+
 # ---------------------------------------------------------------------------
 # O6 - get_queryset + Prefetch downgrade
 # ---------------------------------------------------------------------------

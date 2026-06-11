@@ -17,6 +17,9 @@ The plan is a simple data class carrying optimization directives and metadata:
   lazy-loading the related row.
 - ``planned_resolver_keys``: branch-sensitive resolver keys for relations
   covered by the plan, used by strictness checks.
+- ``finalized_*`` metadata: immutable membership sets computed during
+  ``finalize()`` so context publishing can reuse cache-hit metadata without
+  rebuilding sets or lookup paths.
 - ``cacheable``: whether this plan can be reused from the extension's plan
   cache.
 
@@ -50,16 +53,16 @@ class OptimizationPlan:
     and tuples after ``finalize()``; mutator helpers retain
     ``MutableSequence`` parameters for the walker-only construction path.
 
-    Scope of the post-``finalize()`` immutability enforcement: only the
-    five list fields (``select_related``, ``prefetch_related``,
+    Scope of the post-``finalize()`` immutability enforcement: the
+    five directive fields (``select_related``, ``prefetch_related``,
     ``only_fields``, ``fk_id_elisions``, ``planned_resolver_keys``) are
     swapped to tuples, so ``plan.prefetch_related.append(...)`` after
-    handoff raises ``AttributeError``.  The ``cacheable`` bool remains a
-    plain settable attribute and its post-handoff immutability is a
-    convention enforced by the single writer
-    ``walker.py::plan_optimizations`` (pre-finalize only).  Trigger to
-    move ``OptimizationPlan`` to ``@dataclass(frozen=True)``: a second
-    writer that flips ``cacheable`` lands, or a cache-poisoning incident
+    handoff raises ``AttributeError``; the three ``finalized_*`` metadata fields
+    are swapped to frozensets. The ``cacheable`` bool remains a plain settable
+    attribute and its post-handoff immutability is a convention enforced by the
+    single writer ``walker.py::plan_optimizations`` (pre-finalize only).
+    Trigger to move ``OptimizationPlan`` to ``@dataclass(frozen=True)``: a
+    second writer that flips ``cacheable`` lands, or a cache-poisoning incident
     surfaces a post-finalize mutation.
     """
 
@@ -81,6 +84,12 @@ class OptimizationPlan:
     """Resolver keys elided because the source row already carries the target id."""
     planned_resolver_keys: Sequence[str] = field(default_factory=list)
     """Resolver keys for relations covered by this plan, used by B3 strictness."""
+    finalized_fk_id_elisions: frozenset[str] | None = None
+    """Frozen membership set for ``fk_id_elisions`` after ``finalize()``."""
+    finalized_planned_resolver_keys: frozenset[str] | None = None
+    """Frozen membership set for ``planned_resolver_keys`` after ``finalize()``."""
+    finalized_lookup_paths: frozenset[str] | None = None
+    """Frozen Django lookup paths covered by this plan after ``finalize()``."""
     cacheable: bool = True
     """Whether this plan can be reused from the extension's plan cache.
 
@@ -131,13 +140,20 @@ class OptimizationPlan:
         modified plan from a finalised one (the walker still owns the
         construction-time mutation path).
         """
+        select_related = tuple(self.select_related)
+        prefetch_related = tuple(self.prefetch_related)
         return replace(
             self,
-            select_related=tuple(self.select_related),
-            prefetch_related=tuple(self.prefetch_related),
+            select_related=select_related,
+            prefetch_related=prefetch_related,
             only_fields=tuple(self.only_fields),
             fk_id_elisions=tuple(self.fk_id_elisions),
             planned_resolver_keys=tuple(self.planned_resolver_keys),
+            finalized_fk_id_elisions=frozenset(self.fk_id_elisions),
+            finalized_planned_resolver_keys=frozenset(self.planned_resolver_keys),
+            finalized_lookup_paths=frozenset(
+                _lookup_paths_from_parts(select_related, prefetch_related),
+            ),
         )
 
     def apply(self, queryset: Any) -> Any:
@@ -520,8 +536,18 @@ def _diff_prefetch_related(
 
 def lookup_paths(plan: OptimizationPlan) -> set[str]:
     """Return Django relation lookup paths covered by ``plan`` for B8/debugging."""
-    paths = set(plan.select_related)
-    paths.update(_prefetch_lookup_paths(plan.prefetch_related))
+    if plan.finalized_lookup_paths is not None:
+        return set(plan.finalized_lookup_paths)
+    return _lookup_paths_from_parts(plan.select_related, plan.prefetch_related)
+
+
+def _lookup_paths_from_parts(
+    select_related: Iterable[str],
+    prefetch_related: Iterable[Any],
+) -> set[str]:
+    """Return relation lookup paths from finalized or construction-time fields."""
+    paths = set(select_related)
+    paths.update(_prefetch_lookup_paths(prefetch_related))
     return paths
 
 

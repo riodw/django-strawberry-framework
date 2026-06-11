@@ -150,6 +150,28 @@ class TestOptimizationPlanFinalize:
         assert isinstance(finalized.fk_id_elisions, tuple)
         assert isinstance(finalized.planned_resolver_keys, tuple)
 
+    def test_finalize_precomputes_context_metadata_frozensets(self):
+        inner = Prefetch("entries", queryset=Entry.objects.only("value", "item_id"))
+        outer = Prefetch("items", queryset=Item.objects.prefetch_related(inner))
+        plan = OptimizationPlan(
+            select_related=["category"],
+            prefetch_related=[outer],
+            fk_id_elisions=["ItemType.category@allItems.category"],
+            planned_resolver_keys=["ItemType.items@allItems.items"],
+        )
+
+        finalized = plan.finalize()
+
+        assert finalized.finalized_fk_id_elisions == frozenset(
+            {"ItemType.category@allItems.category"},
+        )
+        assert finalized.finalized_planned_resolver_keys == frozenset(
+            {"ItemType.items@allItems.items"},
+        )
+        assert finalized.finalized_lookup_paths == frozenset(
+            {"category", "items", "items__entries"},
+        )
+
     def test_finalize_preserves_values_and_cacheable_flag(self):
         plan = OptimizationPlan(select_related=["a", "b"], cacheable=False)
         finalized = plan.finalize()
@@ -347,12 +369,13 @@ class TestDiffPlanForQueryset:
             fk_id_elisions=["ItemType.category@allItems.category"],
             planned_resolver_keys=["ItemType.category@allItems.category"],
             cacheable=False,
-        )
+        ).finalize()
         qs = Item.objects.select_related("category")
         delta_plan, _ = diff_plan_for_queryset(plan, qs)
         assert delta_plan.only_fields == ("name",)
         assert delta_plan.fk_id_elisions == ("ItemType.category@allItems.category",)
         assert delta_plan.planned_resolver_keys == ("ItemType.category@allItems.category",)
+        assert delta_plan.finalized_lookup_paths == frozenset()
         assert delta_plan.cacheable is False
 
     def test_consumer_descendant_string_absorbed_by_optimizer_prefetch(self):

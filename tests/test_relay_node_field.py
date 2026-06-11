@@ -28,7 +28,16 @@ each slice (the ``AGENTS.md`` design-doc anchor discipline).
 #     queryset code path; assertNumQueries equality).
 #   test_node_malformed_id_graphql_error
 #     malformed base64 / unresolvable label / strategy-forbidden shape each
-#     surface GLOBALID_INVALID, never a raw ConfigurationError.
+#     surface GLOBALID_INVALID, never a raw ConfigurationError. Reachable
+#     ONLY because the argument is strawberry.ID, not relay.GlobalID
+#     (Revision 7 P1 - a GlobalID arg is parsed by Strawberry's
+#     convert_argument upstream of the resolver); assert the package's
+#     GLOBALID_INVALID code, not Strawberry's engine error.
+#   test_node_uncoercible_pk_returns_null / test_nodes_uncoercible_pk_null_hole
+#     a well-formed id whose pk literal cannot coerce to the target's pk type
+#     (library.genre:abc) -> null (single) / positional null hole (batch) via
+#     the model._meta.pk.to_python pre-coercion; no query, no leaked Django
+#     ValueError (Revision 7 P2).
 #   test_nodes_preserves_input_order_with_null_holes
 #   test_nodes_batches_per_type        (query-count: one per distinct type)
 #   test_nodes_duplicate_ids           (each position gets its row)
@@ -44,7 +53,10 @@ each slice (the ``AGENTS.md`` design-doc anchor discipline).
 #     coroutine - per-call in_async_context() dispatch).
 #   test_node_sync_async_get_queryset_raises_sync_misuse
 #     the SyncMisuseError pass-through, unchanged from the resolve_node
-#     defaults.
+#     defaults. DISCRIMINATING (Revision 7 P2): assert the surfaced error is
+#     a SyncMisuseError and is NOT GLOBALID_INVALID-coded - the catch-convert
+#     boundary scopes the decode call only, so a dispatch-time async-
+#     get_queryset misconfiguration is never mislabeled a client id error.
 #   test_public_exports
 #     DjangoNodeField / DjangoNodesField importable from the package root.
 

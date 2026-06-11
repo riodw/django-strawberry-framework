@@ -2426,7 +2426,13 @@ def test_genre_connection_order_by_to_many_no_node_multiplication():
 #     expected/received-types GraphQLError.
 #   test_node_malformed_id_live
 #     a malformed / unresolvable id posted to /graphql/ surfaces
-#     GLOBALID_INVALID, not a 500.
+#     GLOBALID_INVALID, not a 500 - and not Strawberry's upstream argument-
+#     conversion error (reachable because the field's argument is
+#     strawberry.ID, Revision 7 P1).
+#   test_node_uncoercible_pk_live
+#     a well-formed `library.genre:abc` payload (pk literal not coercible to
+#     the integer pk) resolves to null, NOT a 500 leaking Django's ValueError
+#     (Revision 7 P2).
 #   test_nodes_batch_mixed_types_order_and_null
 #     genre + book ids interleaved with one bogus-pk (WELL-FORMED) id; order
 #     preserved, null hole in place. (A malformed id mid-batch fails the

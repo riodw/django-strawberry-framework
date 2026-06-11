@@ -33,6 +33,7 @@ global ``registry`` is cleared on entry and exit.
 
 import contextlib
 import warnings
+from collections import OrderedDict
 from types import SimpleNamespace
 
 import pytest
@@ -929,51 +930,41 @@ def test_cache_key_differs_for_named_operations_in_same_document():
     ) != DjangoOptimizerExtension._build_cache_key(info_b, Item)
 
 
-@pytest.mark.django_db
 def test_cache_eviction_removes_old_entries(monkeypatch):
-    """B1: the plan cache evicts old entries when it reaches capacity."""
+    """B1: the plan cache evicts least-recently-used entries when full."""
+    from graphql import parse
+
     import django_strawberry_framework.optimizer.extension as extension_module
-
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
 
     ext = DjangoOptimizerExtension()
     monkeypatch.setattr(extension_module, "_MAX_PLAN_CACHE_SIZE", 4)
-    ext._plan_cache = {
-        (
-            idx,
-            frozenset(),
-            Category,
-            (f"root{idx}",),
-            None,
-        ): object()
-        for idx in range(4)
-    }
 
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            return Category.objects.all()
+    def _cache_info_for(root_field: str) -> SimpleNamespace:
+        operation = parse(f"query {root_field} {{ {root_field} {{ name }} }}").definitions[0]
+        return SimpleNamespace(
+            operation=operation,
+            fragments={},
+            variable_values={},
+            path=SimpleNamespace(key=root_field, prev=None),
+        )
 
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    result = schema.execute_sync("{ allCategories { name } }")
+    infos = [_cache_info_for(f"root{idx}") for idx in range(4)]
+    keys = [DjangoOptimizerExtension._build_cache_key(info, Category, None) for info in infos]
+    plans = [object() for _ in range(4)]
+    ext._plan_cache = OrderedDict(zip(keys, plans, strict=True))
 
-    assert result.errors is None
+    assert ext._get_or_build_plan([], Category, infos[0], None) is plans[0]
+
+    root4_info = _cache_info_for("root4")
+    root4_key = DjangoOptimizerExtension._build_cache_key(root4_info, Category, None)
+    ext._get_or_build_plan([], Category, root4_info, None)
+
+    assert keys[0] in ext._plan_cache
+    assert keys[1] not in ext._plan_cache
+    assert root4_key in ext._plan_cache
     assert ext.cache_info().misses == 1
+    assert ext.cache_info().hits == 1
     assert ext.cache_info().size == 4
-    assert (
-        0,
-        frozenset(),
-        Category,
-        ("root0",),
-        None,
-    ) not in ext._plan_cache
 
 
 @pytest.mark.django_db

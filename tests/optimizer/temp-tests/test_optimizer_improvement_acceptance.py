@@ -6,6 +6,7 @@ run them while implementing the optimizer changes without treating them as
 settled package coverage yet.
 """
 
+from collections import OrderedDict
 from types import SimpleNamespace
 
 import pytest
@@ -156,7 +157,7 @@ def test_plan_cache_hit_promotes_entry_before_eviction(monkeypatch):
     infos = [_cache_info_for(f"root{idx}") for idx in range(4)]
     keys = [DjangoOptimizerExtension._build_cache_key(info, Category, None) for info in infos]
     plans = [OptimizationPlan(only_fields=[f"field_{idx}"]).finalize() for idx in range(4)]
-    ext._plan_cache = dict(zip(keys, plans, strict=True))
+    ext._plan_cache = OrderedDict(zip(keys, plans, strict=True))
 
     assert ext._get_or_build_plan([], Category, infos[0], None) is plans[0]
 

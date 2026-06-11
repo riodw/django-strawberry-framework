@@ -837,14 +837,23 @@ class DjangoOptimizerExtension(SchemaExtension):
         unplanned lazy loads.
         """
         _stash_on_context(info.context, DST_OPTIMIZER_PLAN, plan)
-        _stash_on_context(info.context, DST_OPTIMIZER_FK_ID_ELISIONS, set(plan.fk_id_elisions))
+        fk_id_elisions = plan.finalized_fk_id_elisions
+        if fk_id_elisions is None:
+            fk_id_elisions = frozenset(plan.fk_id_elisions)
+        _stash_on_context(info.context, DST_OPTIMIZER_FK_ID_ELISIONS, fk_id_elisions)
         if self.strictness != "off":
+            planned_resolver_keys = plan.finalized_planned_resolver_keys
+            if planned_resolver_keys is None:
+                planned_resolver_keys = frozenset(plan.planned_resolver_keys)
+            plan_lookup_paths = plan.finalized_lookup_paths
+            if plan_lookup_paths is None:
+                plan_lookup_paths = frozenset(lookup_paths(plan))
             _stash_on_context(
                 info.context,
                 DST_OPTIMIZER_PLANNED,
-                set(plan.planned_resolver_keys),
+                planned_resolver_keys,
             )
-            _stash_on_context(info.context, DST_OPTIMIZER_LOOKUP_PATHS, lookup_paths(plan))
+            _stash_on_context(info.context, DST_OPTIMIZER_LOOKUP_PATHS, plan_lookup_paths)
             _stash_on_context(info.context, DST_OPTIMIZER_STRICTNESS, self.strictness)
 
     @staticmethod

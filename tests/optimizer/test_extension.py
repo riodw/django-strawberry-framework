@@ -2244,6 +2244,26 @@ def test_plan_stashed_with_prefetch_related(django_assert_num_queries):
     assert [lookup.prefetch_to for lookup in plan.prefetch_related] == ["items"]
 
 
+def test_publish_plan_to_context_reuses_finalized_metadata():
+    """B5: context publish reuses finalized frozensets instead of rebuilding them."""
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    ext = DjangoOptimizerExtension(strictness="raise")
+    plan = OptimizationPlan(
+        select_related=["category"],
+        fk_id_elisions=["ItemType.category@allItems.category"],
+        planned_resolver_keys=["ItemType.category@allItems.category"],
+    ).finalize()
+    ctx = SimpleNamespace()
+
+    ext._publish_plan_to_context(plan, SimpleNamespace(context=ctx))
+
+    assert ctx.dst_optimizer_plan is plan
+    assert ctx.dst_optimizer_fk_id_elisions is plan.finalized_fk_id_elisions
+    assert ctx.dst_optimizer_planned is plan.finalized_planned_resolver_keys
+    assert ctx.dst_optimizer_lookup_paths is plan.finalized_lookup_paths
+
+
 def test_plan_stashed_on_dict_context():
     """B5: when context is a plain dict, plan is stashed via __setitem__."""
     from django_strawberry_framework.optimizer.extension import _stash_on_context

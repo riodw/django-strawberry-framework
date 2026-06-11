@@ -29,6 +29,7 @@ type-tracing through graphql-core wrappers.
 """
 
 import inspect
+from collections import OrderedDict
 from collections.abc import Callable
 from contextvars import ContextVar
 from types import SimpleNamespace
@@ -616,10 +617,10 @@ class DjangoOptimizerExtension(SchemaExtension):
             msg = f"strictness must be 'off', 'warn', or 'raise', got {strictness!r}"
             raise ValueError(msg)
         self.strictness = strictness
-        self._plan_cache: dict[
+        self._plan_cache: OrderedDict[
             tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...], type | None],
             Any,
-        ] = {}
+        ] = OrderedDict()
         self._cache_hits = 0
         self._cache_misses = 0
 
@@ -793,9 +794,10 @@ class DjangoOptimizerExtension(SchemaExtension):
     ) -> Any:
         """Return the cached plan for ``(info, target_model, origin)`` or build a new one.
 
-        B1: plan cache.  Cache hits increment ``_cache_hits``; misses run
-        the walker, evict the oldest quarter when full, insert iff the
-        plan is ``cacheable``, and increment ``_cache_misses``.
+        B1: plan cache.  Cache hits increment ``_cache_hits`` and refresh
+        recency; misses run the walker, evict the least-recently-used quarter
+        when full, insert iff the plan is ``cacheable``, and increment
+        ``_cache_misses``.
 
         ``origin`` carries the resolver's actual Strawberry return type
         so primary-return and secondary-return resolvers on the same
@@ -808,18 +810,18 @@ class DjangoOptimizerExtension(SchemaExtension):
         cache_key = self._build_cache_key(info, target_model, origin)
         cached_plan = self._plan_cache.get(cache_key)
         if cached_plan is not None:
+            self._plan_cache.move_to_end(cache_key)
             self._cache_hits += 1
             return cached_plan
         plan = plan_optimizations(selections, target_model, info=info, source_type=origin)
         if plan.cacheable and len(self._plan_cache) >= _MAX_PLAN_CACHE_SIZE:
-            # FIFO eviction: drop the oldest quarter at once to amortise
-            # eviction cost across many subsequent inserts.  A cache hit
-            # does *not* refresh recency (no LRU promotion), so a hot
-            # plan that survives an eviction sweep continues to age out
-            # naturally on the next sweep.
-            to_remove = _MAX_PLAN_CACHE_SIZE // 4
-            for _ in range(to_remove):
-                self._plan_cache.pop(next(iter(self._plan_cache)))
+            # LRU eviction: drop the least-recently-used quarter at once to
+            # amortise eviction cost across many subsequent inserts. Cache hits
+            # move entries to the most-recent end above, so hot plans survive a
+            # sweep even when they were inserted early.
+            to_remove = max(1, _MAX_PLAN_CACHE_SIZE // 4)
+            for _ in range(min(to_remove, len(self._plan_cache))):
+                self._plan_cache.popitem(last=False)
         if plan.cacheable:
             self._plan_cache[cache_key] = plan
         self._cache_misses += 1

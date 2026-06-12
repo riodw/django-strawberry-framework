@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 import strawberry
-from apps.library.models import Book, Genre, Shelf
+from apps.library.models import Book, Branch, Genre, Shelf
 from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
@@ -759,6 +759,98 @@ def test_phase_2_5_unresolved_related_filter_raises_at_finalize():
     assert "unresolved" in msg
     assert "UnknownFilter" in msg
     assert isinstance(exc_info.value.__cause__, ImportError)
+
+
+def test_phase_2_5_unregistered_related_filter_target_raises_at_finalize():
+    """A wired filterset whose ``RelatedFilter`` target model has no registered type raises.
+
+    Subpass 2.5: a related branch's visibility scoping runs the target
+    type's ``get_queryset`` (spec-027 Decision 8 step 3), so a
+    ``RelatedFilter`` whose target model has no registered ``DjangoType``
+    is unfulfillable even though its input field would be materialized
+    into the schema. The misconfiguration surfaces at finalize, naming
+    the filterset, instead of on the first request that activates the
+    branch (where ``FilterSet._iter_visibility_steps`` raises the runtime
+    sibling of this error).
+    """
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    class BookFilter(FilterSet):
+        shelf = RelatedFilter(ShelfFilter, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    # No ShelfType registered - only the parent owner is wired.
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            filterset_class = BookFilter
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert "BookFilter" in msg
+    assert "'shelf'" in msg
+    assert "Shelf" in msg
+    assert "no DjangoType is registered" in msg
+
+
+def test_phase_2_5_unregistered_target_check_walks_transitive_filtersets():
+    """Subpass 2.5 reaches ``RelatedFilter``s on UNWIRED child filtersets.
+
+    The misconfigured ``RelatedFilter`` here lives on ``ShelfFilter``,
+    which is never wired via ``Meta.filterset_class`` - it is only
+    reachable as the target of the wired ``BookFilter.shelf`` branch.
+    The sweep must walk wired filtersets transitively (with a visited
+    set, since ``RelatedFilter`` cross-references may be cyclic) so a
+    nested branch cannot smuggle an unregistered target past finalize.
+    """
+
+    class BranchFilter(FilterSet):
+        class Meta:
+            model = Branch
+            fields = {"name": ["exact"]}
+
+    class ShelfFilter(FilterSet):
+        # Branch has no registered DjangoType below; this nested branch
+        # is the misconfiguration the transitive walk must surface.
+        branch = RelatedFilter(BranchFilter, field_name="branch")
+
+        class Meta:
+            model = Shelf
+            fields = {"code": ["exact"]}
+
+    class BookFilter(FilterSet):
+        shelf = RelatedFilter(ShelfFilter, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf")
+            filterset_class = BookFilter
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert "ShelfFilter" in msg
+    assert "'branch'" in msg
+    assert "no DjangoType is registered" in msg
 
 
 def test_phase_2_5_non_import_get_filters_failure_rewraps_as_configuration_error():

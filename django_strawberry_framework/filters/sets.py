@@ -759,11 +759,26 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             ),
         ):
             return None
-        # Operator bags are always Strawberry-input dataclasses, never dicts;
-        # reject dicts before delegating to ``_iter_input_items`` (which
-        # accepts both dict and dataclass shapes for sites 1 / 3) so this
-        # site only walks the dataclass tail per the helper's contract.
+        # A dict reaches a direct ``apply_*`` caller in two shapes that
+        # must NOT be conflated:
+        #   * an operator bag - ``{"i_contains": "x", "gt": 3}`` - whose
+        #     keys are per-field lookup attrs; this is the shape that, when
+        #     passed as a dict, used to fall through to the scalar branch
+        #     where ``normalize_input_value`` splatted the raw dict into
+        #     the form data as unknown keys the form silently ignored (the
+        #     explicit-filter-applies-nothing bug);
+        #   * a multi-key filter VALUE - a ``RangeFilter``'s
+        #     ``{"start": 1, "end": 5}`` - whose keys are NOT lookup attrs
+        #     and which the scalar branch must hand to
+        #     ``normalize_input_value`` so it produces the positional
+        #     ``{<field>_0, <field>_1}`` patch.
+        # Disambiguate by the keys: a dict is an operator bag only when
+        # EVERY key names a known lookup attr (``_FORM_KEY_BY_PYTHON_ATTR``
+        # - ``start`` / ``end`` are absent). Strawberry-input dataclass
+        # bags (the schema-driven path) always delegate unchanged.
         if isinstance(raw_value, dict):
+            if raw_value and all(key in _FORM_KEY_BY_PYTHON_ATTR for key in raw_value):
+                return list(raw_value.items())
             return None
         return FilterSet._iter_input_items(raw_value)
 
@@ -868,13 +883,19 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """Yield the pre-await state each visibility derive method needs.
 
         Returns ``(field_name, target_type, child_filterset, child_input,
-        child_base)`` for every active related branch whose ``target_type``
-        and ``child_filterset`` resolved; skips branches missing either so
-        the sync / async derive methods carry ONLY the two awaits / calls
-        per step. Composes with
-        ``_iter_active_related_branches`` (per-branch yield shape) so the
-        two iterators chain naturally without materializing intermediate
-        lists.
+        child_base)`` for every active related branch. A branch whose
+        ``target_type`` or ``child_filterset`` cannot be resolved raises
+        ``ConfigurationError`` instead of being skipped: the branch is
+        ACTIVE (the consumer supplied input for it), so skipping would
+        drop the constraint entirely and silently return unfiltered
+        parent rows - a filter the consumer believes is applied doing
+        nothing. The same misconfiguration is also caught earlier, at
+        finalize time, by ``_bind_filtersets`` subpass 2.5 for every
+        schema-wired filterset; this runtime guard covers direct
+        ``apply_sync`` / ``apply_async`` callers that never finalize.
+        Composes with ``_iter_active_related_branches`` (per-branch yield
+        shape) so the two iterators chain naturally without materializing
+        intermediate lists.
         """
         for field_name, related_filter, child_input in cls._iter_active_related_branches(
             input_value,
@@ -882,7 +903,21 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             target_type = cls._target_type_for_related_filter(related_filter)
             child_filterset = related_filter.filterset
             if target_type is None or child_filterset is None:
-                continue
+                child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
+                target_label = getattr(child_model, "__qualname__", "<unresolved>")
+                reason = (
+                    f"no DjangoType is registered for its target model {target_label}"
+                    if child_filterset is not None
+                    else "its target FilterSet could not be resolved"
+                )
+                raise ConfigurationError(
+                    f"FilterSet {cls.__qualname__}: related filter branch "
+                    f"{field_name!r} is present in the filter input but {reason}. "
+                    "The branch's visibility scoping runs the target type's "
+                    "get_queryset (spec-027 Decision 8 step 3); skipping it would "
+                    "silently return unfiltered rows. Register a DjangoType for "
+                    "the target model or remove the RelatedFilter.",
+                )
             child_model = child_filterset._meta.model
             child_base = child_model._default_manager.all()
             yield field_name, target_type, child_filterset, child_input, child_base
@@ -1520,9 +1555,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
         M4-of-rev3 + H3-of-rev8 - the explicit `RelatedFilter(queryset=...)`
         constraint AND-intersects with the visibility-scoped child qs
-        from step 3, then `parent_qs.filter(<rel>__in=<intersected>)` runs
-        ONCE for every active branch. Inactive branches do not constrain
-        the parent.
+        from step 3, then a ``pk__in=<parent-pk subquery>`` restriction
+        built from ``<rel>__in=<intersected>`` runs ONCE for every active
+        branch. Inactive branches do not constrain the parent.
         """
         constrained = parent_qs
         for field_name, related_filter, _ in cls._iter_active_related_branches(input_value):
@@ -1579,7 +1614,26 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # ``child_qs_by_branch`` stays keyed by the declared name (see
             # ``_derive_related_visibility_querysets_*``), so only this final
             # ``.filter(...)`` switches to the ORM path.
-            constrained = constrained.filter(**{f"{related_filter.field_name}__in": intersected})
+            #
+            # The restriction is wrapped as ``pk__in=<parent-pk subquery>``
+            # rather than filtering ``<rel>__in=<intersected>`` directly: for
+            # a many-side relation (reverse FK / M2M) the direct form JOINs
+            # the child table onto the parent queryset, so a parent with N
+            # matching children comes back N times - duplicate nodes in
+            # lists / connections and corrupted pagination counts. The pk
+            # subquery collapses those duplicates inside the ``IN`` clause
+            # (no ``.distinct()``, which would mutate consumer-visible
+            # queryset state) and matches the ``Q(pk__in=...)`` shape
+            # ``_q_for_branch`` already emits, so a related branch answers
+            # identically whether it appears directly or nested under
+            # ``and`` / ``or`` / ``not``. The subquery derives from
+            # ``constrained`` itself (not a fresh manager) so custom
+            # default-manager filtering and the queryset's database alias
+            # carry through unchanged.
+            matching_parent_pks = constrained.filter(
+                **{f"{related_filter.field_name}__in": intersected},
+            ).values("pk")
+            constrained = constrained.filter(pk__in=matching_parent_pks)
         return constrained
 
     @classmethod

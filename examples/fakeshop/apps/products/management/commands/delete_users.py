@@ -1,4 +1,4 @@
-"""Management command for deleting generated products test users."""
+"""Delete generated products test users without touching superusers."""
 
 from django.core.management.base import BaseCommand
 

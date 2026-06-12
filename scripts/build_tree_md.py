@@ -245,6 +245,42 @@ def detail_paragraphs(path: Path) -> list[str]:
     return paragraphs[1:]
 
 
+def command_summary(path: Path) -> str:
+    """Return the role-section summary for one management command module."""
+    summary = first_python_docstring_sentence(path)
+    redundant_prefix = f"manage.py {path.stem} - "
+    if summary.startswith(redundant_prefix):
+        summary = summary.removeprefix(redundant_prefix)
+    if summary:
+        return f"{summary[0].upper()}{summary[1:]}"
+    return summary
+
+
+def management_command_files(app_dir: Path) -> list[Path]:
+    """Return documented management command modules for one fakeshop app."""
+    commands_dir = app_dir / "management" / "commands"
+    if not commands_dir.is_dir():
+        return []
+    return [
+        child
+        for child in sorted_children(commands_dir)
+        if child.is_file() and child.suffix == ".py"
+    ]
+
+
+def render_management_commands(app_dir: Path) -> list[str]:
+    """Render management command summaries for one app role section."""
+    command_files = management_command_files(app_dir)
+    if not command_files:
+        return []
+
+    lines = ["Management commands:"]
+    for command_file in command_files:
+        lines.append(f"- `manage.py {command_file.stem}` - {command_summary(command_file)}")
+    lines.append("")
+    return lines
+
+
 def folder_description(path: Path) -> str:
     """Return the folder description stored in ``path / "__init__.py"``."""
     init_path = path / "__init__.py"
@@ -541,6 +577,7 @@ def render_fakeshop_app_details(project_dir: Path) -> list[str]:
         lines.extend([f"`apps.{app_name}/`", ""])
         for paragraph in paragraphs:
             lines.extend([paragraph, ""])
+        lines.extend(render_management_commands(apps_dir / app_name))
     return lines
 
 

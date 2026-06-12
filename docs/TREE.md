@@ -399,11 +399,11 @@ examples/fakeshop/    # A Django + Strawberry GraphQL example project that exerc
     │   ├── services.py           # Dynamic data seeding service using Faker providers.
     │   ├── management/    # Management-command namespace for products data and user fixtures.
     │   │   └── commands/    # Django management commands for products fixture setup and teardown.
-    │   │       ├── create_users.py  # Management command for creating permission-shaped products test users.
-    │   │       ├── delete_data.py  # Management command for deleting seeded products catalog data.
-    │   │       ├── delete_users.py  # Management command for deleting generated products test users.
-    │   │       ├── seed_data.py  # Management command for seeding Faker-backed products catalog rows.
-    │   │       └── seed_shards.py  # Populate the secondary shard SQLite DB used by the multi-DB / stress-test flow.
+    │   │       ├── create_users.py  # Create permission-shaped products test users for admin and API access checks.
+    │   │       ├── delete_data.py  # Delete seeded products catalog rows by count, item scope, or full catalog scope.
+    │   │       ├── delete_users.py  # Delete generated products test users without touching superusers.
+    │   │       ├── seed_data.py  # Seed Faker-backed products catalog rows up to a requested per-provider count.
+    │   │       └── seed_shards.py  # Prepare the secondary shard SQLite DB for multi-DB products coverage.
     │   └── tests/    # Non-live app tests for products admin, commands, models, schema, and services.
     │       ├── test_admin.py     # Products admin tests for changelist query-param branches.
     │       ├── test_commands.py  # Products command tests for service-backed seed and delete management commands.
@@ -417,25 +417,50 @@ examples/fakeshop/    # A Django + Strawberry GraphQL example project that exerc
 
 Each app owns a focused example surface: products for catalog data and seed tooling, library for deeper relation graphs, scalars for converter coverage, and kanban/glossary for repository docs rendered from database rows.
 
+The namespace stays intentionally concrete: every app contributes real Django models, schema objects, and tests that exercise django-strawberry-framework through project configuration instead of synthetic package-only fixtures.
+
 `apps.glossary/`
 
 It backs the exported ``docs/GLOSSARY.md`` file and keeps term aliases, categories, relationships, and spec mentions queryable through the same GraphQL surface used by the markdown exporter.
+
+It also ties completed design specs back to the board: spec companion CSVs become ``GlossarySpecMention`` rows, and done-card glossary links are reconciled so rendered documentation, kanban metadata, and GraphQL API reads describe the same vocabulary.
+
+Management commands:
+- `manage.py import_spec_terms` - Import spec companion CSVs into glossary mentions and done-card links.
 
 `apps.kanban/`
 
 It is the database source for the root ``KANBAN.md`` export, including card ordering, dependency integrity, release targeting, glossary links, and reusable prose sections shared with other docs-as-data exporters.
 
+It owns the board invariants rather than leaving them in importer scripts: card numbers, status placement, dependency edges, dependency prose, card references, and reusable BoardDoc prose are validated in app services/signals so every entry point behaves the same way.
+
+Management commands:
+- `manage.py import_cards` - Create kanban cards from a JSON file.
+
 `apps.library/`
 
 It is the primary relational acceptance surface: live GraphQL tests use it to prove foreign keys, reverse relations, one-to-one links, many-to-many joins, Relay nodes, optimizer hints, consumer queryset shaping, and BigInt round-tripping.
+
+It deliberately stays service-free: tests create rows inline so relation behavior, queryset planning, and computed fields remain visible without a fixture abstraction hiding the model graph being exercised.
 
 `apps.products/`
 
 It carries Category, Item, Property, and Entry data plus Faker-backed services, management commands, admin shortcuts, and filter/order sidecars for a practical catalog-style GraphQL schema.
 
+It is the operational fixture app: services and management commands create users, seed/delete catalog rows, and prepare sharded data, while admin and schema tests prove those same paths work both in-process and through live GraphQL HTTP.
+
+Management commands:
+- `manage.py create_users` - Create permission-shaped products test users for admin and API access checks.
+- `manage.py delete_data` - Delete seeded products catalog rows by count, item scope, or full catalog scope.
+- `manage.py delete_users` - Delete generated products test users without touching superusers.
+- `manage.py seed_data` - Seed Faker-backed products catalog rows up to a requested per-provider count.
+- `manage.py seed_shards` - Prepare the secondary shard SQLite DB for multi-DB products coverage.
+
 `apps.scalars/`
 
 It provides nullable and non-null scalar fixtures, relation edges, and override cases that let live GraphQL tests pin scalar conversion, serialization, filtering, and schema introspection behavior.
+
+It keeps scalar edge cases isolated from richer domain fixtures so converter behavior can be tested directly, then rechecked through live query filters and GraphQL response serialization without catalog or library model noise.
 
 <!-- LINK DEFINITIONS -->
 

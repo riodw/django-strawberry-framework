@@ -1548,6 +1548,18 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/connection.py`](django_strawberry_framework/connection.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/relay.py`](django_strawberry_framework/relay.py)
+- [`django_strawberry_framework/testing/__init__.py`](django_strawberry_framework/testing/__init__.py)
+- [`django_strawberry_framework/testing/relay.py`](django_strawberry_framework/testing/relay.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
+- [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
+
 #### Planning note
 
 blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field lands, this card unblocks and ships in the same release. The post-`1.0.0` "Relay magic" differentiators (type-rename GlobalID migrations, polymorphic connections, stable cursors, refetchable containers, permission-aware cursor decoding) live separately in [`BACKLOG.md`][backlog] item 39 — they extend this story rather than block it.
@@ -1694,6 +1706,18 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 | [`Meta.globalid_strategy`](docs/GLOSSARY.md#metaglobalid_strategy) | shipped (`0.0.9`) |
 | [RELAY_GLOBALID_STRATEGY](docs/GLOSSARY.md#relay_globalid_strategy) | shipped (`0.0.9`) |
 
+#### Package files
+
+- [`django_strawberry_framework/filters/base.py`](django_strawberry_framework/filters/base.py)
+- [`django_strawberry_framework/filters/inputs.py`](django_strawberry_framework/filters/inputs.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
+- [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
+- [`django_strawberry_framework/types/relay.py`](django_strawberry_framework/types/relay.py)
+- [`django_strawberry_framework/utils/typing.py`](django_strawberry_framework/utils/typing.py)
+
 #### Planning note
 
 Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but before the Full Relay story. This is the Relay identity-format decision: Django model identity should be the durable GlobalID anchor before root Node/refetch behavior and client-cache-facing Relay semantics harden.
@@ -1815,6 +1839,18 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
+
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/connection.py`](django_strawberry_framework/connection.py)
+- [`django_strawberry_framework/list_field.py`](django_strawberry_framework/list_field.py)
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/orders/inputs.py`](django_strawberry_framework/orders/inputs.py)
+- [`django_strawberry_framework/orders/sets.py`](django_strawberry_framework/orders/sets.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
 
 #### Planning note
 
@@ -1943,6 +1979,13 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 | [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) | shipped (`0.0.9`) |
 | [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) | shipped (`0.0.9`) |
 
+#### Package files
+
+- [`django_strawberry_framework/management/commands/inspect_django_type.py`](django_strawberry_framework/management/commands/inspect_django_type.py)
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+
 #### Planning note
 
 planned; three independent slices that ship in any order. Card body counts as complete when all three slices land; if the schedule forces Slice 3 to defer, the slice carves off as its own follow-up card without disrupting Slices 1 + 2.
@@ -2049,6 +2092,19 @@ planned; three independent slices that ship in any order. Card body counts as co
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/orders/__init__.py`](django_strawberry_framework/orders/__init__.py)
+- [`django_strawberry_framework/orders/base.py`](django_strawberry_framework/orders/base.py)
+- [`django_strawberry_framework/orders/factories.py`](django_strawberry_framework/orders/factories.py)
+- [`django_strawberry_framework/orders/inputs.py`](django_strawberry_framework/orders/inputs.py)
+- [`django_strawberry_framework/orders/sets.py`](django_strawberry_framework/orders/sets.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
+- [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
+
 #### Planning note
 
 shipped
@@ -2141,6 +2197,28 @@ shipped
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
 | [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
 
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/conf.py`](django_strawberry_framework/conf.py)
+- [`django_strawberry_framework/exceptions.py`](django_strawberry_framework/exceptions.py)
+- [`django_strawberry_framework/filters/__init__.py`](django_strawberry_framework/filters/__init__.py)
+- [`django_strawberry_framework/filters/base.py`](django_strawberry_framework/filters/base.py)
+- [`django_strawberry_framework/filters/factories.py`](django_strawberry_framework/filters/factories.py)
+- [`django_strawberry_framework/filters/inputs.py`](django_strawberry_framework/filters/inputs.py)
+- [`django_strawberry_framework/filters/sets.py`](django_strawberry_framework/filters/sets.py)
+- [`django_strawberry_framework/list_field.py`](django_strawberry_framework/list_field.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
+- [`django_strawberry_framework/sets_mixins.py`](django_strawberry_framework/sets_mixins.py)
+- [`django_strawberry_framework/types/__init__.py`](django_strawberry_framework/types/__init__.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+- [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
+- [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
+- [`django_strawberry_framework/types/relay.py`](django_strawberry_framework/types/relay.py)
+
 #### Planning note
 
 shipped
@@ -2232,6 +2310,11 @@ shipped
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
 
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
+
 #### Planning note
 
 shipped
@@ -2257,6 +2340,13 @@ shipped
 | --- | --- |
 | [`safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Django Trac #37064 hardening](docs/GLOSSARY.md#django-trac-37064-hardening) | shipped (`0.0.7`) |
+
+#### Package files
+
+- [`django_strawberry_framework/_django_patches.py`](django_strawberry_framework/_django_patches.py)
+- [`django_strawberry_framework/apps.py`](django_strawberry_framework/apps.py)
+- `django_strawberry_framework/test/__init__.py` (historical)
+- `django_strawberry_framework/test/_wrap.py` (historical)
 
 #### Planning note
 
@@ -2344,6 +2434,13 @@ shipped
 | [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.12` |
 | [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.12` |
 
+#### Package files
+
+- [`django_strawberry_framework/management/__init__.py`](django_strawberry_framework/management/__init__.py)
+- [`django_strawberry_framework/management/commands/__init__.py`](django_strawberry_framework/management/commands/__init__.py)
+- [`django_strawberry_framework/management/commands/export_schema.py`](django_strawberry_framework/management/commands/export_schema.py)
+- [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
+
 #### Planning note
 
 shipped
@@ -2385,6 +2482,10 @@ shipped
 | [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.12` |
 | [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.12` |
 | [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.12` |
+
+#### Package files
+
+- [`django_strawberry_framework/apps.py`](django_strawberry_framework/apps.py)
 
 #### Planning note
 
@@ -2439,6 +2540,12 @@ shipped
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
 
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/apps.py`](django_strawberry_framework/apps.py)
+- [`django_strawberry_framework/list_field.py`](django_strawberry_framework/list_field.py)
+
 #### Planning note
 
 shipped
@@ -2483,6 +2590,11 @@ shipped
 | [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
 | [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
 | [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
+
+#### Package files
+
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
 
 #### Planning note
 
@@ -2539,6 +2651,15 @@ shipped
 | [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
+
+#### Package files
+
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
+- [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
 
 #### Planning note
 
@@ -2601,6 +2722,12 @@ shipped
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
 | [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | planned for `0.0.11` |
 
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+
 #### Planning note
 
 shipped
@@ -2650,6 +2777,15 @@ shipped
 | --- | --- |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 | [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+
+#### Package files
+
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/field_meta.py`](django_strawberry_framework/optimizer/field_meta.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+- [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
 
 #### Planning note
 
@@ -2726,6 +2862,29 @@ shipped
 | [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/conf.py`](django_strawberry_framework/conf.py)
+- [`django_strawberry_framework/optimizer/_context.py`](django_strawberry_framework/optimizer/_context.py)
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/field_meta.py`](django_strawberry_framework/optimizer/field_meta.py)
+- [`django_strawberry_framework/optimizer/hints.py`](django_strawberry_framework/optimizer/hints.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/types/__init__.py`](django_strawberry_framework/types/__init__.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+- [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
+- [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
+- [`django_strawberry_framework/types/relations.py`](django_strawberry_framework/types/relations.py)
+- [`django_strawberry_framework/types/relay.py`](django_strawberry_framework/types/relay.py)
+- [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
+- [`django_strawberry_framework/utils/__init__.py`](django_strawberry_framework/utils/__init__.py)
+- [`django_strawberry_framework/utils/relations.py`](django_strawberry_framework/utils/relations.py)
+- [`django_strawberry_framework/utils/typing.py`](django_strawberry_framework/utils/typing.py)
 
 #### Planning note
 
@@ -2828,6 +2987,12 @@ shipped
 | Term | Status |
 | --- | --- |
 | [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+
+#### Package files
+
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
 
 #### Planning note
 
@@ -2948,6 +3113,21 @@ shipped
 | [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
+
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/field_meta.py`](django_strawberry_framework/optimizer/field_meta.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/types/__init__.py`](django_strawberry_framework/types/__init__.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+- [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
+- [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
+- [`django_strawberry_framework/types/relations.py`](django_strawberry_framework/types/relations.py)
+- [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
 
 #### Planning note
 
@@ -3162,6 +3342,17 @@ shipped
 | [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
 | [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/optimizer/field_meta.py`](django_strawberry_framework/optimizer/field_meta.py)
+- [`django_strawberry_framework/optimizer/hints.py`](django_strawberry_framework/optimizer/hints.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+- [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
+
 #### Planning note
 
 shipped
@@ -3203,6 +3394,11 @@ shipped
 | [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
 | [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
 | [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+
+#### Package files
+
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
 
 #### Planning note
 
@@ -3247,6 +3443,18 @@ shipped
 | [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/field_meta.py`](django_strawberry_framework/optimizer/field_meta.py)
+- [`django_strawberry_framework/optimizer/hints.py`](django_strawberry_framework/optimizer/hints.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
 
 #### Planning note
 
@@ -3306,6 +3514,15 @@ shipped
 | [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
 | [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
+#### Package files
+
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/field_meta.py`](django_strawberry_framework/optimizer/field_meta.py)
+- [`django_strawberry_framework/optimizer/hints.py`](django_strawberry_framework/optimizer/hints.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
+
 #### Planning note
 
 shipped
@@ -3342,6 +3559,21 @@ shipped
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 | [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/optimizer/__init__.py`](django_strawberry_framework/optimizer/__init__.py)
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/types/__init__.py`](django_strawberry_framework/types/__init__.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+- [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
+- [`django_strawberry_framework/utils/__init__.py`](django_strawberry_framework/utils/__init__.py)
+- [`django_strawberry_framework/utils/strings.py`](django_strawberry_framework/utils/strings.py)
+- [`django_strawberry_framework/utils/typing.py`](django_strawberry_framework/utils/typing.py)
 
 #### Planning note
 
@@ -3409,6 +3641,16 @@ shipped
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+
+#### Package files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`django_strawberry_framework/conf.py`](django_strawberry_framework/conf.py)
+- `django_strawberry_framework/converters.py` (historical)
+- [`django_strawberry_framework/exceptions.py`](django_strawberry_framework/exceptions.py)
+- `django_strawberry_framework/optimizer.py` (historical)
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- `django_strawberry_framework/types.py` (historical)
 
 #### Planning note
 

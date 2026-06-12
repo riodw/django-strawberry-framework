@@ -163,6 +163,15 @@ def _seed_board():
     )
     filters_card.status = done
     filters_card.save(update_fields=["status"])
+    current_package_file = models.PackageFile.objects.create(
+        path="django_strawberry_framework/filters/base.py",
+        is_current=True,
+    )
+    historical_package_file = models.PackageFile.objects.create(
+        path="django_strawberry_framework/old_filters.py",
+        is_current=False,
+    )
+    filters_card.changed_files.add(current_package_file)
     conn_card = models.Card.objects.create(
         title="DjangoConnectionField",
         number=24,
@@ -174,6 +183,7 @@ def _seed_board():
         relative_size=size_m,
         planning_state=planned,
     )
+    conn_card.changed_files.add(historical_package_file)
     reference = models.CardReference.objects.create(
         source_card=conn_card,
         target_card=filters_card,
@@ -222,6 +232,8 @@ def _seed_board():
         "related_glossary_link": related_glossary_link,
         "board_doc": board_doc,
         "board_doc_reference": board_doc_reference,
+        "current_package_file": current_package_file,
+        "historical_package_file": historical_package_file,
     }
 
 
@@ -348,6 +360,46 @@ def test_select_card_glossary_terms_and_filter_by_term_anchor():
                                 "anchor": "relatedfilter",
                                 "statusText": "shipped (`0.0.8`)",
                             },
+                        },
+                    ],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_select_and_filter_cards_by_changed_package_files():
+    """Kanban cards expose linked package-file paths through the live API."""
+    seed = _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(
+            filter: {
+              changedFiles: {
+                path: { exact: "django_strawberry_framework/filters/base.py" }
+              }
+            }
+          ) {
+            title
+            changedFiles {
+              uuid { id }
+              path
+              isCurrent
+            }
+          }
+        }
+        """,
+        {
+            "allCards": [
+                {
+                    "title": "Filtering subsystem",
+                    "changedFiles": [
+                        {
+                            "uuid": {"id": str(seed["current_package_file"].uuid.id)},
+                            "path": "django_strawberry_framework/filters/base.py",
+                            "isCurrent": True,
                         },
                     ],
                 },

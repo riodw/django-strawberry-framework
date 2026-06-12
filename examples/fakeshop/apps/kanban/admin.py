@@ -45,6 +45,13 @@ class SpecDocAdmin(admin.ModelAdmin):
     autocomplete_fields = ("card",)
 
 
+@admin.register(models.PackageFile)
+class PackageFileAdmin(admin.ModelAdmin):
+    list_display = ("path", "is_current")
+    list_filter = ("is_current",)
+    search_fields = ("path",)
+
+
 class CardItemInline(admin.TabularInline):
     model = models.CardItem
     extra = 0
@@ -98,7 +105,7 @@ class CardAdmin(admin.ModelAdmin):
         "priority",
         "severity",
     )
-    filter_horizontal = ("dependencies", "labels")
+    filter_horizontal = ("dependencies", "labels", "changed_files")
     inlines = [
         CardItemInline,
         ParityClaimInline,

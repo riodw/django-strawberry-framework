@@ -10,6 +10,14 @@
 repos:
   - repo: local
     hooks:
+      - id: kanban-package-file-constants
+        name: kanban package file constants
+        entry: uv run python scripts/build_kanban_package_file_constants.py
+        language: system
+        files: ^django_strawberry_framework/
+        pass_filenames: false
+        require_serial: true
+
       - id: source-layout
         name: source layout (py trailing commas + ascii-only; md link-def scaffold; json/graphql brace explosion)
         entry: uv run python scripts/check_trailing_commas.py --fix

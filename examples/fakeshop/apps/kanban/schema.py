@@ -273,6 +273,22 @@ class SpecDocType(DjangoType):
         )
 
 
+class PackageFileType(DjangoType):
+    class Meta:
+        model = models.PackageFile
+        fields = (
+            "id",
+            "path",
+            "is_current",
+            "created_date",
+            "updated_date",
+            "uuid",
+            "cards",
+        )
+        filterset_class = filters.PackageFileFilter
+        orderset_class = orders.PackageFileOrder
+
+
 # ---------------------------------------------------------------------------
 # Card + edges
 # ---------------------------------------------------------------------------
@@ -310,6 +326,7 @@ class CardType(DjangoType):
             "parity",
             "labels",
             "glossary_links",
+            "changed_files",
         )
         interfaces = (relay.Node,)
         filterset_class = filters.CardFilter
@@ -321,6 +338,7 @@ class CardType(DjangoType):
             "outgoing_references": OptimizerHint.prefetch_related(),
             "incoming_references": OptimizerHint.prefetch_related(),
             "glossary_links": OptimizerHint.prefetch_related(),
+            "changed_files": OptimizerHint.prefetch_related(),
         }
 
 
@@ -667,6 +685,20 @@ class Query:
             queryset = filters.LabelFilter.apply_sync(filter, queryset, info)
         if order_by is not None:
             queryset = orders.LabelOrder.apply_sync(order_by, queryset, info)
+        return queryset
+
+    @strawberry.field
+    def all_kanban_package_files(
+        self,
+        info: Info,
+        filter: filter_input_type(filters.PackageFileFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.PackageFileOrder)] | None = None,
+    ) -> list[PackageFileType]:
+        queryset = models.PackageFile.objects.order_by("path")
+        if filter is not None:
+            queryset = filters.PackageFileFilter.apply_sync(filter, queryset, info)
+        if order_by is not None:
+            queryset = orders.PackageFileOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field

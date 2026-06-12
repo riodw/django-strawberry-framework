@@ -59,6 +59,7 @@ from strawberry.utils.str_converters import to_camel_case
 from ..exceptions import ConfigurationError
 from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
+from ..utils.relations import instance_accessor
 from ..utils.strings import snake_case
 from .converters import resolved_relation_annotation
 from .relations import PendingRelation
@@ -403,7 +404,15 @@ def _synthesize_relation_connections() -> None:
                 )
             field_obj = relay.connection(
                 _connection_type_for(target_type),
-                resolver=_build_relation_connection_resolver(target_type, name),
+                # The resolver reads rows off the instance, so it gets the
+                # ACCESSOR (``get_accessor_name()``); ``name`` (the related
+                # query name) stays the GraphQL vocabulary for the generated
+                # field name and the collision guard. The two diverge for a
+                # reverse relation without ``related_name`` (Round-4 S3).
+                resolver=_build_relation_connection_resolver(
+                    target_type,
+                    instance_accessor(field),
+                ),
             )
             setattr(field_obj, _SYNTHESIZED_RELATION_CONNECTION_MARKER, True)
             setattr(type_cls, generated, field_obj)

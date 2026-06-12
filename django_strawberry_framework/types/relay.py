@@ -74,6 +74,18 @@ def implements_relay_node(type_cls: type) -> bool:
     return issubclass(type_cls, relay.Node)
 
 
+# Attribute the root ``node``/``nodes`` resolvers (``relay.py``'s
+# ``_stamp_node_type``) set on a fetched model instance to carry the
+# decode-resolved ``DjangoType`` into abstract-type resolution. Without it, a
+# model with TWO registered Relay types makes every candidate's installed
+# ``is_type_of`` answer ``True`` for the same bare instance and graphql-core's
+# candidate-iteration order picks the ``__typename`` - regardless of which
+# type the GlobalID named (Round-4 review S2). The hint is the missing wire
+# between the decode routing (which type's resolvers fetched the row) and
+# graphql-core's concrete-type selection.
+_NODE_TYPE_HINT_ATTR = "_dsf_node_type_hint"
+
+
 def install_is_type_of(type_cls: type) -> None:
     """Borrow strawberry-django's ``is_type_of`` virtual-subclass behavior.
 
@@ -84,6 +96,14 @@ def install_is_type_of(type_cls: type) -> None:
     that returns a Django model can fail Strawberry's isinstance check
     and surface as "Cannot determine type for object of model X" at
     runtime (spec-015 Decision 6 #"injection (Decision-1 borrow) is added unconditionally").
+
+    A ``_NODE_TYPE_HINT_ATTR`` stamp (set by the root refetch fields on the
+    instances they fetch) takes precedence over the isinstance fallback: the
+    hint names the exact ``DjangoType`` whose resolvers fetched the row, so a
+    multi-type model resolves ``__typename`` to the type the GlobalID named
+    instead of whichever candidate graphql-core happens to test first.
+    Unstamped instances (relation resolvers, consumer resolvers) keep the
+    pre-032 isinstance behavior unchanged.
 
     Preserves a consumer-declared ``is_type_of`` via the ``cls.__dict__``
     membership check (the same discriminator strawberry-django uses); a
@@ -102,6 +122,9 @@ def install_is_type_of(type_cls: type) -> None:
     model = _model_for(type_cls)
 
     def is_type_of(obj: object, info: object) -> bool:  # noqa: ARG001
+        hinted = getattr(obj, _NODE_TYPE_HINT_ATTR, None)
+        if hinted is not None:
+            return hinted is type_cls
         return isinstance(obj, (type_cls, model))
 
     type_cls.is_type_of = is_type_of
@@ -161,10 +184,13 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     model = _model_for(type_cls)
     if not isinstance(model._meta.pk, CompositePrimaryKey):
         return
-    # Phase 2.5 ordering note: this calls upstream ``relay.Node.resolve_id_attr``
-    # (our default is installed after this gate runs).
+    # Ask Strawberry's annotation scan directly rather than
+    # ``type_cls.resolve_id_attr()``: a relay-shaped child of a relay-shaped
+    # parent inherits the parent's installed framework default, which
+    # swallows ``NodeIDAnnotationError`` into the ``"pk"`` fallback and
+    # would let a composite-pk child slip past this gate.
     try:
-        type_cls.resolve_id_attr()  # type: ignore[attr-defined]
+        relay.Node.resolve_id_attr.__func__(type_cls)  # type: ignore[attr-defined]
     except NodeIDAnnotationError:
         pass
     else:
@@ -180,13 +206,25 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
 def _resolve_id_attr_default(cls: type) -> str:
     """Default ``Node.resolve_id_attr`` - falls back to ``"pk"``.
 
-    Calls ``super(cls, cls).resolve_id_attr()`` so a consumer
-    ``id: relay.NodeID[...]`` annotation on the class wins; on
-    ``NodeIDAnnotationError`` falls back to ``"pk"``. Direct port of
+    Calls ``relay.Node.resolve_id_attr`` directly (via ``__func__`` so it
+    binds the runtime ``cls``) so a consumer ``id: relay.NodeID[...]``
+    annotation anywhere on the class's MRO wins; on
+    ``NodeIDAnnotationError`` falls back to ``"pk"``. Port of
     ``strawberry_django/relay/utils.py::resolve_model_id_attr``.
+
+    Deliberately NOT ``super(cls, cls).resolve_id_attr()``: with ``cls``
+    bound at runtime, a relay-shaped DjangoType subclassing another
+    relay-shaped DjangoType inherits the parent's installed copy of this
+    default, and the MRO walk from the child lands back on that copy
+    re-bound to the child - infinite recursion (Round-4 review S1). The
+    direct call asks Strawberry's annotation scan the same question
+    without traversing the MRO's method chain, so the default behaves
+    identically at every inheritance depth. (Skipping installation on
+    the child is then harmless: all four defaults are stateless
+    classmethods that act on the runtime ``cls``.)
     """
     try:
-        return super(cls, cls).resolve_id_attr()  # type: ignore[misc]
+        return relay.Node.resolve_id_attr.__func__(cls)  # type: ignore[attr-defined]
     except NodeIDAnnotationError:
         return "pk"
 

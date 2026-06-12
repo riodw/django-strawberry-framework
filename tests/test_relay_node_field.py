@@ -26,7 +26,7 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.relay import _coerce_pk_or_none
+from django_strawberry_framework.relay import _coerce_pk_or_none, _stamp_node_type
 from django_strawberry_framework.types.relay import SyncMisuseError
 
 
@@ -123,6 +123,100 @@ def test_bare_node_field_resolves_type_name_id():
     )
     assert result.errors is None
     assert result.data["node"] == {"__typename": "CategoryNode", "name": row.name}
+
+
+def _make_multi_type_category_nodes() -> tuple[type, type]:
+    """Two Relay-Node types over ``Category`` - the Round-4 S2 multi-type shape.
+
+    Both carry ``globalid_strategy = "type"`` so each type is addressable by
+    its own GraphQL-type-name gid (under the default model-label strategy a
+    secondary type's gid would decode to the primary).
+    """
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            primary = True
+            globalid_strategy = "type"
+
+    class CategoryAdminNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "type"
+
+    return CategoryNode, CategoryAdminNode
+
+
+@pytest.mark.django_db
+def test_bare_node_field_multi_type_model_typename_follows_gid():
+    """``__typename`` matches the type the GlobalID named, not candidate order.
+
+    Round-4 review S2: the bare ``node`` hands graphql-core a raw model
+    instance, and with two registered types over one model both installed
+    ``is_type_of`` hooks answered ``True`` - whichever candidate graphql-core
+    tested first won, so a ``CategoryAdminNode`` gid came back
+    ``__typename: "CategoryNode"``. The ``_stamp_node_type`` hint carries the
+    decode-routing decision into type resolution.
+    """
+    services.seed_data(1)
+    primary, secondary = _make_multi_type_category_nodes()
+    schema = _schema_with(
+        "node",
+        relay.Node | None,
+        DjangoNodeField(),
+        extra_types=(primary, secondary),
+    )
+    row = Category.objects.order_by("pk").first()
+    for type_name in ("CategoryNode", "CategoryAdminNode"):
+        result = schema.execute_sync(
+            "query ($id: ID!) { node(id: $id) { __typename } }",
+            variable_values={"id": _gid(type_name, row.pk)},
+        )
+        assert result.errors is None
+        assert result.data["node"]["__typename"] == type_name
+
+
+@pytest.mark.django_db
+def test_bare_nodes_field_multi_type_model_typenames_follow_gids():
+    """Batch sibling of the S2 regression: per-position ``__typename`` routing."""
+    services.seed_data(1)
+    primary, secondary = _make_multi_type_category_nodes()
+    schema = _schema_with(
+        "nodes",
+        list[relay.Node | None],
+        DjangoNodesField(),
+        extra_types=(primary, secondary),
+    )
+    row = Category.objects.order_by("pk").first()
+    result = schema.execute_sync(
+        "query ($ids: [ID!]!) { nodes(ids: $ids) { __typename } }",
+        variable_values={
+            "ids": [_gid("CategoryAdminNode", row.pk), _gid("CategoryNode", row.pk)],
+        },
+    )
+    assert result.errors is None
+    assert [node["__typename"] for node in result.data["nodes"]] == [
+        "CategoryAdminNode",
+        "CategoryNode",
+    ]
+
+
+def test_stamp_node_type_passes_through_none_and_unstampable_objects():
+    """``None`` rides through; an attribute-rejecting return stays unstamped.
+
+    ``None`` is the hidden/missing/uncoercible -> ``null`` contract; a bare
+    ``object()`` stands in for a consumer ``resolve_node(s)`` override
+    returning a ``__slots__``-style object that rejects attribute writes -
+    the stamp is best-effort and such returns keep the isinstance fallback.
+    """
+    assert _stamp_node_type(object, None) is None
+    unstampable = object()
+    assert _stamp_node_type(object, unstampable) is unstampable
+    assert not hasattr(unstampable, "_dsf_node_type_hint")
 
 
 @pytest.mark.django_db
@@ -817,6 +911,51 @@ def test_nodes_consumer_resolve_nodes_wrong_length_raises():
     message = str(result.errors[0])
     assert "CategoryNode" in message
     assert "resolve_nodes returned 0 row(s) for 2 requested id(s)" in message
+
+
+@pytest.mark.django_db
+def test_nodes_consumer_resolve_nodes_generator_return_accepted():
+    """A consumer ``resolve_nodes`` override may return a generator (Round-4 minor).
+
+    ``_check_nodes_result`` materializes a no-``__len__`` return before the
+    length check, so a correctly-ordered generator resolves rather than dying
+    on a bare ``len()`` ``TypeError`` (and a wrong-length generator still gets
+    the named ``ConfigurationError``).
+    """
+    services.seed_data(2)
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+        @classmethod
+        def resolve_nodes(
+            cls,
+            *,
+            info,
+            node_ids,
+            required=False,
+        ):
+            rows = {str(obj.pk): obj for obj in Category.objects.filter(pk__in=node_ids)}
+            return (rows.get(str(node_id)) for node_id in node_ids)
+
+    schema = _schema_with(
+        "categories",
+        list[CategoryNode | None],
+        DjangoNodesField(CategoryNode),
+    )
+    first, second = Category.objects.order_by("pk")[:2]
+    result = schema.execute_sync(
+        _CATEGORIES_QUERY,
+        variable_values={
+            "ids": [_gid("products.category", second.pk), _gid("products.category", first.pk)],
+        },
+    )
+    assert result.errors is None
+    assert result.data["categories"] == [{"name": second.name}, {"name": first.name}]
 
 
 @pytest.mark.django_db

@@ -1262,6 +1262,62 @@ def test_unregister_removes_from_types_models_primaries_definitions(fresh_regist
     assert fresh_registry.get_definition(ItemType) is None
 
 
+def test_unregister_evicts_connection_type_cache_entry(fresh_registry):
+    """``unregister`` drops the type's generated-connection-class cache entry.
+
+    ``clear()`` already purges the whole identity-keyed cache; ``unregister``
+    promises "all traces" of one type, so its eviction keeps the two public
+    mutators consistent (Round-4 review minor). Entries for OTHER types
+    survive.
+    """
+    from django_strawberry_framework.connection import _connection_type_cache
+
+    class ItemType:
+        pass
+
+    class CategoryType:
+        pass
+
+    fresh_registry.register(Item, ItemType)
+    _connection_type_cache[ItemType] = object()
+    _connection_type_cache[CategoryType] = sentinel_kept = object()
+    try:
+        fresh_registry.unregister(ItemType)
+        assert ItemType not in _connection_type_cache
+        assert _connection_type_cache[CategoryType] is sentinel_kept
+    finally:
+        _connection_type_cache.pop(ItemType, None)
+        _connection_type_cache.pop(CategoryType, None)
+
+
+def test_unregister_tolerates_unimportable_connection_submodule(fresh_registry):
+    """``unregister``'s connection-cache ``except ImportError`` guard is best-effort.
+
+    Unregister twin of ``test_clear_tolerates_unimportable_connection_submodule``
+    - same poisoned-``sys.modules`` shape; the registry's own maps are still
+    cleaned when ``connection.py`` cannot be imported.
+    """
+    import sys
+
+    connection_name = "django_strawberry_framework.connection"
+    saved = sys.modules.get(connection_name)
+
+    class ItemType:
+        pass
+
+    fresh_registry.register(Item, ItemType)
+    try:
+        sys.modules[connection_name] = None
+        # Must not raise even though connection.py cannot be imported.
+        fresh_registry.unregister(ItemType)
+        assert fresh_registry.model_for_type(ItemType) is None
+    finally:
+        if saved is None:
+            sys.modules.pop(connection_name, None)
+        else:
+            sys.modules[connection_name] = saved
+
+
 def test_unregister_removes_pending_relations_sourced_from_type(fresh_registry):
     """``unregister`` discards pending relations whose ``source_type`` matches."""
 

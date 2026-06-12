@@ -186,6 +186,18 @@ class TypeRegistry:
         self._pending = [
             pending for pending in self._pending if pending.source_type is not type_cls
         ]
+        # Connection-class cache eviction (cycle-safe local import - the
+        # ``clear()`` co-clear precedent). The cache is identity-keyed on the
+        # target type, so a leftover entry is hygiene rather than correctness
+        # (Round-4 review minor) - but this method promises "all traces", and
+        # ``clear()`` already purges the whole cache; eviction keeps the two
+        # public mutators consistent.
+        try:
+            from .connection import _connection_type_cache
+        except ImportError:
+            pass
+        else:
+            _connection_type_cache.pop(type_cls, None)
 
     def get(self, model: type[models.Model]) -> type | None:
         """Return the relation-resolution target for ``model``, or ``None``.

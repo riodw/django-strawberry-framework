@@ -47,7 +47,7 @@ from ..optimizer._context import (
 from ..optimizer.field_meta import FieldMeta
 from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..registry import registry
-from ..utils.relations import is_many_side_relation_kind
+from ..utils.relations import instance_accessor, is_many_side_relation_kind
 
 # Module-level immutable sentinel for the "no elisions registered" branch so
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
@@ -227,6 +227,10 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     a consumer-assigned attribute as "already loaded".
     """
     field_name = field.name
+    # Instance reads go through the accessor; ``field_name`` stays the
+    # GraphQL-surface / optimizer-key vocabulary. They diverge for reverse
+    # relations without ``related_name`` (Round-4 review S3).
+    accessor_name = instance_accessor(field)
     field_meta = _field_meta_for_resolver(field, parent_type)
     kind = field_meta.relation_kind
 
@@ -234,7 +238,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
         def many_resolver(root: Any, info: Info) -> Any:
             _check_n1(info, root, field_name, parent_type, kind=kind)
-            return list(getattr(root, field_name).all())
+            return list(getattr(root, accessor_name).all())
 
         return _name_resolver(many_resolver, field_name)
 
@@ -244,7 +248,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
             _check_n1(info, root, field_name, parent_type, kind=kind)
             try:
-                return getattr(root, field_name)
+                return getattr(root, accessor_name)
             except related_does_not_exist:
                 return None
 

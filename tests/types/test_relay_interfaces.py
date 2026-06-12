@@ -1076,6 +1076,104 @@ def test_node_id_annotation_overrides_default_id_attr():
     assert CategoryNode.resolve_id_attr() == "name"
 
 
+@pytest.mark.django_db
+def test_relay_chain_child_resolvers_do_not_recurse():
+    """A relay-shaped DjangoType subclassing another relay-shaped DjangoType works.
+
+    Regression for the Round-4 review S1: the child inherits the parent's
+    installed ``resolve_id_attr`` default, the installer correctly skips
+    re-installation (the inherited default is not ``relay.Node``'s method),
+    and the default's old ``super(cls, cls)`` chain re-entered the parent's
+    copy re-bound to the child - ``RecursionError`` on every id emission
+    and refetch. The default now consults ``relay.Node.resolve_id_attr``
+    directly, so the inherited copy behaves identically at any depth.
+    """
+    services.seed_data(1)
+
+    class ParentNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class ChildNode(ParentNode):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    # The four defaults live on the parent only; the child inherits them.
+    assert "resolve_id_attr" in ParentNode.__dict__
+    assert "resolve_id_attr" not in ChildNode.__dict__
+    assert ParentNode.resolve_id_attr() == "pk"
+    assert ChildNode.resolve_id_attr() == "pk"
+
+    row = Item.objects.first()
+    assert row is not None
+    assert ChildNode.resolve_id(row, info=None) == str(row.pk)
+    assert ChildNode.resolve_node(str(row.pk), info=None).pk == row.pk
+    assert [obj.pk for obj in ChildNode.resolve_nodes(info=None, node_ids=[str(row.pk)])] == [
+        row.pk,
+    ]
+
+
+def test_relay_chain_child_node_id_annotation_wins():
+    """A child's own ``relay.NodeID[...]`` annotation wins over the inherited default.
+
+    Companion to the recursion regression above: the direct
+    ``relay.Node.resolve_id_attr`` call still runs Strawberry's MRO
+    annotation scan, so a ``NodeID`` declared on the child is honored even
+    though the executing default classmethod lives on the parent.
+    """
+
+    class ParentNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class ChildNode(ParentNode):
+        name: relay.NodeID[str]
+
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert ParentNode.resolve_id_attr() == "pk"
+    assert ChildNode.resolve_id_attr() == "name"
+
+
+def test_relay_chain_composite_pk_child_still_gated(monkeypatch):
+    """The composite-pk gate is not bypassed by an inherited framework default.
+
+    The gate used to call ``type_cls.resolve_id_attr()`` expecting
+    ``NodeIDAnnotationError`` from Strawberry's default when no explicit
+    ``NodeID`` exists - but a chain child inherits the parent's installed
+    framework default, which swallows that error into the ``"pk"``
+    fallback and would have let a composite-pk child slip through. The
+    gate now asks Strawberry's annotation scan directly.
+    """
+
+    class ParentNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class ChildNode(ParentNode):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    monkeypatch.setattr(Category._meta, "pk", CompositePrimaryKey("name", "is_private"))
+    with pytest.raises(ConfigurationError, match="composite primary key"):
+        finalize_django_types()
+
+
 def test_non_relay_interface_works():
     """A non-Relay ``@strawberry.interface`` is injected without Relay resolver wiring."""
 

@@ -9,6 +9,9 @@ from django_strawberry_framework.utils.relations import (
     RelationKind as _RelationKindSubmodule,
 )
 from django_strawberry_framework.utils.relations import (
+    instance_accessor,
+)
+from django_strawberry_framework.utils.relations import (
     is_many_side_relation_kind as _is_many_side_relation_kind_submodule,
 )
 from django_strawberry_framework.utils.relations import (
@@ -97,3 +100,20 @@ def test_relation_kind_classifies_forward_single_relations():
     )
 
     assert relation_kind(field) == "forward_single"
+
+
+def test_instance_accessor_uses_get_accessor_name_for_reverse_relations():
+    """A reverse rel's instance attribute is ``get_accessor_name()``, not ``name``.
+
+    For a reverse FK declared without ``related_name``, Django's
+    ``ForeignObjectRel.name`` is the related QUERY name (``"book"``) while the
+    instance attribute is ``"book_set"`` - the Round-4 S3 split.
+    """
+    rel = SimpleNamespace(name="book", get_accessor_name=lambda: "book_set")
+    assert instance_accessor(rel) == "book_set"
+
+
+def test_instance_accessor_falls_back_to_name_for_forward_fields():
+    """Forward fields have no ``get_accessor_name``; ``name`` IS the attribute."""
+    field = SimpleNamespace(name="genres")
+    assert instance_accessor(field) == "genres"

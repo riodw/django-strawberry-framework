@@ -99,12 +99,12 @@ To complete the Alpha (pre-0.1.0) milestone: **72.7%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning | No dedicated spec |
-| `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/spec-032-full_relay-0_0_9.md) |
+| `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/spec-033-connection_optimizer-0_0_9.md) |
+| `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md) |
 | `DONE-031-0.0.9` - Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md) |
 | `DONE-030-0.0.9` - `DjangoConnectionField` | [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md) |
 | `DONE-029-0.0.9` - `DjangoType` consumer-DX cleanup pass | [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md) |
-| `DONE-028-0.0.8` - Ordering subsystem | [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md) |
+| `DONE-028-0.0.8` - Ordering subsystem | [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md) |
 | `DONE-027-0.0.8` - Filtering subsystem | [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md) |
 | `DONE-026-0.0.7` - Scalar conversion end-to-end coverage in the fakeshop example | [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md) |
 | `DONE-025-0.0.7` - Warning-free scalar registration via `StrawberryConfig.scalar_map` | [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md) |
@@ -146,6 +146,7 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 - Status: Planned
 - Relative size: M
 - Labels: `connections`, `optimizer`, `query-planning`, `relay`
+- Spec: [spec-033-connection_optimizer-0_0_9.md](docs/spec-033-connection_optimizer-0_0_9.md)
 
 #### Planning note
 
@@ -1500,7 +1501,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Status: Planned
 - Relative size: XL
 - Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
-- Spec: [spec-032-full_relay-0_0_9.md](docs/spec-032-full_relay-0_0_9.md)
+- Spec: [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md)
 
 #### Glossary terms
 
@@ -1997,7 +1998,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 - Status: Shipped
 - Relative size: L
 - Labels: `filters`, `graphql-api`, `layer-3`, `ordering`, `public-api`
-- Spec: [spec-028-orders-0_0_8.md](docs/spec-028-orders-0_0_8.md)
+- Spec: [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md)
 
 #### Glossary terms
 

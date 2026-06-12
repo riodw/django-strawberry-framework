@@ -689,99 +689,99 @@ The completion contract the card is built against. Items are grouped by slice; t
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[backlog]: ../BACKLOG.md
-[changelog]: ../CHANGELOG.md
-[contributing]: ../CONTRIBUTING.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[backlog]: ../../BACKLOG.md
+[changelog]: ../../CHANGELOG.md
+[contributing]: ../../CONTRIBUTING.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[glossary]: GLOSSARY.md
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-connection-aware-optimizer-planning]: GLOSSARY.md#connection-aware-optimizer-planning
-[glossary-cross-subsystem-invariants]: GLOSSARY.md#cross-subsystem-invariants
-[glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
-[glossary-djangoconnection]: GLOSSARY.md#djangoconnection
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
-[glossary-djangonodefield]: GLOSSARY.md#djangonodefield
-[glossary-djangonodesfield]: GLOSSARY.md#djangonodesfield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-filter_input_type]: GLOSSARY.md#filter_input_type
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
-[glossary-metaconnection]: GLOSSARY.md#metaconnection
-[glossary-metafields_class]: GLOSSARY.md#metafields_class
-[glossary-metafilterset_class]: GLOSSARY.md#metafilterset_class
-[glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy
-[glossary-metainterfaces]: GLOSSARY.md#metainterfaces
-[glossary-metaname]: GLOSSARY.md#metaname
-[glossary-metaoptimizer_hints]: GLOSSARY.md#metaoptimizer_hints
-[glossary-metaorderset_class]: GLOSSARY.md#metaorderset_class
-[glossary-metaprimary]: GLOSSARY.md#metaprimary
-[glossary-metarelation_shapes]: GLOSSARY.md#metarelation_shapes
-[glossary-metasearch_fields]: GLOSSARY.md#metasearch_fields
-[glossary-order_input_type]: GLOSSARY.md#order_input_type
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
-[glossary-plan-cache]: GLOSSARY.md#plan-cache
-[glossary-relation-handling]: GLOSSARY.md#relation-handling
-[glossary-relay-globalid-strategy]: GLOSSARY.md#relay_globalid_strategy
-[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
-[glossary-safe_wrap_connection_method]: GLOSSARY.md#safe_wrap_connection_method
-[glossary-strawberry_config]: GLOSSARY.md#strawberry_config
-[glossary-strictness-mode]: GLOSSARY.md#strictness-mode
-[glossary-syncmisuseerror]: GLOSSARY.md#syncmisuseerror
-[glossary-testclient]: GLOSSARY.md#testclient
-[spec-032]: spec-032-full_relay-0_0_9.md
-[spec-032-terms]: spec-032-full_relay-0_0_9-terms.csv
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[glossary]: ../GLOSSARY.md
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-cross-subsystem-invariants]: ../GLOSSARY.md#cross-subsystem-invariants
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnection]: ../GLOSSARY.md#djangoconnection
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangolistfield]: ../GLOSSARY.md#djangolistfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangonodesfield]: ../GLOSSARY.md#djangonodesfield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-filter_input_type]: ../GLOSSARY.md#filter_input_type
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-graphqltestcase]: ../GLOSSARY.md#graphqltestcase
+[glossary-metaconnection]: ../GLOSSARY.md#metaconnection
+[glossary-metafields_class]: ../GLOSSARY.md#metafields_class
+[glossary-metafilterset_class]: ../GLOSSARY.md#metafilterset_class
+[glossary-metaglobalid_strategy]: ../GLOSSARY.md#metaglobalid_strategy
+[glossary-metainterfaces]: ../GLOSSARY.md#metainterfaces
+[glossary-metaname]: ../GLOSSARY.md#metaname
+[glossary-metaoptimizer_hints]: ../GLOSSARY.md#metaoptimizer_hints
+[glossary-metaorderset_class]: ../GLOSSARY.md#metaorderset_class
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-metarelation_shapes]: ../GLOSSARY.md#metarelation_shapes
+[glossary-metasearch_fields]: ../GLOSSARY.md#metasearch_fields
+[glossary-order_input_type]: ../GLOSSARY.md#order_input_type
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-per-field-permission-hooks]: ../GLOSSARY.md#per-field-permission-hooks
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
+[glossary-relay-globalid-strategy]: ../GLOSSARY.md#relay_globalid_strategy
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-safe_wrap_connection_method]: ../GLOSSARY.md#safe_wrap_connection_method
+[glossary-strawberry_config]: ../GLOSSARY.md#strawberry_config
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
+[glossary-testclient]: ../GLOSSARY.md#testclient
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-011]: SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md
-[spec-015]: SPECS/spec-015-relay_interfaces-0_0_5.md
-[spec-029]: SPECS/spec-029-consumer_dx_cleanup-0_0_9.md
-[spec-030]: SPECS/spec-030-connection_field-0_0_9.md
-[spec-031]: SPECS/spec-031-globalid_encoding-0_0_9.md
+[next]: NEXT.md
+[spec-011]: spec-011-stale_placeholder_cleanup-0_0_4.md
+[spec-015]: spec-015-relay_interfaces-0_0_5.md
+[spec-029]: spec-029-consumer_dx_cleanup-0_0_9.md
+[spec-030]: spec-030-connection_field-0_0_9.md
+[spec-031]: spec-031-globalid_encoding-0_0_9.md
+[spec-032]: spec-032-full_relay-0_0_9.md
+[spec-032-terms]: spec-032-full_relay-0_0_9-terms.csv
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[base]: ../django_strawberry_framework/types/base.py
-[connection]: ../django_strawberry_framework/connection.py
-[definition]: ../django_strawberry_framework/types/definition.py
-[finalizer]: ../django_strawberry_framework/types/finalizer.py
-[list-field]: ../django_strawberry_framework/list_field.py
-[package-init]: ../django_strawberry_framework/__init__.py
-[registry]: ../django_strawberry_framework/registry.py
-[relay-toplevel]: ../django_strawberry_framework/relay.py
-[resolvers]: ../django_strawberry_framework/types/resolvers.py
-[testing-init]: ../django_strawberry_framework/testing/__init__.py
-[types-relay]: ../django_strawberry_framework/types/relay.py
+[base]: ../../django_strawberry_framework/types/base.py
+[connection]: ../../django_strawberry_framework/connection.py
+[definition]: ../../django_strawberry_framework/types/definition.py
+[finalizer]: ../../django_strawberry_framework/types/finalizer.py
+[list-field]: ../../django_strawberry_framework/list_field.py
+[package-init]: ../../django_strawberry_framework/__init__.py
+[registry]: ../../django_strawberry_framework/registry.py
+[relay-toplevel]: ../../django_strawberry_framework/relay.py
+[resolvers]: ../../django_strawberry_framework/types/resolvers.py
+[testing-init]: ../../django_strawberry_framework/testing/__init__.py
+[types-relay]: ../../django_strawberry_framework/types/relay.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
-[test-connection]: ../tests/test_connection.py
-[test-types-base]: ../tests/types/test_base.py
+[test-base-init]: ../../tests/base/test_init.py
+[test-connection]: ../../tests/test_connection.py
+[test-types-base]: ../../tests/types/test_base.py
 
 <!-- examples/ -->
-[fakeshop-library-schema]: ../examples/fakeshop/apps/library/schema.py
-[fakeshop-library-tests]: ../examples/fakeshop/apps/library/tests/test_schema.py
-[fakeshop-test-library]: ../examples/fakeshop/test_query/test_library_api.py
-[fakeshop-test-query-readme]: ../examples/fakeshop/test_query/README.md
+[fakeshop-library-schema]: ../../examples/fakeshop/apps/library/schema.py
+[fakeshop-library-tests]: ../../examples/fakeshop/apps/library/tests/test_schema.py
+[fakeshop-test-library]: ../../examples/fakeshop/test_query/test_library_api.py
+[fakeshop-test-query-readme]: ../../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
-[check-spec-glossary]: ../scripts/check_spec_glossary.py
+[check-spec-glossary]: ../../scripts/check_spec_glossary.py
 
 <!-- .venv/ -->
 

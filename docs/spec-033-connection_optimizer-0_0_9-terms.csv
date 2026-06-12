@@ -1,0 +1,37 @@
+term,anchor,notes
+Connection-aware optimizer planning,connection-aware-optimizer-planning,the card's own glossary entry; Slice 7 flips it to shipped (0.0.9)
+DjangoConnectionField,djangoconnectionfield,the connection surface whose nested half this card plans; entry carries the pre-033 empty-plan caveat Slice 7 sweeps
+DjangoConnection,djangoconnection,generic connection base / return alias; products conversion uses it in the Query class attributes
+Meta.relation_shapes,metarelation_shapes,the spec-032 key whose synthesized siblings are the planning target; SyncMisuseError caveat survives this card
+Meta.connection,metaconnection,target-type total_count opt-in; nested totalCount now served from the _dst_total_count window annotation
+Meta.filterset_class,metafilterset_class,sidecar source of nested/root filter: arguments; sidecar input on a nested connection forces the per-parent fallback
+Meta.orderset_class,metaorderset_class,sidecar source of orderBy: arguments; same fallback rule as filterset_class
+Meta.optimizer_hints,metaoptimizer_hints,per-relation hint surface; SKIP suppresses window planning for the connection sibling
+Meta.interfaces,metainterfaces,Relay-Node gate; all four products types already declare relay.Node which is why their relations synthesize siblings
+Meta.search_fields,metasearch_fields,reaffirmed absent from connections until 0.1.2
+DjangoOptimizerExtension,djangooptimizerextension,the extension whose apply_to seam / plan cache / strictness constructor this card extends; no public-surface change
+OptimizerHint,optimizerhint,SKIP semantics extended to connection siblings; other hint shapes list-only in 0.0.9
+Plan cache,plan-cache,B1 cache; key gains the nested-pagination-variable component (Decision 7)
+Strictness mode,strictness-mode,B3 contract wired into connection paths (Decision 8)
+Queryset diffing,queryset-diffing,B8 reconciliation; windowed Prefetch rides the same diff rules; no-regression DoD item
+FK-id elision,fk-id-elision,works inside windowed child plans unchanged
+only() projection,only-projection,window annotations compose with .only(); connector + ordering columns force-included
+get_queryset visibility hook,get_queryset-visibility-hook,baked into windowed child querysets; flips plan.cacheable False (shipped rule)
+FilterSet,filterset,sidecar family; plan-time apply deferred (Decision 6 fallback)
+OrderSet,orderset,sidecar family; same deferral
+filter_input_type,filter_input_type,products hand-written resolver arguments the conversion retires
+order_input_type,order_input_type,products hand-written resolver arguments the conversion retires
+DjangoType,djangotype,declaring/target types of the synthesized relation connections
+Relay Node integration,relay-node-integration,the Relay-shaped-ness predicate gating synthesis eligibility
+Definition-order independence,definition-order-independence,Phase-2.5 write point for the relation_connections metadata slot
+finalize_django_types,finalize_django_types,finalization records the synthesis metadata the walker reads
+Relation handling,relation-handling,list-shaped relation planning untouched; window is additive under a to_attr
+DjangoListField,djangolistfield,root-gated list planning untouched; products never used it
+SyncMisuseError,syncmisuseerror,async-get_queryset-through-connection contract unchanged (Non-goals)
+Multi-database cooperation,multi-database-cooperation,windowed child querysets follow the generated-Prefetch alias rules (axis 3)
+Schema audit,schema-audit,unchanged; listed for the no-regression fence
+ConfigurationError,configurationerror,no new validation surface; referenced for the no-new-key statement
+strawberry_config,strawberry_config,relay_max_results passthrough is the plan-time window cap
+Cross-subsystem invariants,cross-subsystem-invariants,the 1.0.0 compose-with-optimizer invariant this card completes for connections
+apply_cascade_permissions,apply_cascade_permissions,0.0.10 permissions; composes via get_queryset which both paths honor
+Per-field permission hooks,per-field-permission-hooks,0.0.10 permissions; out-of-scope pointer

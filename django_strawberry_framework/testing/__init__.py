@@ -1,4 +1,4 @@
-"""Testing utilities for consumers of ``django-strawberry-framework``.
+"""Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
 
 Currently exports
 -----------------

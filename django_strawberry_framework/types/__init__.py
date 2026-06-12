@@ -1,4 +1,4 @@
-"""Type-system subsystem: ``DjangoType``, converters, and relation resolvers.
+"""Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 
 This subpackage re-exports the consumer-facing ``DjangoType`` class so
 ``from django_strawberry_framework.types import DjangoType`` is the canonical

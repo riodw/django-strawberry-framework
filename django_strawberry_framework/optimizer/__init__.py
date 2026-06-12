@@ -1,4 +1,4 @@
-"""Optimizer subsystem: ``DjangoOptimizerExtension`` (N+1 prevention).
+"""Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
 
 Re-exports the consumer-facing ``DjangoOptimizerExtension`` and the
 framework-wide ``logger``. Both are load-bearing: sibling production

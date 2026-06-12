@@ -1,4 +1,4 @@
-"""Django AppConfig - registers django-strawberry-framework with Django's app loader."""
+"""Django ``AppConfig`` - registers the package and applies its Django patches at app load."""
 
 from django.apps import AppConfig
 

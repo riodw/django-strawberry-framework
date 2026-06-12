@@ -1,4 +1,4 @@
-"""``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay connection surface.
+"""``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
 
 Spec: ``docs/spec-030-connection_field-0_0_9.md``.
 Target release: ``0.0.9``.

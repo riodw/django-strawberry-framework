@@ -1,4 +1,4 @@
-"""BFS factory + dynamic-FilterSet cache.
+"""Filter input-class BFS factory + the dynamic-FilterSet cache for connection fields.
 
 Layer 5 of the spec-027 six-layer pipeline (the BFS that builds every
 reachable Strawberry input class via the named converter

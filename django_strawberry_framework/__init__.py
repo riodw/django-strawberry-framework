@@ -1,7 +1,4 @@
-"""django-strawberry-framework.
-
-A DRF-inspired Django integration framework for Strawberry GraphQL.
-"""
+"""Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL."""
 
 # `auto` is re-exported so consumers can write `from django_strawberry_framework import auto`
 # without importing strawberry directly; this is part of the DRF-shaped public surface.

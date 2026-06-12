@@ -1,1 +1,1 @@
-"""Django management entry points for django-strawberry-framework."""
+"""Django management namespace for the framework's ``manage.py`` commands."""

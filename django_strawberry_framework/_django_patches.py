@@ -1,4 +1,4 @@
-"""Defensive patches to Django that ship with this package.
+"""Defensive patches for upstream Django bugs, applied at app load.
 
 The package ships fixes for a small set of Django bugs that affect
 consumers of ``django-strawberry-framework`` in multi-database setups.

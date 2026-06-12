@@ -1,4 +1,4 @@
-"""`FilterSetMetaclass` and `FilterSet` foundation.
+"""``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
 
 Layers 3 and 4 of the spec-027 six-layer pipeline plus the
 Decision-8 / M1-of-rev5 named-helper decomposition of `apply_sync` /

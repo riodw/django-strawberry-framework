@@ -1,4 +1,4 @@
-"""Acceptance tests for definition-order-independent DjangoType relations."""
+"""Acceptance tests for definition-order-independent DjangoType relation finalization."""
 
 import sys
 import types

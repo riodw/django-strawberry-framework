@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.utils.strings``."""
+"""String utility tests for snake_case, camelCase, and PascalCase conversion."""
 
 from django_strawberry_framework.utils.strings import pascal_case, snake_case
 

@@ -1,4 +1,4 @@
-"""Tests for django_strawberry_framework.conf."""
+"""Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK."""
 
 from types import MappingProxyType
 

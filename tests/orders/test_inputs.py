@@ -1,4 +1,4 @@
-"""Tests for the Slice 1 surface of ``django_strawberry_framework/orders/inputs.py``.
+"""Order input tests for Ordering enum, input materialization, reset, and normalization.
 
 Covers ``INPUTS_MODULE_PATH``, the ``Ordering`` enum (members +
 ``resolve`` semantics for ``ASC`` / ``DESC`` / ``NULLS_FIRST`` /

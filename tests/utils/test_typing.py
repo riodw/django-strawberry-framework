@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.utils.typing``."""
+"""Typing utility tests for Strawberry, Python, and GraphQL type unwrapping."""
 
 import typing
 from typing import Any

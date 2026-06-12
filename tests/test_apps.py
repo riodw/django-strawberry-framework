@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.apps`` - Django AppConfig."""
+"""AppConfig tests for package registration and Django patch application."""
 
 import django.apps
 

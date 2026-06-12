@@ -1,3 +1,5 @@
+"""URL routing for fakeshop's index, admin, auth, and GraphQL endpoints."""
+
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.http import HttpResponse

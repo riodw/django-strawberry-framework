@@ -1,4 +1,4 @@
-"""Tests for the package's Django defensive patches.
+"""Django patch tests for DB connection wrapping and multi-database safety.
 
 System-under-test: :mod:`django_strawberry_framework._django_patches`,
 applied at app-load time by

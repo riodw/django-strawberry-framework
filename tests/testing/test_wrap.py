@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.testing._wrap``.
+"""Connection-method wrapping tests for cooperative consumer instrumentation.
 
 System-under-test:
 :func:`django_strawberry_framework.testing.safe_wrap_connection_method` -

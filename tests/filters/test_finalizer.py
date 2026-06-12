@@ -1,4 +1,4 @@
-"""Tests for the spec-021 Slice 3 phase-2.5 filter-binding pass.
+"""Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
 
 Covers:
 

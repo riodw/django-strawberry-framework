@@ -1,4 +1,4 @@
-"""Tests for B7 - precomputed optimizer field metadata.
+"""FieldMeta tests for precomputed relation metadata used by optimizer planning.
 
 Covers ``FieldMeta.from_django_field``, definition-backed field maps on
 ``DjangoType`` subclasses, and the walker's use of the cached map.

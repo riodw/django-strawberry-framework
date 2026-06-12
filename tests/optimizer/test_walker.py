@@ -1,4 +1,4 @@
-"""Tests for ``optimizer/walker.py``.
+"""Selection-walker tests for GraphQL selection to ORM OptimizationPlan conversion.
 
 The walker is a pure function (``plan_optimizations``) tested in
 isolation against synthetic selection objects - no Strawberry execution

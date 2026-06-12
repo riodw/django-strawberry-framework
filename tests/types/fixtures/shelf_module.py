@@ -1,4 +1,4 @@
-"""Cross-module fixture: ``ShelfType`` + ``ShelfFilter`` declared together.
+"""Cross-module fixture declaring ShelfType and ShelfFilter together.
 
 Paired with ``branch_module`` to exercise the cross-module
 ``Meta.filterset_class`` resolution path under spec-021 Slice 3.

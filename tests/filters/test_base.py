@@ -1,4 +1,4 @@
-"""Tests for `django_strawberry_framework/filters/base.py` (Slice 1).
+"""Filter primitive tests for typed, list, range, global-ID, and related filters.
 
 Covers the five parity-floor primitives (`TypedFilter`, `ArrayFilter`,
 `RangeFilter`, `ListFilter`, `GlobalIDFilter` / `GlobalIDMultipleChoiceFilter`),

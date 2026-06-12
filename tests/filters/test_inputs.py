@@ -1,4 +1,4 @@
-"""Tests for `django_strawberry_framework/filters/inputs.py` (Slice 2).
+"""Filter input tests for lookup naming, annotation conversion, and value normalization.
 
 Covers the lookup-name table, the `_build_logic_fields` /
 `_build_input_fields` operator-bag builders, `construct_search`,

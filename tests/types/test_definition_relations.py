@@ -1,4 +1,4 @@
-"""Tests for ``DjangoTypeDefinition.related_target_for`` (spec-021 Slice 3).
+"""DjangoTypeDefinition tests for related_target_for relation lookup.
 
 The lookup powers the Decision-4 owner-aware FK/PK conditional in
 ``FilterSet.filter_for_field`` / ``filter_for_lookup``. Tests cover

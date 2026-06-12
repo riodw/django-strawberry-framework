@@ -1,4 +1,4 @@
-"""Tests for django_strawberry_framework.management.commands.export_schema."""
+"""Management command tests for export_schema SDL output and failure modes."""
 
 import sys
 import types

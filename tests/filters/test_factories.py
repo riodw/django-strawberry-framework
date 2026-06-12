@@ -1,4 +1,4 @@
-"""Tests for `django_strawberry_framework/filters/factories.py` (Slice 2).
+"""FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
 
 Covers `FilterArgumentsFactory`'s BFS walk and per-class collision
 check, plus the Layer-6 `get_filterset_class` + `_dynamic_filterset_cache`

@@ -1,4 +1,4 @@
-"""Tests for the spec-032 relation-as-Connection upgrade (Slice 3).
+"""Relation-as-Connection tests for cursor conformance and Relay field upgrades.
 
 Covers the ``Meta.relation_shapes`` Phase-2.5 synthesis surface
 (``docs/spec-032-full_relay-0_0_9.md`` Decisions 6/7; Decision 11 pins the

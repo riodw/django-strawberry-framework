@@ -1,4 +1,4 @@
-"""Cross-module fixture: ``BranchType`` + ``BranchFilter`` declared together.
+"""Cross-module fixture declaring BranchType and BranchFilter together.
 
 Paired with ``shelf_module``; both modules are imported at test time so
 ``finalize_django_types()`` exercises the cross-module

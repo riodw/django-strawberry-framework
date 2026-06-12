@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for the scalars app filter surface.
+"""Live GraphQL HTTP tests for scalar filter input and queryset behavior.
 
 Where ``test_scalars_api.py`` pins the converter table on the OUTPUT side,
 these tests exercise it on the INPUT side via the filtersets wired in

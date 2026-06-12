@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for the library acceptance app."""
+"""Live GraphQL HTTP tests for library relations, optimizer behavior, and Relay fields."""
 
 import base64
 import importlib

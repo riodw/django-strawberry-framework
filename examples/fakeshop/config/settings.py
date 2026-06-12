@@ -1,11 +1,4 @@
-"""Django settings for fakeshop project.
-
-For more information on this file, see
-https://docs.djangoproject.com/en/stable/topics/settings/
-
-For the full list of settings and their values, see
-https://docs.djangoproject.com/en/stable/ref/settings/
-"""
+"""Django settings for fakeshop and its single-database or sharded test modes."""
 
 import os
 from pathlib import Path

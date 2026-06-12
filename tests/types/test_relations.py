@@ -1,4 +1,4 @@
-"""Tests for ``PendingRelation`` dataclass identity-hash contract.
+"""PendingRelation tests for identity hashing and dataclass field contracts.
 
 The ``@dataclass(frozen=True)`` decorator would normally synthesize a
 value-based ``__hash__`` that hashes every field; ``django_field`` may be

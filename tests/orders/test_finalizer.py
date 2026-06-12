@@ -1,4 +1,4 @@
-"""Tests for the spec-028 Slice 3 phase-2.5 order-binding pass.
+"""Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
 
 Covers:
 

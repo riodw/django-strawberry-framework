@@ -1146,6 +1146,94 @@ def test_relay_chain_child_node_id_annotation_wins():
     assert ChildNode.resolve_id_attr() == "name"
 
 
+def test_relay_chain_distinct_node_ids_resolve_independently_any_call_order():
+    """Parent and child ``NodeID`` declarations never shadow each other.
+
+    Strawberry's ``Node.resolve_id_attr`` caches its scan on ``cls._id_attr``
+    and reads INHERITED cache values, so before the finalize-time stamp a
+    chain where parent and child declare DIFFERENT ``relay.NodeID[...]``
+    columns was call-order-dependent: resolving the parent first cached its
+    attribute where the child's lookup found it, and the child silently
+    emitted ids from - and filtered refetches on - the PARENT's column.
+    ``_stamp_relay_id_attr`` seeds each class's own ``_id_attr`` before its
+    one finalize-time scan, so order cannot matter; the parent-first order
+    asserted here is the one that used to fail.
+    """
+
+    class ParentNode(DjangoType):
+        name: relay.NodeID[str]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class ChildNode(ParentNode):
+        created_date: relay.NodeID[str]
+
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert ParentNode.resolve_id_attr() == "name"  # parent FIRST - the failing order
+    assert ChildNode.resolve_id_attr() == "created_date"
+
+
+def test_resolve_id_attr_reads_stamp_without_rescanning(monkeypatch):
+    """Post-finalize ``resolve_id_attr`` is a dict read, not an annotation scan.
+
+    The ``"pk"`` fallback never landed in Strawberry's success-only
+    ``_id_attr`` cache, so every per-row ``resolve_id`` call re-ran the full
+    MRO ``eval_type`` annotation walk. The finalize-time stamp replaces
+    that; poisoning the upstream scan proves the steady-state path never
+    calls it.
+    """
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert CategoryNode.__dict__["_dsf_relay_id_attr"] == "pk"
+
+    def _boom(cls):
+        raise AssertionError("upstream scan must not run for a stamped type")
+
+    monkeypatch.setattr(relay.Node, "resolve_id_attr", classmethod(_boom))
+    assert CategoryNode.resolve_id_attr() == "pk"
+
+
+def test_resolve_id_attr_live_scan_fallback_for_post_finalize_subclasses():
+    """An UNSTAMPED class (defined after finalize) still resolves via live scan.
+
+    A subclass created post-finalization inherits the installed default but
+    was never stamped; the default falls back to Strawberry's scan - a
+    declared ``NodeID`` wins, no annotation maps to ``"pk"``.
+    """
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    class LatePlain(CategoryNode):
+        pass
+
+    class LateWithNodeID(CategoryNode):
+        name: relay.NodeID[str]
+
+    assert "_dsf_relay_id_attr" not in LatePlain.__dict__
+    assert _resolve_id_attr_default(LatePlain) == "pk"
+    assert _resolve_id_attr_default(LateWithNodeID) == "name"
+
+
 def test_relay_chain_composite_pk_child_still_gated(monkeypatch):
     """The composite-pk gate is not bypassed by an inherited framework default.
 

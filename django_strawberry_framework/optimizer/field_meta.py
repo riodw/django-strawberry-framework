@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..exceptions import OptimizerError
-from ..utils.relations import is_many_side_relation_kind, relation_kind
+from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
 
 if TYPE_CHECKING:  # pragma: no cover
     from django.db import models
@@ -98,6 +98,15 @@ class FieldMeta:
             FK column on the related model that points back to the
             parent model.
         auto_created: ``True`` for reverse-side auto-created fields.
+        accessor_name: The attribute name relation rows are reached
+            through on a model INSTANCE (``utils.relations
+            .instance_accessor``). Diverges from ``name`` for reverse
+            relations without ``related_name`` (query name ``"book"`` vs
+            accessor ``"book_set"``); the optimizer's prefetch lookups
+            and the strictness cache probes consume this slot because
+            ``FieldMeta`` carries no ``get_accessor_name`` to ask live.
+            ``None`` only on hand-built instances; both builders always
+            populate it.
     """
 
     name: str
@@ -114,6 +123,7 @@ class FieldMeta:
     fk_id_elision_eligible: bool = False
     reverse_connector_attname: str | None = None
     auto_created: bool = False
+    accessor_name: str | None = None
 
     @property
     def relation_kind(self) -> RelationKind:
@@ -210,6 +220,7 @@ class FieldMeta:
             ),
             reverse_connector_attname=getattr(getattr(field, "field", None), "attname", None),
             auto_created=auto_created,
+            accessor_name=instance_accessor(field),
         )
 
 

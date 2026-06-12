@@ -203,14 +203,63 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     )
 
 
-def _resolve_id_attr_default(cls: type) -> str:
-    """Default ``Node.resolve_id_attr`` - falls back to ``"pk"``.
+# Framework slot ``_stamp_relay_id_attr`` pins each finalized Relay type's
+# resolved id attribute into (read via ``cls.__dict__`` so a subclass NEVER
+# inherits its parent's stamp). Deliberately NOT Strawberry's ``_id_attr``
+# slot: stamping ``"pk"`` there would satisfy upstream's inherited-cache
+# check on a chain child and silently bypass the composite-pk gate's
+# ``NodeIDAnnotationError`` detection - the exact bug class the Round-4 S1
+# gate hardening removed.
+_RELAY_ID_ATTR_SLOT = "_dsf_relay_id_attr"
 
-    Calls ``relay.Node.resolve_id_attr`` directly (via ``__func__`` so it
-    binds the runtime ``cls``) so a consumer ``id: relay.NodeID[...]``
-    annotation anywhere on the class's MRO wins; on
-    ``NodeIDAnnotationError`` falls back to ``"pk"``. Port of
-    ``strawberry_django/relay/utils.py::resolve_model_id_attr``.
+
+def _stamp_relay_id_attr(type_cls: type) -> None:
+    """Resolve the Relay id attribute ONCE and pin it on the class (Phase 2.5).
+
+    Two defects in the per-call path this replaces (Round-4 follow-up):
+
+    - **Order-dependent shadowing.** Strawberry's ``Node.resolve_id_attr``
+      caches its scan result on ``cls._id_attr``, and its cache check reads
+      INHERITED values - so in a chain where parent and child declare
+      DIFFERENT ``relay.NodeID[...]`` annotations, whichever class resolved
+      first decided the child's id attribute (the child silently emitted and
+      filtered on the parent's column). Seeding ``_id_attr = None`` into the
+      class's OWN ``__dict__`` blinds the inherited-cache read, so the scan
+      below always starts from this class's annotations.
+    - **Per-row rescan.** Upstream caches only on success; the common
+      no-``NodeID`` ``"pk"`` fallback re-ran the full MRO ``eval_type``
+      annotation scan on EVERY ``resolve_id`` call - once per row of every
+      result set. The stamp turns that into one ``__dict__`` read.
+
+    The seed-then-scan keeps upstream as the single scan implementation (no
+    ported annotation walk to drift). Stamped unconditionally for every
+    Relay-Node-shaped type: when the consumer overrode ``resolve_id_attr``
+    the stamp is simply never read (the framework default is not installed).
+    Idempotent across partial-finalize reruns.
+    """
+    type_cls._id_attr = None
+    try:
+        id_attr = relay.Node.resolve_id_attr.__func__(type_cls)  # type: ignore[attr-defined]
+    except NodeIDAnnotationError:
+        id_attr = "pk"
+    setattr(type_cls, _RELAY_ID_ATTR_SLOT, id_attr)
+
+
+def _resolve_id_attr_default(cls: type) -> str:
+    """Default ``Node.resolve_id_attr`` - stamped at finalize, ``"pk"`` fallback.
+
+    Reads the ``_stamp_relay_id_attr`` slot from the class's OWN
+    ``__dict__`` first - every registered Relay type is stamped at
+    Phase 2.5, so this is the steady-state path: one dict read per call,
+    deterministic at any inheritance depth (each chain class carries its
+    own stamp; nothing is inherited).
+
+    The live-scan fallback serves unstamped callers only (a subclass
+    defined AFTER finalization, or direct unit calls): it asks
+    ``relay.Node.resolve_id_attr`` directly (via ``__func__`` so it binds
+    the runtime ``cls``) and maps ``NodeIDAnnotationError`` to ``"pk"`` -
+    the ported ``strawberry_django/relay/utils.py::resolve_model_id_attr``
+    semantics.
 
     Deliberately NOT ``super(cls, cls).resolve_id_attr()``: with ``cls``
     bound at runtime, a relay-shaped DjangoType subclassing another
@@ -223,6 +272,9 @@ def _resolve_id_attr_default(cls: type) -> str:
     the child is then harmless: all four defaults are stateless
     classmethods that act on the runtime ``cls``.)
     """
+    stamped = cls.__dict__.get(_RELAY_ID_ATTR_SLOT)
+    if stamped is not None:
+        return stamped
     try:
         return relay.Node.resolve_id_attr.__func__(cls)  # type: ignore[attr-defined]
     except NodeIDAnnotationError:
@@ -935,6 +987,11 @@ _RELAY_RESOLVER_DEFAULTS: tuple[tuple[str, Callable[..., Any]], ...] = (
 def install_relay_node_resolvers(type_cls: type) -> None:
     """Inject the four ``resolve_*`` defaults via the ``__func__`` identity test.
 
+    Step 0 stamps the type's resolved Relay id attribute
+    (``_stamp_relay_id_attr``) - the one-time scan whose result the
+    installed ``resolve_id_attr`` default reads per call instead of
+    re-running Strawberry's annotation walk per row.
+
     For each ``(name, default)`` pair in ``_RELAY_RESOLVER_DEFAULTS``:
 
     - Look up the inherited method on ``type_cls`` (resolves through MRO
@@ -952,6 +1009,7 @@ def install_relay_node_resolvers(type_cls: type) -> None:
     tuple-membership discriminator (``relay.Node in interfaces``) - the
     three answer different questions at three lifecycle phases.
     """
+    _stamp_relay_id_attr(type_cls)
     for attr, default_impl in _RELAY_RESOLVER_DEFAULTS:
         existing = getattr(type_cls, attr, None)
         node_default = getattr(relay.Node, attr, None)

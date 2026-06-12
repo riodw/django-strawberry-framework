@@ -11,7 +11,7 @@ from strawberry import relay
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
-from ..utils.relations import is_many_side_relation_kind, relation_kind
+from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
 from . import logger
 from .hints import OptimizerHint, hint_is_skip
@@ -292,7 +292,6 @@ def _walk_selections(
                 target_type,
                 plan,
                 prefix,
-                full_path,
                 info,
                 runtime_paths,
                 resolver_identities,
@@ -301,7 +300,6 @@ def _walk_selections(
             _plan_select_relation(
                 sel,
                 django_field,
-                django_name,
                 target_type,
                 plan,
                 prefix,
@@ -315,7 +313,6 @@ def _walk_selections(
 def _plan_select_relation(
     sel: Any,
     django_field: Any,
-    django_name: str,  # noqa: ARG001 - signature parity with _plan_prefetch_relation (which uses it)
     target_type: type | None,
     plan: OptimizationPlan,
     prefix: str,
@@ -324,7 +321,13 @@ def _plan_select_relation(
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
 ) -> None:
-    """Plan a same-query single-valued relation traversal."""
+    """Plan a same-query single-valued relation traversal.
+
+    ``full_path`` (field-name vocabulary) is correct here: Django's
+    ``select_related`` resolves QUERY paths, and single-valued forward
+    relations have no name/accessor split anyway - the accessor swap is
+    a ``_plan_prefetch_relation`` concern only.
+    """
     _record_relation_access(plan, django_field, prefix, resolver_identities)
     target_pk_name = _target_pk_name(django_field)
     if (
@@ -353,18 +356,30 @@ def _plan_prefetch_relation(
     target_type: type | None,
     plan: OptimizationPlan,
     prefix: str,
-    full_path: str,
     info: Any | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
 ) -> None:
-    """Plan a queryset-boundary relation traversal with optional child optimization."""
+    """Plan a queryset-boundary relation traversal with optional child optimization.
+
+    The prefetch LOOKUP segment is the relation's instance accessor
+    (``utils.relations.instance_accessor``), not ``field.name``: Django's
+    ``prefetch_related`` resolves lookups via ``getattr`` on the instance,
+    and for a reverse relation without ``related_name`` the field name is
+    the related QUERY name (``"book"``) while the accessor is ``"book_set"``
+    - planning the query name made every optimized query over such a
+    relation fail with ``AttributeError: ... invalid parameter to
+    prefetch_related()`` (Round-4 S3 follow-up). Plan keys and resolver
+    identities stay in field-name vocabulary; only the lookup string
+    Django consumes uses the accessor.
+    """
     _record_relation_access(plan, django_field, prefix, resolver_identities)
+    lookup_path = f"{prefix}{instance_accessor(django_field)}"
     has_custom_get_queryset = _target_has_custom_get_queryset(target_type)
     if has_custom_get_queryset:
         plan.cacheable = False
     if django_field.related_model is None:
-        append_unique(plan.prefetch_related, full_path)
+        append_unique(plan.prefetch_related, lookup_path)
         return
 
     child_queryset = _build_prefetch_child_queryset(
@@ -376,7 +391,7 @@ def _plan_prefetch_relation(
         runtime_paths,
         has_custom_get_queryset=has_custom_get_queryset,
     )
-    append_prefetch_unique(plan.prefetch_related, Prefetch(full_path, queryset=child_queryset))
+    append_prefetch_unique(plan.prefetch_related, Prefetch(lookup_path, queryset=child_queryset))
 
 
 def _record_relation_access(
@@ -482,10 +497,13 @@ def _apply_hint(
         # never actually planned, which any future caller catching
         # ``ConfigurationError`` at this layer would consume. Compute the
         # rebased Prefetch first, mutate only on success.
+        # The rebase TARGET is the accessor path (what Django's
+        # prefetch_related resolves via getattr); the consumer-facing
+        # lookup vocabulary in the match below stays ``django_name``.
         rebased_prefetch = _prefetch_hint_for_path(
             hint.prefetch_obj,
             django_name=django_name,
-            full_path=full_path,
+            full_path=f"{prefix}{instance_accessor(django_field)}",
             type_name=type_cls.__name__,
         )
         _record_relation_access(plan, django_field, prefix, resolver_identities)
@@ -512,7 +530,6 @@ def _apply_hint(
                 target_type,
                 plan,
                 prefix,
-                full_path,
                 info,
                 runtime_paths,
                 resolver_identities,
@@ -521,7 +538,6 @@ def _apply_hint(
             _plan_select_relation(
                 sel,
                 django_field,
-                django_name,
                 target_type,
                 plan,
                 prefix,
@@ -538,7 +554,6 @@ def _apply_hint(
             target_type,
             plan,
             prefix,
-            full_path,
             info,
             runtime_paths,
             resolver_identities,

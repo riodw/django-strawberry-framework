@@ -117,3 +117,19 @@ def test_instance_accessor_falls_back_to_name_for_forward_fields():
     """Forward fields have no ``get_accessor_name``; ``name`` IS the attribute."""
     field = SimpleNamespace(name="genres")
     assert instance_accessor(field) == "genres"
+
+
+def test_instance_accessor_prefers_precomputed_field_meta_slot():
+    """A ``FieldMeta``-style ``accessor_name`` slot wins over any live lookup.
+
+    ``FieldMeta`` cannot answer ``get_accessor_name()`` (it is a frozen
+    snapshot), so the builders precompute the accessor into ``accessor_name``
+    and this helper reads it first - the optimizer walker passes ``FieldMeta``
+    values, not raw descriptors.
+    """
+    meta_like = SimpleNamespace(
+        name="book",
+        accessor_name="book_set",
+        get_accessor_name=lambda: "WRONG-not-consulted",
+    )
+    assert instance_accessor(meta_like) == "book_set"

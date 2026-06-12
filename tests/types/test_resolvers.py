@@ -433,6 +433,45 @@ def test_check_n1_many_kind_respects_prefetched_objects_cache():
     _check_n1(fake_info, root, "items", CategoryType, kind="many")
 
 
+def test_check_n1_probes_prefetch_cache_under_accessor_name():
+    """B3: the cache probe keys on the ACCESSOR, the plan key on the field name.
+
+    Django stores many-side prefetches under the instance accessor
+    (``"plainbook_set"``), which diverges from ``field.name``
+    (``"plainbook"``) for reverse relations without ``related_name``
+    (Round-4 S3 follow-up). With ``accessor_name`` supplied - as every
+    production resolver does - a manually prefetched relation is
+    recognized as cached; the field-name fallback (test-double direct
+    callers) would mislabel the same root as lazy and raise.
+    """
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.exceptions import OptimizerError
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class PlainAuthorType:
+        pass
+
+    fake_info = SimpleNamespace(
+        context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
+        path=_path("authors", 0, "plainbook"),
+    )
+    root = SimpleNamespace(_prefetched_objects_cache={"plainbook_set": []})
+    # No raise: the accessor-keyed probe finds the prefetched rows.
+    _check_n1(
+        fake_info,
+        root,
+        "plainbook",
+        PlainAuthorType,
+        kind="reverse_many_to_one",
+        accessor_name="plainbook_set",
+    )
+    # Without the accessor the probe falls back to the field name and
+    # misses the cache - documenting why production callers must pass it.
+    with pytest.raises(OptimizerError, match="Unplanned N\\+1: plainbook"):
+        _check_n1(fake_info, root, "plainbook", PlainAuthorType, kind="reverse_many_to_one")
+
+
 def test_runtime_path_from_info_strips_list_indexes_and_keeps_aliases():
     """O4: runtime response paths preserve aliases and omit list indexes."""
     from types import SimpleNamespace

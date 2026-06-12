@@ -127,6 +127,7 @@ def _check_n1(
     parent_type: type | None = None,
     *,
     kind: str | None,
+    accessor_name: str | None = None,
 ) -> None:
     """B3: warn or raise if the relation is not planned and would lazy-load.
 
@@ -137,6 +138,14 @@ def _check_n1(
     always supplies the relation kind; the ``kind=None`` fallback is
     reserved for test-double direct callers that exercise the
     single-valued cache check (see ``tests/types/test_resolvers.py::test_check_n1_*``).
+
+    ``field_name`` keys the PLAN lookup (the optimizer walker emits
+    resolver keys in field-name vocabulary); ``accessor_name`` keys the
+    instance CACHE probes - Django's prefetch/fields caches store under
+    the accessor, which diverges from ``field.name`` for reverse
+    relations without ``related_name`` (Round-4 S3 follow-up). Production
+    callers always supply it; ``None`` falls back to ``field_name`` for
+    test-double direct callers.
     """
     context = getattr(info, "context", None)
     planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
@@ -145,10 +154,11 @@ def _check_n1(
     key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
     if key in planned:
         return
+    probe_name = accessor_name or field_name
     if is_many_side_relation_kind(kind):
-        lazy = _will_lazy_load_many(root, field_name)
+        lazy = _will_lazy_load_many(root, probe_name)
     else:
-        lazy = _will_lazy_load_single(root, field_name)
+        lazy = _will_lazy_load_single(root, probe_name)
     if not lazy:
         return
     strictness = _get_context_value(context, DST_OPTIMIZER_STRICTNESS, "off")
@@ -237,7 +247,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     if field_meta.is_many_side:
 
         def many_resolver(root: Any, info: Info) -> Any:
-            _check_n1(info, root, field_name, parent_type, kind=kind)
+            _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
             return list(getattr(root, accessor_name).all())
 
         return _name_resolver(many_resolver, field_name)
@@ -246,7 +256,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         related_does_not_exist = field_meta.related_model.DoesNotExist
 
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:
-            _check_n1(info, root, field_name, parent_type, kind=kind)
+            _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
             try:
                 return getattr(root, accessor_name)
             except related_does_not_exist:
@@ -257,7 +267,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
     def forward_resolver(root: Any, info: Info) -> Any:
         if field_meta.attname is not None and _is_fk_id_elided(info, field_name, parent_type):
             return _build_fk_id_stub(root, field_meta)
-        _check_n1(info, root, field_name, parent_type, kind=kind)
+        _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
         return getattr(root, field_name)
 
     return _name_resolver(forward_resolver, field_name)

@@ -108,11 +108,12 @@ class DjangoTypeDefinition:
           to the single-registered-type rule). Returns ``None`` for
           non-relation fields and for fields not present on the model.
         - ``has_custom_id_resolver_for(pk_name)`` memoizes the
-          MRO-level custom id resolver check used by the optimizer's
-          FK-id elision guard. The lookup is based on ``origin`` class
-          attributes, ignores the framework-installed Relay
-          ``resolve_id`` default, and is stable for a definition's
-          lifetime.
+          custom id resolver check used by the optimizer's FK-id
+          elision guard. It reports both an ``origin`` MRO-level
+          ``resolve_id`` / ``resolve_{pk_name}`` override (ignoring the
+          framework-installed Relay default) and a ``relay.NodeID``
+          annotation pointing off the pk column; both inputs are stable
+          for a definition's lifetime.
     """
 
     origin: type
@@ -249,18 +250,65 @@ class DjangoTypeDefinition:
         return result
 
     def has_custom_id_resolver_for(self, pk_name: str) -> bool:
-        """Return whether ``origin`` customizes resolution for ``pk_name``."""
+        """Return whether ``origin`` resolves its id from something other than ``pk_name``.
+
+        Reports the two shapes that make pk-only FK-id elision unsafe:
+
+        - a consumer ``resolve_id`` / ``resolve_{pk_name}`` override (the
+          framework-installed Relay default is *not* counted); or
+        - a ``relay.NodeID`` annotation pointing at a non-pk column, so the
+          GlobalID is built from a column the FK-id stub does not carry.
+
+        Memoized per ``pk_name``; both inputs (MRO class attributes and the
+        ``NodeID`` annotation) are stable for the definition's lifetime.
+        """
         if pk_name in self._custom_id_resolver_cache:
             return self._custom_id_resolver_cache[pk_name]
 
-        resolver_names = (pk_name, f"resolve_{pk_name}")
-        result = any(
-            _class_has_custom_id_resolver(cls, name)
-            for cls in getattr(self.origin, "__mro__", ())
-            for name in resolver_names
-        )
+        result = origin_has_custom_id_resolver(self.origin, pk_name)
         self._custom_id_resolver_cache[pk_name] = result
         return result
+
+
+def origin_has_custom_id_resolver(origin: type, pk_name: str) -> bool:
+    """Return whether ``origin`` customizes id resolution away from ``pk_name``.
+
+    Shared by ``DjangoTypeDefinition.has_custom_id_resolver_for`` (the memoized
+    hot path) and the optimizer's definition-less fallback so the two cannot
+    drift. See ``has_custom_id_resolver_for`` for the two shapes detected.
+    """
+    resolver_names = (pk_name, f"resolve_{pk_name}")
+    if any(
+        _class_has_custom_id_resolver(cls, name)
+        for cls in getattr(origin, "__mro__", ())
+        for name in resolver_names
+    ):
+        return True
+    return _resolves_id_off_pk(origin, pk_name)
+
+
+def _resolves_id_off_pk(origin: type, pk_name: str) -> bool:
+    """Return whether a Relay ``NodeID`` maps the id to a non-``pk_name`` column.
+
+    A consumer ``relay.NodeID[...]`` annotation on a non-pk field (e.g.
+    ``slug: relay.NodeID[str]``) makes the GlobalID derive from a column the
+    FK-id elision stub does not populate, so eliding would silently encode the
+    field default instead of the real id. Non-Relay targets (no
+    ``resolve_id_attr``) resolve ``id`` straight from the pk and are always
+    safe; a Relay target with no ``NodeID`` annotation resolves to ``"pk"`` and
+    is likewise safe.
+    """
+    from strawberry import relay
+    from strawberry.relay.exceptions import NodeIDAnnotationError
+
+    if not (isinstance(origin, type) and issubclass(origin, relay.Node)):
+        return False
+    try:
+        id_attr = origin.resolve_id_attr()
+    except NodeIDAnnotationError:
+        # No ``NodeID`` annotation: the framework default resolves to "pk".
+        return False
+    return id_attr not in ("pk", pk_name)
 
 
 def _class_has_custom_id_resolver(type_cls: type, name: str) -> bool:

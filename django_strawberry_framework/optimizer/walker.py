@@ -666,19 +666,24 @@ def _target_pk_name(field: Any) -> str | None:
 
 
 def _has_custom_id_resolver(target_type: type | None, target_pk_name: str | None) -> bool:
-    """Return ``True`` when target type customizes the selected id field."""
+    """Return ``True`` when target type customizes the selected id field.
+
+    Routes through the registered definition's memoized check when one exists,
+    and otherwise delegates to the *same* free function
+    (``definition.origin_has_custom_id_resolver``) so the registered and
+    definition-less paths cannot answer the same type differently.
+    """
     if target_type is None or target_pk_name is None:
         return False
     definition = registry.get_definition(target_type)
     if definition is not None:
         return definition.has_custom_id_resolver_for(target_pk_name)
+    # Lazy import: ``types.definition`` pulls in ``optimizer.field_meta`` at
+    # module load, so importing it at the top of the walker risks an
+    # import-time cycle through the optimizer package init.
+    from ..types.definition import origin_has_custom_id_resolver
 
-    resolver_names = (target_pk_name, f"resolve_{target_pk_name}")
-    return any(
-        name in getattr(cls, "__dict__", {})
-        for cls in getattr(target_type, "__mro__", ())
-        for name in resolver_names
-    )
+    return origin_has_custom_id_resolver(target_type, target_pk_name)
 
 
 def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> None:

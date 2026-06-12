@@ -31,6 +31,7 @@ type-tracing through graphql-core wrappers.
 import inspect
 from collections import OrderedDict
 from collections.abc import Callable
+from contextlib import suppress
 from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any, NamedTuple
@@ -60,7 +61,7 @@ from ._context import (
 )
 from .hints import hint_is_skip
 from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
-from .walker import plan_optimizations, plan_relation
+from .walker import _should_include, plan_optimizations, plan_relation
 
 _MAX_PLAN_CACHE_SIZE = 256
 
@@ -360,13 +361,13 @@ def _with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...]
 
 
 def _converted_selection_included(selection: Any) -> bool:
-    """Evaluate converted-selection ``@skip`` / ``@include`` directives."""
-    directives = getattr(selection, "directives", None) or {}
-    skip = directives.get("skip")
-    if skip is not None and skip.get("if") is True:
-        return False
-    include = directives.get("include")
-    return include is None or include.get("if") is not False
+    """Evaluate converted-selection ``@skip`` / ``@include`` directives.
+
+    Delegates to the walker's ``_should_include`` so the connection-extraction
+    path and the plan walker evaluate ``@skip`` / ``@include`` with one shared
+    implementation that cannot drift.
+    """
+    return _should_include(selection)
 
 
 def _is_converted_fragment(selection: Any) -> bool:
@@ -810,7 +811,16 @@ class DjangoOptimizerExtension(SchemaExtension):
         cache_key = self._build_cache_key(info, target_model, origin)
         cached_plan = self._plan_cache.get(cache_key)
         if cached_plan is not None:
-            self._plan_cache.move_to_end(cache_key)
+            # ``move_to_end`` is the LRU promotion. Guard the rare race where a
+            # concurrent request's eviction sweep drops this key between the
+            # ``get`` above and here (one extension instance is shared across an
+            # ASGI/threaded execution). A lost promotion is harmless - the plan
+            # we already hold is still the correct, cacheable plan. The
+            # ``suppress`` context-manager overhead is once-per-request
+            # (root-only cache), not per-row, so it stays off the row-scaled
+            # hot path.
+            with suppress(KeyError):
+                self._plan_cache.move_to_end(cache_key)
             self._cache_hits += 1
             return cached_plan
         plan = plan_optimizations(selections, target_model, info=info, source_type=origin)

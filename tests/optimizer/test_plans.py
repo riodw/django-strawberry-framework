@@ -86,6 +86,19 @@ class TestLookupPaths:
         plan = OptimizationPlan(prefetch_related=[object()])
         assert lookup_paths(plan) == set()
 
+    def test_uses_finalized_lookup_paths_after_finalize(self):
+        """After ``finalize()``, ``lookup_paths`` reuses the frozen path set."""
+        plan = OptimizationPlan(
+            select_related=["category"],
+            prefetch_related=["items"],
+        ).finalize()
+        # The frozen set is populated and is what ``lookup_paths`` returns.
+        assert plan.finalized_lookup_paths == frozenset({"category", "items"})
+        result = lookup_paths(plan)
+        assert result == {"category", "items"}
+        # A fresh ``set`` copy, not the frozenset itself.
+        assert isinstance(result, set) and not isinstance(result, frozenset)
+
 
 def test_resolver_key_includes_parent_type_and_runtime_path():
     class ItemType:
@@ -259,6 +272,40 @@ class TestPlanHelperRelocations:
 
         assert isinstance(plan.prefetch_related, _IndexedList)
         assert plan.prefetch_related == [first]
+
+
+class TestIndexedList:
+    """Direct coverage of ``_IndexedList`` mutators and the unhashable fallback."""
+
+    def test_constructor_dedupes_initial_values(self):
+        from django_strawberry_framework.optimizer.plans import _IndexedList
+
+        indexed = _IndexedList(["a", "b", "a"])
+        assert indexed == ["a", "b"]
+
+    def test_append_and_extend_keep_index_for_later_append_unique(self):
+        from django_strawberry_framework.optimizer.plans import _IndexedList
+
+        indexed = _IndexedList()
+        indexed.append("a")
+        indexed.extend(["b", "c"])
+        assert indexed == ["a", "b", "c"]
+        # The sidecar index was maintained, so a later ``append_unique`` of an
+        # already-present value is a no-op.
+        indexed.append_unique("b")
+        assert indexed == ["a", "b", "c"]
+
+    def test_append_unique_falls_back_to_membership_for_unhashable_values(self):
+        from django_strawberry_framework.optimizer.plans import _IndexedList
+
+        indexed = _IndexedList()
+        unhashable = ["nested"]
+        # Unhashable key: the ``_seen`` probe raises ``TypeError`` and the
+        # helper falls back to an ``in self`` membership scan. First insert
+        # appends; the second is recognised as a duplicate and skipped.
+        indexed.append_unique(unhashable)
+        indexed.append_unique(unhashable)
+        assert indexed == [["nested"]]
 
 
 class TestFlattenSelectRelated:

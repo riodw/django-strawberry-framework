@@ -90,6 +90,31 @@ def test_from_django_field_reverse_fk():
     # still produce the right GraphQL annotation (``list[target_type]``,
     # not ``list[target_type] | None``).
     assert fm.nullable is False
+    # ``related_name="items"`` makes the accessor coincide with the name;
+    # the no-``related_name`` divergence is pinned in the test below.
+    assert fm.accessor_name == "items"
+
+
+def test_from_django_field_populates_accessor_name_for_unnamed_reverse_fk():
+    """``accessor_name`` carries ``get_accessor_name()`` when it diverges from ``name``.
+
+    A reverse FK without ``related_name`` exposes the related QUERY name as
+    ``field.name`` and the ``*_set`` accessor as the instance attribute
+    (Round-4 S3). ``FieldMeta`` is a frozen snapshot that cannot answer
+    ``get_accessor_name()`` live, so the builder precomputes the accessor
+    for the optimizer's prefetch lookups and the strictness cache probes.
+    """
+    from types import SimpleNamespace
+
+    rel_like = SimpleNamespace(
+        name="plainbook",
+        is_relation=True,
+        one_to_many=True,
+        auto_created=True,
+        get_accessor_name=lambda: "plainbook_set",
+    )
+    fm = FieldMeta.from_django_field(rel_like)
+    assert fm.accessor_name == "plainbook_set"
 
 
 def test_from_django_field_reverse_many_to_many():

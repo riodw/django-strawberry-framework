@@ -89,17 +89,28 @@ def instance_accessor(field: object) -> str:
     ``ForeignObjectRel.name`` is the related *query* name (``"book"`` - the
     filter/annotation vocabulary) while the instance attribute is
     ``get_accessor_name()`` (``"book_set"``); ``getattr(root, field.name)``
-    raises ``AttributeError`` there (Round-4 review S3). They coincide
-    whenever ``related_name`` is set, which is why every fakeshop fixture
-    masked the split. Forward fields (``ForeignKey``, ``ManyToManyField``,
-    ``OneToOneField``) have no ``get_accessor_name`` and their ``name`` IS
-    the instance attribute.
+    raises ``AttributeError`` there (Round-4 review S3), and Django's
+    ``prefetch_related`` rejects the query name as a lookup for the same
+    reason. They coincide whenever ``related_name`` is set, which is why
+    every fakeshop fixture masked the split. Forward fields
+    (``ForeignKey``, ``ManyToManyField``, ``OneToOneField``) have no
+    ``get_accessor_name`` and their ``name`` IS the instance attribute.
+
+    Three-tier read, matching the two field shapes the package passes
+    around: an ``optimizer.field_meta.FieldMeta`` carries the accessor
+    precomputed on its ``accessor_name`` slot (the builders derive it from
+    the raw descriptor via this same helper); a raw Django reverse-relation
+    descriptor answers ``get_accessor_name()``; everything else (forward
+    fields, test doubles) falls back to ``name``.
 
     ``field.name`` stays the GraphQL-surface / optimizer-key vocabulary;
-    this helper is ONLY for the ``getattr(root, ...)`` seam shared by the
-    Phase-2 relation resolvers and the spec-032 synthesized relation
-    connections.
+    this helper is ONLY for the seams Django resolves against the instance:
+    the Phase-2 relation resolvers' ``getattr``, the spec-032 synthesized
+    relation connections, and the optimizer's prefetch lookup paths.
     """
+    precomputed = getattr(field, "accessor_name", None)
+    if precomputed is not None:
+        return precomputed
     get_accessor_name = getattr(field, "get_accessor_name", None)
     if get_accessor_name is not None:
         return get_accessor_name()

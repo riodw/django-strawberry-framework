@@ -133,6 +133,85 @@ def test_optimize_coerces_manager_through_all_records_cache_miss():
     assert ext.cache_info().misses == 1
 
 
+@pytest.mark.django_db(transaction=True)
+def test_optimizer_prefetches_reverse_fk_without_related_name(django_assert_num_queries):
+    """The optimizer plans a no-``related_name`` reverse FK via its ACCESSOR.
+
+    Round-4 S3 follow-up: ``_plan_prefetch_relation`` used to emit the
+    relation's QUERY name (``"plainissue"``) as the prefetch lookup, which
+    Django's ``prefetch_related`` rejects for reverse relations without
+    ``related_name`` - the whole optimized query died with
+    ``AttributeError: ... 'plainissue' is an invalid parameter to
+    prefetch_related()``. The lookup now uses ``get_accessor_name()``
+    (``"plainissue_set"``), batching the relation into one prefetch query;
+    ``strictness="raise"`` doubles as the no-false-N+1 assertion. Invisible
+    to the rest of CI because every fakeshop fixture sets ``related_name``.
+
+    Uses the ``managed=False`` + manual ``schema_editor`` pattern from
+    ``test_relay_id_projection.py``; the app label must be an INSTALLED app
+    because Django only wires reverse relations into ``_meta.get_fields()``
+    for installed apps.
+    """
+    from django.db import connection as db_connection
+    from django.db import models as djmodels
+
+    class PlainPublisher(djmodels.Model):
+        name = djmodels.CharField(max_length=32)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    class PlainIssue(djmodels.Model):
+        title = djmodels.CharField(max_length=32)
+        author = djmodels.ForeignKey(PlainPublisher, on_delete=djmodels.CASCADE)  # no related_name
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(PlainPublisher)
+        schema_editor.create_model(PlainIssue)
+    try:
+
+        class PlainIssueType(DjangoType):
+            class Meta:
+                model = PlainIssue
+                fields = ("id", "title")
+
+        class PlainPublisherType(DjangoType):
+            class Meta:
+                model = PlainPublisher
+                fields = ("id", "name", "plainissue")
+
+        @strawberry.type
+        class Query:
+            @strawberry.field
+            def authors(self) -> list[PlainPublisherType]:
+                return PlainPublisher.objects.all()  # type: ignore[return-value]
+
+        finalize_django_types()
+        for index in range(3):
+            author = PlainPublisher.objects.create(name=f"a{index}")
+            PlainIssue.objects.create(title=f"b{index}", author=author)
+
+        ext = DjangoOptimizerExtension(strictness="raise")
+        schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+        with django_assert_num_queries(2):  # parents + ONE batched prefetch
+            result = schema.execute_sync("{ authors { name plainissue { title } } }")
+        assert result.errors is None
+        assert result.data == {
+            "authors": [
+                {"name": f"a{index}", "plainissue": [{"title": f"b{index}"}]} for index in range(3)
+            ],
+        }
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(PlainIssue)
+            schema_editor.delete_model(PlainPublisher)
+
+
 @pytest.mark.django_db
 def test_optimizer_plans_merged_duplicate_root_field_nodes_plan_shape():
     """Merged duplicate root fields contribute all child selections to one plan.

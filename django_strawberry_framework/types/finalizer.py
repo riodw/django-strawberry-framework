@@ -788,6 +788,32 @@ def _format_orphan_filtersets_error(orphans: list[type]) -> str:
     )
 
 
+def _format_unregistered_related_target_error(
+    filterset_cls: type,
+    field_name: str,
+    child_filterset: type | None,
+) -> str:
+    """Return the canonical unregistered-``RelatedFilter``-target finalize message.
+
+    Sibling of ``_format_orphan_filtersets_error`` /
+    ``_format_owner_mismatch_error`` above; finalize-time formatters stay
+    grouped here so consumer error matching stays grep-stable. Mirrors the
+    runtime message raised by ``FilterSet._iter_visibility_steps`` for the
+    same misconfiguration so the two surfaces read as one contract.
+    """
+    child_model = getattr(getattr(child_filterset, "_meta", None), "model", None)
+    target_label = getattr(child_model, "__qualname__", "<unresolved>")
+    return (
+        f"Cannot finalize Django types: FilterSet {filterset_cls.__qualname__} "
+        f"declares RelatedFilter {field_name!r} targeting {target_label}, but no "
+        f"DjangoType is registered for that model. The related branch's visibility "
+        f"scoping runs the target type's get_queryset (spec-027 Decision 8 step 3); "
+        f"without a registered target the branch would silently return unfiltered "
+        f"rows at request time. Register a DjangoType for {target_label} or remove "
+        f"the RelatedFilter."
+    )
+
+
 def _bind_orderset_owner(orderset_cls: type, definition: DjangoTypeDefinition) -> None:
     """Bind ``orderset_cls._owner_definition`` with first-bind / related / idempotency checks.
 
@@ -1144,6 +1170,39 @@ def _bind_filtersets() -> None:
                 f"Cannot finalize Django types: filterset "
                 f"{filterset_cls.__qualname__} raised during expansion. {exc!r}",
             ) from exc
+
+    # Subpass 2.5: every reachable ``RelatedFilter`` target must resolve to
+    # a registered ``DjangoType``. A related branch's visibility scoping
+    # runs the target type's ``get_queryset`` (spec-027 Decision 8 step 3);
+    # an unregistered target would make the branch unfulfillable even
+    # though its input field is materialized into the schema, so the
+    # misconfiguration surfaces here - at finalize, naming the filterset -
+    # instead of on the first request that activates the branch (where
+    # ``FilterSet._iter_visibility_steps`` raises the runtime sibling of
+    # this error for direct ``apply_*`` callers that never finalize). The
+    # walk is transitive with a visited set: a wired parent's child
+    # filtersets carry their own ``RelatedFilter`` declarations, and
+    # cyclic cross-references (``BookFilter`` <-> ``ShelfFilter``) are
+    # legal. Runs after subpass 2 so every lazy reference has resolved.
+    seen_filtersets: set[type] = set(wired)
+    pending_filtersets: list[type] = list(wired)
+    while pending_filtersets:
+        filterset_cls = pending_filtersets.pop()
+        for field_name, related_filter in (
+            getattr(filterset_cls, "related_filters", {}) or {}
+        ).items():
+            child_filterset = related_filter.filterset
+            if child_filterset is not None and child_filterset not in seen_filtersets:
+                seen_filtersets.add(child_filterset)
+                pending_filtersets.append(child_filterset)
+            if filterset_cls._target_type_for_related_filter(related_filter) is None:
+                raise ConfigurationError(
+                    _format_unregistered_related_target_error(
+                        filterset_cls,
+                        field_name,
+                        child_filterset,
+                    ),
+                )
 
     # Subpass 3: orphan validation against the helper-tracked set. Runs
     # BEFORE materialization so a failure here doesn't leave half-

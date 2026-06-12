@@ -1061,6 +1061,18 @@ def test_apply_sync_nested_or_branch_applies_related_constraint():
             model = library_models.Branch
             fields = {"name": ["exact"]}
 
+    class ShelfType(DjangoType):
+        """Registered target for the ``shelves`` branch's visibility scoping.
+
+        An active related branch requires a registered target type
+        (``_iter_visibility_steps`` raises otherwise); registration alone
+        suffices - the visibility hook is the default pass-through.
+        """
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
     qs = BranchFilter.apply_sync(
         {"or_": [{"shelves": {"code": "match"}}]},
         library_models.Branch.objects.all(),
@@ -1070,6 +1082,176 @@ def test_apply_sync_nested_or_branch_applies_related_constraint():
     # leak through - which it would if the nested related branch were
     # dropped (the B1 bug).
     assert list(qs.values_list("name", flat=True)) == ["alpha"]
+
+
+@pytest.mark.django_db
+def test_related_filter_on_many_side_relation_returns_each_parent_once():
+    """A many-side related branch matching N children yields the parent ONCE.
+
+    ``_apply_related_constraints`` restricts the parent via a
+    ``pk__in=<parent-pk subquery>`` rather than joining
+    ``<rel>__in=<intersected>`` directly: the direct join duplicates the
+    parent row once per matching child (duplicate nodes in lists /
+    connections and corrupted pagination counts). Two shelves match the
+    branch filter here; the owning branch must come back exactly once.
+    """
+    alpha = library_models.Branch.objects.create(name="alpha")
+    library_models.Shelf.objects.create(branch=alpha, code="match-1")
+    library_models.Shelf.objects.create(branch=alpha, code="match-2")
+    library_models.Shelf.objects.create(branch=alpha, code="other")
+    beta = library_models.Branch.objects.create(name="beta")
+    library_models.Shelf.objects.create(branch=beta, code="unrelated")
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact", "icontains"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+    qs = BranchFilter.apply_sync(
+        {"shelves": {"code": {"i_contains": "match"}}},
+        library_models.Branch.objects.all(),
+        _make_info(),
+    )
+    rows = list(qs)
+    assert [row.name for row in rows] == ["alpha"]
+    # Belt-and-braces: the duplicate signature is row count exceeding the
+    # distinct-pk count, which a names-only assertion could mask.
+    assert len(rows) == len({row.pk for row in rows}) == 1
+
+
+@pytest.mark.django_db
+def test_related_filter_answers_identically_direct_and_inside_logic_tree():
+    """The same related branch answers identically direct and under ``and``.
+
+    The direct path constrains via ``_apply_related_constraints`` while a
+    logic-tree branch routes through ``_q_for_branch``'s
+    ``Q(pk__in=...)``; both now share the parent-pk-subquery shape, so a
+    filter must return the same rows wherever it appears. Before the
+    duplicate-row fix the direct path returned the parent once per
+    matching child while the ``and`` path collapsed the duplicates - the
+    same logical query producing two different answers.
+    """
+    alpha = library_models.Branch.objects.create(name="alpha")
+    library_models.Shelf.objects.create(branch=alpha, code="match-1")
+    library_models.Shelf.objects.create(branch=alpha, code="match-2")
+    library_models.Branch.objects.create(name="beta")
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact", "icontains"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+    branch_input = {"shelves": {"code": {"i_contains": "match"}}}
+    direct = BranchFilter.apply_sync(
+        branch_input,
+        library_models.Branch.objects.all(),
+        _make_info(),
+    )
+    in_logic_tree = BranchFilter.apply_sync(
+        {"and_": [branch_input]},
+        library_models.Branch.objects.all(),
+        _make_info(),
+    )
+    assert list(direct.values_list("pk", flat=True)) == list(
+        in_logic_tree.values_list("pk", flat=True),
+    )
+    assert list(direct.values_list("name", flat=True)) == ["alpha"]
+
+
+@pytest.mark.django_db
+def test_active_related_branch_without_registered_target_raises():
+    """An active related branch with no registered target type fails loud.
+
+    ``_iter_visibility_steps`` raises ``ConfigurationError`` instead of
+    skipping: the branch is active (the consumer supplied input for it),
+    so skipping would drop the constraint entirely and return unfiltered
+    parent rows - a filter the consumer believes is applied doing
+    nothing. The same misconfiguration is caught at finalize time for
+    schema-wired filtersets (``_bind_filtersets`` subpass 2.5); this
+    pins the runtime guard for direct ``apply_*`` callers. An INACTIVE
+    branch must not raise - declaring a ``RelatedFilter`` is fine until
+    input activates it.
+    """
+    library_models.Branch.objects.create(name="alpha")
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    # No ShelfType registered: the active branch raises.
+    with pytest.raises(ConfigurationError) as excinfo:
+        BranchFilter.apply_sync(
+            {"shelves": {"code": {"exact": "x"}}},
+            library_models.Branch.objects.all(),
+            _make_info(),
+        )
+    msg = str(excinfo.value)
+    assert "shelves" in msg
+    assert "no DjangoType is registered" in msg
+
+    # Inactive branch: same filterset applies cleanly without the target.
+    qs = BranchFilter.apply_sync(
+        {"name": "alpha"},
+        library_models.Branch.objects.all(),
+        _make_info(),
+    )
+    assert list(qs.values_list("name", flat=True)) == ["alpha"]
+
+
+@pytest.mark.django_db
+def test_dict_operator_bag_filters_through_apply_sync():
+    """A dict-shaped operator bag filters end-to-end via ``apply_sync``.
+
+    Pins the ``_operator_bag_items`` dict-walk: before it, a dict bag
+    fell through to the scalar branch and the filter silently applied
+    nothing (every row returned).
+    """
+    Category.objects.create(name="alpha-match")
+    Category.objects.create(name="beta")
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact", "icontains"]}
+
+    qs = CategoryFilter.apply_sync(
+        {"name": {"i_contains": "match"}},
+        Category.objects.all(),
+        _make_info(),
+    )
+    assert list(qs.values_list("name", flat=True)) == ["alpha-match"]
 
 
 @pytest.mark.django_db
@@ -1185,14 +1367,24 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
             model = library_models.Shelf
             fields = {"code": ["exact"]}
 
+    class ShelfType(DjangoType):
+        """Registered target so the active ``shelves`` branch resolves."""
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
     captured: dict[str, Any] = {}
     real_init = FilterSet.__init__
 
     def spy_init(self, *args, **kwargs):
         # Record the `queryset` kwarg every consumer-`FilterSet` subclass
-        # receives during this call; the test asserts the kwarg carries
-        # the `<rel>__in=<intersected>` clause when the spy fires for
-        # the parent class.
+        # receives during this call. The active `shelves` branch's
+        # visibility scoping now constructs the child `ShelfFilter` first
+        # (its `apply_sync` runs during `_derive_related_visibility_*`),
+        # so the calls list interleaves child + parent constructions; the
+        # test selects the parent (Branch-model) call by queryset model
+        # rather than assuming a position.
         captured.setdefault("calls", []).append(kwargs.get("queryset"))
         real_init(self, *args, **kwargs)
 
@@ -1221,11 +1413,17 @@ def test_apply_sync_passes_constrained_queryset_to_filterset_instance():
     finally:
         FilterSet.__init__ = real_init
 
-    parent_queryset = captured["calls"][0]
-    assert parent_queryset is not None
+    # Select the parent (Branch-model) construction; child ShelfFilter
+    # constructions from the visibility-scoping pass also land in `calls`.
+    parent_querysets = [
+        qs for qs in captured["calls"] if qs is not None and qs.model is library_models.Branch
+    ]
+    assert parent_querysets, "BranchFilter was never constructed with a queryset kwarg"
+    parent_queryset = parent_querysets[0]
     # The constrained queryset reached `BranchFilter.__init__` BEFORE the
-    # filterset was constructed; the SQL carries the `<rel>__in=...`
-    # clause that `_apply_related_constraints` baked in.
+    # filterset was constructed; the SQL carries the parent-pk
+    # `pk__in=<subquery over <rel>__in>` restriction that
+    # `_apply_related_constraints` baked in.
     sql = str(parent_queryset.query).lower()
     assert "library_shelf" in sql
     assert "active" in sql
@@ -1347,15 +1545,56 @@ def test_normalize_input_returns_empty_for_non_dataclass_non_dict():
     assert CategoryFilter._normalize_input(object()) == {}
 
 
-def test_operator_bag_items_returns_none_for_plain_mapping():
-    """``_operator_bag_items`` returns ``None`` for a non-dataclass value."""
+def test_operator_bag_items_walks_lookup_attr_dict():
+    """``_operator_bag_items`` walks a dict whose keys are all lookup attrs.
+
+    The old dict rejection routed a dict-shaped bag down the scalar
+    branch, where the range-patch ``data.update(...)`` splatted its keys
+    into the form data as unknown fields the form silently ignores - an
+    explicit filter input applying NO filtering for direct ``apply_*``
+    callers. A dict whose keys are all recognized lookup attrs is now
+    walked like a dataclass bag.
+    """
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact", "icontains"]}
+
+    assert CategoryFilter._operator_bag_items({"exact": "x"}) == [("exact", "x")]
+    assert CategoryFilter._operator_bag_items({"i_contains": "y"}) == [("i_contains", "y")]
+
+
+def test_operator_bag_items_returns_none_for_non_lookup_key_dict():
+    """A multi-key filter VALUE (e.g. a range ``{start, end}``) is not a bag.
+
+    ``start`` / ``end`` are not lookup attrs, so the dict must fall
+    through to the scalar branch where ``normalize_input_value`` produces
+    the positional ``{<field>_0, <field>_1}`` range patch. Treating it as
+    a bag would emit bogus ``<field>__start`` / ``<field>__end`` keys.
+    """
 
     class CategoryFilter(FilterSet):
         class Meta:
             model = Category
             fields = {"name": ["exact"]}
 
-    assert CategoryFilter._operator_bag_items({"exact": "x"}) is None
+    assert CategoryFilter._operator_bag_items({"start": 1, "end": 5}) is None
+    # A mixed dict (some lookup attrs, some not) is also not a bag - all
+    # keys must be lookup attrs.
+    assert CategoryFilter._operator_bag_items({"exact": "x", "start": 1}) is None
+
+
+def test_operator_bag_items_still_returns_none_for_scalars():
+    """Scalar and sequence values are not operator bags."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    assert CategoryFilter._operator_bag_items("x") is None
+    assert CategoryFilter._operator_bag_items(["x"]) is None
 
 
 def test_extract_branch_value_returns_none_for_none_input():
@@ -1766,8 +2005,15 @@ def test_check_permissions_falls_back_to_active_input_when_no_requested_fields()
     instance.check_permissions(HttpRequest())
 
 
-def test_derive_related_visibility_querysets_async_skips_unregistered_target():
-    """The async derive skips a branch whose target type is not registered."""
+def test_derive_related_visibility_querysets_async_raises_for_unregistered_target():
+    """The async derive raises for an active branch whose target type is unregistered.
+
+    The old contract skipped the branch (``result == {}``), which dropped
+    the constraint entirely: a filter the consumer supplied input for
+    silently returned unfiltered parent rows. Both derive methods route
+    through ``_iter_visibility_steps``, which now raises
+    ``ConfigurationError`` for the active-but-unresolvable branch.
+    """
     import asyncio
 
     class ShelfFilter(FilterSet):
@@ -1783,14 +2029,15 @@ def test_derive_related_visibility_querysets_async_skips_unregistered_target():
             fields = {"name": ["exact"]}
 
     # No ShelfType registered -> ``_target_type_for_related_filter`` is
-    # ``None`` -> the branch is skipped (the async ``continue``).
-    result = asyncio.run(
-        BranchFilter._derive_related_visibility_querysets_async(
-            {"shelves": {"code": "A"}},
-            _make_info(),
-        ),
-    )
-    assert result == {}
+    # ``None`` -> the active branch raises instead of silently dropping.
+    with pytest.raises(ConfigurationError) as excinfo:
+        asyncio.run(
+            BranchFilter._derive_related_visibility_querysets_async(
+                {"shelves": {"code": "A"}},
+                _make_info(),
+            ),
+        )
+    assert "no DjangoType is registered" in str(excinfo.value)
 
 
 @pytest.mark.django_db
@@ -1802,9 +2049,10 @@ def test_iter_visibility_steps_yields_pre_await_tuple_for_active_branches():
     ``_derive_related_visibility_querysets_async`` route through the
     single ``_iter_visibility_steps`` classmethod, so the helper's
     five-tuple shape (``field_name, target_type, child_filterset,
-    child_input, child_base``) is the load-bearing contract. Skips
-    branches missing ``target_type`` or ``child_filterset`` so the derive
-    methods carry only the two awaits / calls per step.
+    child_input, child_base``) is the load-bearing contract. Branches
+    missing ``target_type`` or ``child_filterset`` raise (see the
+    sibling fail-loud test) so the derive methods carry only the two
+    awaits / calls per step.
     """
 
     class ShelfType(DjangoType):
@@ -1836,14 +2084,15 @@ def test_iter_visibility_steps_yields_pre_await_tuple_for_active_branches():
 
 
 @pytest.mark.django_db
-def test_iter_visibility_steps_skips_branches_without_resolved_target_or_filterset():
-    """``_iter_visibility_steps`` swallows the ``None`` target / filterset branches.
+def test_iter_visibility_steps_raises_for_branch_without_resolved_target():
+    """``_iter_visibility_steps`` fails loud for an active-but-unresolvable branch.
 
-    The skip contract is what lets each derive method shrink to a tight
-    loop carrying only the two awaits - every guard lives in the
-    helper. Without a registered ``DjangoType`` for ``Shelf`` the branch
-    drops out (mirrors the sibling async skip test, but pins the
-    helper directly).
+    The guard lives in the helper so each derive method stays a tight
+    loop carrying only the two awaits / calls per step. An active branch
+    (the consumer supplied input for it) whose ``target_type`` cannot be
+    resolved raises ``ConfigurationError`` - the old skip contract
+    dropped the constraint and silently returned unfiltered parent rows
+    (mirrors the sibling async test, but pins the helper directly).
     """
 
     class ShelfFilter(FilterSet):
@@ -1859,11 +2108,12 @@ def test_iter_visibility_steps_skips_branches_without_resolved_target_or_filters
             fields = {"name": ["exact"]}
 
     # No ShelfType registered -> ``_target_type_for_related_filter`` is
-    # ``None`` -> the helper drops the branch before yielding.
-    steps = list(
-        BranchFilter._iter_visibility_steps({"shelves": {"code": "A"}}),
-    )
-    assert steps == []
+    # ``None`` -> the helper raises before yielding.
+    with pytest.raises(ConfigurationError) as excinfo:
+        list(BranchFilter._iter_visibility_steps({"shelves": {"code": "A"}}))
+    msg = str(excinfo.value)
+    assert "'shelves'" in msg
+    assert "no DjangoType is registered" in msg
 
 
 @pytest.mark.django_db

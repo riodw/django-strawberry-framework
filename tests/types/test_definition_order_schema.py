@@ -1,4 +1,4 @@
-"""Schema-level tests for definition-order-independent DjangoType finalization."""
+"""Schema-build tests for definition-order-independent DjangoType finalization."""
 
 import pytest
 import strawberry

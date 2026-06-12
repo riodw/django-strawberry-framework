@@ -1,4 +1,4 @@
-"""Optimizer regressions for definition-order-independent DjangoType graphs."""
+"""Optimizer tests for definition-order-independent DjangoType relation graphs."""
 
 import pytest
 import strawberry

@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for the products app API surface.
+"""Live GraphQL HTTP tests for the products catalog API surface.
 
 Mirrors ``test_library_api.py``'s harness. Exercises the products schema
 wired in ``apps.products.schema`` end to end:

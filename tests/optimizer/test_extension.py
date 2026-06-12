@@ -1,4 +1,4 @@
-"""Tests for ``DjangoOptimizerExtension``.
+"""DjangoOptimizerExtension tests for root-gated planning and queryset optimization.
 
 Covers, by topic code:
 

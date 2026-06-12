@@ -1,4 +1,4 @@
-"""Fixture filtersets for cross-module lazy-resolution tests.
+"""Fixture FilterSet declarations for cross-module lazy-resolution tests.
 
 Carries minimal `FilterSet` subclasses over the fakeshop library models
 so the Slice-1 tests can exercise the absolute-import-path and

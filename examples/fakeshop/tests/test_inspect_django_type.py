@@ -1,4 +1,4 @@
-"""Project-level inspect_django_type command tests for the fakeshop schema.
+"""Fakeshop project command tests for inspect_django_type against example DjangoTypes.
 
 Happy-path coverage via in-process ``call_command``. Bare-name resolution needs
 a finalized registry, so the bare-name tests run under a registry-clear +

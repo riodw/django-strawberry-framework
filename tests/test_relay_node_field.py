@@ -1,4 +1,4 @@
-"""Tests for the spec-032 Slice-2 root refetch fields (``DjangoNodeField`` / ``DjangoNodesField``).
+"""Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
 
 Mirrors the top-level ``django_strawberry_framework/relay.py`` (the card-named
 two-file split over a strict ``docs/TREE.md`` mirror -

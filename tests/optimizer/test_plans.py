@@ -1,4 +1,4 @@
-"""Tests for ``optimizer/plans.py`` - ``OptimizationPlan`` data structure.
+"""OptimizationPlan tests for plan structure, keys, paths, and select/prefetch state.
 
 The plan is a simple dataclass, so the test surface is small and focused
 on the ``is_empty`` property and the ``apply`` method. The walker tests

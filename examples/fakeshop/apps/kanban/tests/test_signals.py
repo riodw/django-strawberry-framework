@@ -1,4 +1,4 @@
-"""Signal-level invariants for the kanban board app.
+"""Kanban signal tests for dependencies, done-card guards, blocking, and ordering.
 
 A curated set covering the non-trivial signal logic: the dependency-reference
 <-> ``dependencies`` M2M sync, the done-card spec/glossary guards, the

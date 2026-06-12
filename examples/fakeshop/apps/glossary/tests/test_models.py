@@ -1,3 +1,5 @@
+"""Glossary model tests for term edges, aliases, categories, and spec mentions."""
+
 import pytest
 
 from apps.glossary import factories as gf

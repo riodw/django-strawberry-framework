@@ -1,4 +1,4 @@
-"""Cross-card composition smoke test for filters + orders (spec-028 Slice 6).
+"""Filter and order composition smoke tests for Layer-3 read-side integration.
 
 Pins the **package-internal** composition contract for a ``DjangoType`` that
 declares BOTH ``Meta.filterset_class`` AND ``Meta.orderset_class``. The

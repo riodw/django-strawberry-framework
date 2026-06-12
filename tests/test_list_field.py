@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.list_field``.
+"""DjangoListField tests for root list fields, queryset visibility, and sidecars.
 
 Spec: ``docs/spec-020-list_field-0_0_7.md`` (Test plan section, the
 ``tests/test_list_field.py (new)`` subsection).

@@ -1,4 +1,4 @@
-"""Tests for the management commands wrapped around services.py."""
+"""Products command tests for service-backed seed and delete management commands."""
 
 from io import StringIO
 

@@ -1,4 +1,4 @@
-"""Tests for ``OrderSetMetaclass`` and ``OrderSet`` (Slices 1 and 2).
+"""OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
 
 Slice 1 surface (kept intact, append-only edits): metaclass collection /
 override / binding, ``_owner_definition`` slot default, cache slot

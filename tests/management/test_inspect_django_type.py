@@ -1,4 +1,4 @@
-"""Tests for django_strawberry_framework.management.commands.inspect_django_type.
+"""Management command tests for inspect_django_type field-resolution tables.
 
 Failure-mode coverage for the ``CommandError`` paths not reachable from a live
 registered type, mirroring ``tests/management/test_export_schema.py``'s

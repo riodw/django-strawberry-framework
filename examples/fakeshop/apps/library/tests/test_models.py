@@ -1,4 +1,4 @@
-"""Model tests for the library app -- self-contained (touches only library models).
+"""Library model tests for __str__ output and computed field behavior.
 
 Mirrors the products model tests so the library app carries its own coverage:
 __str__ rendering, forward/reverse relation traversal, and a uniqueness rule.

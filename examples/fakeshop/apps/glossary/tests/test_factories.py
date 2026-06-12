@@ -1,4 +1,4 @@
-"""Tests for the glossary test-data factories."""
+"""Glossary factory tests for default values, aliases, categories, and spec mentions."""
 
 import pytest
 

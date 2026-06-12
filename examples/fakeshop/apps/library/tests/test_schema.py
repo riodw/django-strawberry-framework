@@ -1,4 +1,4 @@
-"""In-process schema tests for the library app.
+"""Library schema tests for in-process GraphQL execution without HTTP.
 
 Type exposure is checked through the composed project schema; the intentionally
 cross-referenced declaration order is pinned against the library schema module

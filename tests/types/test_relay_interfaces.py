@@ -1,4 +1,4 @@
-"""Tests for the 0.0.5 Relay interfaces slice.
+"""DjangoType Relay interface tests for Node wiring and resolver contracts.
 
 Covers ``Meta.interfaces`` validation, ``is_type_of`` injection, id
 suppression, interface base-class injection, and the four Relay node

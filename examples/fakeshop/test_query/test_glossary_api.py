@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for the glossary data app."""
+"""Live GraphQL HTTP tests for the glossary docs-as-data API."""
 
 import importlib
 import sys

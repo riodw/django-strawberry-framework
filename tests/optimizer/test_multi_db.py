@@ -1,4 +1,4 @@
-"""Multi-database cooperation tests at the optimizer-plan layer.
+"""Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
 
 Scope (per spec ``docs/spec-023-multi_db-0_0_7.md`` Decision 5 + Test plan
 ``### tests/optimizer/test_multi_db.py``): this file holds the

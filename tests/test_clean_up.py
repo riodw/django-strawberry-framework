@@ -1,3 +1,5 @@
+"""Script tests for clean_up generated-artifact deletion boundaries."""
+
 from pathlib import Path
 
 from scripts import clean_up

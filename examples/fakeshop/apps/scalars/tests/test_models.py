@@ -1,4 +1,4 @@
-"""Model tests for the scalars app -- self-contained (touches only scalars models).
+"""Scalars model tests for __str__ output and nullable specimen relationships.
 
 Mirrors the other apps' model tests: __str__ rendering (including the nullable
 fallback), self-referential + FK relation traversal, and a uniqueness rule.

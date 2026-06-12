@@ -1,4 +1,4 @@
-"""Service-level workflows for the kanban app."""
+"""Kanban service tests for structured card creation and rollback behavior."""
 
 import pytest
 from django.core.exceptions import ValidationError

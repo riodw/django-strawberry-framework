@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework/orders/factories.py`` (Slice 2).
+"""OrderArgumentsFactory tests for BFS input generation and dynamic OrderSet caching.
 
 Covers ``OrderArgumentsFactory``'s BFS walk, per-class collision check,
 idempotency, subclass rejection, and the leaf / related-branch

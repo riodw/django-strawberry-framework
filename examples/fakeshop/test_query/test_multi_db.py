@@ -1,4 +1,4 @@
-"""Live /graphql/ multi-database cooperation tests against the sharded fakeshop layout.
+"""Live GraphQL HTTP tests for sharded fakeshop multi-database cooperation.
 
 Scope (per spec Goals item 3 + Test plan ``### examples/fakeshop/test_query/test_multi_db.py``):
 two live ``/graphql/`` HTTP tests against the sharded fakeshop layout.

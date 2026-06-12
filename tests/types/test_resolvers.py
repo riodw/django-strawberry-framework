@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.types.resolvers``.
+"""Relation resolver tests for Django relation managers and optimizer hand-off.
 
 Covers the cardinality-aware relation resolvers attached by
 ``DjangoType.__init_subclass__`` via ``_attach_relation_resolvers``:

@@ -1,4 +1,4 @@
-"""Tests for example app models - covers the __str__ implementations.
+"""Products model tests for example-domain __str__ implementations.
 
 Per AGENTS.md: every test seeds via ``services.seed_data`` first, never
 hand-rolls Category/Item/Property/Entry instances.

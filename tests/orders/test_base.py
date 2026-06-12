@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework/orders/base.py`` (Slice 1).
+"""RelatedOrder tests for nested ordering paths and lazy related-class handling.
 
 Covers the ``RelatedOrder`` primitive: class / absolute-import / unqualified
 target resolution through the shared ``LazyRelatedClassMixin``, the

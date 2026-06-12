@@ -1,4 +1,4 @@
-"""Optimizer invariants for Relay-declared ``DjangoType`` classes.
+"""Optimizer tests for Relay GlobalID projection and connector-column invariants.
 
 Pins Decision 7 (spec #"Decision 7: optimizer and projection invariants"): when a Relay-declared type selects
 ``id`` the optimizer's ``only()`` projection must still include the

@@ -1,7 +1,8 @@
-"""Project-level GraphQL schema.
+"""Project-level GraphQL schema that composes every fakeshop app query.
 
-Composes the per-app ``Query`` types into the top-level ``schema``
-served by ``config.urls``.
+The module imports the per-app ``Query`` types, finalizes all collected
+``DjangoType`` classes, and exposes the top-level ``schema`` served by
+``config.urls``.
 
 This mirrors the ``cookbook/schema.py`` layout from the
 ``django-graphene-filters`` example, adapted to Strawberry.  The

@@ -1,4 +1,4 @@
-"""Tests for the django_strawberry_framework package init."""
+"""Package init tests for version metadata and public exports."""
 
 import logging
 

@@ -1,4 +1,4 @@
-"""Tests for `django_strawberry_framework/filters/sets.py` (Slice 1).
+"""FilterSet tests for Meta collection, validation, sync/async apply, and tree overrides.
 
 Covers the metaclass (`FilterSetMetaclass`), `FilterSet`'s class-creation
 behavior (cycle-safe `get_filters` expansion + `_get_fields` narrowing),

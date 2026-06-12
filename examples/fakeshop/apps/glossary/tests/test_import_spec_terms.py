@@ -1,4 +1,4 @@
-"""Tests for the DONE-card spec glossary import command."""
+"""Glossary import command tests for DONE-card spec term extraction."""
 
 from __future__ import annotations
 

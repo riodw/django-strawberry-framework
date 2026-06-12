@@ -1,4 +1,4 @@
-"""In-process schema tests for the products app.
+"""Products schema tests for in-process GraphQL execution without HTTP.
 
 Exercised via the composed project schema with ``schema.execute_sync`` and a real
 GraphQL query string (per AGENTS.md), never by calling resolver methods directly.

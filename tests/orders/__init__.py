@@ -1,1 +1,1 @@
-"""Planned package tests for the ordering subsystem."""
+"""Package tests for the OrderSet subsystem."""

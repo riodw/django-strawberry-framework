@@ -1,4 +1,4 @@
-"""Project-level export_schema command tests for the fakeshop schema."""
+"""Fakeshop project command tests for export_schema against the configured schema."""
 
 from io import StringIO
 

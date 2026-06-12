@@ -187,348 +187,244 @@ django_graphene_filters/
 
 ## django_strawberry_framework (current on-disk layout)
 
-The shared infrastructure plus model/type, optimizer, filters, orders, testing, and utility subpackages are on disk: `types/`, `optimizer/`, `filters/`, `orders/`, `testing/`, and `utils/`. Every other module shown in the target package layout below — the remaining query-surface subpackages, the mutation cluster, the auth / forms / DRF integrations, the full test client, and the Channels router — is not on disk yet and will land as the corresponding `KANBAN.md` cards ship.
-
-The fakeshop example project uses the standard explicit-package layout under `examples/fakeshop/`: orchestration lives in `config/` (`settings.py`, `schema.py`, `urls.py`, `wsgi.py`), and domain apps live in `apps/` (`apps.products`, `apps.library`, `apps.scalars`, `apps.kanban`, `apps.glossary`). `apps.products` is the catalog example (Category / Item / Property / Entry); `apps.library` is the deeper relation example (Branch / Shelf / Book / Patron / Loan, with `Patron.lifetime_fines_cents` as a real-domain `BigIntegerField → BigInt` proof); `apps.scalars` is a test substrate carrying the paired `ScalarSpecimen` (every scalar non-null + self-FK) / `NullableScalarSpecimen` (every scalar nullable + cross-model FK to `ScalarSpecimen` with `on_delete=SET_NULL`) layout that pins every non-trivial converter row in both shapes via live `/graphql/` tests; `apps.kanban` is the relational source for the exported root `KANBAN.md` and owns the shared `BoardDoc` prose-section table; `apps.glossary` is the relational source for glossary terms and spec-term audit rows, while its generic prose sections share `BoardDoc` under `namespace="glossary"`. `pytest.ini` adds the example project root (`examples/fakeshop`) to `pythonpath` so `config` and `apps` resolve as normal packages; it does not add `examples/fakeshop/apps`, so app imports must use dotted paths such as `apps.products.models`. The project root itself is intentionally not a Python package.
+Source: `django_strawberry_framework/`
 
 ```text
-django_strawberry_framework/
-├── __init__.py              # public-API re-exports (DjangoType, DjangoOptimizerExtension, OptimizerHint, BigInt, finalize_django_types, auto)
+django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
+├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
+├── apps.py                       # Django ``AppConfig`` - registers the package and applies its Django patches at app load.
+├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
+├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
+├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
+├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
 ├── py.typed
-├── apps.py                  # AppConfig
-├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
-├── exceptions.py            # error hierarchy
-├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6: primary_for, types_for, models_with_multiple_types; definition_for_graphql_name graphql-type-name lookup over Relay-Node definitions, 0.0.9; unregister test-fixture helper)
-├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
-├── list_field.py            # DjangoListField (non-Relay list[T] factory for root Query fields; shipped in 0.0.7)
-├── connection.py            # DjangoConnectionField / DjangoConnection (Relay connection factory; shipped in 0.0.9)
-├── relay.py                 # DjangoNodeField / DjangoNodesField root refetch factories (server-side GlobalID decode dispatch; shipped in 0.0.9)
-├── management/              # Django management commands (shipped in 0.0.7)
-│   ├── __init__.py
-│   └── commands/
-│       ├── __init__.py
-│       ├── export_schema.py  # `manage.py export_schema` — print/write GraphQL SDL
-│       └── inspect_django_type.py  # `manage.py inspect_django_type` — per-field GraphQL resolution table (0.0.9)
-├── testing/                 # consumer testing utilities
-│   ├── __init__.py          # safe_wrap_connection_method re-export
-│   ├── _wrap.py             # cooperative connection-method wrapping for Trac #37064
-│   └── relay.py             # global_id_for / decode_global_id public test helpers (0.0.9)
-├── types/                   # DjangoType subsystem (Layer 2) — shipped
-│   ├── __init__.py
-│   ├── base.py              # DjangoType, _validate_meta, _build_annotations
-│   ├── converters.py        # convert_scalar, convert_choices_to_enum, resolved_relation_annotation
-│   ├── definition.py        # DjangoTypeDefinition (canonical per-type metadata with Meta.primary flag and forward-reserved Layer-3 slots)
-│   ├── finalizer.py         # finalize_django_types(): _audit_primary_ambiguity + Phase 1 unresolved-target detection + Phase 2 resolver attachment + Phase 2.5 interfaces/Relay + Phase 3 strawberry.type decoration
-│   ├── relations.py         # PendingRelationAnnotation sentinel + metaclass
-│   ├── relay.py             # Relay Node interface wiring (resolve_* defaults, id suppression, is_type_of injection; strategy-parameterized resolve_typename injection + decode_global_id for model-anchored GlobalID encoding, 0.0.9)
-│   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers, B3 N+1 detection
-├── optimizer/               # N+1 optimizer subsystem (Layer 2) — O1–O6 + B1–B8 shipped
-│   ├── __init__.py          # re-exports DjangoOptimizerExtension
-│   ├── _context.py          # context-key constants and get_context_value helper
-│   ├── extension.py         # DjangoOptimizerExtension (O3 hook, B1 cache w/ H2 origin-typed key, B2 elision stash, B3 strictness, B5 context stash, B6 schema audit w/ H3 multi-type dedupe)
-│   ├── walker.py            # selection-tree walker (O2, O5 only fields, B2 FK-id elision, B4 hints, B7 cached field map, H2 source_type origin routing)
-│   ├── plans.py             # OptimizationPlan data structure + resolver_key / runtime_path helpers
-│   ├── hints.py             # OptimizerHint typed wrapper (B4)
-│   └── field_meta.py        # FieldMeta precomputed field metadata (B7)
-├── filters/                 # Filtering subsystem (Layer 3 read-side) — shipped 0.0.8
-│   ├── __init__.py          # FilterSet, RelatedFilter, filter_input_type re-exports
-│   ├── base.py              # Filter / TypedFilter / ArrayFilter / RangeFilter / ListFilter / GlobalIDFilter / GlobalIDMultipleChoiceFilter / RelatedFilter / LazyRelatedClassMixin
-│   ├── sets.py              # FilterSet + FilterSetMetaclass + apply_sync / apply_async + filter_queryset tree-form override
-│   ├── factories.py         # FilterArgumentsFactory BFS + _dynamic_filterset_cache
-│   └── inputs.py            # input-class module-globals namespace + LOOKUP_NAME_MAP / LOOKUP_PREFIXES / convert_filter_to_input_annotation / normalize_input_value / construct_search
-├── orders/                  # Ordering subsystem (Layer 3 read-side) — shipped 0.0.8
-│   ├── __init__.py          # OrderSet, RelatedOrder, Ordering, order_input_type re-exports + _helper_referenced_ordersets ledger
-│   ├── base.py              # RelatedOrder primitive; LazyRelatedClassMixin re-imported from ..sets_mixins
-│   ├── sets.py              # OrderSet + OrderSetMetaclass + apply_sync / apply_async + check_permissions active-input-only scope
-│   ├── factories.py         # OrderArgumentsFactory BFS + _type_orderset_registry (Layer 6 deferred to 0.0.9)
-│   └── inputs.py            # input-class module-globals namespace + Ordering enum + materialize_input_class + clear_order_input_namespace + normalize_input_value
-└── utils/                   # cross-cutting helpers
-    ├── __init__.py
-    ├── relations.py         # relation_kind / RelationKind / is_many_side_relation_kind
-    ├── strings.py           # snake_case / camelCase / PascalCase conversion
-    └── typing.py            # unwrap_return_type (one layer), unwrap_graphql_type (full peel)
+├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
+├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
+├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
+├── sets_mixins.py                # Mixins shared across the FilterSet / OrderSet / AggregateSet / FieldSet family.
+├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
+│   ├── base.py                   # Filter primitives + ``RelatedFilter``.
+│   ├── factories.py              # Filter input-class BFS factory + the dynamic-FilterSet cache for connection fields.
+│   ├── inputs.py                 # Filter input namespace, lookup-name scaffolding, and shape converters.
+│   └── sets.py                   # ``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
+├── management/    # Django management namespace for the framework's ``manage.py`` commands.
+│   └── commands/    # Implementations of the framework's ``manage.py`` commands (``export_schema``, ``inspect_django_type``).
+│       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
+│       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
+├── optimizer/    # Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
+│   ├── _context.py               # Shared context read/write helpers for optimizer <-> resolver hand-off.
+│   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
+│   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
+│   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
+│   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
+│   └── walker.py                 # Selection-tree walker that converts GraphQL selections into an ``OptimizationPlan``.
+├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
+│   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
+│   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
+│   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
+│   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
+├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
+│   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
+│   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
+├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
+│   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
+│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types.
+│   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata for collected ``DjangoType`` classes.
+│   ├── finalizer.py              # ``finalize_django_types()`` - the once-only finalization gate for collected ``DjangoType`` classes.
+│   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
+│   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
+│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
+└── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
+    ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
+    ├── strings.py                # String-case helpers for the GraphQL <-> Django name boundary.
+    └── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
 ```
 
-## django_strawberry_framework (target package layout)
 
-This package target layout is separate from the fakeshop example-project layout above. It adds query-surface modules on top of the current `django_strawberry_framework/` package. It is derived from the three reference trees above and the package direction captured in [`GLOSSARY.md`][glossary].
+## Test layout
 
-Modules are tagged with `[alpha]`, `[beta]`, or `[stable]` to indicate which development phase they land in (matching the `MILESTONE` convention in [`../KANBAN.md`][kanban]). `[alpha]` modules land before `0.1.0` and `[beta]` modules land before `1.0.0` — both are tracked in [`../KANBAN.md`][kanban]. `[stable]` modules are post-`1.0.0` and tracked in [`../BACKLOG.md`][backlog]; they appear here only so the tree is comprehensive, not because they are committed.
+Tests live in four deliberate places, each chosen by what the test is proving. The root `tests/` tree protects package internals and mirrors `django_strawberry_framework/`. `examples/fakeshop/apps/<app>/tests/` protects one Django app at a time without live HTTP. `examples/fakeshop/tests/` protects project-level fakeshop behavior that belongs to no single app. `examples/fakeshop/test_query/` is the live `/graphql/` acceptance surface.
+
+**Coverage priority.** If a package line can be covered by a real fakeshop GraphQL request, put that test in `examples/fakeshop/test_query/`. Use the non-live fakeshop trees for services, models, admin, commands, URLs, or in-process schema execution. Use root `tests/` for package internals, invalid configuration, registry/finalizer mechanics, and paths unreachable through a realistic GraphQL request. Mock only when the real path is impossible. These placement rules are pinned in [`AGENTS.md`][agents].
+
+### Current test trees
+
+Source: `tests/`
 
 ```text
-django_strawberry_framework/
-├── __init__.py              # public-API re-exports
-├── py.typed
-├── apps.py                  # Django AppConfig
-├── conf.py                  # settings reader (DJANGO_STRAWBERRY_FRAMEWORK)
-├── exceptions.py            # error hierarchy
-├── registry.py              # model→type registry (Meta.primary shipped in 0.0.6)
-├── scalars.py               # BigInt public scalar (NewType-based; Strawberry deprecation suppressed at definition site)
-├── fieldset.py              # [beta] FieldSet (declarative field selection)
-├── list_field.py            # [alpha] DjangoListField (non-Relay list[T])
-├── permissions.py           # [alpha] apply_cascade_permissions, per-field permission hooks
-├── connection.py            # [alpha] DjangoConnectionField (Relay)
-├── relay.py                 # [alpha] DjangoNodeField / DjangoNodesField (root Relay refetch)
-├── routers.py               # [alpha] DjangoGraphQLProtocolRouter (Channels; soft dep)
-├── types/                   # DjangoType subsystem (Layer 2)
-│   ├── __init__.py
-│   ├── base.py              # DjangoType, _validate_meta, _build_annotations
-│   ├── converters.py        # convert_scalar, convert_choices_to_enum, resolved_relation_annotation
-│   ├── definition.py        # DjangoTypeDefinition (canonical per-type metadata)
-│   ├── finalizer.py         # finalize_django_types() three-phase finalizer
-│   ├── relations.py         # PendingRelationAnnotation sentinel + metaclass
-│   ├── relay.py             # Relay Node interface wiring
-│   └── resolvers.py         # _make_relation_resolver, _attach_relation_resolvers
-├── optimizer/               # N+1 optimizer subsystem (Layer 2)
-│   ├── __init__.py
-│   ├── _context.py          # context-key constants and get_context_value helper
-│   ├── extension.py         # DjangoOptimizerExtension (Strawberry SchemaExtension)
-│   ├── walker.py            # selection-tree walker (plan_optimizations)
-│   ├── plans.py             # OptimizationPlan, Prefetch chain helpers
-│   ├── hints.py             # OptimizerHint typed wrapper
-│   └── field_meta.py        # FieldMeta precomputed field metadata
-├── aggregates/              # [beta] Aggregation subsystem (Layer 3)
-│   ├── __init__.py
-│   ├── base.py              # Sum/Count/Avg/Min/Max/GroupBy result types
-│   ├── sets.py              # AggregateSet
-│   └── factories.py         # GraphQL-arguments factory
-├── mutations/               # [alpha] Mutations subsystem (Layer 3 write-side)
-│   ├── __init__.py
-│   ├── base.py              # DjangoMutation base + Meta.input_class / Meta.partial_input_class
-│   ├── fields.py            # DjangoMutationField
-│   ├── resolvers.py         # sync + async write resolvers
-│   ├── types.py             # auto-generated Input / PartialInput type factories
-│   └── errors.py            # shared `errors: list[FieldError]` envelope
-├── forms/                   # [alpha] Form-based mutations (Django Forms / ModelForms)
-│   ├── __init__.py
-│   ├── mutation.py          # DjangoFormMutation, DjangoModelFormMutation (DRF-style Meta)
-│   └── converter.py         # Django form field → Strawberry input type
-├── rest_framework/          # [alpha] DRF serializer-driven mutations (soft dep on rest_framework)
-│   ├── __init__.py
-│   ├── mutation.py          # SerializerMutation (DRF-style Meta)
-│   └── serializer_converter.py  # DRF field → Strawberry input/output type
-├── auth/                    # [alpha] Auth mutations (opt-in import)
-│   ├── __init__.py
-│   ├── mutations.py         # login_mutation, logout_mutation, register_mutation
-│   └── queries.py           # current_user query helper
-├── extensions/              # [alpha] Strawberry SchemaExtension implementations
-│   ├── __init__.py
-│   └── debug.py             # response-extensions debug (SQL + exceptions in `extensions`)
-├── middleware/              # [alpha] Django middleware
-│   ├── __init__.py
-│   └── debug_toolbar.py     # django-debug-toolbar SQL-panel capture during /graphql/
-├── testing/                 # [alpha] Testing utilities for consumers
-│   ├── __init__.py
-│   ├── client.py            # TestClient, AsyncTestClient, GraphQLTestCase
-│   └── relay.py             # global_id_for / decode_global_id public test helpers
-├── management/              # Django management commands
-│   ├── __init__.py
-│   └── commands/
-│       ├── __init__.py
-│       ├── export_schema.py # GraphQL schema SDL export (`manage.py export_schema`)
-│       └── inspect_django_type.py # DjangoType per-field GraphQL resolution table (`manage.py inspect_django_type`)
-└── utils/                   # cross-cutting helpers
-    ├── __init__.py
-    ├── relations.py         # relation_kind / RelationKind / is_many_side_relation_kind
-    ├── strings.py           # snake_case / camelCase / PascalCase conversion
-    ├── typing.py            # unwrap_return_type, unwrap_graphql_type
-    └── queryset.py          # [stable] queryset introspection, prefetch-cache awareness
+tests/    # Package-internal tests for django_strawberry_framework.
+├── test_apps.py                  # AppConfig tests for package registration and Django patch application.
+├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
+├── test_connection.py            # DjangoConnection and DjangoConnectionField tests for Relay pagination behavior.
+├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
+├── test_list_field.py            # DjangoListField tests for root list fields, queryset visibility, and sidecars.
+├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
+├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
+├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
+├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
+├── base/    # Frozen base tests for package configuration and version sanity.
+│   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
+│   └── test_init.py              # Package init tests for version metadata and public exports.
+├── filters/    # Package tests for the FilterSet subsystem.
+│   ├── test_base.py              # Filter primitive tests for typed, list, range, global-ID, and related filters.
+│   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
+│   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
+│   ├── test_inputs.py            # Filter input tests for lookup naming, annotation conversion, and value normalization.
+│   ├── test_sets.py              # FilterSet tests for Meta collection, validation, sync/async apply, and tree overrides.
+│   └── fixtures/    # Fixture modules for filter lazy-resolution tests.
+│       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy-resolution tests.
+├── management/    # Package tests for django-strawberry-framework management commands.
+│   ├── test_export_schema.py     # Management command tests for export_schema SDL output and failure modes.
+│   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
+├── optimizer/    # Package tests for optimizer planning and DjangoOptimizerExtension.
+│   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
+│   ├── test_extension.py         # DjangoOptimizerExtension tests for root-gated planning and queryset optimization.
+│   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.
+│   ├── test_hints.py             # OptimizerHint tests for Meta.optimizer_hints normalization and validation.
+│   ├── test_multi_db.py          # Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
+│   ├── test_plans.py             # OptimizationPlan tests for plan structure, keys, paths, and select/prefetch state.
+│   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
+│   └── test_walker.py            # Selection-walker tests for GraphQL selection to ORM OptimizationPlan conversion.
+├── orders/    # Package tests for the OrderSet subsystem.
+│   ├── test_base.py              # RelatedOrder tests for nested ordering paths and lazy related-class handling.
+│   ├── test_composition.py       # Filter and order composition smoke tests for Layer-3 read-side integration.
+│   ├── test_factories.py         # OrderArgumentsFactory tests for BFS input generation and dynamic OrderSet caching.
+│   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
+│   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
+│   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
+├── testing/    # Package tests for public consumer testing utilities.
+│   ├── test_relay.py             # Public Relay helper tests for global_id_for and decode_global_id.
+│   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
+├── types/    # Package tests for the DjangoType subsystem.
+│   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
+│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, and relation annotations.
+│   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
+│   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
+│   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related_target_for relation lookup.
+│   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
+│   ├── test_relations.py         # PendingRelation tests for identity hashing and dataclass field contracts.
+│   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
+│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off.
+│   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
+│       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
+│       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
+└── utils/    # Package tests for shared utility helpers.
+    ├── test_relations.py         # Relation utility tests for relation_kind classification and package re-exports.
+    ├── test_strings.py           # String utility tests for snake_case, camelCase, and PascalCase conversion.
+    └── test_typing.py            # Typing utility tests for Strawberry, Python, and GraphQL type unwrapping.
 ```
 
-## Test layout going forward
 
-Tests live across three roots, each with a focused responsibility. The root `tests/` tree mirrors the package source one-to-one and grows alongside the package; the two `examples/fakeshop/` test trees hold tests whose system-under-test is the example project, split by whether they exercise the GraphQL HTTP endpoint. The placement rules themselves are pinned in [`AGENTS.md`][agents] "Test placement"; this section is the visual map of the trees and a per-folder reference for what kind of test goes where.
-
-**Coverage priority.** Any package coverage line in `django_strawberry_framework/` that can be earned by a real-world GraphQL query against fakeshop MUST be earned in `examples/fakeshop/test_query/` (live `/graphql/` HTTP via `django.test.Client`). Fall back to `examples/fakeshop/tests/` (in-process schema execution, services, admin, management commands, URLs) or the package-internal `tests/` tree only when the code path is genuinely unreachable from a live query. Mock only when the real path is impossible. The package coverage gate (`fail_under = 100`) is reached *because* the live HTTP tests exercise the package end-to-end — that is the point of the example project's existence in the test suite.
-
-### Current shape (on disk today)
+Source: `examples/fakeshop/apps/*/tests/`
 
 ```text
-tests/                       # Package-internal tests (current state)
-├── __init__.py
-├── management/             # mirrors django_strawberry_framework/management/
-│   ├── __init__.py
-│   ├── test_export_schema.py  # ← export_schema Command — happy paths + failure modes
-│   └── test_inspect_django_type.py  # ← inspect_django_type Command — failure modes
-├── test_apps.py             # AppConfig (single-file Layer-3 module)
-├── test_connection.py       # DjangoConnectionField / DjangoConnection (single-file Layer-3 module)
-├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
-├── test_registry.py         # model→type registry
-├── test_relay_connection.py # relation-as-Connection upgrade + cursor-conformance surface
-├── test_relay_node_field.py # DjangoNodeField / DjangoNodesField root-field surface (card-named two-file split, spec-032 Decision 11)
-├── testing/                 # mirrors django_strawberry_framework/testing/
-│   ├── __init__.py
-│   ├── test_relay.py        # ← testing/relay.py global_id_for / decode_global_id
-│   └── test_wrap.py         # ← safe_wrap_connection_method consumer helper
-├── base/                    # FROZEN: only conf and version checks
-│   ├── __init__.py
-│   ├── test_conf.py
-│   └── test_init.py
-├── types/                   # mirrors django_strawberry_framework/types/
-│   ├── __init__.py
-│   ├── test_base.py         # ← DjangoType + Meta validation + scalar/relation synthesis
-│   ├── test_converters.py   # ← convert_scalar / resolved_relation_annotation / convert_choices_to_enum
-│   ├── test_definition_order.py        # ← consumer override contract (four-corner matrix) + definition-order-independent relation finalization
-│   ├── test_definition_order_schema.py # ← schema-build / strawberry.type decoration interactions
-│   ├── test_generic_foreign_key.py     # ← GenericForeignKey rejection contract
-│   ├── test_relay_interfaces.py        # ← Meta.interfaces + Relay Node wiring
-│   └── test_resolvers.py    # ← O1 _make_relation_resolver / _attach_relation_resolvers
-├── optimizer/               # mirrors django_strawberry_framework/optimizer/
-│   ├── __init__.py
-│   ├── test_definition_order.py     # ← optimizer behavior under definition-order-independent relations
-│   ├── test_extension.py    # ← DjangoOptimizerExtension (root-gated resolve hook, O3)
-│   ├── test_field_meta.py   # ← FieldMeta precomputed field metadata
-│   ├── test_hints.py        # ← OptimizerHint typed wrapper
-│   ├── test_plans.py        # ← OptimizationPlan data structure
-│   ├── test_relay_id_projection.py  # ← Relay GlobalID projection / connector-column behavior
-│   └── test_walker.py       # ← O2 selection-tree walker
-├── filters/                 # mirrors django_strawberry_framework/filters/
-│   ├── __init__.py
-│   ├── test_base.py         # ← Filter primitives + ArrayFilter / RangeFilter / ListFilter / GlobalIDFilter / RelatedFilter / LazyRelatedClassMixin
-│   ├── test_sets.py         # ← FilterSet + FilterSetMetaclass + apply_sync / apply_async + filter_queryset tree-form override
-│   ├── test_factories.py    # ← FilterArgumentsFactory BFS + _dynamic_filterset_cache
-│   ├── test_inputs.py       # ← input-class module-globals namespace + LOOKUP_NAME_MAP / convert_filter_to_input_annotation / normalize_input_value
-│   └── test_finalizer.py    # ← finalizer phase 2.5 binding + owner-aware materialization + filter_input_type orphan validation
-├── orders/                  # mirrors django_strawberry_framework/orders/
-│   ├── __init__.py
-│   ├── test_base.py         # ← RelatedOrder + LazyRelatedClassMixin sibling-import behaviour
-│   ├── test_sets.py         # ← OrderSet + OrderSetMetaclass + apply_sync / apply_async + active-input-only check_permissions
-│   ├── test_factories.py    # ← OrderArgumentsFactory BFS + per-module input-class namespace
-│   ├── test_inputs.py       # ← Ordering enum + materialize_input_class + clear_order_input_namespace + normalize_input_value + order_input_type
-│   ├── test_finalizer.py    # ← finalizer phase 2.5 binding + Meta.orderset_class promotion + orphan validation
-│   └── test_composition.py  # ← filter + order composition smoke (Slice 6)
-└── utils/                   # mirrors django_strawberry_framework/utils/
-    ├── __init__.py
-    ├── test_relations.py    # ← relation_kind / is_many_side_relation_kind
-    ├── test_strings.py      # ← snake_case / camelCase / PascalCase conversion
-    └── test_typing.py       # ← unwrap_return_type / unwrap_graphql_type
-
-examples/fakeshop/tests/     # Example-project tests, NO /graphql HTTP
-├── test_admin.py            # admin actions via django.test.Client on /admin/...
-├── test_commands.py         # management commands via call_command
-├── test_models.py           # __str__ etc. on fakeshop models
-├── test_schema.py           # in-process schema execution via schema.execute_sync
-├── test_services.py         # Faker-driven seed_data / delete_data / create_users
-└── test_urls.py             # fakeshop project urls (index view)
-
-examples/fakeshop/test_query/   # Example-project tests, LIVE /graphql HTTP
-├── README.md                # HTTP-test placement notes
-├── test_glossary_api.py     # live GraphQL tests for the glossary data app
-├── test_kanban_api.py       # live GraphQL tests for the kanban data app
-├── test_library_api.py      # live GraphQL acceptance tests for the library app
-├── test_multi_db.py         # live tests under FAKESHOP_SHARDED=1 (skipped otherwise)
-├── test_products_api.py     # live GraphQL tests for the products catalog app
-├── test_scalars_api.py      # live wire-format / introspection tests for the scalars app
-└── test_scalars_filter_api.py # live GraphQL filter tests for the scalars app
+examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the app they protect.
+├── glossary/
+│   └── tests/    # Non-live app tests for glossary models, factories, and import commands.
+│       ├── test_factories.py     # Glossary factory tests for default values, aliases, categories, and spec mentions.
+│       ├── test_import_spec_terms.py  # Glossary import command tests for DONE-card spec term extraction.
+│       └── test_models.py        # Glossary model tests for term edges, aliases, categories, and spec mentions.
+├── kanban/
+│   └── tests/    # Non-live app tests for kanban services, signals, and board invariants.
+│       ├── test_services.py      # Kanban service tests for structured card creation and rollback behavior.
+│       └── test_signals.py       # Kanban signal tests for dependencies, done-card guards, blocking, and ordering.
+├── library/
+│   └── tests/    # Non-live app tests for library models and in-process schema execution.
+│       ├── test_models.py        # Library model tests for __str__ output and computed field behavior.
+│       └── test_schema.py        # Library schema tests for in-process GraphQL execution without HTTP.
+├── products/
+│   └── tests/    # Non-live app tests for products admin, commands, models, schema, and services.
+│       ├── test_admin.py         # Products admin tests for changelist query-param branches.
+│       ├── test_commands.py      # Products command tests for service-backed seed and delete management commands.
+│       ├── test_models.py        # Products model tests for example-domain __str__ implementations.
+│       ├── test_schema.py        # Products schema tests for in-process GraphQL execution without HTTP.
+│       └── test_services.py      # Products service tests for Faker-driven seed_data, create_users, and delete_data.
+└── scalars/
+    └── tests/    # Non-live app tests for scalar substrate models.
+        └── test_models.py        # Scalars model tests for __str__ output and nullable specimen relationships.
 ```
 
-The example project code itself is organized as:
+
+Source: `examples/fakeshop/tests/`
 
 ```text
-examples/fakeshop/
-├── manage.py
-├── config/                  # project orchestration
-│   ├── __init__.py
-│   ├── settings.py
-│   ├── schema.py
-│   ├── urls.py
-│   └── wsgi.py
-└── apps/                    # domain apps; import as apps.<app_name>
-    ├── __init__.py
-    ├── glossary/            # glossary terms + spec-term audit rows
-    ├── kanban/              # KANBAN.md source tables + shared BoardDoc prose sections
-    ├── library/             # Branch/Shelf/Book/Patron/Loan + Patron.lifetime_fines_cents BigInt
-    ├── products/            # Category/Item/Property/Entry catalog example
-    └── scalars/             # ScalarSpecimen + NullableScalarSpecimen converter substrate
+examples/fakeshop/tests/    # Example-project tests for fakeshop behavior without live /graphql HTTP.
+├── test_export_schema.py         # Fakeshop project command tests for export_schema against the configured schema.
+├── test_inspect_django_type.py   # Fakeshop project command tests for inspect_django_type against example DjangoTypes.
+└── test_urls.py                  # Fakeshop project URL tests for the index view and URL configuration.
 ```
 
-### Target shape (as Layer-3 subsystems land)
 
-Each new source subpackage gets a parallel directory under `tests/`; each new flat single-file module gets a `tests/test_<module>.py`. The example test trees grow new files in place — no new subdirectories needed there.
+Source: `examples/fakeshop/test_query/`
 
 ```text
-tests/                       # Package-internal tests (target as Layer-3 subsystems land)
-├── base/                    # FROZEN
-│   ├── test_init.py
-│   └── test_conf.py
-├── test_apps.py             # AppConfig
-├── test_registry.py         # model→type registry
-├── test_exceptions.py       # error hierarchy
-├── test_fieldset.py         # FieldSet (single-file Layer-3 module)
-├── test_list_field.py       # DjangoListField (single-file Layer-3 module)
-├── test_permissions.py      # apply_cascade_permissions, per-field hooks
-├── test_connection.py       # DjangoConnectionField
-├── test_relay_connection.py # relation-as-Connection upgrade + cursor-conformance surface
-├── test_relay_node_field.py # DjangoNodeField / DjangoNodesField root refetch fields
-├── types/
-│   ├── test_base.py
-│   ├── test_converters.py
-│   ├── test_definition_order.py
-│   ├── test_definition_order_schema.py
-│   ├── test_generic_foreign_key.py
-│   ├── test_relay_interfaces.py
-│   └── test_resolvers.py
-├── optimizer/
-│   ├── test_definition_order.py
-│   ├── test_extension.py
-│   ├── test_field_meta.py   # FieldMeta precomputed field metadata
-│   ├── test_hints.py        # OptimizerHint typed wrapper
-│   ├── test_plans.py        # OptimizationPlan / Prefetch chain helpers
-│   ├── test_relay_id_projection.py
-│   └── test_walker.py       # selection-tree walker
-├── filters/
-│   ├── test_base.py
-│   ├── test_sets.py
-│   ├── test_factories.py
-│   └── test_inputs.py
-├── aggregates/
-│   ├── test_base.py
-│   ├── test_sets.py
-│   └── test_factories.py
-├── management/
-│   ├── test_export_schema.py
-│   └── test_inspect_django_type.py
-├── testing/
-│   └── test_relay.py        # global_id_for / decode_global_id test helpers
-└── utils/
-    ├── test_relations.py
-    ├── test_strings.py
-    ├── test_typing.py
-    └── test_queryset.py
-
-examples/fakeshop/tests/     # unchanged shape; new files land here per concern
-examples/fakeshop/test_query/   # unchanged shape; HTTP-level GraphQL tests land here
+examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consumer-visible API.
+├── README.md                     # Live GraphQL-API tests for the fakeshop example project.
+├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
+├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
+├── test_library_api.py           # Live GraphQL HTTP tests for library relations, optimizer behavior, and Relay fields.
+├── test_multi_db.py              # Live GraphQL HTTP tests for sharded fakeshop multi-database cooperation.
+├── test_products_api.py          # Live GraphQL HTTP tests for the products catalog API surface.
+├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar conversion and wire-format coverage.
+└── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filter input and queryset behavior.
 ```
 
-### What each folder holds
 
-`tests/` — **Package-internal tests.** The system-under-test is `django_strawberry_framework` itself, even when fakeshop models are used as fixtures. This tree mirrors the package source one-to-one: every source subpackage becomes a directory, every source module gets a `test_<module>.py` at the parallel path. Coverage of this tree gates `fail_under = 100` against `[tool.coverage.run] source = ["django_strawberry_framework"]`.
+## Fakeshop example project
 
-`tests/base/` — **Frozen.** Holds exactly two files: `test_init.py` (version sanity check) and `test_conf.py` (`django_strawberry_framework/conf.py` settings reader). Both files may grow as `conf.py` changes, but no new files are ever added here. This is the conf+version baseline that gates the package's most fundamental contract.
+### Project tree
 
-`tests/<subpkg>/` — **Subsystem tests** for the parallel source subpackage. `tests/types/` covers `django_strawberry_framework/types/`; `tests/optimizer/` covers `django_strawberry_framework/optimizer/`; `tests/filters/` will cover `django_strawberry_framework/filters/`; and so on. Each test module exercises the named source module: `tests/types/test_base.py` ↔ `types/base.py`, `tests/types/test_converters.py` ↔ `types/converters.py`, etc. Subdirectories carry an `__init__.py` shell to match the existing `tests/__init__.py` + `tests/base/__init__.py` convention so pytest collects them as `tests.<subpkg>.<module>`.
+Source: `examples/fakeshop/`
 
-`tests/test_<module>.py` (flat, at the root) — **Single-file Layer-3 module tests.** When a Layer-3 module lives flat at the package root (`fieldset.py`, `permissions.py`, `connection.py`) rather than as its own subpackage, its test file lives flat at `tests/test_<module>.py` rather than under a one-file subdirectory. If/when the source module graduates to a subpackage (e.g. `permissions/` once it earns 3+ files), the flat `tests/test_permissions.py` graduates to `tests/permissions/` at the same time.
+```text
+examples/fakeshop/    # A Django + Strawberry GraphQL example project that exercises django-strawberry-framework end-to-end.
+├── manage.py                     # Django command-line entry point for the fakeshop example project.
+├── config/    # Project orchestration package for fakeshop settings, URLs, WSGI, and schema composition.
+│   ├── __init__.py
+│   ├── settings.py               # Django settings for fakeshop and its single-database or sharded test modes.
+│   ├── schema.py                 # Project-level GraphQL schema that composes every fakeshop app query.
+│   ├── urls.py                   # URL routing for fakeshop's index, admin, auth, and GraphQL endpoints.
+│   └── wsgi.py                   # WSGI application entry point for the fakeshop example project.
+└── apps/    # Domain-app namespace imported as ``apps.<app_name>`` from the fakeshop project root.
+    ├── __init__.py
+    ├── glossary/    # Glossary app storing documentation terms and spec-term audit rows.
+    ├── kanban/    # Kanban app storing board cards, dependencies, docs prose, and markdown export metadata.
+    ├── library/    # Library app modeling branch, shelf, book, patron, and loan relations for acceptance queries.
+    ├── products/    # Products app modeling the seedable catalog used by admin, service, command, and query examples.
+    └── scalars/    # Scalars app modeling converter specimens for wire-format and filter coverage.
+```
 
-`examples/fakeshop/tests/` — **Example-project tests, no HTTP `/graphql/`.** The system-under-test is the fakeshop example project, exercised through real Django flows but in-process: management commands via `django.core.management.call_command`, admin actions via `django.test.Client.get("/admin/...")`, URL views via `django.test.Client.get("/")`, schema execution via `strawberry.Schema.execute_sync(...)` directly. Slow enough that they live in their own tree but fast enough not to need an HTTP server. Outside the package coverage gate (the example is example code, not shipping code) but still runs under `uv run pytest` because `pytest.ini` lists it in `testpaths`.
+### App roles
 
-`examples/fakeshop/test_query/` — **Example-project tests, live `/graphql/` HTTP. First place to add a test.** The system-under-test is the same fakeshop project, but exercised end-to-end through the Django + Strawberry HTTP stack via `django.test.Client.post("/graphql/", ...)`. Verifies the full request pipeline: URL routing, view, schema execution, JSON response serialization. **Any new package code whose coverage can be earned by a real GraphQL query lands a test here first** — only fall back to the sibling `tests/` tree or the package-internal `tests/` tree when the code path cannot be reached from a live `/graphql/` request. `test_library_api.py` is the live acceptance suite for the `library` app (relation traversal, nullable scalars, choice enums, optimizer SQL shape, optimizer hints, consumer-shaped querysets, consumer relation override, `Patron.lifetime_fines_cents` BigInt round-trip past JS safe-integer range). `test_scalars_api.py` is the live converter-coverage suite for the `scalars` app — pins every non-trivial `SCALAR_MAP` entry in both nullable and non-null shapes, plus self-FK (`parent`/`children`) and cross-model FK (`partner`/`nullable_partners`) traversal. `test_kanban_api.py` and `test_glossary_api.py` exercise the repository-docs-as-data apps through the same live GraphQL surface their markdown exporters consume. `test_multi_db.py` runs only under `FAKESHOP_SHARDED=1`. Same coverage and discovery rules as the sibling `examples/fakeshop/tests/` tree.
-HTTP tests that import the project schema must preserve the reload pattern from `test_library_api.py`: clear the global registry, reload app schema modules, then reload the project schema and URLconf. That keeps package tests that clear the registry from leaving cached example `DjangoType` classes detached from the active registry.
+Each app owns a focused example surface: products for catalog data and seed tooling, library for deeper relation graphs, scalars for converter coverage, and kanban/glossary for repository docs rendered from database rows.
 
-`examples/<project>/...` — **Future example projects** mirror the same two-folder split: every additional example app under `examples/` ships its own `tests/` and `test_query/` directories with the same in-process / HTTP separation. `pytest.ini`'s `testpaths` will be extended one entry per pair when a second example lands; nothing about the package or the existing fakeshop test trees changes.
+`apps.glossary/`
 
-`examples/fakeshop/apps/<app>/tests/` — **Per-Django-app, non-live tests.** App-owned model/admin/service/schema checks live beside the app they protect. Live `/graphql/` HTTP coverage still belongs in `examples/fakeshop/test_query/`.
+It backs the exported ``docs/GLOSSARY.md`` file and keeps term aliases, categories, relationships, and spec mentions queryable through the same GraphQL surface used by the markdown exporter.
+
+`apps.kanban/`
+
+It is the database source for the root ``KANBAN.md`` export, including card ordering, dependency integrity, release targeting, glossary links, and reusable prose sections shared with other docs-as-data exporters.
+
+`apps.library/`
+
+It is the primary relational acceptance surface: live GraphQL tests use it to prove foreign keys, reverse relations, one-to-one links, many-to-many joins, Relay nodes, optimizer hints, consumer queryset shaping, and BigInt round-tripping.
+
+`apps.products/`
+
+It carries Category, Item, Property, and Entry data plus Faker-backed services, management commands, admin shortcuts, and filter/order sidecars for a practical catalog-style GraphQL schema.
+
+`apps.scalars/`
+
+It provides nullable and non-null scalar fixtures, relation edges, and override cases that let live GraphQL tests pin scalar conversion, serialization, filtering, and schema introspection behavior.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [agents]: ../AGENTS.md
-[backlog]: ../BACKLOG.md
-[kanban]: ../KANBAN.md
 [readme]: ../README.md
 
 <!-- docs/ -->
-[glossary]: GLOSSARY.md
 
 <!-- docs/SPECS/ -->
 

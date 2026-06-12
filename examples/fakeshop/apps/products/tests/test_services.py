@@ -1,4 +1,4 @@
-"""Tests for products.services - Faker-driven seeding and deletion services."""
+"""Products service tests for Faker-driven seed_data, create_users, and delete_data."""
 
 from unittest.mock import patch
 

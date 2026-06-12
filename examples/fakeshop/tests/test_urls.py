@@ -1,4 +1,4 @@
-"""Tests for the fakeshop project urls (index view + url config)."""
+"""Fakeshop project URL tests for the index view and URL configuration."""
 
 import pytest
 from django.test import Client

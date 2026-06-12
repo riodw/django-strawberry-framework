@@ -1,4 +1,4 @@
-"""WSGI config for the fakeshop example project."""
+"""WSGI application entry point for the fakeshop example project."""
 
 import os
 

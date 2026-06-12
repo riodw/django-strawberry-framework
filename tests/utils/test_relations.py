@@ -1,3 +1,5 @@
+"""Relation utility tests for relation_kind classification and package re-exports."""
+
 from types import SimpleNamespace
 
 from django_strawberry_framework.utils import (

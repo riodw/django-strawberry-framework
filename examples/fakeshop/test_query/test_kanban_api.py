@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for the kanban board.
+"""Live GraphQL HTTP tests for the kanban board docs-as-data API.
 
 Mirrors ``test_products_api.py``'s harness. Seeds a small deterministic board
 directly (not via the importer, so assertions stay independent of how the real

@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+"""Django command-line entry point for the fakeshop example project."""
+
 import os
 import sys
 

@@ -1,4 +1,4 @@
-"""Pure-unit tests for ``django_strawberry_framework.registry.TypeRegistry``.
+"""TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
 
 The integration-flavored registry tests (collision raised by ``DjangoType``
 subclassing, enum-caching observed through ``convert_choices_to_enum``)

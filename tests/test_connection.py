@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.connection`` (Slices 1 + 2).
+"""DjangoConnection and DjangoConnectionField tests for Relay pagination behavior.
 
 Spec: ``docs/spec-030-connection_field-0_0_9.md`` (Slice 1 / Slice 2 checklists;
 Test plan Slice 1 / Slice 2 sections). Package tests; system-under-test is

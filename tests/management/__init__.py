@@ -1,1 +1,1 @@
-"""Package tests for django_strawberry_framework.management.*."""
+"""Package tests for django-strawberry-framework management commands."""

@@ -1,4 +1,4 @@
-"""Tests for ``DjangoType`` Meta validation, scalar mapping, relations, registry, and ``get_queryset``.
+"""DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
 
 Slice scope:
 

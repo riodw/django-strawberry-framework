@@ -1,3 +1,5 @@
+"""DjangoType tests for GenericForeignKey rejection and GenericRelation support."""
+
 import pytest
 import strawberry
 from apps.library.models import Branch, TaggedItem

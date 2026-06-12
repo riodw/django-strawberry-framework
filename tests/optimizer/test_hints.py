@@ -1,4 +1,4 @@
-"""Tests for ``OptimizerHint`` - the typed wrapper for ``Meta.optimizer_hints``.
+"""OptimizerHint tests for Meta.optimizer_hints normalization and validation.
 
 Covers the SKIP sentinel, the three factory classmethods, frozen
 immutability, and the identity/equality contracts consumers and the

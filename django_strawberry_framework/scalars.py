@@ -1,4 +1,4 @@
-"""Public scalars defined by django-strawberry-framework.
+"""Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 
 Today: ``BigInt``. Future scalars (e.g. ``Upload`` per TODO-ALPHA-035-0.0.11) land here.
 

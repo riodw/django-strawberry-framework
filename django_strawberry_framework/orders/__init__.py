@@ -1,4 +1,4 @@
-"""Order subsystem entry point.
+"""Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 
 Re-exports the foundational primitives from ``base.py``, the
 ``OrderSet`` + ``OrderSetMetaclass`` pair from ``sets.py``, the

@@ -1,4 +1,4 @@
-"""Canonical metadata object for collected ``DjangoType`` classes."""
+"""``DjangoTypeDefinition`` - canonical metadata for collected ``DjangoType`` classes."""
 
 from __future__ import annotations
 

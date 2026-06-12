@@ -1,4 +1,4 @@
-"""``RelatedOrder`` primitive for the ordering subsystem.
+"""``RelatedOrder`` - the nested-path ordering primitive.
 
 Layer 2 of the spec-028 six-layer plan. ``RelatedOrder`` is the collapsed
 port of the cookbook's ``django_graphene_filters/orders.py::BaseRelatedOrder``

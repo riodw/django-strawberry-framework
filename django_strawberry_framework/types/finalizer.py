@@ -1,4 +1,4 @@
-"""Finalization lifecycle for collected ``DjangoType`` classes.
+"""``finalize_django_types()`` - the once-only finalization gate for collected ``DjangoType`` classes.
 
 ``finalize_django_types()`` is the once-only build gate for the package's
 ``DjangoType`` registry. It runs four phases against every type collected

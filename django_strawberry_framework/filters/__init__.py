@@ -1,4 +1,4 @@
-"""Filter subsystem entry point.
+"""Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 
 Re-exports the foundational primitives from `base.py`, the `FilterSet`
 + `FilterSetMetaclass` pair from `sets.py`, and the Decision-11

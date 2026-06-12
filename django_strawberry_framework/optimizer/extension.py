@@ -1,4 +1,4 @@
-"""``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1.
+"""``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
 
 Opt-in at schema construction::
 

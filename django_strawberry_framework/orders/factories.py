@@ -1,4 +1,4 @@
-"""BFS factory for the ordering subsystem.
+"""Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
 
 Layer 5 of the spec-028 six-layer pipeline (the BFS that builds every
 reachable Strawberry input class via ``_build_input_fields`` +

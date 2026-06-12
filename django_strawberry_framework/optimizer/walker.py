@@ -1,4 +1,4 @@
-"""Selection-tree walker for ORM optimization plans."""
+"""Selection-tree walker that converts GraphQL selections into an ``OptimizationPlan``."""
 
 from __future__ import annotations
 

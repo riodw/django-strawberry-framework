@@ -1,4 +1,4 @@
-"""Filter primitives + `RelatedFilter`.
+"""Filter primitives + ``RelatedFilter``.
 
 Layers 1 and 2 of the six-layer pipeline (spec-027 Decision 3) plus the
 five parity-floor primitives (spec-027 Decision 4):

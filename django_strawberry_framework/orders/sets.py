@@ -1,4 +1,4 @@
-"""``OrderSetMetaclass`` (Layer 3) and ``OrderSet`` foundation (Layer 4).
+"""``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
 
 The metaclass is a verbatim port of
 ``django_graphene_filters/orderset.py::OrderSetMetaclass``; ``OrderSet``

@@ -1,4 +1,4 @@
-"""Cooperative connection-method wrapping for consumers.
+"""Cooperative connection-method wrapping for consumer test instrumentation.
 
 The wrap-time half of the defense-in-depth against Django Trac #37064.
 Consumers (or third-party libraries) that need to replace a method on

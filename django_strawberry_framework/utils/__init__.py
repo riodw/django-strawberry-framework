@@ -1,4 +1,4 @@
-"""Cross-cutting utility helpers.
+"""Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
 
 Subpackage structure mirrors the convention both `graphene_django/utils/`
 and `strawberry_django/utils/` converge on: focused submodules per

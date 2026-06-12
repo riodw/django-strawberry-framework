@@ -1,4 +1,4 @@
-"""Library settings.
+"""Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
 
 User-provided settings live in a top-level Django settings dict named
 ``DJANGO_STRAWBERRY_FRAMEWORK``.  Access them via the module-level

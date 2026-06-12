@@ -1,4 +1,4 @@
-"""Internal Relay/interface helpers for the 0.0.5 Relay foundation slice.
+"""Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 
 Slice 2 introduced ``install_is_type_of``; Slice 4 extends this module with
 the interface base-class injection step and the four Relay node resolver

@@ -1,4 +1,4 @@
-"""Management command for deleting seeded products catalog data."""
+"""Delete seeded products catalog rows by count, item scope, or full catalog scope."""
 
 from django.core.management.base import BaseCommand
 

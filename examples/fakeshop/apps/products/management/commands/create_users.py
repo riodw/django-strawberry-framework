@@ -1,4 +1,4 @@
-"""Management command for creating permission-shaped products test users."""
+"""Create permission-shaped products test users for admin and API access checks."""
 
 from django.core.management.base import BaseCommand
 

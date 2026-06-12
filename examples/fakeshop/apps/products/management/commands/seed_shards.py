@@ -1,4 +1,4 @@
-"""Populate the secondary shard SQLite DB used by the multi-DB / stress-test flow.
+"""Prepare the secondary shard SQLite DB for multi-DB products coverage.
 
 Purpose
 -------

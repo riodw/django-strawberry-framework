@@ -1,4 +1,4 @@
-"""Management command for seeding Faker-backed products catalog rows."""
+"""Seed Faker-backed products catalog rows up to a requested per-provider count."""
 
 from django.core.management.base import BaseCommand
 

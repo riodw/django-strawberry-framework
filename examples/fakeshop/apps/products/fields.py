@@ -1,3 +1,5 @@
+"""AdvancedFieldSet declarations for computed and permission-gated products fields."""
+
 import strawberry
 from graphql import GraphQLError
 

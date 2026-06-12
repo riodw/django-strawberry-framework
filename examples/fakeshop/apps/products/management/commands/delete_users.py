@@ -1,3 +1,5 @@
+"""Management command for deleting generated products test users."""
+
 from django.core.management.base import BaseCommand
 
 from apps.products.services import delete_users

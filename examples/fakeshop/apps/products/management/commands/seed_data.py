@@ -1,3 +1,5 @@
+"""Management command for seeding Faker-backed products catalog rows."""
+
 from django.core.management.base import BaseCommand
 
 from apps.products.services import seed_data

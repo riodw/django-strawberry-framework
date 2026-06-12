@@ -30,8 +30,9 @@ JSON schema (see ``apps/kanban/card_import.example.json`` for a filled template)
           "planning_state": "planned",     # optional (default "planned")
           "planning_note": "...",          # optional
           "labels": ["filters"],           # optional, Label.key list
-          "changed_files": [                # optional, package file paths
-            "django_strawberry_framework/types/base.py"
+          "changed_files": [                # optional, predicted package/test paths
+            "django_strawberry_framework/types/base.py",
+            "tests/mutations/"             # planned dirs end with "/"
           ],
           "parity": [                      # optional
             {"upstream": "graphene_django", "level": "required"}

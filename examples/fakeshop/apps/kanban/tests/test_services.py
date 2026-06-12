@@ -6,8 +6,10 @@ from django.core.exceptions import ValidationError
 from apps.kanban import factories as kf
 from apps.kanban import models, services
 
-PACKAGE_FILE = "django_strawberry_framework/types/base.py"
-OTHER_PACKAGE_FILE = "django_strawberry_framework/optimizer/walker.py"
+TRACKED_FILE = "django_strawberry_framework/types/base.py"
+OTHER_TRACKED_FILE = "django_strawberry_framework/optimizer/walker.py"
+PLANNED_PACKAGE_DIR = "django_strawberry_framework/mutations/"
+PLANNED_TEST_FILE = "tests/mutations/test_inputs.py"
 
 
 @pytest.fixture(autouse=True)
@@ -80,13 +82,13 @@ def test_create_card_from_spec_links_changed_files(beta_version):
             "title": "Changed files card",
             "target_version": beta_version.number,
             "relative_size": "s",
-            "changed_files": [OTHER_PACKAGE_FILE, PACKAGE_FILE],
+            "changed_files": [OTHER_TRACKED_FILE, TRACKED_FILE],
         },
     )
 
     assert list(card.changed_files.values_list("path", flat=True)) == [
-        OTHER_PACKAGE_FILE,
-        PACKAGE_FILE,
+        OTHER_TRACKED_FILE,
+        TRACKED_FILE,
     ]
 
 
@@ -97,31 +99,64 @@ def test_create_card_from_spec_deduplicates_changed_files(beta_version):
             "title": "Deduped changed files card",
             "target_version": beta_version.number,
             "relative_size": "s",
-            "changed_files": [PACKAGE_FILE, PACKAGE_FILE],
+            "changed_files": [TRACKED_FILE, TRACKED_FILE],
         },
     )
 
-    assert list(card.changed_files.values_list("path", flat=True)) == [PACKAGE_FILE]
+    assert list(card.changed_files.values_list("path", flat=True)) == [TRACKED_FILE]
 
 
 @pytest.mark.django_db
-def test_create_card_from_spec_rejects_unknown_changed_file(beta_version):
-    with pytest.raises(services.KanbanServiceError, match="Unknown package file"):
+def test_create_card_from_spec_creates_planned_rows_for_future_paths(beta_version):
+    """New cards are never done, so unknown paths under allowed roots become planned rows."""
+    card = services.create_card_from_spec(
+        {
+            "title": "Predicted files card",
+            "target_version": beta_version.number,
+            "relative_size": "s",
+            "changed_files": [PLANNED_PACKAGE_DIR, PLANNED_TEST_FILE],
+        },
+    )
+
+    planned_dir = card.changed_files.get(path=PLANNED_PACKAGE_DIR)
+    assert planned_dir.is_current is False
+    assert planned_dir.is_directory is True
+    planned_file = card.changed_files.get(path=PLANNED_TEST_FILE)
+    assert planned_file.is_current is False
+    assert planned_file.is_directory is False
+
+
+@pytest.mark.django_db
+def test_create_card_from_spec_rejects_path_outside_allowed_roots(beta_version):
+    with pytest.raises(services.KanbanServiceError, match="allowed roots"):
         services.create_card_from_spec(
             {
-                "title": "Unknown changed file card",
+                "title": "Out-of-root changed file card",
                 "target_version": beta_version.number,
                 "relative_size": "s",
-                "changed_files": ["django_strawberry_framework/not_real.py"],
+                "changed_files": ["docs/GLOSSARY.md"],
             },
         )
 
-    assert not models.Card.objects.filter(title="Unknown changed file card").exists()
+    assert not models.Card.objects.filter(title="Out-of-root changed file card").exists()
+
+
+@pytest.mark.django_db
+def test_create_card_from_spec_rejects_escaping_path(beta_version):
+    with pytest.raises(services.KanbanServiceError, match="repo-relative"):
+        services.create_card_from_spec(
+            {
+                "title": "Escaping changed file card",
+                "target_version": beta_version.number,
+                "relative_size": "s",
+                "changed_files": ["django_strawberry_framework/../secrets.py"],
+            },
+        )
 
 
 @pytest.mark.django_db
 def test_create_card_from_spec_accepts_historical_changed_file(beta_version):
-    historical = models.PackageFile.objects.create(
+    historical = models.TrackedPath.objects.create(
         path="django_strawberry_framework/old_module.py",
         is_current=False,
     )
@@ -138,6 +173,46 @@ def test_create_card_from_spec_accepts_historical_changed_file(beta_version):
     assert card.changed_files.get() == historical
     historical.refresh_from_db()
     assert historical.is_current is False
+
+
+@pytest.mark.django_db
+def test_set_card_changed_files_rejects_unknown_path(beta_version):
+    """The DONE-card surface stays strict: no planned-row creation."""
+    card = kf.make_card(title="Strict changed files card", target_version=beta_version)
+
+    with pytest.raises(services.KanbanServiceError, match="Unknown tracked path"):
+        services.set_card_changed_files(card, ["django_strawberry_framework/not_real.py"])
+
+    assert not card.changed_files.exists()
+    assert not models.TrackedPath.objects.filter(
+        path="django_strawberry_framework/not_real.py",
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_set_card_predicted_files_rejects_done_card(beta_version):
+    card = kf.make_card(
+        title="Shipped card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
+
+    with pytest.raises(services.KanbanServiceError, match="done card"):
+        services.set_card_predicted_files(card, [PLANNED_PACKAGE_DIR])
+
+    assert not card.changed_files.exists()
+
+
+@pytest.mark.django_db
+def test_set_card_predicted_files_keeps_current_rows_current(beta_version):
+    """Predicting a path that already exists links the current row unchanged."""
+    card = kf.make_card(title="Mixed prediction card", target_version=beta_version)
+
+    services.set_card_predicted_files(card, [TRACKED_FILE, PLANNED_PACKAGE_DIR])
+
+    current = card.changed_files.get(path=TRACKED_FILE)
+    assert current.is_current is True
+    assert current.is_directory is False
 
 
 @pytest.mark.django_db

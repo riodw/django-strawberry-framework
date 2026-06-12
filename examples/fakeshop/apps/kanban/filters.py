@@ -113,10 +113,15 @@ class LabelFilter(FilterSet):
         fields = {"id": "__all__", "key": "__all__", "color": "__all__"}
 
 
-class PackageFileFilter(FilterSet):
+class TrackedPathFilter(FilterSet):
     class Meta:
-        model = models.PackageFile
-        fields = {"id": "__all__", "path": "__all__", "is_current": "__all__"}
+        model = models.TrackedPath
+        fields = {
+            "id": "__all__",
+            "path": "__all__",
+            "is_current": "__all__",
+            "is_directory": "__all__",
+        }
 
 
 class CardItemFilter(FilterSet):
@@ -194,7 +199,7 @@ class CardFilter(FilterSet):
     outgoing_references = RelatedFilter(CardReferenceFilter, field_name="outgoing_references")
     incoming_references = RelatedFilter(CardReferenceFilter, field_name="incoming_references")
     glossary_links = RelatedFilter(CardGlossaryTermFilter, field_name="glossary_links")
-    changed_files = RelatedFilter(PackageFileFilter, field_name="changed_files")
+    changed_files = RelatedFilter(TrackedPathFilter, field_name="changed_files")
 
     class Meta:
         model = models.Card
@@ -215,7 +220,6 @@ __all__ = (
     "CardReferenceKindFilter",
     "LabelFilter",
     "MilestoneFilter",
-    "PackageFileFilter",
     "ParityLevelFilter",
     "PlanningStateFilter",
     "PriorityFilter",
@@ -224,5 +228,6 @@ __all__ = (
     "SeverityFilter",
     "StatusFilter",
     "TargetVersionFilter",
+    "TrackedPathFilter",
     "UpstreamFilter",
 )

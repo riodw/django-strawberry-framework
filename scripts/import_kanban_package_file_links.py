@@ -201,18 +201,18 @@ def import_links(cards: Sequence[CardAttribution], *, dry_run: bool) -> None:
     setup_django()
 
     from apps.kanban import models, services
-    from apps.kanban.constants import PACKAGE_FILE_PATH_SET
+    from apps.kanban.constants import TRACKED_PATH_SET
     from django.db import transaction
 
     all_paths = sorted({package_path for card in cards for package_path in card.files})
-    historical_paths = [path for path in all_paths if path not in PACKAGE_FILE_PATH_SET]
+    historical_paths = [path for path in all_paths if path not in TRACKED_PATH_SET]
     updated: list[str] = []
 
     try:
         with transaction.atomic():
-            services.sync_package_files_from_constants()
+            services.sync_tracked_paths_from_constants()
             for path in historical_paths:
-                package_file, _ = models.PackageFile.objects.get_or_create(
+                package_file, _ = models.TrackedPath.objects.get_or_create(
                     path=path,
                     defaults={"is_current": False},
                 )

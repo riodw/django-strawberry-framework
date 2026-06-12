@@ -120,9 +120,9 @@ class LabelOrder(OrderSet):
         fields = "__all__"
 
 
-class PackageFileOrder(OrderSet):
+class TrackedPathOrder(OrderSet):
     class Meta:
-        model = models.PackageFile
+        model = models.TrackedPath
         fields = "__all__"
 
 
@@ -149,7 +149,6 @@ __all__ = (
     "CardReferenceOrder",
     "LabelOrder",
     "MilestoneOrder",
-    "PackageFileOrder",
     "ParityLevelOrder",
     "PlanningStateOrder",
     "PriorityOrder",
@@ -158,5 +157,6 @@ __all__ = (
     "SeverityOrder",
     "StatusOrder",
     "TargetVersionOrder",
+    "TrackedPathOrder",
     "UpstreamOrder",
 )

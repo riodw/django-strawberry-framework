@@ -1,4 +1,10 @@
-"""Render the generated portion of ``docs/TREE.md`` from package docstrings."""
+"""Render the generated portion of ``docs/TREE.md`` from docstrings + kanban predictions.
+
+Current trees come from module docstrings and folder ``__init__.py`` docstrings.
+The target-layout sections additionally merge in the planned ``TrackedPath``
+rows linked from WIP/TODO kanban cards (``examples/fakeshop/db.sqlite3``), so
+the future package/test shape renders from the same DB the board exports use.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +13,7 @@ import ast
 import re
 import sys
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypeVar
 
@@ -442,6 +448,237 @@ def render_package_tree(package_dir: Path) -> list[str]:
     )
 
 
+# ---------------------------------------------------------------------------
+# Target layouts (current filesystem merged with planned WIP/TODO card paths)
+# ---------------------------------------------------------------------------
+
+PACKAGE_ROOT_PREFIX = "django_strawberry_framework/"
+TEST_ROOT_PREFIXES = ("tests/", "examples/fakeshop/test_query/", "examples/fakeshop/tests/")
+APP_TESTS_ROOT_RE = re.compile(r"^examples/fakeshop/apps/[^/]+/tests/")
+TEST_ROOT_DESCRIPTIONS = {
+    "examples/fakeshop/tests/": (
+        "Example-project tests for fakeshop behavior without live /graphql HTTP."
+    ),
+    "examples/fakeshop/test_query/": (
+        "Live GraphQL HTTP tests for fakeshop's consumer-visible API."
+    ),
+}
+
+
+@dataclass(frozen=True)
+class PlannedPath:
+    """One planned repository path owned by a WIP/TODO kanban card."""
+
+    path: str
+    is_directory: bool
+    card_id: str
+    card_title: str
+
+    @property
+    def description(self) -> str:
+        """Return the tree-comment annotation for this planned entry."""
+        return f"planned by {self.card_id} - {self.card_title}"
+
+
+@dataclass
+class TargetNode:
+    """One entry of a merged current+planned tree."""
+
+    name: str
+    is_dir: bool
+    description: str
+    children: dict[str, TargetNode] = field(default_factory=dict)
+
+
+def fetch_planned_paths() -> list[PlannedPath]:
+    """Return planned TrackedPath rows linked from WIP/TODO kanban cards.
+
+    Backlog cards and DONE-card historical paths never qualify: only
+    ``is_current=False`` rows with at least one ``wip``/``todo`` card link are
+    planned, and the lowest-numbered linking card owns the annotation.
+    """
+    from build_kanban_html import configure_django
+
+    configure_django()
+    from apps.kanban.models import TrackedPath
+
+    rows = (
+        TrackedPath.objects.filter(
+            is_current=False,
+            cards__status__key__in=("wip", "todo"),
+        )
+        .distinct()
+        .order_by("path")
+        .prefetch_related("cards__status", "cards__milestone", "cards__target_version")
+    )
+    planned = []
+    for row in rows:
+        owner = min(
+            (card for card in row.cards.all() if card.status.key in ("wip", "todo")),
+            key=lambda card: card.number,
+        )
+        planned.append(
+            PlannedPath(
+                path=row.path,
+                is_directory=row.is_directory,
+                card_id=owner.card_id,
+                card_title=owner.title,
+            ),
+        )
+    return planned
+
+
+def planned_path_root(path: str) -> str | None:
+    """Return the package/test root that owns a planned path, or ``None``."""
+    if path.startswith(PACKAGE_ROOT_PREFIX):
+        return PACKAGE_ROOT_PREFIX
+    for root in TEST_ROOT_PREFIXES:
+        if path.startswith(root):
+            return root
+    match = APP_TESTS_ROOT_RE.match(path)
+    return match.group(0) if match else None
+
+
+def filesystem_target_node(path: Path, *, label: str, description: str) -> TargetNode:
+    """Build the merged-tree node structure for one on-disk directory."""
+    node = TargetNode(name=label, is_dir=True, description=description)
+    for child in sorted_children(path):
+        if child.is_dir():
+            node.children[f"{child.name}/"] = filesystem_target_node(
+                child,
+                label=f"{child.name}/",
+                description=folder_description(child),
+            )
+        else:
+            node.children[child.name] = TargetNode(
+                name=child.name,
+                is_dir=False,
+                description=file_summary(child),
+            )
+    return node
+
+
+def insert_planned_path(root_node: TargetNode, root_prefix: str, planned: PlannedPath) -> None:
+    """Graft one planned path into a filesystem-backed target tree.
+
+    Intermediate directories that do not exist yet inherit the planned
+    annotation; segments that already exist on disk keep their docstring
+    description.
+    """
+    segments = planned.path.removeprefix(root_prefix).rstrip("/").split("/")
+    node = root_node
+    for index, segment in enumerate(segments):
+        is_dir = planned.is_directory or index < len(segments) - 1
+        name = f"{segment}/" if is_dir else segment
+        child = node.children.get(name)
+        if child is None:
+            child = TargetNode(name=name, is_dir=is_dir, description=planned.description)
+            node.children[name] = child
+        node = child
+
+
+def render_target_children(node: TargetNode, prefix: str = "") -> list[str]:
+    """Render merged-tree children using the same connector glyphs as render_children."""
+    files = sorted(
+        (child for child in node.children.values() if not child.is_dir),
+        key=lambda child: child.name,
+    )
+    dirs = sorted(
+        (child for child in node.children.values() if child.is_dir),
+        key=lambda child: child.name,
+    )
+    lines = []
+    for child, position in iter_tree_positions(files + dirs, prefix):
+        lines.append(
+            comment_line(
+                position.line_prefix,
+                child.name,
+                child.description,
+                align_comment=not child.is_dir,
+            ),
+        )
+        if child.is_dir:
+            lines.extend(render_target_children(child, position.child_prefix))
+    return lines
+
+
+def render_target_tree(
+    root_dir: Path,
+    root_prefix: str,
+    planned_paths: Sequence[PlannedPath],
+    *,
+    root_description: str | None = None,
+) -> list[str]:
+    """Render one merged current+planned tree rooted at ``root_prefix``."""
+    root_dir = root_dir.resolve()
+    if not root_dir.is_dir():
+        raise TreeRenderError(f"Tree root does not exist: {root_dir}")
+
+    description = folder_description(root_dir) if root_description is None else root_description
+    root_node = filesystem_target_node(root_dir, label=root_prefix, description=description)
+    for planned in planned_paths:
+        insert_planned_path(root_node, root_prefix, planned)
+    return [
+        comment_line("", root_node.name, root_node.description, align_comment=False),
+        *render_target_children(root_node),
+    ]
+
+
+def render_target_package_layout(
+    package_dir: Path,
+    planned_paths: Sequence[PlannedPath],
+) -> list[str]:
+    """Render the target package layout section (current tree + planned paths)."""
+    package_planned = [
+        planned
+        for planned in planned_paths
+        if planned_path_root(planned.path) == PACKAGE_ROOT_PREFIX
+    ]
+    return [
+        "## django_strawberry_framework (target package layout)",
+        "",
+        "The current package tree merged with every not-yet-existing path linked from "
+        "a WIP/TODO card in [`KANBAN.md`](../KANBAN.md). Each planned entry names the "
+        "card that introduces it; backlog cards and DONE-card historical paths are "
+        "ignored.",
+        *fenced_tree(
+            f"{PACKAGE_ROOT_PREFIX} (+ planned card paths)",
+            render_target_tree(package_dir.resolve(), PACKAGE_ROOT_PREFIX, package_planned),
+        ),
+    ]
+
+
+def render_target_test_shape(planned_paths: Sequence[PlannedPath]) -> list[str]:
+    """Render the target test shape section for test roots with planned paths."""
+    planned_by_root: dict[str, list[PlannedPath]] = {}
+    for planned in planned_paths:
+        root = planned_path_root(planned.path)
+        if root and root != PACKAGE_ROOT_PREFIX:
+            planned_by_root.setdefault(root, []).append(planned)
+
+    lines = [
+        "",
+        "### Target test shape",
+        "",
+        "The current test trees merged with the not-yet-existing test paths linked "
+        "from WIP/TODO cards, annotated the same way as the target package layout. "
+        "Test roots without planned additions match their current trees above.",
+    ]
+    for root in sorted(planned_by_root):
+        lines.extend(
+            fenced_tree(
+                f"{root} (+ planned card paths)",
+                render_target_tree(
+                    REPO_ROOT / root,
+                    root,
+                    planned_by_root[root],
+                    root_description=TEST_ROOT_DESCRIPTIONS.get(root),
+                ),
+            ),
+        )
+    return lines
+
+
 def render_app_test_tree(apps_dir: Path) -> list[str]:
     """Render every fakeshop per-app ``tests/`` package under one parent tree."""
     apps_dir = apps_dir.resolve()
@@ -471,7 +708,7 @@ def render_app_test_tree(apps_dir: Path) -> list[str]:
     return fenced_tree("examples/fakeshop/apps/*/tests/", root_lines)
 
 
-def render_test_layout() -> list[str]:
+def render_test_layout(planned_paths: Sequence[PlannedPath]) -> list[str]:
     """Render the generated test layout section."""
     examples_tests = REPO_ROOT / "examples" / "fakeshop" / "tests"
     examples_query_tests = REPO_ROOT / "examples" / "fakeshop" / "test_query"
@@ -488,9 +725,7 @@ def render_test_layout() -> list[str]:
             render_tree(
                 examples_tests,
                 root_label="examples/fakeshop/tests/",
-                root_description=(
-                    "Example-project tests for fakeshop behavior without live /graphql HTTP."
-                ),
+                root_description=TEST_ROOT_DESCRIPTIONS["examples/fakeshop/tests/"],
             ),
         ),
         *fenced_tree(
@@ -498,9 +733,10 @@ def render_test_layout() -> list[str]:
             render_tree(
                 examples_query_tests,
                 root_label="examples/fakeshop/test_query/",
-                root_description=("Live GraphQL HTTP tests for fakeshop's consumer-visible API."),
+                root_description=TEST_ROOT_DESCRIPTIONS["examples/fakeshop/test_query/"],
             ),
         ),
+        *render_target_test_shape(planned_paths),
     ]
 
 
@@ -599,9 +835,11 @@ def render_fakeshop_project() -> list[str]:
 
 def render_generated_tail(package_dir: Path) -> list[str]:
     """Render every section owned by this script after the package delimiter."""
+    planned_paths = fetch_planned_paths()
     return [
         *render_package_tree(package_dir),
-        *render_test_layout(),
+        *render_target_package_layout(package_dir, planned_paths),
+        *render_test_layout(planned_paths),
         *render_fakeshop_project(),
         LINK_DEFINITIONS,
     ]

@@ -240,6 +240,75 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
     └── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
 ```
 
+## django_strawberry_framework (target package layout)
+
+The current package tree merged with every not-yet-existing path linked from a WIP/TODO card in [`KANBAN.md`](../KANBAN.md). Each planned entry names the card that introduces it; backlog cards and DONE-card historical paths are ignored.
+
+Source: `django_strawberry_framework/ (+ planned card paths)`
+
+```text
+django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
+├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
+├── apps.py                       # Django ``AppConfig`` - registers the package and applies its Django patches at app load.
+├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
+├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
+├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
+├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
+├── permissions.py                # planned by TODO-ALPHA-034-0.0.10 - Permissions subsystem
+├── py.typed
+├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
+├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
+├── routers.py                    # planned by TODO-ALPHA-041-0.0.12 - Channels ASGI router (migration aid)
+├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
+├── sets_mixins.py                # Mixins shared across the FilterSet / OrderSet / AggregateSet / FieldSet family.
+├── aggregates/    # planned by TODO-BETA-049-0.1.3 - Aggregation subsystem
+├── extensions/    # planned by TODO-ALPHA-044-0.0.12 - Response-extensions debug middleware
+│   └── debug.py                  # planned by TODO-ALPHA-044-0.0.12 - Response-extensions debug middleware
+├── fieldset/    # planned by TODO-BETA-046-0.1.1 - `FieldSet`
+├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
+│   ├── base.py                   # Filter primitives + ``RelatedFilter``.
+│   ├── factories.py              # Filter input-class BFS factory + the dynamic-FilterSet cache for connection fields.
+│   ├── inputs.py                 # Filter input namespace, lookup-name scaffolding, and shape converters.
+│   └── sets.py                   # ``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
+├── forms/    # planned by TODO-ALPHA-038-0.0.11 - Form-based mutations (Django Forms / ModelForms)
+├── management/    # Django management namespace for the framework's ``manage.py`` commands.
+│   └── commands/    # Implementations of the framework's ``manage.py`` commands (``export_schema``, ``inspect_django_type``).
+│       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
+│       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
+├── middleware/    # planned by TODO-ALPHA-042-0.0.12 - Debug-toolbar middleware
+│   └── debug_toolbar.py          # planned by TODO-ALPHA-042-0.0.12 - Debug-toolbar middleware
+├── mutations/    # planned by TODO-ALPHA-036-0.0.11 - Mutations + auto-generated Input types
+├── optimizer/    # Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
+│   ├── _context.py               # Shared context read/write helpers for optimizer <-> resolver hand-off.
+│   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
+│   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
+│   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
+│   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
+│   └── walker.py                 # Selection-tree walker that converts GraphQL selections into an ``OptimizationPlan``.
+├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
+│   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
+│   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
+│   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
+│   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
+├── rest_framework/    # planned by TODO-ALPHA-039-0.0.11 - DRF serializer mutations (`SerializerMutation`)
+├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
+│   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
+│   ├── client.py                 # planned by TODO-ALPHA-043-0.0.12 - Test client helper
+│   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
+├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
+│   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
+│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types.
+│   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata for collected ``DjangoType`` classes.
+│   ├── finalizer.py              # ``finalize_django_types()`` - the once-only finalization gate for collected ``DjangoType`` classes.
+│   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
+│   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
+│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
+└── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
+    ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
+    ├── strings.py                # String-case helpers for the GraphQL <-> Django name boundary.
+    └── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
+```
+
 
 ## Test layout
 
@@ -326,6 +395,7 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 │       └── test_models.py        # Glossary model tests for term edges, aliases, categories, and spec mentions.
 ├── kanban/
 │   └── tests/    # Non-live app tests for kanban services, signals, and board invariants.
+│       ├── test_commands.py      # Kanban command tests for card, changed-file, and predicted-file import workflows.
 │       ├── test_services.py      # Kanban service tests for structured card creation and rollback behavior.
 │       └── test_signals.py       # Kanban signal tests for dependencies, done-card guards, blocking, and ordering.
 ├── library/
@@ -367,6 +437,82 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_products_api.py          # Live GraphQL HTTP tests for the products catalog API surface.
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar conversion and wire-format coverage.
 └── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filter input and queryset behavior.
+```
+
+
+### Target test shape
+
+The current test trees merged with the not-yet-existing test paths linked from WIP/TODO cards, annotated the same way as the target package layout. Test roots without planned additions match their current trees above.
+
+Source: `tests/ (+ planned card paths)`
+
+```text
+tests/    # Package-internal tests for django_strawberry_framework.
+├── test_apps.py                  # AppConfig tests for package registration and Django patch application.
+├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
+├── test_connection.py            # DjangoConnection and DjangoConnectionField tests for Relay pagination behavior.
+├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
+├── test_list_field.py            # DjangoListField tests for root list fields, queryset visibility, and sidecars.
+├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
+├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
+├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
+├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
+├── base/    # Frozen base tests for package configuration and version sanity.
+│   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
+│   └── test_init.py              # Package init tests for version metadata and public exports.
+├── extensions/    # planned by TODO-ALPHA-044-0.0.12 - Response-extensions debug middleware
+├── filters/    # Package tests for the FilterSet subsystem.
+│   ├── test_base.py              # Filter primitive tests for typed, list, range, global-ID, and related filters.
+│   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
+│   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
+│   ├── test_inputs.py            # Filter input tests for lookup naming, annotation conversion, and value normalization.
+│   ├── test_pg_full_text.py      # planned by TODO-BETA-048-0.1.2 - Postgres full-text search filter primitives
+│   ├── test_search_fields.py     # planned by TODO-BETA-047-0.1.2 - `Meta.search_fields` support
+│   ├── test_sets.py              # FilterSet tests for Meta collection, validation, sync/async apply, and tree overrides.
+│   └── fixtures/    # Fixture modules for filter lazy-resolution tests.
+│       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy-resolution tests.
+├── forms/    # planned by TODO-ALPHA-038-0.0.11 - Form-based mutations (Django Forms / ModelForms)
+├── management/    # Package tests for django-strawberry-framework management commands.
+│   ├── test_export_schema.py     # Management command tests for export_schema SDL output and failure modes.
+│   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
+├── mutations/    # planned by TODO-ALPHA-036-0.0.11 - Mutations + auto-generated Input types
+├── optimizer/    # Package tests for optimizer planning and DjangoOptimizerExtension.
+│   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
+│   ├── test_extension.py         # DjangoOptimizerExtension tests for root-gated planning and queryset optimization.
+│   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.
+│   ├── test_hints.py             # OptimizerHint tests for Meta.optimizer_hints normalization and validation.
+│   ├── test_multi_db.py          # Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
+│   ├── test_plans.py             # OptimizationPlan tests for plan structure, keys, paths, and select/prefetch state.
+│   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
+│   └── test_walker.py            # Selection-walker tests for GraphQL selection to ORM OptimizationPlan conversion.
+├── orders/    # Package tests for the OrderSet subsystem.
+│   ├── test_base.py              # RelatedOrder tests for nested ordering paths and lazy related-class handling.
+│   ├── test_composition.py       # Filter and order composition smoke tests for Layer-3 read-side integration.
+│   ├── test_factories.py         # OrderArgumentsFactory tests for BFS input generation and dynamic OrderSet caching.
+│   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
+│   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
+│   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
+├── rest_framework/    # planned by TODO-ALPHA-039-0.0.11 - DRF serializer mutations (`SerializerMutation`)
+├── testing/    # Package tests for public consumer testing utilities.
+│   ├── test_relay.py             # Public Relay helper tests for global_id_for and decode_global_id.
+│   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
+├── types/    # Package tests for the DjangoType subsystem.
+│   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
+│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, and relation annotations.
+│   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
+│   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
+│   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related_target_for relation lookup.
+│   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
+│   ├── test_relations.py         # PendingRelation tests for identity hashing and dataclass field contracts.
+│   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
+│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off.
+│   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
+│       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
+│       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
+└── utils/    # Package tests for shared utility helpers.
+    ├── test_relations.py         # Relation utility tests for relation_kind classification and package re-exports.
+    ├── test_strings.py           # String utility tests for snake_case, camelCase, and PascalCase conversion.
+    └── test_typing.py            # Typing utility tests for Strawberry, Python, and GraphQL type unwrapping.
 ```
 
 
@@ -435,6 +581,8 @@ It is the database source for the root ``KANBAN.md`` export, including card orde
 It owns the board invariants rather than leaving them in importer scripts: card numbers, status placement, dependency edges, dependency prose, card references, and reusable BoardDoc prose are validated in app services/signals so every entry point behaves the same way.
 
 Management commands:
+- `manage.py import_card_changed_files` - Replace kanban card changed-file links.
+- `manage.py import_card_predicted_files` - Replace kanban card predicted-path links.
 - `manage.py import_cards` - Create kanban cards from a JSON file.
 
 `apps.library/`

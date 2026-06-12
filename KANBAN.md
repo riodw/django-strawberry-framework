@@ -148,6 +148,14 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 - Labels: `connections`, `optimizer`, `query-planning`, `relay`
 - Spec: [spec-033-connection_optimizer-0_0_9.md](docs/spec-033-connection_optimizer-0_0_9.md)
 
+#### Predicted files
+
+- [`django_strawberry_framework/connection.py`](django_strawberry_framework/connection.py)
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`tests/optimizer/`](tests/optimizer/)
+
 #### Planning note
 
 planned
@@ -203,6 +211,10 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Status: Planned
 - Relative size: L
 - Labels: `optimizer`, `permissions`, `public-api`, `security`
+
+#### Predicted files
+
+- `django_strawberry_framework/permissions.py` (planned)
 
 #### Planning note
 
@@ -279,6 +291,14 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - Status: Needs spec
 - Relative size: M
 - Labels: `hardening`, `optimizer`, `performance`, `query-planning`
+
+#### Predicted files
+
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`tests/optimizer/test_extension.py`](tests/optimizer/test_extension.py)
+- [`tests/optimizer/test_walker.py`](tests/optimizer/test_walker.py)
 
 #### Planning note
 
@@ -360,6 +380,12 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 - Relative size: XL
 - Labels: `graphql-api`, `mutations`, `permissions`, `public-api`
 
+#### Predicted files
+
+- `django_strawberry_framework/mutations/` (planned)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- `tests/mutations/` (planned)
+
 #### Planning note
 
 needs spec
@@ -425,6 +451,12 @@ needs spec
 - Relative size: S
 - Labels: `converters`, `mutations`, `scalars`, `uploads`
 
+#### Predicted files
+
+- `django_strawberry_framework/mutations/` (planned)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+- [`tests/types/test_converters.py`](tests/types/test_converters.py)
+
 #### Planning note
 
 planned
@@ -470,6 +502,11 @@ planned
 - Status: Planned
 - Relative size: L
 - Labels: `forms`, `mutations`, `public-api`
+
+#### Predicted files
+
+- `django_strawberry_framework/forms/` (planned)
+- `tests/forms/` (planned)
 
 #### Planning note
 
@@ -530,6 +567,11 @@ needs spec
 - Status: Planned
 - Relative size: L
 - Labels: `mutations`, `public-api`, `serializers`
+
+#### Predicted files
+
+- `django_strawberry_framework/rest_framework/` (planned)
+- `tests/rest_framework/` (planned)
 
 #### Planning note
 
@@ -629,6 +671,10 @@ planned
 - Relative size: S
 - Labels: `asgi`, `channels`, `django-integration`
 
+#### Predicted files
+
+- `django_strawberry_framework/routers.py` (planned)
+
 #### Planning note
 
 planned
@@ -674,6 +720,10 @@ planned
 - Status: Planned
 - Relative size: M
 - Labels: `debugging`, `django-integration`, `middleware`
+
+#### Predicted files
+
+- `django_strawberry_framework/middleware/debug_toolbar.py` (planned)
 
 #### Planning note
 
@@ -721,6 +771,10 @@ planned
 - Status: Planned
 - Relative size: M
 - Labels: `graphql-api`, `test-client`, `tests`, `uploads`
+
+#### Predicted files
+
+- `django_strawberry_framework/testing/client.py` (planned)
 
 #### Planning note
 
@@ -785,6 +839,11 @@ planned
 - Status: Planned
 - Relative size: M
 - Labels: `debugging`, `graphql-api`, `middleware`
+
+#### Predicted files
+
+- `django_strawberry_framework/extensions/debug.py` (planned)
+- `tests/extensions/` (planned)
 
 #### Planning note
 
@@ -859,6 +918,11 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 - Relative size: M
 - Labels: `cleanup`, `release`, `tests`
 
+#### Predicted files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`tests/base/test_init.py`](tests/base/test_init.py)
+
 #### Planning note
 
 planned
@@ -904,6 +968,10 @@ planned
 - Status: Needs spec
 - Relative size: M
 - Labels: `fieldsets`, `layer-3`, `public-api`
+
+#### Predicted files
+
+- `django_strawberry_framework/fieldset/` (planned)
 
 #### Planning note
 
@@ -955,6 +1023,12 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - Status: Planned
 - Relative size: M
 - Labels: `connections`, `filters`, `public-api`, `search`
+
+#### Predicted files
+
+- [`django_strawberry_framework/filters/`](django_strawberry_framework/filters/)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- `tests/filters/test_search_fields.py` (planned)
 
 #### Planning note
 
@@ -1022,6 +1096,13 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 - Relative size: M
 - Labels: `filters`, `public-api`, `search`
 
+#### Predicted files
+
+- [`django_strawberry_framework/filters/base.py`](django_strawberry_framework/filters/base.py)
+- [`django_strawberry_framework/filters/inputs.py`](django_strawberry_framework/filters/inputs.py)
+- [`examples/fakeshop/test_query/`](examples/fakeshop/test_query/)
+- `tests/filters/test_pg_full_text.py` (planned)
+
 #### Planning note
 
 Strawberry analogue of django-graphene-filters' Postgres full-text search family. The cookbook ships `AnnotatedFilter` (base) plus `SearchQueryFilter`, `SearchRankFilter`, and `TrigramFilter` in `django_graphene_filters/filters.py`, with matching `SearchQueryFilterInputType` / `SearchRankFilterInputType` / `TrigramFilterInputType` input shapes in `django_graphene_filters/input_types.py`. These add Postgres-only `searchQuery` / `searchRank` / `trigram` filter inputs to FilterSets on Postgres-backed models, layered on `django.contrib.postgres.search`. Distinct from `Meta.search_fields` (basic OR'd `icontains`); this is the ranked / weighted / similarity full-text surface. Planned; gated on `TODO-BETA-047-0.1.2` (basic search lands first) and shares `DONE-027-0.0.8`'s filter-argument-factory machinery.
@@ -1088,6 +1169,10 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 - Status: Planned
 - Relative size: L
 - Labels: `aggregations`, `filters`, `layer-3`, `public-api`
+
+#### Predicted files
+
+- `django_strawberry_framework/aggregates/` (planned)
 
 #### Planning note
 
@@ -1163,6 +1248,13 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - Status: Planned
 - Relative size: S
 - Labels: `choice-enums`, `public-api`, `schema`, `stable-api`
+
+#### Predicted files
+
+- [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
+- [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+- [`tests/types/test_converters.py`](tests/types/test_converters.py)
 
 #### Planning note
 
@@ -1255,6 +1347,12 @@ blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-050-0.1.3` (Layer 3
 - Status: Needs spec
 - Relative size: S
 - Labels: `mutations`, `performance`, `security`
+
+#### Predicted files
+
+- `django_strawberry_framework/mutations/` (planned)
+- [`examples/fakeshop/test_query/`](examples/fakeshop/test_query/)
+- `tests/mutations/` (planned)
 
 #### Planning note
 
@@ -1352,6 +1450,11 @@ planned
 - Relative size: M
 - Labels: `adversarial-testing`, `hardening`, `tests`
 
+#### Predicted files
+
+- [`examples/fakeshop/test_query/README.md`](examples/fakeshop/test_query/README.md)
+- [`tests/`](tests/)
+
 #### Planning note
 
 planned
@@ -1394,6 +1497,13 @@ planned
 - Status: Needs spec
 - Relative size: S
 - Labels: `debugging`, `developer-tools`, `graphql-api`, `optimizer`, `performance`, `query-planning`
+
+#### Predicted files
+
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`examples/fakeshop/test_query/`](examples/fakeshop/test_query/)
+- [`tests/optimizer/`](tests/optimizer/)
 
 #### Planning note
 
@@ -1445,6 +1555,11 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 - Status: Planned
 - Relative size: L
 - Labels: `cleanup`, `release`, `stable-api`, `tests`
+
+#### Predicted files
+
+- [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
+- [`tests/base/test_init.py`](tests/base/test_init.py)
 
 #### Planning note
 

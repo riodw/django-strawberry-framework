@@ -1,16 +1,18 @@
-"""Kanban command tests for card and changed-file import workflows."""
+"""Kanban command tests for card, changed-file, and predicted-file import workflows."""
 
 import json
 from io import StringIO
 
 import pytest
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 
 from apps.kanban import factories as kf
 from apps.kanban import models, services
 
-PACKAGE_FILE = "django_strawberry_framework/types/base.py"
-OTHER_PACKAGE_FILE = "django_strawberry_framework/optimizer/walker.py"
+TRACKED_FILE = "django_strawberry_framework/types/base.py"
+OTHER_TRACKED_FILE = "django_strawberry_framework/optimizer/walker.py"
+PLANNED_PACKAGE_DIR = "django_strawberry_framework/mutations/"
+PLANNED_TEST_FILE = "tests/mutations/test_inputs.py"
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +45,7 @@ def test_import_cards_command_accepts_changed_files(tmp_path, beta_version):
                     "title": "Imported changed files",
                     "target_version": beta_version.number,
                     "relative_size": "s",
-                    "changed_files": [PACKAGE_FILE],
+                    "changed_files": [TRACKED_FILE],
                 },
             ],
         },
@@ -54,7 +56,7 @@ def test_import_cards_command_accepts_changed_files(tmp_path, beta_version):
 
     card = models.Card.objects.get(title="Imported changed files")
     assert "Created" in out.getvalue()
-    assert list(card.changed_files.values_list("path", flat=True)) == [PACKAGE_FILE]
+    assert list(card.changed_files.values_list("path", flat=True)) == [TRACKED_FILE]
 
 
 @pytest.mark.django_db
@@ -63,7 +65,7 @@ def test_import_card_changed_files_command_dry_run_rolls_back(tmp_path, beta_ver
     path = _write_json(
         tmp_path,
         {
-            "cards": [{"card": card.title, "changed_files": [PACKAGE_FILE]}],
+            "cards": [{"card": card.title, "changed_files": [TRACKED_FILE]}],
         },
     )
 
@@ -77,11 +79,11 @@ def test_import_card_changed_files_command_dry_run_rolls_back(tmp_path, beta_ver
 @pytest.mark.django_db
 def test_import_card_changed_files_command_replaces_existing_links(tmp_path, beta_version):
     card = kf.make_card(title="Existing card", target_version=beta_version)
-    services.set_card_changed_files(card, [PACKAGE_FILE])
+    services.set_card_changed_files(card, [TRACKED_FILE])
     path = _write_json(
         tmp_path,
         {
-            "cards": [{"number": card.number, "changed_files": [OTHER_PACKAGE_FILE]}],
+            "cards": [{"number": card.number, "changed_files": [OTHER_TRACKED_FILE]}],
         },
     )
 
@@ -89,4 +91,109 @@ def test_import_card_changed_files_command_replaces_existing_links(tmp_path, bet
     call_command("import_card_changed_files", path, stdout=out)
 
     assert "Updated" in out.getvalue()
-    assert list(card.changed_files.values_list("path", flat=True)) == [OTHER_PACKAGE_FILE]
+    assert list(card.changed_files.values_list("path", flat=True)) == [OTHER_TRACKED_FILE]
+
+
+@pytest.mark.django_db
+def test_import_card_predicted_files_command_dry_run_rolls_back(tmp_path, beta_version):
+    card = kf.make_card(title="Future card", target_version=beta_version)
+    path = _write_json(
+        tmp_path,
+        {
+            "cards": [{"card": card.title, "predicted_files": [PLANNED_PACKAGE_DIR]}],
+        },
+    )
+
+    out = StringIO()
+    call_command("import_card_predicted_files", path, "--dry-run", stdout=out)
+
+    assert "Dry run" in out.getvalue()
+    assert not card.changed_files.exists()
+    assert not models.TrackedPath.objects.filter(path=PLANNED_PACKAGE_DIR).exists()
+
+
+@pytest.mark.django_db
+def test_import_card_predicted_files_command_replaces_idempotently(tmp_path, beta_version):
+    card = kf.make_card(title="Future card", target_version=beta_version)
+    path = _write_json(
+        tmp_path,
+        {
+            "cards": [
+                {
+                    "number": card.number,
+                    "predicted_files": [PLANNED_PACKAGE_DIR, PLANNED_TEST_FILE, TRACKED_FILE],
+                },
+            ],
+        },
+    )
+
+    call_command("import_card_predicted_files", path, stdout=StringIO())
+    out = StringIO()
+    call_command("import_card_predicted_files", path, stdout=out)
+
+    assert "Updated" in out.getvalue()
+    assert list(card.changed_files.values_list("path", flat=True)) == [
+        PLANNED_PACKAGE_DIR,
+        TRACKED_FILE,
+        PLANNED_TEST_FILE,
+    ]
+    assert models.TrackedPath.objects.filter(path=PLANNED_PACKAGE_DIR).count() == 1
+
+
+@pytest.mark.django_db
+def test_import_card_predicted_files_command_marks_directories(tmp_path, beta_version):
+    card = kf.make_card(title="Future card", target_version=beta_version)
+    path = _write_json(
+        tmp_path,
+        {
+            "cards": [
+                {"card": card.title, "predicted_files": [PLANNED_PACKAGE_DIR, PLANNED_TEST_FILE]},
+            ],
+        },
+    )
+
+    call_command("import_card_predicted_files", path, stdout=StringIO())
+
+    planned_dir = models.TrackedPath.objects.get(path=PLANNED_PACKAGE_DIR)
+    assert planned_dir.path.endswith("/")
+    assert planned_dir.is_directory is True
+    assert planned_dir.is_current is False
+    planned_file = models.TrackedPath.objects.get(path=PLANNED_TEST_FILE)
+    assert planned_file.is_directory is False
+    assert planned_file.is_current is False
+
+
+@pytest.mark.django_db
+def test_import_card_predicted_files_command_rejects_done_card(tmp_path, beta_version):
+    card = kf.make_card(
+        title="Shipped card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
+    path = _write_json(
+        tmp_path,
+        {
+            "cards": [{"card": card.title, "predicted_files": [PLANNED_PACKAGE_DIR]}],
+        },
+    )
+
+    with pytest.raises(CommandError, match="done card"):
+        call_command("import_card_predicted_files", path, stdout=StringIO())
+
+    assert not card.changed_files.exists()
+
+
+@pytest.mark.django_db
+def test_import_card_predicted_files_command_rejects_path_outside_roots(tmp_path, beta_version):
+    card = kf.make_card(title="Future card", target_version=beta_version)
+    path = _write_json(
+        tmp_path,
+        {
+            "cards": [{"card": card.title, "predicted_files": ["docs/GLOSSARY.md"]}],
+        },
+    )
+
+    with pytest.raises(CommandError, match="allowed roots"):
+        call_command("import_card_predicted_files", path, stdout=StringIO())
+
+    assert not card.changed_files.exists()

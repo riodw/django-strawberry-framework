@@ -29,8 +29,10 @@ from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.optimizer.walker import (
     _apply_hint,
     _ensure_connector_only_fields,
+    _has_custom_id_resolver,
     _is_fragment,
     _merge_aliased_selections,
+    _merge_runtime_prefixes,
     _prefetch_hint_for_path,
     _selected_scalar_names,
     _should_include,
@@ -532,6 +534,41 @@ def test_merge_aliased_selections_passes_fragments_through():
     assert len(merged) == 2
 
 
+def test_merge_runtime_prefixes_adopts_then_unions_connection_prefixes():
+    """Connection-carried runtime prefixes are adopted, then order-preserving unioned.
+
+    Pins the merge path used when aliased ``edges.node`` selections from
+    ``_connection_node_child_selections`` collapse onto one merged selection.
+    """
+    merged = SimpleNamespace(_optimizer_runtime_prefixes=None)
+
+    # First incoming with no existing prefixes -> adopt verbatim.
+    _merge_runtime_prefixes(
+        merged,
+        SimpleNamespace(_optimizer_runtime_prefixes=[("conn", "edges", "node")]),
+    )
+    assert merged._optimizer_runtime_prefixes == [("conn", "edges", "node")]
+
+    # Second incoming unions a new prefix while skipping the duplicate.
+    _merge_runtime_prefixes(
+        merged,
+        SimpleNamespace(
+            _optimizer_runtime_prefixes=[("conn", "edges", "node"), ("alias", "edges", "node")],
+        ),
+    )
+    assert merged._optimizer_runtime_prefixes == [
+        ("conn", "edges", "node"),
+        ("alias", "edges", "node"),
+    ]
+
+    # Incoming ``None`` (a plain non-connection selection) is a no-op.
+    _merge_runtime_prefixes(merged, SimpleNamespace(_optimizer_runtime_prefixes=None))
+    assert merged._optimizer_runtime_prefixes == [
+        ("conn", "edges", "node"),
+        ("alias", "edges", "node"),
+    ]
+
+
 def test_merge_aliased_selections_logs_when_arguments_diverge(caplog):
     """Aliased selections with different ``arguments`` emit a DEBUG signal.
 
@@ -873,6 +910,36 @@ def test_plan_uses_definition_custom_id_resolver_cache(monkeypatch):
     assert plan.select_related == ("target",)
     assert plan.fk_id_elisions == ()
     assert plan.only_fields == ("target_id", "target__id")
+
+
+def test_has_custom_id_resolver_fallback_matches_definition_path():
+    """The definition-less fallback uses the same shared helper, so it agrees.
+
+    Pins finding-2 (drift): when no ``DjangoTypeDefinition`` is registered for
+    the target, ``_has_custom_id_resolver`` delegates to the same
+    ``origin_has_custom_id_resolver`` free function the registered path uses.
+    A plain consumer ``resolve_id`` counts as custom; the inherited
+    Strawberry Relay default does not (the pre-fix raw ``__dict__`` fallback
+    wrongly flagged the latter).
+    """
+    from strawberry import relay
+
+    class PlainCustomTarget:
+        def resolve_id(self):
+            return "custom"
+
+    class FrameworkDefaultTarget(relay.Node):
+        pass
+
+    registry.clear()
+    assert registry.get_definition(PlainCustomTarget) is None
+    assert registry.get_definition(FrameworkDefaultTarget) is None
+
+    assert _has_custom_id_resolver(PlainCustomTarget, "id") is True
+    assert _has_custom_id_resolver(FrameworkDefaultTarget, "id") is False
+    # Guard rails: a ``None`` target / pk short-circuits to ``False``.
+    assert _has_custom_id_resolver(None, "id") is False
+    assert _has_custom_id_resolver(PlainCustomTarget, None) is False
 
 
 # ---------------------------------------------------------------------------

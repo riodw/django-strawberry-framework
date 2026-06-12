@@ -55,7 +55,17 @@ def _lookup_path(entry: Any) -> str:
 
 
 class _IndexedList(list[Any]):
-    """List with a construction-time membership index for optimizer builders."""
+    """List with a construction-time membership index for optimizer builders.
+
+    Only ``append``, ``extend``, and ``append_unique`` maintain the ``_seen``
+    sidecar index. The other ``list`` mutators (``insert``, ``remove``,
+    ``pop``, slice assignment, and in-place ``+=``, which CPython routes
+    through ``list.__iadd__`` rather than the overridden ``extend``) would
+    desynchronize the index from the contents. Every optimizer writer goes
+    through the three maintained entry points, so this is a usage constraint,
+    not a runtime guard: a future caller reaching for any other mutator must
+    rebuild the list instead.
+    """
 
     __slots__ = ("_key", "_seen")
 

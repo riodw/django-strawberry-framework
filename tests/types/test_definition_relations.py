@@ -11,6 +11,7 @@ inline test-fixture model declared without ``related_name=``.
 from __future__ import annotations
 
 import pytest
+import strawberry
 from apps.library.models import Book, Genre, Loan, Shelf
 from strawberry import relay
 
@@ -226,6 +227,89 @@ def test_has_custom_id_resolver_for_ignores_inherited_relay_default():
 
     class BookType(relay.Node):
         pass
+
+    definition = DjangoTypeDefinition(
+        origin=BookType,
+        model=Book,
+        name=None,
+        description=None,
+        fields_spec=None,
+        exclude_spec=None,
+        selected_fields=(),
+        field_map={},
+        optimizer_hints={},
+        has_custom_get_queryset=False,
+    )
+
+    assert definition.has_custom_id_resolver_for("id") is False
+    assert definition._custom_id_resolver_cache == {"id": False}
+
+
+def test_has_custom_id_resolver_for_detects_non_id_pk_resolver():
+    """A ``resolve_<pk>`` override for a non-``id`` pk column counts as custom.
+
+    Exercises the ``name != "resolve_id"`` short-circuit: any consumer marker
+    other than the framework-exempted ``resolve_id`` is taken at face value.
+    """
+
+    class BookType:
+        def resolve_uuid(self):
+            return "custom"
+
+    definition = DjangoTypeDefinition(
+        origin=BookType,
+        model=Book,
+        name=None,
+        description=None,
+        fields_spec=None,
+        exclude_spec=None,
+        selected_fields=(),
+        field_map={},
+        optimizer_hints={},
+        has_custom_get_queryset=False,
+    )
+
+    assert definition.has_custom_id_resolver_for("uuid") is True
+    assert definition._custom_id_resolver_cache == {"uuid": True}
+
+
+def test_has_custom_id_resolver_for_flags_non_pk_node_id():
+    """A ``relay.NodeID`` on a non-pk column makes pk-only FK-id elision unsafe.
+
+    The GlobalID derives from the annotated column (``code``), which the FK-id
+    stub does not populate, so the optimizer must treat it as customized even
+    though no ``resolve_id`` override is present.
+    """
+
+    @strawberry.type
+    class BookType(relay.Node):
+        code: relay.NodeID[str]
+        title: str
+
+    definition = DjangoTypeDefinition(
+        origin=BookType,
+        model=Book,
+        name=None,
+        description=None,
+        fields_spec=None,
+        exclude_spec=None,
+        selected_fields=(),
+        field_map={},
+        optimizer_hints={},
+        has_custom_get_queryset=False,
+    )
+
+    assert definition.has_custom_id_resolver_for("id") is True
+    assert definition._custom_id_resolver_cache == {"id": True}
+
+
+def test_has_custom_id_resolver_for_allows_pk_node_id():
+    """A ``relay.NodeID`` on the pk column itself stays elision-eligible."""
+
+    @strawberry.type
+    class BookType(relay.Node):
+        id: relay.NodeID[int]
+        title: str
 
     definition = DjangoTypeDefinition(
         origin=BookType,

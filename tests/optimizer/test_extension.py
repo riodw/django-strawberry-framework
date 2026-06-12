@@ -44,6 +44,8 @@ from apps.products.models import Category, Entry, Item, Property
 from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
 from django_strawberry_framework.optimizer import logger as optimizer_logger
 from django_strawberry_framework.optimizer.extension import (
+    _named_children,
+    _node_children_with_runtime_prefix,
     _optimizer_active,
     _resolve_model_from_return_type,
 )
@@ -2262,6 +2264,67 @@ def test_publish_plan_to_context_reuses_finalized_metadata():
     assert ctx.dst_optimizer_fk_id_elisions is plan.finalized_fk_id_elisions
     assert ctx.dst_optimizer_planned is plan.finalized_planned_resolver_keys
     assert ctx.dst_optimizer_lookup_paths is plan.finalized_lookup_paths
+
+
+def test_publish_plan_to_context_rebuilds_metadata_for_unfinalized_plan():
+    """B5: an unfinalized plan published under strictness rebuilds the sentinel sets.
+
+    Production plans are always finalized, but the publish path keeps a
+    defensive fallback: when ``finalized_*`` is ``None`` it recomputes the
+    frozensets from the live directive lists rather than stashing ``None``.
+    """
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    ext = DjangoOptimizerExtension(strictness="raise")
+    plan = OptimizationPlan(
+        select_related=["category"],
+        fk_id_elisions=["ItemType.category@allItems.category"],
+        planned_resolver_keys=["ItemType.category@allItems.category"],
+    )
+    assert plan.finalized_planned_resolver_keys is None
+    assert plan.finalized_lookup_paths is None
+    ctx = SimpleNamespace()
+
+    ext._publish_plan_to_context(plan, SimpleNamespace(context=ctx))
+
+    assert ctx.dst_optimizer_fk_id_elisions == frozenset({"ItemType.category@allItems.category"})
+    assert ctx.dst_optimizer_planned == frozenset({"ItemType.category@allItems.category"})
+    assert ctx.dst_optimizer_lookup_paths == frozenset({"category"})
+
+
+def test_named_children_skips_excluded_and_recurses_through_fragments():
+    """Connection extraction: ``@skip`` children are dropped and fragments inlined."""
+    skipped = SimpleNamespace(name="edges", directives={"skip": {"if": True}}, selections=[])
+    inner_edges = SimpleNamespace(name="edges", alias=None, directives={}, selections=[])
+    fragment = SimpleNamespace(
+        type_condition="ItemConnectionEdge",
+        directives={},
+        selections=[inner_edges],
+    )
+    plain = SimpleNamespace(name="edges", alias=None, directives={}, selections=[])
+    container = SimpleNamespace(selections=[skipped, fragment, plain])
+
+    result = _named_children(container, "edges")
+
+    # ``skipped`` excluded; the fragment's inner ``edges`` is inlined; ``plain`` kept.
+    assert result == [inner_edges, plain]
+
+
+def test_node_children_with_runtime_prefix_skips_excluded_and_clones_fragments():
+    """Connection extraction: node children honor ``@include`` and clone fragments."""
+    skipped = SimpleNamespace(name="name", directives={"include": {"if": False}}, selections=[])
+    fragment = SimpleNamespace(type_condition="ItemNode", directives={}, selections=[])
+    plain = SimpleNamespace(name="name", alias=None, directives={}, arguments={}, selections=[])
+    node = SimpleNamespace(selections=[skipped, fragment, plain])
+    prefixes = (("items", "edges", "node"),)
+
+    result = _node_children_with_runtime_prefix(node, runtime_prefixes=prefixes)
+
+    # ``skipped`` excluded; fragment cloned (carries its type condition); plain
+    # cloned carrying the connection-aware runtime prefix for the walker.
+    assert len(result) == 2
+    assert result[0].type_condition == "ItemNode"
+    assert result[1]._optimizer_runtime_prefixes == [("items", "edges", "node")]
 
 
 def test_plan_stashed_on_dict_context():

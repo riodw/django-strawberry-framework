@@ -214,10 +214,20 @@ class FieldMeta:
 
 
 def _target_pk_name(model: type[models.Model] | None) -> str | None:
-    """Return ``model``'s concrete primary-key field name, or ``None``."""
+    """Return ``model``'s concrete primary-key field name, or ``None``.
+
+    Reads ``_meta`` defensively: ``FieldMeta`` is also built from fabricated
+    field shapes on the resolver path (``_field_meta_for_resolver``), whose
+    ``related_model`` may be a lightweight stand-in without ``_meta``. A
+    missing ``_meta`` simply means "no resolvable target pk", which disables
+    FK-id elision rather than raising.
+    """
     if model is None:
         return None
-    return model._meta.pk.name
+    meta = getattr(model, "_meta", None)
+    if meta is None:
+        return None
+    return meta.pk.name
 
 
 def _has_composite_pk(model: type[models.Model]) -> bool:

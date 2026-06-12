@@ -24,6 +24,18 @@ GlobalID: ...", extensions={"code": "GLOBALID_INVALID"})`` at the field
 boundary - decode runs on payload data only, before any query, so nothing
 leaks row existence.
 
+Type source: the field's schema type comes from the consumer's class-body
+annotation at the assignment site, exactly as spelled above - both factories'
+resolvers return ``Any``, so there is no framework-side fallback. Omitting the
+annotation (``node = DjangoNodeField()``) surfaces at ``strawberry.Schema(...)``
+build as graphql-core's ``TypeError: Query fields cannot be resolved.
+Unexpected type 'typing.Any'`` - that message means "annotate the assignment".
+The typed form does NOT cross-validate the annotation against ``target_type``
+(the factory cannot see its assignment site): a mismatched pairing like
+``genre: AuthorType | None = DjangoNodeField(GenreType)`` builds a schema, and
+every query then rejects ids at runtime with the wrong-node-type
+``GraphQLError`` - loud, but late.
+
 The encode/decode internals stay in ``types/relay.py`` (spec-031 Decision 11
 reserved this top-level module for the root fields).
 
@@ -36,6 +48,7 @@ is engine behavior, not package-fixable.
 
 from __future__ import annotations
 
+import contextlib
 import inspect
 from collections.abc import Sequence
 from typing import Any
@@ -49,7 +62,7 @@ from strawberry.utils.inspect import in_async_context
 from .exceptions import ConfigurationError
 from .list_field import _validate_djangotype_target
 from .types.base import _is_relay_shaped
-from .types.relay import _model_for, decode_global_id
+from .types.relay import _NODE_TYPE_HINT_ATTR, _model_for, decode_global_id
 
 __all__ = ("DjangoNodeField", "DjangoNodesField")
 
@@ -195,7 +208,13 @@ def _check_nodes_result(resolved_type: type, result: Any, pks: list[Any]) -> Any
     ``ConfigurationError``; the framework default's ``_order_nodes`` shape
     always satisfies it. (Ordering itself is the documented override contract -
     see ``DjangoNodesField`` - not re-validated here.)
+
+    A generator/iterator return (no ``__len__``) is materialized first so it
+    reaches the length check (and ``_interleave``'s positional indexing)
+    instead of dying on a bare ``len()`` ``TypeError``.
     """
+    if not hasattr(result, "__len__"):
+        result = list(result)
     if len(result) != len(pks):
         raise ConfigurationError(
             f"{resolved_type.__name__}.resolve_nodes returned {len(result)} row(s) for "
@@ -204,6 +223,38 @@ def _check_nodes_result(resolved_type: type, result: Any, pks: list[Any]) -> Any
             "_resolve_nodes_default / _order_nodes shape.",
         )
     return result
+
+
+def _stamp_node_type(resolved_type: type, node: Any) -> Any:
+    """Stamp the decode-resolved ``DjangoType`` on a fetched node instance.
+
+    The bare ``node``/``nodes`` fields hand graphql-core a raw model
+    instance under the abstract ``Node`` annotation; concrete-type
+    selection then runs every candidate type's ``is_type_of``. For a
+    model with two registered Relay types, plain
+    ``isinstance(obj, (type_cls, model))`` answers ``True`` on BOTH
+    candidates and iteration order picks the ``__typename`` - regardless
+    of which type the GlobalID named (Round-4 review S2). The stamp
+    carries the decode-routing decision through to type resolution;
+    ``install_is_type_of``'s closure honors it before the isinstance
+    fallback.
+
+    ``None`` (hidden/missing/uncoercible -> ``null``) passes through. A
+    consumer ``resolve_node(s)`` override may return a non-model object
+    that rejects attribute writes (``__slots__``); the stamp is
+    best-effort there - such objects fall back to the pre-032 isinstance
+    behavior.
+    """
+    if node is None:
+        return node
+    with contextlib.suppress(AttributeError):
+        setattr(node, _NODE_TYPE_HINT_ATTR, resolved_type)
+    return node
+
+
+async def _await_and_stamp(resolved_type: type, awaitable: Any) -> Any:
+    """Await an async ``resolve_node`` result, then stamp it (async sibling)."""
+    return _stamp_node_type(resolved_type, await awaitable)
 
 
 def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoNodeField(GenreType)`
@@ -243,11 +294,15 @@ def DjangoNodeField(  # noqa: N802  # PascalCase for graphene-django parity - co
         if pk is None:
             # Uncoercible literal -> null with no query issued (Revision 7 P2).
             return None
-        # Pass-through: in async context ``resolve_node`` returns a coroutine
-        # Strawberry's executor awaits as a plain-field return (Edge cases
-        # "Async end-to-end"). Calling the classmethod (not the underscore
-        # default) preserves consumer overrides for free.
-        return resolved.resolve_node(pk, info=info, required=False)
+        # In async context ``resolve_node`` returns a coroutine Strawberry's
+        # executor awaits as a plain-field return (Edge cases "Async
+        # end-to-end") - the stamp then rides inside ``_await_and_stamp``.
+        # Calling the classmethod (not the underscore default) preserves
+        # consumer overrides for free.
+        result = resolved.resolve_node(pk, info=info, required=False)
+        if inspect.isawaitable(result):
+            return _await_and_stamp(resolved, result)
+        return _stamp_node_type(resolved, result)
 
     return strawberry.field(
         resolver=_resolve,
@@ -336,16 +391,22 @@ def DjangoNodesField(  # noqa: N802  # PascalCase for graphene-django parity - c
                     result = resolved_type.resolve_nodes(info=info, node_ids=pks, required=False)
                     if inspect.isawaitable(result):
                         result = await result
-                    per_type[resolved_type] = _check_nodes_result(resolved_type, result, pks)
+                    per_type[resolved_type] = [
+                        _stamp_node_type(resolved_type, node)
+                        for node in _check_nodes_result(resolved_type, result, pks)
+                    ]
                 return _interleave(positions, per_type)
 
             return _gather()
         per_type = {
-            resolved_type: _check_nodes_result(
-                resolved_type,
-                resolved_type.resolve_nodes(info=info, node_ids=pks, required=False),
-                pks,
-            )
+            resolved_type: [
+                _stamp_node_type(resolved_type, node)
+                for node in _check_nodes_result(
+                    resolved_type,
+                    resolved_type.resolve_nodes(info=info, node_ids=pks, required=False),
+                    pks,
+                )
+            ]
             for resolved_type, pks in groups.items()
         }
         return _interleave(positions, per_type)

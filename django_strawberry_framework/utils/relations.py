@@ -80,3 +80,27 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
 def is_many_side_relation_kind(kind: RelationKind | None) -> bool:
     """Return ``True`` for relation kinds represented as GraphQL lists."""
     return kind in MANY_SIDE_RELATION_KINDS
+
+
+def instance_accessor(field: object) -> str:
+    """Return the attribute name relation rows are reached through on an instance.
+
+    For a REVERSE relation declared without ``related_name``, Django's
+    ``ForeignObjectRel.name`` is the related *query* name (``"book"`` - the
+    filter/annotation vocabulary) while the instance attribute is
+    ``get_accessor_name()`` (``"book_set"``); ``getattr(root, field.name)``
+    raises ``AttributeError`` there (Round-4 review S3). They coincide
+    whenever ``related_name`` is set, which is why every fakeshop fixture
+    masked the split. Forward fields (``ForeignKey``, ``ManyToManyField``,
+    ``OneToOneField``) have no ``get_accessor_name`` and their ``name`` IS
+    the instance attribute.
+
+    ``field.name`` stays the GraphQL-surface / optimizer-key vocabulary;
+    this helper is ONLY for the ``getattr(root, ...)`` seam shared by the
+    Phase-2 relation resolvers and the spec-032 synthesized relation
+    connections.
+    """
+    get_accessor_name = getattr(field, "get_accessor_name", None)
+    if get_accessor_name is not None:
+        return get_accessor_name()
+    return field.name  # type: ignore[attr-defined]

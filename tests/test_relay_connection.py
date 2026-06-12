@@ -24,6 +24,8 @@ import strawberry
 from apps.library.models import Book, Branch, Genre, Loan, Shelf
 from apps.products import services
 from apps.products.models import Category, Item, Property
+from django.db import connection as db_connection
+from django.db import models as djmodels
 from strawberry import relay
 
 from django_strawberry_framework import (
@@ -162,6 +164,72 @@ def test_default_both_synthesizes_m2m_connection_siblings():
     assert "booksConnection(" in sdl
     assert "genres: [GenreType" in sdl
     assert "genresConnection(" in sdl
+
+
+@pytest.mark.django_db(transaction=True)
+def test_reverse_fk_without_related_name_resolves_list_and_connection():
+    """A reverse FK with NO ``related_name`` resolves on both relation surfaces.
+
+    Round-4 review S3: for such a relation, Django's ``ForeignObjectRel.name``
+    is the related QUERY name (``"plainbook"``) while the instance attribute
+    is ``get_accessor_name()`` (``"plainbook_set"``). Both the Phase-2 list
+    resolver and the synthesized connection resolver used to
+    ``getattr(root, field.name)`` and raised ``AttributeError`` - invisible to
+    CI because every fakeshop fixture sets ``related_name``. Instance access
+    now goes through ``utils.relations.instance_accessor``; the GraphQL field
+    names stay query-name-derived (``plainbook`` / ``plainbookConnection``).
+
+    Uses the ``managed=False`` + manual ``schema_editor`` pattern from
+    ``tests/optimizer/test_relay_id_projection.py``; the app label must be an
+    INSTALLED app (here ``products``) because Django only wires reverse
+    relations into ``_meta.get_fields()`` for installed apps.
+    """
+
+    class PlainAuthor(djmodels.Model):
+        name = djmodels.CharField(max_length=32)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    class PlainBook(djmodels.Model):
+        title = djmodels.CharField(max_length=32)
+        author = djmodels.ForeignKey(PlainAuthor, on_delete=djmodels.CASCADE)  # no related_name
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    rel = PlainAuthor._meta.get_field("plainbook")
+    assert rel.get_accessor_name() == "plainbook_set"  # the S3 split this test pins
+
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(PlainAuthor)
+        schema_editor.create_model(PlainBook)
+    try:
+        _make_type("PlainBookType", PlainBook, ("id", "title"))
+        author_type = _make_type("PlainAuthorType", PlainAuthor, ("id", "name", "plainbook"))
+        schema = _schema_with_root(author_type)
+
+        author = PlainAuthor.objects.create(name="a1")
+        PlainBook.objects.create(title="b1", author=author)
+
+        result = schema.execute_sync(
+            "{ objs { name plainbook { title } "
+            "plainbookConnection { edges { node { title } } } } }",
+        )
+        assert result.errors is None
+        assert result.data["objs"] == [
+            {
+                "name": "a1",
+                "plainbook": [{"title": "b1"}],
+                "plainbookConnection": {"edges": [{"node": {"title": "b1"}}]},
+            },
+        ]
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(PlainBook)
+            schema_editor.delete_model(PlainAuthor)
 
 
 # =============================================================================
@@ -424,6 +492,31 @@ def test_synthesized_connection_paginates():
     connection = result.data["objs"][0]["booksConnection"]
     assert [edge["node"]["title"] for edge in connection["edges"]] == ["a", "b"]
     assert connection["pageInfo"]["hasNextPage"] is True
+
+
+@pytest.mark.django_db
+def test_synthesized_connection_per_parent_query_cost(django_assert_num_queries):
+    """Each parent row pays its own window query - the documented cost contract.
+
+    Round-4 review minor: relation-seeded connections run per-parent (no
+    cross-parent batching in the pre-``033`` posture), so a nested connection
+    under an N-row parent list issues ``1 + N`` queries: the parent list, then
+    one window query per parent (a ``totalCount`` selection would add one
+    ``COUNT`` per parent on a countable target). Pinning the count documents
+    the contract and surfaces any silent regression toward per-edge loading.
+    """
+    services.seed_data(2)
+    _make_type("ItemType", Item, ("id", "name", "category"))
+    category_type = _make_type("CategoryType", Category, ("id", "name", "items"))
+
+    schema = _schema_with_root(category_type)
+    parent_count = Category.objects.count()
+    with django_assert_num_queries(1 + parent_count):
+        result = schema.execute_sync(
+            "{ objs { itemsConnection(first: 2) { edges { node { name } } } } }",
+        )
+    assert result.errors is None
+    assert len(result.data["objs"]) == parent_count
 
 
 # =============================================================================

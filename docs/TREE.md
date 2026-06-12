@@ -380,17 +380,36 @@ Source: `examples/fakeshop/`
 examples/fakeshop/    # A Django + Strawberry GraphQL example project that exercises django-strawberry-framework end-to-end.
 ├── manage.py                     # Django command-line entry point for the fakeshop example project.
 ├── config/    # Project orchestration package for fakeshop settings, URLs, WSGI, and schema composition.
-│   ├── __init__.py
 │   ├── settings.py               # Django settings for fakeshop and its single-database or sharded test modes.
 │   ├── schema.py                 # Project-level GraphQL schema that composes every fakeshop app query.
 │   ├── urls.py                   # URL routing for fakeshop's index, admin, auth, and GraphQL endpoints.
 │   └── wsgi.py                   # WSGI application entry point for the fakeshop example project.
 └── apps/    # Domain-app namespace imported as ``apps.<app_name>`` from the fakeshop project root.
-    ├── __init__.py
     ├── glossary/    # Glossary app storing documentation terms and spec-term audit rows.
     ├── kanban/    # Kanban app storing board cards, dependencies, docs prose, and markdown export metadata.
     ├── library/    # Library app modeling branch, shelf, book, patron, and loan relations for acceptance queries.
     ├── products/    # Products app modeling the seedable catalog used by admin, service, command, and query examples.
+    │   ├── admin.py              # Admin registrations and shortcuts for inspecting and resetting products fixtures.
+    │   ├── apps.py               # Django app configuration for the fakeshop products domain.
+    │   ├── fields.py             # AdvancedFieldSet declarations for computed and permission-gated products fields.
+    │   ├── filters.py            # FilterSet declarations for the fakeshop products app.
+    │   ├── models.py             # Faker-shaped product catalog.
+    │   ├── orders.py             # OrderSet declarations for the fakeshop products app.
+    │   ├── schema.py             # GraphQL schema for the fakeshop products app.
+    │   ├── services.py           # Dynamic data seeding service using Faker providers.
+    │   ├── management/    # Management-command namespace for products data and user fixtures.
+    │   │   └── commands/    # Django management commands for products fixture setup and teardown.
+    │   │       ├── create_users.py  # Management command for creating permission-shaped products test users.
+    │   │       ├── delete_data.py  # Management command for deleting seeded products catalog data.
+    │   │       ├── delete_users.py  # Management command for deleting generated products test users.
+    │   │       ├── seed_data.py  # Management command for seeding Faker-backed products catalog rows.
+    │   │       └── seed_shards.py  # Populate the secondary shard SQLite DB used by the multi-DB / stress-test flow.
+    │   └── tests/    # Non-live app tests for products admin, commands, models, schema, and services.
+    │       ├── test_admin.py     # Products admin tests for changelist query-param branches.
+    │       ├── test_commands.py  # Products command tests for service-backed seed and delete management commands.
+    │       ├── test_models.py    # Products model tests for example-domain __str__ implementations.
+    │       ├── test_schema.py    # Products schema tests for in-process GraphQL execution without HTTP.
+    │       └── test_services.py  # Products service tests for Faker-driven seed_data, create_users, and delete_data.
     └── scalars/    # Scalars app modeling converter specimens for wire-format and filter coverage.
 ```
 

@@ -1,3 +1,5 @@
+"""Admin registrations and shortcuts for inspecting and resetting products fixtures."""
+
 from django.contrib import admin, messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin

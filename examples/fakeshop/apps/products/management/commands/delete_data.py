@@ -1,3 +1,5 @@
+"""Management command for deleting seeded products catalog data."""
+
 from django.core.management.base import BaseCommand
 
 from apps.products.services import delete_data

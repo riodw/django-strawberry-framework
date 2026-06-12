@@ -1,3 +1,5 @@
+"""Management command for creating permission-shaped products test users."""
+
 from django.core.management.base import BaseCommand
 
 from apps.products.services import TEST_USER_PASSWORD, create_users

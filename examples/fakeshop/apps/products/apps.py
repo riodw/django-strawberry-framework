@@ -1,3 +1,5 @@
+"""Django app configuration for the fakeshop products domain."""
+
 from django.apps import AppConfig
 
 

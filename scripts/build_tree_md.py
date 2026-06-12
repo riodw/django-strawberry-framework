@@ -6,13 +6,24 @@ import argparse
 import ast
 import re
 import sys
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TypeVar
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "TREE.md"
 DEFAULT_PACKAGE_DIR = REPO_ROOT / "django_strawberry_framework"
 DELIMITER = "## django_strawberry_framework (current on-disk layout)"
 COMMENT_COLUMN = 34
+IGNORED_TREE_FILENAMES = frozenset(
+    {
+        "__init__.py",
+    },
+)
+IGNORED_TREE_DIRNAMES = frozenset(
+    {"__pycache__", "migrations"},
+)
 TREE_BRANCH = "\u251c\u2500\u2500 "
 TREE_LAST = "\u2514\u2500\u2500 "
 TREE_PIPE = "\u2502   "
@@ -25,7 +36,6 @@ FAKESHOP_APP_NAMES = (
     "scalars",
 )
 FAKESHOP_CONFIG_FILES = (
-    "__init__.py",
     "settings.py",
     "schema.py",
     "urls.py",
@@ -75,10 +85,19 @@ LINK_DEFINITIONS = """<!-- LINK DEFINITIONS -->
 
 <!-- External -->
 """
+T = TypeVar("T")
 
 
 class TreeRenderError(ValueError):
     """A caller-correctable TREE.md rendering error."""
+
+
+@dataclass(frozen=True)
+class TreePosition:
+    """Connector state for one child inside a text tree."""
+
+    line_prefix: str
+    child_prefix: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -153,11 +172,8 @@ def python_docstring_paragraphs(path: Path) -> list[str]:
     return paragraphs_from_text(python_docstring(path))
 
 
-def first_docstring_sentence(path: Path) -> str:
-    """Return the first module-docstring sentence from a Python source file."""
-    if path.suffix != ".py":
-        return first_non_python_sentence(path)
-
+def first_python_docstring_sentence(path: Path) -> str:
+    """Return the first module-docstring line from a Python source file."""
     docstring = python_docstring(path)
     sentence = next((line.strip() for line in docstring.splitlines() if line.strip()), "")
     if not sentence:
@@ -205,15 +221,25 @@ def first_non_python_sentence(path: Path) -> str:
     return ""
 
 
+def file_summary(path: Path) -> str:
+    """Return the tree-comment summary for a file."""
+    if path.suffix == ".py":
+        return first_python_docstring_sentence(path)
+    return first_non_python_sentence(path)
+
+
+def prose_paragraphs(path: Path) -> list[str]:
+    """Return prose paragraphs for files that contribute detail sections."""
+    if path.suffix == ".py":
+        return python_docstring_paragraphs(path)
+    if path.suffix == ".md":
+        return markdown_paragraphs(path)
+    return []
+
+
 def detail_paragraphs(path: Path) -> list[str]:
     """Return prose paragraphs after the summary sentence used by tree comments."""
-    if path.suffix == ".py":
-        paragraphs = python_docstring_paragraphs(path)
-    elif path.suffix == ".md":
-        paragraphs = markdown_paragraphs(path)
-    else:
-        return []
-
+    paragraphs = prose_paragraphs(path)
     if len(paragraphs) <= 1:
         return []
     return paragraphs[1:]
@@ -224,7 +250,7 @@ def folder_description(path: Path) -> str:
     init_path = path / "__init__.py"
     if not init_path.exists():
         return ""
-    return first_docstring_sentence(init_path)
+    return first_python_docstring_sentence(init_path)
 
 
 def comment_line(
@@ -245,12 +271,60 @@ def comment_line(
     return f"{line:<{COMMENT_COLUMN}}# {description}"
 
 
+def file_entry(prefix: str, path: Path, *, label: str | None = None) -> str:
+    """Render one file entry for a tree."""
+    return comment_line(
+        prefix,
+        label or path.name,
+        file_summary(path),
+    )
+
+
+def directory_entry(
+    prefix: str,
+    path: Path,
+    *,
+    label: str | None = None,
+    description: str | None = None,
+) -> str:
+    """Render one directory entry for a tree."""
+    summary = folder_description(path) if description is None else description
+    return comment_line(
+        prefix,
+        label or f"{path.name}/",
+        summary,
+        align_comment=False,
+    )
+
+
+def tree_position(prefix: str, index: int, count: int) -> TreePosition:
+    """Return connector prefixes for a child at ``index`` of ``count``."""
+    is_last = index == count - 1
+    connector = TREE_LAST if is_last else TREE_BRANCH
+    child_indent = TREE_SPACE if is_last else TREE_PIPE
+    return TreePosition(
+        line_prefix=f"{prefix}{connector}",
+        child_prefix=f"{prefix}{child_indent}",
+    )
+
+
+def iter_tree_positions(items: Sequence[T], prefix: str = "") -> Iterator[tuple[T, TreePosition]]:
+    """Pair items with the connector state they need inside a tree."""
+    count = len(items)
+    for index, item in enumerate(items):
+        yield item, tree_position(prefix, index, count)
+
+
 def sorted_children(path: Path) -> list[Path]:
     """Return visible child paths in deterministic tree order."""
     children = [
         child
         for child in path.iterdir()
-        if child.name != "__pycache__" and child.name != "__init__.py"
+        if (
+            (child.is_dir() and child.name not in IGNORED_TREE_DIRNAMES)
+            or (child.is_file() and child.name not in IGNORED_TREE_FILENAMES)
+        )
+        and child.suffix != ".pyc"
     ]
     files = sorted((child for child in children if child.is_file()), key=lambda child: child.name)
     dirs = sorted((child for child in children if child.is_dir()), key=lambda child: child.name)
@@ -261,27 +335,25 @@ def render_children(path: Path, prefix: str = "") -> list[str]:
     """Render children under ``path`` using tree connector glyphs."""
     lines = []
     children = sorted_children(path)
-    for index, child in enumerate(children):
-        is_last = index == len(children) - 1
-        connector = TREE_LAST if is_last else TREE_BRANCH
-        child_prefix = f"{prefix}{connector}"
-        next_prefix = f"{prefix}{TREE_SPACE if is_last else TREE_PIPE}"
+    for child, position in iter_tree_positions(children, prefix):
         if child.is_dir():
             lines.append(
-                comment_line(
-                    child_prefix,
-                    f"{child.name}/",
-                    folder_description(child),
-                    align_comment=False,
+                directory_entry(
+                    position.line_prefix,
+                    child,
                 ),
             )
-            lines.extend(render_children(child, next_prefix))
+            lines.extend(
+                render_children(
+                    child,
+                    position.child_prefix,
+                ),
+            )
         else:
             lines.append(
-                comment_line(
-                    child_prefix,
-                    child.name,
-                    first_docstring_sentence(child),
+                file_entry(
+                    position.line_prefix,
+                    child,
                 ),
             )
     return lines
@@ -301,11 +373,11 @@ def render_tree(
     label = root_label or f"{root_dir.name}/"
     description = folder_description(root_dir) if root_description is None else root_description
     tree_lines = [
-        comment_line(
+        directory_entry(
             "",
-            label,
-            description,
-            align_comment=False,
+            root_dir,
+            label=label,
+            description=description,
         ),
     ]
     tree_lines.extend(render_children(root_dir))
@@ -342,29 +414,24 @@ def render_app_test_tree(apps_dir: Path) -> list[str]:
 
     app_dirs = sorted(path for path in apps_dir.iterdir() if (path / "tests").is_dir())
     root_lines = [
-        comment_line(
+        directory_entry(
             "",
-            "examples/fakeshop/apps/",
-            "Per-Django-app, non-live tests that stay beside the app they protect.",
-            align_comment=False,
+            apps_dir,
+            label="examples/fakeshop/apps/",
+            description="Per-Django-app, non-live tests that stay beside the app they protect.",
         ),
     ]
-    for app_index, app_dir in enumerate(app_dirs):
-        app_is_last = app_index == len(app_dirs) - 1
-        app_connector = TREE_LAST if app_is_last else TREE_BRANCH
-        app_prefix = TREE_SPACE if app_is_last else TREE_PIPE
-        root_lines.append(f"{app_connector}{app_dir.name}/")
+    for app_dir, position in iter_tree_positions(app_dirs):
+        root_lines.append(directory_entry(position.line_prefix, app_dir, description=""))
 
         tests_dir = app_dir / "tests"
         root_lines.append(
-            comment_line(
-                f"{app_prefix}{TREE_LAST}",
-                "tests/",
-                folder_description(tests_dir),
-                align_comment=False,
+            directory_entry(
+                f"{position.child_prefix}{TREE_LAST}",
+                tests_dir,
             ),
         )
-        root_lines.extend(render_children(tests_dir, f"{app_prefix}{TREE_SPACE}"))
+        root_lines.extend(render_children(tests_dir, f"{position.child_prefix}{TREE_SPACE}"))
     return fenced_tree("examples/fakeshop/apps/*/tests/", root_lines)
 
 
@@ -410,69 +477,52 @@ def render_fakeshop_project_tree(project_dir: Path) -> list[str]:
     config_dir = project_dir / "config"
     apps_dir = project_dir / "apps"
     tree_lines = [
-        comment_line(
+        directory_entry(
             "",
-            "examples/fakeshop/",
-            first_non_python_sentence(project_dir / "README.md"),
-            align_comment=False,
+            project_dir,
+            label="examples/fakeshop/",
+            description=first_non_python_sentence(project_dir / "README.md"),
         ),
-        comment_line(
+        file_entry(
             TREE_BRANCH,
-            "manage.py",
-            first_docstring_sentence(project_dir / "manage.py"),
+            project_dir / "manage.py",
         ),
-        comment_line(
+        directory_entry(
             TREE_BRANCH,
-            "config/",
-            folder_description(config_dir),
-            align_comment=False,
+            config_dir,
         ),
     ]
 
-    for index, filename in enumerate(FAKESHOP_CONFIG_FILES):
-        is_last = index == len(FAKESHOP_CONFIG_FILES) - 1
-        connector = TREE_LAST if is_last else TREE_BRANCH
-        description = (
-            "" if filename == "__init__.py" else first_docstring_sentence(config_dir / filename)
-        )
+    for filename, position in iter_tree_positions(FAKESHOP_CONFIG_FILES, TREE_PIPE):
         tree_lines.append(
-            comment_line(
-                f"{TREE_PIPE}{connector}",
-                filename,
-                description,
+            file_entry(
+                position.line_prefix,
+                config_dir / filename,
             ),
         )
 
     tree_lines.append(
-        comment_line(
+        directory_entry(
             TREE_LAST,
-            "apps/",
-            folder_description(apps_dir),
-            align_comment=False,
+            apps_dir,
         ),
     )
 
-    app_entries = ("__init__.py", *FAKESHOP_APP_NAMES)
-    for index, entry in enumerate(app_entries):
-        is_last = index == len(app_entries) - 1
-        connector = TREE_LAST if is_last else TREE_BRANCH
-        if entry == "__init__.py":
-            tree_lines.append(
-                comment_line(
-                    f"{TREE_SPACE}{connector}",
-                    entry,
-                    "",
-                ),
-            )
-            continue
+    app_entries = FAKESHOP_APP_NAMES
+    for entry, position in iter_tree_positions(app_entries, TREE_SPACE):
         tree_lines.append(
-            comment_line(
-                f"{TREE_SPACE}{connector}",
-                f"{entry}/",
-                folder_description(apps_dir / entry),
-                align_comment=False,
+            directory_entry(
+                position.line_prefix,
+                apps_dir / entry,
             ),
         )
+        if entry == "products":
+            tree_lines.extend(
+                render_children(
+                    apps_dir / entry,
+                    position.child_prefix,
+                ),
+            )
 
     return tree_lines
 

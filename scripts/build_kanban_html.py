@@ -122,6 +122,9 @@ query StaticKanbanDashboard {
         statusText
       }
     }
+    changedFiles {
+      ...PackageFileFields
+    }
   }
   allKanbanBoardDocs {
     id
@@ -186,6 +189,9 @@ query StaticKanbanDashboard {
   }
   allKanbanBoardDocKinds {
     ...BoardDocKindFields
+  }
+  allKanbanPackageFiles {
+    ...PackageFileFields
   }
 }
 
@@ -353,6 +359,17 @@ fragment CardBadgeFields on LabelType {
   updatedDate
 }
 
+fragment PackageFileFields on PackageFileType {
+  id
+  uuid {
+    id
+  }
+  path
+  isCurrent
+  createdDate
+  updatedDate
+}
+
 fragment CardLinkFields on CardType {
   id
   uuid {
@@ -466,6 +483,7 @@ LOOKUP_FIELDS = {
     "allKanbanSections": "sections",
     "allKanbanReferenceKinds": "referenceKinds",
     "allKanbanBoardDocKinds": "boardDocKinds",
+    "allKanbanPackageFiles": "packageFiles",
 }
 
 

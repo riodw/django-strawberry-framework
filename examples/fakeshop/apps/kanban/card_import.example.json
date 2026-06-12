@@ -13,6 +13,9 @@
         "filters",
         "public-api"
       ],
+      "changed_files": [
+        "django_strawberry_framework/types/base.py"
+      ],
       "parity": [
         {
           "upstream": "graphene_django",

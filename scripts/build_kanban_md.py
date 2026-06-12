@@ -90,6 +90,14 @@ def glossary_term_link(term: dict[str, Any]) -> str:
     return f"[{term['title']}](docs/GLOSSARY.md#{term['anchor']})"
 
 
+def package_file_link(package_file: dict[str, Any]) -> str:
+    """Return a Markdown link or historical marker for a package file."""
+    path = package_file["path"]
+    if package_file.get("isCurrent", True):
+        return f"[`{path}`]({path})"
+    return f"`{path}` (historical)"
+
+
 def card_column_key(card: dict[str, Any]) -> str:
     """Return the board column key that owns ``card``."""
     status = card["status"]["key"]
@@ -318,6 +326,21 @@ def render_glossary_terms(card: dict[str, Any]) -> list[str]:
     return lines
 
 
+def render_package_files(card: dict[str, Any]) -> list[str]:
+    """Render the package files linked to one card."""
+    changed_files = sorted(
+        card.get("changedFiles", []),
+        key=lambda package_file: package_file["path"],
+    )
+    if not changed_files:
+        return []
+
+    lines = ["#### Package files", ""]
+    lines.extend(f"- {package_file_link(package_file)}" for package_file in changed_files)
+    lines.append("")
+    return lines
+
+
 def render_card(card: dict[str, Any]) -> list[str]:
     """Render a kanban card with its lookup metadata and child rows."""
     text_replacements, token_replacements = card_reference_replacements(card)
@@ -357,6 +380,7 @@ def render_card(card: dict[str, Any]) -> list[str]:
     lines.append("")
 
     lines.extend(render_glossary_terms(card))
+    lines.extend(render_package_files(card))
 
     planning_note = card.get("planningNote") or ""
     if planning_note:

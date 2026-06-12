@@ -120,6 +120,12 @@ class LabelOrder(OrderSet):
         fields = "__all__"
 
 
+class PackageFileOrder(OrderSet):
+    class Meta:
+        model = models.PackageFile
+        fields = "__all__"
+
+
 class BoardDocOrder(OrderSet):
     class Meta:
         model = models.BoardDoc
@@ -143,6 +149,7 @@ __all__ = (
     "CardReferenceOrder",
     "LabelOrder",
     "MilestoneOrder",
+    "PackageFileOrder",
     "ParityLevelOrder",
     "PlanningStateOrder",
     "PriorityOrder",

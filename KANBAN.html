@@ -808,6 +808,61 @@ window.KANBAN_CARDS = window.KANBAN_DATA.cards;
               </details>
 
               <details
+                v-if="packageFiles(selected).length"
+                open
+                class="group border-b border-zinc-100 dark:border-zinc-800"
+              >
+                <summary
+                  class="flex list-none items-center [&::-webkit-details-marker]:hidden gap-2 py-3 text-[11px] font-semibold uppercase tracking-wide text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100"
+                >
+                  <svg
+                    class="h-3.5 w-3.5 transition-transform group-open:rotate-90"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="m9 6 6 6-6 6" />
+                  </svg>
+                  Package files
+                  <span
+                    class="bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+                    >{{ packageFiles(selected).length }}</span
+                  >
+                </summary>
+                <ul class="space-y-1.5 pb-4 pl-5">
+                  <li
+                    v-for="packageFile in packageFiles(selected)"
+                    :key="packageFile.id || packageFile.path"
+                    class="flex min-w-0 items-center gap-2 text-sm"
+                  >
+                    <a
+                      v-if="packageFile.isCurrent"
+                      :href="packageFileUrl(packageFile)"
+                      :title="packageFile.path"
+                      target="_blank"
+                      rel="noopener"
+                      class="min-w-0 flex-1 truncate font-mono text-[12px] text-blue-600 hover:underline dark:text-blue-300"
+                      >{{ packageFile.path }}</a
+                    >
+                    <code
+                      v-else
+                      :title="packageFile.path"
+                      class="min-w-0 flex-1 truncate border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 font-mono text-[12px] text-zinc-700 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200"
+                      >{{ packageFile.path }}</code
+                    >
+                    <span
+                      v-if="!packageFile.isCurrent"
+                      class="shrink-0 border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                      >Historical</span
+                    >
+                  </li>
+                </ul>
+              </details>
+
+              <details
                 v-if="selected.parityClaims && selected.parityClaims.length"
                 open
                 class="group border-b border-zinc-100 dark:border-zinc-800"
@@ -1244,8 +1299,9 @@ window.KANBAN_CARDS = window.KANBAN_DATA.cards;
         "to-do-beta-100": "todo_beta",
         done: "done",
       };
-      const GLOSSARY_URL =
-        "https://github.com/riodw/django-strawberry-framework/blob/main/docs/GLOSSARY.md";
+      const REPOSITORY_BLOB_URL =
+        "https://github.com/riodw/django-strawberry-framework/blob/main";
+      const GLOSSARY_URL = `${REPOSITORY_BLOB_URL}/docs/GLOSSARY.md`;
       const FALLBACK = "#64748b";
       const INLINE_MARKDOWN_CLASSES = [
         "leading-normal",
@@ -2034,6 +2090,19 @@ window.KANBAN_CARDS = window.KANBAN_DATA.cards;
               return GLOSSARY_URL;
             }
             return `${GLOSSARY_URL}#${encodeURIComponent(term.anchor)}`;
+          },
+          packageFiles(card) {
+            const files = Array.isArray(card && card.changedFiles)
+              ? card.changedFiles
+              : [];
+            return files
+              .slice()
+              .sort((left, right) =>
+                String(left.path || "").localeCompare(String(right.path || "")),
+              );
+          },
+          packageFileUrl(packageFile) {
+            return `${REPOSITORY_BLOB_URL}/${packageFile.path}`;
           },
           itemGroups(card) {
             const groups = new Map();

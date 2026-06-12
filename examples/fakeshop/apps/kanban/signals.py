@@ -49,6 +49,7 @@ UUID_LINKED_MODELS = (
     models.BoardDocKind,
     models.TargetVersion,
     models.SpecDoc,
+    models.PackageFile,
     models.Card,
     models.CardReference,
     models.CardGlossaryTerm,

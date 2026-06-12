@@ -6,6 +6,9 @@ from django.core.exceptions import ValidationError
 from apps.kanban import factories as kf
 from apps.kanban import models, services
 
+PACKAGE_FILE = "django_strawberry_framework/types/base.py"
+OTHER_PACKAGE_FILE = "django_strawberry_framework/optimizer/walker.py"
+
 
 @pytest.fixture(autouse=True)
 def _service_lookups(db):
@@ -68,6 +71,73 @@ def test_create_card_from_spec_builds_card_and_children(beta_version):
         ("Dependency", "dependency"),
         ("Related", "related"),
     ]
+
+
+@pytest.mark.django_db
+def test_create_card_from_spec_links_changed_files(beta_version):
+    card = services.create_card_from_spec(
+        {
+            "title": "Changed files card",
+            "target_version": beta_version.number,
+            "relative_size": "s",
+            "changed_files": [OTHER_PACKAGE_FILE, PACKAGE_FILE],
+        },
+    )
+
+    assert list(card.changed_files.values_list("path", flat=True)) == [
+        OTHER_PACKAGE_FILE,
+        PACKAGE_FILE,
+    ]
+
+
+@pytest.mark.django_db
+def test_create_card_from_spec_deduplicates_changed_files(beta_version):
+    card = services.create_card_from_spec(
+        {
+            "title": "Deduped changed files card",
+            "target_version": beta_version.number,
+            "relative_size": "s",
+            "changed_files": [PACKAGE_FILE, PACKAGE_FILE],
+        },
+    )
+
+    assert list(card.changed_files.values_list("path", flat=True)) == [PACKAGE_FILE]
+
+
+@pytest.mark.django_db
+def test_create_card_from_spec_rejects_unknown_changed_file(beta_version):
+    with pytest.raises(services.KanbanServiceError, match="Unknown package file"):
+        services.create_card_from_spec(
+            {
+                "title": "Unknown changed file card",
+                "target_version": beta_version.number,
+                "relative_size": "s",
+                "changed_files": ["django_strawberry_framework/not_real.py"],
+            },
+        )
+
+    assert not models.Card.objects.filter(title="Unknown changed file card").exists()
+
+
+@pytest.mark.django_db
+def test_create_card_from_spec_accepts_historical_changed_file(beta_version):
+    historical = models.PackageFile.objects.create(
+        path="django_strawberry_framework/old_module.py",
+        is_current=False,
+    )
+
+    card = services.create_card_from_spec(
+        {
+            "title": "Historical changed file card",
+            "target_version": beta_version.number,
+            "relative_size": "s",
+            "changed_files": [historical.path],
+        },
+    )
+
+    assert card.changed_files.get() == historical
+    historical.refresh_from_db()
+    assert historical.is_current is False
 
 
 @pytest.mark.django_db

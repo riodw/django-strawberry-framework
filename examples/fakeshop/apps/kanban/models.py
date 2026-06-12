@@ -227,6 +227,21 @@ class SpecDoc(TimeStampedModel):
         return self.name
 
 
+class PackageFile(TimeStampedModel):
+    """A repo-relative package file path that kanban cards may link to."""
+
+    path = models.TextField(unique=True)
+    is_current = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["path"]
+        verbose_name = "package file"
+        verbose_name_plural = "package files"
+
+    def __str__(self):
+        return self.path
+
+
 # ---------------------------------------------------------------------------
 # Card + its edges
 # ---------------------------------------------------------------------------
@@ -320,6 +335,11 @@ class Card(TimeStampedModel):
         "glossary.GlossaryTerm",
         through="CardGlossaryTerm",
         related_name="kanban_cards",
+        blank=True,
+    )
+    changed_files = models.ManyToManyField(
+        PackageFile,
+        related_name="cards",
         blank=True,
     )
 
@@ -690,6 +710,7 @@ _UUID_LINK_NAMES = (
     "boarddockind",
     "targetversion",
     "specdoc",
+    "packagefile",
     "card",
     "cardreference",
     "cardglossaryterm",
@@ -825,6 +846,13 @@ class UUIDModel(TimeStampedModel):
     )
     specdoc = models.OneToOneField(
         "SpecDoc",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="uuid",
+    )
+    packagefile = models.OneToOneField(
+        "PackageFile",
         null=True,
         blank=True,
         on_delete=models.CASCADE,

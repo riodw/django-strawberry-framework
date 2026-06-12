@@ -10,12 +10,14 @@ from django.db import transaction
 from django.db.models import Max
 
 from apps.kanban import models
+from apps.kanban.constants import PACKAGE_FILE_PATH_SET, PACKAGE_FILE_PATHS
 
 DEFAULT_PLANNING_STATE_KEY = "planned"
 DEFAULT_STATUS_KEY = "todo"
 DEPENDENCY_NOTE_SECTION_KEY = "dependencies_note"
 DEPENDENCY_REFERENCE_KIND_KEY = "dependency"
 DONE_STATUS_KEY = "done"
+PACKAGE_PATH_PREFIX = "django_strawberry_framework/"
 
 
 class KanbanServiceError(ValueError):
@@ -61,6 +63,79 @@ def _lookup_by(
         raise KanbanServiceError(
             f"Unknown {model.__name__} {field}={key!r}. Valid values: {valid}",
         ) from None
+
+
+def _normalize_package_file_path(value: object) -> str:
+    """Return a canonical repo-relative package path string."""
+    if not isinstance(value, str):
+        raise KanbanServiceError("Package file paths must be strings.")
+    path = value.strip().replace("\\", "/")
+    if not path:
+        raise KanbanServiceError("Package file paths must not be empty.")
+    if path.startswith("/") or path.startswith("../") or "/../" in path:
+        raise KanbanServiceError(f"Package file path must be repo-relative: {value!r}.")
+    if not path.startswith(PACKAGE_PATH_PREFIX):
+        raise KanbanServiceError(
+            f"Package file path must start with {PACKAGE_PATH_PREFIX!r}: {path!r}.",
+        )
+    return path
+
+
+def _package_file_paths(values: object) -> list[str]:
+    """Return sorted unique normalized package paths from importer input."""
+    if values in (None, ""):
+        return []
+    if not isinstance(values, list):
+        raise KanbanServiceError('"changed_files" must be a list of package file paths.')
+    return sorted({_normalize_package_file_path(value) for value in values})
+
+
+def sync_package_files_from_constants(*, using: str | None = None) -> None:
+    """Synchronize PackageFile rows from the generated constants allowlist."""
+    manager = _manager(models.PackageFile, using)
+    current_paths = set(PACKAGE_FILE_PATHS)
+    existing_paths = set(manager.filter(path__in=current_paths).values_list("path", flat=True))
+    for path in sorted(current_paths - existing_paths):
+        manager.create(path=path, is_current=True)
+    manager.filter(path__in=current_paths, is_current=False).update(is_current=True)
+    manager.exclude(path__in=current_paths).filter(is_current=True).update(is_current=False)
+
+
+def package_files_for_paths(
+    paths: object,
+    *,
+    using: str | None = None,
+) -> list[models.PackageFile]:
+    """Resolve importer path strings to PackageFile rows."""
+    normalized_paths = _package_file_paths(paths)
+    if not normalized_paths:
+        return []
+
+    sync_package_files_from_constants(using=using)
+    manager = _manager(models.PackageFile, using)
+    existing_paths = set(
+        manager.filter(path__in=normalized_paths).values_list("path", flat=True),
+    )
+    unknown_paths = sorted(
+        path
+        for path in normalized_paths
+        if path not in PACKAGE_FILE_PATH_SET and path not in existing_paths
+    )
+    if unknown_paths:
+        valid_count = len(PACKAGE_FILE_PATH_SET)
+        unknown = ", ".join(repr(path) for path in unknown_paths)
+        raise KanbanServiceError(
+            f"Unknown package file path(s): {unknown}. "
+            f"Use one of the {valid_count} generated package paths or an existing "
+            "historical PackageFile row.",
+        )
+    return list(manager.filter(path__in=normalized_paths).order_by("path"))
+
+
+def set_card_changed_files(card: models.Card, paths: object) -> None:
+    """Replace a card's linked package files from importer path strings."""
+    using = _database_alias(card)
+    card.changed_files.set(package_files_for_paths(paths, using=using))
 
 
 def _require_fields(spec: dict[str, Any], fields: tuple[str, ...]) -> None:
@@ -298,4 +373,5 @@ def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> 
         _create_sections(card, spec.get("sections", {}), using)
         _create_dependencies(card, spec.get("dependencies", []), using)
         _create_references(card, spec.get("references", []), using)
+        set_card_changed_files(card, spec.get("changed_files", []))
     return card

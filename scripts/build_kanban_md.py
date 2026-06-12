@@ -90,12 +90,17 @@ def glossary_term_link(term: dict[str, Any]) -> str:
     return f"[{term['title']}](docs/GLOSSARY.md#{term['anchor']})"
 
 
-def package_file_link(package_file: dict[str, Any]) -> str:
-    """Return a Markdown link or historical marker for a package file."""
-    path = package_file["path"]
-    if package_file.get("isCurrent", True):
+def tracked_path_link(tracked_path: dict[str, Any], *, planned: bool) -> str:
+    """Return a Markdown link or planned/historical marker for a tracked path.
+
+    Non-current paths read as ``historical`` on DONE cards (the file once
+    existed) and ``planned`` on WIP/TODO cards (the file does not exist yet).
+    """
+    path = tracked_path["path"]
+    if tracked_path.get("isCurrent", True):
         return f"[`{path}`]({path})"
-    return f"`{path}` (historical)"
+    marker = "planned" if planned else "historical"
+    return f"`{path}` ({marker})"
 
 
 def card_column_key(card: dict[str, Any]) -> str:
@@ -326,17 +331,25 @@ def render_glossary_terms(card: dict[str, Any]) -> list[str]:
     return lines
 
 
-def render_package_files(card: dict[str, Any]) -> list[str]:
-    """Render the package files linked to one card."""
+def render_tracked_paths(card: dict[str, Any]) -> list[str]:
+    """Render the tracked paths linked to one card.
+
+    DONE cards list the files they actually changed; WIP/TODO cards list the
+    paths they are predicted to touch.
+    """
     changed_files = sorted(
         card.get("changedFiles", []),
-        key=lambda package_file: package_file["path"],
+        key=lambda tracked_path: tracked_path["path"],
     )
     if not changed_files:
         return []
 
-    lines = ["#### Package files", ""]
-    lines.extend(f"- {package_file_link(package_file)}" for package_file in changed_files)
+    planned = card["status"]["key"] != "done"
+    heading = "#### Predicted files" if planned else "#### Package files"
+    lines = [heading, ""]
+    lines.extend(
+        f"- {tracked_path_link(tracked_path, planned=planned)}" for tracked_path in changed_files
+    )
     lines.append("")
     return lines
 
@@ -380,7 +393,7 @@ def render_card(card: dict[str, Any]) -> list[str]:
     lines.append("")
 
     lines.extend(render_glossary_terms(card))
-    lines.extend(render_package_files(card))
+    lines.extend(render_tracked_paths(card))
 
     planning_note = card.get("planningNote") or ""
     if planning_note:

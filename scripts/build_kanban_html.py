@@ -123,7 +123,7 @@ query StaticKanbanDashboard {
       }
     }
     changedFiles {
-      ...PackageFileFields
+      ...TrackedPathFields
     }
   }
   allKanbanBoardDocs {
@@ -190,8 +190,8 @@ query StaticKanbanDashboard {
   allKanbanBoardDocKinds {
     ...BoardDocKindFields
   }
-  allKanbanPackageFiles {
-    ...PackageFileFields
+  allKanbanTrackedPaths {
+    ...TrackedPathFields
   }
 }
 
@@ -359,13 +359,14 @@ fragment CardBadgeFields on LabelType {
   updatedDate
 }
 
-fragment PackageFileFields on PackageFileType {
+fragment TrackedPathFields on TrackedPathType {
   id
   uuid {
     id
   }
   path
   isCurrent
+  isDirectory
   createdDate
   updatedDate
 }
@@ -483,7 +484,7 @@ LOOKUP_FIELDS = {
     "allKanbanSections": "sections",
     "allKanbanReferenceKinds": "referenceKinds",
     "allKanbanBoardDocKinds": "boardDocKinds",
-    "allKanbanPackageFiles": "packageFiles",
+    "allKanbanTrackedPaths": "trackedPaths",
 }
 
 

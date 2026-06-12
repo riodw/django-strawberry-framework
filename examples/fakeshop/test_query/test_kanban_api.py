@@ -163,15 +163,15 @@ def _seed_board():
     )
     filters_card.status = done
     filters_card.save(update_fields=["status"])
-    current_package_file = models.PackageFile.objects.create(
+    current_tracked_path = models.TrackedPath.objects.create(
         path="django_strawberry_framework/filters/base.py",
         is_current=True,
     )
-    historical_package_file = models.PackageFile.objects.create(
+    historical_tracked_path = models.TrackedPath.objects.create(
         path="django_strawberry_framework/old_filters.py",
         is_current=False,
     )
-    filters_card.changed_files.add(current_package_file)
+    filters_card.changed_files.add(current_tracked_path)
     conn_card = models.Card.objects.create(
         title="DjangoConnectionField",
         number=24,
@@ -183,7 +183,7 @@ def _seed_board():
         relative_size=size_m,
         planning_state=planned,
     )
-    conn_card.changed_files.add(historical_package_file)
+    conn_card.changed_files.add(historical_tracked_path)
     reference = models.CardReference.objects.create(
         source_card=conn_card,
         target_card=filters_card,
@@ -232,8 +232,8 @@ def _seed_board():
         "related_glossary_link": related_glossary_link,
         "board_doc": board_doc,
         "board_doc_reference": board_doc_reference,
-        "current_package_file": current_package_file,
-        "historical_package_file": historical_package_file,
+        "current_tracked_path": current_tracked_path,
+        "historical_tracked_path": historical_tracked_path,
     }
 
 
@@ -369,8 +369,8 @@ def test_select_card_glossary_terms_and_filter_by_term_anchor():
 
 
 @pytest.mark.django_db
-def test_select_and_filter_cards_by_changed_package_files():
-    """Kanban cards expose linked package-file paths through the live API."""
+def test_select_and_filter_cards_by_changed_tracked_paths():
+    """Kanban cards expose linked tracked paths through the live API."""
     seed = _seed_board()
     _assert_graphql_data(
         """
@@ -387,6 +387,7 @@ def test_select_and_filter_cards_by_changed_package_files():
               uuid { id }
               path
               isCurrent
+              isDirectory
             }
           }
         }
@@ -397,9 +398,10 @@ def test_select_and_filter_cards_by_changed_package_files():
                     "title": "Filtering subsystem",
                     "changedFiles": [
                         {
-                            "uuid": {"id": str(seed["current_package_file"].uuid.id)},
+                            "uuid": {"id": str(seed["current_tracked_path"].uuid.id)},
                             "path": "django_strawberry_framework/filters/base.py",
                             "isCurrent": True,
+                            "isDirectory": False,
                         },
                     ],
                 },

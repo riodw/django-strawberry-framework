@@ -45,10 +45,10 @@ class SpecDocAdmin(admin.ModelAdmin):
     autocomplete_fields = ("card",)
 
 
-@admin.register(models.PackageFile)
-class PackageFileAdmin(admin.ModelAdmin):
-    list_display = ("path", "is_current")
-    list_filter = ("is_current",)
+@admin.register(models.TrackedPath)
+class TrackedPathAdmin(admin.ModelAdmin):
+    list_display = ("path", "is_current", "is_directory")
+    list_filter = ("is_current", "is_directory")
     search_fields = ("path",)
 
 

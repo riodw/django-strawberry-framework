@@ -227,16 +227,23 @@ class SpecDoc(TimeStampedModel):
         return self.name
 
 
-class PackageFile(TimeStampedModel):
-    """A repo-relative package file path that kanban cards may link to."""
+class TrackedPath(TimeStampedModel):
+    """A repo-relative package/test path that kanban cards may link to.
+
+    ``is_current`` marks paths that exist in the working tree today; rows with
+    ``is_current=False`` are either historical (linked from ``done`` cards) or
+    planned (linked from ``wip``/``todo`` cards). Directory paths end with
+    ``/`` and carry ``is_directory=True``.
+    """
 
     path = models.TextField(unique=True)
     is_current = models.BooleanField(default=True)
+    is_directory = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["path"]
-        verbose_name = "package file"
-        verbose_name_plural = "package files"
+        verbose_name = "tracked path"
+        verbose_name_plural = "tracked paths"
 
     def __str__(self):
         return self.path
@@ -338,7 +345,7 @@ class Card(TimeStampedModel):
         blank=True,
     )
     changed_files = models.ManyToManyField(
-        PackageFile,
+        TrackedPath,
         related_name="cards",
         blank=True,
     )
@@ -710,7 +717,7 @@ _UUID_LINK_NAMES = (
     "boarddockind",
     "targetversion",
     "specdoc",
-    "packagefile",
+    "trackedpath",
     "card",
     "cardreference",
     "cardglossaryterm",
@@ -851,8 +858,8 @@ class UUIDModel(TimeStampedModel):
         on_delete=models.CASCADE,
         related_name="uuid",
     )
-    packagefile = models.OneToOneField(
-        "PackageFile",
+    trackedpath = models.OneToOneField(
+        "TrackedPath",
         null=True,
         blank=True,
         on_delete=models.CASCADE,

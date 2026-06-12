@@ -14,7 +14,8 @@
         "public-api"
       ],
       "changed_files": [
-        "django_strawberry_framework/types/base.py"
+        "django_strawberry_framework/types/base.py",
+        "tests/mutations/"
       ],
       "parity": [
         {

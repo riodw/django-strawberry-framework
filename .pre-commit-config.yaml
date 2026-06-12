@@ -10,11 +10,11 @@
 repos:
   - repo: local
     hooks:
-      - id: kanban-package-file-constants
-        name: kanban package file constants
-        entry: uv run python scripts/build_kanban_package_file_constants.py
+      - id: kanban-tracked-path-constants
+        name: kanban tracked path constants
+        entry: uv run python scripts/build_kanban_tracked_path_constants.py
         language: system
-        files: ^django_strawberry_framework/
+        files: ^(django_strawberry_framework/|tests/|examples/fakeshop/(test_query|tests)/|examples/fakeshop/apps/[^/]+/tests/)
         pass_filenames: false
         require_serial: true
 

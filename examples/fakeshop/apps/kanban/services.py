@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,14 +11,26 @@ from django.db import transaction
 from django.db.models import Max
 
 from apps.kanban import models
-from apps.kanban.constants import PACKAGE_FILE_PATH_SET, PACKAGE_FILE_PATHS
+from apps.kanban.constants import (
+    TRACKED_DIRECTORY_PATHS,
+    TRACKED_FILE_PATHS,
+    TRACKED_PATH_SET,
+)
 
 DEFAULT_PLANNING_STATE_KEY = "planned"
 DEFAULT_STATUS_KEY = "todo"
 DEPENDENCY_NOTE_SECTION_KEY = "dependencies_note"
 DEPENDENCY_REFERENCE_KIND_KEY = "dependency"
 DONE_STATUS_KEY = "done"
-PACKAGE_PATH_PREFIX = "django_strawberry_framework/"
+# Roots a card-linked path may live under: the package plus the four deliberate
+# test locations (mirrors scripts/build_kanban_tracked_path_constants.py).
+TRACKED_ROOTS = (
+    "django_strawberry_framework/",
+    "tests/",
+    "examples/fakeshop/test_query/",
+    "examples/fakeshop/tests/",
+)
+APP_TESTS_ROOT_RE = re.compile(r"^examples/fakeshop/apps/[^/]+/tests/")
 
 
 class KanbanServiceError(ValueError):
@@ -65,77 +78,132 @@ def _lookup_by(
         ) from None
 
 
-def _normalize_package_file_path(value: object) -> str:
-    """Return a canonical repo-relative package path string."""
+def _normalize_tracked_path(value: object, *, field_name: str) -> str:
+    """Return a canonical repo-relative tracked path string.
+
+    Directory paths keep their trailing ``/``; that trailing slash is the
+    file/directory discriminator everywhere downstream.
+    """
     if not isinstance(value, str):
-        raise KanbanServiceError("Package file paths must be strings.")
+        raise KanbanServiceError(f'"{field_name}" paths must be strings.')
     path = value.strip().replace("\\", "/")
     if not path:
-        raise KanbanServiceError("Package file paths must not be empty.")
-    if path.startswith("/") or path.startswith("../") or "/../" in path:
-        raise KanbanServiceError(f"Package file path must be repo-relative: {value!r}.")
-    if not path.startswith(PACKAGE_PATH_PREFIX):
+        raise KanbanServiceError(f'"{field_name}" paths must not be empty.')
+    if path.startswith("/") or path.startswith("../") or "/../" in path or path.endswith("/.."):
+        raise KanbanServiceError(f"Tracked path must be repo-relative: {value!r}.")
+    if not (any(path.startswith(root) for root in TRACKED_ROOTS) or APP_TESTS_ROOT_RE.match(path)):
+        roots = ", ".join(repr(root) for root in TRACKED_ROOTS)
         raise KanbanServiceError(
-            f"Package file path must start with {PACKAGE_PATH_PREFIX!r}: {path!r}.",
+            f"Tracked path must live under one of the allowed roots "
+            f"({roots}, 'examples/fakeshop/apps/*/tests/'): {path!r}.",
         )
     return path
 
 
-def _package_file_paths(values: object) -> list[str]:
-    """Return sorted unique normalized package paths from importer input."""
+def _tracked_paths(values: object, *, field_name: str) -> list[str]:
+    """Return sorted unique normalized tracked paths from importer input."""
     if values in (None, ""):
         return []
     if not isinstance(values, list):
-        raise KanbanServiceError('"changed_files" must be a list of package file paths.')
-    return sorted({_normalize_package_file_path(value) for value in values})
+        raise KanbanServiceError(f'"{field_name}" must be a list of repo-relative paths.')
+    return sorted({_normalize_tracked_path(value, field_name=field_name) for value in values})
 
 
-def sync_package_files_from_constants(*, using: str | None = None) -> None:
-    """Synchronize PackageFile rows from the generated constants allowlist."""
-    manager = _manager(models.PackageFile, using)
-    current_paths = set(PACKAGE_FILE_PATHS)
-    existing_paths = set(manager.filter(path__in=current_paths).values_list("path", flat=True))
-    for path in sorted(current_paths - existing_paths):
-        manager.create(path=path, is_current=True)
-    manager.filter(path__in=current_paths, is_current=False).update(is_current=True)
-    manager.exclude(path__in=current_paths).filter(is_current=True).update(is_current=False)
+def sync_tracked_paths_from_constants(*, using: str | None = None) -> None:
+    """Synchronize TrackedPath rows from the generated constants allowlist."""
+    manager = _manager(models.TrackedPath, using)
+    current = dict.fromkeys(TRACKED_FILE_PATHS, False)
+    current.update(dict.fromkeys(TRACKED_DIRECTORY_PATHS, True))
+    existing_paths = set(manager.filter(path__in=current).values_list("path", flat=True))
+    for path in sorted(set(current) - existing_paths):
+        manager.create(path=path, is_current=True, is_directory=current[path])
+    manager.filter(path__in=current, is_current=False).update(is_current=True)
+    manager.exclude(path__in=current).filter(is_current=True).update(is_current=False)
 
 
-def package_files_for_paths(
+def tracked_paths_for_paths(
     paths: object,
     *,
     using: str | None = None,
-) -> list[models.PackageFile]:
-    """Resolve importer path strings to PackageFile rows."""
-    normalized_paths = _package_file_paths(paths)
+) -> list[models.TrackedPath]:
+    """Resolve importer path strings to known TrackedPath rows (no row creation)."""
+    normalized_paths = _tracked_paths(paths, field_name="changed_files")
     if not normalized_paths:
         return []
 
-    sync_package_files_from_constants(using=using)
-    manager = _manager(models.PackageFile, using)
+    sync_tracked_paths_from_constants(using=using)
+    manager = _manager(models.TrackedPath, using)
     existing_paths = set(
         manager.filter(path__in=normalized_paths).values_list("path", flat=True),
     )
     unknown_paths = sorted(
         path
         for path in normalized_paths
-        if path not in PACKAGE_FILE_PATH_SET and path not in existing_paths
+        if path not in TRACKED_PATH_SET and path not in existing_paths
     )
     if unknown_paths:
-        valid_count = len(PACKAGE_FILE_PATH_SET)
+        valid_count = len(TRACKED_PATH_SET)
         unknown = ", ".join(repr(path) for path in unknown_paths)
         raise KanbanServiceError(
-            f"Unknown package file path(s): {unknown}. "
-            f"Use one of the {valid_count} generated package paths or an existing "
-            "historical PackageFile row.",
+            f"Unknown tracked path(s): {unknown}. "
+            f"Use one of the {valid_count} generated tracked paths or an existing "
+            "historical TrackedPath row.",
+        )
+    return list(manager.filter(path__in=normalized_paths).order_by("path"))
+
+
+def planned_tracked_paths_for_paths(
+    paths: object,
+    *,
+    using: str | None = None,
+    field_name: str = "predicted_files",
+) -> list[models.TrackedPath]:
+    """Resolve predicted path strings, creating planned rows for unknown paths.
+
+    Unknown paths must still live under an allowed root; new rows are created
+    with ``is_current=False`` (planned) and ``is_directory`` derived from the
+    trailing ``/``.
+    """
+    normalized_paths = _tracked_paths(paths, field_name=field_name)
+    if not normalized_paths:
+        return []
+
+    sync_tracked_paths_from_constants(using=using)
+    manager = _manager(models.TrackedPath, using)
+    for path in normalized_paths:
+        manager.get_or_create(
+            path=path,
+            defaults={"is_current": False, "is_directory": path.endswith("/")},
         )
     return list(manager.filter(path__in=normalized_paths).order_by("path"))
 
 
 def set_card_changed_files(card: models.Card, paths: object) -> None:
-    """Replace a card's linked package files from importer path strings."""
+    """Replace a DONE card's actually-changed tracked paths (strict allowlist)."""
     using = _database_alias(card)
-    card.changed_files.set(package_files_for_paths(paths, using=using))
+    card.changed_files.set(tracked_paths_for_paths(paths, using=using))
+
+
+def set_card_predicted_files(
+    card: models.Card,
+    paths: object,
+    *,
+    field_name: str = "predicted_files",
+) -> None:
+    """Replace a non-DONE card's predicted tracked paths (may create planned rows).
+
+    DONE cards record what actually shipped; predictions on them are rejected so
+    the strict :func:`set_card_changed_files` path stays the only writer there.
+    """
+    if card.status.key == DONE_STATUS_KEY:
+        raise KanbanServiceError(
+            f"Cannot set predicted files on done card {card.card_id!r}; "
+            "use changed-file imports for shipped cards.",
+        )
+    using = _database_alias(card)
+    card.changed_files.set(
+        planned_tracked_paths_for_paths(paths, using=using, field_name=field_name),
+    )
 
 
 def _require_fields(spec: dict[str, Any], fields: tuple[str, ...]) -> None:
@@ -373,5 +441,6 @@ def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> 
         _create_sections(card, spec.get("sections", {}), using)
         _create_dependencies(card, spec.get("dependencies", []), using)
         _create_references(card, spec.get("references", []), using)
-        set_card_changed_files(card, spec.get("changed_files", []))
+        # Created cards are never "done", so their linked paths are predictions.
+        set_card_predicted_files(card, spec.get("changed_files", []), field_name="changed_files")
     return card

@@ -273,20 +273,21 @@ class SpecDocType(DjangoType):
         )
 
 
-class PackageFileType(DjangoType):
+class TrackedPathType(DjangoType):
     class Meta:
-        model = models.PackageFile
+        model = models.TrackedPath
         fields = (
             "id",
             "path",
             "is_current",
+            "is_directory",
             "created_date",
             "updated_date",
             "uuid",
             "cards",
         )
-        filterset_class = filters.PackageFileFilter
-        orderset_class = orders.PackageFileOrder
+        filterset_class = filters.TrackedPathFilter
+        orderset_class = orders.TrackedPathOrder
 
 
 # ---------------------------------------------------------------------------
@@ -688,17 +689,17 @@ class Query:
         return queryset
 
     @strawberry.field
-    def all_kanban_package_files(
+    def all_kanban_tracked_paths(
         self,
         info: Info,
-        filter: filter_input_type(filters.PackageFileFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.PackageFileOrder)] | None = None,
-    ) -> list[PackageFileType]:
-        queryset = models.PackageFile.objects.order_by("path")
+        filter: filter_input_type(filters.TrackedPathFilter) | None = None,  # noqa: A002
+        order_by: list[order_input_type(orders.TrackedPathOrder)] | None = None,
+    ) -> list[TrackedPathType]:
+        queryset = models.TrackedPath.objects.order_by("path")
         if filter is not None:
-            queryset = filters.PackageFileFilter.apply_sync(filter, queryset, info)
+            queryset = filters.TrackedPathFilter.apply_sync(filter, queryset, info)
         if order_by is not None:
-            queryset = orders.PackageFileOrder.apply_sync(order_by, queryset, info)
+            queryset = orders.TrackedPathOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field

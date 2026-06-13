@@ -1741,7 +1741,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - [x] New spec: `docs/spec-032-full_relay-0_0_9.md` covering all eight goals above with worked examples and decision rationale.
 - [x] `DjangoNodeField` and `DjangoNodesField` exported from the package public surface; both wired through the registry's GlobalID decode path and the per-type `get_queryset`.
 - [x] Reverse-FK and M2M relations on `relay.Node`-implementing types expose their Connection counterparts; `Meta.relation_shapes` opt-out documented.
-- [x] Cursor pagination math passes the Relay-spec test suite for `first`/`after`/`last`/`before`/`pageInfo` edge cases.
+- [x] Cursor pagination math passes the package's hand-authored Relay-spec conformance suite (the `first`/`after`/`last`/`before`/`pageInfo` edge cases), against both a root connection and a synthesized relation connection.
 - [x] `Meta.connection = {"total_count": True}` adds a `totalCount` field that runs `qs.count()` on the unpaginated post-filter queryset.
 - [x] Filter / order arguments accepted on Connection fields when the corresponding `*_class` is declared on the type.
 - [x] Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.

@@ -1591,12 +1591,24 @@ def _unique_override_app_label() -> str:
     return f"test_overrides__{next(_override_app_label_counter)}"
 
 
+_OVERRIDE_STATUS_CHOICES = (("active", "Active"), ("archived", "Archived"))
+
+
 def _make_override_model():
-    """Return a synthetic model with a non-null + a nullable scalar and a relation."""
+    """Return a synthetic model with a non-null + a nullable scalar, a relation, and choices.
+
+    The two choice columns (``status`` non-null, ``nullable_status`` null=True)
+    exist so an override can be driven against a choice-backed field whose
+    generated GraphQL type is an enum, exercising the "flip a choice field's
+    enum nullability for free" path (Decision 9) through the public ``Meta``
+    surface rather than only at the ``convert_scalar`` seam.
+    """
 
     class _OverrideOwner(models.Model):
         text_value = models.TextField()
         note = models.TextField(null=True)
+        status = models.TextField(choices=_OVERRIDE_STATUS_CHOICES)
+        nullable_status = models.TextField(choices=_OVERRIDE_STATUS_CHOICES, null=True)
         partner = models.ForeignKey(
             "self",
             null=True,
@@ -1646,6 +1658,35 @@ def test_nullable_override_flips_annotation():
     assert override_type.__annotations__["text_value"] == (str | None)
     # note is null=True natively (str | None); the override narrows it to bare str.
     assert override_type.__annotations__["note"] is str
+
+
+def test_override_flips_choice_field_enum_nullability():
+    """An override flips a choice field's generated ENUM nullability through Meta (Decision 9).
+
+    Earns the CHANGELOG "flips a choice field's generated enum nullability for
+    free" claim end-to-end through ``Meta.nullable_overrides`` /
+    ``Meta.required_overrides`` - not only at the ``convert_scalar`` seam
+    (``test_converters.py::test_convert_scalar_force_nullable_on_choice_field``).
+    Widening sits AFTER choice substitution, so the non-null ``status`` column
+    widens to ``StatusEnum | None`` and the nullable ``nullable_status`` column
+    narrows to a bare enum - the enum members are untouched in both directions.
+    """
+    model = _make_override_model()
+    override_type = _make_override_type(
+        model,
+        fields=("id", "status", "nullable_status"),
+        nullable_overrides=("status",),
+        required_overrides=("nullable_status",),
+    )
+
+    status_enum = registry.get_enum(model, "status")
+    nullable_status_enum = registry.get_enum(model, "nullable_status")
+    assert status_enum is not None
+    assert nullable_status_enum is not None
+    # Non-null choice widened to ``Enum | None`` (the generated enum is preserved).
+    assert override_type.__annotations__["status"] == (status_enum | None)
+    # Nullable choice narrowed to a bare ``Enum``.
+    assert override_type.__annotations__["nullable_status"] is nullable_status_enum
 
 
 def test_override_unknown_field_raises():

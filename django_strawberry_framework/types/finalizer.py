@@ -59,6 +59,7 @@ from strawberry.types.field import StrawberryField
 from strawberry.utils.str_converters import to_camel_case
 
 from ..exceptions import ConfigurationError
+from ..optimizer import logger
 from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
 from ..utils.relations import instance_accessor
@@ -257,6 +258,55 @@ def _first_model_label_emitter(model: type[models.Model]) -> type | None:
         if _emits_model_label(strategy):
             return type_cls
     return None
+
+
+def _warn_model_label_secondary_collapse(
+    multi_type_models: tuple[type[models.Model], ...],
+) -> None:
+    """Warn when a secondary type's model-label GlobalIDs collapse onto the primary.
+
+    A model-label payload (``app_label.model:pk``) always decodes through
+    ``registry.get(model)`` - the primary - so any registered type OTHER than the
+    primary that also emits model-label IDs (the ``model`` default or
+    ``type+model``) has its ``GlobalID``s route to, and refetch AS, the primary
+    type: ``node(id:)`` / ``nodes(ids:)`` return the primary, and the secondary's
+    distinct identity and ``get_queryset`` visibility scope silently collapse into
+    the primary's. This is legal (spec-031 Decision 8: a model-anchored ID cannot
+    distinguish secondaries by design), but it is the most likely accidental
+    config now that ``model`` is the default - and a regression for a multi-type
+    model that, under the pre-``0.0.9`` type-name default, gave each type a
+    distinct, correctly-routed ``GlobalID``.
+
+    The hard-error sibling ``_audit_model_label_routing`` has already rejected the
+    inverse (a model-label emitter under a primary that CANNOT decode model
+    labels). This pass only warns about the legal-but-surprising collapse and
+    points at the per-type ``type`` opt-out that restores disjoint identity. It
+    runs immediately after that audit, over the same materialized multi-type-model
+    tuple, so every type's ``effective_globalid_strategy`` is already recorded.
+    """
+    for model in multi_type_models:
+        primary = registry.primary_for(model)
+        secondaries = tuple(
+            type_cls
+            for type_cls in registry.types_for(model)
+            if type_cls is not primary
+            and _emits_model_label(registry.get_definition(type_cls).effective_globalid_strategy)
+        )
+        if not secondaries:
+            continue
+        secondary_names = ", ".join(sorted(type_cls.__name__ for type_cls in secondaries))
+        logger.warning(
+            "GlobalID identity collapse on model %s.%s: %s emit model-anchored GlobalIDs "
+            "that decode to the primary type %s, so node(id:)/nodes(ids:) refetch them as %s "
+            "and their distinct identity / get_queryset scope is lost. Set "
+            'Meta.globalid_strategy = "type" on the secondary type(s) for disjoint identity '
+            "scopes (spec-031 Decision 8).",
+            model._meta.app_label,
+            model._meta.model_name,
+            secondary_names,
+            primary.__name__,
+            primary.__name__,
+        )
 
 
 # Re-entrancy marker stamped on every synthesized relation-connection field
@@ -623,6 +673,10 @@ def finalize_django_types() -> None:
     # install step's re-entrancy guard (spec-031 Decision 8/10).
     # Reuses the multi-type-model tuple materialized at the top of this finalize.
     _audit_model_label_routing(multi_type_models)
+    # Legal-but-silent sibling of the audit above: a non-primary type that also
+    # emits model-label IDs collapses its identity onto the primary at decode
+    # time. Warn (do not raise) and point at the ``type`` opt-out.
+    _warn_model_label_secondary_collapse(multi_type_models)
 
     _bind_filtersets()
     _bind_ordersets()

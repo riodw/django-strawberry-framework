@@ -79,6 +79,8 @@ See [`GLOSSARY.md`'s Relay Node integration subsection][glossary-relay-node-inte
 
 As of `0.0.9` the default Relay `GlobalID` payload is the Django model label (`app_label.modelname:<pk>`, e.g. `products.item:42`) rather than the GraphQL type name, so renaming a GraphQL type no longer invalidates cached IDs. `Meta.globalid_strategy` (per type) and `RELAY_GLOBALID_STRATEGY` (schema-wide) select `model` (default), `type` (the legacy GraphQL-type-name opt-out), `type+model` (transitional decode of old type-anchored IDs while emitting model-anchored ones), or a callable encoder. See [`GLOSSARY.md`'s `Meta.globalid_strategy` subsection][glossary-metaglobalid_strategy].
 
+> **Multiple `DjangoType`s per model under the `model` default.** A model-label payload is shared by every `DjangoType` over that model and always decodes to the model's **primary** type (`Meta.primary`). So if two Relay-Node types over one model both use the `model` default, the secondary's `GlobalID`s refetch as the primary — its distinct identity and `get_queryset` scope collapse onto the primary's (under the pre-`0.0.9` type-name default they were distinct and self-routing). This is intentional (a model-anchored ID cannot distinguish secondaries), and finalization emits a warning naming the collapsing secondaries; give a secondary disjoint identity with `Meta.globalid_strategy = "type"`.
+
 ## What just happened?
 
 - `class Meta` tells the package which Django model and fields become a Strawberry type.
@@ -115,6 +117,8 @@ A quick summary:
 - `DjangoNodeField` / `DjangoNodesField` (new in `0.0.9`) — root Relay refetch fields, bare interface (`node: relay.Node | None = DjangoNodeField()`, `nodes: list[relay.Node | None] = DjangoNodesField()`) and typed (`genre: GenreType | None = DjangoNodeField(GenreType)`) forms; `id: ID!` raw-string arguments decoded server-side via the strategy-aware dispatch; dispatch to the type's `resolve_node` / `resolve_nodes` honoring `get_queryset`; `null` for hidden/missing/uncoercible-pk ids (no existence leak), `GraphQLError` with `extensions={"code": "GLOBALID_INVALID"}` for malformed ids; `nodes` is per-type-batched, order-preserving, with `null` holes and duplicate-id support. See [`GLOSSARY.md#djangonodefield`][glossary-djangonodefield].
 - relation-as-Connection upgrade + `Meta.relation_shapes` (new in `0.0.9`) — every Relay-Node-shaped type's many-side relations whose target is also Relay-Node-shaped gain a `<field>Connection` sibling by default (`"both"`); `Meta.relation_shapes = {"<field>": "list" | "connection" | "both"}` narrows per relation; synthesized at finalization Phase 2.5 reusing the shipped connection machinery (per-target connection classes, sidecar `filter:` / `orderBy:` arguments, target-driven `totalCount`). See [`GLOSSARY.md#metarelation_shapes`][glossary-metarelation_shapes].
 - `testing.relay` helpers (new in `0.0.9`) — `django_strawberry_framework.testing.relay.global_id_for(type_cls, id)` (the strategy-aware encoded `GlobalID` a finalized Relay-Node-shaped type emits) and `decode_global_id(gid)` (public re-export of the decode dispatch). See the [`GLOSSARY.md#djangonodefield`][glossary-djangonodefield] cross-refs (the helpers have no own entry; the spec does not create one).
+- `Meta.nullable_overrides` / `Meta.required_overrides` (new in `0.0.9`) — two tuple-set `Meta` keys that decouple a scalar field's GraphQL nullability from its Django column (`T!`→`T` or `T`→`T!`) without an `AlterField` migration or a consumer-authored annotation. Validated at type-creation (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision raise `ConfigurationError`); scalar-only, and the override flips a choice field's generated enum nullability for free. See [`GLOSSARY.md#metanullable_overrides`][glossary-metanullable_overrides].
+- `manage.py inspect_django_type` (new in `0.0.9`) — diagnostic command printing a finalized `DjangoType`'s per-field GraphQL resolution table (Django field → resolved GraphQL type → nullability → converter row). Dispatches the positional arg by shape (dotted path vs unique bare-name registry lookup) and accepts `--schema <selector>` to register + finalize on a cold CLI process. See [`GLOSSARY.md#schema-introspection-management-command`][glossary-inspect-django-type].
 
 **Coming next — remaining alpha (`0.0.10` → `0.0.12`):**
 - `0.0.10` — permissions / cascade-permissions subsystem
@@ -268,6 +272,8 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-djangonodefield]: GLOSSARY.md#djangonodefield
 [glossary-filterset]: GLOSSARY.md#filterset
 [glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy
+[glossary-metanullable_overrides]: GLOSSARY.md#metanullable_overrides
+[glossary-inspect-django-type]: GLOSSARY.md#schema-introspection-management-command
 [glossary-metarelation_shapes]: GLOSSARY.md#metarelation_shapes
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-orderset]: GLOSSARY.md#orderset

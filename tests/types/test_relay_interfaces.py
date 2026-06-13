@@ -1868,6 +1868,47 @@ def test_model_label_routing_audit_passes_model_primary_with_type_secondary():
     finalize_django_types()  # no raise
 
 
+def test_model_label_secondary_collapse_warns_and_routes_to_primary(caplog):
+    """A ``model`` primary + default-``model`` secondary: legal, but the secondary's
+    GlobalID collapses onto the primary - so finalize WARNS (not raises) and the
+    secondary's emitted ID decodes to the primary type.
+
+    This pins the spec-031 Decision 8 / KANBAN DoD claim that multiple-DjangoType
+    behavior is *pinned*: model-label IDs route through the primary. Under the
+    pre-``0.0.9`` type-name default these two types had distinct, self-routing
+    IDs; the model-label default collapses the secondary onto the primary, and the
+    finalizer surfaces that silently-lossy config as a warning naming the
+    offending secondary, the primary, and the ``type`` opt-out.
+    """
+    primary, secondary = _build_multi_type(primary_strategy="model", secondary_strategy=None)
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    finalize_django_types()  # legal: warns, does not raise
+    collapse_warnings = [r.message for r in caplog.records if "identity collapse" in r.message]
+    assert len(collapse_warnings) == 1
+    message = collapse_warnings[0]
+    assert "products.item" in message
+    assert "SecondaryType" in message  # the offending secondary is named
+    assert "PrimaryType" in message  # the primary it collapses onto is named
+    assert '"type"' in message  # the opt-out is surfaced
+    # The collapse itself: the secondary's model-anchored ID decodes to the PRIMARY.
+    assert decode_global_id(_encoded_id(secondary, node_id="42")) == (primary, "42")
+
+
+def test_model_label_no_collapse_warning_when_secondary_is_type(caplog):
+    """A ``type`` secondary stays self-routing, so the collapse warning is silent.
+
+    The negative twin of the collapse pin: opting the secondary into ``type``
+    restores its disjoint identity (its IDs decode to itself, not the primary),
+    so the finalizer emits no identity-collapse warning.
+    """
+    _primary, secondary = _build_multi_type(primary_strategy="model", secondary_strategy="type")
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    finalize_django_types()
+    assert not any("identity collapse" in r.message for r in caplog.records)
+    # The ``type`` secondary round-trips to itself - no collapse.
+    assert decode_global_id(_encoded_id(secondary, node_id="9")) == (secondary, "9")
+
+
 def test_model_label_routing_audit_single_type_model_passes():
     """A single-type ``model`` model trivially satisfies the invariant (no primary needed)."""
 

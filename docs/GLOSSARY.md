@@ -35,7 +35,7 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`SyncMisuseError`](#syncmisuseerror) — typed marker for sync resolver paths that receive an async `get_queryset` coroutine.
 - [`finalize_django_types`](#finalize_django_types) — synchronization point that resolves pending relations and applies `strawberry.type` decoration.
 - [`strawberry_config`](#strawberry_config) — factory returning a `StrawberryConfig` pre-populated with the package's `scalar_map`.
-- `auto` — re-export from Strawberry for `auto`-typed field annotations inside this package's import surface.
+- [`auto`](#auto-typed-annotations) — re-export from Strawberry for `auto`-typed field annotations (the declare-but-infer marker).
 - `__version__` — package version string.
 
 Symbols available from the `django_strawberry_framework.testing` subpackage (consumer test utilities):
@@ -133,13 +133,14 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Django Trac #37064 hardening](#django-trac-37064-hardening) | shipped (`0.0.7`) |
 | [`Upload` scalar](#upload-scalar) | planned for `0.0.11` |
 | [Cross-subsystem invariants](#cross-subsystem-invariants) | planned for 1.0.0 |
+| [`auto`-typed annotations](#auto-typed-annotations) | shipped (`0.0.9`) |
 
 ## Browse by category
 
 For readers exploring rather than looking up a specific term:
 
 - **Type generation:** [`DjangoType`](#djangotype) · [`Meta.model`](#metamodel) · [`Meta.fields`](#metafields) · [`Meta.exclude`](#metaexclude) · [`Meta.name`](#metaname) · [`Meta.description`](#metadescription) · [`Meta.primary`](#metaprimary) · [`Meta.interfaces`](#metainterfaces) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [`Meta.globalid_strategy`](#metaglobalid_strategy) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [Definition-order independence](#definition-order-independence) · [`finalize_django_types`](#finalize_django_types) · [`ConfigurationError`](#configurationerror).
-- **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [`Meta.choice_enum_names`](#metachoice_enum_names).
+- **Field conversion:** [Scalar field conversion](#scalar-field-conversion) · [Choice enum generation](#choice-enum-generation) · [Relation handling](#relation-handling) · [Specialized scalar conversions](#specialized-scalar-conversions) · [Scalar field override semantics](#scalar-field-override-semantics) · [`Meta.nullable_overrides`](#metanullable_overrides) · [`Meta.required_overrides`](#metarequired_overrides) · [`Meta.choice_enum_names`](#metachoice_enum_names) · [`auto`-typed annotations](#auto-typed-annotations).
 - **Optimizer:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [`OptimizerHint`](#optimizerhint) · [`Meta.optimizer_hints`](#metaoptimizer_hints) · [Plan cache](#plan-cache) · [FK-id elision](#fk-id-elision) · [`only()` projection](#only-projection) · [Queryset diffing](#queryset-diffing) · [Strictness mode](#strictness-mode) · [Schema audit](#schema-audit) · [Multi-database cooperation](#multi-database-cooperation) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 - **Filtering:** [`FilterSet`](#filterset) · [`RelatedFilter`](#relatedfilter) · [`filter_input_type`](#filter_input_type) · [`Meta.filterset_class`](#metafilterset_class).
 - **Ordering:** [`OrderSet`](#orderset) · [`RelatedOrder`](#relatedorder) · [`Ordering`](#ordering) · [`order_input_type`](#order_input_type) · [`Meta.orderset_class`](#metaorderset_class).
@@ -1317,6 +1318,19 @@ Goals that the Layer-3 cards collectively satisfy by `1.0.0`:
 - Filters, orders, aggregates, mutations, permissions, and connection fields all compose with [`DjangoOptimizerExtension`](#djangooptimizerextension).
 - The [`FieldError` envelope](#fielderror-envelope) is shared across every mutation flavor for a consistent client contract.
 - Example-project schemas reference only shipped features — never unshipped ones.
+
+## `auto`-typed annotations
+
+**Status:** shipped (`0.0.9`).
+
+Strawberry's `auto` sentinel, re-exported from `django_strawberry_framework`, used as a field annotation (`field: auto`) to **declare a field for inclusion while deferring its GraphQL type to model inference** — the declare-but-infer marker. `DjangoType.__init_subclass__` detects the `StrawberryAuto` sentinel and routes the field back through the package's scalar / relation synthesis instead of treating the annotation as a consumer override.
+
+This is distinct from a concrete consumer annotation: writing `name: str` is a consumer override that bypasses `convert_scalar`, whereas `name: auto` keeps the framework-inferred type (and its nullability / choice-enum handling). Two misuses raise [`ConfigurationError`](#configurationerror) at type creation:
+
+- `auto` on a field **not** in the selected [`Meta.fields`](#metafields) set — an `auto` annotation cannot pull in a field the selection excludes.
+- `auto` combined with an assigned `strawberry.field(...)` value on the same name — the assignment and the infer-marker conflict.
+
+Dogfooded in the fakeshop `scalars` app (`OverriddenScalarSpecimenType.note: auto`).
 
 ## Beyond `1.0.0`
 

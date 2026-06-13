@@ -436,7 +436,7 @@ No new cursor code ships. The cursor remains Strawberry's `ListConnection` opaqu
 
 The card's `b64("offset:N")` wording is read as the *conceptual* cursor shape; the byte-exact payload is Strawberry's `arrayconnection:N`. Both are opaque base64 offset cursors; the spec records the discrepancy rather than changing the shipped format ([Risks and open questions](#risks-and-open-questions)). `Meta.cursor_field` (stable column-keyed cursors) stays out of scope per the card (BACKLOG item 39 sub-feature 3).
 
-Justification: [`spec-030`][spec-030] Decision 9 already delegated cursor mechanics with the explicit rationale that hand-rolling pagination math is engine duplication; re-implementing it here to match an illustrative byte format would churn the shipped wire contract for zero consumer value. The conformance suite is the card's actual deliverable ("Cursor pagination math passes the Relay-spec test suite").
+Justification: [`spec-030`][spec-030] Decision 9 already delegated cursor mechanics with the explicit rationale that hand-rolling pagination math is engine duplication; re-implementing it here to match an illustrative byte format would churn the shipped wire contract for zero consumer value. The conformance suite is the card's actual deliverable ("Cursor pagination math passes the package's hand-authored Relay-spec conformance suite").
 
 Alternatives considered (and rejected): **Re-implement cursors as literal `b64("offset:N")`.** Rejected: breaks every cursor minted since [`DONE-030-0.0.9`][kanban], duplicates `ListConnection`, and buys nothing — both formats are equally opaque to a compliant client.
 

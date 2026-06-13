@@ -8,7 +8,7 @@ from django_strawberry_framework.optimizer import logger as optimizer_logger
 
 
 def test_version():
-    assert __version__ == "0.0.8"
+    assert __version__ == "0.0.9"
 
 
 def test_logger_name_is_django_strawberry_framework():

@@ -611,6 +611,19 @@ def test_merge_aliased_selections_preserves_per_response_key_arguments():
     assert _aliased_arguments_diverge(merged[0]) is True
 
 
+def test_aliased_arguments_diverge_false_without_per_key_map():
+    """A selection carrying no per-response-key argument map cannot diverge.
+
+    Selections built outside ``_merge_aliased_selections`` (direct test/helper
+    callers, or a single non-aliased occurrence) carry no
+    ``_optimizer_response_key_arguments``, so divergence detection returns
+    ``False`` rather than raising (spec-033 Decision 6).
+    """
+    from django_strawberry_framework.optimizer.walker import _aliased_arguments_diverge
+
+    assert _aliased_arguments_diverge(SimpleNamespace()) is False
+
+
 def test_plan_merges_aliased_selections():
     """Aliased selections for the same relation produce one plan entry."""
     plan = plan_optimizations(
@@ -2144,6 +2157,110 @@ def test_scalar_only_window_projects_non_pk_order_column():
         assert defer is False
         # pk + reverse-FK connector (tag_id) + the non-pk ORDER column (title).
         assert {"id", "tag_id", "title"} <= set(only_fields)
+    finally:
+        registry.clear()
+
+
+def test_concrete_order_columns_resolves_expression_relspan_and_attname_entries():
+    """``_concrete_order_columns`` handles all three order-entry shapes against a real model.
+
+    One pass over ``Book`` exercises every branch: an ``OrderBy(F("title"))``
+    resolves through ``_order_entry_field_name``'s expression arm to the local
+    ``title`` column; a related-span ``"shelf__code"`` is skipped (its column is
+    referenced in SQL regardless of the ``.only()`` projection, so a scalar-only
+    selection never needs it loaded); and a raw FK attname ``"shelf_id"`` (an
+    attname, not a field NAME) is accepted directly (spec-033 Decision 4
+    scalar-only projection).
+    """
+    from apps.library.models import Book
+    from django.db.models import F, OrderBy
+
+    from django_strawberry_framework.optimizer.walker import _concrete_order_columns
+
+    columns = _concrete_order_columns(
+        [OrderBy(F("title")), "shelf__code", "shelf_id"],
+        Book,
+    )
+    assert columns == ["title", "shelf_id"]
+
+
+def test_plan_connection_relation_unknown_field_is_noop():
+    """A recognized connection whose relation field is absent from the field map is a no-op.
+
+    Defensive guard: ``field_map.get`` returns ``None``, so no window prefetch is
+    planned and no resolver key recorded - the selection falls back per-parent.
+    """
+    from apps.library.models import Genre
+
+    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
+
+    plan = OptimizationPlan()
+    _plan_connection_relation(
+        _conn_sel("booksConnection", node_selections=[_sel("id")], arguments={"first": 2}),
+        None,
+        relation_field_name="absent_relation",
+        field_map={},
+        plan=plan,
+        prefix="",
+        info=_fake_info(),
+        runtime_prefixes=((),),
+        type_cls=None,
+        model=Genre,
+    )
+    assert not plan.prefetch_related
+    assert not plan.planned_resolver_keys
+
+
+def test_plan_connection_relation_field_without_related_model_is_noop():
+    """A relation field whose ``related_model`` is ``None`` is left unplanned (defensive)."""
+    from apps.library.models import Genre
+
+    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
+
+    plan = OptimizationPlan()
+    _plan_connection_relation(
+        _conn_sel("booksConnection", node_selections=[_sel("id")], arguments={"first": 2}),
+        None,
+        relation_field_name="modelless",
+        field_map={"modelless": SimpleNamespace(related_model=None)},
+        plan=plan,
+        prefix="",
+        info=_fake_info(),
+        runtime_prefixes=((),),
+        type_cls=None,
+        model=Genre,
+    )
+    assert not plan.prefetch_related
+    assert not plan.planned_resolver_keys
+
+
+def test_plan_connection_relation_non_windowable_partition_is_noop():
+    """A relation with no windowable parent partition falls back per-parent (no window).
+
+    Driving ``_plan_connection_relation`` against a forward FK (``Item.category``)
+    reaches the partition step, where ``window_partition_for_prefetch`` raises
+    ``OptimizerError`` for the non-windowable single-valued kind; the planner
+    swallows it and leaves the selection unplanned (spec-033 Decision 6).
+    """
+    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
+
+    registry.clear()
+    try:
+        plan = OptimizationPlan()
+        _plan_connection_relation(
+            _conn_sel("categoryConnection", node_selections=[_sel("id")], arguments={"first": 2}),
+            None,
+            relation_field_name="category",
+            field_map={"category": Item._meta.get_field("category")},
+            plan=plan,
+            prefix="",
+            info=_fake_info(),
+            runtime_prefixes=((),),
+            type_cls=None,
+            model=Item,
+        )
+        assert not plan.prefetch_related
+        assert not plan.planned_resolver_keys
     finally:
         registry.clear()
 

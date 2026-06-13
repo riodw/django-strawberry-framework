@@ -815,6 +815,18 @@ class TestWindowPartitionForPrefetch:
         with pytest.raises(OptimizerError, match="no windowable parent partition"):
             window_partition_for_prefetch(field)
 
+    def test_windowable_kind_without_remote_field_keys_raises(self):
+        """A windowable kind whose ``remote_field`` resolves neither attname nor name raises.
+
+        Stock Django relation descriptors always carry a ``remote_field`` name, so
+        this is a defensive guard: a malformed descriptor that classifies as a
+        windowable kind but exposes no parent partition column falls back
+        per-parent rather than partitioning by ``None`` (spec-033 Decision 4).
+        """
+        field = SimpleNamespace(many_to_many=True, remote_field=SimpleNamespace(), name="mock_rel")
+        with pytest.raises(OptimizerError, match="could not resolve a parent partition"):
+            window_partition_for_prefetch(field)
+
 
 class TestDeterministicOrderHoistParity:
     """The hoisted order rule answers identically to the previous connection.py code."""
@@ -890,3 +902,15 @@ class TestReverseOrderBy:
         assert nulls_last.descending is False
         assert nulls_last.nulls_first is True
         assert nulls_last.nulls_last is None
+
+    def test_bare_expression_without_descending_passes_through(self):
+        """A non-string term with no ``.descending`` is reversed by passing it through.
+
+        ``deterministic_order`` yields strings and ``OrderBy`` wrappers, but the
+        guard handles a raw expression term defensively: with no ``.descending`` to
+        flip, it is appended unchanged rather than mutated.
+        """
+        from django.db.models import F
+
+        expr = F("name")
+        assert _reverse_order_by([expr]) == [expr]

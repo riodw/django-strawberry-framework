@@ -1,21 +1,23 @@
 term,anchor,notes
-Connection-aware optimizer planning,connection-aware-optimizer-planning,the card's own glossary entry; Slice 7 flips it to shipped (0.0.9)
-DjangoConnectionField,djangoconnectionfield,the connection surface whose nested half this card plans; entry carries the pre-033 empty-plan caveat Slice 7 sweeps
+Connection-aware optimizer planning,connection-aware-optimizer-planning,the card's own glossary entry; Slice 7 flips it to shipped with windowed nested prefetches and strictness coverage
+DjangoConnectionField,djangoconnectionfield,the connection surface whose nested half this card plans; Slice 7 sweeps stale empty-plan and strictness caveats
 DjangoConnection,djangoconnection,generic connection base / return alias; products conversion uses it in the Query class attributes
 Meta.relation_shapes,metarelation_shapes,the spec-032 key whose synthesized siblings are the planning target; SyncMisuseError caveat survives this card
-Meta.connection,metaconnection,target-type total_count opt-in; nested totalCount now served from the _dst_total_count window annotation
-Meta.filterset_class,metafilterset_class,sidecar source of nested/root filter: arguments; sidecar input on a nested connection forces the per-parent fallback
-Meta.orderset_class,metaorderset_class,sidecar source of orderBy: arguments; same fallback rule as filterset_class
-Meta.optimizer_hints,metaoptimizer_hints,per-relation hint surface; SKIP suppresses window planning for the connection sibling
+Meta.connection,metaconnection,target-type total_count opt-in; nested totalCount uses _dst_total_count when rows exist and ambiguous empty windows fall back
+Meta.filterset_class,metafilterset_class,sidecar source of nested/root filter: arguments; sidecar input forces per-parent fallback with a strictness reason
+Meta.orderset_class,metaorderset_class,sidecar source of orderBy: arguments; same fallback and strictness-reason rule as filterset_class
+Meta.optimizer_hints,metaoptimizer_hints,per-relation hint surface; SKIP suppresses window planning for the connection sibling without exempting strictness
 Meta.interfaces,metainterfaces,Relay-Node gate; all four products types already declare relay.Node which is why their relations synthesize siblings
 Meta.search_fields,metasearch_fields,reaffirmed absent from connections until 0.1.2
-DjangoOptimizerExtension,djangooptimizerextension,the extension whose apply_to seam / plan cache / strictness constructor this card extends; no public-surface change
-OptimizerHint,optimizerhint,SKIP semantics extended to connection siblings; other hint shapes list-only in 0.0.9
-Plan cache,plan-cache,B1 cache; key gains the nested-pagination-variable component (Decision 7)
-Strictness mode,strictness-mode,B3 contract wired into connection paths (Decision 8)
+DjangoNodeField,djangonodefield,root node(id:) field explicitly remains outside the products conversion
+DjangoNodesField,djangonodesfield,root nodes(ids:) field explicitly remains outside the products conversion
+DjangoOptimizerExtension,djangooptimizerextension,the extension whose apply_to seam plan cache strictness constructor and context publication this card extends
+OptimizerHint,optimizerhint,SKIP semantics extended to connection siblings; SKIP still flags under strictness when it resolves per parent
+Plan cache,plan-cache,B1 cache; key gains nested-pagination variables while root pagination variables stay out and AST variable-name collection is memoized
+Strictness mode,strictness-mode,B3 contract wired into connection paths with fallback reasons and union-preserved parent plan context
 Queryset diffing,queryset-diffing,B8 reconciliation; windowed Prefetch rides the same diff rules; no-regression DoD item
-FK-id elision,fk-id-elision,works inside windowed child plans unchanged
-only() projection,only-projection,window annotations compose with .only(); connector + ordering columns force-included
+FK-id elision,fk-id-elision,works inside windowed child plans and union-published context prevents nested fallback clobbering
+only() projection,only-projection,window annotations compose with .only(); connector and ordering columns are force-included through subquery wrapping
 get_queryset visibility hook,get_queryset-visibility-hook,baked into windowed child querysets; flips plan.cacheable False (shipped rule)
 FilterSet,filterset,sidecar family; plan-time apply deferred (Decision 6 fallback)
 OrderSet,orderset,sidecar family; same deferral

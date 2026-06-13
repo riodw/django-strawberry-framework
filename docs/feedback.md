@@ -1,157 +1,100 @@
-## Spec 033 Review
+I read the whole spec (and pulled up the upstream strawberry-django history to sanity-check the borrowed mechanism). Overall: this is an unusually rigorous plan — the scope boundary against the stale card premise is handled honestly, the `to_attr` isolation under `"both"` is exactly right, and the root/nested asymmetry in Decision 7 is the correct cache rule. Most of my feedback concentrates on a small number of correctness edge cases in Decisions 4–5. One of them I'd consider a real design bug worth fixing in the spec before any code gets written.
 
-Overall: the spec is directionally right and the glossary validation passes
-(`uv run python scripts/check_spec_glossary.py --spec docs/spec-033-connection_optimizer-0_0_9.md`).
-The current draft still has several design blockers that should be fixed before
-implementation starts, because they change the foundation slices rather than
-individual tests.
+## The design bug: empty windows are ambiguous, and the spec resolves the ambiguity wrong
 
-### P1 - Fast path is assigned to the wrong layer
+Decision 5 and the edge-case section both claim an empty `to_attr` list means "the parent had no related rows" — `totalCount` resolves `0` without a query, `hasNextPage`/`hasPreviousPage` resolve `False`. That inference doesn't hold. An empty window has three causes, and only one of them justifies those answers:
 
-Decision 5 says [`connection.py::_build_relation_connection_resolver`][connection]
-should probe `root._dst_<field>_connection` and "build the connection from the
-rows." That is not compatible with Strawberry's connection wrapper. Strawberry's
-`ConnectionExtension.resolve` calls the field resolver, treats its return value
-as the node iterable, and then calls the generated connection class's
-`resolve_connection`; the resolver is not expected to return a connection
-instance. Returning a prebuilt connection from the resolver would make
-`ConnectionExtension` pass that connection object back through
-`resolve_connection` as if it were an iterable of nodes.
+1. The parent genuinely has zero related rows → `totalCount: 0`, both page flags `False`. Correct.
+2. The page **overshot** — `after:` past the end (`first: 3, after: <offset 10>` on a parent with 5 rows). The window filter `row_number > 10 AND row_number <= 13` matches nothing, but the true `totalCount` is 5 and `hasPreviousPage` should be `True`. The fast path would serve `0` / `False` / `False`; the pipeline path serves `5` / `True` / `False`. That breaks the "wire results are byte-identical" promise and the parity tests should catch it — better to design for it now.
+3. **`first: 0`** on a parent that has rows. The spec's own edge-case paragraph contains the flawed step: "with zero rows prefetched the count is 0 by construction either way" — only true when the parent actually has no rows. `{ booksConnection(first: 0) { totalCount } }` on a parent with 10 books should answer 10.
 
-The fix is to move the connection-building fast path into the generated
-connection class path, or introduce a small internal sentinel/list wrapper that
-the generated connection class consumes. The synthesized relation resolver may
-return the annotated `to_attr` rows when present, but the edge/pageInfo/totalCount
-construction needs to happen in the `DjangoConnection.resolve_connection` /
-generated `<TypeName>Connection.resolve_connection` layer, where the real Relay
-pagination arguments and edge class are already available. Add a through-schema
-test that executes the real `relay.connection` field and proves the fast path is
-not only a direct helper call.
+The fix is cheap and resolver-local, because the resolver can recompute the same `SliceMetadata` from its own arguments that the planner used: when the window is empty **and** `offset == 0` **and** `limit > 0`, the parent is provably empty — serve the fast-path zeros. When the window is empty and `offset > 0` or `limit == 0`, fall back to the per-parent pipeline *for that parent only*. Legitimately-empty parents (the common case) stay on the fast path; only overshoot/zero-limit pages — rare, usually client bugs — pay a per-parent query. Worth a dedicated Decision bullet plus parity tests for both ambiguous shapes. For what it's worth, upstream got exactly this family wrong: strawberry-django's issue #613 reports `hasNextPage` incorrectly computed against empty/fallback results and `last`-only misbehavior in this same mechanism — evidence this is where the borrowed design's sharp edges live.
 
-### P1 - Divergent aliases cannot be detected after today's merge
+## Underspecified areas I'd pin before Slice 1
 
-Decision 6 requires aliased duplicate nested connections with different
-pagination arguments to fall back. Today
-[`optimizer/walker.py::_merge_aliased_selections`][walker] merges same-field
-selections by field name, preserves all response keys, and keeps only the first
-selection's `arguments` when aliases differ. The debug log explicitly says a
-future argument-aware optimizer must change that merge. If Slice 1 adds
-`_plan_connection_relation` after the current merge, the planner cannot know
-that `a: booksConnection(first: 2)` and `b: booksConnection(first: 5)` diverged;
-it will plan one window from the first argument set and mark both aliases as
-planned.
+**The reverse (`last`-only) branch's fast-path math.** Decision 5 spells cursors as `to_base64(prefix, _dst_row_number - 1)` and the page flags in forward terms. Under the reversed-row-number branch, row numbers count from the end, so the true offset is `total_count - row_number` and the flag comparisons invert. The plans.py side mentions the reverse branch; the resolver side never does. Spell it in Decision 5, and add an explicit `test_fast_path_wire_parity_last_only` to Slice 2 — "wire parity vs pipeline" as written doesn't force anyone to write that case, and it's precisely the case upstream shipped broken.
 
-Make argument preservation a Slice 1 foundation task before window planning.
-Either keep connection selections unmerged until after pagination classification,
-or store per-response-key argument payloads on the merged selection. The
-fallback tests need to assert the wrong plan is absent (`Prefetch` and planned
-resolver key), not merely that the query still resolves.
+**The M2M partition column.** "Partitioned by the relation's connector column" is doing a lot of silent work. For reverse FK it's just the child's FK column. For M2M — which is **both** of your live library shapes (`booksConnection` reverse M2M, `genresConnection` forward M2M) — the partition key lives on the through table, and Django's prefetch machinery attaches rows via its own join-derived annotation; upstream special-cases M2M here for exactly this reason. Decision 4 should name the mechanism per relation kind, and the Slice 1 `test_apply_window_pagination_unit` should cover both partition shapes, not one generic "connector." Otherwise the hardest part of the port hides inside the phrase "connector columns ensured." Related: filtering on window functions makes Django wrap the query in a subquery (the 4.2+ feature you cite) — worth one test asserting the `only()` deferred mask and child `select_related` survive that wrap, not just that the pre-execution queryset carries them.
 
-### P1 - The window partition key is under-specified for M2M
+**`totalCount`-only selections.** Fallback shape 4 is "`pageInfo`-only (no `edges { node }` children)" — is `{ booksConnection(first: 3) { totalCount } }` in or out? Presumably it falls back by the same rule, but the spec should say so. And I'd push back gently on the dead-weight argument for both shapes: under strictness `"raise"`, a `pageInfo`-only or `totalCount`-only nested selection becomes an *error* for a completely innocuous query, with no per-field remediation. Since the window machinery serves both cheaply (plan the window with a pk-only projection), planning them shrinks the strictness-flag surface to shapes that genuinely can't be planned (sidecar input, divergent aliases, `SKIP`). That seems like a better trade than the test-surface savings.
 
-Decision 4 repeatedly says "partition by the relation connector column", but the
-implementation plan does not define how that connector is derived for each
-relation kind. Reverse FK can partition by the child table's FK column. Forward
-and reverse M2M cannot safely partition by the child primary key; they need the
-through-table parent-side key that Django's prefetch join uses to attach rows to
-each parent. This is not a corner case: the planned live library proof is mostly
-M2M (`Genre.booksConnection` and `Book.genresConnection`), so the first SQL-shape
-slice depends on this being exact.
+**Strictness error ergonomics.** `OptimizerError("Unplanned N+1: books_connection")` for a sidecar-filtered nested connection will read as an optimizer bug to a consumer who has no idea filtering opts them out of windowing. The risks section already worries about this; a cheap mitigation that doesn't reopen the flag-or-not decision is to thread the fallback *reason* into the message ("not window-planned: selection carries `filter:`/`orderBy:`; resolving per-parent — restructure the query or lower strictness"). Parameterizing `_check_n1` is already in Slice 4's scope, so the reason parameter rides along nearly free.
 
-Add a named helper to the spec, for example
-`window_partition_for_prefetch(field)`, with explicit behavior for reverse FK,
-forward M2M, reverse M2M, and unsupported relation kinds. The tests should cover
-two parents sharing at least one child across an M2M relation; that is the shape
-that exposes an accidental child-pk partition because both parents would receive
-the same global child page instead of their own per-parent page.
+## Smaller notes
 
-### P1 - Zero-row windows cannot supply `totalCount` or full `pageInfo`
+The Slice 1→2 gap creates an interim regression on `main`: the window prefetch executes (one extra query per request) while the per-parent pipeline still runs and discards it. The spec acknowledges the unconsumed-window posture but treats it as test-scoping; if slices are separate PRs landing days apart, every nested-connection request pays a wasted window query in the gap. Since the spec already calls 1–2 "one mechanism split for reviewability," consider landing them as one PR with two reviewable commits, or gating planning behind a module flag Slice 2 flips.
 
-The spec currently says `first: 0` yields an empty window and that `totalCount`
-is `0` "by construction." That contradicts the shipped connection contract:
-`first: 0` over a non-empty set still reports the pre-slice `totalCount`, and
-the existing live root test pins `hasNextPage: true` with `endCursor: null`.
-The same problem occurs for any paginated window that returns no rows even
-though the parent has related rows, such as an `after` cursor past the end.
-With no annotated row in the `to_attr` list, `_dst_total_count` and row-number
-metadata are unavailable.
+Decision 7 is correct, but one consequence deserves a line in Risks next to the root-literal fragmentation note: a client paginating a *nested* connection generates a fresh `after` value per page, so every page of the loop is a distinct cache entry. That's genuinely required (the windows differ), and the LRU bounds it, but it means B1's hit rate goes to zero for exactly the nested-pagination loop — the honest framing is that the cache helps repeated *queries*, not pagination *walks*.
 
-The spec needs an explicit zero-row metadata strategy before claiming "zero
-extra queries" for nested `totalCount`. Viable root-cause options are: overfetch
-one metadata row when the requested edge window is empty, add a separate
-parent-keyed count/exists prefetch for metadata, or deliberately fall back to
-the per-parent pipeline for zero-row windows that request `pageInfo` or
-`totalCount`. What should not ship is `totalCount: 0` for `first: 0` over a
-non-empty relation.
+Decision 3's recognition via `snake_case(sel.name)` against Python-attribute-named dict keys is fine as long as it's the same normalization the walker's `field_map` lookup uses — if a custom name converter is ever supported, the two lookups must share one code path or they'll desync silently. One sentence pinning that would do it.
 
-### P2 - Nested connection optimization must not clobber the parent strictness context
+## What I'd leave alone
 
-The current connection pipeline calls
-[`optimizer/extension.py::apply_connection_optimization`][extension], which
-publishes `DST_OPTIMIZER_PLAN`, `DST_OPTIMIZER_PLANNED`, and related sentinels
-onto the shared `info.context`. A fallback nested connection still runs that
-pipeline per parent. Once Slice 4 starts checking strictness for the connection
-access itself, the fallback path can still overwrite the parent field's planned
-set with the child connection's plan, especially under `"warn"` where execution
-continues after the warning.
+Decision 3's metadata-over-suffix-guessing argument is airtight. The refusal to borrow the `_clone` monkeypatch and queryset-config flag is the right call, and annotation-presence probing plus a reserved `to_attr` is a cleaner integrity check than upstream's. The monotonic fallback property — every unplanned shape is byte-identical to shipped behavior — is the strongest single safety claim in the document, and the test plan actually enforces it (wire parity, not just non-error). Decision 12's joint-cut boundary and the Slice 6 severability fallback are both sensible. I wouldn't restructure any of it; I'd just close the empty-window hole, spell the reverse math and M2M partitioning, and decide the `totalCount`-only question explicitly before Slice 1 starts.
 
-The spec should require scoped publish/restore semantics for nested connection
-pipeline runs, or a context shape that is keyed by runtime path instead of a
-single global sentinel set. Add a test where a warn-mode fallback nested
-connection is followed by a parent-level relation sibling that was planned by
-the root plan. It should not warn or raise; without context scoping, this is the
-case likely to fail because the nested child plan overwrote the parent plan's
-sentinels.
 
-### P2 - Cache-key depth through fragments needs one more rule
+Bug #1 confirmed empirically. Now let me empirically test the M2M window mechanism itself — the part of the borrowed design I flagged as least proven — against real Django:All checks done — let me clean up my scratch test file before writing this up.For this pass I cloned the repo, read `walker.py`, `extension.py`, `plans.py`, `connection.py`, `resolvers.py`, `_context.py`, and the finalizer, downloaded the locked Strawberry 0.316.0 and upstream strawberry-django wheels to check the borrowed mechanism at source level, and ran live reproductions against the fakeshop models. The good news first: nearly every factual claim in the spec checks out — the locked Strawberry really is 0.316.0, `relay_max_results` really defaults to 100, commit `7b40d64` exists with the described content, the "Deliberately ABSENT" docstring block is where the spec says, `_total_count_requested` really is direct-children-scoped, `append_prefetch_unique` keys on `prefetch_to` so a `to_attr` window genuinely can't collide with the list sibling (I verified that empirically too), and the kanban/AGENTS/products-schema claims all match disk. The findings below are where grounding turned up real problems.
 
-Decision 7's "non-root field nodes" rule is correct, but fragment traversal
-needs to preserve response-path depth, not raw fragment-definition nesting. A
-root connection selected inside a fragment on `Query` is still a root field and
-its `first: $n` variable should stay out of the key. A nested connection selected
-inside a fragment on the parent node is still nested and its pagination variable
-must be included.
+## 1. Confirmed live bug: the nested connection's per-parent plan publish clobbers the root plan's context sentinels
 
-Add the root-fragment negative test alongside the planned fragment-carried
-nested-variable positive test. Without it, a syntactic traversal of reachable
-fragment definitions can accidentally re-fragment root connection cache entries,
-which is exactly what Decision 7 is trying to avoid.
+This is the most important thing I found, and it's a bug on `main` today, not a spec problem — but Slices 2, 4, and 5 all build directly on the affected machinery. `apply_to` unconditionally calls `_publish_plan_to_context`, and `stash_on_context` overwrites. The synthesized relation-connection resolver calls `apply_to` **per parent row**, so the first parent's nested pipeline replaces `DST_OPTIMIZER_FK_ID_ELISIONS` (and, under strictness, `DST_OPTIMIZER_PLANNED` / `DST_OPTIMIZER_LOOKUP_PATHS`) with the *nested* plan's sets for the rest of the request. I reproduced it against the library models:
 
-## Smaller Notes
+```
+{ allBooks { shelf { id } } }                          → 1 query  (FK-id elision works)
+{ allBooks { genresConnection(first: 1) { … }
+             shelf { id } } }                          → 5 queries
+```
 
-- Decision 5 should say the fast path uses the generated edge class's
-  `resolve_edge(..., cursor=<zero_based_offset>)` rather than manually naming a
-  cursor prefix. That keeps the cursor prefix owned by Strawberry's edge type.
-- The spec should explicitly preserve the existing `first` + `last` guard
-  ordering when the planner computes `SliceMetadata` at plan time. Planning must
-  not introduce a different error surface or duplicate guard.
-- Add a test for a `"both"` relation where the list sibling and connection
-  sibling are selected together and a consumer already has a plain accessor
-  prefetch. The `to_attr` prefetch must coexist with the accessor prefetch
-  through [`optimizer/plans.py::diff_plan_for_queryset`][plans].
+The root plan correctly elides the shelf join and projects only `id, shelf_id` — then each book's `genresConnection` publish wipes the elision set, so every book's `shelf` resolver misses `_is_fk_id_elided`, falls through to `getattr`, and lazy-loads: one shelf query per book, the exact N+1 the elision was built to remove. With `strictness="raise"` the same query fails outright with `OptimizerError: Unplanned N+1: shelf` at `['allBooks', 0, 'shelf']` — a spurious strictness failure on a fully planned relation.
 
-<!-- LINK DEFINITIONS -->
+The fix is small and belongs in this card (I'd put it in Slice 1 or a Slice 0): `_publish_plan_to_context` should *union* the frozensets into any existing stash rather than overwrite. Resolver keys are branch-sensitive (they embed runtime paths), so union is collision-free by construction; `DST_OPTIMIZER_PLAN` itself is introspection-only and can stay last-wins or become root-only. Without this, Slice 4 wires the connection resolver to consult a sentinel that a sibling nested connection may have just destroyed, and Slice 5's fixed-query-count pins will pass or fail depending on which other fields share the query. Add the mixed-shape regression test (`nested connection + elided FK sibling`) — nothing in the current suites covers it, which is why this survived.
 
-<!-- Root -->
+## 2. Decision 5's fast path cannot live in the resolver — `ConnectionExtension` re-resolves unconditionally
 
-<!-- docs/ -->
+I checked the locked Strawberry source directly. `ConnectionExtension.resolve` is:
 
-<!-- docs/SPECS/ -->
+```python
+return self.connection_type.resolve_connection(
+    cast("Iterable[Node]", next_(source, info, **kwargs)), info=info, before=..., ...)
+```
 
-<!-- docs/builder/ -->
+There is no pass-through for a resolver that already returns a `Connection`. So the spec's design — the resolver probes the `to_attr` and "build[s] the connection directly from the prefetched rows" — hands a built connection into `resolve_connection`, which will try to slice it as a node iterable. This is also exactly why upstream's fast path lives in the *connection class*: `DjangoListConnection.resolve_connection` detects the prefetch and dispatches to `resolve_optimized_connection_by_prefetch`; the resolver never builds the instance.
 
-<!-- django_strawberry_framework/ -->
-[connection]: ../django_strawberry_framework/connection.py
-[extension]: ../django_strawberry_framework/optimizer/extension.py
-[plans]: ../django_strawberry_framework/optimizer/plans.py
-[walker]: ../django_strawberry_framework/optimizer/walker.py
+The corrected wiring for the package: the resolver keeps the `to_attr` probe (only it has `root`), and on a hit returns the rows wrapped in a small package-private marker (a marker rather than a bare list — see the empty-window point from pass 1, and because a bare list is indistinguishable from a legitimate consumer iterable); the generated `<TypeName>Connection.resolve_connection` gains the fast-path branch *before* super-delegation. Two concrete integration consequences the spec must spell out, both grounded in `connection.py` as it exists:
 
-<!-- tests/ -->
+- The `first`+`last` guard runs inside `resolve_connection`, so it's free on this wiring — but the spec's current claim that the guard is shared "because the instance is built through the same class" would have been false on the resolver wiring. Re-homing fixes it for real.
+- `_attach_count_sync` / `_guard_total_count_countable` will **raise** `GraphQLError("totalCount was selected on a connection whose resolver returned a non-queryset iterable…")` for every fast-path `totalCount`, because the marker/rows aren't a QuerySet. The totalCount variant's count attachment needs an annotation branch that reads `_dst_total_count` instead of calling `.count()`. As written, Slice 2 would ship a fast path that errors on precisely the `totalCount` queries it exists to accelerate; `test_fast_path_total_count_from_annotation_no_query` would catch it, but the design text should anticipate it.
 
-<!-- examples/ -->
+## 3. Divergent-alias detection is impossible with today's merge — and the failure mode is silent wrong data
 
-<!-- scripts/ -->
+Decision 6 says the planner "compares resolved pagination arguments across merged aliases." It can't: `_merge_aliased_selections` collapses same-name selections keeping **only the first occurrence's `arguments`**, and the source itself warns about this — "Today's walker ignores `arguments`… If a future slice plans per-argument, this merge must become per-response-key instead of merging." The spec's slice checklist never touches the merge. Without that change, `a: booksConnection(first: 2)` + `b: booksConnection(first: 5)` merges into one selection carrying `first: 2`, the planner windows it, and at resolve time alias `b`'s resolver finds the `to_attr` populated and serves a 2-row window as its 5-row page — silently wrong data, not a fallback. Worse, if alias `b` carries `filter:` and alias `a` doesn't, the merged selection looks sidecar-free, gets planned, and `b` serves an *unfiltered* window.
 
-<!-- .venv/ -->
+So Slice 1 needs an explicit item: extend the merge to accumulate per-response-key argument sets (an `_optimizer_argument_sets` sibling to `_optimizer_response_keys`), which is what divergence detection actually reads. And I'd add a one-line defensive guard on the resolver/fast-path side regardless: never consume the window when the call's own `kwargs` carry `filter`/`order_by`, and optionally validate that the window rows' `_dst_row_number` range matches the slice the resolver's own arguments imply — a cheap integrity check that converts any future plan/args desync from wrong-data into fallback.
 
-<!-- External -->
+## 4. M2M windows: empirically verified working — but the partition expression needs per-kind specification
+
+This softens my pass-1 concern with evidence. I ran the windowed `to_attr` prefetch against the real library models on the project's Django:
+
+- Reverse FK (`Shelf.books`), partition by the child FK attname `"shelf_id"`: correct per-parent row numbers and counts, 2 queries.
+- Reverse M2M (`Genre.books`), partition by the child's *forward m2m field name* `"genres"`: correct — including a book in two genres appearing in both windows with independent row numbers, and the generated SQL shows Django resolving the partition onto the prefetch's own through join (`PARTITION BY "library_book_genres"."genre_id"`) inside the window-filter subquery wrap.
+- Forward M2M (`Book.genres`), partition by the reverse query name `"books"`: correct.
+- Visibility-filtered M2M window: row numbers and `_dst_total_count` computed post-filter, as Decision 5 requires.
+- The `"both"` coexistence claim: accessor-keyed list prefetch + `to_attr` window on the same relation ran in 3 queries with the list returning the full set and the window the page — Decision 4 verified.
+
+So the mechanism is sound, but "partitioned by the relation's connector column" is wrong vocabulary for M2M, and notably the repo's existing `_ensure_connector_only_fields` resolves the M2M "connector" to the **child pk** — which is *not* the partition key and must not be reused for it. Decision 4 should pin a per-kind table: reverse FK → `parent_field.field.attname`; reverse M2M prefetch → the child's forward m2m field name; forward M2M prefetch → the target's reverse *query* name (which differs from the accessor for relations without `related_name` — add that shape to the plans.py unit tests).
+
+## 5. Plan-time `SliceMetadata` errors change error locality
+
+`SliceMetadata.from_arguments` raises `ValueError` for `first < 0` or `first > max_results` and `TypeError` for a malformed cursor prefix. On the pipeline path those surface as the *nested field's* error. Once Slice 1 calls it during the root plan walk, the same bad argument detonates inside the root field's resolution — nulling the entire root field and moving the error path. `_plan_connection_relation` should catch both, leave the selection unplanned, and let the fallback reproduce today's error placement (which also keeps the monotonic-fallback property literally true for malformed input).
+
+## 6. Performance improvements the grounding surfaced
+
+The directive-variable collection in `_build_cache_key` re-walks the full operation AST on **every call**, and on the nested-fallback path that's per parent row — only the printed-AST string is memoized today. Slice 3 is about to add a *second* full-AST walk (pagination variables) to the same function. Memoize both collected name-sets per `id(operation)` in the existing `_printed_ast_cache`-style per-execution memo, and derive them from the same reachable-fragments traversal the doc key already performs — one walk per execution instead of two walks per parent. That's a measurable win for exactly the sidecar-fallback shapes that will remain per-parent after this card.
+
+Also worth one line in Decision 7's risks: a fragment spread *at the root level* contains root field nodes — the "non-root" determination must treat fields reached through a root-level spread as root, or every fragment-shaped pagination loop fragments the cache. Your Slice 3 tests cover fragment-carried *nested* args but not fragment-carried *root* args needing to stay out of the key.
+
+## 7. Smaller verified notes
+
+The Decision 9 helper-move list is incomplete: `_named_children` calls `_is_converted_fragment`, and the moved helpers use extension-local `_response_key` (the walker already has its own copy to dedupe against) — the consolidation must take `_is_converted_fragment` along or the import direction breaks anyway. On Decision 8, the `to_attr` lands in the instance `__dict__`, not `_prefetched_objects_cache`, so the `_check_n1` parameterization maps to `_will_lazy_load_single`'s first branch, not the many-side probe — and since `kind=None` is documented as a test-only contract, give the connection probe its own explicit kind rather than silently repurposing it. Finally, the spec source-verifies everything against locked Strawberry 0.316.0, but `pyproject.toml`'s floor is `strawberry-graphql>=0.262.0` — this card adds the package's first direct dependency on `strawberry.relay.utils.SliceMetadata` and on `ConnectionExtension`'s exact resolve behavior, neither verified at the floor; either raise the floor in the joint cut or add a floor-version check to the test plan.
+
+Bottom line: the plan's architecture survives grounding well — the windowed-prefetch mechanism demonstrably works on every relation shape the card targets, including the M2M shapes I was worried about in pass one. What doesn't survive contact are three specifics: the fast path's home (it must move into `resolve_connection`, with the two totalCount guards taught about annotations), the divergent-alias story (the merge erases the data the planner needs), and the sentinel-publish clobbering, which is a live correctness bug worth fixing first since every strictness and SQL-shape assertion in Slices 4–6 will be built on top of those sentinels.

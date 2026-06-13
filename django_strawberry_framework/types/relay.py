@@ -22,7 +22,6 @@ package is not imported at runtime.
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -35,30 +34,19 @@ from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError
 
+# ``SyncMisuseError`` moved to ``utils/querysets.py`` in the 0.0.9 DRY pass
+# (``docs/feedback.md`` Major 1); the redundant ``as`` alias re-exports it from
+# this module so ``from ...types.relay import SyncMisuseError`` and the
+# ``types/__init__.py`` re-export keep working unchanged.
+from ..utils.querysets import SyncMisuseError as SyncMisuseError
+from ..utils.querysets import (
+    apply_type_visibility_async,
+    apply_type_visibility_sync,
+    initial_queryset,
+)
+
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import (Slice 4 quoted hint).
     from .definition import DjangoTypeDefinition
-
-
-class SyncMisuseError(ConfigurationError, RuntimeError):
-    """Raised when a sync resolver context encounters an async ``get_queryset``.
-
-    Typed marker for the "async ``get_queryset`` hook invoked from a
-    sync resolver" misuse. Multiple-inherits ``ConfigurationError``
-    AND ``RuntimeError`` so callers catching either base class still
-    match:
-
-    - ``except ConfigurationError`` (the package's convention for
-      configuration-time errors).
-    - ``except RuntimeError`` (consumer code catching ``RuntimeError``
-      after the ``FilterSet.apply`` dispatcher rethrow continues to
-      work).
-
-    The dispatcher in ``filters/sets.py::FilterSet.apply`` catches
-    this subclass directly. Consumers who want a focused catch should
-    also match the subclass. Exported through
-    ``django_strawberry_framework`` so it can be imported without
-    reaching into private ``types.relay``.
-    """
 
 
 def implements_relay_node(type_cls: type) -> bool:
@@ -313,46 +301,6 @@ def _resolve_id_default(cls: type, root: models.Model, *, info: Any) -> str:  # 
         return str(getattr(root, id_attr))
 
 
-def _apply_get_queryset_sync(cls: type, qs: models.QuerySet, info: Any) -> models.QuerySet:
-    """Run ``cls.get_queryset`` in a sync context; reject async hooks loudly.
-
-    Decision 9 makes a consumer's ``DjangoType.get_queryset`` allowed to
-    be sync or async, but a sync resolver context cannot await an async
-    hook safely (event-loop edge cases dominate the bridge). On the sync
-    path we therefore close the unawaited coroutine to silence the
-    "coroutine was never awaited" warning and raise a named
-    ``SyncMisuseError`` (a ``ConfigurationError`` subclass that also
-    inherits ``RuntimeError``) that points the consumer at the async
-    resolver path or a sync ``get_queryset`` rewrite.
-    """
-    result = cls.get_queryset(qs, info)
-    if inspect.iscoroutine(result):
-        result.close()
-        raise SyncMisuseError(
-            f"{cls.__name__}.get_queryset returned a coroutine in a sync "
-            "resolver context. The Relay node defaults only await async "
-            "get_queryset hooks on the async branch; either invoke the "
-            "Relay node default from an async resolver, or redefine "
-            "get_queryset as a sync method.",
-        )
-    return result
-
-
-async def _apply_get_queryset_async(cls: type, qs: models.QuerySet, info: Any) -> models.QuerySet:
-    """Run ``cls.get_queryset`` in an async context, awaiting awaitables.
-
-    Sync ``get_queryset`` returns the queryset directly and is passed
-    through. Async ``get_queryset`` returns a coroutine which is awaited
-    here before the id filter runs - the Decision 9 contract that the
-    previous implementation broke (it called the hook synchronously then
-    invoked ``.filter`` on a coroutine).
-    """
-    result = cls.get_queryset(qs, info)
-    if inspect.isawaitable(result):
-        result = await result
-    return result
-
-
 def _coerce_node_id(node_id: Any) -> Any:
     return node_id.node_id if isinstance(node_id, relay.GlobalID) else node_id
 
@@ -389,7 +337,7 @@ def _model_for(cls: type) -> type[models.Model]:
 
     Centralizes the ``cls.__django_strawberry_definition__.model`` lookup
     so model-only reads share one source of truth with the queryset-variant
-    lookup in ``_initial_queryset``. Mirrors ``_initial_queryset``'s
+    lookup in ``utils/querysets.py::initial_queryset``. Mirrors that helper's
     contract: callers are responsible for ``cls`` being a registered
     ``DjangoType``; a missing definition surfaces as a raw ``AttributeError``.
     """
@@ -799,16 +747,6 @@ def decode_global_id(gid: relay.GlobalID | str) -> tuple[type, str]:
     return target_type, node_id
 
 
-def _initial_queryset(cls: type) -> models.QuerySet:
-    """Return ``model._default_manager.all()`` for the declared model.
-
-    Centralizes the ``cls.__django_strawberry_definition__.model``
-    lookup so both the sync and async assembly paths share one source of
-    truth for step 1 of the Decision 3 four-step shape.
-    """
-    return _model_for(cls)._default_manager.all()
-
-
 def _order_nodes(
     cls: type,
     results: list,
@@ -877,7 +815,7 @@ def _resolve_node_default(
     id_attr = cls.resolve_id_attr()
     if in_async_context():
         return _resolve_node_async(cls, id_attr, node_id, info=info, required=required)
-    qs = _apply_get_queryset_sync(cls, _initial_queryset(cls), info)
+    qs = apply_type_visibility_sync(cls, initial_queryset(cls), info)
     qs = _apply_node_filter(qs, id_attr, node_id=node_id)
     return qs.get() if required else qs.first()
 
@@ -898,7 +836,7 @@ async def _resolve_node_async(
     both shapes; this is the awaitable that actually delivers on that
     contract.
     """
-    qs = await _apply_get_queryset_async(cls, _initial_queryset(cls), info)
+    qs = await apply_type_visibility_async(cls, initial_queryset(cls), info)
     qs = _apply_node_filter(qs, id_attr, node_id=node_id)
     return await (qs.aget() if required else qs.afirst())
 
@@ -938,7 +876,7 @@ def _resolve_nodes_default(
     id_attr = cls.resolve_id_attr()
     if in_async_context():
         return _resolve_nodes_async(cls, id_attr, node_ids, info=info, required=required)
-    qs = _apply_get_queryset_sync(cls, _initial_queryset(cls), info)
+    qs = apply_type_visibility_sync(cls, initial_queryset(cls), info)
     coerced_ids = _coerce_node_ids(node_ids)
     qs = _apply_node_filter(qs, id_attr, node_ids=coerced_ids)
     if coerced_ids is None:
@@ -963,7 +901,7 @@ async def _resolve_nodes_async(
     ``async for``); when ``node_ids`` is provided, materializes via
     ``async for`` and returns the order-preserving list shape.
     """
-    qs = await _apply_get_queryset_async(cls, _initial_queryset(cls), info)
+    qs = await apply_type_visibility_async(cls, initial_queryset(cls), info)
     coerced_ids = _coerce_node_ids(node_ids)
     qs = _apply_node_filter(qs, id_attr, node_ids=coerced_ids)
     if coerced_ids is None:

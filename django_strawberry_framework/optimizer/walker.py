@@ -16,6 +16,7 @@ from ..utils.connections import (
     derive_connection_window_bounds,
     has_connection_sidecar_kwargs,
 )
+from ..utils.querysets import apply_type_visibility_sync
 from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
 from . import logger
@@ -31,6 +32,31 @@ from .plans import (
     runtime_path_from_info,
     window_partition_for_prefetch,
 )
+from .selections import (
+    included_field_selections,
+    is_fragment,
+    named_children,
+    node_children_with_runtime_prefix,
+    response_key,
+    response_keys,
+    should_include,
+    with_runtime_prefix,
+)
+
+# The selection-traversal primitives moved to ``optimizer/selections.py`` in the
+# 0.0.9 DRY pass (``docs/feedback.md`` Major 2) so the walker and the AST seam in
+# ``extension.py`` share ONE fragment/directive/response-key implementation. The
+# underscore aliases keep this module's bodies - and the tests that import these
+# names from ``optimizer.walker`` - working unchanged; the walker-specific merge
+# / runtime-prefix / argument helpers below consume them.
+_should_include = should_include
+_is_fragment = is_fragment
+_response_key = response_key
+_response_keys = response_keys
+_included_field_selections = included_field_selections
+_named_children = named_children
+_node_children_with_runtime_prefix = node_children_with_runtime_prefix
+_with_runtime_prefix = with_runtime_prefix
 
 
 def plan_optimizations(
@@ -170,10 +196,21 @@ def _build_child_queryset(
     ``has_custom_qs`` is the precomputed value of
     ``target_type.has_custom_get_queryset()`` from the caller, so the
     method does not need to be called twice on the prefetch path.
+
+    The custom ``get_queryset`` visibility hook runs through the shared
+    ``utils/querysets.py::apply_type_visibility_sync`` (the 0.0.9 DRY pass,
+    ``docs/feedback.md`` Major 1) so plan-time prefetch visibility uses the SAME
+    sync routing the resolver surfaces do: an async-only related ``get_queryset``
+    surfaces a clean ``SyncMisuseError`` here (the optimizer walker is sync; a
+    coroutine would otherwise leak into ``OptimizationPlan.apply``) - consistent
+    with the connection field's documented "nested async ``get_queryset`` ->
+    ``relation_shapes = list``" recourse. The base queryset stays the related
+    model's own ``_default_manager.all()`` (NOT ``initial_queryset(target_type)``
+    - the prefetch child is keyed on ``field.related_model``).
     """
     queryset = field.related_model._default_manager.all()
     if has_custom_qs:
-        queryset = target_type.get_queryset(queryset, info)
+        queryset = apply_type_visibility_sync(target_type, queryset, info)
     return queryset
 
 
@@ -839,43 +876,6 @@ def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> 
     )
 
 
-def _should_include(selection: Any) -> bool:
-    """Evaluate ``@skip`` / ``@include`` directives on a selection."""
-    directives = getattr(selection, "directives", None) or {}
-    skip = directives.get("skip")
-    if skip is not None:
-        value = skip.get("if")
-        if value is True:
-            return False
-    include = directives.get("include")
-    if include is not None:
-        value = include.get("if")
-        if value is False:
-            return False
-    return True
-
-
-def _included_field_selections(selections: list[Any]) -> list[Any]:
-    """Return included fields with fragment bodies inlined before field merging.
-
-    Directive filtering happens on both fragment nodes and their nested field
-    selections. Returning a flat field list lets alias/relation merging combine
-    duplicate relation branches before generated child ``Prefetch`` querysets
-    are built.
-    """
-    result: list[Any] = []
-    for selection in selections:
-        if not _should_include(selection):
-            continue
-        if _is_fragment(selection):
-            result.extend(
-                _included_field_selections(list(getattr(selection, "selections", None) or [])),
-            )
-            continue
-        result.append(selection)
-    return result
-
-
 def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
     """Merge same-field selections while preserving all represented response keys.
 
@@ -965,18 +965,6 @@ def _aliased_arguments_diverge(selection: Any) -> bool:
     return any(payload != first for payload in payloads[1:])
 
 
-def _response_key(selection: Any) -> str:
-    """Return the GraphQL response key for a field selection."""
-    return getattr(selection, "alias", None) or selection.name
-
-
-def _response_keys(selection: Any) -> tuple[str, ...]:
-    """Return all response keys represented by a possibly merged selection."""
-    return tuple(
-        getattr(selection, "_optimizer_response_keys", None) or (_response_key(selection),),
-    )
-
-
 def _selection_runtime_prefixes(selection: Any) -> list[tuple[str, ...]] | None:
     """Return selection-specific runtime prefixes carried by connection extraction."""
     prefixes = getattr(selection, "_optimizer_runtime_prefixes", None)
@@ -998,76 +986,19 @@ def _merge_runtime_prefixes(merged: Any, selection: Any) -> None:
             merged._optimizer_runtime_prefixes.append(prefix)
 
 
-def _is_fragment(selection: Any) -> bool:
-    """Return ``True`` if the selection is a fragment spread or inline fragment."""
-    return hasattr(selection, "type_condition")
-
-
 # ---------------------------------------------------------------------------
-# ``edges { node }`` selection-unwrap helpers (spec-033 Decision 9)
+# ``edges { node }`` selection-unwrap orchestration (spec-033 Decision 9).
 #
-# Consolidated HERE (from ``optimizer/extension.py``) so the root-connection
-# seam (``extension._connection_node_child_selections``) and the walker's nested
-# ``_plan_connection_relation`` unwrap an ``edges { node { ... } }`` wrapper with
-# ONE fragment-aware, directive-aware, runtime-prefix-carrying implementation.
-# ``extension`` imports these back (``extension`` already imports from ``walker``;
-# the reverse would cycle). ``_converted_selection_included`` is just
-# ``_should_include`` (same module now), and the converted-fragment predicate is
-# the existing ``_is_fragment`` above (byte-identical ``hasattr(...,
-# "type_condition")``) - both collapsed to one site here.
+# The fragment-aware / directive-aware / runtime-prefix-carrying PRIMITIVES
+# (``named_children`` / ``node_children_with_runtime_prefix`` /
+# ``with_runtime_prefix`` / ``should_include`` / ``is_fragment``) live in
+# ``optimizer/selections.py`` (the 0.0.9 DRY pass, ``docs/feedback.md`` Major 2)
+# so the root-connection seam (``extension._connection_node_child_selections``)
+# and the walker's nested ``_plan_connection_relation`` unwrap an
+# ``edges { node { ... } }`` wrapper with ONE implementation. The walker reaches
+# them through the underscore aliases bound at module top; the per-caller
+# orchestration (``_connection_node_selections`` below) stays here.
 # ---------------------------------------------------------------------------
-
-
-def _named_children(selection: Any, name: str) -> list[Any]:
-    """Return included direct children named ``name``, recursing through fragments."""
-    children: list[Any] = []
-    for child in getattr(selection, "selections", None) or []:
-        if not _should_include(child):
-            continue
-        if _is_fragment(child):
-            for fragment_child in getattr(child, "selections", None) or []:
-                fragment_shell = SimpleNamespace(selections=[fragment_child])
-                children.extend(_named_children(fragment_shell, name))
-            continue
-        if getattr(child, "name", None) == name:
-            children.append(child)
-    return children
-
-
-def _node_children_with_runtime_prefix(
-    node_selection: Any,
-    *,
-    runtime_prefixes: tuple[tuple[str, ...], ...],
-) -> list[Any]:
-    """Clone node children with a connection-aware runtime prefix."""
-    children: list[Any] = []
-    for child in getattr(node_selection, "selections", None) or []:
-        if not _should_include(child):
-            continue
-        children.append(_with_runtime_prefix(child, runtime_prefixes))
-    return children
-
-
-def _with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...], ...]) -> Any:
-    """Clone a node-level selection carrying runtime prefixes for the walker."""
-    if _is_fragment(selection):
-        return SimpleNamespace(
-            name=getattr(selection, "name", None),
-            type_condition=selection.type_condition,
-            directives=getattr(selection, "directives", None) or {},
-            selections=[
-                _with_runtime_prefix(child, runtime_prefixes)
-                for child in getattr(selection, "selections", None) or []
-            ],
-        )
-    return SimpleNamespace(
-        name=selection.name,
-        alias=getattr(selection, "alias", None),
-        directives=getattr(selection, "directives", None) or {},
-        arguments=getattr(selection, "arguments", None) or {},
-        selections=list(getattr(selection, "selections", None) or []),
-        _optimizer_runtime_prefixes=list(runtime_prefixes),
-    )
 
 
 def _relation_connection_to_attr(relation_field_name: str) -> str:

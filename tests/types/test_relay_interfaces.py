@@ -1335,9 +1335,9 @@ def test_model_for_returns_registered_model():
 
     Pins the single-source-of-truth contract for the
     ``cls.__django_strawberry_definition__.model`` lookup that
-    ``install_is_type_of``, ``_check_composite_pk_for_relay_node``,
-    ``_initial_queryset``, and ``_order_nodes`` all share. A divergence
-    between the helper and the direct attribute read would surface here.
+    ``install_is_type_of``, ``_check_composite_pk_for_relay_node``, and
+    ``_order_nodes`` share with ``utils/querysets.py::initial_queryset``. A
+    divergence between the helper and the direct attribute read would surface here.
     """
 
     class CategoryNode(DjangoType):

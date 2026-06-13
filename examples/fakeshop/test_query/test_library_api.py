@@ -591,9 +591,9 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
 def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http():
     """End-to-end ``Manager -> QuerySet`` coercion via a sync consumer ``resolver=``.
 
-    Pins ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"result = result.all()"`` - the field-wrapper's
-    ``_post_process_consumer_sync`` ``Manager.all()`` coercion before
-    ``_apply_get_queryset_sync`` runs (rev4 M1). The fakeshop resolver
+    Pins ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"source = source.all()"`` - the field-wrapper's
+    shared ``Manager.all()`` coercion (reached via ``_post_process_consumer_sync``) before
+    ``apply_type_visibility_sync`` runs (rev4 M1). The fakeshop resolver
     ``apps.library.schema._branches_manager_resolver`` returns
     ``Branch.objects`` (a ``Manager``, NOT a ``QuerySet``); rows coming
     back through ``/graphql/`` prove the wrapper coerced and applied the
@@ -2111,6 +2111,73 @@ def test_nullability_override_acceptance_api_is_queryable():
     rows = payload["data"]["allLibraryNullabilityOverrideBooks"]
     # Only the non-null-subtitle row survives the resolver's exclude().
     assert rows == [{"title": "Parable of the Sower", "subtitle": "Earthseed"}]
+
+
+@pytest.mark.django_db
+def test_public_patron_exclude_deny_list_shapes_type_and_resolves():
+    """``PublicPatronType`` (``Meta.exclude``) drops PII/financial columns; ``PatronType`` keeps them.
+
+    ``PublicPatronType`` selects via a deny-list ``Meta.exclude = ("email",
+    "lifetime_fines_cents")`` over the same ``Patron`` model that the primary
+    ``PatronType`` selects via an allow-list ``Meta.fields``. This pins both halves
+    of the contrast: the excluded columns are absent from the GraphQL type
+    (selecting one is a query error), the kept columns resolve, and the primary
+    ``PatronType`` is unaffected.
+    """
+    models.Patron.objects.create(
+        name="Ada",
+        email="ada@example.com",
+        lifetime_fines_cents=1234,
+    )
+
+    # 1. Schema shape: the two excluded columns are gone from PublicPatronType,
+    #    while the allow-list primary PatronType still carries lifetimeFinesCents.
+    response = _post_graphql(
+        """
+        query {
+          public: __type(name: "PublicPatronType") { fields { name } }
+          primary: __type(name: "PatronType") { fields { name } }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    public_fields = {field["name"] for field in payload["data"]["public"]["fields"]}
+    primary_fields = {field["name"] for field in payload["data"]["primary"]["fields"]}
+    assert "email" not in public_fields
+    assert "lifetimeFinesCents" not in public_fields
+    assert {
+        "id",
+        "name",
+        "card",
+        "loans",
+    } <= public_fields
+    # Contrast: the allow-list primary still exposes the financial column.
+    assert "lifetimeFinesCents" in primary_fields
+
+    # 2. Acceptance: the kept columns resolve over the dedicated root field.
+    data_response = _post_graphql(
+        """
+        query {
+          allLibraryPublicPatrons {
+            name
+          }
+        }
+        """,
+    )
+    assert data_response.status_code == 200
+    data_payload = data_response.json()
+    assert "errors" not in data_payload, data_payload
+    assert data_payload["data"]["allLibraryPublicPatrons"] == [{"name": "Ada"}]
+
+    # 3. An excluded column is not selectable - the deny-list removed it from the type.
+    excluded_response = _post_graphql(
+        "query { allLibraryPublicPatrons { lifetimeFinesCents } }",
+    )
+    excluded_payload = excluded_response.json()
+    assert "errors" in excluded_payload, excluded_payload
+    assert "lifetimeFinesCents" in str(excluded_payload["errors"])
 
 
 # ---------------------------------------------------------------------------

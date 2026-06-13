@@ -24,10 +24,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..sets_mixins import LazyRelatedClassMixin
+from ..sets_mixins import RelatedSetTargetMixin
 
 
-class RelatedOrder(LazyRelatedClassMixin):
+class RelatedOrder(RelatedSetTargetMixin):
     """Target another ``OrderSet`` to enable nested-relation ordering.
 
     Collapsed port of ``django_graphene_filters/orders.py::BaseRelatedOrder``
@@ -45,6 +45,13 @@ class RelatedOrder(LazyRelatedClassMixin):
       file).
     """
 
+    # ``RelatedSetTargetMixin`` parameterization: the slots the shared
+    # owner-bind / lazy-target machinery reads (the 0.0.9 DRY pass,
+    # ``docs/feedback.md`` Major 3). The filter twin uses
+    # ``("_filterset", "bound_filterset")``.
+    _target_attr = "_orderset"
+    _owner_attr = "bound_orderset"
+
     def __init__(self, orderset: str | type, field_name: str | None = None) -> None:
         """Store the (possibly-lazy) target orderset and the ORM field name."""
         super().__init__()
@@ -57,10 +64,10 @@ class RelatedOrder(LazyRelatedClassMixin):
         Idempotent so ``OrderSetMetaclass.__new__`` can rebind every
         related order on subclass creation without clobbering a deliberate
         override. Mirrors the filter side's
-        ``RelatedFilter.bind_filterset`` idempotency contract.
+        ``RelatedFilter.bind_filterset`` idempotency contract. Thin wrapper
+        over the shared ``RelatedSetTargetMixin._bind_owner``.
         """
-        if not hasattr(self, "bound_orderset"):
-            self.bound_orderset = orderset
+        self._bind_owner(orderset)
 
     @property
     def orderset(self) -> type:
@@ -69,14 +76,11 @@ class RelatedOrder(LazyRelatedClassMixin):
         Re-stores the resolved class so the next access is a plain
         attribute read; setter remains usable when a caller wants to
         substitute the target. String / callable resolution is delegated
-        to ``LazyRelatedClassMixin.resolve_lazy_class``.
+        to ``LazyRelatedClassMixin.resolve_lazy_class`` via the shared
+        ``RelatedSetTargetMixin._resolved_target``.
         """
-        self._orderset = self.resolve_lazy_class(
-            self._orderset,
-            getattr(self, "bound_orderset", None),
-        )
-        return self._orderset
+        return self._resolved_target()
 
     @orderset.setter
     def orderset(self, value: Any) -> None:
-        self._orderset = value
+        self._set_target(value)

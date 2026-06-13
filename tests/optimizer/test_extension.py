@@ -40,8 +40,15 @@ import pytest
 import strawberry
 from apps.products import services
 from apps.products.models import Category, Entry, Item, Property
+from strawberry import relay
 
-from django_strawberry_framework import DjangoOptimizerExtension, DjangoType, finalize_django_types
+from django_strawberry_framework import (
+    DjangoListField,
+    DjangoOptimizerExtension,
+    DjangoType,
+    finalize_django_types,
+    strawberry_config,
+)
 from django_strawberry_framework.optimizer import logger as optimizer_logger
 from django_strawberry_framework.optimizer.extension import (
     _named_children,
@@ -1257,6 +1264,386 @@ def test_collect_directive_var_names_no_directives():
     doc = parse("{ items { name } }")
     names = _collect_directive_var_names(doc.definitions[0])
     assert names == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# B1: plan-cache key hygiene for nested pagination variables (spec-033 Slice 3,
+# Decision 7). Nested ``first``/``last``/``before``/``after`` variables are
+# baked into windowed prefetch plans by Slice 1, so their values must key the
+# cache; root pagination variables stay out (root slicing is post-plan).
+# ---------------------------------------------------------------------------
+
+
+def _key_for(
+    operation,
+    *,
+    variable_values,
+    path_key,
+    model=Category,
+):
+    """Build a ``_build_cache_key`` tuple for ``operation`` at root ``path_key``.
+
+    Mirrors the ``SimpleNamespace`` info pattern used by the existing direct
+    cache-key pins (``test_cache_key_includes_root_runtime_path_for_same_model_fields``).
+    The two calls under test differ only in ``variable_values``, so any key
+    inequality is attributable to the variable-collection rule.
+    """
+    info = SimpleNamespace(
+        operation=operation,
+        fragments={},
+        variable_values=variable_values,
+        path=SimpleNamespace(key=path_key, prev=None),
+    )
+    return DjangoOptimizerExtension._build_cache_key(info, model)
+
+
+def test_nested_pagination_variable_keys_cache():
+    """A nested ``first: $n`` value keys the plan cache: two values -> two keys."""
+    from graphql import parse
+
+    operation = parse(
+        "query Q($n: Int!) { parents { booksConnection(first: $n) "
+        "{ edges { node { title } } } } }",
+    ).definitions[0]
+
+    key_two = _key_for(operation, variable_values={"n": 2}, path_key="parents")
+    key_five = _key_for(operation, variable_values={"n": 5}, path_key="parents")
+    assert key_two != key_five
+
+
+def test_root_pagination_variable_shares_cache():
+    """A root ``first: $n`` value does NOT key the cache (root slicing post-plan)."""
+    from graphql import parse
+
+    operation = parse(
+        "query Q($n: Int!) { someRootConnection(first: $n) { edges { node { name } } } }",
+    ).definitions[0]
+
+    key_two = _key_for(operation, variable_values={"n": 2}, path_key="someRootConnection")
+    key_five = _key_for(operation, variable_values={"n": 5}, path_key="someRootConnection")
+    assert key_two == key_five
+
+
+def test_mixed_root_and_nested_pagination_variables():
+    """Only the nested pagination variable keys: vary root -> share, vary nested -> split."""
+    from graphql import parse
+
+    operation = parse(
+        "query Q($r: Int!, $n: Int!) { parents(first: $r) "
+        "{ booksConnection(first: $n) { edges { node { title } } } } }",
+    ).definitions[0]
+
+    base = _key_for(operation, variable_values={"r": 1, "n": 2}, path_key="parents")
+    vary_root = _key_for(operation, variable_values={"r": 9, "n": 2}, path_key="parents")
+    vary_nested = _key_for(operation, variable_values={"r": 1, "n": 5}, path_key="parents")
+
+    assert base == vary_root  # root pagination variable is invariant in the plan
+    assert base != vary_nested  # nested pagination variable keys the cache
+
+
+def test_root_fragment_pagination_variable_shares_cache():
+    """A root connection through a ``Query`` fragment is still root: ``$n`` stays out.
+
+    Decision 7 line 346: depth is preserved at the spread SITE. The fragment
+    spreads at response-path depth 0, so its connection field is root and its
+    pagination variable does not key the cache.
+    """
+    from graphql import parse
+
+    doc = parse(
+        "query Q($n: Int!) { ...RootFrag } "
+        "fragment RootFrag on Query { someRootConnection(first: $n) "
+        "{ edges { node { name } } } }",
+    )
+    operation = doc.definitions[0]
+    fragments = {d.name.value: d for d in doc.definitions[1:]}
+    info_two = SimpleNamespace(
+        operation=operation,
+        fragments=fragments,
+        variable_values={"n": 2},
+        path=SimpleNamespace(key="someRootConnection", prev=None),
+    )
+    info_five = SimpleNamespace(
+        operation=operation,
+        fragments=fragments,
+        variable_values={"n": 5},
+        path=SimpleNamespace(key="someRootConnection", prev=None),
+    )
+    assert DjangoOptimizerExtension._build_cache_key(
+        info_two,
+        Category,
+    ) == DjangoOptimizerExtension._build_cache_key(info_five, Category)
+
+
+def test_fragment_carried_nested_pagination_variable_collected():
+    """A nested connection through a parent-node fragment is still nested: ``$n`` keys.
+
+    The fragment spreads inside ``node`` (response-path depth >= 1), so its
+    ``booksConnection`` field is nested and its pagination variable keys the
+    cache - the positive spread-site-depth pin (Decision 7 line 346).
+    """
+    from graphql import parse
+
+    doc = parse(
+        "query Q($n: Int!) { parents { edges { node { ...BooksFrag } } } } "
+        "fragment BooksFrag on ParentNode { booksConnection(first: $n) "
+        "{ edges { node { title } } } }",
+    )
+    operation = doc.definitions[0]
+    fragments = {d.name.value: d for d in doc.definitions[1:]}
+    info_two = SimpleNamespace(
+        operation=operation,
+        fragments=fragments,
+        variable_values={"n": 2},
+        path=SimpleNamespace(key="parents", prev=None),
+    )
+    info_five = SimpleNamespace(
+        operation=operation,
+        fragments=fragments,
+        variable_values={"n": 5},
+        path=SimpleNamespace(key="parents", prev=None),
+    )
+    assert DjangoOptimizerExtension._build_cache_key(
+        info_two,
+        Category,
+    ) != DjangoOptimizerExtension._build_cache_key(info_five, Category)
+
+
+def test_pagination_var_collection_is_syntactic_superset():
+    """A non-connection nested field with ``first: $n`` is still collected (over-collection).
+
+    Decision 7 line 347: the collection is a syntactic superset by design - any
+    non-root field's pagination-named variable keys the cache, even on a plain
+    resolver that is not a synthesized connection. Over-collection costs cheap
+    duplicate cache entries; under-collection would serve wrong data.
+    """
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import (
+        _collect_nested_pagination_var_names,
+    )
+
+    doc = parse("{ parents { someField(first: $n) { value } } }")
+    names = _collect_nested_pagination_var_names(doc.definitions[0])
+    assert names == frozenset({"n"})
+
+
+def test_collect_nested_pagination_var_names_excludes_root_field():
+    """Root-field pagination variables are excluded from the collected name set."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import (
+        _collect_nested_pagination_var_names,
+    )
+
+    doc = parse("query Q($n: Int!) { rootConn(first: $n) { edges { node { name } } } }")
+    names = _collect_nested_pagination_var_names(doc.definitions[0])
+    assert names == frozenset()
+
+
+def test_collect_nested_pagination_var_names_all_arg_names():
+    """All four pagination arg names collect; a non-pagination arg (``limit``) does not."""
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import (
+        _collect_nested_pagination_var_names,
+    )
+
+    doc = parse(
+        "query Q($f: Int, $l: Int, $b: String, $a: String, $lim: Int) { "
+        "parents { conn(first: $f, last: $l, before: $b, after: $a, limit: $lim) "
+        "{ edges { node { name } } } } }",
+    )
+    names = _collect_nested_pagination_var_names(doc.definitions[0])
+    assert names == frozenset(
+        {
+            "f",
+            "l",
+            "b",
+            "a",
+        },
+    )  # ``$lim`` (a filter var) stays out
+
+
+def test_collect_nested_pagination_var_names_ignores_inline_literals():
+    """A nested pagination arg with an inline literal (not a variable) is not collected.
+
+    Inline literals already key the cache via the printed AST; the collector
+    only tracks variable references (mirroring the directive collector).
+    """
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import (
+        _collect_nested_pagination_var_names,
+    )
+
+    doc = parse("{ parents { booksConnection(first: 3) { edges { node { title } } } } }")
+    names = _collect_nested_pagination_var_names(doc.definitions[0])
+    assert names == frozenset()
+
+
+def _categories_list_schema(ext):
+    """Build a ``DjangoListField(CategoryType)`` root over the reverse FK ``Category.items``.
+
+    With the optimizer installed the parent ``Category`` queryset is planned, so
+    the nested ``itemsConnection`` window lands on each category's ``to_attr``
+    and the nested pagination value is baked into the cached plan - the
+    end-to-end shape Slice 3's cache-key rule must keep honest. A non-visibility
+    synthetic target (no ``get_queryset``), so the plan is cacheable (spec line
+    350: the visibility-bearing library shape is uncacheable for an orthogonal
+    reason and is covered by Slice 5, not here).
+    """
+    type(
+        "ItemType",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": Item, "fields": ("id", "name"), "interfaces": (relay.Node,)},
+            ),
+        },
+    )
+    category_type = type(
+        "CategoryType",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": Category,
+                    "fields": ("id", "name", "items"),
+                    "interfaces": (relay.Node,),
+                },
+            ),
+        },
+    )
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"objs": list[category_type]},
+                "objs": DjangoListField(category_type),
+            },
+        ),
+    )
+    return strawberry.Schema(
+        query=query_cls,
+        config=strawberry_config(),
+        extensions=[lambda: ext],
+    )
+
+
+@pytest.mark.django_db
+def test_nested_pagination_variable_two_plans_two_windows():
+    """End-to-end: a nested ``first: $n`` value varying yields two distinct cached plans.
+
+    Executes the real synthesized ``itemsConnection`` under an optimizer-planned
+    parent list with ``$n=2`` then ``$n=5``: two misses, two cache entries (each
+    plan bakes its own window), no hit. The correctness rule of Decision 7
+    observed through the live ``on_execute`` lifecycle and plan cache.
+    """
+    services.seed_data(2)
+    ext = DjangoOptimizerExtension()
+    schema = _categories_list_schema(ext)
+    query = (
+        "query Q($n: Int!) { objs { name itemsConnection(first: $n) "
+        "{ edges { node { name } } } } }"
+    )
+
+    result_two = schema.execute_sync(query, variable_values={"n": 2})
+    result_five = schema.execute_sync(query, variable_values={"n": 5})
+
+    assert result_two.errors is None, result_two.errors
+    assert result_five.errors is None, result_five.errors
+    assert ext.cache_info().misses == 2
+    assert ext.cache_info().hits == 0
+    assert ext.cache_info().size == 2
+
+
+@pytest.mark.django_db
+def test_root_pagination_variable_one_plan_through_schema():
+    """End-to-end: a ROOT connection's ``first: $n`` value shares one cached plan.
+
+    The optimizer-on counterpart of ``test_filter_vars_do_not_affect_cache`` for
+    pagination: a root list field whose own ``first: $n`` slices post-plan does
+    not fragment the cache - one miss + one hit across two ``$n`` values.
+    """
+    services.seed_data(2)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_categories(self, first: int = 10) -> list[CategoryType]:
+            return Category.objects.all()[:first]
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+    query = "query Q($n: Int!) { allCategories(first: $n) { name } }"
+
+    schema.execute_sync(query, variable_values={"n": 1})
+    schema.execute_sync(query, variable_values={"n": 2})
+
+    assert ext.cache_info().hits == 1
+    assert ext.cache_info().size == 1
+
+
+@pytest.mark.django_db
+def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(monkeypatch):
+    """The combined var-name AST walk runs once per operation, not per ``_build_cache_key``.
+
+    Decision 7 line 348: nested fallback connections call ``_build_cache_key``
+    once per parent row, so the full-operation pagination walk must be memoized
+    per ``id(operation)`` within one ``on_execute`` lifecycle. Wrap the
+    pagination collector with a call counter and assert repeated
+    ``_build_cache_key`` calls on the SAME operation walk it only once.
+    """
+    from graphql import parse
+
+    import django_strawberry_framework.optimizer.extension as extension_module
+
+    calls = {"count": 0}
+    real = extension_module._collect_nested_pagination_var_names
+
+    def _counting(operation, fragments=None):
+        calls["count"] += 1
+        return real(operation, fragments=fragments)
+
+    monkeypatch.setattr(extension_module, "_collect_nested_pagination_var_names", _counting)
+
+    operation = parse(
+        "query Q($n: Int!) { parents { booksConnection(first: $n) "
+        "{ edges { node { title } } } } }",
+    ).definitions[0]
+    info = SimpleNamespace(
+        operation=operation,
+        fragments={},
+        variable_values={"n": 2},
+        path=SimpleNamespace(key="parents", prev=None),
+    )
+
+    ext = DjangoOptimizerExtension()
+    gen = ext.on_execute()
+    next(gen)  # enter the lifecycle: installs the per-execution var-name memo
+    try:
+        DjangoOptimizerExtension._build_cache_key(info, Category)
+        DjangoOptimizerExtension._build_cache_key(info, Category)
+        DjangoOptimizerExtension._build_cache_key(info, Category)
+    finally:
+        with contextlib.suppress(StopIteration):
+            next(gen)  # exit the lifecycle: resets the memo
+
+    assert calls["count"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -3457,6 +3844,137 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
 #   test_cache_key_variable_name_collection_memoized_for_nested_fallbacks
 #   B1 no-regression: hit/miss counters, LRU promotion, immutability stay green unmodified.
 #
-# TODO(spec-033 Slice 1/4): union-publish + strictness extension coverage.
-#   test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets  (nested fallback publish
-#       does not overwrite parent DST_OPTIMIZER_PLANNED / FK_ID_ELISIONS / LOOKUP_PATHS)
+def test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets():
+    """A nested fallback publish UNIONS the correctness sentinels, never overwrites them.
+
+    spec-033 Decision 8 foundation: a nested fallback connection pipeline is a
+    real optimizer run that re-enters ``_publish_plan_to_context`` per parent.
+    Its publish must not shrink the parent plan's planned / FK-id-elision /
+    lookup-path sets - especially under ``"warn"``, where execution continues
+    after the nested connection returns. ``DST_OPTIMIZER_PLAN`` stays last-wins
+    introspection (not unioned).
+    """
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    ext = DjangoOptimizerExtension(strictness="warn")
+    parent_plan = OptimizationPlan(
+        select_related=["category"],
+        fk_id_elisions=["ItemType.category@allItems.category"],
+        planned_resolver_keys=["ItemType.category@allItems.category"],
+    ).finalize()
+    nested_plan = OptimizationPlan(
+        prefetch_related=["entries"],
+        fk_id_elisions=["EntryType.property@allItems.entries.property"],
+        planned_resolver_keys=["EntryType.property@allItems.entries.property"],
+    ).finalize()
+    ctx = SimpleNamespace()
+
+    ext._publish_plan_to_context(parent_plan, SimpleNamespace(context=ctx))
+    # The nested publish (a fallback pipeline re-entry) unions into the parent's stash.
+    ext._publish_plan_to_context(nested_plan, SimpleNamespace(context=ctx))
+
+    # The parent's resolver key + FK-id elision survive the nested publish.
+    assert ctx.dst_optimizer_planned == frozenset(
+        {"ItemType.category@allItems.category", "EntryType.property@allItems.entries.property"},
+    )
+    assert ctx.dst_optimizer_fk_id_elisions == frozenset(
+        {"ItemType.category@allItems.category", "EntryType.property@allItems.entries.property"},
+    )
+    # Lookup paths union too (parent "category" + nested "entries").
+    assert {"category", "entries"} <= ctx.dst_optimizer_lookup_paths
+    # DST_OPTIMIZER_PLAN stays last-wins introspection data (not unioned).
+    assert ctx.dst_optimizer_plan is nested_plan
+
+
+def test_publish_plan_to_context_union_tolerates_non_set_existing_stash():
+    """``_stash_union`` overwrites a non-set existing stash defensively (no crash)."""
+    from django_strawberry_framework.optimizer._context import get_context_value
+
+    ext = DjangoOptimizerExtension(strictness="raise")
+    ctx = SimpleNamespace()
+    # Pre-seed a non-set value under the planned key (defensive shape).
+    DjangoOptimizerExtension._stash_union(ctx, "dst_optimizer_planned", frozenset({"a"}))
+    # Existing is a frozenset -> union.
+    DjangoOptimizerExtension._stash_union(ctx, "dst_optimizer_planned", frozenset({"b"}))
+    assert get_context_value(ctx, "dst_optimizer_planned") == frozenset({"a", "b"})
+    # A non-set existing value is overwritten rather than crashing the union.
+    ctx.dst_optimizer_planned = "not-a-set"
+    DjangoOptimizerExtension._stash_union(ctx, "dst_optimizer_planned", frozenset({"c"}))
+    assert get_context_value(ctx, "dst_optimizer_planned") == frozenset({"c"})
+
+
+@pytest.mark.django_db
+def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end():
+    """End-to-end: a real nested-connection fallback publish UNIONS, never clobbers.
+
+    spec-033 Slice 4 (Decision 8): the Slice-1 unit pin
+    (``test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets``)
+    proves the helper unions; THIS pins the union holds through an actual nested
+    -connection-fallback EXECUTION - the scenario that motivates the union. A
+    sidecar-filtered ``itemsConnection(filter:)`` is a Decision-6 fallback: its
+    per-parent pipeline is a real optimizer run that re-publishes, but the
+    parent's planned ``items`` list-sibling resolver key must survive on the
+    shared context (otherwise a planned sibling would spuriously strictness-flag
+    after the nested connection returned).
+    """
+    from django.http import HttpRequest
+
+    from django_strawberry_framework.filters import FilterSet
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_PLANNED,
+        get_context_value,
+    )
+
+    services.seed_data(1)
+
+    class ItemFilter(FilterSet):
+        class Meta:
+            model = Item
+            fields = {"name": ["exact"]}
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            filterset_class = ItemFilter
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        objs: list[CategoryType] = DjangoListField(CategoryType)
+
+    ext = DjangoOptimizerExtension(strictness="warn")
+    schema = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(),
+        extensions=[lambda: ext],
+    )
+    # An ``HttpRequest`` context: the sidecar filter pipeline needs a resolvable
+    # request, and the optimizer stashes its sentinels onto the same object
+    # (read back via ``get_context_value``). Warn mode so execution continues and
+    # the post-return context can be inspected.
+    ctx = HttpRequest()
+    # ``items`` is the planned reverse-FK list sibling; ``itemsConnection(filter:)``
+    # is the sidecar fallback (a real per-parent optimizer publish).
+    result = schema.execute_sync(
+        "{ objs { items { name } "
+        '  itemsConnection(filter: { name: { exact: "nope" } }) '
+        "{ edges { node { name } } } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None, result.errors
+    planned = get_context_value(ctx, DST_OPTIMIZER_PLANNED, frozenset())
+    # The parent's planned ``items`` resolver key survives the nested fallback's
+    # publish (the union foundation) - it is NOT shrunk away.
+    assert any(key.startswith("CategoryType.items@") for key in planned), planned
+    # The sidecar fallback connection was left unplanned (Decision 6): no planned
+    # key for the ``items`` relation keyed under the connection's runtime path.
+    assert not any("@objs.itemsConnection" in key for key in planned), planned

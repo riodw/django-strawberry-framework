@@ -194,7 +194,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its Django patches at app load.
 ├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
-├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
+├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface (incl. the optimizer windowed-row fast path and the nested-connection strictness consultation).
 ├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
 ├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
 ├── py.typed
@@ -213,11 +213,11 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
 ├── optimizer/    # Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
 │   ├── _context.py               # Shared context read/write helpers for optimizer <-> resolver hand-off.
-│   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
+│   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans (incl. pagination-aware cache keys and the ``edges { node }`` root-seam extractor).
 │   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
 │   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
-│   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
-│   └── walker.py                 # Selection-tree walker that converts GraphQL selections into an ``OptimizationPlan``.
+│   ├── plans.py                  # ``OptimizationPlan`` plus the window-pagination + deterministic-order helpers the walker applies.
+│   └── walker.py                 # Selection-tree walker (incl. the shared ``edges { node }`` unwrap helpers and nested-connection windowed-``Prefetch`` planning) that converts GraphQL selections into an ``OptimizationPlan``.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
 │   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
@@ -229,7 +229,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 │   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
 │   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types.
-│   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata for collected ``DjangoType`` classes.
+│   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata (incl. the ``relation_connections`` slot the walker reads to recognize synthesized connections) for collected ``DjangoType`` classes.
 │   ├── finalizer.py              # ``finalize_django_types()`` - the once-only finalization gate for collected ``DjangoType`` classes.
 │   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
@@ -251,7 +251,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its Django patches at app load.
 ├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
-├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
+├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface (incl. the optimizer windowed-row fast path and the nested-connection strictness consultation).
 ├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
 ├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
 ├── permissions.py                # planned by TODO-ALPHA-034-0.0.10 - Permissions subsystem
@@ -280,11 +280,11 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── mutations/    # planned by TODO-ALPHA-036-0.0.11 - Mutations + auto-generated Input types
 ├── optimizer/    # Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
 │   ├── _context.py               # Shared context read/write helpers for optimizer <-> resolver hand-off.
-│   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
+│   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans (incl. pagination-aware cache keys and the ``edges { node }`` root-seam extractor).
 │   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
 │   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
-│   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
-│   └── walker.py                 # Selection-tree walker that converts GraphQL selections into an ``OptimizationPlan``.
+│   ├── plans.py                  # ``OptimizationPlan`` plus the window-pagination + deterministic-order helpers the walker applies.
+│   └── walker.py                 # Selection-tree walker (incl. the shared ``edges { node }`` unwrap helpers and nested-connection windowed-``Prefetch`` planning) that converts GraphQL selections into an ``OptimizationPlan``.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
 │   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
@@ -298,7 +298,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 │   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
 │   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types.
-│   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata for collected ``DjangoType`` classes.
+│   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata (incl. the ``relation_connections`` slot the walker reads to recognize synthesized connections) for collected ``DjangoType`` classes.
 │   ├── finalizer.py              # ``finalize_django_types()`` - the once-only finalization gate for collected ``DjangoType`` classes.
 │   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.

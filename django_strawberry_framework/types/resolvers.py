@@ -128,16 +128,20 @@ def _check_n1(
     *,
     kind: str | None,
     accessor_name: str | None = None,
+    to_attr: str | None = None,
+    reason: str | None = None,
 ) -> None:
     """B3: warn or raise if the relation is not planned and would lazy-load.
 
     ``kind`` is required (keyword-only) and accepts the ``relation_kind``
     of the field being resolved. ``"many"`` and ``"reverse_many_to_one"``
-    use the many-side cache check; every other known relation shape uses
-    the single-valued cache check. Production ``_make_relation_resolver``
-    always supplies the relation kind; the ``kind=None`` fallback is
-    reserved for test-double direct callers that exercise the
-    single-valued cache check (see ``tests/types/test_resolvers.py::test_check_n1_*``).
+    use the many-side cache check; the special ``"connection_to_attr"``
+    value (spec-033 Decision 8) uses the windowed-prefetch ``to_attr``
+    probe; every other known relation shape uses the single-valued cache
+    check. Production ``_make_relation_resolver`` always supplies the
+    relation kind; the ``kind=None`` fallback is reserved for test-double
+    direct callers that exercise the single-valued cache check (see
+    ``tests/types/test_resolvers.py::test_check_n1_*``).
 
     ``field_name`` keys the PLAN lookup (the optimizer walker emits
     resolver keys in field-name vocabulary); ``accessor_name`` keys the
@@ -146,24 +150,19 @@ def _check_n1(
     relations without ``related_name`` (Round-4 S3 follow-up). Production
     callers always supply it; ``None`` falls back to ``field_name`` for
     test-double direct callers.
+
+    Connection contract (spec-033 Decision 8): the synthesized
+    relation-connection resolver calls this with ``kind="connection_to_attr"``
+    and the windowed-prefetch ``to_attr`` (``_dst_<field>_connection``).
+    The access truly queries iff that ``to_attr`` is ABSENT on ``root`` -
+    when present, Slice 1's window already served the page, so no lazy load
+    happens and the check is silent. ``reason`` (the per-parent-fallback
+    cause, supplied by the connection call site) is appended to the
+    ``"raise"`` / ``"warn"`` message when present so a flagged fallback
+    reads as actionable rather than as an optimizer defect; the
+    list-relation calls pass no ``reason`` and produce the byte-identical
+    pre-slice message.
     """
-    # TODO(spec-033 Slice 4, Decision 8): parameterize this so
-    # ``connection.py::_build_relation_connection_resolver`` can REUSE it instead
-    # of duplicating the contract (two implementations of one contract drift).
-    # Add a connection probe kind + a ``to_attr`` probe + an optional fallback
-    # reason, e.g. extend the keyword-only signature with ``kind="connection_to_attr"``,
-    # ``to_attr="_dst_books_connection"``, and ``reason="not window-planned: selection
-    # carries filter/orderBy; resolving per-parent"``.
-    # New "will it actually query?" probe for the connection kind: the access
-    # queries iff the fast-path ``to_attr`` is ABSENT on ``root`` (when present,
-    # the window already served the rows -> silent, no lazy load) -- so for
-    # ``kind == "connection_to_attr"`` set lazy from ``getattr(root, to_attr, None)
-    # is None``. The raise/warn message then carries the reason when present, e.g.
-    # raise ``OptimizerError(f"Unplanned N+1: {field_name} ({reason})")``.
-    # The three-condition guard (sentinel stashed + key not planned + to_attr
-    # absent) reproduces the list-relation semantics exactly: planned -> silent,
-    # window-served -> silent, unplanned-and-will-query -> flag. The existing
-    # list-relation strictness suite must pass UNMODIFIED.
     context = getattr(info, "context", None)
     planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
     if planned is None:
@@ -171,18 +170,24 @@ def _check_n1(
     key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
     if key in planned:
         return
-    probe_name = accessor_name or field_name
-    if is_many_side_relation_kind(kind):
-        lazy = _will_lazy_load_many(root, probe_name)
+    if kind == "connection_to_attr":
+        # The windowed page already landed under ``to_attr`` when present;
+        # only an absent ``to_attr`` means the per-parent pipeline will query.
+        lazy = getattr(root, to_attr, None) is None
     else:
-        lazy = _will_lazy_load_single(root, probe_name)
+        probe_name = accessor_name or field_name
+        if is_many_side_relation_kind(kind):
+            lazy = _will_lazy_load_many(root, probe_name)
+        else:
+            lazy = _will_lazy_load_single(root, probe_name)
     if not lazy:
         return
     strictness = _get_context_value(context, DST_OPTIMIZER_STRICTNESS, "off")
+    suffix = f" ({reason})" if reason is not None else ""
     if strictness == "raise":
-        raise OptimizerError(f"Unplanned N+1: {field_name}")
+        raise OptimizerError(f"Unplanned N+1: {field_name}{suffix}")
     if strictness == "warn":
-        _resolver_logger.warning("Potential N+1 on %s", field_name)
+        _resolver_logger.warning("Potential N+1 on %s%s", field_name, suffix)
 
 
 def _name_resolver(resolver: Callable[..., Any], field_name: str) -> Callable[..., Any]:

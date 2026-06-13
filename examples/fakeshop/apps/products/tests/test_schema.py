@@ -27,16 +27,20 @@ def test_project_schema_executes_products_categories_list():
         """
         query {
           allCategories {
-            id
-            name
-            description
+            edges {
+              node {
+                id
+                name
+                description
+              }
+            }
           }
         }
         """,
     )
 
     assert result.errors is None
-    names = {row["name"] for row in result.data["allCategories"]}
+    names = {edge["node"]["name"] for edge in result.data["allCategories"]["edges"]}
     assert names == set(products_models.Category.objects.values_list("name", flat=True))
 
 
@@ -49,12 +53,20 @@ def test_project_schema_traverses_products_relations():
         """
         query {
           allItems {
-            name
-            category { name }
+            edges {
+              node {
+                name
+                category { name }
+              }
+            }
           }
           allCategories {
-            name
-            items { name }
+            edges {
+              node {
+                name
+                items { name }
+              }
+            }
           }
         }
         """,
@@ -66,7 +78,10 @@ def test_project_schema_traverses_products_relations():
     expected_item_category = dict(
         products_models.Item.objects.values_list("name", "category__name"),
     )
-    got_item_category = {row["name"]: row["category"]["name"] for row in result.data["allItems"]}
+    got_item_category = {
+        edge["node"]["name"]: edge["node"]["category"]["name"]
+        for edge in result.data["allItems"]["edges"]
+    }
     assert got_item_category == expected_item_category
 
     # Reverse FK: each category lists exactly its own items.
@@ -79,8 +94,8 @@ def test_project_schema_traverses_products_relations():
     ):
         expected_category_items[category_name].append(item_name)
     got_category_items = {
-        row["name"]: sorted(i["name"] for i in row["items"])
-        for row in result.data["allCategories"]
+        edge["node"]["name"]: sorted(i["name"] for i in edge["node"]["items"])
+        for edge in result.data["allCategories"]["edges"]
     }
     assert got_category_items == {
         name: sorted(items) for name, items in expected_category_items.items()

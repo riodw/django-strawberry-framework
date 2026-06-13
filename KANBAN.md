@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-12
+Last refreshed: 2026-06-13
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -61,7 +61,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
 - `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
-- `0.0.9` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is nearly complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `WIP-ALPHA-033-0.0.9` (connection-aware optimizer planning) remains in progress. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
+- `0.0.9` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -69,7 +69,6 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 - Layer 3 public subsystems are still planned only:
   - `aggregates/`
   - `fieldset.py`
-  - `connection.py`
   - `permissions.py`
   - `utils/queryset.py`
 - Layer 3 still needs the rest of the goal-level contract: declarative aggregation and permission rules configured through `Meta`, composing with the shipped filtering and ordering, and introspectable from one type definition.
@@ -77,21 +76,20 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
   - stable choice-enum naming override, because the first `DjangoType` to read a choice field currently wins the enum name
 - Optimizer follow-up ideas remain outside the shipped B1-B8 surface:
   - model-property / cached-property optimization hints
-  - connection-aware planning for Relay-style nested connection selections (`WIP-ALPHA-033-0.0.9`)
 - Test/example hygiene items surfaced by the foundation slice review have moved into the testing-shift docs and backlog: package-level override tests intentionally pin Strawberry internals while HTTP tests pin the consumer-visible override contract ([`BACKLOG.md`][backlog] item 38).
 - The library GraphQL schema is real and wired into the project schema; the product-catalog Layer 3 aspirational schema block remains commented until those subsystems ship.
 
 ## Progress to 1.0.0
 
-**55.2% complete** toward `1.0.0` - 32 of 58 cards done (55.8% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**56.9% complete** toward `1.0.0` - 33 of 58 cards done (57.6% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 32/44 (72.7%) | 71.1% |
+| Alpha (pre-0.1.0) | 33/44 (75.0%) | 73.3% |
 | Beta (pre-1.0.0) | 0/13 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **72.7%**.
+To complete the Alpha (pre-0.1.0) milestone: **75.0%**.
 
 ## Board columns
 
@@ -99,7 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **72.7%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/spec-033-connection_optimizer-0_0_9.md) |
+| `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/spec-033-connection_optimizer-0_0_9.md) |
 | `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md) |
 | `DONE-031-0.0.9` - Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md) |
 | `DONE-030-0.0.9` - `DjangoConnectionField` | [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md) |
@@ -135,68 +133,7 @@ To complete the Alpha (pre-0.1.0) milestone: **72.7%**.
 
 ## In progress
 
-Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="connection_aware_optimizer_planning"></a>
-### [WIP-ALPHA-033-0.0.9 - Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
-
-- Priority: Medium
-- Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
-- Status: Planned
-- Relative size: M
-- Labels: `connections`, `optimizer`, `query-planning`, `relay`
-- Spec: [spec-033-connection_optimizer-0_0_9.md](docs/spec-033-connection_optimizer-0_0_9.md)
-
-#### Predicted files
-
-- [`django_strawberry_framework/connection.py`](django_strawberry_framework/connection.py)
-- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
-- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
-- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
-- [`tests/optimizer/`](tests/optimizer/)
-
-#### Planning note
-
-planned
-
-#### Definition of done
-
-- [ ] New spec, probably `docs/spec-connection_optimizer.md` (or folded into `docs/spec-connection.md`).
-- [ ] Walker recognizes connection edge/node shapes without reaching into `DjangoConnectionField` internals.
-- [ ] Tests cover the cookbook-equivalent nested-connection shape against fakeshop or the cardinality fixture.
-- [ ] No regression on the existing B1-B8 plan-cache and queryset-diff coverage.
-
-#### Files likely touched
-
-- `django_strawberry_framework/optimizer/walker.py`
-- `django_strawberry_framework/optimizer/plans.py`
-- `django_strawberry_framework/optimizer/extension.py`
-- future `django_strawberry_framework/connection.py`
-- mirrored optimizer tests
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_optimize_prefetch_queryset` detects a `StrawberryDjangoConnectionExtension` on a nested field, computes a `SliceMetadata.from_arguments(first, last, before, after, max_results)`, and pushes the cursor slice into the prefetch via `apply_window_pagination` (a `RowNumber` `Window` partitioned by the related field) so each parent's connection is paginated inside one query — the connection-aware planning this card designs, making the strawberry_django parity required.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/list_connection.py::DjangoListConnection.resolve_connection` cooperates with that planner by reading `node._strawberry_total_count` / a `models.Window` annotation for `totalCount` instead of issuing a second `count()` — the per-connection total-count planning this card folds in; graphene_django ships no native connection-aware optimizer, so the claim is correctly strawberry_django-only and required.
-
-#### Other
-
-- gated on `DONE-030-0.0.9` / Relay decisions.
-- strawberry-graphql-django plans connection selections natively; graphene-django has only rudimentary connection-aware optimization (⚛️ parity-adjacent).
-- bounded optimizer extension: teach the selection-walker to recognize Relay `edges { node }` and plan paginated selections. No new subpackage; touches `walker.py` / `plans.py` / `extension.py` + mirrored tests.
-- The optimizer's plan cache, `select_related` / `prefetch_related` planning, FK-id elision, and queryset diffing are all proven for direct selection trees and nested non-Relay relation paths.
-- Relay-style nested connection selections (`{ allObjects { edges { node { values { edges { node { value } } } } } } }`, mirroring the cookbook recipes shape) have not been exercised against the optimizer.
-- The cookbook reference `AdvancedDjangoFilterConnectionField` does its own argument and queryset construction; the Strawberry equivalent will need the optimizer to recognize Relay edge/node wrappers in its selection walk.
-- Selection-tree walker awareness of Relay `edges { node { ... } }` pattern.
-- Connection-pagination-aware queryset planning (`Prefetch` downgrade for `connection { edges { node } }`, `total_count` aggregate cooperation, slice-aware projections).
-- Plan-cache key hygiene for paginated selections (skip pagination args that do not affect selection shape, hash the ones that do).
-- Strictness-mode interaction with connection paths so unplanned nested connection access still surfaces as N+1.
-- Blocks the fakeshop products connections-only conversion tracked under `TODO-BETA-051-0.1.5` (fakeshop activation). The products live optimizer tests (`examples/fakeshop/test_query/test_products_api.py::test_products_optimizer_*` — root-node merge, nested reverse-FK prefetch depth-2, nested forward-FK `select_related` depth-2) rely on root-list optimization. Because a `0.0.9` `DjangoConnectionField` derives an empty plan (the flat walker is connection-unaware), replacing the products list resolvers with connection fields before this card lands would turn those nested `edges { node }` selections into N+1 and regress the optimizer dogfooding. Land the products list->connection replacement together with this card.
-
-#### Card references
-
-- Related: gated on `DONE-030-0.0.9` / Relay decisions. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts. No active WIP cards.
 
 ## To Do - Alpha (0.1.0)
 
@@ -306,7 +243,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 
 #### Dependencies
 
-- `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning
+- `DONE-033-0.0.9` - Connection-aware optimizer planning
 
 #### Scope
 
@@ -365,7 +302,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 
 #### Card references
 
-- Dependency: G3 rewrites fragment inlining in the same `walker.py` selection-normalization seam (`_included_field_selections` / `_named_children`) that connection-aware planning extends; land after it to avoid concurrent walker churn, and so G3's union/interface tests can cover connection-wrapped fragments too. -> `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning
+- Dependency: G3 rewrites fragment inlining in the same `walker.py` selection-normalization seam (`_included_field_selections` / `_named_children`) that connection-aware planning extends; land after it to avoid concurrent walker churn, and so G3's union/interface tests can cover connection-wrapped fragments too. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
 - Related: G2 (`.only()` gating by operation type) must land before the 0.0.11 mutations cohort makes mutation root querysets a mainstream consumer path. -> `TODO-ALPHA-036-0.0.11` - Mutations + auto-generated Input types
 - Related: G1 extends spec-004 B8's consumer-state reconciliation from optimization state to execution state; G2's cache-safety argument rests on the spec-004 B1 printed-AST cache key. -> `DONE-004-0.0.3` - Optimizer beyond slices B1-B8
 - Related: G1's minimal shape (no clone monkeypatch, no optimized flag) is justified by the O3 root gate; G3 lives in the O2 walker's selection-normalization seam. -> `DONE-002-0.0.2` - Optimizer O1-O6 foundation
@@ -977,6 +914,10 @@ planned
 
 Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative field-level behavior layer that the cookbook drives via `Meta.fields_class`. The cookbook shape: a consumer-authored `class GalaxyFieldSet(FieldSet)` carries `resolve_<field>(self, root, info)` overrides for custom resolution, `check_<field>_permission(self, info)` denial gates that raise before resolve runs, and class-level annotations like `display_name: str | None = strawberry.field(description="...")` for computed fields the Django model does not have. Pointed at by `Meta.fields_class = GalaxyFieldSet` on the owning `DjangoType`. This is the smallest Layer-3 surface by file count but the most novel by semantic surface area — the resolver-override contract, the redaction-vs-denial split, and the computed-field annotation discipline all live here.
 
+#### Dependencies
+
+- `DONE-030-0.0.9` - `DjangoConnectionField`
+
 #### Scope
 
 - Cookbook anchor: the `fields.py` example in `GOAL.md` and the `recipes/fields.py` in the django-graphene-filters cookbook are the canonical shapes. Tiered date visibility (staff → full datetime, perm-holder → day precision, authenticated → month precision, anonymous → year precision) plus redaction-vs-denial (`resolve_is_private` returns `False` for non-staff = redaction; `check_updated_date_permission` raises for anonymous = denial) plus computed-field annotations (`display_name: str | None = strawberry.field(...)` with `resolve_display_name`) are the three patterns the FieldSet contract must support cleanly.
@@ -1011,9 +952,17 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - Field-level visibility is the only cookbook surface where redaction (return a safe value) and denial (raise an error) need to be distinct. Filter / order / cascade all use queryset narrowing — they remove rows. FieldSet is the one place where a row stays visible but a field is either redacted or guarded behind an error. Without it, the cookbook's `is_private` and `description` patterns are not portable.
 - Computed fields (annotations like `display_name: str | None = strawberry.field(...)` paired with `resolve_display_name`) are the cookbook's escape hatch for fields the Django model does not have. The framework currently has no declarative way to add them without subclassing `DjangoType`; the FieldSet is the home for that contract.
 
+#### Dependencies
+
+- `DjangoConnectionField` (`DONE-030-0.0.9`) - `FieldSet` composes on top of the shipped connection-field surface.
+
 #### Other
 
 - the smallest Layer-3 subsystem: `fieldset.py` + `docs/spec-fieldset.md` + tests; defines field-selection semantics the connection field consumes. Meta-driven.
+
+#### Card references
+
+- Dependency: `DjangoConnectionField` (`DONE-030-0.0.9`) - `FieldSet` composes on top of the shipped connection-field surface. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
 <a id="metasearch_fields_support"></a>
 ### [TODO-BETA-047-0.1.2 - `Meta.search_fields` support](KANBAN.html#metasearch_fields_support)
@@ -1607,6 +1556,110 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="connection_aware_optimizer_planning"></a>
+### [DONE-033-0.0.9 - Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
+
+- Priority: Medium
+- Parity: 🍓 strawberry-graphql-django (Required)
+- Severity: Medium
+- Status: Planned
+- Relative size: M
+- Labels: `connections`, `optimizer`, `query-planning`, `relay`
+- Spec: [spec-033-connection_optimizer-0_0_9.md](docs/spec-033-connection_optimizer-0_0_9.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
+| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
+| [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
+| [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
+| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
+| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
+| [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
+| [`order_input_type`](docs/GLOSSARY.md#order_input_type) | shipped (`0.0.8`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+
+#### Package files
+
+- [`django_strawberry_framework/connection.py`](django_strawberry_framework/connection.py)
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`tests/optimizer/`](tests/optimizer/)
+
+#### Planning note
+
+planned
+
+#### Definition of done
+
+- [x] New spec at `docs/spec-033-connection_optimizer-0_0_9.md` (the canonical structured filename).
+- [x] Walker recognizes connection edge/node shapes without reaching into `DjangoConnectionField` internals.
+- [x] Tests cover the cookbook-equivalent nested-connection shape against fakeshop or the cardinality fixture.
+- [x] No regression on the existing B1-B8 plan-cache and queryset-diff coverage.
+
+#### Files likely touched
+
+- `django_strawberry_framework/optimizer/walker.py`
+- `django_strawberry_framework/optimizer/plans.py`
+- `django_strawberry_framework/optimizer/extension.py`
+- future `django_strawberry_framework/connection.py`
+- mirrored optimizer tests
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py::_optimize_prefetch_queryset` detects a `StrawberryDjangoConnectionExtension` on a nested field, computes a `SliceMetadata.from_arguments(first, last, before, after, max_results)`, and pushes the cursor slice into the prefetch via `apply_window_pagination` (a `RowNumber` `Window` partitioned by the related field) so each parent's connection is paginated inside one query — the connection-aware planning this card designs, making the strawberry_django parity required.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/relay/list_connection.py::DjangoListConnection.resolve_connection` cooperates with that planner by reading `node._strawberry_total_count` / a `models.Window` annotation for `totalCount` instead of issuing a second `count()` — the per-connection total-count planning this card folds in; graphene_django ships no native connection-aware optimizer, so the claim is correctly strawberry_django-only and required.
+
+#### Other
+
+- gated on `DONE-030-0.0.9` / Relay decisions.
+- strawberry-graphql-django plans connection selections natively; graphene-django has only rudimentary connection-aware optimization (⚛️ parity-adjacent).
+- bounded optimizer extension: teach the selection-walker to recognize Relay `edges { node }` and plan paginated selections. No new subpackage; touches `walker.py` / `plans.py` / `extension.py` + mirrored tests.
+- The optimizer's plan cache, `select_related` / `prefetch_related` planning, FK-id elision, and queryset diffing are all proven for direct selection trees and nested non-Relay relation paths.
+- Relay-style nested connection selections (`{ allObjects { edges { node { values { edges { node { value } } } } } } }`, mirroring the cookbook recipes shape) have not been exercised against the optimizer.
+- The cookbook reference `AdvancedDjangoFilterConnectionField` does its own argument and queryset construction; the Strawberry equivalent will need the optimizer to recognize Relay edge/node wrappers in its selection walk.
+- Selection-tree walker awareness of Relay `edges { node { ... } }` pattern.
+- Connection-pagination-aware queryset planning (`Prefetch` downgrade for `connection { edges { node } }`, `total_count` aggregate cooperation, slice-aware projections).
+- Plan-cache key hygiene for paginated selections (skip pagination args that do not affect selection shape, hash the ones that do).
+- Strictness-mode interaction with connection paths so unplanned nested connection access still surfaces as N+1.
+- Unblocked the fakeshop products connections-only conversion (the fakeshop-activation card). The products live optimizer tests (`examples/fakeshop/test_query/test_products_api.py::test_products_optimizer_*` — root-node merge, nested reverse-FK prefetch depth-2, nested forward-FK `select_related` depth-2) rely on root-list optimization. A `0.0.9` `DjangoConnectionField` derived an empty plan before this card (the flat walker was connection-unaware), so the products list->connection replacement landed together with this card rather than ahead of it, keeping the `test_products_optimizer_*` SQL-shape coverage honest.
+
+#### Card references
+
+- Related: gated on `DONE-030-0.0.9` / Relay decisions. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+
 <a id="full_relay_story_node_connection_root_validation"></a>
 ### [DONE-032-0.0.9 - Full Relay story (Node + Connection + Root + validation)](KANBAN.html#full_relay_story_node_connection_root_validation)
 
@@ -1652,7 +1705,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
 | [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
 | [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
@@ -1742,7 +1795,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands.
 - `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
 - `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
-- `WIP-ALPHA-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
+- `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
 - `TODO-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands.
 - `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`)
 - `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
@@ -1769,7 +1822,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Related: `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 - Related: `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections. -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` - Ordering subsystem
-- Related: `WIP-ALPHA-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning
+- Related: `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
 - Related: `TODO-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `TODO-ALPHA-034-0.0.10` - Permissions subsystem
 - Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-052-0.1.5`. -> `TODO-BETA-052-0.1.5` - Fakeshop GraphQL schema activation
 - Related: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`) -> `DONE-030-0.0.9` - `DjangoConnectionField`
@@ -1804,7 +1857,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
@@ -1927,7 +1980,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 | [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
 | [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
 | [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
@@ -1975,7 +2028,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 
 - `DONE-027-0.0.8` - Filtering subsystem
 - `DONE-028-0.0.8` - Ordering subsystem
-- `TODO-BETA-046-0.1.1` - `FieldSet`
+- `DONE-029-0.0.9` - `DjangoType` consumer-DX cleanup pass
 
 #### Scope
 
@@ -1998,14 +2051,14 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - [x] When the wrapped type declares `Meta.filterset_class`, the connection field exposes `filter: <Type>FilterInput` and routes input values through the filterset's `apply_sync` / `apply_async` pair.
 - [x] When the wrapped type declares `Meta.orderset_class`, the connection field exposes `orderBy: [<Type>OrderInput!]` and routes through the orderset's `apply_sync` / `apply_async` pair.
 - [x] Connection field composes with `cls.get_queryset(queryset, info)` — visibility scoping runs before any filter / order / cursor work.
-- [x] Optimizer cooperation: the connection-aware planner (`WIP-ALPHA-033-0.0.9`) layers on without retrofit; this card ships against the existing flat-selection walker and the connection-aware walker takes over when 032 lands.
+- [x] Optimizer cooperation: the connection-aware planner (`DONE-033-0.0.9`) layers on without retrofit; this card ships against the existing flat-selection walker and the connection-aware walker takes over when 032 lands.
 - [x] Live HTTP coverage in `examples/fakeshop/test_query/` exercises a real round-trip with filter + orderBy + cursor + totalCount on a Relay-Node-shaped type.
 
 #### Foundation-slice seam
 
 - `finalize_django_types()` is the single architectural entry point that `DjangoConnectionField(DjangoType)` (and `DjangoNodeField`) will auto-trigger as their wrapper.
 - An auto-trigger wrapper must respect the single-threaded-setup window: either be constrained to schema-construction time, or acquire a real lock around the finalizer.
-- Connection-aware optimizer planning is its own follow-up slice (`WIP-ALPHA-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
+- Connection-aware optimizer planning is its own follow-up slice (`DONE-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes.
 
 #### Verified in upstream
 
@@ -2018,6 +2071,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - `OrderSet` (`DONE-028-0.0.8`)
 - Relay/interface decisions
 - `FieldSet` — **deferred to `TODO-BETA-046-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker.
+- `DjangoType` consumer-DX cleanup pass (`DONE-029-0.0.9`) - schema-construction examples are current before `DjangoConnectionField` becomes the new consumer pattern.
 
 #### Other
 
@@ -2029,10 +2083,10 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 #### Card references
 
 - Dependency: `FilterSet` (`DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
-- Related: Connection-aware optimizer planning is its own follow-up slice (`WIP-ALPHA-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `WIP-ALPHA-033-0.0.9` - Connection-aware optimizer planning
+- Related: Connection-aware optimizer planning is its own follow-up slice (`DONE-033-0.0.9`); the foundation slice did not exercise nested connection prefetch shapes. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
 - Dependency: `OrderSet` (`DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
 - Related: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-046-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-046-0.1.1` - `FieldSet`
-- Dependency: `FieldSet` — **deferred to `TODO-BETA-046-0.1.1`** (post-Alpha); field-selection composition is layered on after the connection field ships, not a 0.0.9 blocker. -> `TODO-BETA-046-0.1.1` - `FieldSet`
+- Dependency: `DjangoType` consumer-DX cleanup pass (`DONE-029-0.0.9`) - schema-construction examples are current before `DjangoConnectionField` becomes the new consumer pattern. -> `DONE-029-0.0.9` - `DjangoType` consumer-DX cleanup pass
 
 <a id="djangotype_consumer_dx_cleanup_pass"></a>
 ### [DONE-029-0.0.9 - `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)
@@ -2089,7 +2143,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
 | [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
 | [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) | shipped (`0.0.9`) |
 | [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) | shipped (`0.0.9`) |
@@ -2104,10 +2158,6 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 #### Planning note
 
 planned; three independent slices that ship in any order. Card body counts as complete when all three slices land; if the schedule forces Slice 3 to defer, the slice carves off as its own follow-up card without disrupting Slices 1 + 2.
-
-#### Dependencies
-
-- `DONE-030-0.0.9` - `DjangoConnectionField`
 
 #### Scope
 
@@ -2132,20 +2182,12 @@ planned; three independent slices that ship in any order. Card body counts as co
 - `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.__init_subclass_with_meta__` is graphene_django's consumer type-declaration surface, deriving GraphQL field nullability from the Django column (`required = not (field.blank or field.null)` in `converter.py`) and policing `Meta` keys like `fields`/`exclude`/`filterset_class` — the same `DjangoType`/`Meta` DX this card's cleanup pass refines (including the `Meta.nullable_overrides` decoupling), so the graphene_django parity is required.
 - `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py::is_optional` decides a `DjangoType` field's nullability straight from `model_field.null`/`blank`, with no consumer hook to override it independent of the column — the gap this card's `Meta.nullable_overrides` (Slice 3) closes against the strawberry_django type-definition surface, making the strawberry_django parity required.
 
-#### Dependencies
-
-- None blocking. Slice 1 should land before any new schema-construction surfaces ship in `DONE-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one.
-
 #### Other
 
 - three independent slices: Slice 1 `extensions=` factory-form sweep (XS, ~30 min, no spec), Slice 2 `inspect_django_type` command (S, sub-1-day), Slice 3 `Meta.nullable_overrides` (M, needs spec, deferrable to `0.0.9`). Smallest of the three `0.0.8` cards.
 - **Slice 1**: defensive — both upstreams already use the factory-callable form in their consumer docs. Strawberry's removal runway is multiple releases, but landing the migration in 0.0.8 keeps the package's surface aligned with the upstream recommendation.
 - **Slice 2**: differentiating — neither `graphene-django` nor `strawberry-graphql-django` ships an equivalent `manage.py inspect_*` diagnostic for their type definitions. Consumers currently introspect by hand against the GraphQL schema after construction. This command moves that diagnostic to the type-definition layer, before schema construction.
 - **Slice 3**: ⚛️&🍓 required — `strawberry_django.field(required=True/False)` allows per-field GraphQL nullability override against the Django column's native nullability. `graphene_django` allows the same via `DjangoObjectType.Meta.fields` plus per-field overrides on the type class. This card surfaces the same capability through a single `Meta`-key dict that the rest of the package's `Meta`-shaped API already prefers.
-
-#### Card references
-
-- Dependency: None blocking. Slice 1 should land before any new schema-construction surfaces ship in `DONE-030-0.0.9` and onward, so consumers copy from a current pattern rather than a deprecated one. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
 <a id="ordering_subsystem"></a>
 ### [DONE-028-0.0.8 - Ordering subsystem](KANBAN.html#ordering_subsystem)
@@ -2191,7 +2233,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
@@ -2309,7 +2351,7 @@ shipped
 | [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
 | [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
 | [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`filter_input_type`](docs/GLOSSARY.md#filter_input_type) | shipped (`0.0.8`) |
 
 #### Package files
@@ -2418,7 +2460,7 @@ shipped
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
 | [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
 | [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
@@ -2501,7 +2543,7 @@ shipped
 | [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
 | [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
 | [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
@@ -2633,7 +2675,7 @@ shipped
 | [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
 | [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
@@ -2962,7 +3004,7 @@ shipped
 | [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
 | [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | planned for `0.0.9` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |

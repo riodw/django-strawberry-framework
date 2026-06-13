@@ -26,18 +26,32 @@ from apps.products import services
 from apps.products.models import Category, Item, Property
 from django.db import connection as db_connection
 from django.db import models as djmodels
+from django.http import HttpRequest
 from strawberry import relay
 
 from django_strawberry_framework import (
+    DjangoListField,
+    DjangoOptimizerExtension,
     DjangoType,
     finalize_django_types,
     strawberry_config,
 )
-from django_strawberry_framework.connection import _connection_type_cache
+from django_strawberry_framework.connection import (
+    _connection_type_cache,
+    _connection_type_for,
+)
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet, filter_input_type
 from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
+
+
+def _path(*keys):
+    """Build a graphql-core-style linked response path (integer keys are list indexes)."""
+    path = None
+    for key in keys:
+        path = type("Path", (), {"key": key, "prev": path})()
+    return path
 
 
 @pytest.fixture(autouse=True)
@@ -811,29 +825,911 @@ def test_relation_connection_backward_pagination_last_before(shape):
     assert window["pageInfo"]["hasPreviousPage"] is True
 
 
-# TODO(spec-033 Slice 2): connection-class fast-path coverage (Test plan).
-#   test_fast_path_single_query  (parent page + one window query, zero per-parent queries)
-#   test_fast_path_through_schema_connection_extension  (real relay.connection(...) field; resolver
-#       returns the wrapper, generated connection class builds the Relay object -- MANDATORY,
-#       a direct helper call misses ConnectionExtension's layer boundary)
-#   test_fast_path_wire_parity_with_pipeline  (identical edges/cursors/pageInfo/totalCount
-#       with and without the optimizer installed)
-#   test_fast_path_wire_parity_last_only  (reversed-window row numbers -> same cursors/flags)
-#   test_fast_path_cursor_round_trips_to_fallback_after  (fast-path endCursor fed to after: on an
-#       optimizer-less execution continues correctly)
-#   test_fast_path_total_count_from_annotation_no_query / ..._marker_bypasses_non_queryset_guard
-#   test_fast_path_first_zero_falls_back_for_total_count_and_pageinfo / ..._after_end_falls_back...
-#   test_fast_path_ignores_window_when_sidecar_kwargs_present
-#   test_fallback_when_annotations_missing  (consumer's own accessor prefetch -> pipeline, correct)
-#   test_fallback_when_no_optimizer_installed  (pre-card behavior byte-identical)
-#   test_outer_total_count_predicate_ignores_nested_total_count  (re-affirmation)
+# =============================================================================
+# spec-033 Slice 2 - connection-class fast path (Decision 5). The walker's
+# windowed prefetch (Slice 1) only lands on ``root`` when the PARENT queryset
+# flows through ``DjangoOptimizerExtension``, so the fast-path schemas use a
+# ``DjangoListField`` root (which the optimizer plans) with the extension
+# installed. The existing ``_schema_with_root`` (a plain list resolver the
+# optimizer never sees) stays the pipeline-path baseline - and
+# ``test_synthesized_connection_per_parent_query_cost`` stays ``1 + N`` there.
+# =============================================================================
+
+
+def _genres_list_schema(*, optimizer=False, book_total_count=False, strictness="off"):
+    """Build a ``DjangoListField(GenreType)`` root over the M2M ``Genre.books``.
+
+    With ``optimizer`` installed the parent ``Genre`` queryset is planned, so
+    the nested ``booksConnection`` window lands on each genre's
+    ``_dst_books_connection`` ``to_attr`` and the fast path fires.
+    ``book_total_count`` opts ``BookType`` into ``Meta.connection`` so the
+    nested connection carries ``totalCount``. ``strictness`` (``"off"`` /
+    ``"warn"`` / ``"raise"``) wires the B3 contract for the Slice-4 strictness
+    pins; it is only meaningful with ``optimizer=True`` (no extension stashes
+    no sentinel - the no-op baseline).
+    """
+    book_meta = {"model": Book, "fields": ("id", "title"), "interfaces": (relay.Node,)}
+    if book_total_count:
+        book_meta["connection"] = {"total_count": True}
+    type("BookType", (DjangoType,), {"Meta": type("Meta", (), book_meta)})
+    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
+        ),
+    )
+    extensions = [lambda: DjangoOptimizerExtension(strictness=strictness)] if optimizer else []
+    return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
+
+
+def _genres_filterable_book_schema(*, strictness="raise"):
+    """Build the same M2M genres list root but with ``BookType`` carrying a sidecar.
+
+    A ``filterset_class`` on ``BookType`` means a nested ``booksConnection(filter:
+    ...)`` selection is a Decision-6 sidecar fallback: the walker leaves it
+    unplanned, so the resolver runs the per-parent pipeline and (with strictness
+    active) fires the B3 contract with the filter/orderBy fallback reason.
+    """
+
+    class _BookFilter(FilterSet):
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    book_meta = {
+        "model": Book,
+        "fields": ("id", "title"),
+        "interfaces": (relay.Node,),
+        "filterset_class": _BookFilter,
+    }
+    type("BookType", (DjangoType,), {"Meta": type("Meta", (), book_meta)})
+    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
+        ),
+    )
+    return strawberry.Schema(
+        query=query_cls,
+        config=strawberry_config(),
+        extensions=[lambda: DjangoOptimizerExtension(strictness=strictness)],
+    )
+
+
+def _exec(schema, query):
+    """Execute and return the first parent's ``booksConnection`` dict (no errors)."""
+    result = schema.execute_sync(query)
+    assert result.errors is None, result.errors
+    return result
+
+
+@pytest.mark.django_db
+def test_fast_path_single_query(django_assert_num_queries):
+    """Parent page + one window query, zero per-parent queries (the cost contract).
+
+    The optimizer-on mirror of ``test_synthesized_connection_per_parent_query_cost``:
+    a nested connection under an N-row parent list pays a FIXED count (parent
+    list + one batched window query) independent of parent count.
+    """
+    branch = Branch.objects.create(name="central")
+    shelf = Shelf.objects.create(code="A1", branch=branch)
+    for gi in range(4):
+        genre = Genre.objects.create(name=f"g{gi}")
+        for title in ("a", "b", "c"):
+            book = Book.objects.create(title=f"g{gi}-{title}", shelf=shelf)
+            book.genres.add(genre)
+
+    schema = _genres_list_schema(optimizer=True)
+    with django_assert_num_queries(2):
+        result = _exec(
+            schema,
+            "{ objs { name booksConnection(first: 2) { edges { node { title } } } } }",
+        )
+    assert len(result.data["objs"]) == 4
+    assert all(len(g["booksConnection"]["edges"]) == 2 for g in result.data["objs"])
+
+
+@pytest.mark.django_db
+def test_fast_path_through_schema_connection_extension(django_assert_num_queries):
+    """The fast path survives Strawberry's ``ConnectionExtension.resolve`` wrapper.
+
+    MANDATORY (spec line 68): execute the real ``relay.connection(...)`` field
+    end to end. The resolver returns a ``_WindowedConnectionRows`` node wrapper
+    and the generated connection class builds the Relay object - a direct helper
+    call would miss the ``ConnectionExtension`` layer boundary. The fixed query
+    count (parent + one window, no per-parent query) proves the fast path fired
+    rather than the per-parent pipeline.
+    """
+    _seed_library_books(["a", "b", "c"])
+    schema = _genres_list_schema(optimizer=True)
+    with django_assert_num_queries(2):
+        result = _exec(
+            schema,
+            "{ objs { booksConnection(first: 2) { edges { node { title } } } } }",
+        )
+    titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
+    assert titles == ["a", "b"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "args",
+    ["first: 2", "first: 10", 'first: 2, after: "YXJyYXljb25uZWN0aW9uOjA="'],
+)
+def test_fast_path_wire_parity_with_pipeline(args):
+    """Identical edges / cursors / pageInfo for the same data, optimizer on vs off.
+
+    The core parity matrix: the fast path (optimizer installed, window consumed)
+    and the per-parent pipeline (no optimizer) must produce byte-identical wire
+    results across forward windows, overruns, and ``after:`` continuation.
+    """
+    _seed_library_books(
+        [
+            "a",
+            "b",
+            "c",
+            "d",
+        ],
+    )
+    selection = (
+        f"booksConnection({args}) {{ edges {{ cursor node {{ title }} }} "
+        f"pageInfo {{ hasNextPage hasPreviousPage startCursor endCursor }} }}"
+    )
+    query = f"{{ objs {{ {selection} }} }}"
+
+    # The seeded rows persist across both schema builds in one test transaction;
+    # only the registry / connection-cache need clearing between the two
+    # ``DjangoType`` declarations (re-seeding would collide on unique fields).
+    fast = _exec(_genres_list_schema(optimizer=True), query)
+    registry.clear()
+    _connection_type_cache.clear()
+    slow = _exec(_genres_list_schema(optimizer=False), query)
+    assert fast.data == slow.data
+
+
+@pytest.mark.django_db
+def test_fast_path_wire_parity_last_only():
+    """Reversed (``last``-only) window maps to the SAME cursors and page flags.
+
+    Slice 1 keeps ``_dst_row_number`` forward (a separate
+    ``_dst_row_number_reversed`` drives only the plan-time row filter), so the
+    fast path's positional cursor (``_dst_row_number - 1``) and forward page-flag
+    comparisons land on the pipeline's values for a ``last``-only page too.
+    """
+    _seed_library_books(
+        [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+        ],
+    )
+    selection = (
+        "booksConnection(last: 2) { edges { cursor node { title } } "
+        "pageInfo { hasNextPage hasPreviousPage startCursor endCursor } }"
+    )
+    query = f"{{ objs {{ {selection} }} }}"
+
+    fast = _exec(_genres_list_schema(optimizer=True), query)
+    fast_conn = fast.data["objs"][0]["booksConnection"]
+    assert [e["node"]["title"] for e in fast_conn["edges"]] == ["d", "e"]
+    assert fast_conn["pageInfo"]["hasPreviousPage"] is True
+    assert fast_conn["pageInfo"]["hasNextPage"] is False
+
+    registry.clear()
+    _connection_type_cache.clear()
+    slow = _exec(_genres_list_schema(optimizer=False), query)
+    assert fast.data == slow.data
+
+
+@pytest.mark.django_db
+def test_fast_path_cursor_round_trips_to_fallback_after():
+    """A fast-path ``endCursor`` fed to ``after:`` on an optimizer-less execution continues.
+
+    The cursor-parity invariant's observable proof (Decision 4): the fast path's
+    positional offset cursors are format-compatible with the pipeline's, so a
+    page-1 ``endCursor`` captured under the optimizer drives a correct page-2
+    ``after:`` with the optimizer absent.
+    """
+    _seed_library_books(
+        [
+            "a",
+            "b",
+            "c",
+            "d",
+        ],
+    )
+    fast = _exec(
+        _genres_list_schema(optimizer=True),
+        "{ objs { booksConnection(first: 2) { pageInfo { endCursor } } } }",
+    )
+    end_cursor = fast.data["objs"][0]["booksConnection"]["pageInfo"]["endCursor"]
+
+    registry.clear()
+    _connection_type_cache.clear()
+    page_two = _exec(
+        _genres_list_schema(optimizer=False),
+        f'{{ objs {{ booksConnection(first: 2, after: "{end_cursor}") '
+        f"{{ edges {{ node {{ title }} }} }} }} }}",
+    )
+    titles = [e["node"]["title"] for e in page_two.data["objs"][0]["booksConnection"]["edges"]]
+    assert titles == ["c", "d"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fast_path_fires_for_reverse_fk_without_related_name(django_assert_num_queries):
+    """The fast path fires for a reverse FK without ``related_name``.
+
+    Decision 5: the resolver receives the relation FIELD NAME (``windowbook``),
+    not the accessor (``windowbook_set``), so its ``_dst_<field>_connection`` probe
+    matches the ``to_attr`` the walker keyed on the field name. The fixed query
+    count (parent + one window) proves the fast path fired rather than silently
+    falling back because the probe missed.
+
+    Uses its own ``WindowAuthor`` / ``WindowBook`` ``managed=False`` models (not
+    the ``PlainAuthor`` / ``PlainBook`` of the behavior-only test above) so the
+    two reverse-FK fixtures never collide in Django's app registry when both run.
+    """
+
+    class WindowAuthor(djmodels.Model):
+        name = djmodels.CharField(max_length=32)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    class WindowBook(djmodels.Model):
+        title = djmodels.CharField(max_length=32)
+        author = djmodels.ForeignKey(WindowAuthor, on_delete=djmodels.CASCADE)  # no related_name
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    assert WindowAuthor._meta.get_field("windowbook").get_accessor_name() == "windowbook_set"
+
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(WindowAuthor)
+        schema_editor.create_model(WindowBook)
+    try:
+        type(
+            "WindowBookType",
+            (DjangoType,),
+            {
+                "Meta": type(
+                    "Meta",
+                    (),
+                    {
+                        "model": WindowBook,
+                        "fields": ("id", "title"),
+                        "interfaces": (relay.Node,),
+                    },
+                ),
+            },
+        )
+        author_type = _make_type("WindowAuthorType", WindowAuthor, ("id", "name", "windowbook"))
+        finalize_django_types()
+        query_cls = strawberry.type(
+            type(
+                "Query",
+                (),
+                {
+                    "__annotations__": {"objs": list[author_type]},
+                    "objs": DjangoListField(author_type),
+                },
+            ),
+        )
+        schema = strawberry.Schema(
+            query=query_cls,
+            config=strawberry_config(),
+            extensions=[lambda: DjangoOptimizerExtension()],
+        )
+        for ai in range(3):
+            author = WindowAuthor.objects.create(name=f"a{ai}")
+            for ti in range(3):
+                WindowBook.objects.create(title=f"a{ai}-b{ti}", author=author)
+
+        with django_assert_num_queries(2):
+            result = _exec(
+                schema,
+                "{ objs { name windowbookConnection(first: 2) { edges { node { title } } } } }",
+            )
+        assert len(result.data["objs"]) == 3
+        assert all(len(a["windowbookConnection"]["edges"]) == 2 for a in result.data["objs"])
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(WindowBook)
+            schema_editor.delete_model(WindowAuthor)
+
+
+@pytest.mark.django_db
+def test_fast_path_total_count_from_annotation_no_query(django_assert_num_queries):
+    """A fast-path ``totalCount`` reads ``_dst_total_count`` - zero extra COUNT queries."""
+    _seed_library_books(
+        [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+        ],
+    )
+    schema = _genres_list_schema(optimizer=True, book_total_count=True)
+    with django_assert_num_queries(2):  # parent + window only; no per-relation COUNT
+        result = _exec(
+            schema,
+            "{ objs { booksConnection(first: 2) { totalCount edges { node { title } } } } }",
+        )
+    assert result.data["objs"][0]["booksConnection"]["totalCount"] == 5
+
+
+@pytest.mark.django_db
+def test_fast_path_total_count_marker_bypasses_non_queryset_guard():
+    """``totalCount`` over the wrapper does NOT raise the non-queryset count guard.
+
+    The ``_WindowedConnectionRows`` marker is not a ``QuerySet``; the totalCount
+    variant must branch on it BEFORE ``_guard_total_count_countable`` / ``.count()``
+    (Decision 5), so selecting ``totalCount`` over a fast-path window resolves
+    cleanly instead of raising the M1 non-queryset ``GraphQLError``.
+    """
+    _seed_library_books(["a", "b", "c"])
+    schema = _genres_list_schema(optimizer=True, book_total_count=True)
+    result = schema.execute_sync(
+        "{ objs { booksConnection(first: 2) { totalCount edges { node { title } } } } }",
+    )
+    assert result.errors is None, result.errors
+    assert result.data["objs"][0]["booksConnection"]["totalCount"] == 3
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("args", ["first: 0", 'after: "YXJyYXljb25uZWN0aW9uOjk5"'])
+def test_fast_path_ambiguous_empty_falls_back_for_total_count_and_pageinfo(args):
+    """``first: 0`` (``limit == 0``) and overshot ``after:`` (``offset > 0``) fall back.
+
+    An optimized empty window is ambiguous for these shapes (empty for the same
+    reason a genuinely empty parent is), so the fast path must NOT infer
+    ``totalCount = 0``; it falls back per parent, preserving byte-identical
+    ``totalCount`` / ``pageInfo`` against the pipeline path.
+    """
+    _seed_library_books(["a", "b", "c"])
+    selection = (
+        f"booksConnection({args}) {{ edges {{ node {{ title }} }} totalCount "
+        f"pageInfo {{ hasNextPage hasPreviousPage }} }}"
+    )
+    query = f"{{ objs {{ {selection} }} }}"
+
+    fast = _exec(_genres_list_schema(optimizer=True, book_total_count=True), query)
+    registry.clear()
+    _connection_type_cache.clear()
+    slow = _exec(_genres_list_schema(optimizer=False, book_total_count=True), query)
+    assert fast.data == slow.data
+    # The ambiguous-empty windows still report the true totalCount (3), never a
+    # spurious 0 from inferring "the window is empty so the parent is empty".
+    assert fast.data["objs"][0]["booksConnection"]["totalCount"] == 3
+
+
+@pytest.mark.django_db
+def test_fast_path_genuinely_empty_parent_serves_zero(django_assert_num_queries):
+    """A parent with no related rows is fast-pathed: totalCount 0, no fallback query.
+
+    Empty window with ``offset == 0`` and a positive bound proves the parent
+    genuinely has none, so the fast path serves ``totalCount = 0`` / no cursors /
+    both flags ``False`` without a per-parent fallback query.
+    """
+    branch = Branch.objects.create(name="central")
+    Shelf.objects.create(code="A1", branch=branch)
+    Genre.objects.create(name="empty")  # genre with zero books
+    schema = _genres_list_schema(optimizer=True, book_total_count=True)
+    with django_assert_num_queries(2):  # parent + the (empty) window; no fallback
+        result = _exec(
+            schema,
+            "{ objs { booksConnection(first: 2) { totalCount edges { node { title } } "
+            "pageInfo { hasNextPage hasPreviousPage } } } }",
+        )
+    conn = result.data["objs"][0]["booksConnection"]
+    assert conn["edges"] == []
+    assert conn["totalCount"] == 0
+    assert conn["pageInfo"] == {"hasNextPage": False, "hasPreviousPage": False}
+
+
+@pytest.mark.django_db
+def test_fast_path_ignores_window_when_sidecar_kwargs_present():
+    """A ``filter:`` argument makes the resolver ignore the window and run the pipeline.
+
+    The defensive belt (Decision 5): even if the walker desyncs and plans a
+    window, a sidecar-carrying selection must NOT consume it (which would serve
+    unfiltered wrong data) - the resolver refuses the window when its own
+    ``filter`` / ``order_by`` kwargs are present and runs the filtered pipeline.
+    """
+
+    class _BookFilter(FilterSet):
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    book_meta = {
+        "model": Book,
+        "fields": ("id", "title"),
+        "interfaces": (relay.Node,),
+        "filterset_class": _BookFilter,
+    }
+    type("BookType", (DjangoType,), {"Meta": type("Meta", (), book_meta)})
+    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
+        ),
+    )
+    schema = strawberry.Schema(
+        query=query_cls,
+        config=strawberry_config(),
+        extensions=[lambda: DjangoOptimizerExtension()],
+    )
+    _seed_library_books(["apple", "banana", "avocado"])
+    result = schema.execute_sync(
+        '{ objs { booksConnection(filter: { title: { exact: "banana" } }) '
+        "{ edges { node { title } } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None, result.errors
+    titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
+    assert titles == ["banana"]  # the filter narrowed; the unfiltered window was refused
+
+
+@pytest.mark.django_db
+def test_fallback_when_annotations_missing():
+    """A ``to_attr`` list whose rows lack the window annotations is not consumed.
+
+    A consumer's own prefetch (or any non-window attribute) at the package-reserved
+    name without ``_dst_row_number`` / ``_dst_total_count`` must fall through to
+    the pipeline - the annotation-presence probe is upstream's integrity check.
+    """
+    _seed_library_books(["a", "b", "c"])
+    _make_type("BookType", Book, ("id", "title"))
+    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
+    finalize_django_types()
+    model = genre_type.__django_strawberry_definition__.model
+
+    def _resolver() -> list[genre_type]:
+        objs = list(model._default_manager.all().order_by("pk"))
+        # Plant an UNANNOTATED list at the package-reserved to_attr (a consumer
+        # prefetch shape); the resolver must NOT consume it as a window.
+        for obj in objs:
+            obj._dst_books_connection = list(obj.books.all())
+        return objs
+
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"objs": list[genre_type]},
+                "objs": strawberry.field(resolver=_resolver),
+            },
+        ),
+    )
+    schema = strawberry.Schema(query=query_cls, config=strawberry_config())
+    result = schema.execute_sync(
+        "{ objs { booksConnection(first: 2) { edges { node { title } } } } }",
+    )
+    assert result.errors is None, result.errors
+    titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
+    assert titles == ["a", "b"]
+
+
+@pytest.mark.django_db
+def test_fallback_when_no_optimizer_installed():
+    """No optimizer -> no window planned -> per-parent pipeline, byte-identical results."""
+    _seed_library_books(["a", "b", "c"])
+    query = "{ objs { booksConnection(first: 2) { edges { node { title } } pageInfo { hasNextPage } } } }"
+    no_opt = _exec(_genres_list_schema(optimizer=False), query)
+    conn = no_opt.data["objs"][0]["booksConnection"]
+    assert [e["node"]["title"] for e in conn["edges"]] == ["a", "b"]
+    assert conn["pageInfo"]["hasNextPage"] is True
+
+
+@pytest.mark.django_db
+def test_outer_total_count_predicate_ignores_nested_total_count():
+    """A nested connection's ``totalCount`` does not fire the OUTER connection's count.
+
+    Re-affirmation (Edge case line 456) now that nested ``totalCount`` is a
+    fast-path read: a two-level selection of the nested ``totalCount`` must not
+    make the root connection's ``_total_count_requested`` predicate fire (no
+    spurious outer COUNT, no outer non-queryset guard raise). The root here is a
+    ``DjangoConnectionField`` (its own ``totalCount`` opt-in) whose ``totalCount``
+    is NOT selected - only the nested one is.
+    """
+    _seed_library_books(["a", "b", "c"])
+    type(
+        "BookType",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": Book,
+                    "fields": ("id", "title"),
+                    "interfaces": (relay.Node,),
+                    "connection": {"total_count": True},
+                },
+            ),
+        },
+    )
+    genre_type = _make_type(
+        "GenreType",
+        Genre,
+        ("id", "name", "books"),
+        meta_extra={"connection": {"total_count": True}},
+    )
+    finalize_django_types()
+    from django_strawberry_framework import DjangoConnectionField
+
+    conn_type = _connection_type_for(genre_type)
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {"__annotations__": {"objs": conn_type}, "objs": DjangoConnectionField(genre_type)},
+        ),
+    )
+    schema = strawberry.Schema(
+        query=query_cls,
+        config=strawberry_config(),
+        extensions=[lambda: DjangoOptimizerExtension()],
+    )
+    # Only the NESTED totalCount is selected; the outer one is not. The outer
+    # predicate must stay False (its direct children are edges + the nested
+    # connection), so no spurious root COUNT fires and no outer non-queryset
+    # guard raises.
+    result = schema.execute_sync(
+        "{ objs { edges { node { name booksConnection(first: 2) "
+        "{ totalCount edges { node { title } } } } } } }",
+    )
+    assert result.errors is None, result.errors
+    genre_node = result.data["objs"]["edges"][0]["node"]
+    assert genre_node["booksConnection"]["totalCount"] == 3
+
+
+# =============================================================================
+# Slice 4: strictness wiring for connection paths (spec-033 Decision 8).
 #
-# TODO(spec-033 Slice 4): strictness wiring coverage (Test plan).
-#   test_strictness_raise_unplanned_nested_connection  ("raise" + optimizer + fallback shape ->
-#       OptimizerError naming the generated field)
-#   test_strictness_warn_logs_once_per_occurrence
-#   test_strictness_warn_nested_fallback_preserves_parent_plan_context
-#   test_nested_fallback_does_not_clobber_fk_id_elisions
-#   test_strictness_silent_when_window_served / ..._when_planned / ..._when_off / ..._no_optimizer
-#   test_sidecar_fallback_is_flagged_with_reason  (actionable message incl. fallback reason)
-#   _check_n1 parameterization no-regression: list-relation strictness suite passes unmodified.
+# The synthesized relation-connection resolver consults the union-published
+# optimizer sentinels via the PARAMETERIZED ``types/resolvers.py::_check_n1``
+# (kind="connection_to_attr") before the per-parent fallback pipeline. An
+# unplanned, unserved nested-connection access fires the B3 contract -
+# ``OptimizerError`` under ``"raise"``, a logged warning under ``"warn"`` -
+# through the SAME machinery list relations use. These pins need an
+# optimizer-installed, strictness-active schema (the fakeshop project schema
+# runs strictness-off), so they live here, not in the live suite (Test plan).
+#
+# The sidecar-filtered ``booksConnection(filter: ...)`` is the clearest
+# live-reachable fallback shape: the walker leaves it unplanned (Decision 6),
+# so the resolver runs per-parent and is visible to strictness.
+# =============================================================================
+
+
+@pytest.mark.django_db
+def test_strictness_raise_unplanned_nested_connection():
+    """``"raise"`` + optimizer + a fallback nested connection -> ``OptimizerError``.
+
+    The flagged message NAMES the generated relation field (the ``field_name``
+    stem, the relation field name ``books`` the walker keyed the would-be plan
+    under), exactly as a plain list relation's strictness flag reads.
+    """
+    from django_strawberry_framework.exceptions import OptimizerError
+
+    _seed_library_books(["apple", "banana", "avocado"])
+    schema = _genres_filterable_book_schema(strictness="raise")
+    result = schema.execute_sync(
+        '{ objs { booksConnection(filter: { title: { exact: "banana" } }) '
+        "{ edges { node { title } } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is not None
+    messages = [str(e.original_error or e) for e in result.errors]
+    assert any(isinstance(e.original_error, OptimizerError) for e in result.errors)
+    assert any("Unplanned N+1: books" in m for m in messages)
+
+
+@pytest.mark.django_db
+def test_sidecar_fallback_is_flagged_with_reason():
+    """A sidecar fallback's ``"raise"`` message carries an ACTIONABLE reason.
+
+    Decision 6 consistency pin (Risks bullet "include the fallback reason in the
+    message"): a consumer who legitimately filters a nested connection gets a
+    per-parent fallback that strictness flags - the message must explain WHY
+    (the filter/orderBy wording) so it does not look like an optimizer defect.
+    """
+    _seed_library_books(["apple", "banana", "avocado"])
+    schema = _genres_filterable_book_schema(strictness="raise")
+    result = schema.execute_sync(
+        '{ objs { booksConnection(filter: { title: { exact: "banana" } }) '
+        "{ edges { node { title } } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is not None
+    messages = [str(e.original_error or e) for e in result.errors]
+    assert any("selection carries filter/orderBy" in m for m in messages), messages
+
+
+@pytest.mark.django_db
+def test_strictness_warn_logs_once_per_occurrence(caplog):
+    """``"warn"`` + a fallback nested connection -> logged warning, execution CONTINUES.
+
+    The query still resolves correctly (warn does not abort); the resolver
+    logger emits a warning naming the field. Pinned via ``caplog``.
+    """
+    _seed_library_books(["apple", "banana", "avocado"])
+    schema = _genres_filterable_book_schema(strictness="warn")
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    result = schema.execute_sync(
+        '{ objs { booksConnection(filter: { title: { exact: "banana" } }) '
+        "{ edges { node { title } } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None, result.errors
+    # Warn continues: the filtered page is still served correctly.
+    titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
+    assert titles == ["banana"]
+    assert any("Potential N+1 on books" in r.getMessage() for r in caplog.records), [
+        r.getMessage() for r in caplog.records
+    ]
+
+
+@pytest.mark.django_db
+def test_strictness_warn_nested_fallback_preserves_parent_plan_context():
+    """A warn-mode nested fallback does not corrupt the parent's PLANNED siblings.
+
+    The Slice-1 union-publish foundation: a nested fallback connection's own
+    optimizer publish must not shrink the parent ``DST_OPTIMIZER_PLANNED`` set.
+    A planned parent-level relation sibling (``books``, the plain list field)
+    selected alongside the fallback nested connection must NOT warn or raise -
+    its planned key survives the nested pipeline's publish.
+    """
+    _seed_library_books(["apple", "banana", "avocado"])
+    # ``GenreType`` exposes both the list sibling ``books`` (planned) and the
+    # connection sibling ``booksConnection``; selecting the planned list field
+    # alongside a sidecar-filtered connection must leave the list field silent.
+    schema = _genres_filterable_book_schema(strictness="raise")
+    result = schema.execute_sync(
+        "{ objs { books { title } "
+        '  booksConnection(filter: { title: { exact: "banana" } }) '
+        "{ edges { node { title } } } } }",
+        context_value=HttpRequest(),
+    )
+    # The sidecar connection raises (it is the unplanned access), but the planned
+    # ``books`` list sibling never does - its planned key was not clobbered.
+    assert result.errors is not None
+    messages = [str(e.original_error or e) for e in result.errors]
+    assert all("Unplanned N+1: books@" not in m for m in messages)
+    # The only flag is the connection field's, keyed on ``books`` (field name) -
+    # never the list sibling under the same name with a different runtime path.
+    assert any("Unplanned N+1: books (" in m for m in messages), messages
+
+
+@pytest.mark.django_db
+def test_nested_fallback_does_not_clobber_fk_id_elisions():
+    """A planned forward-FK sibling still elides after a nested fallback publishes.
+
+    The ``DST_OPTIMIZER_FK_ID_ELISIONS`` union (Slice 1) must survive the nested
+    fallback pipeline's own publish: a query selecting an elided forward-FK
+    (``shelf { id }`` on each book) alongside a fallback nested connection
+    resolves with no spurious strictness flag on the FK-id resolver and no extra
+    per-row query for the elided FK.
+    """
+    from django_strawberry_framework.exceptions import OptimizerError
+
+    branch = Branch.objects.create(name="central")
+    shelf = Shelf.objects.create(code="A1", branch=branch)
+    genre = Genre.objects.create(name="fiction")
+    for title in ("apple", "banana"):
+        book = Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+
+    # ``BookType`` exposes its forward FK ``shelf`` (a ``{ id }``-only selection
+    # elides it) and the M2M ``genres`` (the fallback nested connection target).
+    type(
+        "ShelfType",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": Shelf, "fields": ("id",), "interfaces": (relay.Node,)},
+            ),
+        },
+    )
+
+    class _GenreFilter(FilterSet):
+        class Meta:
+            model = Genre
+            fields = {"name": ["exact"]}
+
+    type(
+        "GenreType",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": Genre,
+                    "fields": ("id", "name"),
+                    "interfaces": (relay.Node,),
+                    "filterset_class": _GenreFilter,
+                },
+            ),
+        },
+    )
+    book_type = _make_type(
+        "BookType",
+        Book,
+        (
+            "id",
+            "title",
+            "shelf",
+            "genres",
+        ),
+    )
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {"__annotations__": {"objs": list[book_type]}, "objs": DjangoListField(book_type)},
+        ),
+    )
+    schema = strawberry.Schema(
+        query=query_cls,
+        config=strawberry_config(),
+        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+    )
+    # ``shelf { id }`` is FK-id elided (planned); ``genresConnection(filter:)`` is
+    # a sidecar fallback. The elided FK must NOT spuriously flag after the nested
+    # connection's pipeline publishes its own plan.
+    result = schema.execute_sync(
+        "{ objs { shelf { id } "
+        '  genresConnection(filter: { name: { exact: "fiction" } }) '
+        "{ edges { node { name } } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is not None
+    messages = [str(e.original_error or e) for e in result.errors]
+    # The only flag is the unplanned connection; the elided ``shelf`` FK is silent.
+    assert all("Unplanned N+1: shelf" not in m for m in messages), messages
+    assert any(isinstance(e.original_error, OptimizerError) for e in result.errors)
+    assert any("Unplanned N+1: genres (" in m for m in messages), messages
+
+
+@pytest.mark.django_db
+def test_strictness_silent_when_window_served():
+    """``"raise"`` + a WINDOW-PLANNED nested connection -> no raise, no warn.
+
+    The fast path served the rows under ``_dst_books_connection`` (the ``to_attr``
+    is present on each parent), so ``_check_n1``'s connection lazy probe returns
+    "not lazy" and the contract is silent. Wire result correct.
+    """
+    _seed_library_books(["apple", "banana", "avocado"])
+    schema = _genres_list_schema(optimizer=True, strictness="raise")
+    result = schema.execute_sync(
+        "{ objs { booksConnection(first: 2) { edges { node { title } } } } }",
+    )
+    assert result.errors is None, result.errors
+    titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
+    assert titles == ["apple", "banana"]
+
+
+@pytest.mark.django_db
+def test_strictness_silent_when_off():
+    """``"off"`` (optimizer installed) -> neither raise nor warn on a fallback.
+
+    ``DST_OPTIMIZER_STRICTNESS == "off"`` is the resolver's no-op: no sentinel is
+    stashed (the publish gates on ``strictness != "off"``), so ``_check_n1``'s
+    prelude returns immediately even on the unplanned sidecar fallback.
+    """
+    _seed_library_books(["apple", "banana", "avocado"])
+    schema = _genres_filterable_book_schema(strictness="off")
+    result = schema.execute_sync(
+        '{ objs { booksConnection(filter: { title: { exact: "banana" } }) '
+        "{ edges { node { title } } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None, result.errors
+    titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
+    assert titles == ["banana"]
+
+
+@pytest.mark.django_db
+def test_strictness_silent_no_optimizer():
+    """No optimizer installed -> no sentinel stashed -> ``_check_n1`` is a no-op.
+
+    The byte-identical pre-card behavior (and the root-shaped no-op of
+    Implementation step 5): with no extension, ``DST_OPTIMIZER_PLANNED`` is never
+    stashed, so the prelude returns before any probe - the per-parent pipeline
+    runs exactly as before, no flag.
+    """
+    _seed_library_books(["apple", "banana", "avocado"])
+    # No-optimizer variant: the plain list schema installs no extension at all,
+    # so no sentinel is ever stashed (``strictness="raise"`` is inert here).
+    schema = _genres_list_schema(optimizer=False, strictness="raise")
+    result = schema.execute_sync(
+        "{ objs { booksConnection(first: 2) { edges { node { title } } } } }",
+    )
+    assert result.errors is None, result.errors
+    titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
+    assert titles == ["apple", "banana"]
+
+
+def test_strictness_silent_when_planned():
+    """A planned connection key short-circuits BEFORE the ``to_attr`` probe.
+
+    The load-bearing resolver-key parity (Implementation step 2): the resolver-
+    side ``_check_n1`` builds ``resolver_key(declaring_type, relation_field_name,
+    runtime_path)`` - the IDENTICAL shape the walker emits
+    (``walker.py::_plan_connection_relation`` #"resolver_key(type_cls,
+    relation_field_name, runtime_path)"). When that exact key is in
+    ``DST_OPTIMIZER_PLANNED`` the resolver is silent even with the ``to_attr``
+    ABSENT on ``root`` (the planned short-circuit beats the connection probe), so
+    a window-planned connection never false-flags. A divergent key
+    (generated ``books_connection`` name, or the target type) would miss the
+    planned set and spuriously fire - this asserts the match directly.
+    """
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.exceptions import OptimizerError
+    from django_strawberry_framework.optimizer.plans import resolver_key
+    from django_strawberry_framework.types.resolvers import _check_n1
+
+    class GenreType:
+        pass
+
+    # The walker keys a planned connection under (declaring type, RELATION FIELD
+    # NAME, runtime path) - matched here at resolve time off ``info.path``.
+    info = SimpleNamespace(
+        context={
+            "dst_optimizer_planned": {
+                resolver_key(GenreType, "books", ("objs", "booksConnection")),
+            },
+            "dst_optimizer_strictness": "raise",
+        },
+        path=_path("objs", 0, "booksConnection"),
+    )
+    # ``to_attr`` absent on root (no window served), yet planned -> silent. The
+    # call mirrors the connection.py consultation exactly.
+    _check_n1(
+        info,
+        SimpleNamespace(),
+        "books",
+        GenreType,
+        kind="connection_to_attr",
+        to_attr="_dst_books_connection",
+        reason="not window-planned; resolving per-parent",
+    )
+
+    # Sanity counter-proof: the SAME shape with the key absent DOES fire, so the
+    # silence above is the planned-key match, not an inert no-op.
+    info_unplanned = SimpleNamespace(
+        context={"dst_optimizer_planned": set(), "dst_optimizer_strictness": "raise"},
+        path=_path("objs", 0, "booksConnection"),
+    )
+    with pytest.raises(OptimizerError, match=r"Unplanned N\+1: books \("):
+        _check_n1(
+            info_unplanned,
+            SimpleNamespace(),
+            "books",
+            GenreType,
+            kind="connection_to_attr",
+            to_attr="_dst_books_connection",
+            reason="not window-planned; resolving per-parent",
+        )

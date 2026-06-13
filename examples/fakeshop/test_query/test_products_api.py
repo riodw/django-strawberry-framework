@@ -28,7 +28,7 @@ import sys
 
 import pytest
 from apps.products import models
-from apps.products.services import create_users, seed_data
+from apps.products.services import create_users, delete_data, seed_data
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import Client, override_settings
@@ -117,11 +117,12 @@ def test_emitted_globalid_is_model_anchored():
     """
     seed_data(1)
     item = models.Item.objects.order_by("id").first()
-    response = _post_graphql("query { allItems { id name } }")
+    response = _post_graphql("query { allItems { edges { node { id name } } } }")
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
-    emitted = next(row for row in payload["data"]["allItems"] if row["name"] == item.name)
+    nodes = [edge["node"] for edge in payload["data"]["allItems"]["edges"]]
+    emitted = next(node for node in nodes if node["name"] == item.name)
     parsed = relay.GlobalID.from_id(emitted["id"])
     assert parsed.type_name == models.Item._meta.label_lower
     assert parsed.node_id == str(item.pk)
@@ -139,16 +140,18 @@ def test_globalid_filter_round_trip():
     """
     seed_data(1)
     target = models.Item.objects.order_by("id").first()
-    emit_response = _post_graphql("query { allItems { id name } }")
+    emit_response = _post_graphql("query { allItems { edges { node { id name } } } }")
     assert emit_response.status_code == 200
     emit_payload = emit_response.json()
     assert "errors" not in emit_payload, emit_payload
-    emitted = next(row for row in emit_payload["data"]["allItems"] if row["name"] == target.name)
+    emitted_nodes = [edge["node"] for edge in emit_payload["data"]["allItems"]["edges"]]
+    emitted = next(node for node in emitted_nodes if node["name"] == target.name)
     emitted_id = emitted["id"]
 
     _assert_graphql_data(
-        f'query {{ allItems(filter: {{ id: {{ exact: "{emitted_id}" }} }}) {{ id name }} }}',
-        {"allItems": [{"id": emitted_id, "name": target.name}]},
+        f'query {{ allItems(filter: {{ id: {{ exact: "{emitted_id}" }} }}) '
+        "{ edges { node { id name } } } }",
+        {"allItems": {"edges": [{"node": {"id": emitted_id, "name": target.name}}]}},
     )
 
 
@@ -170,11 +173,12 @@ def test_type_strategy_opt_out_reproduces_type_name():
         DJANGO_STRAWBERRY_FRAMEWORK={"RELAY_GLOBALID_STRATEGY": "type"},
     ):
         _reload_products_project_schema()
-        response = _post_graphql("query { allItems { id name } }")
+        response = _post_graphql("query { allItems { edges { node { id name } } } }")
         assert response.status_code == 200
         payload = response.json()
         assert "errors" not in payload, payload
-        emitted = next(row for row in payload["data"]["allItems"] if row["name"] == item.name)
+        nodes = [edge["node"] for edge in payload["data"]["allItems"]["edges"]]
+        emitted = next(node for node in nodes if node["name"] == item.name)
         parsed = relay.GlobalID.from_id(emitted["id"])
         assert parsed.type_name == "ItemType"
         assert parsed.node_id == str(item.pk)
@@ -182,9 +186,20 @@ def test_type_strategy_opt_out_reproduces_type_name():
 
 @pytest.mark.django_db
 def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
+    """Re-pinned through the connection wrapper: duplicate-root-field merge holds.
+
+    The two `allItems` connection selections still merge into one node set
+    (each `node` carries both `name` and `category { name }`), the root
+    connection issues exactly ONE planned slice query carrying the
+    `select_related("category")` JOIN, and NO COUNT runs (products declare no
+    `Meta.connection`, so no `totalCount` field gates one). The appended
+    deterministic `ORDER BY pk` is a no-op vs the old `.order_by("id")`
+    (`id` IS the pk). Items = 25 at `seed_data(1)`, well under the default
+    `relay_max_results` cap of 100.
+    """
     seed_data(1)
     expected = [
-        {"name": item.name, "category": {"name": item.category.name}}
+        {"node": {"name": item.name, "category": {"name": item.category.name}}}
         for item in models.Item.objects.select_related("category").order_by("id")
     ]
 
@@ -192,8 +207,8 @@ def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
         response = _post_graphql(
             """
             query {
-              allItems { name }
-              allItems { category { name } }
+              allItems { edges { node { name } } }
+              allItems { edges { node { category { name } } } }
             }
             """,
         )
@@ -201,7 +216,7 @@ def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
-    assert payload["data"] == {"allItems": expected}
+    assert payload["data"] == {"allItems": {"edges": expected}}
     assert len(captured) == 1, [query["sql"] for query in captured]
     sql = captured[0]["sql"].lower()
     assert "products_item" in sql
@@ -211,17 +226,34 @@ def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
 
 @pytest.mark.django_db
 def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
+    """Re-pinned through the connection wrapper: depth-2 reverse-FK prefetch holds.
+
+    `allCategories` is now a connection (one planned categories slice query),
+    but `items` and `entries` stay LIST relations (`{ name }`, not
+    `itemsConnection`) - the depth-2 reverse-FK prefetch chain the test pins
+    is unchanged: 1 categories slice + 1 `items` prefetch + 1 `entries`
+    prefetch = 3 queries, no COUNT. List relations are not capped, so the
+    full 25 categories / 25 items / 177 entries still come back; categories
+    (25) is under the default `relay_max_results` cap of 100.
+    """
     seed_data(1)
+    assert models.Category.objects.count() < _RELAY_MAX_RESULTS, (
+        "fixture must stay under the cap so the full-set assertion is not silently truncated"
+    )
 
     with CaptureQueriesContext(connection) as captured:
         response = _post_graphql(
             """
             query {
               allCategories {
-                name
-                items {
-                  name
-                  entries { value }
+                edges {
+                  node {
+                    name
+                    items {
+                      name
+                      entries { value }
+                    }
+                  }
                 }
               }
             }
@@ -231,7 +263,7 @@ def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
-    categories = payload["data"]["allCategories"]
+    categories = [edge["node"] for edge in payload["data"]["allCategories"]["edges"]]
     items = [item for category in categories for item in category["items"]]
     entries = [entry for item in items for entry in item["entries"]]
     assert len(categories) == models.Category.objects.count()
@@ -243,23 +275,55 @@ def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
     assert "products_entry" in captured[2]["sql"]
 
 
+# The connection caps an un-paginated default page (and any explicit ``first:``)
+# at ``relay_max_results``; Strawberry rejects a ``first:`` above it outright.
+# ``seed_data(1)`` produces 177 entries, OVER this cap, so the forward-FK
+# depth-2 pin asserts the capped default page (the first ``RELAY_MAX_RESULTS``
+# rows in deterministic pk order) rather than the full set (Decision 10's cap
+# boundary). 100 is Strawberry's default ``StrawberryConfig.relay_max_results``;
+# the fakeshop schema sets no override.
+_RELAY_MAX_RESULTS = 100
+
+
 @pytest.mark.django_db
 def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
+    """Re-pinned through the connection wrapper: depth-2 forward-FK select_related holds.
+
+    `allEntries` is now a connection: one planned slice query carrying
+    `select_related("item__category")`, no COUNT. `seed_data(1)` produces 177
+    entries - OVER the `relay_max_results` cap of 100 - and Strawberry rejects
+    a `first:` above the cap, so the connection cannot return the full set.
+    The pin therefore asserts the capped default page: the first
+    `_RELAY_MAX_RESULTS` entries in deterministic pk order. The appended
+    `ORDER BY pk` matches the ORM `.order_by("id")` (`id` IS the pk), so the
+    emitted node order equals the expected ORM order; the SQL-shape contract
+    (the depth-2 `select_related` JOIN in one query) is what this test fences.
+    """
     seed_data(1)
+    assert models.Entry.objects.count() > _RELAY_MAX_RESULTS, (
+        "fixture must exceed the cap to exercise the capped-default-page boundary"
+    )
     expected = [
         {
-            "id": _global_id(models.Entry._meta.label_lower, entry.pk),
-            "value": entry.value,
-            "item": {
-                "id": _global_id(models.Item._meta.label_lower, entry.item_id),
-                "name": entry.item.name,
-                "category": {
-                    "id": _global_id(models.Category._meta.label_lower, entry.item.category_id),
-                    "name": entry.item.category.name,
+            "node": {
+                "id": _global_id(models.Entry._meta.label_lower, entry.pk),
+                "value": entry.value,
+                "item": {
+                    "id": _global_id(models.Item._meta.label_lower, entry.item_id),
+                    "name": entry.item.name,
+                    "category": {
+                        "id": _global_id(
+                            models.Category._meta.label_lower,
+                            entry.item.category_id,
+                        ),
+                        "name": entry.item.category.name,
+                    },
                 },
             },
         }
-        for entry in models.Entry.objects.select_related("item__category").order_by("id")
+        for entry in models.Entry.objects.select_related("item__category").order_by("id")[
+            :_RELAY_MAX_RESULTS
+        ]
     ]
 
     with CaptureQueriesContext(connection) as captured:
@@ -267,12 +331,16 @@ def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
             """
             query {
               allEntries {
-                id
-                value
-                item {
-                  id
-                  name
-                  category { id name }
+                edges {
+                  node {
+                    id
+                    value
+                    item {
+                      id
+                      name
+                      category { id name }
+                    }
+                  }
                 }
               }
             }
@@ -282,7 +350,7 @@ def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
-    assert payload["data"] == {"allEntries": expected}
+    assert payload["data"] == {"allEntries": {"edges": expected}}
     assert len(captured) == 1, [query["sql"] for query in captured]
     sql = captured[0]["sql"].lower()
     assert "products_entry" in sql
@@ -297,8 +365,9 @@ def test_products_categories_filter_by_name_exact_as_staff():
     seed_data(1)
     category = models.Category.objects.order_by("id").first()
     _assert_graphql_data(
-        f"query {{ allCategories(filter: {{ name: {{ exact: {json.dumps(category.name)} }} }}) {{ name }} }}",
-        {"allCategories": [{"name": category.name}]},
+        f"query {{ allCategories(filter: {{ name: {{ exact: {json.dumps(category.name)} }} }}) "
+        "{ edges { node { name } } } }",
+        {"allCategories": {"edges": [{"node": {"name": category.name}}]}},
         client=_staff_client(),
     )
 
@@ -309,7 +378,8 @@ def test_products_categories_filter_by_name_denied_for_anonymous():
     seed_data(1)
     category = models.Category.objects.order_by("id").first()
     response = _post_graphql(
-        f"query {{ allCategories(filter: {{ name: {{ exact: {json.dumps(category.name)} }} }}) {{ name }} }}",
+        f"query {{ allCategories(filter: {{ name: {{ exact: {json.dumps(category.name)} }} }}) "
+        "{ edges { node { name } } } }",
     )
     payload = response.json()
     assert "errors" in payload, payload
@@ -329,7 +399,8 @@ def test_products_categories_name_permission_fires_for_non_exact_lookup():
     seed_data(1)
     category = models.Category.objects.order_by("id").first()
     response = _post_graphql(
-        f"query {{ allCategories(filter: {{ name: {{ iContains: {json.dumps(category.name[:2])} }} }}) {{ name }} }}",
+        f"query {{ allCategories(filter: {{ name: {{ iContains: {json.dumps(category.name[:2])} }} }}) "
+        "{ edges { node { name } } } }",
     )
     payload = response.json()
     assert "errors" in payload, payload
@@ -342,7 +413,8 @@ def test_products_items_related_category_name_permission_fires_for_anonymous():
     seed_data(1)
     category = models.Category.objects.order_by("id").first()
     response = _post_graphql(
-        f"query {{ allItems(filter: {{ category: {{ name: {{ exact: {json.dumps(category.name)} }} }} }}) {{ name }} }}",
+        f"query {{ allItems(filter: {{ category: {{ name: {{ exact: {json.dumps(category.name)} }} }} }}) "
+        "{ edges { node { name } } } }",
     )
     payload = response.json()
     assert "errors" in payload, payload
@@ -365,8 +437,13 @@ def test_products_categories_filter_by_relay_own_pk_global_id_in():
         for category in categories
     )
     _assert_graphql_data(
-        f"query {{ allCategories(filter: {{ id: {{ in: [{gids}] }} }}) {{ name }} }}",
-        {"allCategories": [{"name": category.name} for category in categories]},
+        f"query {{ allCategories(filter: {{ id: {{ in: [{gids}] }} }}) "
+        "{ edges { node { name } } } }",
+        {
+            "allCategories": {
+                "edges": [{"node": {"name": category.name}} for category in categories],
+            },
+        },
     )
 
 
@@ -383,14 +460,15 @@ def test_products_categories_filter_by_starts_with_via_all_lookups():
     seed_data(1)
     prefix = models.Category.objects.order_by("id").first().name[:2]
     expected = [
-        {"name": name}
+        {"node": {"name": name}}
         for name in models.Category.objects.filter(name__startswith=prefix)
         .order_by("id")
         .values_list("name", flat=True)
     ]
     _assert_graphql_data(
-        f'query {{ allCategories(filter: {{ name: {{ startsWith: "{prefix}" }} }}) {{ name }} }}',
-        {"allCategories": expected},
+        f'query {{ allCategories(filter: {{ name: {{ startsWith: "{prefix}" }} }}) '
+        "{ edges { node { name } } } }",
+        {"allCategories": {"edges": expected}},
         client=_staff_client(),
     )
 
@@ -404,14 +482,15 @@ def test_products_items_filter_by_related_category_global_id():
         relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
     )
     expected = [
-        {"name": name}
+        {"node": {"name": name}}
         for name in models.Item.objects.filter(category=category)
         .order_by("id")
         .values_list("name", flat=True)
     ]
     _assert_graphql_data(
-        f'query {{ allItems(filter: {{ category: {{ id: {{ exact: "{gid}" }} }} }}) {{ name }} }}',
-        {"allItems": expected},
+        f'query {{ allItems(filter: {{ category: {{ id: {{ exact: "{gid}" }} }} }}) '
+        "{ edges { node { name } } } }",
+        {"allItems": {"edges": expected}},
     )
 
 
@@ -429,12 +508,12 @@ def test_products_items_order_by_name_asc():
     """``orderBy: [{ name: ASC }]`` sorts items by name ascending (Item has no order gate)."""
     seed_data(1)
     expected = [
-        {"name": name}
+        {"node": {"name": name}}
         for name in models.Item.objects.order_by("name").values_list("name", flat=True)
     ]
     _assert_graphql_data(
-        "query { allItems(orderBy: [{ name: ASC }]) { name } }",
-        {"allItems": expected},
+        "query { allItems(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+        {"allItems": {"edges": expected}},
     )
 
 
@@ -443,12 +522,12 @@ def test_products_items_order_by_name_desc():
     """``orderBy: [{ name: DESC }]`` sorts items by name descending."""
     seed_data(1)
     expected = [
-        {"name": name}
+        {"node": {"name": name}}
         for name in models.Item.objects.order_by("-name").values_list("name", flat=True)
     ]
     _assert_graphql_data(
-        "query { allItems(orderBy: [{ name: DESC }]) { name } }",
-        {"allItems": expected},
+        "query { allItems(orderBy: [{ name: DESC }]) { edges { node { name } } } }",
+        {"allItems": {"edges": expected}},
     )
 
 
@@ -461,7 +540,9 @@ def test_products_categories_order_by_name_denied_for_anonymous():
     on the filter side.
     """
     seed_data(1)
-    response = _post_graphql("query { allCategories(orderBy: [{ name: ASC }]) { name } }")
+    response = _post_graphql(
+        "query { allCategories(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+    )
     payload = response.json()
     assert "errors" in payload, payload
     assert "staff user" in payload["errors"][0]["message"]
@@ -472,12 +553,12 @@ def test_products_categories_order_by_name_as_staff():
     """A staff user clears the order-by-name gate and gets categories sorted by name."""
     seed_data(1)
     expected = [
-        {"name": name}
+        {"node": {"name": name}}
         for name in models.Category.objects.order_by("name").values_list("name", flat=True)
     ]
     _assert_graphql_data(
-        "query { allCategories(orderBy: [{ name: ASC }]) { name } }",
-        {"allCategories": expected},
+        "query { allCategories(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+        {"allCategories": {"edges": expected}},
         client=_staff_client(),
     )
 
@@ -490,7 +571,7 @@ def test_products_items_order_by_related_category_name_denied_for_anonymous():
         """
         query {
           allItems(orderBy: [{ category: { name: ASC } }]) {
-            name
+            edges { node { name } }
           }
         }
         """,
@@ -502,22 +583,28 @@ def test_products_items_order_by_related_category_name_denied_for_anonymous():
 
 @pytest.mark.django_db
 def test_products_items_order_by_related_category_name_as_staff():
-    """Nested ``RelatedOrder`` input sorts by the child order field."""
+    """Nested ``RelatedOrder`` input sorts by the child order field.
+
+    Each item's category is distinct (one item per category at
+    ``seed_data(1)``) and category names are unique provider names, so
+    ``category__name`` is a total order and the connection's appended
+    deterministic ``ORDER BY pk`` tiebreaker is a no-op against the ORM
+    ``order_by("category__name")`` expectation.
+    """
     seed_data(1)
     expected = [
-        {"name": item.name, "category": {"name": item.category.name}}
+        {"node": {"name": item.name, "category": {"name": item.category.name}}}
         for item in models.Item.objects.select_related("category").order_by("category__name")
     ]
     _assert_graphql_data(
         """
         query {
           allItems(orderBy: [{ category: { name: ASC } }]) {
-            name
-            category { name }
+            edges { node { name category { name } } }
           }
         }
         """,
-        {"allItems": expected},
+        {"allItems": {"edges": expected}},
         client=_staff_client(),
     )
 
@@ -536,33 +623,103 @@ def test_products_items_filter_and_order_compose():
         relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
     )
     expected = [
-        {"name": name}
+        {"node": {"name": name}}
         for name in models.Item.objects.filter(category=category)
         .order_by("name")
         .values_list("name", flat=True)
     ]
     _assert_graphql_data(
         f'query {{ allItems(filter: {{ category: {{ id: {{ exact: "{gid}" }} }} }}, '
-        "orderBy: [{ name: ASC }]) { name } }",
-        {"allItems": expected},
+        "orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+        {"allItems": {"edges": expected}},
     )
 
 
-# TODO(spec-033 Slice 6): products connections-only conversion re-pin (Test plan).
-# After apps/products/schema.py becomes connections-only (the cookbook mirror):
-#   - Rewrite EVERY root-field assertion list-shape -> edges { node }; semantic
-#     expectations (rows, ordering, filter/order narrowing, the
-#     check_name_permission denial gates on the synthesized filter:/orderBy:) carry
-#     over one-to-one. This is the LARGEST live suite -- mechanical shape rewrites,
-#     not semantic changes.
-#   - Re-pin the three SQL-shape dogfooding tests THROUGH the connection wrapper,
-#     query-count assertions INTACT (the card's regression fence):
-#       test_products_optimizer_merges_duplicate_root_field_nodes_over_http
-#       test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http
-#       test_products_optimizer_selects_nested_forward_fk_depth_2_over_http
-#   - NEW: one nested relation-connection fixed-query-count pin on the products
-#     graph (allCategories { edges { node { itemsConnection(first: N) { edges
-#     { node } } } } }) -- the reverse-FK windowed shape the M2M-only library
-#     graph cannot express live.
-# No Meta.connection opt-in on the four products types (no totalCount; minimal
-# conversion). No root node(id:)/nodes(ids:) fields (those stay TODO-BETA-051-0.1.5).
+# ---------------------------------------------------------------------------
+# Nested relation-connection windowed-prefetch coverage (spec-033 Slice 6,
+# DoD item 10). The reverse-FK windowed nested-connection shape the M2M-only
+# library graph cannot express live: ``Category.items`` synthesizes an
+# ``itemsConnection`` sibling (both ``CategoryType`` and ``ItemType`` are
+# Relay-Node-shaped, so the ``DONE-032-0.0.9`` implicit ``"both"`` default made
+# it), and Slices 1-2 plan it as a single windowed ``Prefetch``.
+# ---------------------------------------------------------------------------
+
+# itemsConnection carries ONLY ``first:`` -- a ``filter:`` / ``orderBy:`` sidecar
+# on a NESTED connection diverts it to the per-parent fallback (Decision 6),
+# which would issue one query per parent category (count scaling with parent
+# cardinality) instead of the single windowed prefetch. Selecting only ``first:``
+# pins the windowed path.
+_CATEGORIES_ITEMS_CONNECTION_QUERY = """
+query {
+  allCategories {
+    edges {
+      node {
+        name
+        itemsConnection(first: 2) {
+          edges { node { name } }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_products_categories_items_connection_fixed_query_count():
+    """The nested reverse-FK ``itemsConnection`` resolves in a FIXED query count.
+
+    Runs the same ``allCategories { edges { node { itemsConnection(first: 2)
+    { edges { node } } } } }`` query under two seed cardinalities and asserts
+    the captured query count is EQUAL (and absolutely small) across both -- the
+    N+1 disproof. The windowed path is a FIXED 2 queries (one ``allCategories``
+    slice + one windowed ``itemsConnection`` prefetch covering every category's
+    page). A per-parent fallback issues at least one query per parent and scales
+    with the number of ITEMS under ``first: 2`` (measured ~52 queries at
+    ``seed_data(1)`` and ~102 at ``seed_data(3)``), so it neither stays equal
+    across the two seedings nor lands at 2. Both seedings hold 25 parent
+    categories fixed and grow items-per-category, so the equality rules out a
+    per-child N+1 and the absolute ``== 2`` rules out the item-scaling fallback.
+
+    ``itemsConnection`` carries only ``first:`` (no sidecars) so it window-plans
+    rather than falling back (Decision 6). At ``seed_data(3)`` each category has
+    3 items and ``first: 2`` returns a true 2-item sub-page, proving the window
+    is per-parent-correct rather than one shared slice. Both seedings stay well
+    under the ``relay_max_results`` cap (25 categories).
+    """
+
+    def _run(seed_count: int) -> int:
+        delete_data("everything")
+        seed_data(seed_count)
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(_CATEGORIES_ITEMS_CONNECTION_QUERY)
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        edges = payload["data"]["allCategories"]["edges"]
+        # Each category node's itemsConnection is its OWN windowed page: every
+        # returned item belongs to that category and the page honours first: 2.
+        for edge in edges:
+            node = edge["node"]
+            category = models.Category.objects.get(name=node["name"])
+            item_names = {ie["node"]["name"] for ie in node["itemsConnection"]["edges"]}
+            assert len(item_names) <= 2
+            assert item_names <= set(
+                category.items.values_list("name", flat=True),
+            )
+        return len(captured)
+
+    one_item_each = _run(1)
+    three_items_each = _run(3)
+
+    # Load-bearing: count is equal across the two parent cardinalities (no N+1).
+    assert one_item_each == three_items_each
+    # Strengthening: the empirically-derived windowed fixed count (1 allCategories
+    # slice query + 1 windowed itemsConnection prefetch); a fallback issues at
+    # least one query per parent and scales with items (measured ~52 / ~102 here).
+    assert three_items_each == 2
+
+
+# Slice 6 (spec-033) deliberately adds NO Meta.connection opt-in on the four
+# products types (no totalCount; minimal cookbook-mirror conversion) and NO root
+# node(id:) / nodes(ids:) entry points (those stay TODO-BETA-051-0.1.5).

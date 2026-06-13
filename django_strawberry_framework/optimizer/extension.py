@@ -33,12 +33,12 @@ from collections import OrderedDict
 from collections.abc import Callable
 from contextlib import suppress
 from contextvars import ContextVar
-from types import SimpleNamespace
 from typing import Any, NamedTuple
 
 from django.db import models
 from graphql.language.ast import (
     DirectiveNode,
+    FieldNode,
     FragmentSpreadNode,
     VariableNode,
 )
@@ -57,13 +57,37 @@ from ._context import (
     DST_OPTIMIZER_STRICTNESS,
 )
 from ._context import (
+    get_context_value as _get_context_value,
+)
+from ._context import (
     stash_on_context as _stash_on_context,
 )
 from .hints import hint_is_skip
 from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
-from .walker import _should_include, plan_optimizations, plan_relation
+from .walker import (
+    _named_children,
+    _node_children_with_runtime_prefix,
+    _response_key,
+    plan_optimizations,
+    plan_relation,
+)
 
 _MAX_PLAN_CACHE_SIZE = 256
+
+# The Relay pagination argument names whose variable-supplied values must key
+# the plan cache when they appear on a NON-ROOT field node (Slice 1 bakes those
+# resolved values into windowed prefetch querysets, so two requests differing
+# only in a nested ``first: $n`` value need distinct cached plans -- Decision 7).
+# Single source of truth for the four argument names; a future ``search:``
+# extension (``0.1.2``) would extend the family here, not re-spell it inline.
+_PAGINATION_ARG_NAMES = frozenset(
+    {
+        "first",
+        "last",
+        "before",
+        "after",
+    },
+)
 
 # Re-export the stash helper under its original underscore-prefixed name so
 # existing tests that import ``from ...extension import _stash_on_context``
@@ -136,6 +160,89 @@ def _walk_directives(
         frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
         if frag_def is not None:
             _walk_directives(frag_def, names, fragments, visited_fragments)
+
+
+def _collect_nested_pagination_var_names(
+    node: Any,
+    fragments: dict[str, Any] | None = None,
+) -> frozenset[str]:
+    """Return variable names used in pagination args on **non-root** field nodes.
+
+    Walks the operation (and reachable fragments) for ``first`` / ``last`` /
+    ``before`` / ``after`` arguments whose value is a variable reference on a
+    field node at response-path depth >= 1 (nested). Slice 1 bakes those
+    resolved pagination values into windowed prefetch querysets, so two requests
+    sharing a printed AST (``booksConnection(first: $n)``) but differing in
+    ``$n`` must NOT share a cached plan -- a correctness rule (Decision 7).
+
+    Root-field pagination variables stay OUT: a root connection's slicing
+    happens post-plan in Strawberry's ``ConnectionExtension`` and plan content
+    is invariant in them, so hashing them would fragment the cache across every
+    page of a consumer's pagination loop.
+
+    The collection is a syntactic **superset** by design: any non-root field's
+    pagination-named variable is collected, including on fields that are not
+    synthesized connections. Over-collection costs cheap duplicate cache entries
+    (bounded by the LRU); under-collection would serve wrong data -- the same
+    asymmetry ``_collect_directive_var_names`` already encodes.
+
+    ``fragments`` is the document's fragment definitions map. Fragment spreads
+    are followed with response-path depth preserved at the **spread site**, not
+    raised by the fragment-definition wrapper, so a fragment spread at the root
+    contributes root-depth fields and a fragment spread inside a nested node
+    contributes nested-depth fields.
+    """
+    names: set[str] = set()
+    _walk_pagination_vars(node, names, fragments or {}, set(), 0)
+    return frozenset(names)
+
+
+def _walk_pagination_vars(
+    node: Any,
+    names: set[str],
+    fragments: dict[str, Any],
+    visited_fragments: set[str],
+    depth: int,
+) -> None:
+    """Recursive workhorse for ``_collect_nested_pagination_var_names``.
+
+    The depth-tracking twin of ``_walk_directives``: it collects pagination
+    variable names only when the current node is a field node at response-path
+    depth >= 1 (nested), where ``_walk_directives`` collects directive variables
+    unconditionally. Depth increments only when descending into a **field**
+    node's selection set; descending into a resolved fragment definition keeps
+    the spread-site depth (a fragment is a transparent wrapper at its spread
+    site -- Decision 7's "depth at the spread SITE, not raw fragment-definition
+    nesting"). Kept deliberately separate from ``_walk_directives`` (which is
+    already a control-flow hotspot) because the two walks collect on different
+    axes -- directives everywhere vs pagination on non-root only.
+    """
+    # Collect on the current node only when it is a nested field node.
+    if depth >= 1 and isinstance(node, FieldNode):
+        for arg in node.arguments or ():
+            if arg.name.value in _PAGINATION_ARG_NAMES and isinstance(arg.value, VariableNode):
+                names.add(arg.value.name.value)
+    # A field node deepens the response path for its children; a fragment
+    # wrapper does not, so its body inherits the field node's depth here.
+    child_depth = depth + 1 if isinstance(node, FieldNode) else depth
+    for child in _child_selections(node):
+        _walk_pagination_vars(child, names, fragments, visited_fragments, child_depth)
+        frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
+        if frag_def is not None:
+            _walk_pagination_vars(frag_def, names, fragments, visited_fragments, child_depth)
+
+
+def _collect_cache_relevant_var_names(operation: Any, fragments: dict[str, Any]) -> frozenset[str]:
+    """Union of the cache-relevant variable names for one operation.
+
+    Combines the ``@skip``/``@include`` directive variable names with the
+    non-root pagination variable names so ``_build_cache_key`` folds one
+    name set through its single ``(name, value)`` comprehension. The result
+    is what ``_pagination_var_names_cache`` memoizes per ``id(operation)``.
+    """
+    directive_names = _collect_directive_var_names(operation, fragments=fragments)
+    pagination_names = _collect_nested_pagination_var_names(operation, fragments=fragments)
+    return directive_names | pagination_names
 
 
 def _child_selections(node: Any) -> tuple[Any, ...]:
@@ -308,87 +415,6 @@ def _connection_node_child_selections(selections: list[Any], info: Any) -> list[
     return node_children
 
 
-# TODO(spec-033 Slice 1, Decision 9): MOVE the following selection-unwrap
-# helpers to ``optimizer/walker.py`` and import them back here:
-#   _named_children, _node_children_with_runtime_prefix, _with_runtime_prefix,
-#   _converted_selection_included, _is_converted_fragment, _response_key.
-# The walker's ``_plan_connection_relation`` needs identical unwrap semantics for
-# NESTED connections; ``extension`` already imports from ``walker`` (the reverse
-# would cycle). ``_connection_node_child_selections`` (the root-seam entry point,
-# above) STAYS here as a thin composition over the moved helpers. Pure move --
-# the root-extraction tests in test_extension.py must pass unmodified.
-def _named_children(selection: Any, name: str) -> list[Any]:
-    """Return included direct children named ``name``, recursing through fragments."""
-    children: list[Any] = []
-    for child in getattr(selection, "selections", None) or []:
-        if not _converted_selection_included(child):
-            continue
-        if _is_converted_fragment(child):
-            for fragment_child in getattr(child, "selections", None) or []:
-                fragment_shell = SimpleNamespace(selections=[fragment_child])
-                children.extend(_named_children(fragment_shell, name))
-            continue
-        if getattr(child, "name", None) == name:
-            children.append(child)
-    return children
-
-
-def _node_children_with_runtime_prefix(
-    node_selection: Any,
-    *,
-    runtime_prefixes: tuple[tuple[str, ...], ...],
-) -> list[Any]:
-    """Clone node children with a connection-aware runtime prefix."""
-    children: list[Any] = []
-    for child in getattr(node_selection, "selections", None) or []:
-        if not _converted_selection_included(child):
-            continue
-        children.append(_with_runtime_prefix(child, runtime_prefixes))
-    return children
-
-
-def _with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...], ...]) -> Any:
-    """Clone a node-level selection carrying runtime prefixes for the walker."""
-    if _is_converted_fragment(selection):
-        return SimpleNamespace(
-            name=getattr(selection, "name", None),
-            type_condition=selection.type_condition,
-            directives=getattr(selection, "directives", None) or {},
-            selections=[
-                _with_runtime_prefix(child, runtime_prefixes)
-                for child in getattr(selection, "selections", None) or []
-            ],
-        )
-    return SimpleNamespace(
-        name=selection.name,
-        alias=getattr(selection, "alias", None),
-        directives=getattr(selection, "directives", None) or {},
-        arguments=getattr(selection, "arguments", None) or {},
-        selections=list(getattr(selection, "selections", None) or []),
-        _optimizer_runtime_prefixes=list(runtime_prefixes),
-    )
-
-
-def _converted_selection_included(selection: Any) -> bool:
-    """Evaluate converted-selection ``@skip`` / ``@include`` directives.
-
-    Delegates to the walker's ``_should_include`` so the connection-extraction
-    path and the plan walker evaluate ``@skip`` / ``@include`` with one shared
-    implementation that cannot drift.
-    """
-    return _should_include(selection)
-
-
-def _is_converted_fragment(selection: Any) -> bool:
-    """Return whether a converted Strawberry selection is a fragment wrapper."""
-    return hasattr(selection, "type_condition")
-
-
-def _response_key(selection: Any) -> str:
-    """Return the converted selection's runtime response key."""
-    return getattr(selection, "alias", None) or selection.name
-
-
 class CacheInfo(NamedTuple):
     """Plan-cache statistics (hits, misses, current size)."""
 
@@ -426,6 +452,21 @@ _active_optimizer: "ContextVar[DjangoOptimizerExtension | None]" = ContextVar(
 # recomputing, keyed by ``id(operation)``.
 _printed_ast_cache: ContextVar[dict[int, str] | None] = ContextVar(
     "django_strawberry_framework_optimizer_printed_ast_cache",
+    default=None,
+)
+
+
+# Per-execution memo for the COMBINED ``@skip``/``@include`` directive plus
+# non-root pagination variable-NAME frozenset, keyed by ``id(operation)``.  A
+# nested fallback connection pipeline calls ``apply_connection_optimization`` ->
+# ``_build_cache_key`` once per parent row; without this memo each parent would
+# re-walk the full operation AST twice (directives + pagination).  Same
+# per-execution ``ContextVar`` lifecycle as ``_printed_ast_cache``: set to an
+# empty dict in ``on_execute`` and reset on the way out, ``None`` (the default)
+# when ``_build_cache_key`` is called outside an ``on_execute`` lifecycle so the
+# lookup falls back to recomputing -- Decision 7.
+_pagination_var_names_cache: ContextVar[dict[int, frozenset[str]] | None] = ContextVar(
+    "django_strawberry_framework_optimizer_pagination_var_names_cache",
     default=None,
 )
 
@@ -659,9 +700,11 @@ class DjangoOptimizerExtension(SchemaExtension):
         # discover it and share the instance-bound plan cache (Decision 11).
         instance_token = _active_optimizer.set(self)
         ast_token = _printed_ast_cache.set({})
+        var_names_token = _pagination_var_names_cache.set({})
         try:
             yield
         finally:
+            _pagination_var_names_cache.reset(var_names_token)
             _printed_ast_cache.reset(ast_token)
             _active_optimizer.reset(instance_token)
             _optimizer_active.reset(active_token)
@@ -855,27 +898,21 @@ class DjangoOptimizerExtension(SchemaExtension):
         the strictness mode so per-relation resolvers can detect
         unplanned lazy loads.
         """
-        # TODO(spec-033 Slice 1, Decision 8): UNION the correctness sentinels
-        # into any existing frozenset stash instead of overwriting them. Nested
-        # FALLBACK connection pipelines are real optimizer runs that re-enter
-        # this publish per parent; they must NOT destroy the parent plan's
-        # planned/elision sets (especially under "warn", where execution
-        # continues after the nested connection returns). Apply to the THREE
-        # frozenset stashes -- DST_OPTIMIZER_FK_ID_ELISIONS,
-        # DST_OPTIMIZER_PLANNED, DST_OPTIMIZER_LOOKUP_PATHS. For each: read the
-        # existing stash via ``_get_context_value(info.context, KEY)``, union it
-        # with the new frozenset (``existing | new`` when present, else ``new``),
-        # and re-stash the merged set. (Use the read-side ``get_context_value``
-        # helper -- it is already importable from ``_context``.)
-        # Resolver keys + FK-id-elision keys embed runtime paths, so parent and
-        # nested-connection plans coexist without collision. ``DST_OPTIMIZER_PLAN``
-        # stays LAST-WINS introspection data (not a correctness sentinel). Pin:
-        # ``test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets``.
+        # UNION the correctness sentinels into any existing frozenset stash
+        # rather than overwriting (spec-033 Decision 8). Nested FALLBACK
+        # connection pipelines are real optimizer runs that re-enter this
+        # publish per parent; they must NOT destroy the parent plan's
+        # planned / FK-id-elision / lookup-path sets (especially under
+        # ``"warn"``, where execution continues after the nested connection
+        # returns). Resolver keys and FK-id-elision keys embed runtime paths, so
+        # parent and nested-connection plans coexist without collision.
+        # ``DST_OPTIMIZER_PLAN`` stays LAST-WINS introspection data (not a
+        # correctness sentinel - do not union it).
         _stash_on_context(info.context, DST_OPTIMIZER_PLAN, plan)
         fk_id_elisions = plan.finalized_fk_id_elisions
         if fk_id_elisions is None:
             fk_id_elisions = frozenset(plan.fk_id_elisions)
-        _stash_on_context(info.context, DST_OPTIMIZER_FK_ID_ELISIONS, fk_id_elisions)
+        self._stash_union(info.context, DST_OPTIMIZER_FK_ID_ELISIONS, fk_id_elisions)
         if self.strictness != "off":
             planned_resolver_keys = plan.finalized_planned_resolver_keys
             if planned_resolver_keys is None:
@@ -883,13 +920,25 @@ class DjangoOptimizerExtension(SchemaExtension):
             plan_lookup_paths = plan.finalized_lookup_paths
             if plan_lookup_paths is None:
                 plan_lookup_paths = frozenset(lookup_paths(plan))
-            _stash_on_context(
-                info.context,
-                DST_OPTIMIZER_PLANNED,
-                planned_resolver_keys,
-            )
-            _stash_on_context(info.context, DST_OPTIMIZER_LOOKUP_PATHS, plan_lookup_paths)
+            self._stash_union(info.context, DST_OPTIMIZER_PLANNED, planned_resolver_keys)
+            self._stash_union(info.context, DST_OPTIMIZER_LOOKUP_PATHS, plan_lookup_paths)
             _stash_on_context(info.context, DST_OPTIMIZER_STRICTNESS, self.strictness)
+
+    @staticmethod
+    def _stash_union(context: Any, key: str, new: frozenset) -> None:
+        """Stash ``new`` unioned with any existing frozenset under ``key``.
+
+        Reads the current stash via the read-side ``get_context_value`` helper
+        and unions it with ``new`` when the existing value is a ``frozenset`` /
+        ``set``; otherwise stashes ``new`` alone (defensive: a non-set existing
+        value, the empty/absent case, matches the file's defensive-coerce
+        stance). This is the foundation that lets a nested fallback connection
+        pipeline's publish coexist with the parent's planned set rather than
+        overwriting it (spec-033 Decision 8).
+        """
+        existing = _get_context_value(context, key)
+        merged = existing | new if isinstance(existing, (frozenset, set)) else new
+        _stash_on_context(context, key, merged)
 
     @staticmethod
     def check_schema(schema: Any) -> list[str]:
@@ -961,8 +1010,12 @@ class DjangoOptimizerExtension(SchemaExtension):
            string (not its ``hash``) to eliminate the rare-but-real chance of
            two distinct document shapes sharing a 64-bit hash and silently
            sharing a cached plan.
-        2. Frozenset of ``(var_name, var_value)`` for only the
-           variables referenced in ``@skip``/``@include`` directives.
+        2. Frozenset of ``(var_name, var_value)`` for the variables
+           referenced in ``@skip``/``@include`` directives and in
+           ``first``/``last``/``before``/``after`` arguments on non-root
+           field nodes (nested pagination values are baked into windowed
+           prefetch plans by Slice 1, so they must key the cache; root
+           pagination variables stay out -- root slicing is post-plan).
         3. The target Django model class (different root fields in the
            same operation can return different models).
         4. The root response path, so multiple root fields returning the
@@ -989,45 +1042,28 @@ class DjangoOptimizerExtension(SchemaExtension):
             if doc_key is None:
                 doc_key = _print_operation_with_reachable_fragments(operation, fragments)
                 memo[op_id] = doc_key
-        # Directive-variable extraction.
-        directive_var_names = _collect_directive_var_names(
-            operation,
-            fragments=fragments,
-        )
-        # TODO(spec-033 Slice 3, Decision 7): also collect NESTED pagination
-        # variables. Slice 1 bakes resolved first/last/before/after VALUES into
-        # windowed prefetch querysets, so two requests sharing a printed AST
-        # ("booksConnection(first: $n)") but differing in $n must NOT share a
-        # cached plan (they'd serve one request's page size to the other -- a
-        # CORRECTNESS rule, not an optimization). Collect variable names
-        # referenced in first/last/before/after on NON-ROOT field nodes and union
-        # them into ``directive_var_names`` (or a combined name set) -- i.e.
-        # collect a ``pagination_var_names`` set from a new
-        # ``_collect_nested_pagination_var_names(operation, fragments)`` and union
-        # it with ``directive_var_names`` before building ``relevant_vars``.
-        #
-        # Rules:
-        #   - ROOT pagination args stay OUT (root slicing happens post-plan in
-        #     ConnectionExtension; plan content is invariant in them). Hashing
-        #     them would fragment B1 across every page of a consumer's pagination
-        #     loop.
-        #   - Fragment traversal preserves RESPONSE-PATH DEPTH: track depth at the
-        #     spread SITE, not raw fragment-definition nesting. A root connection
-        #     selected via a fragment on Query is still root (stays out); a nested
-        #     connection via a fragment on a parent node is still nested (keys).
-        #   - Syntactic SUPERSET by design: any non-root field's pagination-named
-        #     variable is collected, incl. non-connection fields. Over-collection
-        #     = cheap duplicate cache entries; under-collection = wrong data.
-        #   - MEMOIZE the var-name sets per ``id(operation)`` from ONE
-        #     reachable-fragments traversal (same per-execution memo style as the
-        #     printed-AST cache) -- Slice 3 must not add a second full-AST walk to
-        #     a path nested fallback connections call per parent.
-        # Pins: ``test_nested_pagination_variable_keys_cache`` /
-        # ``..._root_pagination_variable_shares_cache`` / fragment + superset +
-        # memoization tests in test_extension.py.
+        # Combined cache-relevant variable NAMES: the ``@skip``/``@include``
+        # directive variables plus the non-root pagination variables (whose
+        # resolved values Slice 1 bakes into windowed prefetch plans, so they
+        # must key the cache -- Decision 7).  Memoized per ``id(operation)`` in
+        # the same per-execution style as the printed-AST key: a nested fallback
+        # connection pipeline calls ``_build_cache_key`` once per parent row, so
+        # the full-operation walk must run once per operation, not per row.  The
+        # memo is ``None`` outside an ``on_execute`` lifecycle (direct test-only
+        # callers), in which case we recompute -- mirroring the printed-AST
+        # fallback above.
+        var_names_memo = _pagination_var_names_cache.get()
+        if var_names_memo is None:
+            relevant_var_names = _collect_cache_relevant_var_names(operation, fragments)
+        else:
+            op_id = id(operation)
+            relevant_var_names = var_names_memo.get(op_id)
+            if relevant_var_names is None:
+                relevant_var_names = _collect_cache_relevant_var_names(operation, fragments)
+                var_names_memo[op_id] = relevant_var_names
         variable_values = info.variable_values or {}
         relevant_vars = frozenset(
-            (k, variable_values[k]) for k in directive_var_names if k in variable_values
+            (k, variable_values[k]) for k in relevant_var_names if k in variable_values
         )
         return (
             doc_key,

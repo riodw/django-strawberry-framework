@@ -9,10 +9,13 @@ from typing import Any
 from django.db import models
 from django.db.models import Prefetch
 from strawberry import relay
-from strawberry.relay.utils import SliceMetadata
 
 from ..exceptions import ConfigurationError, OptimizerError
 from ..registry import registry
+from ..utils.connections import (
+    derive_connection_window_bounds,
+    has_connection_sidecar_kwargs,
+)
 from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
 from . import logger
@@ -1067,14 +1070,6 @@ def _with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...]
     )
 
 
-# Sidecar argument names a synthesized connection sibling may carry; their presence
-# forces a per-parent fallback (Decision 6). The pagination family
-# (``first`` / ``last`` / ``before`` / ``after``) is read positionally by
-# ``_connection_window_slice`` as explicit ``SliceMetadata.from_arguments`` kwargs,
-# so it needs no name collection here.
-_CONNECTION_SIDECAR_ARGS = ("filter", "order_by")
-
-
 def _relation_connection_to_attr(relation_field_name: str) -> str:
     """Return the package-reserved ``to_attr`` for a relation connection window.
 
@@ -1157,61 +1152,50 @@ def _coerce_pagination_int(value: Any) -> Any:
 def _connection_window_slice(sel: Any, info: Any) -> tuple[int, int | None, bool] | None:
     """Resolve the window ``(offset, limit, reverse)`` from a connection selection.
 
-    Reads the RESOLVED ``first`` / ``last`` / ``before`` / ``after`` values off
-    ``sel.arguments`` (converted selections already resolved variable references
-    through ``info.variable_values``) and runs them through Strawberry's
-    ``SliceMetadata.from_arguments`` - the same engine the resolve-time pipeline
-    uses. ``max_results`` is resolved from the Strawberry schema config via
-    ``_relay_max_results_from_info`` and passed EXPLICITLY (the walker's
-    graphql-core ``info.schema`` has no ``.config`` for the helper to read), so
-    the plan-time and resolve-time caps are the same number by construction.
+    The walker-side adapter over the shared
+    ``utils/connections.py::derive_connection_window_bounds`` contract (so the
+    plan-time and resolve-time windows can never drift): it reads the RESOLVED
+    ``first`` / ``last`` / ``before`` / ``after`` values off ``sel.arguments``
+    (converted selections already resolved variable references through
+    ``info.variable_values``), applies the walker-only int coercion, resolves
+    ``max_results`` from the Strawberry schema config via
+    ``_relay_max_results_from_info`` (the walker's graphql-core ``info.schema``
+    has no ``.config`` the engine could read), and hands those to the shared
+    helper, which owns the ``reverse`` / ``limit`` rule.
 
-    Returns ``None`` when the arithmetic raises ``ValueError`` (negative /
+    Returns ``None`` when the shared helper raises ``ValueError`` (negative /
     over-max ``first`` / ``last``) or ``TypeError`` (malformed cursor) so
     ``_plan_connection_relation`` leaves the selection UNPLANNED and the shipped
-    nested field path raises at its own error locality (Decision 4 step f).
-    ``offset = start``. For the forward window ``limit = expected`` (``None`` =>
-    no upper bound). For the ``reverse`` (last-only backward) window
-    ``SliceMetadata`` sets ``end = sys.maxsize`` so ``expected is None``; the
-    bound is the literal ``last`` value (the reversed-row-number
-    ``__lte`` filter), mirroring upstream's ``field_kwargs.get("last")`` in that
-    branch rather than the unbounded ``expected``.
+    nested field path raises at its own error locality (Decision 4 step f). The
+    resolver calls the same helper directly with already-coerced Strawberry
+    arguments and lets the pagination error propagate instead.
     """
     arguments = getattr(sel, "arguments", None) or {}
     # ``first`` / ``last`` from an inline GraphQL Int LITERAL arrive as the raw
     # token STRING (``convert_value`` returns ``node.value`` and graphql-core
     # stores an ``IntValueNode.value`` as ``"2"``); a variable
     # (``first: $n``) is already coerced to ``int`` by the engine. Coerce to int
-    # so ``SliceMetadata.from_arguments`` - which gates the slice on
-    # ``isinstance(first, int)`` - applies the window bound instead of silently
-    # leaving the page uncapped at ``relay_max_results`` (the literal-vs-variable
-    # divergence the resolve-time ``ConnectionExtension`` argument coercion hides
-    # at the field boundary).
+    # so the shared helper's ``SliceMetadata.from_arguments`` - which gates the
+    # slice on ``isinstance(first, int)`` - applies the window bound instead of
+    # silently leaving the page uncapped at ``relay_max_results`` (the
+    # literal-vs-variable divergence the resolve-time ``ConnectionExtension``
+    # argument coercion hides at the field boundary). This coercion is
+    # plan-time-only and deliberately NOT folded into the shared helper, whose
+    # resolver caller already receives ``int`` arguments from Strawberry.
     first = _coerce_pagination_int(arguments.get("first"))
     last = _coerce_pagination_int(arguments.get("last"))
-    before = arguments.get("before")
-    after = arguments.get("after")
     try:
-        slice_meta = SliceMetadata.from_arguments(
+        bounds = derive_connection_window_bounds(
             info,
-            before=before,
-            after=after,
+            before=arguments.get("before"),
+            after=arguments.get("after"),
             first=first,
             last=last,
             max_results=_relay_max_results_from_info(info),
         )
     except (ValueError, TypeError):
         return None
-    # Backward (``last``-only) pagination needs the reversed-row-number window:
-    # ``last`` is set with no ``first`` and no ``before`` bound (``before`` + ``last``
-    # resolves to a forward offset window that the forward branch already handles).
-    reverse = isinstance(last, int) and not isinstance(first, int) and before is None
-    # In the reversed case ``expected is None`` (relay sets ``end = sys.maxsize``),
-    # so the row-count bound is the literal ``last`` - exactly what upstream passes
-    # in that branch. Passing ``expected`` would never apply the ``__lte`` filter
-    # and the window would over-fetch every child row.
-    limit = last if reverse else slice_meta.expected
-    return slice_meta.start, limit, reverse
+    return bounds.offset, bounds.limit, bounds.reverse
 
 
 def _plan_connection_relation(
@@ -1242,7 +1226,7 @@ def _plan_connection_relation(
         return
     # (b) Fallback shapes detectable before any queryset is built -> UNPLANNED.
     arguments = getattr(sel, "arguments", None) or {}
-    if any(arguments.get(name) is not None for name in _CONNECTION_SIDECAR_ARGS):
+    if has_connection_sidecar_kwargs(arguments):
         return  # sidecar input (filter:/orderBy:) - per-parent fallback.
     if _aliased_arguments_diverge(sel):
         return  # divergent aliased pagination/sidecar args - one to_attr cannot serve two.

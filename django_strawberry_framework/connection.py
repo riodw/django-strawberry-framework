@@ -52,7 +52,6 @@ from django.db import models
 from graphql import GraphQLError
 from strawberry import relay
 from strawberry.relay.types import NodeIterableType
-from strawberry.relay.utils import SliceMetadata
 from strawberry.types import Info, get_object_definition
 from strawberry.types.base import StrawberryContainer
 from strawberry.types.nodes import FragmentSpread, InlineFragment, Selection
@@ -75,6 +74,13 @@ from .types.relay import (
     _initial_queryset,
 )
 from .types.resolvers import _check_n1
+from .utils.connections import (
+    CONNECTION_FILTER_KWARG,
+    CONNECTION_ORDER_KWARG,
+    connection_sidecar_inputs_from_kwargs,
+    derive_connection_window_bounds,
+    has_connection_sidecar_input,
+)
 
 # Re-export the hoisted deterministic-order predicate under its original
 # private name so the spec-030 ``tests/test_connection.py`` pins keep importing
@@ -278,7 +284,14 @@ def _consume_window(
     """
     if not isinstance(nodes, _WindowedConnectionRows):
         return _NOT_A_WINDOW
-    slice_meta = SliceMetadata.from_arguments(
+    # Derive the window through the SHARED contract the walker planned with
+    # (``utils/connections.py::derive_connection_window_bounds``), so the
+    # resolve-time window matches the plan-time one by construction (the
+    # cursor-parity invariant). Resolver arguments are already coerced by
+    # Strawberry, so any malformed-pagination ``ValueError`` / ``TypeError``
+    # propagates as the field's own error (the walker, by contrast, catches it to
+    # leave the selection unplanned).
+    bounds = derive_connection_window_bounds(
         info,
         before=before,
         after=after,
@@ -286,19 +299,12 @@ def _consume_window(
         last=last,
         max_results=max_results,
     )
-    # Mirror ``walker._connection_window_slice`` so the resolve-time window
-    # matches the plan-time one by construction (the cursor-parity invariant):
-    # ``last``-only backward pagination sets ``end = sys.maxsize`` so
-    # ``expected is None`` - the bound is the literal ``last``.
-    reverse = isinstance(last, int) and not isinstance(first, int) and before is None
-    offset = slice_meta.start
-    limit = last if reverse else slice_meta.expected
     built = _resolve_from_window(
         cls,
         nodes,
         info=info,
-        offset=offset,
-        limit=limit,
+        offset=bounds.offset,
+        limit=bounds.limit,
         want_count=want_count,
         **kwargs,
     )
@@ -743,6 +749,36 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
     return apply_connection_optimization(target_type, qs, info)
 
 
+def _prepare_pipeline_source(
+    source: Any,
+    *,
+    filter_input: Any,
+    order_by_input: Any,
+) -> tuple[Any, bool]:
+    """Normalize the pipeline source and apply the non-queryset sidecar guard.
+
+    The color-agnostic head shared by ``_pipeline_sync`` / ``_pipeline_async``:
+    a ``Manager`` is coerced to its ``QuerySet``; a non-queryset iterable passes
+    the ``filter:`` / ``orderBy:`` guard here and is returned with
+    ``is_queryset=False`` so the caller short-circuits and returns it unchanged.
+    Returns ``(source, is_queryset)`` rather than returning early itself so the
+    sync and async pipelines keep their colored steps (the ``_apply_get_queryset``
+    / ``apply_*`` calls) explicit, never hidden behind a maybe-await abstraction.
+    """
+    if isinstance(source, models.Manager):
+        source = source.all()
+    if not isinstance(source, models.QuerySet):
+        _guard_sidecar_input_against_non_queryset(
+            source,
+            has_sidecar_input=has_connection_sidecar_input(
+                filter_input=filter_input,
+                order_by_input=order_by_input,
+            ),
+        )
+        return source, False
+    return source, True
+
+
 def _pipeline_sync(
     target_type: type,
     source: Any,
@@ -760,11 +796,12 @@ def _pipeline_sync(
     unchanged after the sidecar-input guard rejects ``filter:`` / ``orderBy:``.
     """
     definition = target_type.__django_strawberry_definition__
-    if isinstance(source, models.Manager):
-        source = source.all()
-    has_sidecar_input = filter_input is not None or order_by_input is not None
-    if not isinstance(source, models.QuerySet):
-        _guard_sidecar_input_against_non_queryset(source, has_sidecar_input=has_sidecar_input)
+    source, is_queryset = _prepare_pipeline_source(
+        source,
+        filter_input=filter_input,
+        order_by_input=order_by_input,
+    )
+    if not is_queryset:
         return source
     qs = _apply_get_queryset_sync(target_type, source, info)
     if filter_input is not None and definition.filterset_class is not None:
@@ -784,11 +821,12 @@ async def _pipeline_async(
 ) -> Any:
     """Async sibling of ``_pipeline_sync`` - awaits the colored visibility / filter / order steps."""
     definition = target_type.__django_strawberry_definition__
-    if isinstance(source, models.Manager):
-        source = source.all()
-    has_sidecar_input = filter_input is not None or order_by_input is not None
-    if not isinstance(source, models.QuerySet):
-        _guard_sidecar_input_against_non_queryset(source, has_sidecar_input=has_sidecar_input)
+    source, is_queryset = _prepare_pipeline_source(
+        source,
+        filter_input=filter_input,
+        order_by_input=order_by_input,
+    )
+    if not is_queryset:
         return source
     qs = await _apply_get_queryset_async(target_type, source, info)
     if filter_input is not None and definition.filterset_class is not None:
@@ -840,24 +878,24 @@ def _synthesized_signature(target_type: type) -> tuple[inspect.Signature, dict[s
         filter_ann = filter_input_type(definition.filterset_class) | None
         params.append(
             inspect.Parameter(
-                "filter",
+                CONNECTION_FILTER_KWARG,
                 inspect.Parameter.KEYWORD_ONLY,
                 default=None,
                 annotation=filter_ann,
             ),
         )
-        annotations["filter"] = filter_ann
+        annotations[CONNECTION_FILTER_KWARG] = filter_ann
     if definition.orderset_class is not None:
         order_ann = list[order_input_type(definition.orderset_class)] | None
         params.append(
             inspect.Parameter(
-                "order_by",
+                CONNECTION_ORDER_KWARG,
                 inspect.Parameter.KEYWORD_ONLY,
                 default=None,
                 annotation=order_ann,
             ),
         )
-        annotations["order_by"] = order_ann
+        annotations[CONNECTION_ORDER_KWARG] = order_ann
     return_annotation = Iterable[target_type]
     annotations["return"] = return_annotation
     return inspect.Signature(params, return_annotation=return_annotation), annotations
@@ -894,35 +932,38 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
     if resolver is None:
 
         def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:  # noqa: ARG001
+            filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
             return _pipeline_sync(
                 target_type,
                 _initial_queryset(target_type),
                 info,
-                filter_input=kwargs.get("filter"),
-                order_by_input=kwargs.get("order_by"),
+                filter_input=filter_input,
+                order_by_input=order_by_input,
             )
 
     elif _is_async_callable(resolver):
 
         async def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
             source = await resolver(root, info)
+            filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
             return await _pipeline_async(
                 target_type,
                 source,
                 info,
-                filter_input=kwargs.get("filter"),
-                order_by_input=kwargs.get("order_by"),
+                filter_input=filter_input,
+                order_by_input=order_by_input,
             )
 
     else:
 
         def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
+            filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
             return _pipeline_sync(
                 target_type,
                 resolver(root, info),
                 info,
-                filter_input=kwargs.get("filter"),
-                order_by_input=kwargs.get("order_by"),
+                filter_input=filter_input,
+                order_by_input=order_by_input,
             )
 
     signature, annotations = _synthesized_signature(target_type)
@@ -1013,7 +1054,11 @@ def _build_relation_connection_resolver(
     def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
         source = getattr(root, accessor_name).all()
         window_rows = getattr(root, to_attr, None)
-        no_sidecar = kwargs.get("filter") is None and kwargs.get("order_by") is None
+        filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
+        no_sidecar = not has_connection_sidecar_input(
+            filter_input=filter_input,
+            order_by_input=order_by_input,
+        )
         if (
             isinstance(window_rows, list)
             and no_sidecar
@@ -1052,8 +1097,8 @@ def _build_relation_connection_resolver(
             target_type,
             source,
             info,
-            filter_input=kwargs.get("filter"),
-            order_by_input=kwargs.get("order_by"),
+            filter_input=filter_input,
+            order_by_input=order_by_input,
         )
 
     signature, annotations = _synthesized_signature(target_type)

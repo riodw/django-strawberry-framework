@@ -1,72 +1,105 @@
-# spec-033 build review — round 2 (post-fix, 2026-06-13)
+# spec-033 build review — round 3 (live-coverage lens, 2026-06-13)
 
-Re-review after commit `f6d3b829` ("Enhance connection optimizer and tests for distinct
-target handling"), which addresses the five findings from the round-1 review. Working tree
-clean. The fix commit touched **docs + tests only** — no package source changed
-(`git show f6d3b829 --stat` confirms), so the mechanism reviewed in round 1 is byte-for-byte
-unchanged and the round-1 verdict (correct, high-quality, no blocking bug) stands. This pass
-verifies the fixes and re-checks for anything the changes introduced.
+Re-review after commit `41164269` ("Refactor spec-033 documentation: update revision history
+and reconcile strictness-message vocabulary"). This pass (1) verifies the two round-2
+residuals are closed and (2) audits spec-033 **test placement against the coverage rule in
+[`examples/fakeshop/test_query/README.md`](../examples/fakeshop/test_query/README.md)** —
+*"Any coverage line in `django_strawberry_framework/` that can be earned by a real `/graphql/`
+query against the fakeshop schema MUST be earned here … only fall back to the package-internal
+`tests/` tree when the path is genuinely unreachable from a live request."* Working tree clean;
+`41164269` is docs-only, so the mechanism (rounds 1–2) is unchanged.
 
 ## Verdict
 
-**All five round-1 findings are resolved, and resolved well.** F3–F5 added genuinely
-meaningful tests (not placebo coverage); F1 and F2 reconciled the spec/TREE.md to the shipped
-reality. One small residual remains from the F2 reconciliation (a single stale phrase the
-sweep missed, **N1** below) plus a cosmetic revision-ordering nit (**N2**). Neither blocks the
-cut. Build-ready.
+**Round-2 residuals N1 and N2 are resolved.** Measured against the README's live-HTTP-first
+rule, spec-033 coverage is mostly compliant: the headline nested-connection behaviors are
+earned live, and the package-only placements that the spec calls out (plan/cache internals,
+strictness, the `.distinct()` fallback) are *genuinely* unreachable from the current fakeshop
+schema — a correct use of the fallback clause. There is **one real gap (G1, MED): the "both"
+shape — a list relation and its connection sibling selected together — is consumer-visible and
+expressible live, but only package-tested.** Two lower items follow. None is a correctness bug;
+the cut is not blocked, but G1 is the one worth closing to hold `test_query/` to its mandate.
 
-## Round-1 findings — fix verification
+## Round-2 residuals — verified closed
 
-| # | Round-1 finding | Status | Evidence |
-| --- | --- | --- | --- |
-| F1 | `utils/connections.py` undocumented / contradicts Decision 11 | **Resolved (thorough)** | [`docs/TREE.md`](TREE.md) now lists `connections.py` in **both** `utils/` blocks and `test_connections.py` in **both** `tests/utils/` blocks, and the `utils/` summary line names the window-bounds/sidecar-kwarg contracts. The spec adds **Revision 4**, splits Decision 11 into "Source (build proper): no new module" vs "Source (post-build DRY refactor): one new module" with the cycle-safety justification, and fixes the Slice-checklist preamble + the TREE.md convention bullet. The "no mirror tension" claim is now honest. |
-| F2 | Strictness message names relation field, spec said `<field>_connection` | **Resolved (spec → code)** | They took the lowest-churn option: reconcile the spec to the shipped relation-field form. [Error shapes](spec-033-connection_optimizer-0_0_9.md) (line 217) now reads `Unplanned N+1: <field>` with an explicit "NOT the generated `<field>_connection` attribute" note; Decision 8 (line 364), its fallback-reason example (line 373 → `Unplanned N+1: books (...)`), and the Decision-4 Resolver-keys bullet all updated to the relation-field vocabulary. **See N1** for the one spot the sweep missed. |
-| F3 | `test_window_slice_from_variables` near-tautological | **Resolved** | Now asserts `"_DST_ROW_NUMBER" in sql`, `"<= 5" in sql` (the resolved variable value `5` bounds the window) **and** `"<= 100" not in sql` (proving it's the value, not the `relay_max_results` cap). Independently proves variable resolution drives the slice — the gap is closed. |
-| F4 | `test_both_shape...` discarded its `diff_plan_for_queryset` result | **Resolved** | The delta is now captured and asserted: `delta_to_attrs` must contain **both** `None` (list sibling / absorbed consumer prefetch) and `"_dst_books_connection"` (the window), with `prefetch_through == {"books"}` for both. The B8 exact-match/absorption claim is now executed, not smoke-tested. |
-| F5 | DISTINCT fallback count-correctness implied, not executed | **Resolved (strong)** | New `@pytest.mark.django_db test_distinct_target_fallback_reports_correct_total_count` + `_genres_distinct_book_schema` (a `BookType.get_queryset` doing `.filter(genres__isnull=False).distinct()`). Real fan-out: fiction holds 3 distinct books, two also in scifi → 5 pre-DISTINCT rows; the test asserts `totalCount == 3`, the true distinct count a `Count(1) OVER` would have inflated to 5. Optimizer ON so the DISTINCT guard is what routes to the counting fallback, strictness off so it doesn't raise. This is exactly the executed correctness pin the round-1 finding asked for. |
+- **N1 (resolved).** The Slice-4 checklist (spec line 77) now reads "parameterized with an
+  explicit connection probe kind, a `to_attr` probe, **the relation field name**, and a
+  fallback-reason message." `rg "generated field name"` over the spec returns nothing — the F2
+  reconciliation is now complete and internally consistent.
+- **N2 (resolved).** Revision history is ordered **1, 2, 3, 4** (spec lines 13–16).
 
-## New / residual findings
+## Test placement vs the live-HTTP-first coverage rule
 
-### N1 [LOW — residual F2 miss] One strictness-message reference in the spec still says "generated field name"
+The spec's own Test plan already encodes the README rule (its "Live-first (Slices 5–6)" vs
+"Package-only where live is genuinely unreachable" split, spec ~lines 460-467). Audited
+against the shipped suites:
 
-The F2 reconciliation updated Error shapes and Decision 8 but missed the **Slice-4 checklist
-bullet** (spec line 77), which still describes `_check_n1` as "parameterized with an explicit
-connection probe kind, a `to_attr` probe, **the generated field name**, and a fallback-reason
-message." The shipped code passes the **relation** field name (`relation_field_name` →
-`field_name` in `_check_n1`), and Decision 8 (line 364) was reconciled to say exactly that.
-So the spec now contradicts itself within one document: the checklist says "generated field
-name," the Decision says "relation field name." **Recommend:** change line 77 to "the relation
-field name" to finish the sweep. One-word fix; purely the same F2 reconciliation, just an
-unswept instance.
+### Correctly earned LIVE (honor the rule)
 
-### N2 [TRIVIAL — cosmetic] Revision history is ordered 1, 4, 3, 2
+| Behavior | Live test (file:line) |
+| --- | --- |
+| Nested windowed fast path, fixed query count (parent-count-independent, `== 2`) | `test_nested_books_connection_fixed_query_count` — test_library_api.py:2928 |
+| Nested `totalCount` from the window, no per-parent COUNT | `test_nested_total_count_no_per_parent_count` — test_library_api.py:2988 |
+| Visibility-filtered nested window (`BookType.get_queryset`) | `test_nested_window_respects_book_visibility` — test_library_api.py:3063 |
+| Reverse-FK nested connection fixed count (products) | `test_products_categories_items_connection_fixed_query_count` — test_products_api.py:669 |
+| Nested sidecar `filter:`/`orderBy:` (per-parent fallback path) | `test_book_genres_connection_sidecars_and_total_count` — test_library_api.py:2773 |
 
-The inline revision history now reads Revision **1, 4, 3, 2** (spec lines 13–16) — Revision 1
-(initial draft) at the top, then the later revisions newest-first below it. New entries have
-been inserted directly under Revision 1, pushing older ones down, which yields the mixed
-order. Harmless, but a reader expecting strictly ascending or strictly descending will
-stumble. **Optional:** either move Revision 1 to the bottom (full descending 4→1) or append
-new revisions after the last (full ascending 1→4). Not worth a dedicated edit unless the file
-is touched again.
+### Correctly PACKAGE-ONLY (genuinely unreachable — consistent with the fallback clause)
+
+- **`.distinct()` fallback `totalCount`** (`tests/test_relay_connection.py::test_distinct_target_fallback_reports_correct_total_count`, in-process synthetic schema). No fakeshop *connection target* distincts — the only `.distinct()` in fakeshop is `apps/kanban/schema.py` `all_kanban_board_doc_kinds`, a **root list** resolver over a non-Relay-Node type (no synthesized connection). Earning this live would require *adding a `.distinct()`-ing relation target to fakeshop* — a schema change, not a test move — so package placement is the correct fallback. (The spec scoped exactly this: "a live pin to Slice 5 **if** any library/products target distincts.")
+- **Strictness `"raise"`/`"warn"`** (Slice 4 package tests). `examples/fakeshop/config/schema.py:38` builds `DjangoOptimizerExtension()` with no strictness arg (default `off`), so the raise/warn paths cannot fire over `/graphql/`. Package-only is correct; the spec says so.
+- **Plan-object / `diff_plan_for_queryset` / cache-key-identity assertions** (Slices 1/3). You cannot inspect an `OptimizationPlan` or a cache key over HTTP; these are inherently package-internal.
+
+### Gaps under the rule
+
+#### G1 [MED] The "both" shape is consumer-visible and live-expressible, but only package-tested
+
+`GenreType.books` is simultaneously a list relation field **and** the parent of a synthesized
+`booksConnection`. The spec's Edge-cases section (spec line ~433) and User-facing API treat
+selecting both together as a supported, load-bearing shape — the list field returns the full
+related set, the connection returns the windowed page, and the package's `to_attr` isolation
+(Decision 4) exists precisely so the two `Prefetch`es don't collide into Django's
+"lookup already seen" error. Yet:
+
+- The only test of this coexistence is `tests/optimizer/test_walker.py::test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch` (line 2842), which asserts on the **plan object** + `diff_plan_for_queryset`. The plan-object assertion is correctly package-only — but the **consumer-visible behavior** (both siblings resolve, no duplicate-prefetch error, list = full set / connection = windowed page) has **no live `/graphql/` test**.
+- It is fully expressible against the current schema — e.g. `allLibraryGenres { books { title } booksConnection(first: 2) { edges { node { title } } } }` — with no schema change. Per the README ("MUST be earned here … the *first* place to add a test"), this behavior should be earned live.
+- The spec under-specifies it too: Slice 5's DoD (spec items 8) and live deliverables list the fixed-count / totalCount / visibility pins but **not** a live "both"-shape pin, so the gap traces back to the test plan, not just the implementation.
+
+**Recommend:** add one live test to `test_library_api.py` selecting a list relation and its
+connection sibling on the same parent, asserting both resolve with correct, distinct results
+(and, ideally, a query-count pin showing the window + the list prefetch coexist). Cheap, and it
+closes the clearest README-rule violation in the card.
+
+#### G2 [LOW] The live harness cannot send GraphQL variables, so variable-driven nested pagination is never live
+
+`_post_graphql(query, *, client=None)` (test_library_api.py:77, test_products_api.py:79) takes
+no `variables=` argument, so every live query uses literal pagination (`first: 2`). The
+"variable drives the nested window" behavior is therefore exercised only in-process
+(`test_window_slice_from_variables`, the Slice-3 cache-key tests). The cache-keying assertions
+are legitimately package-internal, and the literal-paginated live tests cover the same
+`derive_connection_window_bounds` line — so this is a harness limitation broader than spec-033,
+not a spec-033 hole. **Optional:** add a `variables=` parameter to `_post_graphql` and one live
+variable-paginated nested-connection test, which would also serve future cards.
+
+#### G3 [LOW — note] Nested ambiguous-empty fallback (`first: 0` / overshot `after:`) is not live
+
+`first: 0` is pinned live only at the **root** connection (`test_genre_connection_first_zero_empty_edges`, test_library_api.py:2250); the **nested** ambiguous-empty fast-path→fallback (a consumer-visible parity behavior) is package-only (`test_fast_path_first_zero_falls_back_*`). The spec did not scope a nested ambiguous-empty live pin, so this is arguably intentional, but it is expressible live and would round out the nested-connection live matrix. Lowest priority.
 
 ## Re-checks (clean)
 
-- **No behavior change.** `f6d3b829` changed only `docs/TREE.md`, the spec, `test_walker.py`,
-  `test_relay_connection.py`, and `feedback.md` — zero `django_strawberry_framework/*.py`. The
-  round-1 mechanism review (windowed `Prefetch` + DISTINCT guard + throwaway `sub_plan`
-  isolation, the field-name-keyed `to_attr` probe, the single-sourced cursor-parity bounds,
-  the forward-row-number cursor scheme, the three-condition strictness guard, the unified
-  cache-key traversal) is unchanged and remains correct.
-- **The three new tests don't paper over anything.** Each asserts a concrete, falsifiable
-  value (`"<= 5"`/`"<= 100" not in`; both `to_attr`s surviving the delta; `totalCount == 3`),
-  and the DISTINCT test in particular constructs a real fan-out where a regression (windowing
-  a distinct target) would flip the assertion to 5. No skip/xfail, no loosened bound.
-- **F1 doc reconciliation is internally consistent** apart from N1: Decision 11, the preamble,
-  the TREE.md convention bullet, both TREE.md `utils/` source blocks, and both `tests/utils/`
-  blocks all now agree the DRY refactor added exactly one module + its twin.
+- `41164269` is docs-only (`git show --stat`): spec revision-history reorder + the one
+  strictness-vocabulary phrase. No package source, no test logic changed. Rounds 1–2 mechanism
+  and test verifications stand.
+- The round-2 fixes (F3 SQL-bound assertion, F4 `delta` assertion, F5 distinct fan-out test)
+  remain correctly placed under the README rule: F3/F4 assert plan internals (package-correct),
+  and F5's distinct path is genuinely unreachable live (package-correct, per above).
 
 ## Net assessment
 
-Ship it. The five findings are closed; the two residuals (N1 a one-word spec fix, N2
-cosmetic) can ride along with any next spec touch or be ignored without consequence to the
-`0.0.9` cut. Nothing outstanding blocks the joint cut.
+Build-ready; N1/N2 closed. The card is consistent with the `test_query/` coverage rule
+**except G1** — the "both"-shape coexistence is a consumer-visible, live-expressible behavior
+currently earned only at the plan-object level. Closing it is a one-test addition to
+`test_library_api.py` and would make the live suite honor its own "MUST be earned here"
+mandate for the last unexercised nested-connection shape. G2/G3 are optional polish (a harness
+enhancement and an out-of-scope-but-expressible nested case). Nothing here blocks the joint
+`0.0.9` cut.

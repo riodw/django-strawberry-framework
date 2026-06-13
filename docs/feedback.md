@@ -1,185 +1,157 @@
-# Review - spec-032 Full Relay (logic-only pass over stripped skeletons)
+## Spec 033 Review
 
-Method: this pass read ONLY the `*.stripped.py` snapshots in `docs/shadow/current/`
-(no source files, no tests, no scripts run). Strings/docstrings/comments are `...`,
-so everything below is reasoned from control flow, names, and types. Findings are
-phrased as **suspicions with a verification scenario** - they're gut-check grade,
-not confirmed repros. Coverage caveat: `testing/relay.py` has no snapshot in
-`docs/shadow/current/` (the snapshot run skipped the `testing/` subpackage), so the
-test-helper module is unreviewed in this pass.
+Overall: the spec is directionally right and the glossary validation passes
+(`uv run python scripts/check_spec_glossary.py --spec docs/spec-033-connection_optimizer-0_0_9.md`).
+The current draft still has several design blockers that should be fixed before
+implementation starts, because they change the foundation slices rather than
+individual tests.
 
-Verdict on the previously-flagged items: the skeletons confirm all three prior
-fixes landed and are logically sound - `_coerce_pk_or_none` now derives its
-coercion field from `resolve_id_attr()` (pk vs `get_field`, `FieldDoesNotExist` ->
-raw passthrough), `_check_nodes_result` enforces the 1:1 length contract before
-`_interleave`, and the async gatherer is awaitable-or-value. The interleave
-machinery is correct for duplicates (`positions` indexes are allocated before the
-`pks.append`, and `_order_nodes` emits one entry per input key even when the DB
-returns one row). What follows is new.
+### P1 - Fast path is assigned to the wrong layer
 
-## Suspicions (highest confidence first)
+Decision 5 says [`connection.py::_build_relation_connection_resolver`][connection]
+should probe `root._dst_<field>_connection` and "build the connection from the
+rows." That is not compatible with Strawberry's connection wrapper. Strawberry's
+`ConnectionExtension.resolve` calls the field resolver, treats its return value
+as the node iterable, and then calls the generated connection class's
+`resolve_connection`; the resolver is not expected to return a connection
+instance. Returning a prebuilt connection from the resolver would make
+`ConnectionExtension` pass that connection object back through
+`resolve_connection` as if it were an iterable of nodes.
 
-### S1 - P2: inheriting one relay Node DjangoType from another likely causes infinite recursion in `resolve_id_attr`
+The fix is to move the connection-building fast path into the generated
+connection class path, or introduce a small internal sentinel/list wrapper that
+the generated connection class consumes. The synthesized relation resolver may
+return the annotated `to_attr` rows when present, but the edge/pageInfo/totalCount
+construction needs to happen in the `DjangoConnection.resolve_connection` /
+generated `<TypeName>Connection.resolve_connection` layer, where the real Relay
+pagination arguments and edge class are already available. Add a through-schema
+test that executes the real `relay.connection` field and proves the fast path is
+not only a direct helper call.
 
-`types/relay.py::install_relay_node_resolvers` installs a default only when the
-existing attribute is absent **or is exactly `relay.Node`'s** classmethod
-(`existing_func is node_func`). And `_resolve_id_attr_default` resolves upward via
-`super(cls, cls).resolve_id_attr()` with the **runtime** cls.
+### P1 - Divergent aliases cannot be detected after today's merge
 
-Now take `class ChildType(ParentType)` where both are relay-shaped with their own
-`Meta`. At finalize, the installer inspects `ChildType.resolve_id_attr`, finds the
-framework default **inherited from ParentType**, sees it is not `relay.Node`'s
-function, and skips installation (it's misclassified as a consumer override). At
-runtime, `ChildType.resolve_id_attr()` binds `cls=ChildType`, executes
-`super(ChildType, ChildType).resolve_id_attr()`, the MRO search lands back on
-*ParentType's installed copy of the same default*, which re-binds `cls=ChildType`
-and re-executes the identical `super()` call -> `RecursionError`. Because
-`_resolve_id_default`, `_resolve_node_default`, and `_resolve_nodes_default` all
-call `cls.resolve_id_attr()`, every id emission and every refetch on the child
-type recurses - it fails loudly, at least.
+Decision 6 requires aliased duplicate nested connections with different
+pagination arguments to fall back. Today
+[`optimizer/walker.py::_merge_aliased_selections`][walker] merges same-field
+selections by field name, preserves all response keys, and keeps only the first
+selection's `arguments` when aliases differ. The debug log explicitly says a
+future argument-aware optimizer must change that merge. If Slice 1 adds
+`_plan_connection_relation` after the current merge, the planner cannot know
+that `a: booksConnection(first: 2)` and `b: booksConnection(first: 5)` diverged;
+it will plan one window from the first argument set and mark both aliases as
+planned.
 
-The telling asymmetry: `resolve_typename` got exactly this treatment via
-`_FRAMEWORK_CLOSURE_MARKER` - `_inherits_framework_closure` detects an inherited
-framework closure and **re-installs** a fresh one bound to the child's definition.
-The four `_RELAY_RESOLVER_DEFAULTS` have no equivalent marker, and they're the
-ones whose default uses dynamic `super(cls, cls)`.
+Make argument preservation a Slice 1 foundation task before window planning.
+Either keep connection selections unmerged until after pagination classification,
+or store per-response-key argument payloads on the merged selection. The
+fallback tests need to assert the wrong plan is absent (`Prefetch` and planned
+resolver key), not merely that the query still resolves.
 
-**Script to confirm:** two relay-shaped DjangoTypes in an inheritance chain
-(child with its own `Meta.model`), finalize, then call
-`ChildType.resolve_id_attr()`. If it recurses, the fix is the same marker pattern
-the typename installer already uses (stamp the installed classmethods; on a
-subclass, treat an inherited stamped default as "not a consumer override" and
-re-install). If DjangoType-subclassing-DjangoType is meant to be unsupported,
-`__init_subclass__` should say so instead - `_detect_custom_get_queryset` walking
-the MRO suggests chains are anticipated.
+### P1 - The window partition key is under-specified for M2M
 
-### S2 - P2: untyped `node`/`nodes` on a multi-type model can resolve to the wrong `__typename`
+Decision 4 repeatedly says "partition by the relation connector column", but the
+implementation plan does not define how that connector is derived for each
+relation kind. Reverse FK can partition by the child table's FK column. Forward
+and reverse M2M cannot safely partition by the child primary key; they need the
+through-table parent-side key that Django's prefetch join uses to attach rows to
+each parent. This is not a corner case: the planned live library proof is mostly
+M2M (`Genre.booksConnection` and `Book.genresConnection`), so the first SQL-shape
+slice depends on this being exact.
 
-The untyped `DjangoNodeField()` returns a **raw Django model instance** under the
-`Node` interface annotation. Concrete-type selection then happens in
-graphql-core's abstract-type resolution, which consults each candidate type's
-`is_type_of`. The framework's installed hook
-(`types/relay.py::install_is_type_of`) is `isinstance(obj, (type_cls, model))` -
-for a model with two registered types (say `BookType` primary, `BookAdminType`
-secondary), **both** hooks answer True for every `Book` row. Whichever type
-graphql-core happens to test first wins, regardless of which type the GlobalID
-named.
+Add a named helper to the spec, for example
+`window_partition_for_prefetch(field)`, with explicit behavior for reverse FK,
+forward M2M, reverse M2M, and unsupported relation kinds. The tests should cover
+two parents sharing at least one child across an M2M relation; that is the shape
+that exposes an accidental child-pk partition because both parents would receive
+the same global child page instead of their own per-parent page.
 
-All the careful decode routing (`_audit_primary_ambiguity`,
-`_audit_model_label_routing`, `definition_for_graphql_name`) governs which type's
-*resolvers* fetch the row - but `_resolve(...)` drops `resolved` after fetching
-and hands the schema a bare model instance, so the routing decision never reaches
-type resolution. `node(id: <BookAdminType gid>)` could plausibly come back as
-`__typename: "BookType"` (or vice versa, ordering-dependent). Connections don't
-hit this because they're concretely typed; the Node interface refetch is the
-first abstract-resolution surface the package ships, so this is in 032's scope.
+### P1 - Zero-row windows cannot supply `totalCount` or full `pageInfo`
 
-**Script to confirm:** one model, two registered types (one primary), an untyped
-`node: relay.Node | None = DjangoNodeField()`, query each type's gid and assert
-`__typename`. If it misroutes, candidate fixes: have the node resolvers wrap or
-annotate the instance with the decode-resolved type (e.g. a per-request
-`resolve_type` hint), or tighten `is_type_of` for non-primary types - both need
-design care, hence flagging rather than prescribing.
+The spec currently says `first: 0` yields an empty window and that `totalCount`
+is `0` "by construction." That contradicts the shipped connection contract:
+`first: 0` over a non-empty set still reports the pre-slice `totalCount`, and
+the existing live root test pins `hasNextPage: true` with `endCursor: null`.
+The same problem occurs for any paginated window that returns no rows even
+though the parent has related rows, such as an `after` cursor past the end.
+With no annotated row in the `to_attr` list, `_dst_total_count` and row-number
+metadata are unavailable.
 
-### S3 - P3 (inherited, widened by 032): reverse relations without `related_name` - field name vs instance accessor mismatch
+The spec needs an explicit zero-row metadata strategy before claiming "zero
+extra queries" for nested `totalCount`. Viable root-cause options are: overfetch
+one metadata row when the requested edge window is empty, add a separate
+parent-keyed count/exists prefetch for metadata, or deliberately fall back to
+the per-parent pipeline for zero-row windows that request `pageInfo` or
+`totalCount`. What should not ship is `totalCount: 0` for `first: 0` over a
+non-empty relation.
 
-Synthesis seeds the relation connection with
-`_build_relation_connection_resolver(target_type, name)` where
-`name = field.name`, and the resolver does `getattr(root, accessor_name).all()`.
-For a reverse FK **without** `related_name`, Django's `ForeignObjectRel.name` is
-the related *query* name (`"book"`) while the instance accessor is
-`get_accessor_name()` (`"book_set"`) - `getattr(root, "book")` would
-`AttributeError`. The same assumption predates 032
-(`types/resolvers.py::many_resolver` uses `getattr(root, field_name)` too), which
-is why I grade it inherited - but 032 both widens the exposure (every relay node's
-many-relations now auto-synthesize connections) and bakes `field.name` into the
-generated field name and the collision guard. Notably `FieldMeta` carries a
-`reverse_connector_attname` slot, so the raw material for the correct accessor may
-already exist.
+### P2 - Nested connection optimization must not clobber the parent strictness context
 
-**Script to confirm:** a model pair with a plain `ForeignKey` (no
-`related_name`), parent type relay-shaped, query both the Phase-2 list field and
-the synthesized connection. If your fixtures all set `related_name`, this has
-been invisible to CI from the start.
+The current connection pipeline calls
+[`optimizer/extension.py::apply_connection_optimization`][extension], which
+publishes `DST_OPTIMIZER_PLAN`, `DST_OPTIMIZER_PLANNED`, and related sentinels
+onto the shared `info.context`. A fallback nested connection still runs that
+pipeline per parent. Once Slice 4 starts checking strictness for the connection
+access itself, the fallback path can still overwrite the parent field's planned
+set with the child connection's plan, especially under `"warn"` where execution
+continues after the warning.
 
-### S4 - question, not a defect: where does the `node`/`nodes` field type come from?
+The spec should require scoped publish/restore semantics for nested connection
+pipeline runs, or a context shape that is keyed by runtime path instead of a
+single global sentinel set. Add a test where a warn-mode fallback nested
+connection is followed by a parent-level relation sibling that was planned by
+the root plan. It should not warn or raise; without context scoping, this is the
+case likely to fail because the nested child plan overwrote the parent plan's
+sentinels.
 
-Both `relay.py` resolvers are annotated `-> Any` (the skeleton preserves
-annotations, so that's the real source). `strawberry.field(resolver=...)` can't
-type a field from `Any`, so the schema type must come from the consumer's class
-annotation at the assignment site (`node: BookType | None = DjangoNodeField(...)`).
-Two things to verify: (a) the documented usage always annotates the assignment;
-(b) the failure mode when a consumer writes a bare `node = DjangoNodeField()` is
-strawberry's generic missing-annotation error, with no framework-named message.
-If (b) is ugly, a one-line check or doc note is cheap. Also worth confirming the
-typed variant's annotation is checked for compatibility with `target_type` -
-nothing in the skeleton cross-validates `node: AuthorType = DjangoNodeField(BookType)`
-(`_check_typed_match` would make every query error at runtime, which is loud but
-late).
+### P2 - Cache-key depth through fragments needs one more rule
 
-## Minor notes (no scripts needed unless you disagree)
+Decision 7's "non-root field nodes" rule is correct, but fragment traversal
+needs to preserve response-path depth, not raw fragment-definition nesting. A
+root connection selected inside a fragment on `Query` is still a root field and
+its `first: $n` variable should stay out of the key. A nested connection selected
+inside a fragment on the parent node is still nested and its pagination variable
+must be included.
 
-- `_check_nodes_result` calls `len(result)` - a consumer `resolve_nodes` override
-  returning a generator dies with a bare `TypeError` instead of the named
-  `ConfigurationError`. One `list(result)`-or-message away from airtight.
-- `decode_global_id` called before finalize (effective strategies unstamped)
-  raises `ConfigurationError`, which the root fields translate to
-  `GLOBALID_INVALID` - a configuration problem masquerading as a bad-id error.
-  Unreachable through-schema (finalize precedes serving); only odd harnesses see it.
-- The async gatherer awaits each per-type `resolve_nodes` **sequentially**.
-  Correct, and defensible given Django's per-connection serialization, but it's a
-  latency choice worth one docstring word so nobody "fixes" it into
-  `asyncio.gather` against a single shared connection.
-- Synthesized relation connections run per-parent: each parent row pays its own
-  window query (plus `COUNT` when `totalCount` is exposed) - inherent to
-  relation-seeded connections, but a nested-connection query-count pin in the
-  fakeshop tests would document the cost contract.
-- The synthesis collision guard compares against `to_camel_case` - i.e. the
-  *default* name converter. A schema configured with a custom converter could
-  collide post-guard. Fine to leave if custom converters are out of scope; worth
-  a sentence somewhere if not.
-- `registry.unregister` removes the definition but leaves
-  `_connection_type_cache` entries for the type (only full `clear()` purges).
-  Test-utility-only surface; cosmetic.
+Add the root-fragment negative test alongside the planned fragment-carried
+nested-variable positive test. Without it, a syntactic traversal of reachable
+fragment definitions can accidentally re-fragment root connection cache entries,
+which is exactly what Decision 7 is trying to avoid.
 
-## Verified sound in this pass (logic traced, no action)
+## Smaller Notes
 
-- **Decode boundary:** `_decode_or_graphql_error` wraps *only* the decode call;
-  `SyncMisuseError` (a `ConfigurationError` subclass) cannot arise inside decode,
-  so the narrow `except ConfigurationError` doesn't swallow it - the prior
-  contract holds structurally, not just by test pin.
-- **Interleave/dedup/duplicates:** position indexes allocated pre-append; default
-  `resolve_nodes` -> `_order_nodes` emits exactly one entry per input key (string
-  keys built from the same coerced values on both sides), so duplicate ids and
-  missing rows both produce correct positional output; `_check_nodes_result`
-  catches the override that breaks it.
-- **Finalize ordering is load-bearing and correct:** `_audit_primary_ambiguity`
-  runs before synthesis (so `registry.get(related_model)` can't return None for a
-  multi-type model with no primary), interfaces are applied before
-  `implements_relay_node` checks in the same loop, effective strategies are
-  stamped before `_audit_model_label_routing` reads them, and synthesis precedes
-  `_bind_filtersets` so sidecar registrations are orphan-validated in the same run.
-- **Re-entrancy:** the synthesized-marker branch re-suppresses the list form a
-  partial-finalize rerun re-attached; the once-discarded pendings mean the popped
-  annotation is never restored, so the re-attached Phase-2 attr is inert and then
-  deleted again - the end state is consistent for both `"connection"` and
-  `"both"` shapes.
-- **Sync/async split:** `in_async_context()` checked per call; the sync pipeline's
-  lazy QuerySet flows through `ListConnection.resolve_connection`'s
-  AsyncIterable path under ASGI (Django QuerySets are async-iterable), which is
-  exactly why the relation resolver can be sync-only; `_apply_get_queryset_sync`
-  closes the rejected coroutine before raising.
-- **Connection generation:** always-concrete classes via `types.new_class` over
-  `DjangoConnection[target]`, single cache keyed by target, `first`+`last` guard
-  ahead of `super()`, `totalCount` attach guarded by countability and computed
-  only when selected (fragment-recursive check).
-- **Validation ladders:** `relation_shapes` stage-1 (isinstance-before-membership,
-  defensive `dict()` copy) and stage-2 (unknown -> excluded -> non-relation ->
-  single-valued -> consumer-authored, sorted messages) are complete and ordered
-  so the most specific error wins; the relay `id` gate and the
-  `_RELAY_NON_INTERFACE_HELPERS` identity table sit before the generic
-  non-class rejection.
-- **Registry hygiene:** `register_with_definition` rollback restores the exact
-  pre-state including the prior primary; `clear()` co-clears the node-field
-  ledger and connection cache cycle-safely; the no-Node-types contract check uses
-  a plain import so it cannot silently skip.
+- Decision 5 should say the fast path uses the generated edge class's
+  `resolve_edge(..., cursor=<zero_based_offset>)` rather than manually naming a
+  cursor prefix. That keeps the cursor prefix owned by Strawberry's edge type.
+- The spec should explicitly preserve the existing `first` + `last` guard
+  ordering when the planner computes `SliceMetadata` at plan time. Planning must
+  not introduce a different error surface or duplicate guard.
+- Add a test for a `"both"` relation where the list sibling and connection
+  sibling are selected together and a consumer already has a plain accessor
+  prefetch. The `to_attr` prefetch must coexist with the accessor prefetch
+  through [`optimizer/plans.py::diff_plan_for_queryset`][plans].
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+[connection]: ../django_strawberry_framework/connection.py
+[extension]: ../django_strawberry_framework/optimizer/extension.py
+[plans]: ../django_strawberry_framework/optimizer/plans.py
+[walker]: ../django_strawberry_framework/optimizer/walker.py
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

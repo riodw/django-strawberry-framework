@@ -26,7 +26,6 @@ triggers the collection pipeline, which:
    pass.
 """
 
-import functools
 import inspect
 import re
 import typing
@@ -43,6 +42,7 @@ from ..optimizer.field_meta import FieldMeta
 from ..optimizer.hints import OptimizerHint
 from ..registry import registry
 from ..utils.strings import snake_case
+from ..utils.typing import is_async_callable
 from .converters import convert_scalar
 from .definition import DjangoTypeDefinition
 from .relations import PendingRelation, PendingRelationAnnotation
@@ -334,49 +334,21 @@ def _validate_globalid_strategy(
     return normalized
 
 
-def _is_async_globalid_callable(value: object) -> bool:
-    """Return whether ``value`` is (or wraps) an async GlobalID encoder.
-
-    ``inspect.iscoroutinefunction`` returns ``True`` only for the value it is
-    handed directly - it does NOT see through two realistic wrapper shapes:
-
-    1. A callable *instance* whose ``__call__`` is ``async def`` - the instance
-       itself is not a coroutine function, so its ``__call__`` is checked too.
-    2. A ``functools.partial`` around either of the above - ``iscoroutinefunction``
-       only unwraps a partial whose ``.func`` is itself an ``async def`` function,
-       NOT a partial around an async callable *instance*. So the partial's target
-       is checked instead of the partial.
-
-    A single ``.func`` hop reaches that target with no loop to bound: ``partial``
-    flattens nested partials at construction (``partial(partial(f)).func is f``),
-    so ``.func`` is never itself a ``partial`` and the traversal is provably
-    depth-1. Either wrapper, left undetected, survives validation and only fails
-    at the first ``types/relay.py::encode_typename`` call (a coroutine return that
-    trips the non-``str`` guard plus an unawaited-coroutine warning) - exactly the
-    request-time failure the build-time check exists to prevent.
-    """
-    target = value.func if isinstance(value, functools.partial) else value
-    # Inspecting ``__call__``'s async-ness, not testing callability - so
-    # ``callable()`` (what B004 suggests) is the wrong tool here.
-    return inspect.iscoroutinefunction(target) or inspect.iscoroutinefunction(
-        getattr(target, "__call__", None),  # noqa: B004
-    )
-
-
 def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None:
     """Reject a wrong-arity or async GlobalID encoder at validation time.
 
     ``inspect.signature`` must bind the four positional ``_GLOBALID_CALLABLE_PARAMS``
     and the encoder must be sync (spec-031 Decision 6).
-    The sync-ness test (``_is_async_globalid_callable``) sees through callable
-    instances with an ``async def __call__`` and ``functools.partial`` wrappers
-    around either an ``async def`` function or such an instance - all of which
+    The sync-ness test (``utils/typing.py::is_async_callable``, shared with the
+    field factories per the 0.0.9 DRY pass) sees through callable instances with
+    an ``async def __call__`` and ``functools.partial`` wrappers around either an
+    ``async def`` function or such an instance -- all of which
     ``inspect.iscoroutinefunction`` alone would miss, letting an async encoder
     survive to request time. A callable that survives both checks is returned to
     the caller untouched; the per-call non-``str`` return guard lives in the
     Slice-2 install closure.
     """
-    if _is_async_globalid_callable(value):
+    if is_async_callable(value):
         raise ConfigurationError(
             f"{subject} callable encoder must be sync; "
             f"got an `async def`. Expected `(type_cls, model, root, info) -> str`.",
@@ -1157,6 +1129,49 @@ def _validate_optimizer_hints(hints: dict[str, Any], fields: tuple[Any, ...], mo
         )
 
 
+def _selected_meta_targets(
+    *,
+    model: type[models.Model],
+    selected_fields: tuple[Any, ...],
+    attr: str,
+    targets: set[str],
+    excluded_error: Callable[[list[str]], str],
+) -> tuple[dict[str, Any], list[str]]:
+    """Run the shared unknown/excluded Meta-target guards; return ``(selected_by_name, sorted)``.
+
+    The first half shared by ``_validate_nullability_override_targets`` and
+    ``_validate_relation_shape_targets`` (spec-029 / spec-032 Decision 7-8, the
+    0.0.9 DRY pass): reject names unknown to the model (via the shared
+    ``_format_unknown_fields_error`` keyed on ``attr`` so the consumer-visible
+    shape matches the ``Meta.fields`` / ``Meta.exclude`` typo guards), then
+    reject names not in the selected set (via the caller's family-specific
+    ``excluded_error``, which receives the sorted excluded names). Returns the
+    ``{name: field}`` selected map and the sorted target names; the
+    domain-specific per-name checks (consumer-authored, scalar-only, Relay-pk,
+    many-side) stay in the caller, which iterates the returned names.
+
+    Keeping the unknown-vs-excluded distinction here means a future ``Meta.*``
+    target feature inherits both guards without re-deriving the model-wide vs
+    selected name sets.
+    """
+    model_field_names = {f.name for f in model._meta.get_fields()}
+    unknown = sorted(targets - model_field_names)
+    if unknown:
+        raise ConfigurationError(
+            _format_unknown_fields_error(
+                model=model,
+                attr=attr,
+                unknown=unknown,
+                available=model_field_names,
+            ),
+        )
+    selected_by_name = {f.name: f for f in selected_fields}
+    excluded = sorted(targets - set(selected_by_name))
+    if excluded:
+        raise ConfigurationError(excluded_error(excluded))
+    return selected_by_name, sorted(targets)
+
+
 def _validate_nullability_override_targets(
     *,
     model: type[models.Model],
@@ -1212,28 +1227,20 @@ def _validate_nullability_override_targets(
     targets = nullable_overrides | required_overrides
     if not targets:
         return
-    model_field_names = {f.name for f in model._meta.get_fields()}
-    unknown = sorted(targets - model_field_names)
-    if unknown:
-        raise ConfigurationError(
-            _format_unknown_fields_error(
-                model=model,
-                attr="nullable_overrides/required_overrides",
-                unknown=unknown,
-                available=model_field_names,
-            ),
-        )
-    selected_by_name = {f.name: f for f in selected_fields}
-    excluded = sorted(targets - set(selected_by_name))
-    if excluded:
-        raise ConfigurationError(
+    selected_by_name, sorted_targets = _selected_meta_targets(
+        model=model,
+        selected_fields=selected_fields,
+        attr="nullable_overrides/required_overrides",
+        targets=targets,
+        excluded_error=lambda excluded: (
             f"{model.__name__}.Meta nullable_overrides/required_overrides name fields not in "
             f"the selected set: {excluded}. The override targets a field that will not appear "
             "in the GraphQL type (excluded via Meta.exclude or absent from a subset Meta.fields); "
-            "select the field or drop the override.",
-        )
+            "select the field or drop the override."
+        ),
+    )
     relay_pk_name = model._meta.pk.name if relay_shaped else None
-    for name in sorted(targets):
+    for name in sorted_targets:
         if name in consumer_authored_fields:
             raise ConfigurationError(
                 f"{model.__name__}.Meta nullable_overrides/required_overrides names "
@@ -1292,27 +1299,19 @@ def _validate_relation_shape_targets(
     """
     if not relation_shapes:
         return
-    model_field_names = {f.name for f in model._meta.get_fields()}
-    unknown = sorted(set(relation_shapes) - model_field_names)
-    if unknown:
-        raise ConfigurationError(
-            _format_unknown_fields_error(
-                model=model,
-                attr="relation_shapes",
-                unknown=unknown,
-                available=model_field_names,
-            ),
-        )
-    selected_by_name = {f.name: f for f in selected_fields}
-    excluded = sorted(set(relation_shapes) - set(selected_by_name))
-    if excluded:
-        raise ConfigurationError(
+    selected_by_name, sorted_targets = _selected_meta_targets(
+        model=model,
+        selected_fields=selected_fields,
+        attr="relation_shapes",
+        targets=set(relation_shapes),
+        excluded_error=lambda excluded: (
             f"{model.__name__}.Meta.relation_shapes names fields not in the selected set: "
             f"{excluded}. The entry targets a field that will not appear in the GraphQL type "
             "(excluded via Meta.exclude or absent from a subset Meta.fields); select the field "
-            "or drop the entry.",
-        )
-    for name in sorted(relation_shapes):
+            "or drop the entry."
+        ),
+    )
+    for name in sorted_targets:
         if not selected_by_name[name].is_relation:
             raise ConfigurationError(
                 f"{model.__name__}.Meta.relation_shapes names non-relation field {name!r}; "

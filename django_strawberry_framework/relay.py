@@ -60,8 +60,7 @@ from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError
-from .list_field import _validate_djangotype_target
-from .types.base import _is_relay_shaped
+from .list_field import _validate_relay_djangotype_target
 from .types.relay import _NODE_TYPE_HINT_ATTR, _model_for, decode_global_id
 
 __all__ = ("DjangoNodeField", "DjangoNodesField")
@@ -158,20 +157,21 @@ def _check_typed_match(target_type: type | None, resolved: type) -> None:
 def _validate_node_target(target_type: type, *, field: str) -> None:
     """Run the four shared target guards plus the Relay-Node-shaped fifth guard.
 
-    The shared four come from ``list_field.py::_validate_djangotype_target``
-    (no ``resolver=`` seam exists on a refetch field, so ``None`` is passed).
-    The fifth reuses ``types/base.py::_is_relay_shaped`` exactly as
-    ``connection.py::DjangoConnectionField`` does - including its
-    construction-time-tuple rationale (a Meta-declared ``relay.Node`` is in
-    ``definition.interfaces`` before Phase 2.5 injects it into ``__bases__``).
+    Thin wrapper over ``list_field.py::_validate_relay_djangotype_target`` -- the
+    Relay-shaped target guard shared with ``connection.py::DjangoConnectionField``
+    per the 0.0.9 DRY pass. A refetch field has no ``resolver=`` seam, so ``None``
+    is passed; ``field`` is interpolated into the messages so each factory
+    (``DjangoNodeField`` / ``DjangoNodesField``) names itself.
     """
-    _validate_djangotype_target(target_type, None, field=field)
-    definition = target_type.__django_strawberry_definition__
-    if not _is_relay_shaped(target_type, definition.interfaces):
-        raise ConfigurationError(
+    _validate_relay_djangotype_target(
+        target_type,
+        None,
+        field=field,
+        relay_error_message=(
             f"{field} requires a Relay-Node-shaped DjangoType target; add "
-            "`relay.Node` to `Meta.interfaces` (or inherit `relay.Node` directly)",
-        )
+            "`relay.Node` to `Meta.interfaces` (or inherit `relay.Node` directly)"
+        ),
+    )
 
 
 def _interleave(

@@ -17,9 +17,10 @@ fixture.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+import importlib
+from collections.abc import Callable, Iterable, Iterator
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from django.db import models
 
@@ -28,6 +29,25 @@ from .exceptions import ConfigurationError
 if TYPE_CHECKING:  # pragma: no cover
     from .types.definition import DjangoTypeDefinition
     from .types.relations import PendingRelation
+
+
+def _clear_if_importable(module_path: str, attr_name: str, action: Callable[[Any], None]) -> None:
+    """Best-effort: import ``module_path.attr_name`` and run ``action`` on it.
+
+    The cycle-safe local-import shape that ``TypeRegistry.clear`` /
+    ``TypeRegistry.unregister`` repeat for each subsystem co-clear (filter /
+    order input namespaces + helper ledgers, the connection-class cache, the
+    root node-field ledger), single-sited per the 0.0.9 DRY pass
+    (``docs/feedback.md`` "Registry Clear Optional-Callback Pattern"). An
+    unreachable subsystem (a partial-load build state where ``registry`` is
+    imported but a sidecar package is not) is skipped via ``ImportError`` so it
+    never prevents a LATER co-clear from running -- each block stays independent.
+    """
+    try:
+        target = getattr(importlib.import_module(module_path), attr_name)
+    except ImportError:
+        return
+    action(target)
 
 
 class TypeRegistry:
@@ -186,18 +206,17 @@ class TypeRegistry:
         self._pending = [
             pending for pending in self._pending if pending.source_type is not type_cls
         ]
-        # Connection-class cache eviction (cycle-safe local import - the
-        # ``clear()`` co-clear precedent). The cache is identity-keyed on the
-        # target type, so a leftover entry is hygiene rather than correctness
+        # Connection-class cache eviction (best-effort via ``_clear_if_importable``
+        # - the ``clear()`` co-clear precedent). The cache is identity-keyed on
+        # the target type, so a leftover entry is hygiene rather than correctness
         # (Round-4 review minor) - but this method promises "all traces", and
         # ``clear()`` already purges the whole cache; eviction keeps the two
         # public mutators consistent.
-        try:
-            from .connection import _connection_type_cache
-        except ImportError:
-            pass
-        else:
-            _connection_type_cache.pop(type_cls, None)
+        _clear_if_importable(
+            "django_strawberry_framework.connection",
+            "_connection_type_cache",
+            lambda cache: cache.pop(type_cls, None),
+        )
 
     def get(self, model: type[models.Model]) -> type | None:
         """Return the relation-resolution target for ``model``, or ``None``.
@@ -463,73 +482,49 @@ class TypeRegistry:
         self._pending.clear()
         self._finalized = False
 
-        # Filter-input namespace clear (cycle-safe local import per
-        # spec-021 Decision 9, M5 of rev3 + M4 of rev8). Two independent
-        # try/except blocks - one per cleared cache - so a partial-
-        # rollback build state where one cache is reachable and the
-        # other is not still clears whatever IS reachable. Both blocks
-        # follow the same "best-effort, skip and continue" shape so the
-        # cleanup contract is uniform: an unreachable filter subsystem
-        # never prevents the reachable cache from being cleared.
-        try:
-            from .filters.inputs import clear_filter_input_namespace
-        except ImportError:
-            pass
-        else:
-            clear_filter_input_namespace()
-
-        try:
-            from .filters import _helper_referenced_filtersets
-        except ImportError:
-            pass
-        else:
-            _helper_referenced_filtersets.clear()
-
-        # Order-input namespace clear (cycle-safe local import per
-        # spec-028 Decision 9). Two independent try/except blocks --
-        # one per cleared cache -- so a partial-rollback build state
-        # where one cache is reachable and the other is not still
-        # clears whatever IS reachable. Both blocks follow the
-        # ``pass`` + ``else`` shape (NOT ``return``) so a future fifth
-        # phase, e.g. aggregates 0.1.3, is never silently skipped.
-        try:
-            from .orders.inputs import clear_order_input_namespace
-        except ImportError:
-            pass
-        else:
-            clear_order_input_namespace()
-
-        try:
-            from .orders import _helper_referenced_ordersets
-        except ImportError:
-            pass
-        else:
-            _helper_referenced_ordersets.clear()
-
-        # Connection-type cache clear (cycle-safe local import, same shape as
-        # the filter/order blocks above). ``connection.py`` caches one generated
-        # ``<TypeName>Connection`` class per node type, keyed on identity; the
-        # documented registry reset drops them so repeated schema reloads do not
-        # accumulate dead connection classes (``docs/feedback.md`` P3b).
-        try:
-            from .connection import clear_connection_type_cache
-        except ImportError:
-            pass
-        else:
-            clear_connection_type_cache()
-
-        # Root-node-field ledger clear (cycle-safe local import, same shape as
-        # the blocks above - the ``_helper_referenced_filtersets`` precedent).
-        # ``relay.py``'s ``_node_fields_declared`` backs the finalize-time
-        # no-Node-types check (spec-032 Decision 8); the documented registry
-        # reset drops it so a cleared registry forgets stale root-field
-        # declarations.
-        try:
-            from .relay import _node_fields_declared
-        except ImportError:
-            pass
-        else:
-            _node_fields_declared.clear()
+        # Subsystem co-clears (cycle-safe, best-effort via ``_clear_if_importable``
+        # -- see that helper for the partial-load contract). Each entry is
+        # independent: an unreachable subsystem is skipped so it never prevents a
+        # later co-clear from running. The order is immaterial (the registry's
+        # own maps are already cleared above); a future sidecar family (e.g.
+        # aggregates) appends one row here.
+        #   * filter / order input namespaces (spec-021 / spec-028 Decision 9)
+        #     and their ``filter_input_type`` / ``order_input_type`` helper
+        #     ledgers;
+        #   * the connection-class cache (one ``<TypeName>Connection`` per node
+        #     type, ``docs/feedback.md`` P3b);
+        #   * the root node-field ledger backing the finalize-time no-Node-types
+        #     check (spec-032 Decision 8).
+        _clear_if_importable(
+            "django_strawberry_framework.filters.inputs",
+            "clear_filter_input_namespace",
+            lambda clear: clear(),
+        )
+        _clear_if_importable(
+            "django_strawberry_framework.filters",
+            "_helper_referenced_filtersets",
+            lambda ledger: ledger.clear(),
+        )
+        _clear_if_importable(
+            "django_strawberry_framework.orders.inputs",
+            "clear_order_input_namespace",
+            lambda clear: clear(),
+        )
+        _clear_if_importable(
+            "django_strawberry_framework.orders",
+            "_helper_referenced_ordersets",
+            lambda ledger: ledger.clear(),
+        )
+        _clear_if_importable(
+            "django_strawberry_framework.connection",
+            "clear_connection_type_cache",
+            lambda clear: clear(),
+        )
+        _clear_if_importable(
+            "django_strawberry_framework.relay",
+            "_node_fields_declared",
+            lambda ledger: ledger.clear(),
+        )
 
 
 registry = TypeRegistry()

@@ -29,10 +29,17 @@ from typing import TYPE_CHECKING, Any
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
-from django.http import HttpRequest
 
 from ..exceptions import ConfigurationError
 from ..sets_mixins import ClassBasedTypeNameMixin
+from ..utils.permissions import (
+    active_permission_field_paths,
+    active_related_branches,
+    extract_branch_value,
+    invoke_permission_method,
+    request_from_info,
+    run_active_input_permission_checks,
+)
 from ..utils.relations import is_many_side_relation_kind, relation_kind
 from .base import RelatedOrder
 from .inputs import Ordering, _field_specs, normalize_input_value
@@ -264,24 +271,11 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         wrapper-less alternative ``isinstance(info.context, HttpRequest)``
         is detected so consumers running a bare-HttpRequest context (the
         Django test client default) work without bespoke wiring. Any
-        other shape raises ``ConfigurationError``. Mirror of
-        ``FilterSet._request_from_info``.
+        other shape raises ``ConfigurationError``. Thin delegate to
+        ``utils/permissions.py::request_from_info`` (single-sited with the
+        filter side per the 0.0.9 DRY pass).
         """
-        context = getattr(info, "context", None)
-        if context is None:
-            raise ConfigurationError(
-                "OrderSet.apply requires `info.context`; received `info` without a context.",
-            )
-        request = getattr(context, "request", None)
-        if request is not None:
-            return request
-        if isinstance(context, HttpRequest):
-            return context
-        raise ConfigurationError(
-            f"OrderSet.apply could not resolve a Django HttpRequest from `info.context` "
-            f"(got {type(context).__name__}). Expected `info.context.request` or a bare "
-            "HttpRequest.",
-        )
+        return request_from_info(info, family_label="OrderSet")
 
     @staticmethod
     def _extract_branch_value(input_value: Any, field_name: str) -> Any:
@@ -294,15 +288,11 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         fields to ``None`` rather than UNSET (the apply pipeline never
         sees an UNSET sentinel from the resolver layer because the
         ``order_input_type`` argument shape is ``list[<T>!] | None``,
-        not a struct of UNSET-defaulted attributes).
+        not a struct of UNSET-defaulted attributes). Thin delegate to
+        ``utils/permissions.py::extract_branch_value`` (no ``unset_sentinel``,
+        so the sentinel check is a harmless ``value is None`` no-op).
         """
-        if input_value is None:
-            return None
-        if isinstance(input_value, dict):
-            value = input_value.get(field_name)
-        else:
-            value = getattr(input_value, field_name, None)
-        return value
+        return extract_branch_value(input_value, field_name)
 
     @classmethod
     def _iter_active_related_branches(
@@ -311,76 +301,46 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     ) -> list[tuple[str, RelatedOrder, Any]]:
         """List ``(field_name, related_order, child_input)`` for present branches.
 
-        Active-branch scoping (spec-028 Decision 8 step 6 / Revision 4
-        H3) -- a ``RelatedOrder`` is "active" when its key is present in
-        the input. Inactive branches are skipped end-to-end (permission
-        recursion and child-orderset normalization) so an empty branch
-        does not exercise the child's per-field gates.
+        Active-branch scoping (spec-028 Decision 8 step 6 / Revision 4 H3) -- a
+        ``RelatedOrder`` is "active" when its key is present in the input.
+        Inactive branches are skipped end-to-end. Thin delegate to
+        ``utils/permissions.py::active_related_branches`` with
+        ``handle_top_level_list=True`` so each dataclass element of a top-level
+        list is walked separately (the parent gate fires once per active branch
+        occurrence; the ``_fired`` dedup collapses repeats per class).
         """
-        related_orders = getattr(cls, "related_orders", {})
-        if not related_orders:
-            return []
-        active: list[tuple[str, RelatedOrder, Any]] = []
-        # Walk each dataclass element of a top-level list separately so
-        # the parent gate fires once per active branch occurrence (the
-        # ``_fired`` dedup map keys on class, so repeated occurrences
-        # collapse to one fire-per-class).
-        if isinstance(input_value, list):
-            for element in input_value:
-                active.extend(cls._iter_active_related_branches(element))
-            return active
-        for field_name, related_order in related_orders.items():
-            child_input = cls._extract_branch_value(input_value, field_name)
-            if child_input is None:
-                continue
-            active.append((field_name, related_order, child_input))
-        return active
+        return active_related_branches(
+            cls,
+            input_value,
+            related_attr="related_orders",
+            handle_top_level_list=True,
+        )
 
     @classmethod
     def _active_permission_field_paths(cls, input_value: Any) -> list[str]:
         """Return the base django source path for each active top-level leaf.
 
-        Drives ``_run_permission_checks``'s per-field gate dispatch.
-        Emits one entry per supplied leaf field -- its
-        ``django_source_path`` -- so ``check_<field>_permission`` fires
-        once for a field regardless of which input list element
-        populates it. ``RelatedOrder`` branches are excluded here (they
-        fire via the related-branch loop); ``None`` attribute values are
-        skipped (active-input-only contract).
+        Drives ``_run_permission_checks``'s per-field gate dispatch. Emits one
+        entry per supplied leaf field -- its ``django_source_path`` -- so
+        ``check_<field>_permission`` fires once for a field regardless of which
+        input list element populates it. ``RelatedOrder`` branches are excluded
+        (they fire via the related-branch loop); ``None`` values are skipped
+        (active-input-only). Thin delegate to
+        ``utils/permissions.py::active_permission_field_paths`` with
+        ``handle_top_level_list=True``; the order side has no logical operator
+        keys and falls back to the python-attr token verbatim when a field has
+        no field-spec entry (e.g. permission checks invoked outside the apply
+        pipeline before the bind populates ``_field_specs``).
         """
-        if input_value is None:
-            return []
-        if isinstance(input_value, list):
-            # Aggregate across every top-level dataclass element; the
-            # caller's ``_fired`` dedup ensures one gate-fire per
-            # (class, method-name) pair.
-            paths: list[str] = []
-            for element in input_value:
-                paths.extend(cls._active_permission_field_paths(element))
-            return paths
-        dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
-        if dataclass_fields is None and not isinstance(input_value, dict):
-            return []
-        if isinstance(input_value, dict):
-            items = list(input_value.items())
-        else:
-            items = [(name, getattr(input_value, name)) for name in dataclass_fields]
-        related_keys = set(getattr(cls, "related_orders", {}) or {})
-        paths = []
-        for python_attr, raw_value in items:
-            if raw_value is None:
-                continue
-            if python_attr in related_keys:
-                continue
-            spec = _field_specs.get((cls, python_attr))
-            if spec is None:
-                # Defensive -- before Slice 3's bind, ``_field_specs`` may
-                # be empty when permission checks are invoked outside the
-                # apply pipeline. Fall back to the python-attr token.
-                paths.append(python_attr)
-            else:
-                paths.append(spec.django_source_path)
-        return paths
+        return active_permission_field_paths(
+            cls,
+            input_value,
+            field_specs=_field_specs,
+            related_keys=set(getattr(cls, "related_orders", {}) or {}),
+            logic_keys=frozenset(),
+            fallback_path=lambda python_attr: python_attr,
+            handle_top_level_list=True,
+        )
 
     @staticmethod
     def _invoke_permission_method(
@@ -392,21 +352,13 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     ) -> None:
         """Call ``check_<field_path>_permission(request)`` if defined.
 
-        When ``fired`` is supplied, the method-name is recorded after a
-        successful fire and subsequent calls with the same name skip
-        the attribute lookup entirely. The dedup is scoped to the
-        supplied set -- ``_run_permission_checks`` passes the per-class
-        set keyed out of its shared ``_fired`` map. Mirror of
-        ``FilterSet._invoke_permission_method``.
+        Thin delegate to ``utils/permissions.py::invoke_permission_method``
+        (single-sited with the filter side). When ``fired`` is supplied, the
+        method name is recorded after a successful fire and subsequent calls
+        with the same name skip the attribute lookup -- the per-class set keyed
+        out of ``_run_permission_checks``'s shared ``_fired`` map.
         """
-        method_name = f"check_{field_path.replace('__', '_')}_permission"
-        if fired is not None and method_name in fired:
-            return
-        method = getattr(bare_instance, method_name, None)
-        if callable(method):
-            method(request)
-            if fired is not None:
-                fired.add(method_name)
+        invoke_permission_method(bare_instance, field_path, request, fired=fired)
 
     @classmethod
     def _run_permission_checks(
@@ -456,31 +408,22 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             return
         if _fired is None:
             _fired = {}
-        class_fired = _fired.setdefault(cls, set())
         bare = _bare if _bare is not None else object.__new__(cls)
-
-        for field_path in cls._active_permission_field_paths(input_value):
-            cls._invoke_permission_method(bare, field_path, request, fired=class_fired)
-
-        for field_name, related_order, child_input in cls._iter_active_related_branches(
+        # Fire the per-field and per-branch gates -- the active-input core shared
+        # with the filter side (``utils/permissions.py``): the active-field gate
+        # loop, the active-related-branch loop (recurse into the child orderset's
+        # own ``_run_permission_checks`` then fire the parent's per-branch gate),
+        # and the per-class ``_fired`` dedup. The order side has no logical
+        # ``and`` / ``or`` / ``not`` recursion (spec-028 Decision 8) and no depth
+        # cap, so this is the whole body.
+        run_active_input_permission_checks(
+            cls,
             input_value,
-        ):
-            child_orderset = related_order.orderset
-            if child_orderset is not None and hasattr(child_orderset, "_run_permission_checks"):
-                # Child orderset is a different class; it keys its own
-                # per-class set inside the shared ``_fired`` map and
-                # allocates its own bare instance.
-                child_orderset._run_permission_checks(
-                    child_input,
-                    request,
-                    _fired=_fired,
-                )
-            # Per-branch permission gate on the parent -- fires e.g.
-            # ``check_shelf_permission`` when the ``shelf`` branch is
-            # active. Child orderset's own field gates fire via the
-            # recursive call above. Deduped against the parent's
-            # per-class set.
-            cls._invoke_permission_method(bare, field_name, request, fired=class_fired)
+            request,
+            fired=_fired,
+            bare=bare,
+            target_attr="orderset",
+        )
 
     def check_permissions(self, request: Any) -> None:
         """Backward-compatible thin delegate to ``_run_permission_checks``.

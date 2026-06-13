@@ -61,14 +61,26 @@ class TypedFilter(Filter):
     """
 
 
-class ArrayFilterMethod(FilterMethod):
-    """Treat empty list as a real value; defer the rest to `FilterMethod`."""
+class _EmptyListAwareFilterMethod(FilterMethod):
+    """``FilterMethod`` that treats an empty list as a real value.
+
+    Shared base for `ArrayFilterMethod` / `ListFilterMethod` (single-sited per
+    the 0.0.9 DRY pass): a consumer-supplied `method=` callable must run for
+    `[]` -- the empty list is a valid filter value for array / list-shaped
+    filters -- unlike the default `FilterMethod`, which short-circuits the whole
+    `EMPTY_VALUES` set. Only `None` short-circuits to the unfiltered queryset
+    here; the empty list reaches `self.method`.
+    """
 
     def __call__(self, qs: Any, value: Any) -> Any:
         """Apply the custom method, treating empty list as a real value."""
         if value is None:
             return qs
         return self.method(qs, self.f.field_name, value)
+
+
+class ArrayFilterMethod(_EmptyListAwareFilterMethod):
+    """Empty-list-aware `FilterMethod` for `ArrayFilter` (see the shared base)."""
 
 
 class ArrayFilter(TypedFilter):
@@ -143,14 +155,8 @@ class RangeFilter(TypedFilter):
     field_class = RangeField
 
 
-class ListFilterMethod(FilterMethod):
-    """Treat empty list as a real value; defer the rest to `FilterMethod`."""
-
-    def __call__(self, qs: Any, value: Any) -> Any:
-        """Apply the custom method, treating empty list as a real value."""
-        if value is None:
-            return qs
-        return self.method(qs, self.f.field_name, value)
+class ListFilterMethod(_EmptyListAwareFilterMethod):
+    """Empty-list-aware `FilterMethod` for `ListFilter` (see the shared base)."""
 
 
 class ListFilter(TypedFilter):

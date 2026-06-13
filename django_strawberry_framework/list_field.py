@@ -6,7 +6,6 @@ Target release: ``0.0.7``.
 
 from __future__ import annotations
 
-import functools
 import inspect
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -18,7 +17,9 @@ from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError
 from .types import DjangoType
+from .types.base import _is_relay_shaped
 from .types.relay import _apply_get_queryset_async, _apply_get_queryset_sync, _initial_queryset
+from .utils.typing import is_async_callable
 
 __all__ = ("DjangoListField",)
 
@@ -43,51 +44,6 @@ async def _post_process_consumer_async(target_type: type, result: Any, info: Inf
     if isinstance(result, models.QuerySet):
         return await _apply_get_queryset_async(target_type, result, info)
     return result
-
-
-def _is_async_callable(fn: Any) -> bool:
-    """True if calling ``fn`` returns a coroutine.
-
-    The wrapped target is resolved first: ``functools.partial`` flattens nested
-    partials at construction, so a single ``.func`` hop reaches the underlying
-    callable (mirrors
-    ``django_strawberry_framework/types/base.py::_is_async_globalid_callable``).
-    Two checks on that target then cover the practical resolver shapes:
-
-    - ``inspect.iscoroutinefunction(target)`` - catches ``async def`` functions
-      (and, with the partial unwrapped, a ``functools.partial`` around one -
-      though ``inspect`` also looks through partials of plain functions natively).
-    - ``inspect.iscoroutinefunction(target.__call__)`` - catches callable
-      instances whose ``__call__`` is ``async def``. ``iscoroutinefunction``
-      checks the function flag of the immediate argument, so a callable instance
-      is False; descending into ``__call__`` recovers the async flag. Without
-      this branch an async-callable-object resolver would land in the sync
-      wrapper, its coroutine return would bypass ``_post_process_consumer_sync``,
-      and the awaited QuerySet would silently skip ``target_type.get_queryset(...)``.
-
-    The explicit ``.func`` unwrap is load-bearing for the *combination*: a
-    ``functools.partial`` wrapping an async callable *instance*. There
-    ``inspect.iscoroutinefunction(partial)`` unwraps to the instance (not a
-    coroutine function -> False) and ``partial.__call__`` is the partial's own
-    ``__call__`` (also False), so without unwrapping first the resolver is
-    misclassified as sync. The three shapes are pinned in
-    ``tests/test_list_field.py`` by
-    ``test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied``,
-    ``test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied``,
-    and ``test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied``.
-
-    Resolvers whose sync entry point returns an awaitable (e.g., a plain ``def``
-    that produces a coroutine from somewhere else) remain undetected - the
-    contract is that resolvers signal sync-vs-async through the standard
-    coroutine-function flag, not through opaque awaitable returns.
-    """
-    target = fn.func if isinstance(fn, functools.partial) else fn
-    if inspect.iscoroutinefunction(target):
-        return True
-    # Inspecting ``__call__``'s async-ness, not testing callability - so
-    # ``callable()`` (what B004 suggests) is the wrong tool here.
-    call = getattr(target, "__call__", None)  # noqa: B004
-    return call is not None and inspect.iscoroutinefunction(call)
 
 
 def _validate_djangotype_target(
@@ -139,6 +95,32 @@ def _validate_djangotype_target(
         raise ConfigurationError(f"{field} resolver must be callable.")
 
 
+def _validate_relay_djangotype_target(
+    target_type: type,
+    resolver: Callable | None,
+    *,
+    field: str,
+    relay_error_message: str,
+) -> None:
+    """Run the four shared DjangoType-target guards plus the Relay-Node-shaped fifth.
+
+    The Relay-shaped target guard shared by ``DjangoConnectionField`` and
+    ``relay.py::_validate_node_target`` (which backs ``DjangoNodeField`` /
+    ``DjangoNodesField``) -- single-sited per the 0.0.9 DRY pass
+    (``docs/feedback.md`` Major 4). Delegates the four base checks to
+    ``_validate_djangotype_target`` (with the call site's ``resolver`` seam),
+    then rejects a non-Relay-Node-shaped target. ``_is_relay_shaped`` reads the
+    declared ``Meta.interfaces`` (a Meta-declared ``relay.Node`` is in
+    ``definition.interfaces`` before Phase 2.5 injects it into ``__bases__``)
+    OR direct ``relay.Node`` inheritance. The caller supplies the full
+    ``relay_error_message`` so each factory keeps its own wording.
+    """
+    _validate_djangotype_target(target_type, resolver, field=field)
+    definition = target_type.__django_strawberry_definition__
+    if not _is_relay_shaped(target_type, definition.interfaces):
+        raise ConfigurationError(relay_error_message)
+
+
 def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - consumer usage is `DjangoListField(BranchType)`
     target_type: type,
     *,
@@ -188,7 +170,7 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
         wrapped = _default
     else:
         user_resolver = resolver
-        if _is_async_callable(user_resolver):
+        if is_async_callable(user_resolver):
 
             async def _wrap(root: Any, info: Info) -> Any:
                 # rev4 H2: ``await`` the consumer coroutine BEFORE handing

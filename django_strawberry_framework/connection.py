@@ -57,8 +57,7 @@ from strawberry.types.base import StrawberryContainer
 from strawberry.types.nodes import FragmentSpread, InlineFragment, Selection
 from strawberry.utils.await_maybe import AwaitableOrValue
 
-from .exceptions import ConfigurationError
-from .list_field import _is_async_callable, _validate_djangotype_target
+from .list_field import _validate_relay_djangotype_target
 from .optimizer.extension import apply_connection_optimization
 from .optimizer.plans import (
     WINDOW_ROW_NUMBER,
@@ -67,7 +66,6 @@ from .optimizer.plans import (
     ends_in_unique_column,
 )
 from .optimizer.walker import _relation_connection_to_attr
-from .types.base import _is_relay_shaped
 from .types.relay import (
     _apply_get_queryset_async,
     _apply_get_queryset_sync,
@@ -81,6 +79,7 @@ from .utils.connections import (
     derive_connection_window_bounds,
     has_connection_sidecar_input,
 )
+from .utils.typing import is_async_callable
 
 # Re-export the hoisted deterministic-order predicate under its original
 # private name so the spec-030 ``tests/test_connection.py`` pins keep importing
@@ -923,7 +922,7 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
       pipeline meeting an async ``get_queryset`` raises ``SyncMisuseError`` (the
       Relay-foundation contract); to drive an async ``get_queryset`` hook through
       a connection, supply an ``async def`` ``resolver=`` (below).
-    - **Async consumer-resolver** branch (``_is_async_callable(resolver)``) is an
+    - **Async consumer-resolver** branch (``is_async_callable(resolver)``) is an
       ``async def`` resolver running ``_pipeline_async`` - being ``async def``
       makes the field async, so ``ConnectionExtension.resolve_async`` awaits its
       return and the async ``get_queryset`` / ``apply_async`` hooks run on the
@@ -941,7 +940,7 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
                 order_by_input=order_by_input,
             )
 
-    elif _is_async_callable(resolver):
+    elif is_async_callable(resolver):
 
         async def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
             source = await resolver(root, info)
@@ -1134,34 +1133,23 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
     them; use ``Meta.filterset_class`` / ``Meta.orderset_class`` to shape the
     sidecar arguments.
     """
-    # The four shared ``DjangoType``-target guards (see
-    # ``list_field.py::_validate_djangotype_target`` for the load-bearing
-    # ordering and the own-class ``definition.origin is target_type`` invariant).
-    _validate_djangotype_target(target_type, resolver, field="DjangoConnectionField")
-    # Re-derive ``definition`` for the connection-specific Relay-Node guard
-    # below (and the downstream ``_connection_type_for`` path). The shared
-    # helper does its own internal lookup for guard 3 and returns ``None``.
-    definition = getattr(target_type, "__django_strawberry_definition__", None)
-    # The fifth, connection-specific guard: a connection is only meaningful over
-    # a Relay-Node-shaped type. Reuse the canonical ``_is_relay_shaped(cls,
-    # interfaces)`` predicate (the single source of truth in ``types/base.py``),
-    # which accepts EITHER spelling at construction time:
-    #   * ``relay.Node`` in the declared ``Meta.interfaces`` tuple - the
-    #     Meta-driven spelling. The tuple is populated at class creation, before
-    #     ``finalize_django_types()`` (Phase 2.5 ``apply_interfaces``) injects
-    #     ``relay.Node`` into ``__bases__``, so a plain MRO check
-    #     (``implements_relay_node``) would wrongly reject it at this call site.
-    #   * direct inheritance (``class Foo(DjangoType, relay.Node)``) - ``relay.Node``
-    #     is in ``__bases__`` from class definition, so ``issubclass(target_type,
-    #     relay.Node)`` is already True here. The finalizer fully supports this
-    #     Strawberry-native spelling (it keys Relay finalization off
-    #     ``implements_relay_node``, not a non-empty ``Meta.interfaces``), so the
-    #     connection field accepts it too.
-    if not _is_relay_shaped(target_type, definition.interfaces):
-        raise ConfigurationError(
+    # The four shared ``DjangoType``-target guards plus the connection-specific
+    # Relay-Node-shaped guard, single-sited in
+    # ``list_field.py::_validate_relay_djangotype_target`` (shared with the node
+    # fields per the 0.0.9 DRY pass). Its ``_is_relay_shaped`` check accepts
+    # EITHER spelling at construction time: ``relay.Node`` in the declared
+    # ``Meta.interfaces`` tuple (populated at class creation, before Phase 2.5
+    # ``apply_interfaces`` injects it into ``__bases__`` -- a plain MRO check
+    # would wrongly reject it here) OR direct ``relay.Node`` inheritance.
+    _validate_relay_djangotype_target(
+        target_type,
+        resolver,
+        field="DjangoConnectionField",
+        relay_error_message=(
             "a connection field requires a Relay-Node-shaped DjangoType; add "
-            "`relay.Node` to `Meta.interfaces` (or inherit `relay.Node` directly)",
-        )
+            "`relay.Node` to `Meta.interfaces` (or inherit `relay.Node` directly)"
+        ),
+    )
     return relay.connection(
         _connection_type_for(target_type),
         resolver=_build_connection_resolver(target_type, resolver),

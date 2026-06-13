@@ -1,5 +1,6 @@
 """Typing utility tests for Strawberry, Python, and GraphQL type unwrapping."""
 
+import functools
 import typing
 from typing import Any
 
@@ -8,6 +9,7 @@ import pytest
 from django_strawberry_framework.utils import unwrap_graphql_type
 from django_strawberry_framework.utils.typing import (
     _MAX_TYPE_WRAPPER_DEPTH,
+    is_async_callable,
     unwrap_return_type,
 )
 
@@ -134,3 +136,46 @@ def test_unwrap_graphql_type_passes_through_none():
     """
 
     assert unwrap_graphql_type(None) is None
+
+
+# ---------------------------------------------------------------------------
+# is_async_callable -- shared by the field factories + GlobalID-callable validator
+# ---------------------------------------------------------------------------
+
+
+# These callables are never invoked; ``is_async_callable`` only reads their
+# coroutine-function flags. (Test code is outside the coverage source.)
+async def _async_fn(): ...
+
+
+def _sync_fn(): ...
+
+
+class _AsyncCallable:
+    async def __call__(self): ...
+
+
+class _SyncCallable:
+    def __call__(self): ...
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (_async_fn, True),
+        (_sync_fn, False),
+        (_AsyncCallable(), True),  # async ``__call__`` instance
+        (_SyncCallable(), False),
+        (functools.partial(_async_fn), True),  # partial around an async function
+        (functools.partial(_AsyncCallable()), True),  # partial around an async instance
+        (functools.partial(_sync_fn), False),
+    ],
+)
+def test_is_async_callable_sees_through_instances_and_partials(value, expected):
+    """The predicate sees through async ``__call__`` instances and ``functools.partial`` wrappers.
+
+    These are the shapes ``inspect.iscoroutinefunction`` alone misses; both the
+    public field factories and the GlobalID-callable validator depend on the
+    shared predicate catching them at construction/validation time.
+    """
+    assert is_async_callable(value) is expected

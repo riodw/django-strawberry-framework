@@ -234,7 +234,8 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 │   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
-└── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
+└── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, type unwrapping, and the connection window-bounds / sidecar-kwarg contracts.
+    ├── connections.py            # Shared connection planner/resolver contracts: ``ConnectionWindowBounds`` / ``derive_connection_window_bounds`` (cursor-parity) and the ``CONNECTION_SIDECAR_KWARGS`` family.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── strings.py                # String-case helpers for the GraphQL <-> Django name boundary.
     └── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
@@ -303,7 +304,8 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
 │   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
-└── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
+└── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, type unwrapping, and the connection window-bounds / sidecar-kwarg contracts.
+    ├── connections.py            # Shared connection planner/resolver contracts: ``ConnectionWindowBounds`` / ``derive_connection_window_bounds`` (cursor-parity) and the ``CONNECTION_SIDECAR_KWARGS`` family.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── strings.py                # String-case helpers for the GraphQL <-> Django name boundary.
     └── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
@@ -378,6 +380,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
+    ├── test_connections.py       # Connection-contract tests: window-bounds derivation (last-only limit, forward/reverse) and the sidecar-kwarg helpers.
     ├── test_relations.py         # Relation utility tests for relation_kind classification and package re-exports.
     ├── test_strings.py           # String utility tests for snake_case, camelCase, and PascalCase conversion.
     └── test_typing.py            # Typing utility tests for Strawberry, Python, and GraphQL type unwrapping.
@@ -510,6 +513,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
+    ├── test_connections.py       # Connection-contract tests: window-bounds derivation (last-only limit, forward/reverse) and the sidecar-kwarg helpers.
     ├── test_relations.py         # Relation utility tests for relation_kind classification and package re-exports.
     ├── test_strings.py           # String utility tests for snake_case, camelCase, and PascalCase conversion.
     └── test_typing.py            # Typing utility tests for Strawberry, Python, and GraphQL type unwrapping.

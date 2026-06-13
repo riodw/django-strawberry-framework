@@ -1,181 +1,147 @@
-# DRY review: connection optimizer follow-up
-
-## Executive verdict
-
-All four proposed DRY opportunities are real. The strongest two are the duplicated slice-window derivation and the re-spelled connection sidecar argument names. Those are worth fixing because they sit on optimizer correctness boundaries: plan-time window shape must match resolve-time consumption, and planner/resolver sidecar detection must never drift.
-
-The sync/async pipeline duplication is also real, but the right fix is deliberately small: extract source normalization and sidecar-input helpers, while keeping the sync and async hook application explicit. The cache-key AST traversal duplication is valid too, but it is first-call and maintainability work because the combined result is already memoized per operation during execution.
-
-Recommended order:
-
-1. Extract the window-bound derivation helper.
-2. Centralize sidecar kwarg names and sidecar-input predicates.
-3. Use those sidecar helpers to lightly reduce sync/async pipeline duplication.
-4. Merge the directive and nested-pagination variable collectors into one AST traversal.
-
-## 1. Slice-window derivation
-
-Verdict: valid, highest priority.
-
-Current duplication:
-
-- `django_strawberry_framework/optimizer/walker.py::_connection_window_slice`
-- `django_strawberry_framework/connection.py::_consume_window`
-
-Both call `SliceMetadata.from_arguments`, derive the same `reverse` predicate, use `slice_meta.start` as `offset`, and choose `limit = last if reverse else slice_meta.expected`. The comments explicitly say the resolver mirrors the walker, which is the smell: this is not merely similar code, it is a correctness contract split across two modules.
-
-Why it matters:
-
-The walker decides what rows to prefetch. The connection class later decides whether the annotated rows can be consumed and how to compute cursors/page flags. If the two copies diverge, optimizer-on and optimizer-off behavior can split even when every individual branch looks locally reasonable. The recent last-only and malformed-slice fixes are exactly the kind of change that would be easy to land in one copy and miss in the other.
-
-Best fix:
-
-Extract a private neutral helper that returns a small immutable value object, for example `ConnectionWindowBounds(offset, limit, reverse)`. Put it somewhere both `connection.py` and `optimizer/walker.py` can import without cycles, such as a new private utility module under `django_strawberry_framework/utils/` or another neutral package-private module. Do not put it in `connection.py` or `optimizer/walker.py`.
-
-Suggested shape:
-
-- `derive_connection_window_bounds(info, *, before, after, first, last, max_results) -> ConnectionWindowBounds`
-- The helper should call `SliceMetadata.from_arguments` and own the reverse/limit rule.
-- The walker should keep a thin adapter that reads `sel.arguments`, uses `_relay_max_results_from_info`, applies walker-only int coercion, catches `ValueError` / `TypeError`, and returns `None` for the malformed-slice fallback.
-- The resolver should call the same helper with already-coerced Strawberry resolver arguments and should continue to let pagination errors propagate.
-
-Do not hide the walker-only `_coerce_pagination_int` behavior inside the shared helper unless the helper makes that coercion an explicit option. Resolve-time arguments are already coerced by Strawberry; plan-time converted AST literals are not.
-
-Tests to keep/add:
-
-- Preserve the existing walker tests for inline int literals, variables, over-cap values, malformed cursors, and last-only reverse windows.
-- Add a direct unit test for the shared helper proving `last`-only returns `limit == last`, not `slice_meta.expected`.
-- Keep at least one through-schema parity test for last-only windows so the helper remains tied to real Relay output, not just tuple math.
-
-## 2. Connection sidecar argument names
-
-Verdict: valid, high priority.
-
-Current duplication:
-
-- `django_strawberry_framework/optimizer/walker.py::_CONNECTION_SIDECAR_ARGS`
-- `django_strawberry_framework/connection.py::_pipeline_sync`
-- `django_strawberry_framework/connection.py::_pipeline_async`
-- `django_strawberry_framework/connection.py::_build_connection_resolver`
-- `django_strawberry_framework/connection.py::_build_relation_connection_resolver`
-
-The Python kwarg names `"filter"` and `"order_by"` are repeatedly spelled, and the predicate "does this request carry sidecar input?" is reimplemented as either `filter_input is not None or order_by_input is not None` or `kwargs.get("filter") is None and kwargs.get("order_by") is None`.
-
-Why it matters:
-
-This is a planner/resolver contract. The walker refuses to window-plan sidecar-bearing nested connections; the resolver refuses to consume a window if sidecar kwargs are present. Those two decisions must always use the same kwarg family. A future sidecar such as `search` would currently require synchronized edits in several places, and missing one would risk serving an unfiltered/unsearched prefetch through the fast path.
-
-Best fix:
-
-Centralize the Python kwarg names and the sidecar predicate in a cycle-safe private module. The module should have no dependency on `connection.py` or `optimizer/walker.py`.
-
-Suggested shape:
-
-- `CONNECTION_FILTER_KWARG = "filter"`
-- `CONNECTION_ORDER_KWARG = "order_by"`
-- `CONNECTION_SIDECAR_KWARGS = (CONNECTION_FILTER_KWARG, CONNECTION_ORDER_KWARG)`
-- `connection_sidecar_inputs_from_kwargs(kwargs) -> tuple[Any, Any]`
-- `has_connection_sidecar_input(*, filter_input, order_by_input) -> bool`
-- Optionally `has_connection_sidecar_kwargs(kwargs) -> bool`
-
-Then:
-
-- The walker uses `CONNECTION_SIDECAR_KWARGS` for fallback detection.
-- `_build_connection_resolver` and `_build_relation_connection_resolver` use the extraction helper instead of repeated `kwargs.get(...)`.
-- `_pipeline_sync` and `_pipeline_async` use the predicate helper.
-- `_synthesized_signature` uses the same constants when adding parameters and annotations.
-
-Keep the distinction between Python kwarg names and GraphQL names explicit. The Python name is `order_by`; Strawberry exposes that as `orderBy`. Do not centralize only the display string and then derive the Python kwarg by convention.
-
-Tests to keep/add:
-
-- Existing sidecar SDL tests should continue to prove `filter:` / `orderBy:` are exposed.
-- Existing sidecar fallback tests should continue to prove sidecar input prevents window consumption.
-- Add one focused private-helper test if the helper has branching behavior; otherwise existing integration tests are enough.
-
-## 3. Sync and async connection pipelines
-
-Verdict: valid, but fix narrowly.
-
-Current duplication:
-
-- `django_strawberry_framework/connection.py::_pipeline_sync`
-- `django_strawberry_framework/connection.py::_pipeline_async`
-
-Both functions repeat manager coercion, sidecar-input detection, non-queryset guarding, visibility hook application, filter hook application, order hook application, and finalization. Some duplication is legitimate because sync and async hook application really is different: `_apply_get_queryset_sync` vs `_apply_get_queryset_async`, `apply_sync` vs `apply_async`, and explicit awaits on the async path.
-
-Best fix:
-
-Do not force the whole pipeline through a generic "maybe await" abstraction. That would obscure the sync/async contract and make `SyncMisuseError` behavior harder to audit. Instead extract only the pure or color-agnostic pieces:
-
-- A source normalizer: Manager -> QuerySet, other values unchanged.
-- A sidecar extraction/predicate helper from item 2.
-- A guard helper that applies `_guard_sidecar_input_against_non_queryset` and returns early for non-querysets.
-- Keep `_finalize_queryset` as the already-shared tail.
-
-After that, `_pipeline_sync` and `_pipeline_async` should still visibly show their colored steps:
-
-- sync: `_apply_get_queryset_sync`, `filterset_class.apply_sync`, `orderset_class.apply_sync`
-- async: `await _apply_get_queryset_async`, `await filterset_class.apply_async`, `await orderset_class.apply_async`
-
-This gives the maintainability win without turning a clear pipeline into an abstraction that hides where async work occurs.
-
-Tests to keep/add:
-
-- Existing sync resolver and async resolver tests should stay the primary proof.
-- Add no test-only abstraction tests unless a new helper has a meaningful branch.
-- Ensure non-queryset iterable plus sidecar input still raises the same `GraphQLError` message.
-
-## 4. Cache-key variable collection AST walks
-
-Verdict: valid, lower runtime priority, useful maintainability cleanup.
-
-Current duplication:
-
-- `django_strawberry_framework/optimizer/extension.py::_collect_cache_relevant_var_names`
-- `django_strawberry_framework/optimizer/extension.py::_walk_directives`
-- `django_strawberry_framework/optimizer/extension.py::_walk_pagination_vars`
-
-The result is memoized per operation by `_pagination_var_names_cache`, so nested fallback rows do not repeatedly pay the full traversal. However, the first cache-key build still walks the operation/fragments once for directive variables and once for nested pagination variables. More importantly, both walkers own similar child traversal, fragment-spread descent, and cycle-guard plumbing.
-
-Why it matters:
-
-The two collection rules differ, but the traversal mechanics are the same. Keeping separate walkers makes future fragment-depth or cycle fixes easier to apply to only one path by accident. A single traversal better matches the intended "collect cache-relevant variables for this operation" concept.
-
-Best fix:
-
-Replace the two recursive walkers with one internal traversal that collects both families:
-
-- Directive variables: collect `@skip` / `@include` variable references on every node, independent of depth.
-- Nested pagination variables: collect `first` / `last` / `before` / `after` variable references only when the current node is a `FieldNode` at response-path depth >= 1.
-- Fragment spread directives must still be collected on the spread node itself.
-- Fragment definitions must still be traversed at the spread-site depth, not at raw fragment-definition nesting depth.
-- The visited-fragment cycle guard must remain shared within the traversal.
-
-Preserve thin wrappers for `_collect_directive_var_names` and `_collect_nested_pagination_var_names` if keeping the existing private tests stable is useful. Those wrappers can call the unified collector and return one side of the result. Then `_collect_cache_relevant_var_names` returns the union from a single traversal.
-
-Do not fold `_collect_reachable_fragment_definitions` / `_print_operation_with_reachable_fragments` into this pass unless there is a measured reason. That path has a different output contract: deterministic printed document text, not variable names.
-
-Tests to keep/add:
-
-- Existing directive-variable tests.
-- Existing nested-pagination variable tests, especially root-vs-nested fragment depth.
-- Existing memoization test should be updated to count the unified collector rather than only `_collect_nested_pagination_var_names`.
-- Add one mixed test where the same operation has both a directive variable and a nested pagination variable through a fragment spread, proving one traversal returns both.
-
-## Areas not worth spending time on
-
-These "do not spend time" claims are accurate:
-
-- `_response_key` is already single-sited in `optimizer/walker.py`, with `optimizer/extension.py` importing it.
-- `_relation_connection_to_attr` is already the single `_dst_<field>_connection` builder.
-- Window annotation names are centralized in `optimizer/plans.py`.
-- Deterministic ordering is centralized in `optimizer/plans.py::deterministic_order`.
-- Strictness is centralized through `types/resolvers.py::_check_n1`; `connection.py` does not implement a second checker.
-- The `append_unique` shape is not a DRY problem. `_IndexedList.append_unique` is the optimized indexed method, while module-level `append_unique` is the generic mutator wrapper for callers that only know they have a mutable sequence.
-
-## Implementation guidance
-
-Land this as small mechanical slices, not one broad refactor. The first two items are foundational and should come before pipeline cleanup because they give the later edits a stable vocabulary. Keep each slice covered by behavior tests that exercise real optimizer paths, not just private helper units.
-
-Avoid introducing public API. These helpers are internal contracts between planner and resolver code. Names should be private or package-internal, and docs should reference spec decisions or symbol-qualified paths rather than line numbers.
+# spec-033 build review — post-implementation (2026-06-13)
+
+Rigorous review of the *committed* spec-033 implementation (`4e536697` "Finish spec-033"
+through `c8df425c`), working tree clean. Reviewed against
+[`docs/spec-033-connection_optimizer-0_0_9.md`](spec-033-connection_optimizer-0_0_9.md)
+and against the seven findings the spec absorbed in its Revision 2.
+
+Scope read directly: `optimizer/walker.py` (recognition + `_plan_connection_relation` +
+scalar projection), `optimizer/plans.py` (window helpers + `deterministic_order` +
+partition), `connection.py` (resolver + fast-path consumption), `utils/connections.py`
+(shared bounds), `types/resolvers.py::_check_n1`, `optimizer/extension.py` (cache-key
+collection), `types/finalizer.py` / `types/definition.py` (slot + resolver call site).
+Test coverage, the fakeshop conversion, and the doc sweep were audited by sub-agents and
+spot-checked.
+
+## Verdict
+
+**The implementation is correct and high quality. No blocking correctness bug was found.**
+The mechanism (windowed `Prefetch` under a reserved `to_attr`, annotation fast path,
+pagination-aware cache key, strictness wiring) is faithful to the spec and in several
+places *better* than the spec text it was built from. All seven Revision-2 findings are
+genuinely addressed in code, not just in prose. The findings below are one
+documentation-integrity gap (MED) and four LOW items (a spec/code message divergence and
+three test-strength nits). None block the joint `0.0.9` cut.
+
+## The seven prior findings — verification
+
+| # | Finding | Status in code |
+| --- | --- | --- |
+| 1 | DISTINCT guard | **Done, and hardened.** `walker.py:1309` checks `child_queryset.query.distinct` and returns unplanned. The child is built against a throwaway `sub_plan` (`walker.py:1294`), so the distinct fallback leaks **no** child resolver keys / fk-id elisions / `cacheable=False` into the parent — the parent absorbs child metadata only on the success path (`walker.py:1312-1315`). Cleaner than the spec required. |
+| 2 | Resolver `to_attr` identity | **Done.** `_build_relation_connection_resolver(target_type, accessor_name, relation_field_name, declaring_type)` (`connection.py:991`); `to_attr` keyed on `relation_field_name` (`connection.py:1052`), probe reads it (`connection.py:1056`). Finalizer passes `instance_accessor(field)` *and* `name` (`finalizer.py:436-454`). Reverse-FK-without-`related_name` fast path pinned with real DB models (`book` vs `book_set`). |
+| 3 | Primary-type recognition | **Done + commented + tested.** Nested walk routes through `registry.get(model)` → primary type (`walker.py:192-198`); recognition reads the primary's `relation_connections` (`walker.py:205-234`). A divergent secondary type's connection is never window-planned and stays honestly flagged by strictness keyed under `type_cls` (`finalizer.py:449-453`). `test_secondary_type_relation_shapes_nested_recognition` pins it. |
+| 4 | Cacheable / visibility interaction | **Done.** `has_custom_get_queryset` flips `sub_plan.cacheable=False` (`walker.py:1295`) and propagates to the parent only on success (`walker.py:1314-1315`). Slice-3 cache pins use non-visibility synthetic targets; Slice-5 uses the visibility library shape — different fixtures, as the spec now requires. |
+| 5 | Products cardinality cap | **Done.** The over-cap fixture (`entries == 177 > _RELAY_MAX_RESULTS`) asserts the *capped* page with a `> _RELAY_MAX_RESULTS` guard so the fixture can't drift under the cap; full-set assertions are guarded `< _RELAY_MAX_RESULTS`. `ORDER BY pk` reasoned as a no-op where `id` is the pk. |
+| 6 | Config read is safe | **Confirmed, no change needed.** `relay_max_results` is read-only off the schema config and passed explicitly into `derive_connection_window_bounds`, so plan-time and resolve-time caps are one number. |
+| 7 | Cursor-parity invariant | **Done, single-sourced.** `derive_connection_window_bounds` (`utils/connections.py:84`) is the one `(offset, limit, reverse)` derivation both the walker and resolver call; `deterministic_order` (`plans.py:526`) is the one order rule both the plan-time window and `connection.py::_finalize_queryset` use (`ends_in_unique_column` hoisted, imported back). Decision 5 was reconciled during the build to the forward-row-number cursor scheme the code implements (spec line 302), so spec and code now agree. |
+
+Two choices worth calling out as *improvements* over the spec as authored: the
+throwaway-`sub_plan` isolation on the DISTINCT path (finding 1), and the forward-cursor
+scheme for reversed `last`-only windows — `apply_window_pagination` keeps `_dst_row_number`
+forward in both branches and uses a separate `_dst_row_number_reversed` only for the
+plan-time `__lte` filter (`plans.py:627-657`), consumed as the uniform `_dst_row_number - 1`
+(`connection.py:226-255`). This is the upstream-faithful, byte-parity-correct scheme; the
+spec text was updated to match it.
+
+## Findings
+
+### F1 [MED — documentation integrity] The new module `utils/connections.py` is undocumented and contradicts Decision 11
+
+The DRY refactor (`c8df425c`) extracted `django_strawberry_framework/utils/connections.py`
+(the `ConnectionWindowBounds` / `derive_connection_window_bounds` cursor-parity contract and
+the `CONNECTION_SIDECAR_KWARGS` family). The extraction is the **right call** — it makes the
+plan/resolve window agreement a single source of truth, which is exactly what the
+cursor-parity invariant needs. But the spec was never reconciled:
+
+- Decision 11 still asserts **"no new module"** and enumerates only the six touched modules
+  (spec ~lines 398-406); the Slice-checklist preamble repeats "this card adds **no new
+  source module**" (spec line 50). Both are now false.
+- [`docs/TREE.md`](TREE.md) does **not** list `utils/connections.py` in either `utils/`
+  block (lines ~62-66 / ~133-137), and its `utils` summary line doesn't mention the
+  connection-window-bounds / sidecar-kwarg contracts. TREE.md also asserts tests mirror
+  source one-to-one; the twin `tests/utils/test_connections.py` **does** exist (good), but
+  is likewise undocumented.
+
+A build-deviates-from-its-own-spec gap, not a code defect. **Recommend:** update Decision 11
+to record the justified module addition (or, if the bounded-extension pin is contractual,
+note the exception explicitly), and add `utils/connections.py` + `tests/utils/test_connections.py`
+to TREE.md. Cheap, and it keeps the DoD's "every edit lands in an existing module / no mirror
+tension" claim honest.
+
+### F2 [LOW — spec/code divergence] Strictness message names the relation field, not the generated connection field
+
+`_check_n1` raises `OptimizerError(f"Unplanned N+1: {field_name}{suffix}")` where
+`field_name` is the *relation* field name, so a flagged nested connection reads
+`Unplanned N+1: books (not window-planned: selection carries filter/orderBy; resolving
+per-parent)` (`resolvers.py:188`; pinned by `test_relay_connection.py:1660`). The spec's
+Decision 8 example and Error-shapes section both specify the **generated** field name —
+`Unplanned N+1: books_connection` / `<field>_connection` (spec ~lines 214, 365).
+
+Code and tests are internally consistent, and using the relation-field vocabulary matches
+what list relations emit and what the planned `resolver_key` is built from — a defensible
+choice. But a consumer wrote `booksConnection` and gets told `books`, which is marginally
+less actionable, and it diverges from the spec's literal text. **Recommend:** reconcile —
+either update the spec to the relation-field form (lowest churn, keeps list/connection
+messages uniform), or include the generated connection name in connection-kind flags. Decide
+and pin it.
+
+### F3 [LOW — weak test] `test_window_slice_from_variables` is near-tautological
+
+The test passes an already-resolved `int` and asserts only `prefetch.to_attr ==
+"_dst_books_connection"` — by its own docstring it exercises the *same* code path as the
+literals test and asserts no offset/limit bound. The literals sibling
+(`test_window_slice_from_first_after_literals`) does the real `"> 2"` / `"<= 5"` SQL-bound
+assertion, so this is not a coverage hole — just a redundant test that doesn't independently
+prove variable resolution drives the window. Optional: assert the resolved bound, or drop it
+as redundant.
+
+### F4 [LOW — weak test] `test_both_shape...` discards its `diff_plan_for_queryset` result
+
+The B8-coexistence test asserts the plan shape well (`None` + `_dst_books_connection` both in
+`to_attrs`, `prefetch_throughs == {"books"}`) but the closing `diff_plan_for_queryset(...)`
+call discards its result — a no-error smoke check, not an assertion that the consumer
+accessor prefetch and the `_dst_` window both *survive* the delta un-merged (the
+exact-match/absorption claim the spec edge case makes). Optional: assert the delta keeps both
+lookups.
+
+### F5 [LOW — optional coverage] DISTINCT fallback count-correctness is implied, not executed
+
+`test_distinct_child_queryset_left_unplanned_for_correct_total_count` firmly asserts the
+no-window half (`planned_resolver_keys == ()`, no `_dst_books_connection` prefetch). The
+"…for correct total count" half — that the per-parent fallback returns the right `totalCount`
+for a `.distinct()` target — is structurally implied (falls through to the shipped pipeline)
+but not executed anywhere, because no fakeshop target distincts. The spec only promised a
+live pin "if any library/products target distincts," so this is acceptable. Optional: add a
+package-level test with a `.distinct()` `get_queryset` asserting the fallback `totalCount` is
+correct, so the test name's second clause is earned.
+
+## Adjacent areas — assessed clean
+
+- **Fakeshop (Slices 5–6):** Decision 10 honored exactly (four `DjangoConnectionField` attrs
+  replace four list resolvers; no root Node fields, no `Meta.connection` added). The three
+  `test_products_optimizer_*` pins keep **exact** `==` query counts through the connection
+  wrapper (1 / 3 / 1). `test_library_api` fixed-query-count pins are real: run at 3 vs 10
+  genres and assert `three_count == ten_count == 2`; nested `totalCount` adds zero queries;
+  the visibility window honors `BookType.get_queryset`. No skip/xfail anywhere.
+- **Cache key (Slice 3):** single unified AST traversal (`extension.py:105`), depth model
+  correct (root pagination stays out at depth 0; nested collected at depth ≥ 1; fragment
+  spreads keep spread-site depth), memoized per `id(operation)`. Superset rule and
+  root-in-fragment / fragment-carried-nested cases all pinned.
+- **Strictness (Slice 4):** three-condition guard exact (`planned` present, key absent,
+  `to_attr` absent → flag); `connection_to_attr` probe correct (`resolvers.py:173-176`);
+  union-publish prevents a nested fallback from clobbering the parent's planned set / fk-id
+  elisions (pinned). List-relation `_check_n1` no-regression preserved.
+- **Doc sweep (Slice 7):** GLOSSARY entry flipped to `shipped (0.0.9)` with the mechanism +
+  fallback matrix + `.distinct()`/window-backend caveats; stale `DjangoConnectionField` /
+  `Meta.relation_shapes` / Strictness / Plan-cache caveats swept; README / docs/README
+  updated; CHANGELOG bullets under `[Unreleased]`; **no version bump** (`pyproject.toml` /
+  `__version__` still `0.0.8`, Decision 12 honored). Companion terms CSV present.
+- **No leftover staged seams:** no `TODO(spec-033 …)` / `NotImplementedError` anchors remain
+  in package source.
+
+## Net assessment
+
+Build-ready. Fix **F1** (a one-paragraph spec edit + two TREE.md lines) and **decide F2**
+(message wording) before the cut so the spec doesn't ship internally inconsistent with the
+shipped module set and error text. F3–F5 are test-strength polish that can land in the `035`
+hardening pass. Nothing here argues against cutting `0.0.9`.

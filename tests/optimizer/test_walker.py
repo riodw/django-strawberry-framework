@@ -2401,12 +2401,20 @@ def test_window_slice_from_variables():
     ``sel.arguments`` (Strawberry resolves them during ``convert_selections``),
     so the walker reads the value the same way for a literal or a variable; the
     walker grows no second variable-resolution path (spec-033 Decision 3/4).
+
+    The window BOUND is asserted (not just ``to_attr``) so this independently
+    proves the resolved variable value drives the slice: a resolved variable
+    arrives already as an ``int`` (``5``), distinct from the literals sibling's
+    raw token STRING (``"3"``); both must bound the window. ``first: 5`` with no
+    ``after`` bounds the window to row 5, NOT the ``relay_max_results`` cap of 100.
     """
     registry.clear()
     try:
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
-        # ``arguments`` carries the RESOLVED value (5), as convert_selections produces.
+        # ``arguments`` carries the RESOLVED int value (5), as convert_selections
+        # produces for a variable reference - NOT the raw token string a literal
+        # arrives as.
         plan = plan_optimizations(
             [
                 _conn_sel(
@@ -2421,6 +2429,11 @@ def test_window_slice_from_variables():
         )
         prefetch = _prefetch_entry(plan)
         assert prefetch.to_attr == "_dst_books_connection"
+        sql = str(prefetch.queryset.query).upper()
+        assert "_DST_ROW_NUMBER" in sql
+        # offset 0 + first 5 -> bounded to row 5, NOT the relay_max_results cap.
+        assert "<= 5" in sql
+        assert "<= 100" not in sql
     finally:
         registry.clear()
 
@@ -2856,10 +2869,19 @@ def test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch(
         assert None in to_attrs
         assert "_dst_books_connection" in to_attrs
         assert prefetch_throughs == {"books"}
-        # A consumer accessor prefetch on "books" is a distinct lookup that diff
-        # reconciliation never merges with the window.
+        # A consumer accessor prefetch on "books" is reconciled against the plan:
+        # the list sibling (a Prefetch carrying a queryset) losslessly absorbs the
+        # consumer's bare "books" string, while the window (prefetch_to
+        # "_dst_books_connection", a distinct lookup) passes through untouched. The
+        # delta must therefore STILL carry both lookups un-merged - the
+        # exact-match/absorption claim the Decision-4 ``to_attr``-isolation edge
+        # case makes - not collapse one of them.
         consumer_qs = Genre.objects.prefetch_related("books")
-        _delta, _qs = diff_plan_for_queryset(plan.finalize(), consumer_qs)
+        delta, _qs = diff_plan_for_queryset(plan.finalize(), consumer_qs)
+        delta_to_attrs = {getattr(pf, "to_attr", None) for pf in delta.prefetch_related}
+        assert None in delta_to_attrs
+        assert "_dst_books_connection" in delta_to_attrs
+        assert {pf.prefetch_through for pf in delta.prefetch_related} == {"books"}
     finally:
         registry.clear()
 

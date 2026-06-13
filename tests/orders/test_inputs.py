@@ -295,6 +295,52 @@ def test_normalize_input_value_returns_empty_for_none_input():
     assert normalize_input_value(OrderSet, None) == []
 
 
+def test_normalize_input_value_raw_dict_matches_dataclass_form():
+    """A raw-dict order input flattens identically to the dataclass form.
+
+    The 0.0.9 DRY pass routed ``normalize_input_value`` through the shared
+    ``utils/input_values.py::iter_active_fields`` classifier (``docs/feedback.md``
+    Major 1), whose ``iter_input_items`` walk accepts the dict shape as well as
+    the Strawberry input dataclass. This pins the feedback's required equivalence
+    -- dataclass and raw-dict forms (including a nested ``RelatedOrder`` branch)
+    produce the same flattened ``(field_path, direction)`` tuples.
+    """
+    from apps.library.models import Book, Shelf
+
+    from django_strawberry_framework.orders import OrderSet, RelatedOrder
+    from django_strawberry_framework.orders.factories import OrderArgumentsFactory
+    from django_strawberry_framework.orders.inputs import normalize_input_value
+
+    # Distinct class names so the ``OrderArgumentsFactory`` collision registry
+    # (not reset between tests in this module) does not clash with the sibling
+    # ``BookOrder`` / ``ShelfOrder`` fixtures above.
+    class ShelfOrderDictEq(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class BookOrderDictEq(OrderSet):
+        shelf = RelatedOrder(ShelfOrderDictEq, field_name="shelf")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(BookOrderDictEq)
+    BookInput = factory.arguments
+    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderDictEqInputType"]
+
+    dataclass_form = normalize_input_value(
+        BookOrderDictEq,
+        BookInput(title=Ordering.ASC, shelf=ShelfInput(code=Ordering.DESC)),
+    )
+    dict_form = normalize_input_value(
+        BookOrderDictEq,
+        {"title": Ordering.ASC, "shelf": {"code": Ordering.DESC}},
+    )
+    assert dataclass_form == dict_form == [("title", Ordering.ASC), ("shelf__code", Ordering.DESC)]
+
+
 # ---------------------------------------------------------------------------
 # Slice 2 - build_input_class
 # ---------------------------------------------------------------------------

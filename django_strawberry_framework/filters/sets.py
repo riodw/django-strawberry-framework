@@ -36,6 +36,13 @@ from ..sets_mixins import (
     expanded_once,
 )
 from ..types.relay import implements_relay_node
+from ..utils.input_values import (
+    LOGIC,
+    RELATED,
+    SetInputTraversal,
+    is_inactive_value,
+    iter_active_fields,
+)
 from ..utils.permissions import (
     active_permission_field_paths,
     active_related_branches,
@@ -676,43 +683,45 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         if items is None:
             return {}
 
-        # Related-branch keys are owned by the apply pipeline's
-        # `_apply_related_constraints` step (which constrains the parent
-        # queryset before instantiation); leaving them in the form-data
-        # dict would cause `django-filter`'s form validation to reject
-        # the nested-dict shape.
-        related_filters = getattr(cls, "related_filters", {}) or {}
-        related_keys = set(related_filters.keys())
-
         all_filters = cls.get_filters() if cls._meta.model is not None else {}
 
+        # The dataclass-vs-dict walk, the ``None`` / ``UNSET`` active-input skip,
+        # the ``_field_specs`` lookup, and the leaf / related / logic
+        # classification are the shared traversal mechanics owned by
+        # ``utils/input_values.py::iter_active_fields`` (the 0.0.9 DRY pass,
+        # ``docs/feedback.md`` Major 1). Each yielded ``ActiveField`` is
+        # dispatched here by ``kind``: ``LOGIC`` copies the raw sub-tree under
+        # its ``django-filter`` wire key, ``RELATED`` is stripped (owned by
+        # ``_apply_related_constraints``, since the parent form cannot validate a
+        # nested-dict shape), and ``LEAF`` runs the per-field operator-bag /
+        # range normalization that stays local to the filter family.
         data: dict[str, Any] = {}
         logic_lookup = dict(_LOGIC_KEYS)
-        for python_attr, raw_value in items:
-            # Strawberry input dataclasses default unsupplied fields to
-            # ``strawberry.UNSET``; treat it the same as ``None`` so the
-            # form sees only consumer-supplied keys.
-            if raw_value is None or raw_value is UNSET:
+        config = SetInputTraversal(
+            field_specs=_field_specs,
+            related_attr="related_filters",
+            logic_keys=_LOGIC_PYTHON_ATTRS,
+            unset_sentinel=UNSET,
+        )
+        for field in iter_active_fields(cls, input_value, config):
+            if field.kind == LOGIC:
+                data[logic_lookup[field.python_attr]] = field.raw_value
                 continue
-            if python_attr in logic_lookup:
-                data[logic_lookup[python_attr]] = raw_value
-                continue
-            if python_attr in related_keys:
+            if field.kind == RELATED:
                 # Related branches travel through `_apply_related_constraints`,
                 # not the parent form.
                 continue
-            spec = _field_specs.get((cls, python_attr))
-            django_source_path = spec.django_source_path if spec is not None else None
+            django_source_path = field.spec.django_source_path if field.spec is not None else None
             # Per spec-027 L518-605 (per-field operator bag), top-
             # level scalar fields wrap a nested ``<Field>FilterInputType``
             # dataclass whose attrs map to ``django-filter`` lookups
             # (``exact`` / ``i_contains`` / ``in_`` / ...). Iterate the bag
             # to produce ``<source>__<lookup>`` form-data keys.
-            bag_items = cls._operator_bag_items(raw_value)
+            bag_items = cls._operator_bag_items(field.raw_value)
             if bag_items is not None:
-                base_path = django_source_path or cls._form_key_for_python_attr(python_attr)
+                base_path = django_source_path or cls._form_key_for_python_attr(field.python_attr)
                 for lookup_attr, lookup_value in bag_items:
-                    # Mirror the outer loop's UNSET guard so a partially-
+                    # Mirror the classifier's active-input rule so a partially-
                     # supplied operator bag (e.g.
                     # ``title: { exact: UNSET, icontains: "foo" }``) does
                     # not leak the UNSET sentinel through to
@@ -721,7 +730,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                     # ``UNSET`` rather than ``None``, so this is the
                     # common case for any consumer who fills some but
                     # not all lookups.
-                    if lookup_value is None or lookup_value is UNSET:
+                    if is_inactive_value(lookup_value, unset_sentinel=UNSET):
                         continue
                     django_lookup = cls._form_key_for_python_attr(lookup_attr)
                     form_key = (
@@ -743,12 +752,16 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                     else:
                         data[form_key] = normalized
                 continue
-            form_key = django_source_path or cls._form_key_for_python_attr(python_attr)
+            form_key = django_source_path or cls._form_key_for_python_attr(field.python_attr)
             filter_instance = all_filters.get(form_key)
             if filter_instance is None:
-                data[form_key] = raw_value
+                data[form_key] = field.raw_value
                 continue
-            normalized = normalize_input_value(filter_instance, raw_value, field_name=form_key)
+            normalized = normalize_input_value(
+                filter_instance,
+                field.raw_value,
+                field_name=form_key,
+            )
             if isinstance(normalized, dict):
                 # Range-filter patch: multiple positional form keys for
                 # one Strawberry attribute.
@@ -1264,7 +1277,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             cls,
             input_value,
             field_specs=_field_specs,
-            related_keys=set(getattr(cls, "related_filters", {}) or {}),
+            related_attr="related_filters",
             logic_keys=_LOGIC_PYTHON_ATTRS,
             fallback_path=cls._form_key_for_python_attr,
             unset_sentinel=UNSET,

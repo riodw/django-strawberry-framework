@@ -25,12 +25,34 @@ cycle -- same contract as ``utils/connections.py`` / ``utils/inputs.py``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from django.http import HttpRequest
 
 from ..exceptions import ConfigurationError
+from .input_values import (
+    LEAF,
+    RELATED,
+    SetInputTraversal,
+    is_inactive_value,
+    iter_active_fields,
+    iter_input_items,
+)
+
+# ``iter_input_items`` is single-sited in ``utils/input_values.py`` (the 0.0.9
+# DRY pass, ``docs/feedback.md`` Major 1). Re-exported here so the existing
+# ``from ..utils.permissions import iter_input_items`` consumers (``filters/sets.py``,
+# the permission test suite) keep their import path.
+__all__ = [
+    "active_permission_field_paths",
+    "active_related_branches",
+    "extract_branch_value",
+    "invoke_permission_method",
+    "iter_input_items",
+    "request_from_info",
+    "run_active_input_permission_checks",
+]
 
 
 def request_from_info(info: Any, *, family_label: str) -> Any:
@@ -59,23 +81,6 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     )
 
 
-def iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
-    """Walk a dict or Strawberry-input dataclass into ``(name, value)`` pairs.
-
-    Returns ``None`` when ``input_value`` is neither a dict nor an object
-    carrying ``__dataclass_fields__`` (the Strawberry-input sniff used
-    package-wide -- faster than ``dataclasses.is_dataclass`` and matches the
-    shape upstream uses to introspect input classes). Returns ``[]`` for a
-    walkable-but-empty input.
-    """
-    if isinstance(input_value, dict):
-        return list(input_value.items())
-    dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
-    if dataclass_fields is None:
-        return None
-    return [(name, getattr(input_value, name)) for name in dataclass_fields]
-
-
 def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: Any = None) -> Any:
     """Return the value at ``field_name`` on a dataclass-or-dict input.
 
@@ -85,6 +90,12 @@ def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: A
     Strawberry input dataclasses default unsupplied fields to ``UNSET``; the
     order side leaves it ``None`` (its inputs default to ``None``), which makes
     the sentinel check a harmless ``value is None`` no-op.
+
+    Shares the active-value rule with every traversal surface via
+    ``input_values.is_inactive_value`` (the 0.0.9 DRY pass, ``docs/feedback.md``
+    Major 1). Used by the filter side's logical-branch pre-walk
+    (``_collect_nested_visibility_querysets_async``) to read ``and_`` / ``or_`` /
+    ``not_`` arms off the raw input.
     """
     if input_value is None:
         return None
@@ -92,9 +103,7 @@ def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: A
         value = input_value.get(field_name)
     else:
         value = getattr(input_value, field_name, None)
-    if value is unset_sentinel:
-        return None
-    return value
+    return None if is_inactive_value(value, unset_sentinel=unset_sentinel) else value
 
 
 def invoke_permission_method(
@@ -140,37 +149,33 @@ def active_related_branches(
     ``handle_top_level_list`` (order side) walks each dataclass element of a
     top-level list separately so the parent gate fires once per active branch
     occurrence (the caller's ``_fired`` dedup collapses repeats per class).
+
+    Consumes the shared ``iter_active_fields`` classifier (the 0.0.9 DRY pass,
+    ``docs/feedback.md`` Major 1), keeping the ``RELATED`` records; the yield
+    order is the input-iteration order rather than the declared-collection order,
+    which is immaterial here (the per-class ``_fired`` dedup, the AND-commutative
+    ``_apply_related_constraints`` narrowing, and the field-name-keyed visibility
+    map are all order-independent).
     """
-    related = getattr(cls, related_attr, {})
-    if not related:
-        return []
-    active: list[tuple[str, Any, Any]] = []
-    if handle_top_level_list and isinstance(input_value, list):
-        for element in input_value:
-            active.extend(
-                active_related_branches(
-                    cls,
-                    element,
-                    related_attr=related_attr,
-                    unset_sentinel=unset_sentinel,
-                    handle_top_level_list=handle_top_level_list,
-                ),
-            )
-        return active
-    for field_name, related_obj in related.items():
-        child_input = extract_branch_value(input_value, field_name, unset_sentinel=unset_sentinel)
-        if child_input is None:
-            continue
-        active.append((field_name, related_obj, child_input))
-    return active
+    config = SetInputTraversal(
+        field_specs={},
+        related_attr=related_attr,
+        unset_sentinel=unset_sentinel,
+        handle_top_level_list=handle_top_level_list,
+    )
+    return [
+        (field.python_attr, field.related_obj, field.raw_value)
+        for field in iter_active_fields(cls, input_value, config)
+        if field.kind == RELATED
+    ]
 
 
 def active_permission_field_paths(
     cls: type,
     input_value: Any,
     *,
-    field_specs: dict[Any, Any],
-    related_keys: set[str],
+    field_specs: Mapping[Any, Any],
+    related_attr: str,
     logic_keys: frozenset[str],
     fallback_path: Callable[[str], str],
     unset_sentinel: Any = None,
@@ -178,50 +183,38 @@ def active_permission_field_paths(
 ) -> list[str]:
     """Return the base Django source path for each active top-level field.
 
-    Drives the per-field gate dispatch: one entry per supplied top-level field,
-    keyed on its ``django_source_path`` (the lookup-free source field) from
-    ``field_specs[(cls, python_attr)]`` so ``check_<field>_permission`` fires
-    once for a field no matter which lookups the consumer populated. Fields with
-    no field-spec entry fall back to ``fallback_path(python_attr)`` (the filter
-    side maps lookup attrs back to form keys; the order side uses the attr
+    Drives the per-field gate dispatch: one entry per supplied top-level LEAF
+    field, keyed on its ``django_source_path`` (the lookup-free source field)
+    from ``field_specs[(cls, python_attr)]`` so ``check_<field>_permission``
+    fires once for a field no matter which lookups the consumer populated. Fields
+    with no field-spec entry fall back to ``fallback_path(python_attr)`` (the
+    filter side maps lookup attrs back to form keys; the order side uses the attr
     verbatim).
 
-    ``logic_keys`` (filter ``and_`` / ``or_`` / ``not_``) and ``related_keys``
-    are excluded -- the former are walked by the logical-branch recursion, the
-    latter by the related-branch loop. ``None`` / ``unset_sentinel`` values are
-    skipped (active-input-only). ``handle_top_level_list`` (order side)
-    aggregates across the elements of a top-level list input.
+    Logical operators (``logic_keys`` -- filter ``and_`` / ``or_`` / ``not_``)
+    and related branches (recognized off ``related_attr`` on ``cls``) are
+    excluded -- the former are walked by the logical-branch recursion, the latter
+    by the related-branch loop -- because the shared ``iter_active_fields``
+    classifier marks them ``LOGIC`` / ``RELATED`` and only the ``LEAF`` records
+    are kept. ``None`` / ``unset_sentinel`` values are skipped (active-input-only)
+    and ``handle_top_level_list`` (order side) aggregates across the elements of
+    a top-level list input -- both handled inside the classifier (the 0.0.9 DRY
+    pass, ``docs/feedback.md`` Major 1).
     """
-    if input_value is None or input_value is unset_sentinel:
-        return []
-    if handle_top_level_list and isinstance(input_value, list):
-        paths: list[str] = []
-        for element in input_value:
-            paths.extend(
-                active_permission_field_paths(
-                    cls,
-                    element,
-                    field_specs=field_specs,
-                    related_keys=related_keys,
-                    logic_keys=logic_keys,
-                    fallback_path=fallback_path,
-                    unset_sentinel=unset_sentinel,
-                    handle_top_level_list=handle_top_level_list,
-                ),
-            )
-        return paths
-    items = iter_input_items(input_value)
-    if items is None:
-        return []
-    paths = []
-    for python_attr, raw_value in items:
-        if raw_value is None or raw_value is unset_sentinel:
-            continue
-        if python_attr in logic_keys or python_attr in related_keys:
-            continue
-        spec = field_specs.get((cls, python_attr))
-        paths.append(spec.django_source_path if spec is not None else fallback_path(python_attr))
-    return paths
+    config = SetInputTraversal(
+        field_specs=field_specs,
+        related_attr=related_attr,
+        logic_keys=logic_keys,
+        unset_sentinel=unset_sentinel,
+        handle_top_level_list=handle_top_level_list,
+    )
+    return [
+        field.spec.django_source_path
+        if field.spec is not None
+        else fallback_path(field.python_attr)
+        for field in iter_active_fields(cls, input_value, config)
+        if field.kind == LEAF
+    ]
 
 
 def run_active_input_permission_checks(

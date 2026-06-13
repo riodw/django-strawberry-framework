@@ -217,6 +217,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
 │   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
 │   ├── plans.py                  # ``OptimizationPlan`` plus the window-pagination + deterministic-order helpers the walker applies.
+│   ├── selections.py             # Selection-tree traversal substrate - the AST + converted-selection adapters shared by the optimizer cache-key walk, the plan walker, and the connection ``totalCount`` detection.
 │   └── walker.py                 # Selection-tree walker (incl. the shared ``edges { node }`` unwrap helpers and nested-connection windowed-``Prefetch`` planning) that converts GraphQL selections into an ``OptimizationPlan``.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
@@ -236,6 +237,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
 └── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, type unwrapping, and the connection window-bounds / sidecar-kwarg contracts.
     ├── connections.py            # Shared connection planner/resolver contracts: ``ConnectionWindowBounds`` / ``derive_connection_window_bounds`` (cursor-parity) and the ``CONNECTION_SIDECAR_KWARGS`` family.
+    ├── inputs.py                 # Generated-input substrate shared by the filter / order families: field specs, the BFS arguments-factory base, materialization, and namespace clearing.
+    ├── permissions.py            # Active-input permission-traversal substrate shared by ``FilterSet`` / ``OrderSet`` (request resolution, branch walking, per-field gate dispatch).
+    ├── querysets.py              # Query-source + ``DjangoType.get_queryset`` visibility contract: Manager coercion, ``initial_queryset``, sync/async visibility, and ``SyncMisuseError``.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── strings.py                # String-case helpers for the GraphQL <-> Django name boundary.
     └── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
@@ -285,6 +289,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
 │   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
 │   ├── plans.py                  # ``OptimizationPlan`` plus the window-pagination + deterministic-order helpers the walker applies.
+│   ├── selections.py             # Selection-tree traversal substrate - the AST + converted-selection adapters shared by the optimizer cache-key walk, the plan walker, and the connection ``totalCount`` detection.
 │   └── walker.py                 # Selection-tree walker (incl. the shared ``edges { node }`` unwrap helpers and nested-connection windowed-``Prefetch`` planning) that converts GraphQL selections into an ``OptimizationPlan``.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
@@ -306,6 +311,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
 └── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, type unwrapping, and the connection window-bounds / sidecar-kwarg contracts.
     ├── connections.py            # Shared connection planner/resolver contracts: ``ConnectionWindowBounds`` / ``derive_connection_window_bounds`` (cursor-parity) and the ``CONNECTION_SIDECAR_KWARGS`` family.
+    ├── inputs.py                 # Generated-input substrate shared by the filter / order families: field specs, the BFS arguments-factory base, materialization, and namespace clearing.
+    ├── permissions.py            # Active-input permission-traversal substrate shared by ``FilterSet`` / ``OrderSet`` (request resolution, branch walking, per-field gate dispatch).
+    ├── querysets.py              # Query-source + ``DjangoType.get_queryset`` visibility contract: Manager coercion, ``initial_queryset``, sync/async visibility, and ``SyncMisuseError``.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── strings.py                # String-case helpers for the GraphQL <-> Django name boundary.
     └── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.

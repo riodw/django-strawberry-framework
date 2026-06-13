@@ -162,6 +162,8 @@ Retrospective notes must stay general. Describe recurring issue types and workfl
 
 Always use the **Django ORM** (`manage.py shell`, `.save()` / `.objects.create()` / `import_spec_terms`), never raw SQL: kanban models (`SpecDoc`, `CardGlossaryTerm`, `Card`, …) get a `UUIDModel` side-row created by a `post_save` signal, and the build queries request `uuid { id }`; a raw `INSERT` skips the side-row and breaks the GraphQL render.
 
+**Verify card/glossary references against the DB before editing — plan and spec text can be wrong.** A spec or plan that names a card (`TODO-…-NNN`), a glossary anchor, or a `CardItem` to edit can carry a stale or mis-numbered reference; the rendered `KANBAN.md` is not the ground truth either. Confirm with `Card.objects.get(number=…)` / `GlossaryTerm.objects.get(anchor=…)` before mutating. When a reference is wrong **across multiple surfaces** (e.g. the same mis-numbered card id in the spec, in source comments, and in a standing doc), do **not** partial-fix one surface — a spec-only correction that diverges from un-editable source/doc copies is worse than uniformly-wrong. Record the cluster as a maintainer / next-spec-author follow-up in the deferred-work catalog and leave all surfaces consistent.
+
 ### DONE-card invariants (enforced by `examples/fakeshop/apps/kanban/signals.py`)
 
 A card cannot be saved with `status.key == "done"` unless it has BOTH:

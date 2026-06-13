@@ -50,6 +50,8 @@ Worker 3 must not:
 10. Set the artifact `Status:` line to `review-accepted` (every High/Medium/Low finding addressed or intentionally rejected with a recorded reason) or `revision-needed`.
 11. Append a memory entry only when the pass reaches an accepted state.
 
+**Wire-shape conversions span all three test trees.** When the diff changes a root or relation field's wire shape (list→connection, or any change to the `edges` / `node` / argument envelope), independently grep all three `AGENTS.md` test trees (`tests/`, `examples/fakeshop/apps/<app>/tests/`, `examples/fakeshop/test_query/`) for the converted field name — do not trust the slice's enumerated file list. A tree the slice missed re-pinning stays green in the per-pass diff (the stale file is never in the diff) and only fails at the final `pytest` sweep, costing a late re-loop. A stale untouched tree is a Medium finding.
+
 ### Acceptance gate
 
 Set `review-accepted` only when:
@@ -115,6 +117,8 @@ Flag:
 - branch structures that duplicate an existing code path with small differences
 - new modules that own responsibilities already covered elsewhere
 - helpers extracted too early that hide simple readable logic
+
+Before flagging a duplication as a consolidation target, grep its readers — a "constant/helper pair" can be **dead code** (zero readers) rather than a live duplication, where the fix is deletion, not extraction. Verify the duplication is live before recommending a shared shape.
 
 Recommend the most readable reusable shape, not the most abstract shape.
 

@@ -119,6 +119,13 @@ Tests themselves are still in scope:
 
 If gap-discovery feels intractable, escalate to the maintainer rather than running coverage.
 
+### Query-shape tests must pin the load-bearing property, not observability
+
+A test that asserts only that an optimization is *observable* — an annotation is present, a column was added — does not prove the optimization *happened*. For ORM-shape work especially, the wire result is frequently identical whether the query was optimized or fell back to an N+1, so a wire-only or annotation-only assertion is non-distinguishing. Pin the load-bearing property directly:
+
+- **Batched/windowed/prefetch vs. N+1:** assert the **query count at two or more parent cardinalities** — equal count across cardinalities means the work is batched; count scaling with cardinality means N+1. An equality-only assertion is vacuous unless paired with an **absolute** expected count (some fallback shapes are also "equal across runs"). Derive the absolute count from a real run; never guess it.
+- **Right-path tests:** confirm the query under test actually exercises the intended path. An argument that silently routes a selection to a fallback (e.g. a sidecar `filter:` / `orderBy:` that disables a planned optimization) makes a "fast-path" test pass while pinning the fallback. Keep the test's query minimal so it can only take the path it claims to test.
+
 ## Required plan structure
 
 `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` must begin with:

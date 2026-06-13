@@ -68,6 +68,10 @@ For the current slice:
 
 The plan must prefer small, reusable helpers over duplicated local logic. If a helper would be premature, say why and name the condition that would justify extracting it later.
 
+### Wire-shape conversions touch all three test trees
+
+When a slice changes a root or relation field's wire shape (a list field becoming a connection, or any change to the `edges` / `node` / argument envelope a consumer query must use), the plan must require re-pinning **every** test tree that exercises that field — not just the one the spec slice text names. `AGENTS.md` defines three: package `tests/`, per-app non-live `examples/fakeshop/apps/<app>/tests/` (in-process `schema.execute_sync`), and live `examples/fakeshop/test_query/` (HTTP). A per-pass `git diff` review stays green on a stale tree because the un-re-pinned file is never in the diff — the full `pytest` sweep at the final gate is the first run to execute it, turning a missed tree into a late re-loop. Plan the grep (`grep -rn <converted field name>` across all three trees) as an explicit test step.
+
 ### DRY analysis shape
 
 The `Plan (Worker 1)` section's DRY analysis answers three questions explicitly, each as a bullet that cites file paths and line ranges:
@@ -118,6 +122,8 @@ Check:
 - misplaced responsibilities between modules
 - public API/export drift
 - comments and docs telling inconsistent stories
+
+Before recommending a consolidation for a flagged duplication, grep the candidate's **readers** across `django_strawberry_framework/`, `tests/`, and `examples/`. A flagged "constant/helper pair" can turn out to be **dead code** (zero readers) rather than a live duplication — in which case the higher-quality fix is delete-and-trim, not extract-a-shared-source. Confirm the duplication is live before designing the shared shape.
 
 If consolidation is needed, record the work and ask Worker 0 to dispatch Worker 2 and Worker 3. After the consolidation loop, re-run the integration pass.
 

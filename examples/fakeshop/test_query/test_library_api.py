@@ -3408,3 +3408,74 @@ def test_nested_connection_first_zero_empty_page_live():
     conn = payload["data"]["allLibraryGenres"][0]["booksConnection"]
     assert conn["edges"] == []
     assert conn["pageInfo"]["hasNextPage"] is True
+
+
+_EMPTY_PARENT_GENRES_CONNECTION_QUERY = """
+    query {
+      allLibraryBooks {
+        genresConnection(first: 2) {
+          totalCount
+          edges { node { name } }
+          pageInfo { hasNextPage hasPreviousPage }
+        }
+      }
+    }
+    """
+
+
+@pytest.mark.django_db
+def test_nested_empty_parent_serves_zero_total_count_no_fallback_live():
+    """A genuinely-empty parent is fast-path-served zero live - NOT per-parent fallback.
+
+    The contrast with ``test_nested_connection_first_zero_empty_page_live``: that
+    is the AMBIGUOUS empty window (``first: 0``, ``limit == 0``) which falls back
+    per parent; this is the UNAMBIGUOUS empty window (``offset == 0``,
+    ``limit > 0``, no related rows) the fast path serves directly -
+    ``totalCount = 0``, no cursors, both ``pageInfo`` flags ``False`` - WITHOUT a
+    per-parent fallback query (spec-033 Decision 5 / the ``Parents with no
+    related rows`` edge case). Rides ``genresConnection`` (target ``GenreType``,
+    ``total_count`` on) so ``totalCount`` exists.
+
+    This earns LIVE the behavior the package-level
+    ``test_fast_path_genuinely_empty_parent_serves_zero`` pins in-process
+    (``tests/test_relay_connection.py``): the README's live-HTTP-first rule
+    requires a fakeshop-expressible coverage line to be earned here, and a book
+    with zero genres expresses it. The no-fallback claim is held the same way
+    the sibling fixed-query-count pins hold theirs - the captured count is
+    INDEPENDENT of the number of empty parents (a per-parent fallback would
+    scale with it).
+    """
+
+    def _run(book_count: int) -> tuple[int, dict]:
+        shelf = _seed_shelf()
+        # Each book carries ZERO genres: the genuinely-empty window shape.
+        for index in range(book_count):
+            models.Book.objects.create(title=f"Genre-less-{index}", shelf=shelf)
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(_EMPTY_PARENT_GENRES_CONNECTION_QUERY)
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        return len(captured), payload
+
+    three_count, three_payload = _run(3)
+    three_books = three_payload["data"]["allLibraryBooks"]
+    assert len(three_books) == 3
+    for book in three_books:
+        conn = book["genresConnection"]
+        assert conn["edges"] == []
+        assert conn["totalCount"] == 0
+        assert conn["pageInfo"] == {"hasNextPage": False, "hasPreviousPage": False}
+
+    # Reset to an empty library, then re-run with more empty parents.
+    models.Book.objects.all().delete()
+    models.Shelf.objects.all().delete()
+    models.Branch.objects.all().delete()
+
+    eight_count, eight_payload = _run(8)
+    assert len(eight_payload["data"]["allLibraryBooks"]) == 8
+
+    # The load-bearing pin: equal query count across 3 vs 8 empty parents -
+    # the genuinely-empty parents are served from the single window prefetch,
+    # never a per-parent fallback (which would make the count scale).
+    assert three_count == eight_count

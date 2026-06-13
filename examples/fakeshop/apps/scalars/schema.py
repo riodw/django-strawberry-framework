@@ -30,7 +30,7 @@ import strawberry
 from strawberry.types import Info
 
 from apps.scalars import filters, models, orders
-from django_strawberry_framework import BigInt, DjangoType
+from django_strawberry_framework import BigInt, DjangoType, auto
 from django_strawberry_framework.filters import filter_input_type
 from django_strawberry_framework.orders import order_input_type
 
@@ -118,7 +118,7 @@ class NullableScalarSpecimenType(DjangoType):
 
 
 class OverriddenScalarSpecimenType(DjangoType):
-    """Demonstrates the four consumer-authored field-override corners (spec-029).
+    """Demonstrates the consumer-authored field corners (spec-029) plus ``auto``.
 
     ``_build_annotations`` skips auto-synthesis for any consumer-authored field,
     so ``manage.py inspect_django_type OverriddenScalarSpecimenType`` names the row
@@ -137,11 +137,22 @@ class OverriddenScalarSpecimenType(DjangoType):
       (``consumer annotation + strawberry.field (scalar)``).
     * ``label`` - an assigned ``@strawberry.field`` resolver shadowing the column
       (``consumer strawberry.field (scalar)``).
+
+    The fifth corner is the inverse of the four overrides:
+
+    * ``note`` - declared as ``note: auto``. ``auto`` is "declare-but-infer": the
+      field is listed as a class annotation (so every field is co-located here
+      rather than split between annotations and the ``Meta.fields`` tuple), but its
+      type is synthesized from the model exactly as bare selection would
+      (``TextField`` -> ``String!``). It is *not* a consumer override, so its
+      converter column still names the auto ``SCALAR_MAP`` row. Selection still
+      belongs to ``Meta.fields``; ``auto`` never adds a field.
     """
 
     quantity: float | None
     token: str
     score: int = strawberry.field(resolver=lambda root: root.score)
+    note: auto
 
     @strawberry.field
     def label(self) -> str:
@@ -156,6 +167,7 @@ class OverriddenScalarSpecimenType(DjangoType):
             "quantity",
             "score",
             "token",
+            "note",
         )
 
 

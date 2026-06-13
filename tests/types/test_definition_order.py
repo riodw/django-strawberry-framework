@@ -11,7 +11,7 @@ from apps.products.models import Category, Entry, Item, Property
 from django.db import models
 from strawberry import relay
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework import DjangoType, auto, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.base import _build_annotations
@@ -453,6 +453,143 @@ def test_annotation_only_scalar_override_survives_strawberry_finalization():
     description_type = fields["description"]
     assert description_type["kind"] == "NON_NULL"
     assert description_type["ofType"]["name"] == "Int"
+
+
+# ---------------------------------------------------------------------------
+# ``field: auto`` - declare-but-infer (the fifth corner of the override surface).
+# ---------------------------------------------------------------------------
+
+
+def test_auto_annotation_synthesizes_model_inferred_scalar_type():
+    """``name: auto`` keeps the field selected but infers its type from the model."""
+
+    class CategoryType(DjangoType):
+        name: auto
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+
+    finalize_django_types()
+
+    # Resolved to the model-inferred scalar, not the ``auto`` sentinel / ``Any``.
+    assert CategoryType.__annotations__["name"] is str
+    assert _strawberry_field(CategoryType, "name").type is str
+
+
+def test_auto_annotation_is_not_a_consumer_override():
+    """An ``auto`` field routes back into synthesis, not the consumer-authored union."""
+
+    class CategoryType(DjangoType):
+        name: auto
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert "name" not in definition.consumer_annotated_scalar_fields
+    assert "name" not in definition.consumer_authored_fields
+
+
+def test_auto_annotation_emits_synthesized_annotation():
+    """Unlike a real override, an ``auto`` field IS present in the synthesized dict."""
+
+    class CategoryType(DjangoType):
+        name: auto
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+
+    definition = CategoryType.__django_strawberry_definition__
+    synthesized, _pending = _build_annotations(
+        CategoryType,
+        definition.selected_fields,
+        source_model=Category,
+        field_map=definition.field_map,
+        consumer_authored_fields=definition.consumer_authored_fields,
+        interfaces=definition.interfaces,
+    )
+    assert synthesized["name"] is str
+
+
+def test_auto_annotation_survives_strawberry_finalization():
+    """End-to-end: ``name: auto`` surfaces in the schema as the inferred ``String!``."""
+
+    class CategoryType(DjangoType):
+        name: auto
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "description")
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def category(self) -> CategoryType:
+            return Category(id=1, name="x", description="y")
+
+    schema = strawberry.Schema(query=Query)
+    query = '{ __type(name: "CategoryType") { fields { name type { kind name ofType { kind name } } } } }'
+    result = schema.execute_sync(query)
+    assert result.errors is None, result.errors
+    fields = {f["name"]: f["type"] for f in result.data["__type"]["fields"]}
+    name_type = fields["name"]
+    assert name_type["kind"] == "NON_NULL"
+    assert name_type["ofType"]["name"] == "String"
+
+
+def test_auto_annotation_on_relation_field_synthesizes_relation():
+    """``items: auto`` defers the reverse-FK relation to finalization like bare selection."""
+
+    class CategoryType(DjangoType):
+        items: auto
+
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    definition = CategoryType.__django_strawberry_definition__
+    assert "items" not in definition.consumer_annotated_relation_fields
+    assert "items" not in definition.consumer_authored_fields
+
+    finalize_django_types()
+
+    assert CategoryType.__annotations__["items"] == list[ItemType]
+
+
+def test_auto_annotation_on_unselected_field_raises():
+    """``auto`` never adds a field: an unselected ``auto`` name is rejected at creation."""
+
+    with pytest.raises(ConfigurationError, match=r"annotated `auto` but not selected"):
+
+        class CategoryType(DjangoType):
+            description: auto
+
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+
+
+def test_auto_annotation_combined_with_assigned_field_raises():
+    """``auto`` (infer type) cannot coexist with an assigned resolver/type."""
+
+    with pytest.raises(ConfigurationError, match="cannot combine with an assigned resolver"):
+
+        class CategoryType(DjangoType):
+            description: auto = strawberry.field(resolver=lambda root: 0)
+
+            class Meta:
+                model = Category
+                fields = ("id", "name", "description")
 
 
 # ---------------------------------------------------------------------------

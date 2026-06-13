@@ -779,7 +779,8 @@ def _concrete_order_columns(order_by: Sequence[Any], model: type[models.Model]) 
     reference those columns in SQL regardless of the ``.only()`` projection, so a
     skipped column only forgoes loading an attribute a scalar-only selection
     never reads. Used to keep the scalar-only window projection minimal yet
-    order-complete (spec line 63: "pk/connector/order-only child projection").
+    order-complete (spec-033 Decision 4 scalar-only bullet: the
+    "pk/connector/order-only child projection").
     """
     by_name = {field.name: field.attname for field in model._meta.concrete_fields}
     attnames = set(by_name.values())
@@ -807,7 +808,7 @@ def _project_scalar_only_window(
     full model rows even though the page needs only the target pk (Relay edge
     identity), the relation connector column (Django's prefetch attach), and the
     concrete ordering columns the deterministic window order references
-    (spec-033 Decision 6 / spec line 63). The ``_dst_*`` window annotations
+    (spec-033 Decision 4 / Decision 6 scalar-only contract). The ``_dst_*`` window annotations
     compose with ``.only()`` (annotations, not deferred columns).
     """
     related_model = django_field.related_model
@@ -1338,7 +1339,7 @@ def _plan_connection_relation(
     # A scalar-only (pageInfo/totalCount) selection unwrapped to [] node children,
     # so the child plan added no `.only()` projection; restrict it to the minimal
     # pk/connector/order columns now that the deterministic order is known
-    # (Decision 6 / spec line 63) rather than fetching full child rows.
+    # (spec-033 Decision 4 / Decision 6 scalar-only contract) rather than fetching full child rows.
     if scalar_only:
         child_queryset = _project_scalar_only_window(child_queryset, django_field, order_by)
 

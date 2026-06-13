@@ -939,7 +939,7 @@ def test_fast_path_single_query(django_assert_num_queries):
 def test_fast_path_through_schema_connection_extension(django_assert_num_queries):
     """The fast path survives Strawberry's ``ConnectionExtension.resolve`` wrapper.
 
-    MANDATORY (spec line 68): execute the real ``relay.connection(...)`` field
+    MANDATORY (spec-033 Decision 5, the through-schema mandate): execute the real ``relay.connection(...)`` field
     end to end. The resolver returns a ``_WindowedConnectionRows`` node wrapper
     and the generated connection class builds the Relay object - a direct helper
     call would miss the ``ConnectionExtension`` layer boundary. The fixed query
@@ -1027,6 +1027,121 @@ def test_fast_path_wire_parity_last_only():
     _connection_type_cache.clear()
     slow = _exec(_genres_list_schema(optimizer=False), query)
     assert fast.data == slow.data
+
+
+@pytest.mark.django_db(transaction=True)
+def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
+    """A non-pk-ordered child: the windowed prefetch's outer ORDER BY carries the pk tiebreaker.
+
+    The shipped parity tests order ``Book`` by pk, where DB-natural (rowid) order
+    coincides with the window order and cannot expose a missing
+    ``queryset.order_by``. Even here, where the child orders by a non-pk
+    ``Meta.ordering`` (``title``), SQLite's window sort emits rows in title order
+    and Django propagates ``Meta.ordering`` to the outer query on its own - so a
+    wire comparison cannot catch the bug on SQLite. What the fix uniquely adds is
+    the **deterministic order** applied to the queryset: the outer ORDER BY gains
+    the pk tiebreaker (``ORDER BY <title>, <pk>``) instead of the single
+    ``Meta.ordering`` column, which is what keeps fast-path cursors stable across
+    rows that tie on ``title``. This asserts that two-column outer order directly
+    on the prefetch SQL (the deterministic regression, Revision 3) and pins
+    optimizer-on vs optimizer-off wire parity for the distinct-title case.
+    """
+    from django.test.utils import CaptureQueriesContext
+
+    class OConnTag(djmodels.Model):
+        name = djmodels.CharField(max_length=32)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    class OConnPost(djmodels.Model):
+        title = djmodels.CharField(max_length=32)
+        tag = djmodels.ForeignKey(OConnTag, related_name="posts", on_delete=djmodels.CASCADE)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+            ordering = ["title"]
+
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(OConnTag)
+        schema_editor.create_model(OConnPost)
+    try:
+        tag = OConnTag.objects.create(name="t")
+        for title in (
+            "d",
+            "a",
+            "c",
+            "b",
+        ):  # pk order (d,a,c,b) != title order (a,b,c,d)
+            OConnPost.objects.create(title=title, tag=tag)
+
+        query = (
+            "{ objs { postsConnection(first: 2) { edges { cursor node { title } } "
+            "pageInfo { startCursor endCursor } } } }"
+        )
+
+        def _build(*, optimizer):
+            type(
+                "OConnPostType",
+                (DjangoType,),
+                {
+                    "Meta": type(
+                        "Meta",
+                        (),
+                        {
+                            "model": OConnPost,
+                            "fields": ("id", "title"),
+                            "interfaces": (relay.Node,),
+                        },
+                    ),
+                },
+            )
+            tag_type = _make_type("OConnTagType", OConnTag, ("id", "name", "posts"))
+            finalize_django_types()
+            query_cls = strawberry.type(
+                type(
+                    "Query",
+                    (),
+                    {
+                        "__annotations__": {"objs": list[tag_type]},
+                        "objs": DjangoListField(tag_type),
+                    },
+                ),
+            )
+            extensions = [lambda: DjangoOptimizerExtension()] if optimizer else []
+            return strawberry.Schema(
+                query=query_cls,
+                config=strawberry_config(),
+                extensions=extensions,
+            )
+
+        with CaptureQueriesContext(db_connection) as ctx:
+            fast = _exec(_build(optimizer=True), query)
+        window_sql = next(
+            q["sql"] for q in ctx.captured_queries if "ROW_NUMBER" in q["sql"].upper()
+        )
+        # The outer query (after the row-number filter) must order by the FULL
+        # deterministic tuple - title AND the pk tiebreaker. Without the explicit
+        # `queryset.order_by`, Django still propagates the single Meta.ordering
+        # column, so the regression signal is the SECOND sort column (the comma),
+        # not the mere presence of ORDER BY.
+        tail = window_sql.upper().split('"_DST_ROW_NUMBER" <=')[-1]
+        assert "ORDER BY" in tail, window_sql
+        outer_order = tail.split("ORDER BY", 1)[-1]
+        assert "," in outer_order, window_sql  # title + pk, not title alone
+
+        registry.clear()
+        _connection_type_cache.clear()
+        slow = _exec(_build(optimizer=False), query)
+        assert fast.data == slow.data
+        titles = [e["node"]["title"] for e in fast.data["objs"][0]["postsConnection"]["edges"]]
+        assert titles == ["a", "b"]
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(OConnPost)
+            schema_editor.delete_model(OConnTag)
 
 
 @pytest.mark.django_db
@@ -1342,7 +1457,8 @@ def test_fallback_when_no_optimizer_installed():
 def test_outer_total_count_predicate_ignores_nested_total_count():
     """A nested connection's ``totalCount`` does not fire the OUTER connection's count.
 
-    Re-affirmation (Edge case line 456) now that nested ``totalCount`` is a
+    Re-affirmation (spec-033 Edge cases: the outer-``totalCount`` direct-children-scoped
+    rule) now that nested ``totalCount`` is a
     fast-path read: a two-level selection of the nested ``totalCount`` must not
     make the root connection's ``_total_count_requested`` predicate fire (no
     spurious outer COUNT, no outer non-queryset guard raise). The root here is a

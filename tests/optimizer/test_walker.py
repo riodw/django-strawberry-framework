@@ -2044,6 +2044,110 @@ def _connection_relay_types():
     return {"Book": (Book, BookType), "Genre": (Genre, GenreType), "Shelf": (Shelf, ShelfType)}
 
 
+class _OrderedTag(models.Model):
+    name = models.CharField(max_length=32)
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class _OrderedPost(models.Model):
+    title = models.CharField(max_length=32)
+    tag = models.ForeignKey(_OrderedTag, related_name="posts", on_delete=models.CASCADE)
+
+    class Meta:
+        app_label = "products"
+        managed = False
+        ordering = ["title"]
+
+
+def _ordered_connection_types():
+    """Register Relay ``DjangoType``s over a child model with a NON-pk ``Meta.ordering``.
+
+    The library/products fixtures order by pk only, so their deterministic window
+    order is the pk alone. This pair (``_OrderedPost`` ordered by ``title``, a
+    reverse FK off ``_OrderedTag.posts``) lets the non-pk ordering path
+    (``("title", "id")``) be pinned for the generated prefetch's ``ORDER BY`` and
+    for the scalar-only projection so ``_concrete_order_columns`` is exercised
+    against a real non-pk column. ``managed=False`` needs no table - planning
+    builds the queryset lazily and never executes it.
+    """
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class OrderedPostType(DjangoType):
+        class Meta:
+            model = _OrderedPost
+            fields = ("id", "title")
+            interfaces = (relay.Node,)
+
+    class OrderedTagType(DjangoType):
+        class Meta:
+            model = _OrderedTag
+            fields = ("id", "name", "posts")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    return {"Tag": (_OrderedTag, OrderedTagType), "Post": (_OrderedPost, OrderedPostType)}
+
+
+def test_windowed_prefetch_queryset_carries_non_pk_deterministic_order():
+    """The generated prefetch's ``ORDER BY`` is the non-pk ``(title, pk)`` tuple.
+
+    The pk-only variant cannot catch a refactor that special-cases pk ordering;
+    this pins that a real ``Meta.ordering`` column propagates to the queryset's
+    own ``ORDER BY`` (spec-033 Decision 11, cursor-parity / Revision 3).
+    """
+    registry.clear()
+    try:
+        types = _ordered_connection_types()
+        tag_model, tag_type = types["Tag"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "postsConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            tag_model,
+            info=_fake_info(),
+            source_type=tag_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert tuple(prefetch.queryset.query.order_by) == ("title", "id")
+    finally:
+        registry.clear()
+
+
+def test_scalar_only_window_projects_non_pk_order_column():
+    """A scalar-only window over a non-pk-ordered target projects the order column.
+
+    Covers ``_concrete_order_columns`` against a real ``Meta.ordering`` column:
+    the projection must carry pk + reverse-FK connector + the ``title`` order
+    column, not the full row (spec-033 Decision 6 / Revision 3).
+    """
+    registry.clear()
+    try:
+        types = _ordered_connection_types()
+        tag_model, tag_type = types["Tag"]
+        plan = plan_optimizations(
+            [_conn_sel("postsConnection", scalar_children=["totalCount"], arguments={"first": 3})],
+            tag_model,
+            info=_fake_info(),
+            source_type=tag_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        only_fields, defer = prefetch.queryset.query.deferred_loading
+        assert defer is False
+        # pk + reverse-FK connector (tag_id) + the non-pk ORDER column (title).
+        assert {"id", "tag_id", "title"} <= set(only_fields)
+    finally:
+        registry.clear()
+
+
 def test_relation_connections_slot_recorded():
     """The synthesis records ``{generated: relation_field}`` for attached siblings only."""
     registry.clear()
@@ -2476,7 +2580,7 @@ def test_scalar_only_window_projects_pk_connector_and_order_columns():
     selections unwrap to ``[]`` node children, so historically no ``.only()`` was
     applied and the window fetched every model column. The page needs only the
     target pk, the relation connector column (here the reverse-FK ``shelf_id``),
-    and the concrete ordering columns (spec line 63 / Decision 6).
+    and the concrete ordering columns (spec-033 Decision 4 / Decision 6 scalar-only contract).
     """
     registry.clear()
     try:

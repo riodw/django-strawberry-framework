@@ -6,13 +6,18 @@ Test plan Slice 1 / Slice 2 sections). Package tests; system-under-test is
 ``connection.py`` module per ``docs/TREE.md`` and the ``tests/test_list_field.py``
 precedent.
 
-The ``DjangoConnectionField`` factory (Slice 2) is not yet reachable from a live
-``/graphql/`` query (live usage is Slice 4), so its surface is exercised here
-through an in-process Strawberry schema (the real ``info`` / slicing path). The
-``first`` + ``last`` guard is driven at the ``resolve_connection`` classmethod
-directly (the guard runs before any ``info`` use). This is the correct home per
-the ``AGENTS.md`` real-query-priority rule - the path is genuinely unreachable
-from a live ``/graphql/`` query at this slice.
+``DjangoConnectionField`` IS now reachable from a live ``/graphql/`` query
+(the fakeshop ``library`` app ships
+``all_library_genres_connection: DjangoConnection[GenreType] = DjangoConnectionField(GenreType)``,
+and the products app is connections-only), and the live suite carries the
+consumer round-trips (filter + orderBy + cursor + totalCount). The tests here
+stay package-side because they assert what a live query cannot: the
+``resolve_connection`` ``first`` + ``last`` guard driven at the classmethod
+directly (the guard runs before any ``info`` use), generated-connection-type
+caching, the concrete-subclass specialization regression, and the
+non-queryset-iterable guards - per the ``examples/fakeshop/test_query/README.md``
+live-HTTP-first rule's "keep when it asserts internal state / construction-time
+validation" clause.
 """
 
 import asyncio
@@ -376,61 +381,6 @@ def test_total_count_requested_recurses_through_fragments():
 # =============================================================================
 # totalCount counting + selection-gating through a real schema query
 # =============================================================================
-
-
-@pytest.mark.django_db
-def test_total_count_counts_post_filter_pre_slice_when_selected():
-    """A query selecting ``totalCount`` counts the full pre-slice queryset.
-
-    ``first: 1`` slices ``edges`` to one entry, but ``totalCount`` reflects the
-    whole (post-filter, pre-slice) set - the Decision 4 / Decision 7 contract.
-    """
-    services.seed_data(3)
-    expected = Category.objects.count()
-    assert expected > 1
-
-    schema = _schema_for(_make_node_type("SelectedCountNode", total_count=True))
-    result = schema.execute_sync(
-        "{ items(first: 1) { edges { node { id } } totalCount } }",
-    )
-    assert result.errors is None
-    assert len(result.data["items"]["edges"]) == 1
-    assert result.data["items"]["totalCount"] == expected
-
-
-@pytest.mark.django_db
-def test_total_count_not_counted_when_not_selected():
-    """A query that omits ``totalCount`` resolves correctly without a count.
-
-    The field resolver returns ``None`` (no count was captured) - selection
-    gating means ``resolve_connection`` ran no count query.
-    """
-    services.seed_data(2)
-    schema = _schema_for(_make_node_type("UnselectedCountNode", total_count=True))
-
-    # The connection resolves fine when totalCount is omitted.
-    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
-    assert result.errors is None
-    assert len(result.data["items"]["edges"]) == 1
-
-    # When totalCount IS selected on the same schema, the count is present -
-    # proving the field exists and gating is per-query, not type-wide.
-    counted = schema.execute_sync("{ items { totalCount } }")
-    assert counted.errors is None
-    assert counted.data["items"]["totalCount"] == Category.objects.count()
-
-
-@pytest.mark.django_db
-def test_first_and_last_graphql_error_through_schema():
-    """A query supplying both ``first`` and ``last`` surfaces the guard in ``errors``."""
-    services.seed_data(2)
-    schema = _schema_for(_make_node_type("BothArgsNode", total_count=True))
-
-    result = schema.execute_sync(
-        "{ items(first: 1, last: 1) { edges { node { id } } } }",
-    )
-    assert result.errors is not None
-    assert any("mutually exclusive" in str(err.message) for err in result.errors)
 
 
 @pytest.mark.django_db
@@ -1033,16 +983,6 @@ def test_connection_resolver_composition_order():
 
 
 # --- Sync + async dispatch + SyncMisuseError ---------------------------------
-
-
-@pytest.mark.django_db
-def test_connection_resolver_sync_dispatch():
-    """The default resolver dispatches correctly on the sync ``execute_sync`` path."""
-    services.seed_data(2)
-    schema = _field_schema(_make_sidecar_node_type("SyncDispatchNode"))
-    result = schema.execute_sync("{ items(first: 1) { edges { node { id } } } }")
-    assert result.errors is None
-    assert len(result.data["items"]["edges"]) == 1
 
 
 @pytest.mark.django_db

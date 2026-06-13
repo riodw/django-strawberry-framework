@@ -3,20 +3,21 @@
 Covers the ``Meta.relation_shapes`` Phase-2.5 synthesis surface
 (``docs/spec-032-full_relay-0_0_9.md`` Decisions 6/7; Decision 11 pins the
 card-named two-file split). The ``Meta``-key *validation* tests sit with the
-other Meta validation in ``tests/types/test_base.py``. Package-internal by
-spec mandate: finalization ``ConfigurationError``s cannot appear in the
-example schema, and the synthesized-relation shape variants need cardinality
-fixtures the fakeshop graph lacks until Slice 6 promotes ``BookType`` (the
-live nested-connection proofs land there).
+other Meta validation in ``tests/types/test_base.py``. These stay package-side
+because they assert what a live query cannot: finalization
+``ConfigurationError``s never appear in the example schema, and the
+fast-path / windowed-prefetch tests pin SQL shape, query counts, cached-plan
+identity, and the per-parent fallback - the
+``examples/fakeshop/test_query/README.md`` live-HTTP-first rule's
+"keep when it asserts query planning / query count / construction-time
+validation" clause. The shipped live nested-connection proofs (the
+synthesized ``library`` relation connections and ``allLibraryGenresConnection``)
+run in ``examples/fakeshop/test_query/test_library_api.py``.
 
-Pre-``033`` posture (Decision 12): the synthesized connections derive an
-empty optimizer plan, so every execution assertion here pins behavior (rows,
-pagination, argument presence) - never SQL shape.
-
-The Slice-4 cursor-contract conformance mirror also runs here (the live
-primary copies run in ``examples/fakeshop/test_query/test_library_api.py``
-against the shipped ``allLibraryGenresConnection``): the synthesized-relation
-variants need cardinality fixtures the fakeshop graph lacks until Slice 6.
+Now that ``033`` has landed, the optimizer plans the synthesized connections
+into windowed prefetches, so the fast-path tests here pin SQL shape and query
+count; the optimizer-less behavior tests still pin rows / pagination /
+argument presence on the per-parent fallback.
 """
 
 import pytest
@@ -620,10 +621,11 @@ def test_connection_only_relation_stays_list_suppressed_on_refinalize():
 # connection (Decision 9). The live PRIMARY matrix runs against the shipped
 # root ``allLibraryGenresConnection``; this mirror exercises the same matrix
 # through the relation-manager-seeded pipeline on a reverse-FK cardinality
-# fixture (``Shelf.books``) the fakeshop graph lacks until Slice 6,
-# parametrized over the implicit ``"both"`` default and the narrowed
-# ``"connection"`` shape. Behavior-only assertions (rows, cursors,
-# ``pageInfo``) - never SQL shape (pre-``033`` posture).
+# fixture (``Shelf.books``), parametrized over the implicit ``"both"`` default
+# and the narrowed ``"connection"`` shape. These schemas run WITHOUT the
+# optimizer (the per-parent pipeline baseline), so the assertions are
+# behavior-only (rows, cursors, ``pageInfo``); the windowed SQL-shape pins live
+# in the ``_genres_list_schema(optimizer=True)`` fast-path tests below.
 # =============================================================================
 
 
@@ -1347,6 +1349,93 @@ def test_fast_path_total_count_from_annotation_no_query(django_assert_num_querie
         result = _exec(
             schema,
             "{ objs { booksConnection(first: 2) { totalCount edges { node { title } } } } }",
+        )
+    assert result.data["objs"][0]["booksConnection"]["totalCount"] == 5
+
+
+@pytest.mark.django_db
+def test_fast_path_has_next_page_without_edges_on_window(django_assert_num_queries):
+    """``hasNextPage`` is correct on the WINDOW path even when ``edges`` is unrequested.
+
+    The Relay invariant (spec-032 Goal 4 / DoD: "the connection MUST resolve
+    ``hasNextPage`` correctly even when the consumer didn't request ``edges``")
+    asserted on the exact path spec-033 introduces - the others assert it only on
+    the root field and the optimizer-less per-parent fallback. A nested
+    ``booksConnection { pageInfo { hasNextPage } }`` with no ``edges`` is
+    recognized by field name, window-planned as a scalar-only projection, and
+    serves ``hasNextPage`` from the UNCONDITIONALLY-annotated ``_dst_total_count``
+    - so it is correct WITHOUT ``edges`` AND WITHOUT the ``totalCount`` opt-in
+    (``book_total_count=False`` here), and it costs one batched window query (no
+    per-parent fallback, no per-relation COUNT).
+    """
+    _seed_library_books(
+        [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+        ],
+    )
+    schema = _genres_list_schema(optimizer=True)  # NO totalCount opt-in
+    with django_assert_num_queries(2):  # parent + window only; no edges, no fallback
+        result = _exec(
+            schema,
+            "{ objs { booksConnection(first: 2) { pageInfo { hasNextPage } } } }",
+        )
+    # 5 books, first: 2 -> a further page exists.
+    assert result.data["objs"][0]["booksConnection"]["pageInfo"]["hasNextPage"] is True
+
+
+@pytest.mark.django_db
+def test_fast_path_has_no_next_page_at_boundary_without_edges_on_window(django_assert_num_queries):
+    """The boundary twin: ``first >= total`` -> ``hasNextPage`` False on the window path.
+
+    Pins that the scalar-only window's ``hasNextPage`` is not hard-wired True: 5
+    books with ``first: 5`` exhausts the window, so ``hasNextPage`` is False -
+    still served from the annotation with no ``edges`` selected.
+    """
+    _seed_library_books(
+        [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+        ],
+    )
+    schema = _genres_list_schema(optimizer=True)
+    with django_assert_num_queries(2):
+        result = _exec(
+            schema,
+            "{ objs { booksConnection(first: 5) { pageInfo { hasNextPage } } } }",
+        )
+    assert result.data["objs"][0]["booksConnection"]["pageInfo"]["hasNextPage"] is False
+
+
+@pytest.mark.django_db
+def test_fast_path_total_count_without_edges_on_window(django_assert_num_queries):
+    """``totalCount`` alone (no ``edges``) reads ``_dst_total_count`` on the window path.
+
+    The totalCount-only sibling of the pageInfo-only pin: a nested
+    ``booksConnection { totalCount }`` with no ``edges`` is the scalar-only window
+    projection, served from the annotation in a single batched window query - the
+    existing ``totalCount`` window pins all also select ``edges``.
+    """
+    _seed_library_books(
+        [
+            "a",
+            "b",
+            "c",
+            "d",
+            "e",
+        ],
+    )
+    schema = _genres_list_schema(optimizer=True, book_total_count=True)
+    with django_assert_num_queries(2):  # parent + window only; no edges, no per-relation COUNT
+        result = _exec(
+            schema,
+            "{ objs { booksConnection(first: 2) { totalCount } } }",
         )
     assert result.data["objs"][0]["booksConnection"]["totalCount"] == 5
 

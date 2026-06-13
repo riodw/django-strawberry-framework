@@ -214,6 +214,8 @@ Both ship in `0.0.8`; as of `0.0.9` the `filter:` / `orderBy:` arguments are syn
 > 3. **Only then** rename GraphQL types (or `Meta.name`) or flip to `model`.
 >
 > The step-3 ordering is load-bearing: `type+model` decodes an old type-anchored ID only while its old GraphQL type name still resolves. Renaming a type / `Meta.name` *during* the window still orphans cached old-type-name IDs — `type+model` is a strategy bridge, **not** a rename-history alias map (that is `BACKLOG.md` item 39). A consumer who must rename mid-window owns a consumer alias / callable migration until then.
+>
+> **One more upgrade hazard — multiple `DjangoType`s over one model.** A model-label payload (`app_label.model:pk`) is shared by *every* type registered for that model and always decodes to the model's **primary** type (`Meta.primary`). So if two Relay-Node types map to one model and both take the `model` default, the secondary's `GlobalID`s become byte-identical to the primary's and refetch *as* the primary — the secondary's distinct identity and `get_queryset` visibility scope silently collapse onto the primary's. Under the pre-`0.0.9` type-name default those two types had distinct, self-routing IDs, so this is a behavioral change on upgrade, not just a cache-invalidation. Finalization emits a warning naming the collapsing secondaries. If the two types need disjoint identity / auth scopes (the public-vs-admin pattern), set `Meta.globalid_strategy = "type"` on the secondary so its IDs stay self-routing.
 
 ## Visibility filtering via `get_queryset`
 

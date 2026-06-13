@@ -33,9 +33,9 @@ Slice 2's surface (Decision 5 / Decision 6 / Decision 7 / Decision 10):
   ``ConnectionExtension`` slices the queryset, with the ``Manager`` / ``QuerySet``
   / non-queryset-iterable consumer-``resolver=`` contract.
 
-The public exports (``DjangoConnection`` / ``DjangoConnectionField``) land in
-Slice 4 alongside the live fakeshop usage; until then the symbols are referenced
-by their module path.
+``DjangoConnection`` and ``DjangoConnectionField`` are exported from the package
+root (``django_strawberry_framework``) and dogfooded in the fakeshop example
+(e.g. ``examples/fakeshop/apps/products/schema.py`` and the ``library`` app).
 """
 
 from __future__ import annotations

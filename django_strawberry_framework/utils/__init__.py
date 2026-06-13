@@ -2,19 +2,22 @@
 
 Subpackage structure mirrors the convention both `graphene_django/utils/`
 and `strawberry_django/utils/` converge on: focused submodules per
-concern rather than a single 500-line `utils.py`. Currently:
+concern rather than a single 500-line `utils.py`. Includes, among others:
 
 - ``relations`` - Django relation-shape classification
   (``relation_kind``, ``RelationKind``, ``is_many_side_relation_kind``).
 - ``strings`` - case conversion (``snake_case``, ``pascal_case``).
 - ``typing`` - Strawberry / Python / GraphQL type unwrapping
-  (``unwrap_graphql_type``, ``unwrap_return_type``).
-  ``unwrap_return_type`` is the Strawberry-list-peel sibling of
-  ``unwrap_graphql_type``, exported for the upcoming schema-factory
-  consumer (mirrors the ``queryset`` future-extension framing below).
-
-A ``queryset`` submodule will land when queryset-introspection helpers
-become cross-cutting (currently each subsystem keeps its own).
+  (``unwrap_graphql_type``, ``unwrap_return_type``) plus ``is_async_callable``.
+- ``connections`` - the connection window-bounds / sidecar-kwarg contracts.
+- ``inputs`` / ``permissions`` - the generated-input and active-input
+  permission substrates shared by the filter / order families.
+- ``querysets`` - the query-source + ``DjangoType.get_queryset`` visibility
+  contract (``initial_queryset`` / ``normalize_query_source`` /
+  ``apply_type_visibility_*`` / ``SyncMisuseError``). It landed in the 0.0.9
+  DRY pass (``docs/feedback.md`` Major 1), consolidating the Manager-coercion
+  and sync/async visibility routing each resolver surface previously spelled
+  inline (so each subsystem no longer keeps its own).
 """
 
 from .relations import RelationKind, is_many_side_relation_kind, relation_kind

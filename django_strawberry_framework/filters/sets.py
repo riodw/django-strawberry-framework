@@ -29,13 +29,13 @@ from strawberry import UNSET
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
-from ..sets_mixins import ClassBasedTypeNameMixin
-from ..types.relay import (
-    SyncMisuseError,
-    _apply_get_queryset_async,
-    _apply_get_queryset_sync,
-    implements_relay_node,
+from ..sets_mixins import (
+    ClassBasedTypeNameMixin,
+    SetLifecycleAttrs,
+    collect_related_declarations,
+    expanded_once,
 )
+from ..types.relay import implements_relay_node
 from ..utils.permissions import (
     active_permission_field_paths,
     active_related_branches,
@@ -44,6 +44,11 @@ from ..utils.permissions import (
     iter_input_items,
     request_from_info,
     run_active_input_permission_checks,
+)
+from ..utils.querysets import (
+    SyncMisuseError,
+    apply_type_visibility_async,
+    apply_type_visibility_sync,
 )
 from .base import GlobalIDFilter, GlobalIDMultipleChoiceFilter, RelatedFilter
 from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_value
@@ -157,16 +162,19 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
 
         new_class = super().__new__(cls, name, bases, attrs)
 
-        new_class.related_filters = OrderedDict(
-            [
-                (filter_name, f)
-                for filter_name, f in new_class.declared_filters.items()
-                if isinstance(f, RelatedFilter)
-            ],
+        # Collect the ``RelatedFilter`` declarations and bind each to the new
+        # class via the shared set-family collector (the 0.0.9 DRY pass,
+        # ``docs/feedback.md`` Major 3). ``declared_filters`` is already MRO-merged
+        # by ``django_filters``' metaclass, so ``inherit_from_bases=False`` - only
+        # the ``isinstance`` filter runs (the order side merges from bases itself).
+        collect_related_declarations(
+            new_class,
+            bases,
+            own_items=new_class.declared_filters.items(),
+            declaration_type=RelatedFilter,
+            collection_attr="related_filters",
+            inherit_from_bases=False,
         )
-
-        for f in new_class.related_filters.values():
-            f.bind_filterset(new_class)
 
         return new_class
 
@@ -204,7 +212,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     Decision-8 / M1-of-rev5 named helpers decompose `apply_sync` and
     `apply_async` so each step can be exercised in isolation; `apply`
     stays as a thin dispatcher that translates the typed
-    `SyncMisuseError` from `_apply_get_queryset_sync` into a
+    `SyncMisuseError` from `apply_type_visibility_sync` into a
     `RuntimeError` consumers can match on.
 
     `_owner_definition` is the binding seam populated by
@@ -223,6 +231,16 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     # Recursion guard around `get_filters` so a self-referential
     # `RelatedFilter` does not blow the stack.
     _is_expanding_filters = False
+
+    # Family binding-state descriptor: the single source for the lifecycle attr
+    # names `get_filters` (via `expanded_once`) and `registry.clear()` (via
+    # `clear_filter_input_namespace`'s `binding_attrs`) reference, instead of
+    # re-spelling the tuple (the 0.0.9 DRY pass, `docs/feedback.md` Major 3).
+    _lifecycle: ClassVar[SetLifecycleAttrs] = SetLifecycleAttrs(
+        owner="_owner_definition",
+        cache="_expanded_filters",
+        guard="_is_expanding_filters",
+    )
 
     # Logical-branch (`and` / `or` / `not`) recursion-depth cap. Declared
     # as a `ClassVar` so a consumer with a legitimate deeper-nesting case
@@ -300,15 +318,17 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             do not introduce a ``threading.local`` here without first
             confirming a real consumer call path requires it.
         """
-        if cls.__dict__.get("_expanded_filters") is not None:
-            return cls.__dict__["_expanded_filters"]
+        # Capture ``super().get_filters`` HERE (in the classmethod body, where
+        # zero-arg ``super()`` resolves ``cls`` + the ``__class__`` cell) rather
+        # than inside ``_build`` / ``on_reentry``: the metaclass calls
+        # ``get_filters()`` DURING ``FilterSet``'s own creation, before the module
+        # global ``FilterSet`` is bound, so a ``super(FilterSet, cls)`` lookup in a
+        # nested function would ``NameError`` (and a zero-arg ``super()`` in a
+        # no-arg nested function / lambda has no positional to bind).
+        get_base = super().get_filters
 
-        if cls.__dict__.get("_is_expanding_filters", False):
-            return super().get_filters()
-
-        cls._is_expanding_filters = True
-        try:
-            all_filters = super().get_filters()
+        def _build() -> OrderedDict:
+            all_filters = get_base()
             if cls._meta.model is not None:
                 related_filters_val = getattr(cls, "related_filters", OrderedDict())
                 for filter_name, f in related_filters_val.items():
@@ -331,8 +351,20 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 cls._expanded_filters = all_filters
                 cls.base_filters = all_filters
             return all_filters
-        finally:
-            cls._is_expanding_filters = False
+
+        # The class-level expansion cache + reentry-guard skeleton is shared with
+        # `OrderSet.get_fields` through `sets_mixins.expanded_once` (the 0.0.9 DRY
+        # pass, `docs/feedback.md` Major 3). `on_reentry` returns the unexpanded
+        # `super().get_filters()` when this class is already mid-expansion, so a
+        # self-referential `RelatedFilter` neither blows the stack nor caches a
+        # half-built result.
+        return expanded_once(
+            cls,
+            cache_attr=cls._lifecycle.cache,
+            guard_attr=cls._lifecycle.guard,
+            build=_build,
+            on_reentry=get_base,
+        )
 
     @classmethod
     def get_fields(cls) -> OrderedDict:
@@ -913,7 +945,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> dict[str, models.QuerySet]:
         """Run each active branch's target ``get_queryset(...)`` then recurse.
 
-        Reuses ``django_strawberry_framework/types/relay.py::_apply_get_queryset_sync``
+        Reuses ``django_strawberry_framework/utils/querysets.py::apply_type_visibility_sync``
         - the existing helper handles the sync-misuse detection and
         raises ``SyncMisuseError`` (a ``ConfigurationError`` and
         ``RuntimeError`` subclass); ``apply``'s catch-and-rethrow
@@ -934,7 +966,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             child_input,
             child_base,
         ) in cls._iter_visibility_steps(input_value):
-            scoped = _apply_get_queryset_sync(target_type, child_base, info)
+            scoped = apply_type_visibility_sync(target_type, child_base, info)
             result[field_name] = child_filterset.apply_sync(child_input, scoped, info)
         return result
 
@@ -953,7 +985,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             child_input,
             child_base,
         ) in cls._iter_visibility_steps(input_value):
-            scoped = await _apply_get_queryset_async(target_type, child_base, info)
+            scoped = await apply_type_visibility_async(target_type, child_base, info)
             result[field_name] = await child_filterset.apply_async(child_input, scoped, info)
         return result
 
@@ -1059,7 +1091,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         filterset, scoping the related branch by the wrong visibility hook (a
         silent row-leak). ``definition.origin`` is the same ``DjangoType`` class
         the registry stores (``types/base.py`` registers ``cls`` with
-        ``origin=cls``), so both branches hand ``_apply_get_queryset_*`` an object
+        ``origin=cls``), so both branches hand ``apply_type_visibility_*`` an object
         exposing ``get_queryset``.
 
         This mirrors ``_resolve_relation_target_type`` (already owner-aware); the
@@ -1709,7 +1741,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """Thin dispatcher - picks `apply_sync` and translates sync-misuse.
 
         Decision 8 / M5 of rev6 - catches the typed ``SyncMisuseError``
-        raised by ``_apply_get_queryset_sync`` and rethrows as
+        raised by ``apply_type_visibility_sync`` and rethrows as
         ``RuntimeError`` with the actionable "use apply_async instead"
         message consumers can match on. Class-based dispatch closes the
         round-3 loop: no substring-matching against a constant string.

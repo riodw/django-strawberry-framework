@@ -33,7 +33,10 @@ from django_filters.filters import FilterMethod
 from graphql import GraphQLError
 from strawberry import relay
 
-from ..sets_mixins import LazyRelatedClassMixin
+from ..sets_mixins import (
+    LazyRelatedClassMixin as LazyRelatedClassMixin,
+)  # re-exported via filters.__init__
+from ..sets_mixins import RelatedSetTargetMixin
 
 # ``filters -> types`` is the documented safe (acyclic) import direction:
 # ``types/relay.py`` module-top imports are stdlib/django/strawberry/``..exceptions``
@@ -364,7 +367,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         return super().filter(qs, node_ids)
 
 
-class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
+class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):
     """`ModelChoiceFilter` that traverses into another `FilterSet`.
 
     Collapsed port of `django_graphene_filters/filters.py::BaseRelatedFilter`
@@ -382,6 +385,13 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
       module (e.g. ``"ShelfFilter"`` when both filtersets live in the
       same file).
     """
+
+    # ``RelatedSetTargetMixin`` parameterization: the slots the shared
+    # owner-bind / lazy-target machinery reads (the 0.0.9 DRY pass,
+    # ``docs/feedback.md`` Major 3). The order twin uses
+    # ``("_orderset", "bound_orderset")``.
+    _target_attr = "_filterset"
+    _owner_attr = "bound_filterset"
 
     def __init__(
         self,
@@ -439,9 +449,10 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
             ``ShelfFilter`` would resolve to the first's. Use a class object
             or an absolute import path for a shared/inherited
             ``RelatedFilter``, or declare it per subclass.
+
+        Thin wrapper over the shared ``RelatedSetTargetMixin._bind_owner``.
         """
-        if not hasattr(self, "bound_filterset"):
-            self.bound_filterset = filterset
+        self._bind_owner(filterset)
 
     @property
     def filterset(self) -> type[BaseFilterSet]:
@@ -449,17 +460,14 @@ class RelatedFilter(LazyRelatedClassMixin, ModelChoiceFilter):
 
         Re-stores the resolved class so the next access is a plain
         attribute read; setter remains usable when a caller wants to
-        substitute the target.
+        substitute the target. Delegates to the shared
+        ``RelatedSetTargetMixin._resolved_target``.
         """
-        self._filterset = self.resolve_lazy_class(
-            self._filterset,
-            getattr(self, "bound_filterset", None),
-        )
-        return self._filterset
+        return self._resolved_target()
 
     @filterset.setter
     def filterset(self, value: type[BaseFilterSet]) -> None:
-        self._filterset = value
+        self._set_target(value)
 
     def get_queryset(self, request: HttpRequest) -> Any:
         """Derive the queryset from the target filterset's `Meta.model`.

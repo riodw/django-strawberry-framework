@@ -1,4 +1,4 @@
-"""Mixins shared across the FilterSet / OrderSet / AggregateSet / FieldSet family.
+"""Mixins and lifecycle machinery shared across the FilterSet / OrderSet / AggregateSet family.
 
 Ported from ``django_graphene_filters/mixins.py`` and refactored to this
 package's structure (Strawberry, not Graphene) and dependencies. This module
@@ -7,24 +7,39 @@ lives at the package root so the ``filters`` subpackage -- and the future
 and later) -- all import shared set-machinery from one neutral home rather
 than from each other.
 
-Scope is deliberately limited to the two mixins the shipped ``FilterSet``
-already uses:
+The two foundational mixins the shipped ``FilterSet`` / ``OrderSet`` use:
 
 - ``ClassBasedTypeNameMixin`` -- class-derived GraphQL type naming
   (``type_name_for``), the single naming rule every set's arguments factory
   shares (the cookbook uses it for filterset, orderset, AND aggregateset).
 - ``LazyRelatedClassMixin`` -- string / callable class-reference resolution
-  used by ``RelatedFilter`` (and, later, ``RelatedOrder`` / ``RelatedAggregate``).
+  used by ``RelatedFilter`` / ``RelatedOrder``.
+
+Plus the set-family DECLARATION-LIFECYCLE substrate the 0.0.9 DRY pass
+single-sited (``docs/feedback.md`` Major 3), so a future set family does not
+copy the related-declaration + metaclass + expansion lifecycle a fourth time:
+
+- ``RelatedSetTargetMixin`` -- the idempotent owner-bind + lazy target-class
+  property machinery, parameterized by the per-family attr names.
+- ``collect_related_declarations`` -- the metaclass collect-and-bind step.
+- ``expanded_once`` -- the class-level expansion cache + reentry-guard skeleton
+  shared by ``FilterSet.get_filters`` / ``OrderSet.get_fields``.
+- ``SetLifecycleAttrs`` -- the per-family binding-state descriptor naming the
+  ``registry.clear()`` reset attrs (owner / expansion cache / reentry guard) in
+  one place instead of re-spelled tuples.
 
 The cookbook's other shared helpers (``get_concrete_field_names``,
 ``InputObjectTypeFactoryMixin``, ``ObjectTypeFactoryMixin``) are intentionally
-NOT ported yet: the ``FilterSet`` does not use them today, and the package's
+NOT ported yet: the shipped sets do not use them today, and the package's
 100%-coverage gate would flag them as dead. They land with their consuming
 sets.
 """
 
 from __future__ import annotations
 
+from collections import OrderedDict
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from django.db.models.constants import LOOKUP_SEP
@@ -124,4 +139,170 @@ class LazyRelatedClassMixin:
         return class_ref
 
 
-__all__ = ("ClassBasedTypeNameMixin", "LazyRelatedClassMixin")
+class RelatedSetTargetMixin(LazyRelatedClassMixin):
+    """Idempotent owner-bind + lazy target-class resolution for a related-set declaration.
+
+    The machinery ``RelatedFilter`` / ``RelatedOrder`` grew as byte-parallel
+    copies (``docs/feedback.md`` Major 3): an idempotent ``bind_*`` that records
+    the owning set ONCE (a second, possibly divergent, bind is a no-op - strict
+    cross-owner mismatch is caught later at finalize), and a lazy ``.<target>``
+    property that resolves a string / callable target through
+    ``resolve_lazy_class`` and re-stores the result so the next access is a plain
+    read.
+
+    Parameterized by two instance-attribute names a subclass sets as class
+    attributes:
+
+    - ``_target_attr`` -- the slot holding the possibly-lazy target
+      (``"_filterset"`` / ``"_orderset"``).
+    - ``_owner_attr`` -- the slot the bind records the owner under, and the
+      resolution scope for an unqualified string target
+      (``"bound_filterset"`` / ``"bound_orderset"``).
+
+    Subclasses keep their family-named public surface (``bind_filterset`` +
+    ``.filterset`` / ``bind_orderset`` + ``.orderset``) as thin wrappers over
+    ``_bind_owner`` / ``_resolved_target`` / ``_set_target``, so the public
+    ``RelatedFilter`` / ``RelatedOrder`` attributes are unchanged.
+    """
+
+    _target_attr: str
+    _owner_attr: str
+
+    def _bind_owner(self, owner: type) -> None:
+        """Bind the owning set once; a second (possibly divergent) bind is a no-op."""
+        if not hasattr(self, self._owner_attr):
+            setattr(self, self._owner_attr, owner)
+
+    def _resolved_target(self) -> Any:
+        """Resolve the (possibly-lazy) target class on first access and re-store it."""
+        resolved = self.resolve_lazy_class(
+            getattr(self, self._target_attr),
+            getattr(self, self._owner_attr, None),
+        )
+        setattr(self, self._target_attr, resolved)
+        return resolved
+
+    def _set_target(self, value: Any) -> None:
+        """Substitute the target class (the ``.<target>`` setter seam)."""
+        setattr(self, self._target_attr, value)
+
+
+def collect_related_declarations(
+    new_class: type,
+    bases: tuple,
+    *,
+    own_items: Any,
+    declaration_type: type,
+    collection_attr: str,
+    inherit_from_bases: bool,
+) -> OrderedDict:
+    """Collect a metaclass's related-set declarations onto ``new_class`` and bind each.
+
+    The shared ``FilterSetMetaclass`` / ``OrderSetMetaclass`` collect-and-bind
+    step (``docs/feedback.md`` Major 3): build an ``OrderedDict`` of the
+    ``declaration_type`` instances, store it on ``new_class`` under
+    ``collection_attr``, and call each declaration's ``_bind_owner(new_class)``
+    (the ``RelatedSetTargetMixin`` idempotent owner bind).
+
+    ``inherit_from_bases`` selects the MRO-merge policy:
+
+    - ``False`` (filter side): ``own_items`` is ``declared_filters.items()``,
+      which ``django_filters``' metaclass has ALREADY MRO-merged across bases, so
+      only the ``isinstance`` filter runs.
+    - ``True`` (order side): the plain ``type`` metaclass does no merge, so each
+      base's existing ``collection_attr`` is copied first (reversed MRO -> later
+      bases override earlier ones) and then ``own_items`` (the class body's
+      ``attrs``) override inherited same-named declarations.
+    """
+    collected: OrderedDict = OrderedDict()
+    if inherit_from_bases:
+        for base in reversed(bases):
+            for name, declaration in getattr(base, collection_attr, {}).items():
+                collected[name] = declaration
+    for name, declaration in own_items:
+        if isinstance(declaration, declaration_type):
+            collected[name] = declaration
+    setattr(new_class, collection_attr, collected)
+    for declaration in collected.values():
+        declaration._bind_owner(new_class)
+    return collected
+
+
+def expanded_once(
+    cls: type,
+    *,
+    cache_attr: str,
+    guard_attr: str,
+    build: Callable[[], Any],
+    on_reentry: Callable[[], Any] | None = None,
+) -> Any:
+    """Run ``build()`` once under a class-level expansion cache + reentry guard.
+
+    The control-flow skeleton ``FilterSet.get_filters`` / ``OrderSet.get_fields``
+    grew separately (``docs/feedback.md`` Major 3):
+
+    - Return ``cls.__dict__[cache_attr]`` when populated. Read from the class's
+      OWN ``__dict__`` (NOT ``getattr``) so a subclass never inherits a parent's
+      completed expansion cache via MRO, and so an in-flight class (the metaclass
+      runs ``super().__new__`` -> ``get_filters`` before stamping
+      ``related_filters``) cannot serve a half-built result.
+    - ``on_reentry`` (filter side only): when set AND ``cls`` is already mid-
+      expansion (``guard_attr`` truthy in its own ``__dict__``), return
+      ``on_reentry()`` -- the unexpanded fallback that breaks a self-referential
+      ``RelatedFilter`` cycle without caching a half-built result. The order side
+      passes ``None`` (its expansion never re-enters ``get_fields``).
+    - Otherwise set ``guard_attr`` ``True`` on ``cls``, run ``build()`` (which
+      owns the family-specific expansion AND the cache-write decision, including
+      any family side-effect such as ``FilterSet.base_filters``), and clear the
+      guard in a ``finally``.
+
+    Single-threaded contract: ``guard_attr`` is a class-level flag, not a
+    thread-local one. Expansion runs during ``finalize_django_types()``
+    (single-threaded) and once per class; parallel test runs that exercise the
+    same set class from different threads can race the flag (the second thread
+    short-circuits via ``on_reentry`` to the unexpanded set). Do not introduce a
+    ``threading.local`` here without a real consumer call path requiring it.
+    """
+    cached = cls.__dict__.get(cache_attr)
+    if cached is not None:
+        return cached
+    if on_reentry is not None and cls.__dict__.get(guard_attr, False):
+        return on_reentry()
+    setattr(cls, guard_attr, True)
+    try:
+        return build()
+    finally:
+        setattr(cls, guard_attr, False)
+
+
+@dataclass(frozen=True)
+class SetLifecycleAttrs:
+    """The class-level lifecycle attribute names a set family resets / caches under.
+
+    Single source for the attr-name strings otherwise re-spelled across a
+    family's class body, its ``get_filters`` / ``get_fields`` expansion, and the
+    ``registry.clear()`` binding-state reset (the tuple
+    ``utils/inputs.py::clear_generated_input_namespace`` consumes). Each family
+    declares ONE instance on its set class (``docs/feedback.md`` Major 3).
+    """
+
+    owner: str  # the finalizer-bound owner-definition slot (``_owner_definition``).
+    cache: (
+        str  # the completed-expansion cache slot (``_expanded_filters`` / ``_expanded_fields``).
+    )
+    guard: str  # the expansion reentry-guard slot (``_is_expanding_filters`` / ``_is_expanding_fields``).
+
+    @property
+    def binding_attrs(self) -> tuple[str, str, str]:
+        """The ``(owner, cache, guard)`` tuple ``clear_generated_input_namespace`` resets."""
+        return (self.owner, self.cache, self.guard)
+
+
+__all__ = (
+    "ClassBasedTypeNameMixin",
+    "LazyRelatedClassMixin",
+    "RelatedSetTargetMixin",
+    "SetLifecycleAttrs",
+    "collect_related_declarations",
+    "expanded_once",
+)

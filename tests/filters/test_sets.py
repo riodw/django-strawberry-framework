@@ -2123,9 +2123,9 @@ def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_syn
 
     Before the Medium-#2 fix, ``_q_for_branch`` called
     ``_derive_related_visibility_querysets_sync`` unconditionally, which
-    invokes ``_apply_get_queryset_sync`` on the target type. A target whose
+    invokes ``apply_type_visibility_sync`` on the target type. A target whose
     ``get_queryset`` is ``async def`` returns a coroutine that
-    ``_apply_get_queryset_sync`` flags as ``SyncMisuseError``. The pre-walk
+    ``apply_type_visibility_sync`` flags as ``SyncMisuseError``. The pre-walk
     in ``apply_async`` (``_collect_nested_visibility_querysets_async``)
     now awaits every nested branch's visibility BEFORE the ``.qs`` read,
     and ``_q_for_branch`` consults the stash keyed by ``id(child_input)``

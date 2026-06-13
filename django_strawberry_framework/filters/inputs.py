@@ -862,9 +862,10 @@ def clear_filter_input_namespace() -> None:
     not yet imported) tolerates the call without raising.
 
     Delegates the lifecycle to
-    ``utils/inputs.py::clear_generated_input_namespace``; the filter-side
-    binding attrs are ``_owner_definition`` / ``_expanded_filters`` /
-    ``_is_expanding_filters``.
+    ``utils/inputs.py::clear_generated_input_namespace``, which reads the
+    per-filterset binding attrs from ``FilterSet._lifecycle`` (the
+    ``SetLifecycleAttrs`` descriptor: ``_owner_definition`` / ``_expanded_filters``
+    / ``_is_expanding_filters``) rather than a re-spelled tuple.
     """
     clear_generated_input_namespace(
         materialized_names=_materialized_names,
@@ -874,5 +875,4 @@ def clear_filter_input_namespace() -> None:
         collision_registry_attr="_type_filterset_registry",
         set_module="django_strawberry_framework.filters.sets",
         set_class_name="FilterSet",
-        binding_attrs=("_owner_definition", "_expanded_filters", "_is_expanding_filters"),
     )

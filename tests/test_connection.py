@@ -833,7 +833,7 @@ async def test_attach_count_async_awaits_before_guard_raises():
     """``_attach_count_async`` awaits the connection coroutine BEFORE the M1 guard can raise.
 
     Regression guard for the await-before-raise discipline (Decision 10, mirroring
-    ``types/relay.py::_apply_get_queryset_sync``'s close-before-raise). With the
+    ``utils/querysets.py::apply_type_visibility_sync``'s close-before-raise). With the
     pre-fix ordering (guard first), a guard-raise on the non-queryset + ``totalCount``
     path left the queued connection coroutine unawaited -> ``RuntimeWarning: coroutine
     ... was never awaited`` (a hard failure under ``-W error``). Deterministic: assert

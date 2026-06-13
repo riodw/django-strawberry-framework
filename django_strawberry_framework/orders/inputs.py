@@ -377,9 +377,10 @@ def clear_order_input_namespace() -> None:
     the call without raising.
 
     Delegates the lifecycle to
-    ``utils/inputs.py::clear_generated_input_namespace``; the order-side
-    binding attrs are ``_owner_definition`` / ``_expanded_fields`` /
-    ``_is_expanding_fields``.
+    ``utils/inputs.py::clear_generated_input_namespace``, which reads the
+    per-orderset binding attrs from ``OrderSet._lifecycle`` (the
+    ``SetLifecycleAttrs`` descriptor: ``_owner_definition`` / ``_expanded_fields``
+    / ``_is_expanding_fields``) rather than a re-spelled tuple.
     """
     clear_generated_input_namespace(
         materialized_names=_materialized_names,
@@ -389,5 +390,4 @@ def clear_order_input_namespace() -> None:
         collision_registry_attr="_type_orderset_registry",
         set_module="django_strawberry_framework.orders.sets",
         set_class_name="OrderSet",
-        binding_attrs=("_owner_definition", "_expanded_fields", "_is_expanding_fields"),
     )

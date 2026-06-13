@@ -25,13 +25,18 @@ expands the file to:
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
 from ..exceptions import ConfigurationError
-from ..sets_mixins import ClassBasedTypeNameMixin
+from ..sets_mixins import (
+    ClassBasedTypeNameMixin,
+    SetLifecycleAttrs,
+    collect_related_declarations,
+    expanded_once,
+)
 from ..utils.permissions import (
     active_permission_field_paths,
     active_related_branches,
@@ -97,23 +102,20 @@ class OrderSetMetaclass(type):
         """Build the class, collect ``RelatedOrder`` declarations, bind owner."""
         new_class = super().__new__(cls, name, bases, attrs)
 
-        # Start with inherited related_orders from base classes (in MRO order,
-        # with later bases overriding earlier ones - matches Python's method
-        # resolution). Cookbook lines 30-33.
-        inherited: OrderedDict = OrderedDict()
-        for base in reversed(bases):
-            for n, f in getattr(base, "related_orders", {}).items():
-                inherited[n] = f
-
-        # Apply the current class's own declarations, overriding inherited
-        # ones. Cookbook lines 36-38.
-        for n, f in attrs.items():
-            if isinstance(f, RelatedOrder):
-                inherited[n] = f
-
-        new_class.related_orders = inherited
-        for f in new_class.related_orders.values():
-            f.bind_orderset(new_class)
+        # Collect the ``RelatedOrder`` declarations and bind each to the new
+        # class via the shared set-family collector (the 0.0.9 DRY pass,
+        # ``docs/feedback.md`` Major 3). The plain ``type`` metaclass does no MRO
+        # merge, so ``inherit_from_bases=True`` copies each base's
+        # ``related_orders`` first (reversed MRO -> later bases win) before the
+        # class body's own ``attrs`` override - the cookbook lines 30-38 behavior.
+        collect_related_declarations(
+            new_class,
+            bases,
+            own_items=attrs.items(),
+            declaration_type=RelatedOrder,
+            collection_attr="related_orders",
+            inherit_from_bases=True,
+        )
         return new_class
 
 
@@ -161,6 +163,17 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     # unreachable through the planned Slice 2 surface).
     _is_expanding_fields = False
 
+    # Family binding-state descriptor: the single source for the lifecycle attr
+    # names ``get_fields`` (via ``expanded_once``) and ``registry.clear()`` (via
+    # ``clear_order_input_namespace``'s ``binding_attrs``) reference, instead of
+    # re-spelling the tuple (the 0.0.9 DRY pass, ``docs/feedback.md`` Major 3).
+    # Mirrors ``FilterSet._lifecycle`` with the order-side slot names.
+    _lifecycle: ClassVar[SetLifecycleAttrs] = SetLifecycleAttrs(
+        owner="_owner_definition",
+        cache="_expanded_fields",
+        guard="_is_expanding_fields",
+    )
+
     @classmethod
     def get_fields(cls) -> OrderedDict:
         """Return ``Meta.fields`` expansion merged with ``related_orders``.
@@ -181,11 +194,8 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         ``_get_concrete_field_names_for_order`` (Slice 2's deliverable
         per spec-028 Decision 3 / Revision 4 B4).
         """
-        if cls.__dict__.get("_expanded_fields") is not None:
-            return cls.__dict__["_expanded_fields"]
 
-        cls._is_expanding_fields = True
-        try:
+        def _build() -> OrderedDict:
             fields = cls._expand_meta_fields()
             for k, v in getattr(cls, "related_orders", {}).items():
                 fields[k] = v
@@ -201,8 +211,18 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             ):
                 cls._expanded_fields = fields
             return fields
-        finally:
-            cls._is_expanding_fields = False
+
+        # The class-level expansion cache + reentry-guard skeleton is shared with
+        # ``FilterSet.get_filters`` through ``sets_mixins.expanded_once`` (the
+        # 0.0.9 DRY pass, ``docs/feedback.md`` Major 3). The order side passes no
+        # ``on_reentry``: its expansion never re-enters ``get_fields`` (the
+        # filter side's self-referential-cycle fallback has no order analogue).
+        return expanded_once(
+            cls,
+            cache_attr=cls._lifecycle.cache,
+            guard_attr=cls._lifecycle.guard,
+            build=_build,
+        )
 
     @classmethod
     def _expand_meta_fields(cls) -> OrderedDict:

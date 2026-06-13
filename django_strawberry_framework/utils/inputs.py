@@ -221,7 +221,6 @@ def clear_generated_input_namespace(
     collision_registry_attr: str,
     set_module: str,
     set_class_name: str,
-    binding_attrs: tuple[str, ...],
 ) -> None:
     """Reset a family's generated-input ledger and per-set binding state.
 
@@ -233,7 +232,10 @@ def clear_generated_input_namespace(
     - ``field_specs`` -- per-(set, field) provenance for the runtime normalizer.
     - the arguments factory's class-level caches (``input_object_types`` and the
       family collision registry named by ``collision_registry_attr``).
-    - every set subclass's phase-2.5 binding state (``binding_attrs``).
+    - every set subclass's phase-2.5 binding state. The reset attrs come from the
+      resolved set base's ``_lifecycle`` descriptor (``SetLifecycleAttrs``) rather
+      than a re-spelled tuple, so the family names them in ONE place (the 0.0.9
+      DRY pass, ``docs/feedback.md`` Major 3).
 
     **Materialized class objects are intentionally left parked** in the family
     ``inputs`` module ``__dict__``: the materialization helper overwrites the
@@ -257,6 +259,10 @@ def clear_generated_input_namespace(
 
     set_root = _safe_import(set_module, set_class_name)
     if set_root is not None:
+        # The per-family binding-state attrs (owner / expansion cache / reentry
+        # guard) come from the set base's ``_lifecycle`` descriptor, so the names
+        # are not re-spelled at the call site.
+        binding_attrs = set_root._lifecycle.binding_attrs
         for subclass in iter_set_subclasses(set_root):
             # ``delattr`` on the subclass so an inherited default (the set
             # base's ``_owner_definition = None``) is restored rather than

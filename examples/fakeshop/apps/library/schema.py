@@ -19,14 +19,15 @@ from django_strawberry_framework import (
 from django_strawberry_framework.filters import filter_input_type
 from django_strawberry_framework.orders import order_input_type
 
-# Consumer ``resolver=`` helper exercising the ``_post_process_consumer_sync``
+# Consumer ``resolver=`` helper exercising the shared field-wrapper
 # ``Manager`` coercion line at
-# ``django_strawberry_framework/list_field.py::_post_process_consumer_sync #"result = result.all()"``.
+# ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"source = source.all()"``.
 # The README rule at ``examples/fakeshop/test_query/README.md #"Coverage rule"`` requires
 # coverage lines reachable from a live ``/graphql/`` query to land here. Returns
 # ``models.Branch.objects`` (a ``Manager``) - NOT ``.all()`` - so the field-
 # wrapper's coercion fires per rev4 M1. The async equivalent
-# (``django_strawberry_framework/list_field.py::_post_process_consumer_async #"result = result.all()"``) is genuinely unreachable from the sync ``GraphQLView``
+# (the same ``normalize_query_source`` line reached via
+# ``django_strawberry_framework/utils/querysets.py::post_process_queryset_result_async``) is genuinely unreachable from the sync ``GraphQLView``
 # mounted at ``/graphql/`` (Strawberry's sync execution rejects async resolvers
 # with ``RuntimeError: GraphQL execution failed to complete synchronously``),
 # so the async ``Manager`` coercion stays in ``tests/test_list_field.py`` per
@@ -217,10 +218,17 @@ class BranchType(DjangoType):
 
 
 class PatronType(DjangoType):
-    """Patron with nullable reverse OneToOne card and reverse FK loans."""
+    """Patron with nullable reverse OneToOne card and reverse FK loans.
+
+    Uses an allow-list ``Meta.fields`` tuple. ``primary = True`` keeps this type the
+    relation-resolution target (``Loan.patron`` / ``MembershipCard.patron`` resolve
+    here) now that ``PublicPatronType`` registers a second, ``Meta.exclude``-shaped
+    view on the same model.
+    """
 
     class Meta:
         model = models.Patron
+        primary = True
         fields = (
             "id",
             "name",
@@ -230,6 +238,29 @@ class PatronType(DjangoType):
         )
         filterset_class = filters.PatronFilter
         orderset_class = orders.PatronOrder
+
+
+class PublicPatronType(DjangoType):
+    """Secondary ``primary=False`` Patron view selected via ``Meta.exclude``.
+
+    Where ``PatronType`` uses an allow-list ``Meta.fields`` tuple, this type uses a
+    deny-list ``Meta.exclude``: it starts from every Patron field and drops the
+    sensitive ``email`` (PII) and ``lifetime_fines_cents`` (internal financial)
+    columns. The two coexist on one model so the schema shows both selection
+    mechanics side by side - ``fields`` (allow-list) vs ``exclude`` (deny-list).
+    ``Meta.fields`` and ``Meta.exclude`` are mutually exclusive, so each mechanic
+    needs its own type.
+
+    ``exclude`` selects over ``model._meta.get_fields()``, so the kept set still
+    includes the reverse relations (``card`` / ``loans``); only the two named
+    scalar columns are removed from the GraphQL type. ``primary = False`` leaves
+    ``PatronType`` the relation-resolution target.
+    """
+
+    class Meta:
+        model = models.Patron
+        primary = False
+        exclude = ("email", "lifetime_fines_cents")
 
 
 @strawberry.type
@@ -354,6 +385,11 @@ class Query:
         if order_by is not None:
             queryset = orders.PatronOrder.apply_sync(order_by, queryset, info)
         return queryset
+
+    @strawberry.field
+    def all_library_public_patrons(self) -> list[PublicPatronType]:
+        """Root field for the ``Meta.exclude`` deny-list view (see ``PublicPatronType``)."""
+        return models.Patron.objects.order_by("id")
 
     @strawberry.field
     def all_library_membership_cards(self) -> list[MembershipCardType]:

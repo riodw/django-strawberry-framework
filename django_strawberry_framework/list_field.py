@@ -11,39 +11,40 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 import strawberry
-from django.db import models
 from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError
 from .types import DjangoType
 from .types.base import _is_relay_shaped
-from .types.relay import _apply_get_queryset_async, _apply_get_queryset_sync, _initial_queryset
+from .utils.querysets import (
+    apply_type_visibility_async,
+    apply_type_visibility_sync,
+    initial_queryset,
+    post_process_queryset_result_async,
+    post_process_queryset_result_sync,
+)
 from .utils.typing import is_async_callable
 
 __all__ = ("DjangoListField",)
 
 
 # Consumer-resolver post-processing helpers (rev6 H2: module-scope placement,
-# rev6 H3: ``_consumer`` suffix). The default-resolver path bypasses these
-# because ``qs`` is already known to be a ``QuerySet`` from ``Manager.all()`` -
-# no Manager-to-QuerySet coercion or isinstance branching is needed there.
+# rev6 H3: ``_consumer`` suffix). The field-wrapper Manager -> QuerySet coercion
+# + visibility-hook contract is single-sited in
+# ``utils/querysets.py::post_process_queryset_result_sync`` / ``_async`` (the
+# 0.0.9 DRY pass, ``docs/feedback.md`` Major 1); these stay as the named
+# consumer-wrapper entry points the ``_wrap`` resolvers call. The
+# default-resolver path bypasses them because ``qs`` is already known to be a
+# ``QuerySet`` from ``initial_queryset(...)`` - no normalization is needed there.
 
 
 def _post_process_consumer_sync(target_type: type, result: Any, info: Info) -> Any:
-    if isinstance(result, models.Manager):
-        result = result.all()  # field-wrapper Manager -> QuerySet coercion (rev4 M1).
-    if isinstance(result, models.QuerySet):
-        return _apply_get_queryset_sync(target_type, result, info)
-    return result  # Python list / generator - pass through (rev2 H1).
+    return post_process_queryset_result_sync(target_type, result, info)
 
 
 async def _post_process_consumer_async(target_type: type, result: Any, info: Info) -> Any:
-    if isinstance(result, models.Manager):
-        result = result.all()
-    if isinstance(result, models.QuerySet):
-        return await _apply_get_queryset_async(target_type, result, info)
-    return result
+    return await post_process_queryset_result_async(target_type, result, info)
 
 
 def _validate_djangotype_target(
@@ -158,14 +159,14 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     if resolver is None:
 
         def _default(root: Any, info: Info) -> Any:  # noqa: ARG001
-            qs = _initial_queryset(target_type)
+            qs = initial_queryset(target_type)
             if in_async_context():
-                # rev6 H1: return the coroutine from ``_apply_get_queryset_async``
+                # rev6 H1: return the coroutine from ``apply_type_visibility_async``
                 # directly; Strawberry's AwaitableOrValue dispatch awaits it.
                 # An inner ``async def`` wrapper would add a redundant coroutine
                 # layer with no semantic gain.
-                return _apply_get_queryset_async(target_type, qs, info)
-            return _apply_get_queryset_sync(target_type, qs, info)
+                return apply_type_visibility_async(target_type, qs, info)
+            return apply_type_visibility_sync(target_type, qs, info)
 
         wrapped = _default
     else:

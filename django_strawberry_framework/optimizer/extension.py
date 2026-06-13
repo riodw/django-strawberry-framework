@@ -37,9 +37,7 @@ from typing import Any, NamedTuple
 
 from django.db import models
 from graphql.language.ast import (
-    DirectiveNode,
     FieldNode,
-    FragmentSpreadNode,
     VariableNode,
 )
 from graphql.language.printer import print_ast
@@ -47,6 +45,7 @@ from graphql.type.definition import GraphQLInterfaceType
 from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
+from ..utils.querysets import normalize_query_source
 from ..utils.typing import unwrap_graphql_type
 from . import logger
 from ._context import (
@@ -64,13 +63,28 @@ from ._context import (
 )
 from .hints import hint_is_skip
 from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
-from .walker import (
-    _named_children,
-    _node_children_with_runtime_prefix,
-    _response_key,
-    plan_optimizations,
-    plan_relation,
+from .selections import (
+    ast_child_selections,
+    directive_variable_names,
+    named_children,
+    node_children_with_runtime_prefix,
+    resolve_unvisited_fragment,
+    response_key,
 )
+from .walker import plan_optimizations, plan_relation
+
+# The selection-traversal primitives moved to ``optimizer/selections.py`` in the
+# 0.0.9 DRY pass (``docs/feedback.md`` Major 2). The underscore aliases keep this
+# module's bodies - and the tests that import ``_named_children`` /
+# ``_node_children_with_runtime_prefix`` from ``optimizer.extension`` - working
+# unchanged. ``extension`` no longer imports the converted-selection helpers back
+# from ``walker`` (the reverse dependency the substrate removes); both modules now
+# source them from ``selections``.
+_child_selections = ast_child_selections
+_unvisited_fragment_definition = resolve_unvisited_fragment
+_named_children = named_children
+_node_children_with_runtime_prefix = node_children_with_runtime_prefix
+_response_key = response_key
 
 _MAX_PLAN_CACHE_SIZE = 256
 
@@ -139,16 +153,10 @@ def _walk_cache_relevant_vars(
     them apart risked a future fragment-depth or cycle fix landing on only one
     path.
     """
-    # Directive variables: collected on every node, depth-independent.
-    for directive in getattr(node, "directives", ()) or ():
-        if not isinstance(directive, DirectiveNode):
-            continue
-        d_name = directive.name.value if directive.name else None
-        if d_name not in ("skip", "include"):
-            continue
-        for arg in directive.arguments or ():
-            if isinstance(arg.value, VariableNode):
-                directive_names.add(arg.value.name.value)
+    # Directive variables: collected on every node, depth-independent. The
+    # ``@skip`` / ``@include`` variable extraction is the shared AST-adapter
+    # primitive (``optimizer/selections.py::directive_variable_names``).
+    directive_names.update(directive_variable_names(node))
     # Nested pagination variables: only on a field node at depth >= 1.
     if depth >= 1 and isinstance(node, FieldNode):
         for arg in node.arguments or ():
@@ -242,53 +250,6 @@ def _collect_cache_relevant_var_names(operation: Any, fragments: dict[str, Any])
     """
     directive_names, pagination_names = _collect_cache_var_families(operation, fragments)
     return frozenset(directive_names | pagination_names)
-
-
-def _child_selections(node: Any) -> tuple[Any, ...]:
-    """Return the AST node's selection-set children as a tuple, or ``()``.
-
-    Centralizes the ``getattr(node, "selection_set", None)`` plus
-    ``selections or ()`` shape so the AST walkers in this module
-    (``_walk_cache_relevant_vars``, ``_walk_reachable_fragment_definitions``,
-    and by extension ``_collect_reachable_fragment_definitions``) share
-    one "iterate children" implementation. ``FragmentSpreadNode`` has
-    no ``selection_set``, so this returns ``()`` and the caller's
-    per-child loop becomes a no-op.
-    """
-    selection_set = getattr(node, "selection_set", None)
-    if selection_set is None:
-        return ()
-    return tuple(selection_set.selections or ())
-
-
-def _unvisited_fragment_definition(
-    node: Any,
-    fragments: dict[str, Any],
-    visited_fragments: set[str],
-) -> Any | None:
-    """Resolve a ``FragmentSpreadNode`` to its definition, once.
-
-    Returns the matching ``FragmentDefinitionNode`` and marks the
-    fragment name as visited so a sibling or cyclic spread of the same
-    fragment in the same walk is a no-op. Returns ``None`` when
-    ``node`` is not a fragment spread, when the spread has no name,
-    when the fragment name is already visited, or when the document
-    does not define the named fragment (defensive - graphql-core's
-    validation would normally reject the operation before the optimizer
-    sees it). Mutates ``visited_fragments`` on success so callers share
-    the same cycle-detection set across recursive descents in both the
-    cache-relevant-variable walk and the reachable-fragment walk.
-    """
-    if not isinstance(node, FragmentSpreadNode):
-        return None
-    frag_name = node.name.value if node.name else None
-    if frag_name is None or frag_name in visited_fragments:
-        return None
-    frag_def = fragments.get(frag_name)
-    if frag_def is None:
-        return None
-    visited_fragments.add(frag_name)
-    return frag_def
 
 
 def _collect_reachable_fragment_definitions(
@@ -751,6 +712,11 @@ class DjangoOptimizerExtension(SchemaExtension):
            manager's ``.all()`` returns a fresh unevaluated ``QuerySet``;
            no rows are fetched at this step.
         2. Non-``QuerySet`` results pass through unchanged.
+
+           Steps 1-2 are the shared ``utils/querysets.py::normalize_query_source``
+           contract - the same Manager-coercion + is-queryset decision the
+           list / connection field consumer paths use, so the middleware never
+           decides it independently (``docs/feedback.md`` Major 1).
         3. Trace the graphql-core return type to a Django ``(origin, model)``.
         4. Delegate the plan-build-and-apply tail to :meth:`apply_to`, passing
            the resolved ``origin`` / ``model`` explicitly - the SAME helper
@@ -761,9 +727,8 @@ class DjangoOptimizerExtension(SchemaExtension):
            (the connection field's return type is the connection type, not the
            node type).
         """
-        if isinstance(result, models.Manager):
-            result = result.all()
-        if not isinstance(result, models.QuerySet):
+        result, is_queryset = normalize_query_source(result)
+        if not is_queryset:
             return result
         resolved = _resolve_model_from_return_type(info)
         if resolved is None:

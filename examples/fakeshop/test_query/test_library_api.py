@@ -74,11 +74,14 @@ def _seed_branch_with_two_shelves(name: str = "Override"):
     models.Shelf.objects.create(code="B-2", topic="Second floor", branch=branch)
 
 
-def _post_graphql(query: str, *, client: Client | None = None):
+def _post_graphql(query: str, *, client: Client | None = None, variables: dict | None = None):
     graphql_client = client or Client()
+    payload: dict = {"query": query}
+    if variables is not None:
+        payload["variables"] = variables
     return graphql_client.post(
         "/graphql/",
-        data={"query": query},
+        data=payload,
         content_type="application/json",
     )
 
@@ -3178,3 +3181,163 @@ def test_nested_window_respects_book_visibility():
             "Withdrawn-1",
         ],
     ]
+
+
+# One query string for the "both"-shape coexistence test (a list relation and
+# its synthesized connection sibling selected on the same parent).
+_BOTH_SHAPE_QUERY = """
+query {
+  allLibraryGenres {
+    name
+    books { title }
+    booksConnection(first: 2) {
+      edges { node { title } }
+      pageInfo { hasNextPage }
+    }
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_list_relation_and_connection_sibling_coexist_live():
+    """The "both" shape over ``/graphql/``: a genre's ``books`` list AND its windowed ``booksConnection`` resolve together.
+
+    spec-033 Decision 4 ``to_attr`` isolation, earned LIVE (the ``test_query/``
+    README live-HTTP-first rule). Selecting the list relation and its synthesized
+    connection sibling on the same parent lands TWO prefetches on the ``books``
+    accessor - the list field's accessor-keyed ``Prefetch`` (the FULL related
+    set) and the window's ``_dst_books_connection`` ``to_attr`` ``Prefetch`` (the
+    windowed page). The ``to_attr`` slot is precisely what keeps them from
+    colliding into Django's "lookup already seen with a different queryset" error.
+
+    Two pins: (1) the wire results are distinct and correct - the list returns
+    the full set, the connection only the ``first: 2`` page; (2) the captured
+    query count is FLAT (root + the ``books`` list prefetch + the windowed
+    ``_dst_books_connection`` prefetch), independent of parent count, proving the
+    two prefetches coexist as ONE-per-relation batched queries rather than a
+    per-parent fallback.
+    """
+
+    def _run(genre_count: int) -> tuple[int, dict]:
+        shelf = _seed_shelf()
+        for index in range(genre_count):
+            # >2 books per genre so ``first: 2`` leaves a meaningful hasNextPage
+            # and the list/connection results visibly differ; per-genre unique
+            # titles satisfy the (shelf, title) constraint.
+            _seed_genre_with_books(
+                f"Genre-{index}",
+                shelf,
+                (f"Book-{index}-a", f"Book-{index}-b", f"Book-{index}-c"),
+            )
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(_BOTH_SHAPE_QUERY)
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        return len(captured), payload
+
+    two_count, two_payload = _run(2)
+    genres = two_payload["data"]["allLibraryGenres"]
+    assert len(genres) == 2
+    for index, genre in enumerate(genres):
+        # The list relation returns the FULL related set...
+        assert [b["title"] for b in genre["books"]] == [
+            f"Book-{index}-a",
+            f"Book-{index}-b",
+            f"Book-{index}-c",
+        ]
+        # ...while the connection sibling returns only the windowed page.
+        conn = genre["booksConnection"]
+        assert [e["node"]["title"] for e in conn["edges"]] == [
+            f"Book-{index}-a",
+            f"Book-{index}-b",
+        ]
+        assert conn["pageInfo"]["hasNextPage"] is True
+
+    # Reset and re-run with more parents: the count must be identical - the list
+    # prefetch and the window each run ONCE over all parents, never per-parent.
+    models.Book.objects.all().delete()
+    models.Genre.objects.all().delete()
+    models.Shelf.objects.all().delete()
+    models.Branch.objects.all().delete()
+
+    four_count, four_payload = _run(4)
+    assert len(four_payload["data"]["allLibraryGenres"]) == 4
+    # The coexistence + N+1-disproof pin: equal count across parent counts, and a
+    # small fixed N - root genres query + the "books" list prefetch + the windowed
+    # "_dst_books_connection" prefetch.
+    assert two_count == four_count
+    assert two_count == 3
+
+
+@pytest.mark.django_db
+def test_nested_connection_pagination_from_graphql_variable_live():
+    """A GraphQL VARIABLE drives the nested window over ``/graphql/`` (not just a literal).
+
+    The in-process Slice-3 cache-key tests pin variable resolution at the plan
+    layer; this earns the end-to-end half live - ``$n`` flows through the request
+    body, ``ConnectionExtension``, and the window so the page size IS the
+    variable's value (spec-033 Slice 5; the round-3 live-coverage G2 follow-up,
+    which also added the ``variables=`` parameter to ``_post_graphql``).
+    """
+    shelf = _seed_shelf()
+    _seed_genre_with_books(
+        "Variable",
+        shelf,
+        (
+            "a",
+            "b",
+            "c",
+            "d",
+        ),
+    )
+    query = """
+    query Books($n: Int!) {
+      allLibraryGenres {
+        booksConnection(first: $n) {
+          edges { node { title } }
+          pageInfo { hasNextPage }
+        }
+      }
+    }
+    """
+    response = _post_graphql(query, variables={"n": 2})
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenres"][0]["booksConnection"]
+    assert [e["node"]["title"] for e in conn["edges"]] == ["a", "b"]
+    assert conn["pageInfo"]["hasNextPage"] is True
+
+
+@pytest.mark.django_db
+def test_nested_connection_first_zero_empty_page_live():
+    """Nested ``first: 0`` returns an empty page live (the ambiguous-empty fallback).
+
+    The ROOT ``first: 0`` is pinned at ``test_genre_connection_first_zero_empty_edges``;
+    this rounds out the live matrix with the NESTED ambiguous-empty window
+    (fast-path -> per-parent fallback, spec-033 Decision 5): empty edges, but
+    ``hasNextPage`` True because the genre genuinely has books beyond the zero
+    window (the round-3 live-coverage G3 follow-up).
+    """
+    shelf = _seed_shelf()
+    _seed_genre_with_books("Empty", shelf, ("a", "b", "c"))
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenres {
+            booksConnection(first: 0) {
+              edges { node { title } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenres"][0]["booksConnection"]
+    assert conn["edges"] == []
+    assert conn["pageInfo"]["hasNextPage"] is True

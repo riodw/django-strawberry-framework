@@ -809,3 +809,31 @@ def test_relation_connection_backward_pagination_last_before(shape):
     # start > 0 sees "a" / "b").
     assert window["pageInfo"]["hasNextPage"] is True
     assert window["pageInfo"]["hasPreviousPage"] is True
+
+
+# TODO(spec-033 Slice 2): connection-class fast-path coverage (Test plan).
+#   test_fast_path_single_query  (parent page + one window query, zero per-parent queries)
+#   test_fast_path_through_schema_connection_extension  (real relay.connection(...) field; resolver
+#       returns the wrapper, generated connection class builds the Relay object -- MANDATORY,
+#       a direct helper call misses ConnectionExtension's layer boundary)
+#   test_fast_path_wire_parity_with_pipeline  (identical edges/cursors/pageInfo/totalCount
+#       with and without the optimizer installed)
+#   test_fast_path_wire_parity_last_only  (reversed-window row numbers -> same cursors/flags)
+#   test_fast_path_cursor_round_trips_to_fallback_after  (fast-path endCursor fed to after: on an
+#       optimizer-less execution continues correctly)
+#   test_fast_path_total_count_from_annotation_no_query / ..._marker_bypasses_non_queryset_guard
+#   test_fast_path_first_zero_falls_back_for_total_count_and_pageinfo / ..._after_end_falls_back...
+#   test_fast_path_ignores_window_when_sidecar_kwargs_present
+#   test_fallback_when_annotations_missing  (consumer's own accessor prefetch -> pipeline, correct)
+#   test_fallback_when_no_optimizer_installed  (pre-card behavior byte-identical)
+#   test_outer_total_count_predicate_ignores_nested_total_count  (re-affirmation)
+#
+# TODO(spec-033 Slice 4): strictness wiring coverage (Test plan).
+#   test_strictness_raise_unplanned_nested_connection  ("raise" + optimizer + fallback shape ->
+#       OptimizerError naming the generated field)
+#   test_strictness_warn_logs_once_per_occurrence
+#   test_strictness_warn_nested_fallback_preserves_parent_plan_context
+#   test_nested_fallback_does_not_clobber_fk_id_elisions
+#   test_strictness_silent_when_window_served / ..._when_planned / ..._when_off / ..._no_optimizer
+#   test_sidecar_fallback_is_flagged_with_reason  (actionable message incl. fallback reason)
+#   _check_n1 parameterization no-regression: list-relation strictness suite passes unmodified.

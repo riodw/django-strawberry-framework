@@ -1962,3 +1962,28 @@ def test_walker_resolves_relation_targets_through_definition_metadata(monkeypatc
 
     assert calls == ["category"]
     assert plan.select_related == ("category",)
+
+
+# TODO(spec-033 Slice 1): add the nested-connection walker coverage (Test plan).
+# Recognition + windowed-Prefetch planning + fallback non-planning:
+#   test_relation_connections_slot_recorded  (slot written; suppressed shapes record nothing)
+#   test_nested_connection_planned_as_windowed_prefetch  (Prefetch to_attr=_dst_books_connection,
+#       _dst_row_number/_dst_total_count annotations, slice filters, pk-terminal order)
+#   test_window_slice_from_first_after_literals / ..._from_variables  (variables via info.variable_values)
+#   test_window_last_only_uses_reversed_row_number
+#   test_window_respects_relay_max_results
+#   test_window_partition_for_reverse_fk_forward_m2m_reverse_m2m  (incl. absent related_name reverse query name)
+#   test_m2m_shared_child_partitions_per_parent  (catches accidental child-pk partitioning)
+#   test_nested_connection_two_level_recursion  (window inside a window)
+#   test_child_plan_projections_include_connector_and_ordering_columns
+#   test_window_subquery_wrap_preserves_only_mask_and_child_select_related
+#   test_scalar_only_pageinfo_and_total_count_are_window_planned
+#   test_malformed_slice_arguments_are_left_unplanned_for_fallback_error_locality
+#   test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets
+#   test_fallback_not_planned_sidecar_input / ..._divergent_aliases / ..._skip_hint
+#       (no window, no planned_resolver_keys entry; divergent also asserts wrong Prefetch ABSENT)
+#   test_identical_alias_args_merge_and_plan
+#   test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch  (diff_plan_for_queryset)
+#   test_visibility_target_window_flips_cacheable_false
+#   test_planned_resolver_keys_include_connection_field
+# Helper-move (Decision 9) no-regression lives in test_extension.py (unmodified).

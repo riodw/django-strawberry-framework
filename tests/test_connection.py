@@ -1427,3 +1427,11 @@ def test_registry_clear_also_clears_connection_type_cache():
     assert _connection_type_cache
     registry.clear()
     assert not _connection_type_cache
+
+
+# TODO(spec-033 Slice 1-2): root-connection no-regression fence. The shipped
+# root-connection planning pins here (edges { node } extraction -> select_related
+# / Prefetch on the pre-slice queryset) must stay GREEN UNMODIFIED through the
+# helper consolidation (Decision 9) and the fast-path addition (Decision 5) --
+# this card touches only the NESTED half. No new tests required here; this marker
+# records the fence (DoD item 12 / "No B1-B8 regression").

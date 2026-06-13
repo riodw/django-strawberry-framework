@@ -1,0 +1,44 @@
+term,anchor,notes
+apply_cascade_permissions,apply_cascade_permissions,the card's deliverable; Slice 5 flips the entry to shipped (0.0.10) and rewrites the body
+aapply_cascade_permissions,apply_cascade_permissions,async twin documented inside the same entry (one concept two execution contexts); no own heading by design
+get_queryset,get_queryset-visibility-hook,the seam the cascade composes — called from inside it; per-edge target visibility is each target's hook
+Per-field permission hooks,per-field-permission-hooks,Decision 2 re-statuses the entry to planned for 0.1.1 (currently says 0.0.10 while hosting hooks on the 0.1.1 FieldSet)
+FieldSet,fieldset,0.1.1 host of the read-side field gates; contract defined here only
+Meta.fields_class,metafields_class,stays in DEFERRED_META_KEYS through this card (end-to-end promotion rule)
+FilterSet,filterset,input-side gates survive unchanged (Decision 11); child-branch visibility derivation already routes through target hooks
+OrderSet,orderset,same composition matrix as FilterSet on the orderBy side
+RelatedFilter,relatedfilter,active-branch child visibility derivation names it; cascade narrows what its branches see
+RelatedOrder,relatedorder,active-branch double-dispatch gate precedent referenced in Current state
+Meta.filterset_class,metafilterset_class,sidecar wiring whose gates compose with the cascade
+Meta.orderset_class,metaorderset_class,sidecar wiring whose gates compose with the cascade
+DjangoType,djangotype,the cascade's cls argument and the owner of the get_queryset hook
+Meta.primary,metaprimary,cascade targets resolve through the registry primary lookup; secondaries never cascade
+Meta.fields,metafields,selection does not gate the cascade — Meta.fields-excluded FK edges still cascade (Decision 5)
+DjangoOptimizerExtension,djangooptimizerextension,no optimizer change; downgrade + cacheability pins in Slice 2
+Plan cache,plan-cache,plans baking cascading hooks are already uncacheable (request-scope rule); pinned
+Queryset diffing,queryset-diffing,B8 no-regression fence for consumer select_related on cascading relations
+Strictness mode,strictness-mode,cascade composes SQL never lazy-loads; raise stays silent — pinned in Slice 2
+Multi-database cooperation,multi-database-cooperation,axis 2 extended: every cascade subquery pinned to the caller's resolved alias (Decision 8)
+only() projection,only-projection,the helper is pure filter composition; composes with projections downstream
+FK-id elision,fk-id-elision,elision already falls back when a target hook must run; cascading targets never elide
+Meta.optimizer_hints,metaoptimizer_hints,typo-guard precedent for the loud fields= validation (Decision 9); hints untouched
+OptimizerHint,optimizerhint,untouched; hints shape relation planning not parent-row narrowing
+DjangoConnectionField,djangoconnectionfield,card DoD composition target; pipeline applies get_queryset first so the cascade narrows edges + totalCount
+DjangoConnection,djangoconnection,connection return alias named in the Key glossary references composition map
+Meta.connection,metaconnection,totalCount counted post-visibility — reflects the cascade
+DjangoNodeField,djangonodefield,cascade-hidden rows refetch as null; no existence leak
+DjangoNodesField,djangonodesfield,batch holes for cascade-hidden rows
+Relay Node integration,relay-node-integration,resolve_node/resolve_nodes defaults route through get_queryset
+DjangoListField,djangolistfield,default resolver and consumer-resolver wrap both apply the hook
+Meta.relation_shapes,metarelation_shapes,SyncMisuseError-recourse precedent cited in Decision 10
+SyncMisuseError,syncmisuseerror,the cascade is the third sync surface adopting the contract; both variants raise for async target hooks
+ConfigurationError,configurationerror,fields= validation raises it; SyncMisuseError multiple-inherits it
+finalize_django_types,finalize_django_types,call-time walk reads only post-finalization state; root-export precedent in Decision 4
+Definition-order independence,definition-order-independence,why the walk needs no finalizer change
+Relation handling,relation-handling,per-relation traversal contracts unchanged; resolver-level hidden-target behavior stays (Decision 6)
+DjangoMutation,djangomutation,0.0.11 write-side consumer; dependency note on this card
+Auth mutations,auth-mutations,0.0.11 out-of-scope pointer
+AggregateSet,aggregateset,0.1.3 sibling pattern at the aggregate layer (acompute naming precedent in Decision 4)
+get_child_queryset,get_child_queryset,0.1.3 aggregation cascade hook; composition map pointer
+Connection-aware optimizer planning,connection-aware-optimizer-planning,WIP-ALPHA-033 out-of-scope pointer; independent of this card
+Cross-subsystem invariants,cross-subsystem-invariants,the deferred-keys end-to-end promotion rule grounding Decision 2

@@ -308,6 +308,15 @@ def _connection_node_child_selections(selections: list[Any], info: Any) -> list[
     return node_children
 
 
+# TODO(spec-033 Slice 1, Decision 9): MOVE the following selection-unwrap
+# helpers to ``optimizer/walker.py`` and import them back here:
+#   _named_children, _node_children_with_runtime_prefix, _with_runtime_prefix,
+#   _converted_selection_included, _is_converted_fragment, _response_key.
+# The walker's ``_plan_connection_relation`` needs identical unwrap semantics for
+# NESTED connections; ``extension`` already imports from ``walker`` (the reverse
+# would cycle). ``_connection_node_child_selections`` (the root-seam entry point,
+# above) STAYS here as a thin composition over the moved helpers. Pure move --
+# the root-extraction tests in test_extension.py must pass unmodified.
 def _named_children(selection: Any, name: str) -> list[Any]:
     """Return included direct children named ``name``, recursing through fragments."""
     children: list[Any] = []
@@ -846,6 +855,22 @@ class DjangoOptimizerExtension(SchemaExtension):
         the strictness mode so per-relation resolvers can detect
         unplanned lazy loads.
         """
+        # TODO(spec-033 Slice 1, Decision 8): UNION the correctness sentinels
+        # into any existing frozenset stash instead of overwriting them. Nested
+        # FALLBACK connection pipelines are real optimizer runs that re-enter
+        # this publish per parent; they must NOT destroy the parent plan's
+        # planned/elision sets (especially under "warn", where execution
+        # continues after the nested connection returns). Apply to the THREE
+        # frozenset stashes -- DST_OPTIMIZER_FK_ID_ELISIONS,
+        # DST_OPTIMIZER_PLANNED, DST_OPTIMIZER_LOOKUP_PATHS. For each: read the
+        # existing stash via ``_get_context_value(info.context, KEY)``, union it
+        # with the new frozenset (``existing | new`` when present, else ``new``),
+        # and re-stash the merged set. (Use the read-side ``get_context_value``
+        # helper -- it is already importable from ``_context``.)
+        # Resolver keys + FK-id-elision keys embed runtime paths, so parent and
+        # nested-connection plans coexist without collision. ``DST_OPTIMIZER_PLAN``
+        # stays LAST-WINS introspection data (not a correctness sentinel). Pin:
+        # ``test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets``.
         _stash_on_context(info.context, DST_OPTIMIZER_PLAN, plan)
         fk_id_elisions = plan.finalized_fk_id_elisions
         if fk_id_elisions is None:
@@ -969,6 +994,37 @@ class DjangoOptimizerExtension(SchemaExtension):
             operation,
             fragments=fragments,
         )
+        # TODO(spec-033 Slice 3, Decision 7): also collect NESTED pagination
+        # variables. Slice 1 bakes resolved first/last/before/after VALUES into
+        # windowed prefetch querysets, so two requests sharing a printed AST
+        # ("booksConnection(first: $n)") but differing in $n must NOT share a
+        # cached plan (they'd serve one request's page size to the other -- a
+        # CORRECTNESS rule, not an optimization). Collect variable names
+        # referenced in first/last/before/after on NON-ROOT field nodes and union
+        # them into ``directive_var_names`` (or a combined name set) -- i.e.
+        # collect a ``pagination_var_names`` set from a new
+        # ``_collect_nested_pagination_var_names(operation, fragments)`` and union
+        # it with ``directive_var_names`` before building ``relevant_vars``.
+        #
+        # Rules:
+        #   - ROOT pagination args stay OUT (root slicing happens post-plan in
+        #     ConnectionExtension; plan content is invariant in them). Hashing
+        #     them would fragment B1 across every page of a consumer's pagination
+        #     loop.
+        #   - Fragment traversal preserves RESPONSE-PATH DEPTH: track depth at the
+        #     spread SITE, not raw fragment-definition nesting. A root connection
+        #     selected via a fragment on Query is still root (stays out); a nested
+        #     connection via a fragment on a parent node is still nested (keys).
+        #   - Syntactic SUPERSET by design: any non-root field's pagination-named
+        #     variable is collected, incl. non-connection fields. Over-collection
+        #     = cheap duplicate cache entries; under-collection = wrong data.
+        #   - MEMOIZE the var-name sets per ``id(operation)`` from ONE
+        #     reachable-fragments traversal (same per-execution memo style as the
+        #     printed-AST cache) -- Slice 3 must not add a second full-AST walk to
+        #     a path nested fallback connections call per parent.
+        # Pins: ``test_nested_pagination_variable_keys_cache`` /
+        # ``..._root_pagination_variable_shares_cache`` / fragment + superset +
+        # memoization tests in test_extension.py.
         variable_values = info.variable_values or {}
         relevant_vars = frozenset(
             (k, variable_values[k]) for k in directive_var_names if k in variable_values

@@ -147,6 +147,23 @@ def _check_n1(
     callers always supply it; ``None`` falls back to ``field_name`` for
     test-double direct callers.
     """
+    # TODO(spec-033 Slice 4, Decision 8): parameterize this so
+    # ``connection.py::_build_relation_connection_resolver`` can REUSE it instead
+    # of duplicating the contract (two implementations of one contract drift).
+    # Add a connection probe kind + a ``to_attr`` probe + an optional fallback
+    # reason, e.g. extend the keyword-only signature with ``kind="connection_to_attr"``,
+    # ``to_attr="_dst_books_connection"``, and ``reason="not window-planned: selection
+    # carries filter/orderBy; resolving per-parent"``.
+    # New "will it actually query?" probe for the connection kind: the access
+    # queries iff the fast-path ``to_attr`` is ABSENT on ``root`` (when present,
+    # the window already served the rows -> silent, no lazy load) -- so for
+    # ``kind == "connection_to_attr"`` set lazy from ``getattr(root, to_attr, None)
+    # is None``. The raise/warn message then carries the reason when present, e.g.
+    # raise ``OptimizerError(f"Unplanned N+1: {field_name} ({reason})")``.
+    # The three-condition guard (sentinel stashed + key not planned + to_attr
+    # absent) reproduces the list-relation semantics exactly: planned -> silent,
+    # window-served -> silent, unplanned-and-will-query -> flag. The existing
+    # list-relation strictness suite must pass UNMODIFIED.
     context = getattr(info, "context", None)
     planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
     if planned is None:

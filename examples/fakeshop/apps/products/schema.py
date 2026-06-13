@@ -200,6 +200,28 @@ class Query:
     # `*Type` class's Meta block above are what make `relay.node()` work
     # - uncomment those first.
 
+    # TODO(spec-033 Slice 6, Decision 10): replace the four @strawberry.field
+    # list resolvers below with four DjangoConnectionField class attributes -- the
+    # connections-only cookbook mirror (django-graphene-filters: a single
+    # AdvancedDjangoFilterConnectionField, no list resolvers):
+    #
+    #   from django_strawberry_framework import DjangoConnection, DjangoConnectionField
+    #
+    #   all_categories: DjangoConnection[CategoryType] = DjangoConnectionField(CategoryType)
+    #   all_items: DjangoConnection[ItemType] = DjangoConnectionField(ItemType)
+    #   all_properties: DjangoConnection[PropertyType] = DjangoConnectionField(PropertyType)
+    #   all_entries: DjangoConnection[EntryType] = DjangoConnectionField(EntryType)
+    #
+    # The hand-written filter:/orderBy: parameters (and the filter_input_type /
+    # order_input_type imports, now unused) disappear; DjangoConnectionField
+    # synthesizes the SAME arguments from the SAME Meta.filterset_class /
+    # Meta.orderset_class sidecars and the pipeline applies the same
+    # visibility -> filter -> order -> deterministic-order -> optimizer composition.
+    # NO Meta.connection opt-in (no totalCount), NO root node(id:)/nodes(ids:)
+    # fields -- those stay TODO-BETA-051-0.1.5. The four types are already
+    # Relay-Node-shaped, so their relation siblings (itemsConnection,
+    # entriesConnection, ...) already exist live and now plan through Slices 1-2.
+    # test_products_api.py re-pins the whole suite through edges { node } (Slice 6).
     @strawberry.field
     def all_categories(
         self,

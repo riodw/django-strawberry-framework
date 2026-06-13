@@ -412,10 +412,36 @@ def _synthesize_relation_connections() -> None:
                 resolver=_build_relation_connection_resolver(
                     target_type,
                     instance_accessor(field),
+                    # TODO(spec-033 Slice 2, Decision 5): thread the relation
+                    # FIELD NAME (``name``) through here as a third argument so
+                    # the resolver can build its fast-path probe attribute
+                    # ``f"_dst_{name}_connection"``.
+                    # The walker plans the window under ``_dst_<field>_connection``
+                    # keyed on the FIELD NAME (Decision 4), but this resolver is
+                    # currently handed only the ACCESSOR, which DIVERGES from the
+                    # field name for a reverse relation without ``related_name``
+                    # (accessor ``book_set`` vs field ``book``). Without the
+                    # field name the resolver would probe the wrong attribute and
+                    # silently never consume the window. Pass ``name`` (or the
+                    # precomputed ``_dst_<name>_connection`` string).
                 ),
             )
             setattr(field_obj, _SYNTHESIZED_RELATION_CONNECTION_MARKER, True)
             setattr(type_cls, generated, field_obj)
+            # TODO(spec-033 Slice 1, Decision 3): record the walker-readable
+            # synthesis mapping on the declaring definition -- lazily init
+            # ``definition.relation_connections`` to ``{}`` if ``None``, then set
+            # entry ``definition.relation_connections[generated] = name``.
+            # ``generated`` is the Python attr ("books_connection"); ``name`` is
+            # the relation field name ("books"). This is the ONLY write site, and
+            # it runs exactly when a sibling is attached -- so suppressed shapes
+            # ("list"/non-Node/consumer-authored, which ``continue`` above before
+            # reaching here) correctly record nothing. The walker reads this slot
+            # to plan the windowed Prefetch; see ``types/definition.py``. NOTE the
+            # re-entrancy path: the ``_SYNTHESIZED_RELATION_CONNECTION_MARKER``
+            # early-``continue`` above (a prior partial finalize) skips this write,
+            # so the slot write must be idempotent OR also run on that branch --
+            # pin which in the Slice-1 test ``test_relation_connections_slot_recorded``.
             if shape == "connection":
                 # Remove the generated list form before Phase 3 freezes the
                 # annotation set (spec-032 Edge cases): the Phase-1 resolved

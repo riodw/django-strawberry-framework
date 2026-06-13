@@ -15,7 +15,7 @@ guard (High #1, rejects ``DjangoType`` subclass that omits its own
 ``async def __call__`` at construction time so the coroutine return
 doesn't bypass ``_post_process_consumer_async``), and the
 ``functools.partial``-wrapped async-callable-*instance* detection
-(``_is_async_callable`` now unwraps ``partial.func`` before the
+(``is_async_callable`` now unwraps ``partial.func`` before the
 ``__call__`` async check - without it that resolver was misclassified as
 sync and skipped ``get_queryset``). The fourth is a contract pin for
 ``functools.partial``-wrapped async *functions*:
@@ -569,7 +569,7 @@ async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_
 ) -> None:
     """Callable instance with ``async def __call__`` is detected as async at construction.
 
-    Pins ``_is_async_callable`` detection of callable objects whose
+    Pins ``is_async_callable`` detection of callable objects whose
     ``__call__`` is ``async def`` (``list_field.py``'s helper).
     ``inspect.iscoroutinefunction(instance)`` is False for such objects, but
     ``inspect.iscoroutinefunction(instance.__call__)`` is True - the factory
@@ -621,7 +621,7 @@ async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_
     Contract pin (not a fix for a bug that exists today): Python's
     ``inspect.iscoroutinefunction`` looks through ``functools.partial`` wrappers
     natively since 3.8 (empirically verified against the installed Python at
-    review time), so the first branch of ``_is_async_callable`` already routes
+    review time), so the first branch of ``is_async_callable`` already routes
     partial-wrapped async resolvers to the async wrapper. This test pins that
     contract end-to-end through the field's pipeline: ``get_queryset``'s
     ``startswith("a")`` exclusion fires on the awaited QuerySet, proving the
@@ -678,7 +678,7 @@ async def test_djangolistfield_partial_wrapped_async_callable_object_resolver_ge
     ``functools.partial`` whose ``.func`` is a callable object with
     ``async def __call__``. ``inspect.iscoroutinefunction(partial)`` unwraps to
     the instance (not a coroutine function -> False) and ``partial.__call__`` is
-    the partial's own ``__call__`` (also False), so before ``_is_async_callable``
+    the partial's own ``__call__`` (also False), so before ``is_async_callable``
     unwrapped the partial first this resolver was misclassified as sync - its
     coroutine return bypassed ``_post_process_consumer_async`` and silently
     skipped ``target_type.get_queryset(...)`` (docs/feedback.md). Pins the

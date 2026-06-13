@@ -22,7 +22,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 
 from asgiref.sync import sync_to_async
 from django.db import models
-from django.http import HttpRequest
 from django_filters import filterset
 from django_filters.utils import get_model_field
 from graphql import GraphQLError
@@ -37,8 +36,21 @@ from ..types.relay import (
     _apply_get_queryset_sync,
     implements_relay_node,
 )
+from ..utils.permissions import (
+    active_permission_field_paths,
+    active_related_branches,
+    extract_branch_value,
+    invoke_permission_method,
+    iter_input_items,
+    request_from_info,
+    run_active_input_permission_checks,
+)
 from .base import GlobalIDFilter, GlobalIDMultipleChoiceFilter, RelatedFilter
 from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_value
+
+# Python-attr tokens of the logical operator keys (``and_`` / ``or_`` / ``not_``),
+# excluded from the active-permission field walk (they recurse separately).
+_LOGIC_PYTHON_ATTRS: frozenset[str] = frozenset(python_attr for python_attr, _wire in _LOGIC_KEYS)
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
@@ -592,18 +604,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
         """Walk a dict or Strawberry-input dataclass into ``(name, value)`` pairs.
 
-        Returns ``None`` when ``input_value`` is neither a dict nor an
-        object carrying ``__dataclass_fields__`` (the Strawberry-input
-        sniff used package-wide; see ``_operator_bag_items`` docstring
-        for the rationale over ``dataclasses.is_dataclass``).
-        Returns ``[]`` for a walkable-but-empty input.
+        Thin delegate to ``utils/permissions.py::iter_input_items`` (single-sited
+        with the order side per the 0.0.9 DRY pass). Returns ``None`` for an
+        input that is neither a dict nor a Strawberry-input dataclass, ``[]`` for
+        a walkable-but-empty input.
         """
-        if isinstance(input_value, dict):
-            return list(input_value.items())
-        dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
-        if dataclass_fields is None:
-            return None
-        return [(name, getattr(input_value, name)) for name in dataclass_fields]
+        return iter_input_items(input_value)
 
     @classmethod
     def _normalize_input(cls, input_value: Any) -> dict[str, Any]:
@@ -804,22 +810,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         wrapper-less alternative `isinstance(info.context, HttpRequest)`
         is detected so consumers running a bare-HttpRequest context (the
         Django test client default) work without bespoke wiring. Any
-        other shape raises `ConfigurationError`.
+        other shape raises `ConfigurationError`. Thin delegate to
+        ``utils/permissions.py::request_from_info`` (single-sited with the
+        order side per the 0.0.9 DRY pass).
         """
-        context = getattr(info, "context", None)
-        if context is None:
-            raise ConfigurationError(
-                "FilterSet.apply requires `info.context`; received `info` without a context.",
-            )
-        request = getattr(context, "request", None)
-        if request is not None:
-            return request
-        if isinstance(context, HttpRequest):
-            return context
-        raise ConfigurationError(
-            f"FilterSet.apply could not resolve a Django HttpRequest from `info.context` "
-            f"(got {type(context).__name__}). Expected `info.context.request` or a bare HttpRequest.",
-        )
+        return request_from_info(info, family_label="FilterSet")
 
     @classmethod
     def _iter_active_related_branches(
@@ -838,23 +833,17 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         Both ``strawberry.UNSET`` (the Strawberry input-dataclass default
         for unsupplied fields) and ``None`` collapse to "branch not
         supplied" via ``_extract_branch_value``; only the consumer-
-        supplied branches reach the caller. Future refactors that
-        bypass ``_extract_branch_value`` (e.g. inlining the ``getattr``
-        for speed) must replicate the UNSET-collapse explicitly or the
-        active-branch derivation silently widens.
+        supplied branches reach the caller. Thin delegate to
+        ``utils/permissions.py::active_related_branches`` (single-sited with
+        the order side per the 0.0.9 DRY pass); the filter side has no
+        top-level list shape, so ``handle_top_level_list`` stays ``False``.
         """
-        related_filters = getattr(cls, "related_filters", {})
-        if not related_filters:
-            return []
-        active: list[tuple[str, RelatedFilter, Any]] = []
-        for field_name, related_filter in related_filters.items():
-            child_input = cls._extract_branch_value(input_value, field_name)
-            if child_input is None:
-                continue
-            active.append(
-                (field_name, related_filter, child_input),
-            )
-        return active
+        return active_related_branches(
+            cls,
+            input_value,
+            related_attr="related_filters",
+            unset_sentinel=UNSET,
+        )
 
     @staticmethod
     def _extract_branch_value(input_value: Any, field_name: str) -> Any:
@@ -863,17 +852,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         Strawberry input dataclasses default unsupplied fields to
         ``strawberry.UNSET`` rather than ``None``; collapse that sentinel
         to ``None`` so the active-branch caller treats UNSET the same as
-        a missing key (no permission gate, no constraint application).
+        a missing key. Thin delegate to
+        ``utils/permissions.py::extract_branch_value`` with
+        ``unset_sentinel=UNSET``.
         """
-        if input_value is None:
-            return None
-        if isinstance(input_value, dict):
-            value = input_value.get(field_name)
-        else:
-            value = getattr(input_value, field_name, None)
-        if value is UNSET:
-            return None
-        return value
+        return extract_branch_value(input_value, field_name, unset_sentinel=UNSET)
 
     @classmethod
     def _iter_visibility_steps(
@@ -1158,40 +1141,24 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
 
         if _fired is None:
             _fired = {}
-        class_fired = _fired.setdefault(cls, set())
         bare = _bare if _bare is not None else object.__new__(cls)
 
+        # Fire the per-field and per-branch gates -- the active-input core
+        # shared with the order side (``utils/permissions.py``). Gates key on
+        # the SOURCE FIELD (one fire per field across all its lookups) and the
+        # parent's per-branch ``check_<relation>_permission``; the child
+        # filterset recursion + per-class ``_fired`` dedup live in the core.
+        # ``normalized`` is read here only to drive the filter-only logical
+        # ``and`` / ``or`` / ``not`` recursion below.
         normalized = cls._normalize_input(input_value)
-        # Permission gates are keyed on the SOURCE FIELD, not the
-        # lookup-expanded form key: ``check_<field>_permission`` gates a
-        # field across ALL its lookups (``exact`` / ``icontains`` /
-        # ``in`` / ``range`` / ...). Iterating ``normalized``'s flattened
-        # form keys would build ``check_<field>_<lookup>_permission`` and
-        # silently skip the gate for every non-``exact`` lookup -- only
-        # ``exact`` lands a suffix-free form key (``name``), so the gate
-        # fired for it by accident while ``name__icontains`` etc. slipped
-        # past ungated. ``_active_permission_field_paths`` strips back to
-        # the per-field source path so the gate fires once per field.
-        for field_path in cls._active_permission_field_paths(input_value):
-            cls._invoke_permission_method(bare, field_path, request, fired=class_fired)
-
-        for field_name, related_filter, child_input in cls._iter_active_related_branches(
+        run_active_input_permission_checks(
+            cls,
             input_value,
-        ):
-            child_filterset = related_filter.filterset
-            if child_filterset is not None and hasattr(child_filterset, "_run_permission_checks"):
-                # Child filterset is a different class; it keys its own
-                # per-class set inside the shared ``_fired`` map (so a
-                # same-class child re-entered from sibling branches still
-                # dedups) and allocates its own bare instance.
-                child_filterset._run_permission_checks(child_input, request, _fired=_fired)
-            # Per-branch permission gate on the parent - fires e.g.
-            # `check_shelves_permission` when the `shelves` branch is
-            # active. Child filterset's own field gates fire via the
-            # recursive call above. Deduped against the parent's
-            # per-class set so an ``or: [{shelves: ...}, {shelves: ...}]``
-            # shape fires the parent's per-branch gate once.
-            cls._invoke_permission_method(bare, field_name, request, fired=class_fired)
+            request,
+            fired=_fired,
+            bare=bare,
+            target_attr="filterset",
+        )
 
         # Recurse into logical branches (and, or, not) to check permissions
         # of any nested field/lookup clauses. Same cls -> reuse ``bare`` and
@@ -1236,63 +1203,40 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     ) -> None:
         """Call `check_<field_path>_permission(request)` if defined on `bare_instance`.
 
-        When ``fired`` is supplied, the method-name is recorded after a
-        successful fire and subsequent calls with the same name skip the
-        attribute lookup entirely. The dedup is scoped to the supplied
-        set - ``_run_permission_checks`` passes the per-class set keyed
-        out of its shared ``_fired`` map.
+        Thin delegate to ``utils/permissions.py::invoke_permission_method``
+        (single-sited with the order side). When ``fired`` is supplied, the
+        method name is recorded after a successful fire and subsequent calls
+        with the same name skip the attribute lookup -- the per-class set keyed
+        out of ``_run_permission_checks``'s shared ``_fired`` map.
         """
-        method_name = f"check_{field_path.replace('__', '_')}_permission"
-        if fired is not None and method_name in fired:
-            return
-        method = getattr(bare_instance, method_name, None)
-        if callable(method):
-            method(request)
-            if fired is not None:
-                fired.add(method_name)
+        invoke_permission_method(bare_instance, field_path, request, fired=fired)
 
     @classmethod
     def _active_permission_field_paths(cls, input_value: Any) -> list[str]:
         """Return the base Django source path for each active top-level field.
 
-        Drives ``_run_permission_checks``'s per-field gate dispatch. Emits
-        one entry per supplied top-level field -- its ``django_source_path``
-        (the lookup-free source field, e.g. ``name`` for both ``name`` and
-        ``name__icontains``) -- so ``check_<field>_permission`` fires once
-        for a field no matter which lookups the consumer populated. This
-        is the fix for the form-key dispatch bug: the per-field operator
-        bag means a single top-level field carries many lookups, and the
-        gate must key on the field, not the lookup.
-
-        Logic keys (``and`` / ``or`` / ``not``) and ``RelatedFilter``
-        branches are excluded here -- the former are walked by the
-        logical-branch recursion, the latter by the related-branch loop
-        (each fires its own per-branch gate). ``UNSET`` / ``None`` values
-        are skipped: a Strawberry input dataclass defaults unsupplied
-        fields to ``UNSET``, and only consumer-supplied fields are gated
-        (active-input-only contract, M2 of rev5).
+        Drives ``_run_permission_checks``'s per-field gate dispatch. Emits one
+        entry per supplied top-level field -- its ``django_source_path`` (the
+        lookup-free source field, e.g. ``name`` for both ``name`` and
+        ``name__icontains``) -- so ``check_<field>_permission`` fires once for a
+        field no matter which lookups the consumer populated. Logic keys
+        (``and_`` / ``or_`` / ``not_``) and ``RelatedFilter`` branches are
+        excluded (walked by the logical-branch recursion / related-branch loop
+        respectively); ``UNSET`` / ``None`` values are skipped (active-input-only
+        contract, M2 of rev5). Thin delegate to
+        ``utils/permissions.py::active_permission_field_paths``; the filter side
+        excludes the logical operator attrs and falls back to the form-key map
+        for fields with no field-spec entry.
         """
-        if input_value is None or input_value is UNSET:
-            return []
-        items = cls._iter_input_items(input_value)
-        if items is None:
-            return []
-
-        logic_lookup = dict(_LOGIC_KEYS)
-        related_keys = set(getattr(cls, "related_filters", {}) or {})
-        paths: list[str] = []
-        for python_attr, raw_value in items:
-            if raw_value is None or raw_value is UNSET:
-                continue
-            if python_attr in logic_lookup or python_attr in related_keys:
-                continue
-            spec = _field_specs.get((cls, python_attr))
-            paths.append(
-                spec.django_source_path
-                if spec is not None
-                else cls._form_key_for_python_attr(python_attr),
-            )
-        return paths
+        return active_permission_field_paths(
+            cls,
+            input_value,
+            field_specs=_field_specs,
+            related_keys=set(getattr(cls, "related_filters", {}) or {}),
+            logic_keys=_LOGIC_PYTHON_ATTRS,
+            fallback_path=cls._form_key_for_python_attr,
+            unset_sentinel=UNSET,
+        )
 
     def check_permissions(self, request: Any, requested_fields: set[str] | None = None) -> None:
         """Backward-compatible thin delegate to `_run_permission_checks`.

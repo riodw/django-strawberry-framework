@@ -22,7 +22,6 @@ import decimal
 import enum
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any
 
 import strawberry
@@ -33,6 +32,14 @@ from strawberry import UNSET, relay
 
 from ..conf import settings
 from ..exceptions import ConfigurationError
+from ..utils.inputs import (
+    GeneratedInputFieldSpec,
+    build_strawberry_input_class,
+    clear_generated_input_namespace,
+    graphql_camel_name,
+    iter_set_subclasses,
+    materialize_generated_input_class,
+)
 from .base import (
     ArrayFilter,
     GlobalIDFilter,
@@ -41,6 +48,15 @@ from .base import (
     RangeFilter,
     TypedFilter,
 )
+
+# Domain-local aliases for the shared generated-input substrate (the mechanics
+# are single-sited in ``utils/inputs.py`` per the 0.0.9 DRY pass). Tests and
+# ``factories.py`` import these spec-027 Decision 9 names from this module, so
+# they stay addressable here.
+FieldSpec = GeneratedInputFieldSpec
+build_input_class = build_strawberry_input_class
+_camel_case = graphql_camel_name
+_iter_filterset_subclasses = iter_set_subclasses
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..types.definition import DjangoTypeDefinition
@@ -111,22 +127,6 @@ LOOKUP_NAME_MAP: dict[str, tuple[str, str]] = {
 # surface names land through ``strawberry.field(name=...)`` because
 # ``and`` / ``or`` / ``not`` cannot be dataclass field names.
 _LOGIC_KEYS: tuple[tuple[str, str], ...] = (("and_", "and"), ("or_", "or"), ("not_", "not"))
-
-
-@dataclass(frozen=True)
-class FieldSpec:
-    """Per-generated-input-field metadata.
-
-    Carries the three names ``normalize_input_value`` and
-    ``materialize_input_class`` need to map between the Strawberry input
-    dataclass field, the GraphQL wire-format name, and the
-    `django-filter` lookup path on the Django ORM (per spec-027 M5 of
-    rev8).
-    """
-
-    python_attr: str
-    graphql_name: str
-    django_source_path: str
 
 
 # Provenance table populated by ``_build_input_fields`` and consulted at
@@ -584,48 +584,6 @@ def _owner_type_name(owner_definition: DjangoTypeDefinition | None) -> str | Non
 
 
 # ---------------------------------------------------------------------------
-# Input class construction
-# ---------------------------------------------------------------------------
-
-
-def build_input_class(
-    name: str,
-    field_specs: list[tuple[str, Any, dict[str, Any] | None]],
-) -> type:
-    """Construct a ``@strawberry.input``-decorated dataclass.
-
-    ``field_specs`` is a list of ``(python_attr, annotation, field_kwargs)``
-    triples. ``field_kwargs`` may carry ``name=`` for the GraphQL alias,
-    ``default=`` for the dataclass default (defaults to ``None``), and
-    ``description=`` for the Strawberry field description.
-
-    The class is constructed via ``type(name, (), namespace)`` rather
-    than ``dataclasses.make_dataclass`` because ``make_dataclass``
-    replaces any ``strawberry.field(...)`` default with a plain
-    ``dataclasses.Field`` and strips the strawberry-specific metadata
-    (the ``name=`` alias would be lost). Setting the ``strawberry.field``
-    as a class-level attribute alongside ``__annotations__`` preserves
-    the metadata through the ``@strawberry.input`` decoration.
-    """
-    namespace: dict[str, Any] = {"__annotations__": {}}
-    for python_attr, annotation, raw_kwargs in field_specs:
-        kwargs = dict(raw_kwargs or {})
-        default = kwargs.pop("default", None)
-        strawberry_field_kwargs: dict[str, Any] = {}
-        if "name" in kwargs:
-            strawberry_field_kwargs["name"] = kwargs.pop("name")
-        if "description" in kwargs:
-            strawberry_field_kwargs["description"] = kwargs.pop("description")
-        namespace["__annotations__"][python_attr] = annotation
-        if strawberry_field_kwargs:
-            namespace[python_attr] = strawberry.field(default=default, **strawberry_field_kwargs)
-        else:
-            namespace[python_attr] = default
-    cls = type(name, (), namespace)
-    return strawberry.input(cls)
-
-
-# ---------------------------------------------------------------------------
 # Logical-operator + input-field builders
 # ---------------------------------------------------------------------------
 
@@ -788,15 +746,6 @@ def _build_input_fields(
     return triples
 
 
-def _camel_case(name: str) -> str:
-    """Lowercase the head, then ``PascalCase`` the rest (``galaxy_name`` -> ``galaxyName``)."""
-    parts = [part for part in name.split("_") if part]
-    if not parts:
-        return name
-    head, *rest = parts
-    return head + "".join(part.capitalize() for part in rest)
-
-
 def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Filter) -> Any:
     """Resolve the Django model field a filter targets (or ``None``)."""
     from django.core.exceptions import FieldDoesNotExist
@@ -856,35 +805,20 @@ def construct_search(all_filters: dict[str, Any]) -> dict[str, str]:
 def materialize_input_class(name: str, cls: type) -> None:
     """Set ``cls`` as a real module global of ``filters.inputs`` under ``name``.
 
-    Strawberry's ``LazyType.resolve_type`` reads
-    ``sys.modules[<module>].__dict__[name]`` to materialize an
-    ``Annotated[<name>, strawberry.lazy(<module>)]`` reference; this
-    helper is the single entry point that pins ``cls`` at the matching
-    ``__dict__`` slot per spec-027 Decision 9.
-
-    Idempotent on the ``(name, cls)`` pair: re-materializing the same
-    class under the same name is a no-op (Decision 9 lifecycle clause -
-    supports partial-finalize recovery without a sentinel pass). A
-    collision against a different class under the same ``name`` raises
-    ``ConfigurationError`` naming both qualified class names so the
-    consumer sees the offending pair instead of a cryptic schema-build
-    error.
+    Thin family wrapper over
+    ``utils/inputs.py::materialize_generated_input_class`` pinning the
+    filter-side module path, family label, and ledger. See that helper for the
+    Strawberry ``LazyType.resolve_type`` contract, the ``(name, cls)``
+    idempotency clause, and the distinct-class collision raise (spec-027
+    Decision 9).
     """
-    import sys
-
-    existing = _materialized_names.get(name)
-    if existing is cls:
-        return
-    if existing is not None:
-        raise ConfigurationError(
-            f"{name!r} is materialized by two distinct FilterSet input classes: "
-            f"{existing.__module__}.{existing.__qualname__} vs "
-            f"{cls.__module__}.{cls.__qualname__}. Rename one filterset so its "
-            "class-derived input type name is unique.",
-        )
-    module = sys.modules[INPUTS_MODULE_PATH]
-    setattr(module, name, cls)
-    _materialized_names[name] = cls
+    materialize_generated_input_class(
+        name,
+        cls,
+        module_path=INPUTS_MODULE_PATH,
+        family_label="FilterSet",
+        ledger=_materialized_names,
+    )
 
 
 def clear_filter_input_namespace() -> None:
@@ -924,71 +858,21 @@ def clear_filter_input_namespace() -> None:
     and never reached ``filters.inputs``) - the ledger and the
     per-filterset map still get reset so a subsequent import / build
     starts from a clean slate. The factory / FilterSet clears use
-    local imports so a partial-load environment (factories / sets not
-    yet imported) tolerates the call without raising.
+    cycle-safe imports so a partial-load environment (factories / sets
+    not yet imported) tolerates the call without raising.
+
+    Delegates the lifecycle to
+    ``utils/inputs.py::clear_generated_input_namespace``; the filter-side
+    binding attrs are ``_owner_definition`` / ``_expanded_filters`` /
+    ``_is_expanding_filters``.
     """
-    _materialized_names.clear()
-    _field_specs.clear()
-
-    # FilterArgumentsFactory's class-level caches hold the built input
-    # classes; stale entries here cause `_ensure_built` to skip rebuild
-    # and surface prior-build input classes (with prior-build enum
-    # annotations) against a freshly-cleared registry.
-    try:
-        from .factories import FilterArgumentsFactory
-    except ImportError:
-        pass
-    else:
-        FilterArgumentsFactory.input_object_types.clear()
-        FilterArgumentsFactory._type_filterset_registry.clear()
-
-    # Every FilterSet subclass carries the phase-2.5 binding state at
-    # the class level; that state survives a `registry.clear()` and
-    # would otherwise force `_bind_filterset_owner` down the multi-owner
-    # strict-equality branch on the next finalize even though the
-    # caller intended a clean rebuild.
-    # Symmetric with the factory guard above (M-core-4 review): on a broken
-    # import this ``pass``es rather than ``return``s, so this phase never
-    # short-circuits a later cleanup phase added after it. Today it is the
-    # last phase, but the early-return was a latent footgun.
-    try:
-        from .sets import FilterSet
-    except ImportError:
-        pass
-    else:
-        for subclass in _iter_filterset_subclasses(FilterSet):
-            # `delattr` on the subclass so an inherited default (the
-            # `FilterSet` base's `_owner_definition = None`) is restored
-            # rather than masked. Each attribute is removed only when set
-            # directly on the subclass (``in subclass.__dict__``) so a
-            # subclass that never had a binding tolerates the clear.
-            for attr in ("_owner_definition", "_expanded_filters", "_is_expanding_filters"):
-                if attr in subclass.__dict__:
-                    delattr(subclass, attr)
-
-
-def _iter_filterset_subclasses(root: type) -> list[type]:
-    """Return every concrete subclass of ``root`` (depth-first, dedup by identity).
-
-    Uses ``type.__subclasses__()`` which only yields LIVE subclasses;
-    garbage-collected definitions silently drop. That is the correct
-    contract for a test-isolation clear - a definition that has
-    already been collected has no state to reset. However: long-running
-    test runners that keep filterset references through fixture
-    lifetimes accumulate filtersets across tests; each carries
-    ``_expanded_filters`` / ``base_filters`` on ``__dict__``. If
-    integration suites ever run thousands of fixture-based filtersets,
-    profile this walk and consider weak-referencing the helper-tracked
-    set instead of relying on ``__subclasses__()`` traversal.
-    """
-    seen: set[type] = set()
-    result: list[type] = []
-    stack: list[type] = list(root.__subclasses__())
-    while stack:
-        cls = stack.pop()
-        if cls in seen:
-            continue
-        seen.add(cls)
-        result.append(cls)
-        stack.extend(cls.__subclasses__())
-    return result
+    clear_generated_input_namespace(
+        materialized_names=_materialized_names,
+        field_specs=_field_specs,
+        factory_module="django_strawberry_framework.filters.factories",
+        factory_class_name="FilterArgumentsFactory",
+        collision_registry_attr="_type_filterset_registry",
+        set_module="django_strawberry_framework.filters.sets",
+        set_class_name="FilterSet",
+        binding_attrs=("_owner_definition", "_expanded_filters", "_is_expanding_filters"),
+    )

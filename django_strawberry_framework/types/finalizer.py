@@ -48,6 +48,8 @@ offending type cannot be fixed in place.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import strawberry
@@ -634,6 +636,93 @@ def finalize_django_types() -> None:
     registry.mark_finalized()
 
 
+def _bind_set_owner_common(
+    set_cls: type,
+    definition: DjangoTypeDefinition,
+    *,
+    get_model: Callable[[type], type[models.Model] | None],
+    format_model_mismatch: Callable[[type, DjangoTypeDefinition], str],
+    before_second_owner_check: (
+        Callable[[type, DjangoTypeDefinition, DjangoTypeDefinition], None] | None
+    ),
+    related_attr: str,
+    format_target_mismatch: Callable[..., str],
+) -> None:
+    """Bind ``set_cls._owner_definition`` with shared first-bind/idempotency/target checks.
+
+    The phase-2.5 owner-binding skeleton shared by FilterSet and OrderSet (the
+    0.0.9 DRY pass, ``docs/feedback.md`` Major 2). Family-specific behaviour
+    enters through hooks:
+
+    - ``get_model`` reads the set's ``Meta.model`` (FilterSet exposes it via
+      ``_meta``, OrderSet via the raw ``Meta``).
+    - ``format_model_mismatch`` / ``format_target_mismatch`` produce the
+      family-named error messages.
+    - ``before_second_owner_check`` is the filter-only own-PK Relay-identity
+      axis (``None`` for orders -- ``ORDER BY id`` uses the column, not the
+      GraphQL ID type, so own-PK identity is not an owner-dependent axis there).
+    - ``related_attr`` is ``related_filters`` / ``related_orders``.
+
+    First binding stores ``definition`` after rejecting a ``Meta.model``
+    unrelated to the owner's (``definition.model`` must BE the set's model or
+    derive from it; otherwise the set's lookups would run against a queryset of
+    the wrong model, and the mismatch surfaces here at finalize rather than as
+    an opaque query-time ``FieldError``). Re-binding the same
+    ``(set_cls, definition)`` pair is idempotent (partial-finalize recovery). A
+    second, distinct owner runs the optional pre-check then the declared-
+    relation-target agreement walk: every declared related target must resolve
+    to the EXACT same ``DjangoTypeDefinition`` AND ``graphql_type_name`` across
+    both owners.
+
+    Scope note: ``related_target_for`` resolves via the process-global
+    ``registry.primary_for(target_model)`` keyed on the TARGET model -- not the
+    owner -- so for two legitimate owners (which share the set's ``Meta.model``)
+    the relation targets are invariant. The own-PK identity is the real
+    owner-dependent axis, which is why only the filter side wires a pre-check.
+    """
+    previous: DjangoTypeDefinition | None = getattr(set_cls, "_owner_definition", None)
+    if previous is None:
+        set_model = get_model(set_cls)
+        if (
+            set_model is not None
+            and definition.model is not None
+            and not issubclass(definition.model, set_model)
+        ):
+            raise ConfigurationError(format_model_mismatch(set_cls, definition))
+        set_cls._owner_definition = definition
+        return
+    if previous is definition:
+        return
+    if before_second_owner_check is not None:
+        before_second_owner_check(set_cls, previous, definition)
+    related = getattr(set_cls, related_attr, {}) or {}
+    for field_name in related:
+        prev_target = previous.related_target_for(field_name)
+        new_target = definition.related_target_for(field_name)
+        if prev_target is None and new_target is None:
+            continue
+        # Short-circuits before indexing a ``None`` target: an exactly-one-None
+        # pair diverges, as does a both-present pair whose resolved definition
+        # or GraphQL type name differs.
+        diverges = (
+            prev_target is None
+            or new_target is None
+            or prev_target[0] is not new_target[0]
+            or prev_target[0].graphql_type_name != new_target[0].graphql_type_name
+        )
+        if diverges:
+            raise ConfigurationError(
+                format_target_mismatch(
+                    set_cls,
+                    previous,
+                    definition,
+                    field_name,
+                    prev_target,
+                    new_target,
+                ),
+            )
+
+
 def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition) -> None:
     """Bind ``filterset_cls._owner_definition`` with strict multi-owner validation.
 
@@ -671,76 +760,42 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
     surface and stays deferred (spec lines 575-576) until real demand
     surfaces.
     """
-    previous: DjangoTypeDefinition | None = getattr(filterset_cls, "_owner_definition", None)
-    if previous is None:
-        # First binding - reject a ``Meta.filterset_class`` whose own
-        # ``Meta.model`` is unrelated to this owner's model BEFORE storing
-        # it. ``definition.model`` must BE the filterset's model or derive
-        # from it (proxy / multi-table-inheritance owners carry every field
-        # the filterset's lookups reference); otherwise the filterset's
-        # lookups would run against a queryset of the wrong model. Catching
-        # it here - at finalize, on the FIRST bind - replaces the opaque
-        # query-time ``FieldError`` the mismatch would otherwise raise far
-        # from its cause (H-core-3 of the pre-merge review).
-        filterset_model = filterset_cls._meta.model
-        if (
-            filterset_model is not None
-            and definition.model is not None
-            and not issubclass(definition.model, filterset_model)
-        ):
-            raise ConfigurationError(
-                _format_owner_model_mismatch_error(filterset_cls, definition),
-            )
-        filterset_cls._owner_definition = definition
-        return
-    if previous is definition:
-        return
-    # Axis 1 - own-PK Relay identity. ``owner.origin`` Relay-node-ness and
-    # ``graphql_type_name`` are the only owner-dependent inputs to the
-    # filterset's own-PK GlobalID resolution; a divergence here means the
-    # shared ``id`` filter would resolve ambiguously across owners.
+    _bind_set_owner_common(
+        filterset_cls,
+        definition,
+        get_model=lambda cls: cls._meta.model,
+        format_model_mismatch=_format_owner_model_mismatch_error,
+        before_second_owner_check=_check_filterset_owner_pk_identity,
+        related_attr="related_filters",
+        format_target_mismatch=_format_owner_mismatch_error,
+    )
+
+
+def _check_filterset_owner_pk_identity(
+    filterset_cls: type,
+    previous: DjangoTypeDefinition,
+    new: DjangoTypeDefinition,
+) -> None:
+    """Filter-only own-PK Relay-identity axis for multi-owner binding.
+
+    A filterset's own primary key resolves to a Relay ``GlobalID`` typed to the
+    *owner* -- keyed on ``owner.origin``'s Relay-node-ness and its
+    ``graphql_type_name``. Two owners that disagree on either would make the
+    shared filterset's ``id`` filter resolve to a different (or differently-
+    typed) GlobalID depending on which owner finalized first; only the FIRST
+    binding is stored, so the second owner would silently mis-resolve. Wired as
+    the ``before_second_owner_check`` hook of ``_bind_set_owner_common``; the
+    order side passes ``None`` because ``ORDER BY id`` uses the column, not the
+    GraphQL ID type (spec-027 H2 of rev8 / spec-028 Decision 6).
+    """
     prev_is_relay = implements_relay_node(previous.origin)
-    new_is_relay = implements_relay_node(definition.origin)
+    new_is_relay = implements_relay_node(new.origin)
     if prev_is_relay != new_is_relay or (
-        prev_is_relay and previous.graphql_type_name != definition.graphql_type_name
+        prev_is_relay and previous.graphql_type_name != new.graphql_type_name
     ):
         raise ConfigurationError(
-            _format_owner_pk_mismatch_error(filterset_cls, previous, definition),
+            _format_owner_pk_mismatch_error(filterset_cls, previous, new),
         )
-    # Axis 2 - declared relation targets.
-    related_filters = getattr(filterset_cls, "related_filters", {}) or {}
-    for field_name in related_filters:
-        prev_target = previous.related_target_for(field_name)
-        new_target = definition.related_target_for(field_name)
-        if prev_target is None and new_target is None:
-            continue
-        if prev_target is None or new_target is None:
-            raise ConfigurationError(
-                _format_owner_mismatch_error(
-                    filterset_cls,
-                    previous,
-                    definition,
-                    field_name,
-                    prev_target,
-                    new_target,
-                ),
-            )
-        prev_definition, _ = prev_target
-        new_definition, _ = new_target
-        if (
-            prev_definition is not new_definition
-            or prev_definition.graphql_type_name != new_definition.graphql_type_name
-        ):
-            raise ConfigurationError(
-                _format_owner_mismatch_error(
-                    filterset_cls,
-                    previous,
-                    definition,
-                    field_name,
-                    prev_target,
-                    new_target,
-                ),
-            )
 
 
 def _format_owner_mismatch_error(
@@ -885,62 +940,15 @@ def _bind_orderset_owner(orderset_cls: type, definition: DjangoTypeDefinition) -
     the GraphQL ID type, so own-PK identity is not an
     owner-dependent axis here.
     """
-    previous: DjangoTypeDefinition | None = getattr(orderset_cls, "_owner_definition", None)
-    if previous is None:
-        # First binding -- reject an ``Meta.orderset_class`` whose own
-        # ``Meta.model`` is unrelated to this owner's model BEFORE storing
-        # it. ``definition.model`` must BE the orderset's model or derive
-        # from it (proxy / multi-table-inheritance owners carry every field
-        # the orderset's lookups reference); otherwise the orderset's
-        # ``order_by(...)`` calls would run against a queryset of the wrong
-        # model.
-        orderset_model = getattr(getattr(orderset_cls, "Meta", None), "model", None)
-        if (
-            orderset_model is not None
-            and definition.model is not None
-            and not issubclass(definition.model, orderset_model)
-        ):
-            raise ConfigurationError(
-                _format_owner_orderset_model_mismatch_error(orderset_cls, definition),
-            )
-        orderset_cls._owner_definition = definition
-        return
-    if previous is definition:
-        return
-    # Declared related-order targets must agree across owners.
-    related_orders = getattr(orderset_cls, "related_orders", {}) or {}
-    for field_name in related_orders:
-        prev_target = previous.related_target_for(field_name)
-        new_target = definition.related_target_for(field_name)
-        if prev_target is None and new_target is None:
-            continue
-        if prev_target is None or new_target is None:
-            raise ConfigurationError(
-                _format_owner_ordersets_mismatch_error(
-                    orderset_cls,
-                    previous,
-                    definition,
-                    field_name,
-                    prev_target,
-                    new_target,
-                ),
-            )
-        prev_definition, _ = prev_target
-        new_definition, _ = new_target
-        if (
-            prev_definition is not new_definition
-            or prev_definition.graphql_type_name != new_definition.graphql_type_name
-        ):
-            raise ConfigurationError(
-                _format_owner_ordersets_mismatch_error(
-                    orderset_cls,
-                    previous,
-                    definition,
-                    field_name,
-                    prev_target,
-                    new_target,
-                ),
-            )
+    _bind_set_owner_common(
+        orderset_cls,
+        definition,
+        get_model=lambda cls: getattr(getattr(cls, "Meta", None), "model", None),
+        format_model_mismatch=_format_owner_orderset_model_mismatch_error,
+        before_second_owner_check=None,
+        related_attr="related_orders",
+        format_target_mismatch=_format_owner_ordersets_mismatch_error,
+    )
 
 
 def _format_owner_ordersets_mismatch_error(
@@ -1021,6 +1029,161 @@ def _format_orphan_ordersets_error(orphans: list[type]) -> str:
     )
 
 
+@dataclass(frozen=True)
+class _SidecarBindingSpec:
+    """Per-family configuration for the shared phase-2.5 binding driver.
+
+    The ordered four-subpass binding skeleton (``_bind_sidecar_sets``) is shared
+    by FilterSet and OrderSet (the 0.0.9 DRY pass, ``docs/feedback.md`` Major 2);
+    this carries the family differences. ``expand`` runs Layer-4 expansion for
+    one set; ``post_expand_audit`` is the optional filter-only
+    unregistered-``RelatedFilter``-target walk (``None`` for orders).
+    """
+
+    definition_attr: str
+    expand_label_noun: str
+    related_noun: str
+    bind_owner: Callable[[type, DjangoTypeDefinition], None]
+    helper_ledger: set[type]
+    factory_cls: type
+    materialize: Callable[[str, type], None]
+    format_orphans: Callable[[list[type]], str]
+    expand: Callable[[type], None]
+    post_expand_audit: Callable[[list[type]], None] | None
+
+
+def _expand_filterset(filterset_cls: type) -> None:
+    """Layer-4 filterset expansion (resolves lazy ``RelatedFilter`` refs)."""
+    filterset_cls.get_filters()
+
+
+def _expand_orderset(orderset_cls: type) -> None:
+    """Layer-4 orderset expansion.
+
+    ``OrderSet.get_fields()`` stores ``RelatedOrder`` instances without eagerly
+    resolving their lazy class refs (unlike the filter side's ``get_filters()``
+    which calls ``_expand_related_filter`` reading ``f.filterset``), so this
+    also reads ``related.orderset`` to force Layer-2 resolution at the
+    subpass-2 boundary -- so an unresolved ``RelatedOrder('...')`` rewraps as
+    ``ConfigurationError`` with ``__cause__`` preserved here.
+    """
+    orderset_cls.get_fields()
+    for related in getattr(orderset_cls, "related_orders", {}).values():
+        _ = related.orderset
+
+
+def _audit_unregistered_related_filter_targets(wired: list[type]) -> None:
+    """Filter-only subpass 2.5: every reachable ``RelatedFilter`` target must be registered.
+
+    A related branch's visibility scoping runs the target type's
+    ``get_queryset`` (spec-027 Decision 8 step 3); an unregistered target would
+    make the branch unfulfillable even though its input field is materialized
+    into the schema, so the misconfiguration surfaces here -- at finalize,
+    naming the filterset -- instead of on the first request that activates the
+    branch (where ``FilterSet._iter_visibility_steps`` raises the runtime
+    sibling of this error). The walk is transitive with a visited set; cyclic
+    cross-references (``BookFilter`` <-> ``ShelfFilter``) are legal.
+    """
+    seen_filtersets: set[type] = set(wired)
+    pending_filtersets: list[type] = list(wired)
+    while pending_filtersets:
+        filterset_cls = pending_filtersets.pop()
+        for field_name, related_filter in (
+            getattr(filterset_cls, "related_filters", {}) or {}
+        ).items():
+            child_filterset = related_filter.filterset
+            if child_filterset is not None and child_filterset not in seen_filtersets:
+                seen_filtersets.add(child_filterset)
+                pending_filtersets.append(child_filterset)
+            if filterset_cls._target_type_for_related_filter(related_filter) is None:
+                raise ConfigurationError(
+                    _format_unregistered_related_target_error(
+                        filterset_cls,
+                        field_name,
+                        child_filterset,
+                    ),
+                )
+
+
+def _bind_sidecar_sets(spec: _SidecarBindingSpec) -> None:
+    """Run the ordered phase-2.5 subpasses for one sidecar family.
+
+    Shared by ``_bind_filtersets`` / ``_bind_ordersets`` (the 0.0.9 DRY pass,
+    ``docs/feedback.md`` Major 2). The ordering is load-bearing: every subpass
+    MUST complete across all wired types before the next starts so cross-set
+    references resolve against bound owners regardless of registration order.
+
+    1. Bind every owner (``spec.bind_owner``) before any expansion runs.
+    2. Expand every set (``spec.expand``); ``ImportError`` from an unresolved
+       lazy related target and any other exception rewrap as
+       ``ConfigurationError`` naming the offending set (uniform finalize-time
+       error shape). ``repr(exc)`` keeps the underlying error fully in the
+       consumer-visible message and ``from exc`` preserves ``__cause__``.
+    3. (Optional) ``spec.post_expand_audit`` -- the filter-only transitive
+       unregistered-``RelatedFilter``-target walk.
+    4. Orphan validation: helper-referenced sets not wired to any DjangoType
+       raise via ``spec.format_orphans``. Runs BEFORE materialization so a
+       failure leaves no half-materialized input classes in the namespace.
+    5. Materialize every built input class as a module global.
+    """
+    # Subpass 1: bind every owner before any expansion runs.
+    wired: list[type] = []
+    for _type_cls, definition in registry.iter_definitions():
+        if definition.finalized:
+            continue
+        set_cls = getattr(definition, spec.definition_attr)
+        if set_cls is None:
+            continue
+        spec.bind_owner(set_cls, definition)
+        wired.append(set_cls)
+
+    # Subpass 2: expand every set; cross-references now resolve.
+    for set_cls in wired:
+        # PERF203 (try/except in a loop) is intentional: the per-iteration try
+        # attributes the failure to this specific set_cls.
+        try:
+            spec.expand(set_cls)
+        except ImportError as exc:  # noqa: PERF203
+            raise ConfigurationError(
+                f"Cannot finalize Django types: {spec.expand_label_noun} "
+                f"{set_cls.__qualname__} references an unresolved "
+                f"{spec.related_noun} target. {exc}",
+            ) from exc
+        except ConfigurationError:
+            raise
+        except Exception as exc:
+            raise ConfigurationError(
+                f"Cannot finalize Django types: {spec.expand_label_noun} "
+                f"{set_cls.__qualname__} raised during expansion. {exc!r}",
+            ) from exc
+
+    # Subpass 2.5 (filter-only today): unregistered related-target audit.
+    if spec.post_expand_audit is not None:
+        spec.post_expand_audit(wired)
+
+    # Subpass 3: orphan validation against the helper-tracked set. Runs BEFORE
+    # materialization so a failure here doesn't leave half-materialized input
+    # classes in the inputs-module namespace.
+    wired_set = set(wired)
+    orphans = sorted(
+        spec.helper_ledger - wired_set,
+        key=lambda cls: f"{cls.__module__}.{cls.__qualname__}",
+    )
+    if orphans:
+        raise ConfigurationError(spec.format_orphans(orphans))
+
+    # Subpass 4: materialize every built input class as a module global.
+    for set_cls in wired:
+        factory = spec.factory_cls(set_cls)
+        # Touch ``.arguments`` to drive ``_ensure_built`` (idempotent through
+        # the factory's class-level cache); the cache is shared across
+        # instances so dependent input classes built by one factory are visible
+        # to a sibling factory's materialize loop.
+        _ = factory.arguments
+        for name, input_cls in factory.input_object_types.items():
+            spec.materialize(name, input_cls)
+
+
 def _bind_ordersets() -> None:
     """Run the four ordered phase-2.5 subpasses for orderset binding.
 
@@ -1059,77 +1222,28 @@ def _bind_ordersets() -> None:
     ``input_object_types`` ledger as a real module global of
     ``orders.inputs`` via ``materialize_input_class(name, cls)``.
     """
-    # Local imports: keep ``types/finalizer.py`` independent of the
-    # orders package's module-load order. The phase-2.5 binding only
-    # runs when a definition declares ``orderset_class``, which only
-    # works when the orders subsystem has been imported by the
-    # consumer.
+    # Local imports: keep ``types/finalizer.py`` independent of the orders
+    # package's module-load order. The phase-2.5 binding only runs when a
+    # definition declares ``orderset_class``, which only works when the orders
+    # subsystem has been imported by the consumer.
     from ..orders import _helper_referenced_ordersets
     from ..orders.factories import OrderArgumentsFactory
     from ..orders.inputs import materialize_input_class
 
-    # Subpass 1: bind every owner before any expansion runs.
-    wired: list[type] = []
-    for _type_cls, definition in registry.iter_definitions():
-        if definition.finalized:
-            continue
-        orderset_cls = definition.orderset_class
-        if orderset_cls is None:
-            continue
-        _bind_orderset_owner(orderset_cls, definition)
-        wired.append(orderset_cls)
-
-    # Subpass 2: expand every orderset; cross-references now resolve.
-    # ``OrderSet.get_fields()`` stores ``RelatedOrder`` instances without
-    # eagerly resolving their lazy class refs (unlike the filter side's
-    # ``get_filters()`` which calls ``_expand_related_filter`` that reads
-    # ``f.filterset``). So this subpass also explicitly reads
-    # ``related.orderset`` to force Layer-2 resolution at the spec-named
-    # subpass-2 boundary -- matching the spec contract that "ImportError
-    # from unresolved RelatedOrder('...') rewraps as ConfigurationError
-    # with __cause__ preserved" lands in subpass 2.
-    for orderset_cls in wired:
-        # PERF203 (try/except in a loop) is intentional: the per-iteration try
-        # attributes the failure to this specific orderset_cls.
-        try:
-            orderset_cls.get_fields()
-            for related in getattr(orderset_cls, "related_orders", {}).values():
-                _ = related.orderset
-        except ImportError as exc:  # noqa: PERF203
-            raise ConfigurationError(
-                f"Cannot finalize Django types: orderset "
-                f"{orderset_cls.__qualname__} references an unresolved "
-                f"related-order target. {exc}",
-            ) from exc
-        except ConfigurationError:
-            raise
-        except Exception as exc:
-            raise ConfigurationError(
-                f"Cannot finalize Django types: orderset "
-                f"{orderset_cls.__qualname__} raised during expansion. {exc!r}",
-            ) from exc
-
-    # Subpass 3: orphan validation against the helper-tracked set. Runs
-    # BEFORE materialization so a failure here doesn't leave half-
-    # materialized input classes in the inputs-module namespace.
-    wired_set = set(wired)
-    orphans = sorted(
-        _helper_referenced_ordersets - wired_set,
-        key=lambda cls: f"{cls.__module__}.{cls.__qualname__}",
+    _bind_sidecar_sets(
+        _SidecarBindingSpec(
+            definition_attr="orderset_class",
+            expand_label_noun="orderset",
+            related_noun="related-order",
+            bind_owner=_bind_orderset_owner,
+            helper_ledger=_helper_referenced_ordersets,
+            factory_cls=OrderArgumentsFactory,
+            materialize=materialize_input_class,
+            format_orphans=_format_orphan_ordersets_error,
+            expand=_expand_orderset,
+            post_expand_audit=None,
+        ),
     )
-    if orphans:
-        raise ConfigurationError(_format_orphan_ordersets_error(orphans))
-
-    # Subpass 4: materialize every built input class as a module global.
-    for orderset_cls in wired:
-        factory = OrderArgumentsFactory(orderset_cls)
-        # Touch ``.arguments`` to drive ``_ensure_built`` (idempotent
-        # through the factory's class-level cache); the cache is shared
-        # across instances so dependent input classes built by one
-        # factory are visible to a sibling factory's materialize loop.
-        _ = factory.arguments
-        for name, input_cls in factory.input_object_types.items():
-            materialize_input_class(name, input_cls)
 
 
 def _bind_filtersets() -> None:
@@ -1168,123 +1282,25 @@ def _bind_filtersets() -> None:
     second factory instance for a sibling root sees the cached build
     via the class-level dict.
     """
-    # Local imports: keep ``types/finalizer.py`` independent of the
-    # filters package's module-load order. The phase-2.5 binding only
-    # runs when a definition declares ``filterset_class``, which only
-    # works when the filters subsystem has been imported by the
-    # consumer.
+    # Local imports: keep ``types/finalizer.py`` independent of the filters
+    # package's module-load order. The phase-2.5 binding only runs when a
+    # definition declares ``filterset_class``, which only works when the filters
+    # subsystem has been imported by the consumer.
     from ..filters import _helper_referenced_filtersets
     from ..filters.factories import FilterArgumentsFactory
     from ..filters.inputs import materialize_input_class
 
-    # Subpass 1: bind every owner before any expansion runs.
-    wired: list[type] = []
-    for _type_cls, definition in registry.iter_definitions():
-        if definition.finalized:
-            continue
-        filterset_cls = definition.filterset_class
-        if filterset_cls is None:
-            continue
-        _bind_filterset_owner(filterset_cls, definition)
-        wired.append(filterset_cls)
-
-    # Subpass 2: expand every filterset; cross-references now resolve.
-    # ``LazyRelatedClassMixin.resolve_lazy_class`` (Slice 1) raises
-    # ``ImportError`` when a string-form ``RelatedFilter("Name")`` cannot
-    # be resolved. Re-wrap as ``ConfigurationError`` per spec-027
-    # #"lazy-related-filter targets unresolved at finalize raise" and the
-    # package's "finalize-time errors are ConfigurationError" convention
-    # (sibling formatters
-    # ``_format_unresolved_targets_error`` / ``_format_ambiguity_error``
-    # / ``_format_owner_mismatch_error`` / ``_format_orphan_filtersets_error``
-    # all raise ``ConfigurationError`` at finalize time); the original
-    # ``ImportError`` is preserved via ``__cause__``.
-    for filterset_cls in wired:
-        # PERF203 (try/except in a loop) is intentional: the per-iteration try
-        # attributes the failure to this specific filterset_cls.
-        try:
-            filterset_cls.get_filters()
-        except ImportError as exc:  # noqa: PERF203
-            raise ConfigurationError(
-                f"Cannot finalize Django types: filterset "
-                f"{filterset_cls.__qualname__} references an unresolved "
-                f"related-filter target. {exc}",
-            ) from exc
-        except ConfigurationError:
-            raise
-        except Exception as exc:
-            # Uniform finalize-time error shape: any failure surfacing from
-            # ``get_filters()`` rebinds as ``ConfigurationError`` so the
-            # consumer sees one error class for every finalize failure
-            # instead of having to guard for the underlying exception type.
-            # ``repr(exc)`` keeps the underlying error fully in the
-            # consumer-visible message (class + every arg, not just
-            # ``str(exc)``), and ``from exc`` preserves the original
-            # traceback on ``__cause__`` (H-core-1 of the pre-merge review).
-            raise ConfigurationError(
-                f"Cannot finalize Django types: filterset "
-                f"{filterset_cls.__qualname__} raised during expansion. {exc!r}",
-            ) from exc
-
-    # Subpass 2.5: every reachable ``RelatedFilter`` target must resolve to
-    # a registered ``DjangoType``. A related branch's visibility scoping
-    # runs the target type's ``get_queryset`` (spec-027 Decision 8 step 3);
-    # an unregistered target would make the branch unfulfillable even
-    # though its input field is materialized into the schema, so the
-    # misconfiguration surfaces here - at finalize, naming the filterset -
-    # instead of on the first request that activates the branch (where
-    # ``FilterSet._iter_visibility_steps`` raises the runtime sibling of
-    # this error for direct ``apply_*`` callers that never finalize). The
-    # walk is transitive with a visited set: a wired parent's child
-    # filtersets carry their own ``RelatedFilter`` declarations, and
-    # cyclic cross-references (``BookFilter`` <-> ``ShelfFilter``) are
-    # legal. Runs after subpass 2 so every lazy reference has resolved.
-    seen_filtersets: set[type] = set(wired)
-    pending_filtersets: list[type] = list(wired)
-    while pending_filtersets:
-        filterset_cls = pending_filtersets.pop()
-        for field_name, related_filter in (
-            getattr(filterset_cls, "related_filters", {}) or {}
-        ).items():
-            child_filterset = related_filter.filterset
-            if child_filterset is not None and child_filterset not in seen_filtersets:
-                seen_filtersets.add(child_filterset)
-                pending_filtersets.append(child_filterset)
-            if filterset_cls._target_type_for_related_filter(related_filter) is None:
-                raise ConfigurationError(
-                    _format_unregistered_related_target_error(
-                        filterset_cls,
-                        field_name,
-                        child_filterset,
-                    ),
-                )
-
-    # Subpass 3: orphan validation against the helper-tracked set. Runs
-    # BEFORE materialization so a failure here doesn't leave half-
-    # materialized input classes in the inputs-module namespace.
-    #
-    # Test-isolation dependency: ``_helper_referenced_filtersets`` is a
-    # module-global ledger cleared only by ``registry.clear()``. A consumer
-    # test suite that reloads filter modules WITHOUT routing through
-    # ``registry.clear()`` can leave stale entries here -- FilterSet classes
-    # from a prior build that no consumer wires this build -- producing a
-    # spurious orphan error. The filter test files' ``_isolate_registry``
-    # autouse fixture clears it explicitly for exactly that reason.
-    wired_set = set(wired)
-    orphans = sorted(
-        _helper_referenced_filtersets - wired_set,
-        key=lambda cls: f"{cls.__module__}.{cls.__qualname__}",
+    _bind_sidecar_sets(
+        _SidecarBindingSpec(
+            definition_attr="filterset_class",
+            expand_label_noun="filterset",
+            related_noun="related-filter",
+            bind_owner=_bind_filterset_owner,
+            helper_ledger=_helper_referenced_filtersets,
+            factory_cls=FilterArgumentsFactory,
+            materialize=materialize_input_class,
+            format_orphans=_format_orphan_filtersets_error,
+            expand=_expand_filterset,
+            post_expand_audit=_audit_unregistered_related_filter_targets,
+        ),
     )
-    if orphans:
-        raise ConfigurationError(_format_orphan_filtersets_error(orphans))
-
-    # Subpass 4: materialize every built input class as a module global.
-    for filterset_cls in wired:
-        factory = FilterArgumentsFactory(filterset_cls)
-        # Touch ``.arguments`` to drive ``_ensure_built`` (idempotent
-        # through the factory's class-level cache); the cache is shared
-        # across instances so dependent input classes built by one
-        # factory are visible to a sibling factory's materialize loop.
-        _ = factory.arguments
-        for name, input_cls in factory.input_object_types.items():
-            materialize_input_class(name, input_cls)

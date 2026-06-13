@@ -183,7 +183,10 @@ def test_factory_raises_on_two_distinct_ordersets_sharing_classname():
         factory2.arguments
     message = str(excinfo.value)
     assert "DupOrderInputType" in message
+    # The shared BFS substrate keeps family-specific wording: the message
+    # still names OrderArgumentsFactory / OrderSet (not the filter twin).
     assert "OrderArgumentsFactory" in message
+    assert "OrderSet" in message
 
 
 def test_factory_arguments_is_idempotent():

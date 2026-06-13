@@ -16,10 +16,7 @@ need to distinguish the two.
 
 from __future__ import annotations
 
-from typing import Annotated
-
-import strawberry
-
+from ..utils.inputs import build_lazy_input_annotation
 from .base import (
     ArrayFilter,
     ArrayFilterMethod,
@@ -69,21 +66,21 @@ def filter_input_type(filterset_class: type[FilterSet]) -> object:
     Raises:
         TypeError: ``filterset_class`` is not a ``FilterSet`` subclass.
     """
-    if not (isinstance(filterset_class, type) and issubclass(filterset_class, FilterSet)):
-        raise TypeError(
-            f"filter_input_type() requires a FilterSet subclass; got {filterset_class!r}",
-        )
-    _helper_referenced_filtersets.add(filterset_class)
-    name = _input_type_name_for(filterset_class)
-    # `Annotated[<str_variable>, ...]` wraps the runtime-computed string
-    # as a `typing.ForwardRef` in the first `__args__` position; the
-    # test plan pins this against future Python typing regressions
-    # (`test_filter_input_type_returns_forwardref_in_annotation_args`,
-    # spec-027 L7 of rev5). Do NOT refactor this into a literal-string
-    # interpolation outside the Annotated call -- Strawberry's
-    # `LazyType.resolve_type` requires the ForwardRef-wrapped form to
-    # resolve via `module.__dict__` at schema build.
-    return Annotated[name, strawberry.lazy(INPUTS_MODULE_PATH)]
+    # Decision-11 consumer-helper body shared with ``orders/__init__.py::
+    # order_input_type`` via ``utils/inputs.py::build_lazy_input_annotation``
+    # (the 0.0.9 DRY pass). The ForwardRef-wrapped ``Annotated[<runtime str>,
+    # strawberry.lazy(...)]`` form is pinned by
+    # ``test_filter_input_type_returns_forwardref_in_annotation_args`` (spec-027
+    # L7 of rev5) -- the shared helper preserves it.
+    return build_lazy_input_annotation(
+        filterset_class,
+        expected_base=FilterSet,
+        family_name="filter_input_type",
+        expected_label="a FilterSet",
+        ledger=_helper_referenced_filtersets,
+        input_type_name_for=_input_type_name_for,
+        module_path=INPUTS_MODULE_PATH,
+    )
 
 
 __all__: tuple[str, ...] = (

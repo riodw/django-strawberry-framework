@@ -21,20 +21,34 @@ spec-028 Decision 9 line 775.
 from __future__ import annotations
 
 import enum
-import sys
 from collections import OrderedDict
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any
 
 import strawberry
 from django.db.models import F
 from django.db.models.expressions import OrderBy
 
-from ..exceptions import ConfigurationError
+from ..utils.inputs import (
+    GeneratedInputFieldSpec,
+    build_strawberry_input_class,
+    clear_generated_input_namespace,
+    graphql_camel_name,
+    iter_set_subclasses,
+    materialize_generated_input_class,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..types.definition import DjangoTypeDefinition
     from .sets import OrderSet
+
+# Domain-local aliases for the shared generated-input substrate (the mechanics
+# are single-sited in ``utils/inputs.py`` per the 0.0.9 DRY pass). Tests and
+# ``factories.py`` import these spec-028 Decision 9 names from this module, so
+# they stay addressable here.
+FieldSpec = GeneratedInputFieldSpec
+build_input_class = build_strawberry_input_class
+_camel_case = graphql_camel_name
+_iter_orderset_subclasses = iter_set_subclasses
 
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
@@ -90,22 +104,6 @@ class Ordering(enum.Enum):
         if "ASC" in self.name:
             return F(value).asc(nulls_first=nulls_first, nulls_last=nulls_last)
         return F(value).desc(nulls_first=nulls_first, nulls_last=nulls_last)
-
-
-@dataclass(frozen=True)
-class FieldSpec:
-    """Per-generated-input-field metadata.
-
-    Carries the three names ``normalize_input_value`` and
-    ``materialize_input_class`` need to map between the Strawberry input
-    dataclass field, the GraphQL wire-format name, and the ORM lookup
-    path on the Django model (mirrors
-    ``django_strawberry_framework/filters/inputs.py::FieldSpec``).
-    """
-
-    python_attr: str
-    graphql_name: str
-    django_source_path: str
 
 
 # Provenance table populated by ``_build_input_fields`` and consulted at
@@ -170,15 +168,6 @@ def _get_concrete_field_names_for_order(model: Any) -> list[str]:
     ]
 
 
-def _camel_case(name: str) -> str:
-    """Lowercase the head, then ``PascalCase`` the rest (``shelf_code`` -> ``shelfCode``)."""
-    parts = [part for part in name.split("_") if part]
-    if not parts:
-        return name
-    head, *rest = parts
-    return head + "".join(part.capitalize() for part in rest)
-
-
 def convert_order_field_to_input_annotation(
     model_field: Any,
     owner_definition: DjangoTypeDefinition | None = None,
@@ -200,45 +189,6 @@ def convert_order_field_to_input_annotation(
     """
     del model_field, owner_definition  # reserved for future-extension (see docstring).
     return Ordering | None
-
-
-def build_input_class(
-    name: str,
-    field_specs: list[tuple[str, Any, dict[str, Any] | None]],
-) -> type:
-    """Construct a ``@strawberry.input``-decorated dataclass.
-
-    ``field_specs`` is a list of ``(python_attr, annotation, field_kwargs)``
-    triples. ``field_kwargs`` may carry ``name=`` for the GraphQL alias,
-    ``default=`` for the dataclass default (defaults to ``None``), and
-    ``description=`` for the Strawberry field description.
-
-    The class is constructed via ``type(name, (), namespace)`` rather
-    than ``dataclasses.make_dataclass`` because ``make_dataclass``
-    replaces any ``strawberry.field(...)`` default with a plain
-    ``dataclasses.Field`` and strips the strawberry-specific metadata
-    (the ``name=`` alias would be lost). Setting the ``strawberry.field``
-    as a class-level attribute alongside ``__annotations__`` preserves
-    the metadata through the ``@strawberry.input`` decoration. Direct
-    port of ``filters/inputs.py::build_input_class`` -- same shape, no
-    order-specific divergence justified.
-    """
-    namespace: dict[str, Any] = {"__annotations__": {}}
-    for python_attr, annotation, raw_kwargs in field_specs:
-        kwargs = dict(raw_kwargs or {})
-        default = kwargs.pop("default", None)
-        strawberry_field_kwargs: dict[str, Any] = {}
-        if "name" in kwargs:
-            strawberry_field_kwargs["name"] = kwargs.pop("name")
-        if "description" in kwargs:
-            strawberry_field_kwargs["description"] = kwargs.pop("description")
-        namespace["__annotations__"][python_attr] = annotation
-        if strawberry_field_kwargs:
-            namespace[python_attr] = strawberry.field(default=default, **strawberry_field_kwargs)
-        else:
-            namespace[python_attr] = default
-    cls = type(name, (), namespace)
-    return strawberry.input(cls)
 
 
 def _build_input_fields(
@@ -375,55 +325,20 @@ def normalize_input_value(
 def materialize_input_class(name: str, input_cls: type) -> None:
     """Set ``input_cls`` as a real module global of ``orders.inputs`` under ``name``.
 
-    Strawberry's ``LazyType.resolve_type`` reads
-    ``sys.modules[<module>].__dict__[name]`` to materialize an
-    ``Annotated[<name>, strawberry.lazy(<module>)]`` reference; this
-    helper is the single entry point that pins ``input_cls`` at the
-    matching ``__dict__`` slot per spec-028 Decision 9.
-
-    Idempotent on the ``(name, input_cls)`` pair: re-materializing the
-    same class under the same name is a no-op (Decision 9 lifecycle
-    clause -- supports partial-finalize recovery without a sentinel pass).
-    A collision against a different class under the same ``name`` raises
-    ``ConfigurationError`` naming both qualified class names so the
-    consumer sees the offending pair instead of a cryptic schema-build
-    error.
+    Thin family wrapper over
+    ``utils/inputs.py::materialize_generated_input_class`` pinning the
+    order-side module path, family label, and ledger. See that helper for the
+    Strawberry ``LazyType.resolve_type`` contract, the ``(name, input_cls)``
+    idempotency clause, and the distinct-class collision raise (spec-028
+    Decision 9).
     """
-    existing = _materialized_names.get(name)
-    if existing is input_cls:
-        return
-    if existing is not None:
-        raise ConfigurationError(
-            f"{name!r} is materialized by two distinct OrderSet input classes: "
-            f"{existing.__module__}.{existing.__qualname__} vs "
-            f"{input_cls.__module__}.{input_cls.__qualname__}. Rename one orderset "
-            "so its class-derived input type name is unique.",
-        )
-    module = sys.modules[INPUTS_MODULE_PATH]
-    setattr(module, name, input_cls)
-    _materialized_names[name] = input_cls
-
-
-def _iter_orderset_subclasses(root: type) -> list[type]:
-    """Return every concrete subclass of ``root`` (depth-first, dedup by identity).
-
-    Uses ``type.__subclasses__()`` which only yields LIVE subclasses;
-    garbage-collected definitions silently drop. That is the correct
-    contract for a test-isolation clear -- a definition that has
-    already been collected has no state to reset. Mirror of
-    ``filters/inputs.py::_iter_filterset_subclasses``.
-    """
-    seen: set[type] = set()
-    result: list[type] = []
-    stack: list[type] = list(root.__subclasses__())
-    while stack:
-        cls = stack.pop()
-        if cls in seen:
-            continue
-        seen.add(cls)
-        result.append(cls)
-        stack.extend(cls.__subclasses__())
-    return result
+    materialize_generated_input_class(
+        name,
+        input_cls,
+        module_path=INPUTS_MODULE_PATH,
+        family_label="OrderSet",
+        ledger=_materialized_names,
+    )
 
 
 def clear_order_input_namespace() -> None:
@@ -458,43 +373,21 @@ def clear_order_input_namespace() -> None:
 
     The helper short-circuits cleanly when the factory / orderset
     modules are not in ``sys.modules`` (e.g., a partial-load
-    environment) -- each subpass is wrapped in a local-import-with-
-    pass-on-ImportError block.
+    environment) -- the shared substrate's cycle-safe imports tolerate
+    the call without raising.
+
+    Delegates the lifecycle to
+    ``utils/inputs.py::clear_generated_input_namespace``; the order-side
+    binding attrs are ``_owner_definition`` / ``_expanded_fields`` /
+    ``_is_expanding_fields``.
     """
-    _materialized_names.clear()
-    _field_specs.clear()
-
-    # OrderArgumentsFactory's class-level caches hold the built input
-    # classes; stale entries here would cause ``_ensure_built`` to skip
-    # rebuild and surface prior-build input classes against a freshly-
-    # cleared registry.
-    try:
-        from .factories import OrderArgumentsFactory
-    except ImportError:
-        pass
-    else:
-        OrderArgumentsFactory.input_object_types.clear()
-        OrderArgumentsFactory._type_orderset_registry.clear()
-
-    # Every OrderSet subclass carries phase-2.5 binding state at the
-    # class level; that state survives a ``registry.clear()`` call and
-    # would otherwise force the rebuild down a stale-owner path on the
-    # next finalize even though the caller intended a clean rebuild.
-    # Symmetric with the factory guard above: on a broken import this
-    # ``pass``es rather than ``return``s so this phase never short-
-    # circuits a later cleanup added after it.
-    try:
-        from .sets import OrderSet
-    except ImportError:
-        pass
-    else:
-        for subclass in _iter_orderset_subclasses(OrderSet):
-            # ``delattr`` on the subclass so an inherited default (the
-            # ``OrderSet`` base's ``_owner_definition = None``) is
-            # restored rather than masked. Each attribute is removed
-            # only when set directly on the subclass
-            # (``in subclass.__dict__``) so a subclass that never had a
-            # binding tolerates the clear.
-            for attr in ("_owner_definition", "_expanded_fields", "_is_expanding_fields"):
-                if attr in subclass.__dict__:
-                    delattr(subclass, attr)
+    clear_generated_input_namespace(
+        materialized_names=_materialized_names,
+        field_specs=_field_specs,
+        factory_module="django_strawberry_framework.orders.factories",
+        factory_class_name="OrderArgumentsFactory",
+        collision_registry_attr="_type_orderset_registry",
+        set_module="django_strawberry_framework.orders.sets",
+        set_class_name="OrderSet",
+        binding_attrs=("_owner_definition", "_expanded_fields", "_is_expanding_fields"),
+    )

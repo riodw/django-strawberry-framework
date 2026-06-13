@@ -167,7 +167,12 @@ def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_n
     factory2 = FilterArgumentsFactory(DupFilter2)
     with pytest.raises(ConfigurationError) as excinfo:
         factory2.arguments
-    assert "DupFilterInputType" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert "DupFilterInputType" in message
+    # The shared BFS substrate keeps family-specific wording: the message
+    # still names FilterArgumentsFactory / FilterSet (not the order twin).
+    assert "FilterArgumentsFactory" in message
+    assert "FilterSet" in message
 
 
 @pytest.mark.django_db

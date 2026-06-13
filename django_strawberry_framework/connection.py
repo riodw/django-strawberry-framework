@@ -364,7 +364,7 @@ def _total_count_requested(info: Info) -> bool:
     of ``edges`` / ``pageInfo``); the GraphQL field name is camelCase
     ``totalCount`` regardless of the Python ``total_count`` attribute.
 
-    Scoped to the direct children deliberately (``docs/feedback.md`` P2): unlike
+    Scoped to the direct children deliberately: unlike
     strawberry-django's ``_should_optimize_total_count``, which recurses through
     the WHOLE ``edges { node { ... } }`` subtree, ``_check`` recurses only THROUGH
     fragment wrappers (``InlineFragment`` / ``FragmentSpread`` - so a
@@ -461,8 +461,8 @@ def clear_connection_type_cache() -> None:
     Test-only - production never reloads the schema. Wired into
     ``registry.clear()`` (the documented registry reset) so a registry-clearing
     test or fixture also drops the generated ``<TypeName>Connection`` classes,
-    rather than accumulating dead identity-keyed entries across schema reloads
-    (``docs/feedback.md`` P3b). The cache is keyed on ``target_type`` identity,
+    rather than accumulating dead identity-keyed entries across schema reloads.
+    The cache is keyed on ``target_type`` identity,
     so a stale entry is never *wrong* - this clear is hygiene, not correctness.
     """
     _connection_type_cache.clear()
@@ -488,7 +488,7 @@ def _generate_connection_class(
     share a Python ``__name__`` while declaring distinct ``Meta.name`` values;
     naming from ``__name__`` would generate two connection classes with the
     SAME SDL type name, which Strawberry collapses into one - cross-wiring the
-    two fields' ``edges`` / node types (P1, ``docs/feedback.md``).
+    two fields' ``edges`` / node types.
     ``graphql_type_name`` is the same surface-name source the finalizer and the
     filter / order input types derive from.
     """
@@ -717,7 +717,7 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
        Decision 11 so the plan-time window order and this resolve-time order can
        never disagree - the cursor-parity invariant). This covers all three
        cases - fully unordered, a supplied ``orderBy``, and a model
-       ``Meta.ordering`` - not just the unordered one (``docs/feedback.md`` P1).
+       ``Meta.ordering`` - not just the unordered one.
 
        The effective ordering must NOT be read from ``qs.query.order_by`` alone:
        that tuple is EMPTY when the order comes from model ``Meta.ordering``
@@ -1111,7 +1111,7 @@ def DjangoConnectionField(  # noqa: N802  # PascalCase for graphene-django parit
     #     relay.Node)`` is already True here. The finalizer fully supports this
     #     Strawberry-native spelling (it keys Relay finalization off
     #     ``implements_relay_node``, not a non-empty ``Meta.interfaces``), so the
-    #     connection field accepts it too (``docs/feedback.md`` Open Question).
+    #     connection field accepts it too.
     if not _is_relay_shaped(target_type, definition.interfaces):
         raise ConfigurationError(
             "a connection field requires a Relay-Node-shaped DjangoType; add "

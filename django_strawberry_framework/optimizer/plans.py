@@ -604,6 +604,19 @@ def apply_window_pagination(
     same way), then filters to the requested row-number range. The annotations
     compose with ``.only()`` (they are annotations, not deferred columns).
 
+    The same ``order_by`` tuple is also applied to the queryset itself via
+    ``.order_by(*order_by)``: the SQL window only determines the ROW-NUMBER
+    VALUES, not the order Django hands the prefetched instances to ``to_attr``,
+    and the connection fast path
+    (``connection.py::_resolve_from_window``) consumes ``rows`` as
+    already forward-ordered (``rows[0]`` / ``rows[-1]`` / edge iteration drive the
+    cursors and ``pageInfo``). Sourcing the window order and the return order from
+    one tuple by construction keeps the fast path from diverging from the
+    fallback pipeline when the DB's natural return order is not the connection
+    order (spec-033 Decision 11, the cursor-parity invariant). The forward order
+    is applied in BOTH branches: the ``reverse`` (last-only) window keeps
+    ``_dst_row_number`` forward, so its rows are forward-ordered too.
+
     ``offset`` / ``limit`` come from Strawberry's ``SliceMetadata.from_arguments``
     (offset = ``start``, limit = ``expected``). For ``reverse`` (last-only backward
     pagination) the row numbers count from the partition end, so a separate
@@ -611,6 +624,7 @@ def apply_window_pagination(
     ``__lte=limit``. ``limit is None`` (or ``sys.maxsize``) means "no upper bound"
     - the offset filter still applies.
     """
+    queryset = queryset.order_by(*order_by)
     queryset = queryset.annotate(
         **{
             WINDOW_ROW_NUMBER: Window(

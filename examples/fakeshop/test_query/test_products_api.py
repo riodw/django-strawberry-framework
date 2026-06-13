@@ -159,7 +159,7 @@ def test_globalid_filter_round_trip():
 def test_type_strategy_opt_out_reproduces_type_name():
     """``RELAY_GLOBALID_STRATEGY = "type"`` opts back into the GraphQL-type-name payload.
 
-    Deterministic per ``docs/feedback.md`` P3: the override is applied *before*
+    Ordering matters here: the override is applied *before*
     ``_reload_products_project_schema()`` finalizes the schema (the fakeshop
     fixtures reload at finalization, so a strategy override must precede the
     reload or the test silently exercises the default schema). Under the ``type``

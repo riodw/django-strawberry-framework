@@ -686,6 +686,21 @@ class TestApplyWindowPagination:
         assert "ROW_NUMBER()" in sql
         assert "COUNT(" in sql
 
+    def test_applies_order_by_to_queryset_not_just_the_window(self):
+        """The deterministic order is applied to the queryset's own ``ORDER BY``.
+
+        The SQL window orders the ROW-NUMBER values, but Django hands prefetched
+        instances to ``to_attr`` in the queryset's own return order; the fast path
+        consumes ``rows`` as forward-ordered. So the same ``order_by`` tuple must
+        drive ``queryset.order_by`` too, or the fast path can diverge from the
+        fallback pipeline when DB return order != connection order (spec-033
+        Decision 11, cursor-parity). Forward order applies in BOTH branches.
+        """
+        forward = self._windowed(offset=0, limit=3)
+        assert tuple(forward.query.order_by) == ("name", "pk")
+        reverse = self._windowed(offset=0, limit=2, reverse=True)
+        assert tuple(reverse.query.order_by) == ("name", "pk")
+
     def test_forward_window_filters_offset_and_upper_bound(self):
         """A forward window with offset+limit filters ``__gt`` offset and ``__lte`` offset+limit."""
         qs = self._windowed(offset=2, limit=3)

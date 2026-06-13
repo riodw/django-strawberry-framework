@@ -1443,6 +1443,32 @@ def test_strictness_raise_unplanned_nested_connection():
 
 
 @pytest.mark.django_db
+def test_strictness_raise_malformed_cursor_surfaces_pagination_error_not_optimizer_error():
+    """A malformed nested ``after:`` cursor raises the PAGINATION error, not ``OptimizerError``.
+
+    Error-locality regression (spec-033 Decision 4 step f / Decision 8): a
+    malformed cursor leaves the connection unwindowed so the per-parent pipeline
+    can raise its own cursor-validation error. Under strictness ``"raise"`` the
+    walker must still record the resolver key for this fallback, or the B3 check
+    preempts the real error with a spurious ``OptimizerError("Unplanned N+1")``.
+    The user should see the cursor error, not an optimizer defect.
+    """
+    from django_strawberry_framework.exceptions import OptimizerError
+
+    _seed_library_books(["a", "b", "c"])
+    schema = _genres_list_schema(optimizer=True, strictness="raise")
+    result = schema.execute_sync(
+        '{ objs { booksConnection(first: 2, after: "not-a-valid-cursor") '
+        "{ edges { node { title } } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is not None
+    # The surfaced error is the pipeline's pagination/cursor error - NOT an N+1.
+    assert not any(isinstance(e.original_error, OptimizerError) for e in result.errors)
+    assert not any("Unplanned N+1" in str(e.original_error or e) for e in result.errors)
+
+
+@pytest.mark.django_db
 def test_sidecar_fallback_is_flagged_with_reason():
     """A sidecar fallback's ``"raise"`` message carries an ACTIONABLE reason.
 

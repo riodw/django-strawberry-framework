@@ -3055,6 +3055,101 @@ def test_nested_books_connection_fixed_query_count():
 
 
 @pytest.mark.django_db
+def test_nested_books_connection_has_next_page_without_edges():
+    """Nested ``pageInfo { hasNextPage }`` is correct on the window with NO ``edges``.
+
+    The Relay invariant ("``hasNextPage`` MUST resolve correctly even when the
+    consumer didn't request ``edges``") asserted LIVE over /graphql/ on the
+    windowed nested path spec-033 introduces - the root-field live twin
+    (``test_has_next_page_correct_when_edges_unrequested``) and the package window
+    pins cover the other paths. Each genre carries 3 books; ``first: 2`` with no
+    ``edges`` selected still reports ``hasNextPage`` True, served from the window's
+    ``_dst_total_count`` annotation in the same fixed two-query window (root
+    genres-connection + one ``booksConnection`` prefetch), independent of parent
+    count.
+    """
+    query = """
+    query {
+      allLibraryGenresConnection {
+        edges {
+          node {
+            booksConnection(first: 2) {
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+      }
+    }
+    """
+    shelf = _seed_shelf()
+    for index in range(3):
+        _seed_genre_with_books(
+            f"Genre-{index}",
+            shelf,
+            (f"Book-{index}-a", f"Book-{index}-b", f"Book-{index}-c"),
+        )
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    edges = payload["data"]["allLibraryGenresConnection"]["edges"]
+    assert len(edges) == 3
+    for edge in edges:
+        # No ``edges`` requested; the page-flag still resolves True (3 > first: 2).
+        assert edge["node"]["booksConnection"]["pageInfo"]["hasNextPage"] is True
+    # One root genres-connection query + one windowed prefetch; no per-parent COUNT
+    # and no per-parent fallback despite ``edges`` being absent.
+    assert len(captured) == 2
+
+
+@pytest.mark.django_db
+def test_nested_total_count_without_edges():
+    """Nested ``genresConnection { totalCount }`` with NO ``edges`` reads the annotation.
+
+    The totalCount-only live sibling of ``test_nested_total_count_no_per_parent_count``
+    (which selects ``totalCount`` AND ``edges``): selecting ``totalCount`` alone on
+    the windowed connection serves the true count from ``_dst_total_count`` without
+    a per-parent ``COUNT``.
+    """
+    query = """
+    query {
+      allLibraryBooks {
+        genresConnection(first: 2) {
+          totalCount
+        }
+      }
+    }
+    """
+    shelf = _seed_shelf()
+    genres = [
+        models.Genre.objects.create(name=name)
+        for name in (
+            "Alpha",
+            "Beta",
+            "Gamma",
+            "Echo",
+        )
+    ]
+    for title in ("Kindred", "Dawn", "Wild Seed"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        for genre in genres:
+            book.genres.add(genre)
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    books = payload["data"]["allLibraryBooks"]
+    assert books, payload
+    for book in books:
+        assert book["genresConnection"]["totalCount"] == 4  # all four genres, no edges
+    # Root books list + one windowed genres prefetch; no per-book COUNT.
+    assert len(captured) == 2
+
+
+@pytest.mark.django_db
 def test_nested_total_count_no_per_parent_count():
     """Selecting nested ``totalCount`` adds zero queries over the same shape.
 
@@ -3479,3 +3574,365 @@ def test_nested_empty_parent_serves_zero_total_count_no_fallback_live():
     # the genuinely-empty parents are served from the single window prefetch,
     # never a per-parent fallback (which would make the count scale).
     assert three_count == eight_count
+
+
+# ---------------------------------------------------------------------------
+# RelatedFilter behavior over live /graphql/ (feedback2.md high-confidence
+# moves from ``tests/filters/test_sets.py``). The live ``BranchFilter.shelves``
+# carries an explicit ``queryset=Shelf.objects.filter(topic="permanent collection")``
+# (apps/library/filters.py), so these exercise GraphQL input coercion, root
+# visibility, the real configured RelatedFilter + explicit-queryset
+# intersection, and the HTTP envelope - strictly stronger than the
+# ``BranchFilter.apply_sync`` package twins they replace.
+# ---------------------------------------------------------------------------
+
+
+def _seed_branch_with_shelf_codes(name: str, codes: tuple[str, ...]) -> None:
+    """Create a branch (visible city) owning one shelf per code.
+
+    Shelves carry ``topic="permanent collection"`` so they survive the live
+    ``BranchFilter.shelves`` explicit queryset; the branch city is never
+    ``"restricted"`` so ``BranchType.get_queryset`` keeps it visible to the
+    anonymous client.
+    """
+    branch = models.Branch.objects.create(name=name, city="Boston")
+    for code in codes:
+        models.Shelf.objects.create(code=code, topic="permanent collection", branch=branch)
+
+
+@pytest.mark.django_db
+def test_nested_or_related_branch_constrains_parent_live():
+    """A ``RelatedFilter`` nested in ``or`` constrains the parent over /graphql/.
+
+    The live twin of ``test_apply_sync_nested_or_branch_applies_related_constraint``:
+    ``_normalize_input`` strips related-branch keys from a child branch's form
+    data, so without ``_q_for_branch`` re-deriving the related constraint,
+    ``or: [{ shelves: {...} }]`` would silently widen to the whole parent set.
+    Here only ``alpha`` owns a shelf matching ``code: "match"``; ``beta`` must
+    NOT leak through, driving the real ``allLibraryBranches`` filter pipeline
+    (``apply_sync`` -> ``_evaluate_logic_tree`` -> ``_q_for_branch`` ->
+    ``_apply_related_constraints``) end to end over HTTP.
+    """
+    _seed_branch_with_shelf_codes("alpha", ("match",))
+    _seed_branch_with_shelf_codes("beta", ("other",))
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(
+            filter: { or: [{ shelves: { code: { exact: "match" } } }] }
+          ) {
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["allLibraryBranches"] == [{"name": "alpha"}]
+
+
+@pytest.mark.django_db
+def test_many_side_related_filter_returns_each_parent_once_live():
+    """A many-side related branch matching N shelves yields the parent ONCE.
+
+    The live twin of ``test_related_filter_on_many_side_relation_returns_each_parent_once``:
+    ``_apply_related_constraints`` restricts the parent via a
+    ``pk__in=<parent-pk subquery>`` rather than a fan-out join, so a branch
+    whose TWO shelves both match comes back exactly once - no duplicate node in
+    the HTTP list (a join would surface ``alpha`` twice and corrupt any
+    downstream pagination count).
+    """
+    _seed_branch_with_shelf_codes("alpha", ("match-1", "match-2", "other"))
+    _seed_branch_with_shelf_codes("beta", ("unrelated",))
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(
+            filter: { shelves: { code: { iContains: "match" } } }
+          ) {
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    # ``alpha`` appears exactly once despite two matching shelves; ``beta`` is
+    # absent. A fan-out join would have returned ``[alpha, alpha]``.
+    assert payload["data"]["allLibraryBranches"] == [{"name": "alpha"}]
+
+
+@pytest.mark.django_db
+def test_related_filter_identical_direct_and_inside_logic_tree_live():
+    """The same related branch answers identically direct and wrapped in ``and``.
+
+    The live twin of ``test_related_filter_answers_identically_direct_and_inside_logic_tree``:
+    the direct path constrains via ``_apply_related_constraints`` while the
+    logic-tree path routes through ``_q_for_branch``'s ``Q(pk__in=...)``; both
+    share the parent-pk-subquery shape, so two aliases in ONE request - one
+    direct, one wrapped in ``and`` - must return identical rows.
+    """
+    _seed_branch_with_shelf_codes("alpha", ("match-1", "match-2"))
+    _seed_branch_with_shelf_codes("beta", ("other",))
+
+    response = _post_graphql(
+        """
+        query {
+          direct: allLibraryBranches(
+            filter: { shelves: { code: { iContains: "match" } } }
+          ) { name }
+          wrapped: allLibraryBranches(
+            filter: { and: [{ shelves: { code: { iContains: "match" } } }] }
+          ) { name }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    data = payload["data"]
+    assert data["direct"] == data["wrapped"] == [{"name": "alpha"}]
+
+
+# ---------------------------------------------------------------------------
+# Schema-shape introspection over live /graphql/ (feedback2.md high-confidence
+# moves from ``tests/types/test_definition_order_schema.py``). The library
+# schema already exposes the M2M (``BookType.genres``), a Relay-declared
+# ``GenreType``, and a non-Relay ``ShelfType``, so the rendered shapes are
+# assertable through the real ``__type`` introspection over HTTP.
+# ---------------------------------------------------------------------------
+
+
+def _introspect_type(type_name: str) -> dict:
+    """Return the ``__type`` payload (interfaces + fields with nested type tree)."""
+    response = _post_graphql(
+        f"""
+        query {{
+          __type(name: "{type_name}") {{
+            interfaces {{ name }}
+            fields {{
+              name
+              type {{ kind name ofType {{ kind name ofType {{ kind name ofType {{ kind name }} }} }} }}
+            }}
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    type_info = payload["data"]["__type"]
+    assert type_info is not None, f"{type_name} is not in the schema"
+    return type_info
+
+
+@pytest.mark.django_db
+def test_book_genres_m2m_renders_as_list_shape_live():
+    """``BookType.genres`` (forward M2M) renders as ``[GenreType!]!`` over HTTP.
+
+    The live twin of ``test_m2m_schema_shape_builds_with_real_library_models``:
+    the M2M relation surfaces as a non-null list of non-null ``GenreType`` -
+    asserted through real introspection rather than ``schema._schema.type_map``.
+    """
+    genres_type = _field_type(_introspect_type("BookType"), "genres")
+    # ``[GenreType!]!`` unwraps NON_NULL -> LIST -> NON_NULL -> OBJECT GenreType.
+    assert genres_type["kind"] == "NON_NULL"
+    assert genres_type["ofType"]["kind"] == "LIST"
+    assert genres_type["ofType"]["ofType"]["kind"] == "NON_NULL"
+    assert genres_type["ofType"]["ofType"]["ofType"]["kind"] == "OBJECT"
+    assert genres_type["ofType"]["ofType"]["ofType"]["name"] == "GenreType"
+
+
+@pytest.mark.django_db
+def test_relay_genre_type_emits_node_interface_and_global_id_live():
+    """A Relay-declared ``GenreType`` exposes the ``Node`` interface and ``id: ID!``.
+
+    The live twin of ``test_relay_declared_type_emits_node_interface_and_global_id``:
+    ``GenreType`` declares ``interfaces = (relay.Node,)``, so introspection shows
+    the ``Node`` interface and its ``id`` renders as the GlobalID scalar ``ID!``.
+    """
+    genre_type = _introspect_type("GenreType")
+    interface_names = {iface["name"] for iface in genre_type["interfaces"]}
+    assert "Node" in interface_names
+    id_type = _field_type(genre_type, "id")
+    assert id_type["kind"] == "NON_NULL"
+    assert id_type["ofType"]["name"] == "ID"
+
+
+@pytest.mark.django_db
+def test_mixed_relay_and_non_relay_no_interface_bleed_live():
+    """A non-Relay ``ShelfType`` does NOT implement ``Node`` (no interface bleed).
+
+    The live twin of ``test_mixed_relay_and_non_relay_types_introspect_cleanly``:
+    the library schema ships Relay ``GenreType`` and non-Relay ``ShelfType``;
+    introspection proves ``Node`` lands on the Relay type only and ``ShelfType.id``
+    is NOT the GlobalID scalar (no GlobalID bleed onto the plain type).
+    """
+    genre_type = _introspect_type("GenreType")
+    shelf_type = _introspect_type("ShelfType")
+    genre_interfaces = {iface["name"] for iface in genre_type["interfaces"]}
+    shelf_interfaces = {iface["name"] for iface in shelf_type["interfaces"]}
+    assert "Node" in genre_interfaces
+    assert "Node" not in shelf_interfaces
+    # The Relay type's id is the GlobalID scalar; the plain type's id is a plain
+    # scalar (NOT ``ID``), so the Relay interface does not bleed across.
+    assert _field_type(genre_type, "id")["ofType"]["name"] == "ID"
+    assert _field_type(shelf_type, "id")["ofType"]["name"] != "ID"
+
+
+# ---------------------------------------------------------------------------
+# DjangoListField default resolver visibility over live /graphql/ (feedback2.md
+# high-confidence move from ``tests/test_list_field.py``). ``BranchType.get_queryset``
+# excludes ``city="restricted"`` for anonymous requests; the default list-field
+# resolver must apply it, so the restricted branch is absent from the HTTP result.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_branches_via_list_field_default_resolver_applies_get_queryset_live():
+    """``allLibraryBranchesViaListField`` applies ``BranchType.get_queryset`` over HTTP.
+
+    The live twin of ``test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_queryset``:
+    the ``DjangoListField`` default resolver routes the queryset through
+    ``BranchType.get_queryset`` (``apply_type_visibility_sync``), which hides
+    ``city="restricted"`` branches from the anonymous client - so the seeded
+    restricted branch is absent from the field output while the visible one
+    remains.
+    """
+    models.Branch.objects.create(name="Visible", city="Boston")
+    models.Branch.objects.create(name="Hidden", city="restricted")
+
+    response = _post_graphql("{ allLibraryBranchesViaListField { name } }")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    names = [branch["name"] for branch in payload["data"]["allLibraryBranchesViaListField"]]
+    assert "Visible" in names
+    assert "Hidden" not in names
+
+
+# ---------------------------------------------------------------------------
+# Scalar logic-tree filter unions/intersections and nested-branch validation
+# over live /graphql/ (feedback3.md high-confidence + qualifying conditional
+# moves from ``tests/filters/test_sets.py``). The live ``BranchFilter`` exposes
+# ``name``/``city`` scalar lookups and the ``PatronFilter`` carries the
+# ``emailMustHaveAtSign`` custom-validator filter, so the union/intersection
+# and per-branch form-validation contracts are reachable through the real API.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_scalar_or_branch_unions_matching_rows_live():
+    """A scalar ``or`` over two leaf clauses returns the deduplicated union.
+
+    The live twin of ``test_filter_queryset_unions_or_branch``:
+    ``or: [{ name }, { city }]`` ORs the two scalar leaves, so a branch matching
+    EITHER arm appears and a branch matching neither is absent. The existing
+    live suite covers ``and`` and ``not`` on branches but not a plain scalar
+    ``or`` union, and this drives the real ``BranchFilter`` ->
+    ``_evaluate_logic_tree`` union path over HTTP.
+    """
+    models.Branch.objects.create(name="x-row", city="Boston")
+    models.Branch.objects.create(name="other-name", city="y-row")
+    models.Branch.objects.create(name="no-match", city="elsewhere")
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(
+            filter: { or: [{ name: { exact: "x-row" } }, { city: { exact: "y-row" } }] }
+          ) {
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    # OR does not guarantee ordering; assert the matching set. ``no-match`` is
+    # excluded; neither row is duplicated.
+    names = {row["name"] for row in payload["data"]["allLibraryBranches"]}
+    assert names == {"x-row", "other-name"}
+
+
+@pytest.mark.django_db
+def test_scalar_and_branch_intersects_matching_rows_live():
+    """A pure two-scalar ``and`` intersects the leaf clauses.
+
+    The live twin of ``test_filter_queryset_intersects_and_branch``:
+    ``and: [{ name }, { city }]`` ANDs the two scalar leaves, so only the branch
+    matching BOTH survives while branches matching a single arm are excluded.
+    ``test_library_books_filter_combines_and_or_not`` mixes a ``not`` clause and
+    is not a pure two-scalar intersection, so this keeps that simpler ``and``
+    contract live.
+    """
+    # Only the first branch matches both scalar arms. The second shares the
+    # ``city`` arm only (``Branch.name`` is unique, so a name-only twin cannot
+    # exist; the city-only row alone distinguishes AND from a union, which would
+    # also return it). The third matches neither.
+    models.Branch.objects.create(name="both", city="downtown")
+    models.Branch.objects.create(name="city-only", city="downtown")
+    models.Branch.objects.create(name="neither", city="elsewhere")
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryBranches(
+            filter: { and: [{ name: { exact: "both" } }, { city: { exact: "downtown" } }] }
+          ) {
+            name
+            city
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    # AND returns only the both-arm row; ``city-only`` (city arm only) is
+    # excluded - a union would have returned it too.
+    assert payload["data"]["allLibraryBranches"] == [{"name": "both", "city": "downtown"}]
+
+
+@pytest.mark.django_db
+def test_malformed_nested_branch_form_raises_filter_invalid_live():
+    """A malformed filter nested inside ``and`` is validated per-branch, not dropped.
+
+    The live twin of ``test_q_for_branch_validates_child_form_and_raises_on_malformed_subbranch``:
+    ``_q_for_branch`` runs ``_validate_form_or_raise`` on every nested instance,
+    so a value failing the ``email_must_have_at_sign`` validator inside an
+    ``and`` branch surfaces ``FILTER_INVALID`` with the nested field error -
+    rather than ``BaseFilterSet.qs`` silently falling through to an empty
+    ``pk__in`` set. This differs from the top-level
+    ``test_apply_raises_graphqlerror_on_invalid_filter_input`` by exercising the
+    *nested* branch-validation path. A GraphQL-rejected literal (e.g. a bad
+    integer) cannot reach the form, so the custom validator is used instead.
+    """
+    models.Patron.objects.create(name="Ada", email="ada@example.com")
+
+    response = _post_graphql(
+        """
+        query {
+          allLibraryPatrons(
+            filter: { and: [{ emailMustHaveAtSign: { exact: "bogus" } }] }
+          ) {
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    error = payload["errors"][0]
+    assert error["message"] == "Invalid filter input"
+    extensions = error["extensions"]
+    assert extensions["code"] == "FILTER_INVALID"
+    field_errors = extensions["errors"]["email_must_have_at_sign"]
+    assert any("missing @" in entry["message"] for entry in field_errors)
+    assert any(entry["code"] == "missing_at_sign" for entry in field_errors)

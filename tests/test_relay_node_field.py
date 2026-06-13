@@ -2,11 +2,18 @@
 
 Mirrors the top-level ``django_strawberry_framework/relay.py`` (the card-named
 two-file split over a strict ``docs/TREE.md`` mirror -
-``docs/spec-032-full_relay-0_0_9.md`` Decision 11). These are the package
-twins that keep the per-slice ``fail_under = 100`` gate green until the
-Slice-6 fakeshop activation makes the live copies the canonical surface
-(spec Test plan "Package twins"). The Slice-4 permission-integration
-contract is satisfied by the Slice-2 tests below.
+``docs/spec-032-full_relay-0_0_9.md`` Decision 11). The fakeshop ``library`` app
+now ships the live root-node surface (``node`` / ``nodes`` over ``/graphql/`` in
+``examples/fakeshop/test_query/test_library_api.py``), so the consumer refetch
+contract is carried there. The tests here stay package-side because they assert
+what a live query cannot per the ``examples/fakeshop/test_query/README.md``
+live-HTTP-first rule: synthetic model-label / type-strategy routing,
+multi-type-over-one-model dispatch, custom ``relay.NodeID`` attributes, exact
+query-count side channels, ``GLOBALID_INVALID`` error-code shapes,
+construction- / finalize-time guards, ``SyncMisuseError`` discrimination, and
+the public-export surface. Behavior-only twins whose contract the live suite
+now carries are migration candidates (``docs/feedback.md`` /
+``examples/fakeshop/test_query/README.md``).
 """
 
 import pytest

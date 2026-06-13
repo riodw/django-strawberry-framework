@@ -196,42 +196,6 @@ def test_djangolistfield_rejects_non_callable_resolver() -> None:
 # -----------------------------------------------------------------------------
 
 
-@pytest.mark.django_db
-def test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_queryset() -> None:
-    """Default resolver applies ``cls.get_queryset(qs, info)`` in a sync context.
-
-    Pins the sync branch at ``django_strawberry_framework/list_field.py::DjangoListField #"return apply_type_visibility_sync(target_type, qs, info)"`` -
-    ``return apply_type_visibility_sync(target_type, qs, info)`` - by declaring
-    a ``DjangoType`` whose ``get_queryset`` excludes the categories whose
-    names start with ``"a"`` (e.g. ``address``, ``automotive``) and
-    asserting those names are absent from the resolved field output
-    (spec Decision 2 #"load-bearing visibility hook"; spec #"test_djangolistfield_default_resolver_returns_queryset_filtered_by_get_queryset").
-    """
-    services.seed_data(1)
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name")
-
-        @classmethod
-        def get_queryset(cls, queryset, info, **kwargs):
-            return queryset.exclude(name__startswith="a")
-
-    @strawberry.type
-    class Query:
-        all_categories: list[CategoryType] = DjangoListField(CategoryType)
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-
-    result = schema.execute_sync("{ allCategories { id name } }")
-    assert result.errors is None
-    names = [row["name"] for row in result.data["allCategories"]]
-    assert names, "expected at least one non-filtered Category row"
-    assert all(not name.startswith("a") for name in names)
-
-
 @pytest.mark.django_db(transaction=True)
 async def test_djangolistfield_async_get_queryset_is_awaited(monkeypatch) -> None:
     """Default resolver awaits an ``async def get_queryset(...)`` under ``await schema.execute(...)``.

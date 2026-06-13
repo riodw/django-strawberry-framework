@@ -275,37 +275,6 @@ def test_assigned_relation_field_override_keeps_consumer_resolver():
     assert items_field.base_resolver.wrapped_func.__qualname__.endswith("CategoryType.items")
 
 
-def test_decorator_relation_field_override_routes_schema_query_through_consumer_resolver():
-    """A decorator override survives finalization and executes inside a schema query."""
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name")
-
-    class CategoryType(DjangoType):
-        @strawberry.field
-        def items(self) -> list[ItemType]:
-            return [Item(id=1, name="manual")]
-
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def categories(self) -> list[CategoryType]:
-            return [Category(id=1, name="category")]
-
-    finalize_django_types()
-    schema = strawberry.Schema(query=Query)
-    result = schema.execute_sync("{ categories { items { name } } }")
-
-    assert result.errors is None
-    assert result.data == {"categories": [{"items": [{"name": "manual"}]}]}
-
-
 def test_relation_field_class_attribute_shadowing_raises():
     """Unsupported class attributes cannot silently shadow relation fields.
 

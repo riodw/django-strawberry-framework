@@ -1064,16 +1064,24 @@ def test_scalars_optimizer_coerces_manager_to_queryset_in_http_query():
 
 @pytest.mark.django_db
 def test_override_specimen_consumer_field_overrides_resolve_over_http():
-    """The four consumer-authored override corners resolve correctly over ``/graphql/``.
+    """The override corners plus the ``auto`` corner resolve correctly over ``/graphql/``.
 
     ``OverriddenScalarSpecimenType`` (``apps/scalars/schema.py``) demonstrates the
     spec-029 consumer-override matrix live: an assigned ``@strawberry.field``
     (``label``), an annotation-only widening override (``quantity``), the
     ``annotation + strawberry.field`` overlap (``score``), and an annotation escape
-    hatch over the unsupported ``Base36Field`` column (``token``). This pins that
-    every corner not only inspects correctly but actually resolves end to end.
+    hatch over the unsupported ``Base36Field`` column (``token``). ``note`` adds the
+    declare-but-infer corner: declared ``note: auto`` so its ``String!`` type is
+    synthesized from the model, not overridden. This pins that every corner not only
+    inspects correctly but actually resolves end to end.
     """
-    models.OverrideSpecimen.objects.create(label="alpha", quantity=7, score=42, token="zz9")
+    models.OverrideSpecimen.objects.create(
+        label="alpha",
+        quantity=7,
+        score=42,
+        token="zz9",
+        note="inferred",
+    )
 
     response = _post_graphql(
         """
@@ -1083,6 +1091,7 @@ def test_override_specimen_consumer_field_overrides_resolve_over_http():
             quantity
             score
             token
+            note
           }
         }
         """,
@@ -1103,3 +1112,5 @@ def test_override_specimen_consumer_field_overrides_resolve_over_http():
     assert row["score"] == 42
     # Unsupported ``Base36Field`` surfaced via the consumer ``str`` annotation.
     assert row["token"] == "zz9"
+    # ``note: auto`` - inferred ``String!`` resolved straight from the column.
+    assert row["note"] == "inferred"

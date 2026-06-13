@@ -196,11 +196,15 @@ class Base36Field(models.Field):
 class OverrideSpecimen(models.Model):
     """Substrate for the consumer-authored field-override demonstration (spec-029).
 
-    Every column is overridden a different way by ``OverriddenScalarSpecimenType``
-    so the four-corner consumer-override contract (annotation-only, assigned
-    ``strawberry.field``, the ``annotation + strawberry.field`` overlap idiom, and
-    an annotation escape hatch over the unsupported ``token``) is visible both at
-    the GraphQL boundary and in ``inspect_django_type``'s converter column.
+    Four columns are each overridden a different way by
+    ``OverriddenScalarSpecimenType`` so the four-corner consumer-override contract
+    (annotation-only, assigned ``strawberry.field``, the ``annotation +
+    strawberry.field`` overlap idiom, and an annotation escape hatch over the
+    unsupported ``token``) is visible both at the GraphQL boundary and in
+    ``inspect_django_type``'s converter column. The fifth column, ``note``, is the
+    *declare-but-infer* corner: declared as ``note: auto`` so it appears as a class
+    annotation alongside the four overrides while its GraphQL type is synthesized
+    from the model exactly as bare ``Meta.fields`` selection would.
     """
 
     # Overridden by an assigned ``@strawberry.field`` resolver.
@@ -212,6 +216,9 @@ class OverrideSpecimen(models.Model):
     score = models.IntegerField(default=0)
     # Unsupported column; surfaced only via the consumer ``token: str`` annotation.
     token = Base36Field()
+    # Declared as ``note: auto`` - selected and inferred (``TextField`` -> ``String!``)
+    # rather than overridden, so the auto ``SCALAR_MAP`` converter still produces it.
+    note = models.TextField(blank=True, default="")
 
     def __str__(self):
         return self.label

@@ -10,6 +10,14 @@ Consumer surface::
 A nested ``Meta`` class declares the model and (optionally) ``fields``,
 ``exclude``, ``name``, ``description``, ``optimizer_hints``,
 ``interfaces``, ``nullable_overrides``, and ``required_overrides``.
+
+Selection lives in ``Meta.fields`` / ``Meta.exclude``. A field may also be
+written as a class annotation ``name: auto`` ("declare-but-infer"): the name
+must still be selected via ``Meta.fields``, and its GraphQL type is synthesized
+from the Django field exactly as bare selection would. ``auto`` never adds a
+field; it only lets a selected field appear as a class annotation alongside
+sibling overrides (or for IDE/type-checker visibility).
+
 Subclassing
 triggers the collection pipeline, which:
 
@@ -35,6 +43,7 @@ from typing import Annotated, Any, ClassVar, NamedTuple
 from django.db import models
 from strawberry import relay
 from strawberry.relay.types import NodeIDPrivate
+from strawberry.types.auto import StrawberryAuto
 from strawberry.types.field import StrawberryField
 
 from ..exceptions import ConfigurationError
@@ -475,15 +484,45 @@ class DjangoType:
 
         field_map = {snake_case(f.name): FieldMeta.from_django_field(f) for f in fields}
         consumer_annotations = dict(cls.__annotations__)
+        # ``field: auto`` is the "declare-but-infer" marker (the fifth corner of the
+        # override surface): the field is written as a class annotation for
+        # readability / IDE visibility / co-location with sibling overrides, but its
+        # GraphQL type is synthesized from the Django field exactly as bare
+        # ``Meta.fields`` selection would. Selection still belongs to ``Meta.fields`` -
+        # an ``auto`` annotation never adds a field - so an ``auto`` name that is not
+        # selected is a configuration error. Annotation-only ``auto`` names are routed
+        # back into synthesis (excluded from the consumer-authored union below and
+        # dropped from ``consumer_annotations`` so the synthesized annotation wins the
+        # final merge); an ``auto`` name that ALSO carries an assigned
+        # ``strawberry.field`` keeps the assignment-override path (``auto`` loses to a
+        # real override).
+        selected_field_names = {field.name for field in fields}
+        auto_annotated_fields = frozenset(
+            name
+            for name, annotation in consumer_annotations.items()
+            if isinstance(annotation, StrawberryAuto)
+        )
+        unselected_auto = sorted(auto_annotated_fields - selected_field_names)
+        if unselected_auto:
+            raise ConfigurationError(
+                f"{cls.__name__}: fields annotated `auto` but not selected in Meta.fields: "
+                f"{unselected_auto}. `auto` declares an already-selected field's type as "
+                "model-inferred; it does not add fields. Add the name to Meta.fields (or "
+                'Meta.fields = "__all__"), or remove the annotation.',
+            )
         consumer_annotated_relation_fields = frozenset(
             field.name
             for field in fields
-            if field.is_relation and field.name in consumer_annotations
+            if field.is_relation
+            and field.name in consumer_annotations
+            and field.name not in auto_annotated_fields
         )
         consumer_annotated_scalar_fields = frozenset(
             field.name
             for field in fields
-            if not field.is_relation and field.name in consumer_annotations
+            if not field.is_relation
+            and field.name in consumer_annotations
+            and field.name not in auto_annotated_fields
         )
         consumer_assigned_relation_fields, consumer_assigned_scalar_fields = (
             _consumer_assigned_fields(
@@ -491,6 +530,27 @@ class DjangoType:
                 fields,
             )
         )
+        # ``auto`` (model-inferred type) cannot combine with an assigned
+        # ``strawberry.field`` (custom resolver / type): the annotation supplies no
+        # type for the overlap idiom, so the pair is contradictory. Reject it rather
+        # than silently leaving the field typed ``Any``.
+        assigned_auto = sorted(
+            auto_annotated_fields
+            & (consumer_assigned_relation_fields | consumer_assigned_scalar_fields),
+        )
+        if assigned_auto:
+            raise ConfigurationError(
+                f"{cls.__name__}: fields both annotated `auto` and assigned a "
+                f"strawberry.field: {assigned_auto}. `auto` means model-inferred type and "
+                "cannot combine with an assigned resolver. Use `name: <type> = "
+                "strawberry.field(...)` for a typed resolver override, or drop the "
+                "assignment to keep the inferred type.",
+            )
+        # Annotation-only ``auto`` fields defer to synthesis: drop their ``auto``
+        # sentinel so ``{**synthesized, **consumer_annotations}`` below resolves them to
+        # the model-inferred annotation rather than ``Any``.
+        for name in auto_annotated_fields:
+            consumer_annotations.pop(name, None)
         # Four-corner consumer-override contract: relation/scalar x annotation/
         # assignment. Full enumeration of the contract lives on the
         # ``_consumer_assigned_fields`` docstring; this union is the single

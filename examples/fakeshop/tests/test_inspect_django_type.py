@@ -198,6 +198,10 @@ def test_inspect_consumer_authored_scalar_override_matrix(reload_inspect_schema)
       -> ``consumer annotation (scalar)``, exercising the ``StrawberryOptional`` path
     - ``score`` - ``annotation + strawberry.field`` overlap idiom
     - ``token`` - annotation escape hatch over the unsupported ``Base36Field``
+
+    The ``note`` field is the inverse: declared ``note: auto`` (declare-but-infer),
+    so it is *not* a consumer override and its converter column names the auto
+    ``SCALAR_MAP`` row exactly as a bare-selected field would.
     """
     out = StringIO()
     call_command("inspect_django_type", "OverriddenScalarSpecimenType", stdout=out)
@@ -222,6 +226,13 @@ def test_inspect_consumer_authored_scalar_override_matrix(reload_inspect_schema)
     assert "String!" in token_row
     assert "consumer annotation (scalar)" in token_row
     assert "SCALAR_MAP" not in token_row
+
+    # ``note: auto`` is declare-but-infer, not an override: the auto SCALAR_MAP
+    # converter still produces it, and it never reports a consumer-authored source.
+    note_row = _field_row(text, "note")
+    assert "String!" in note_row
+    assert "SCALAR_MAP" in note_row
+    assert "consumer" not in note_row
 
 
 def test_inspect_relay_node_pk_row(reload_inspect_schema):

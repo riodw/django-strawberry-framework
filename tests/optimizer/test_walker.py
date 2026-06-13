@@ -52,13 +52,14 @@ def _sel(
     selections=None,
     directives=None,
     alias=None,
+    arguments=None,
 ):
     """Build a synthetic ``SelectedField``."""
     return SimpleNamespace(
         name=name,
         alias=alias,
         directives=directives or {},
-        arguments={},
+        arguments=arguments or {},
         selections=selections or [],
     )
 
@@ -569,14 +570,18 @@ def test_merge_runtime_prefixes_adopts_then_unions_connection_prefixes():
     ]
 
 
-def test_merge_aliased_selections_logs_when_arguments_diverge(caplog):
-    """Aliased selections with different ``arguments`` emit a DEBUG signal.
+def test_merge_aliased_selections_preserves_per_response_key_arguments():
+    """Aliased selections preserve each occurrence's ``arguments`` under its response key.
 
-    Today's walker ignores ``arguments``, so divergence is harmless and
-    merge proceeds.  The DEBUG line exists so the future optimizer slice
-    that begins planning per-argument has an immediate trace pointing
-    at this branch.
+    Re-pinned for spec-033 Decision 6: the merge keeps the first occurrence's
+    ``arguments`` as the merged selection's primary value (the pre-033
+    first-args-win contract) AND records every occurrence's payload in
+    ``_optimizer_response_key_arguments`` so a synthesized connection sibling's
+    divergent pagination/sidecar arguments stay detectable
+    (``_aliased_arguments_diverge``).
     """
+    from django_strawberry_framework.optimizer.walker import _aliased_arguments_diverge
+
     sel_a = SimpleNamespace(
         name="items",
         alias="first",
@@ -592,14 +597,18 @@ def test_merge_aliased_selections_logs_when_arguments_diverge(caplog):
         selections=[_sel("name")],
     )
 
-    with caplog.at_level("DEBUG", logger="django_strawberry_framework"):
-        merged = _merge_aliased_selections([sel_a, sel_b])
+    merged = _merge_aliased_selections([sel_a, sel_b])
 
     # Merge still proceeds; the first occurrence's ``arguments`` are kept.
     assert len(merged) == 1
     assert merged[0].arguments == {"active": True}
     assert merged[0]._optimizer_response_keys == ["first", "second"]
-    assert any("different arguments" in record.message for record in caplog.records)
+    # Per-response-key payloads recorded for both aliases; divergence detected.
+    assert merged[0]._optimizer_response_key_arguments == {
+        "first": {"active": True},
+        "second": {"active": False},
+    }
+    assert _aliased_arguments_diverge(merged[0]) is True
 
 
 def test_plan_merges_aliased_selections():
@@ -1964,26 +1973,1024 @@ def test_walker_resolves_relation_targets_through_definition_metadata(monkeypatc
     assert plan.select_related == ("category",)
 
 
-# TODO(spec-033 Slice 1): add the nested-connection walker coverage (Test plan).
-# Recognition + windowed-Prefetch planning + fallback non-planning:
-#   test_relation_connections_slot_recorded  (slot written; suppressed shapes record nothing)
-#   test_nested_connection_planned_as_windowed_prefetch  (Prefetch to_attr=_dst_books_connection,
-#       _dst_row_number/_dst_total_count annotations, slice filters, pk-terminal order)
-#   test_window_slice_from_first_after_literals / ..._from_variables  (variables via info.variable_values)
-#   test_window_last_only_uses_reversed_row_number
-#   test_window_respects_relay_max_results
-#   test_window_partition_for_reverse_fk_forward_m2m_reverse_m2m  (incl. absent related_name reverse query name)
-#   test_m2m_shared_child_partitions_per_parent  (catches accidental child-pk partitioning)
-#   test_nested_connection_two_level_recursion  (window inside a window)
-#   test_child_plan_projections_include_connector_and_ordering_columns
-#   test_window_subquery_wrap_preserves_only_mask_and_child_select_related
-#   test_scalar_only_pageinfo_and_total_count_are_window_planned
-#   test_malformed_slice_arguments_are_left_unplanned_for_fallback_error_locality
-#   test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets
-#   test_fallback_not_planned_sidecar_input / ..._divergent_aliases / ..._skip_hint
-#       (no window, no planned_resolver_keys entry; divergent also asserts wrong Prefetch ABSENT)
-#   test_identical_alias_args_merge_and_plan
-#   test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch  (diff_plan_for_queryset)
-#   test_visibility_target_window_flips_cacheable_false
-#   test_planned_resolver_keys_include_connection_field
+# ---------------------------------------------------------------------------
+# spec-033 Slice 1 - nested connection recognition + windowed-Prefetch planning
+# ---------------------------------------------------------------------------
+
+
+def _fake_info(relay_max_results=100):
+    """Build a minimal ``info`` exposing ``schema.config.relay_max_results`` and ``path``.
+
+    ``SliceMetadata.from_arguments`` reads ``info.schema.config.relay_max_results``
+    when ``max_results`` is left ``None``; the walker reads ``info.path`` for
+    runtime-path identity. Nothing else on ``info`` is touched at plan time.
+    """
+    return SimpleNamespace(
+        schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=relay_max_results)),
+        path=None,
+        variable_values={},
+    )
+
+
+def _conn_sel(
+    name,
+    *,
+    node_selections=None,
+    arguments=None,
+    alias=None,
+    scalar_children=None,
+):
+    """Build a synthetic connection selection (``edges { node { ... } }`` wrapper)."""
+    children = []
+    if scalar_children is not None:
+        children.extend(_sel(child) for child in scalar_children)
+    if node_selections is not None:
+        node = _sel("node", selections=list(node_selections))
+        children.append(_sel("edges", selections=[node]))
+    return _sel(name, selections=children, alias=alias, arguments=arguments or {})
+
+
+def _connection_relay_types():
+    """Register ``GenreType`` / ``BookType`` / ``ShelfType`` with synthesized connections.
+
+    Uses the real library M2M (``Genre.books`` reverse, ``Book.genres`` forward)
+    and reverse-FK (``Shelf.books``) graph so synthesized ``<field>_connection``
+    siblings exist and the partition derivation is exercised against real fields.
+    """
+    from apps.library.models import Book, Genre, Shelf
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "genres")
+            interfaces = (relay.Node,)
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name", "books")
+            interfaces = (relay.Node,)
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code", "books")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    return {"Book": (Book, BookType), "Genre": (Genre, GenreType), "Shelf": (Shelf, ShelfType)}
+
+
+def test_relation_connections_slot_recorded():
+    """The synthesis records ``{generated: relation_field}`` for attached siblings only."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_def = registry.get_definition(types["Genre"][1])
+        # Genre.books (reverse M2M) synthesizes booksConnection.
+        assert genre_def.relation_connections == {"books_connection": "books"}
+        shelf_def = registry.get_definition(types["Shelf"][1])
+        assert shelf_def.relation_connections == {"books_connection": "books"}
+    finally:
+        registry.clear()
+
+
+def test_relation_connections_slot_records_nothing_for_suppressed_shapes():
+    """A ``"list"``-narrowed relation records no slot entry (suppressed shape)."""
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+                relation_shapes = {"books": "list"}
+
+        finalize_django_types()
+        genre_def = registry.get_definition(GenreType)
+        # The "list" narrowing suppresses synthesis, so nothing is recorded.
+        assert not (genre_def.relation_connections or {})
+    finally:
+        registry.clear()
+
+
+def test_record_relation_connection_is_idempotent():
+    """``_record_relation_connection`` lazily inits the slot and is idempotent.
+
+    The re-entrancy branch (a partial-finalize rerun) and the first-attach
+    branch share this writer; an idempotent dict assignment means the rerun
+    records the same mapping the first attach did (spec-033 Decision 3).
+    """
+    from django_strawberry_framework.types.finalizer import _record_relation_connection
+
+    definition = SimpleNamespace(relation_connections=None)
+    _record_relation_connection(definition, "books_connection", "books")
+    assert definition.relation_connections == {"books_connection": "books"}
+    # Idempotent re-write (the marker-``continue`` branch path).
+    _record_relation_connection(definition, "books_connection", "books")
+    assert definition.relation_connections == {"books_connection": "books"}
+
+
+def test_relation_connections_slot_recorded_on_partial_finalize_rerun(monkeypatch):
+    """A partial finalize whose Phase 3 raised, then a re-run, still records the slot.
+
+    Forces ``strawberry.type`` (Phase 3) to raise on the first
+    ``finalize_django_types`` so the synthesis (Phase 2.5) has attached the
+    marker-bearing connection field but ``finalized`` stays ``False``. The bare
+    re-run takes the ``_SYNTHESIZED_RELATION_CONNECTION_MARKER`` early-``continue``
+    branch, which must re-record the slot (spec-033 Decision 3 re-entrancy path).
+    """
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    import django_strawberry_framework.types.finalizer as finalizer_module
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+
+        real_strawberry_type = finalizer_module.strawberry.type
+
+        def boom(cls=None, *args, **kwargs):
+            # Only the Phase-3 decoration of GenreType raises; synthesis
+            # (Phase 2.5) internally calls ``strawberry.type`` to build the
+            # connection class, which must still succeed.
+            if cls is GenreType:
+                raise RuntimeError("forced Phase 3 failure for re-entrancy test")
+            return real_strawberry_type(cls, *args, **kwargs)
+
+        # Synthesis (Phase 2.5) runs before Phase 3; make Phase 3 raise so the
+        # marker is set but ``finalized`` stays False.
+        monkeypatch.setattr(finalizer_module.strawberry, "type", boom)
+        with pytest.raises(RuntimeError, match="forced Phase 3 failure"):
+            finalize_django_types()
+        genre_def = registry.get_definition(GenreType)
+        # The first (raising) finalize already recorded the slot.
+        assert genre_def.relation_connections == {"books_connection": "books"}
+        # Wipe it and re-run with Phase 3 restored: the marker-``continue`` branch
+        # must re-record the slot rather than skip it.
+        genre_def.relation_connections = None
+        monkeypatch.setattr(finalizer_module.strawberry, "type", real_strawberry_type)
+        finalize_django_types()
+        assert genre_def.relation_connections == {"books_connection": "books"}
+    finally:
+        registry.clear()
+
+
+def test_nested_connection_planned_as_windowed_prefetch():
+    """A nested connection plans a windowed ``Prefetch`` under the ``_dst_`` ``to_attr``."""
+    from django_strawberry_framework.optimizer.plans import (
+        WINDOW_ROW_NUMBER,
+        WINDOW_TOTAL_COUNT,
+    )
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        # The window lands on the reserved ``to_attr``, lookup stays the accessor.
+        assert prefetch.to_attr == "_dst_books_connection"
+        assert prefetch.prefetch_through == "books"
+        annotations = prefetch.queryset.query.annotations
+        assert WINDOW_ROW_NUMBER in annotations
+        assert WINDOW_TOTAL_COUNT in annotations
+        # Deterministic total order ends in the pk tiebreaker.
+        assert prefetch.queryset.query.annotations  # window present
+    finally:
+        registry.clear()
+
+
+def test_window_slice_from_first_after_literals():
+    """Resolved ``first`` / ``after`` literals drive the window offset + limit.
+
+    ``first`` arrives as the raw token STRING ``"3"`` from an inline Int literal
+    (``convert_value`` returns ``IntValueNode.value``, a string); the walker
+    coerces it so the window actually bounds to ``offset + first`` rather than
+    silently leaving the page uncapped at ``relay_max_results``. The bound is
+    asserted, not just annotation presence (the gap that hid the literal-string
+    over-cap bug).
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        # after cursor for offset 1 -> start 2; first 3 -> upper bound 5.
+        from strawberry.relay.utils import to_base64
+
+        after = to_base64("arrayconnection", "1")
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    # String values - exactly what ``convert_selections`` emits
+                    # for inline Int literals (the real plan-time argument shape).
+                    arguments={"first": "3", "after": after},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        sql = str(prefetch.queryset.query).upper()
+        assert "_DST_ROW_NUMBER" in sql
+        # offset 2 (after "1") + first 3 -> the window is bounded to row 5, NOT
+        # the relay_max_results cap of 100. Both the offset and the upper bound
+        # must appear.
+        assert "> 2" in sql
+        assert "<= 5" in sql
+    finally:
+        registry.clear()
+
+
+def test_window_slice_coerces_int_literal_strings():
+    """``_coerce_pagination_int`` turns int-like strings to ints; passes others through.
+
+    Guards the literal-vs-variable divergence: an inline Int literal arrives as
+    a string (``"2"``), a resolved variable as an ``int`` (``2``); both must drive
+    the slice. A non-int-castable value passes through so
+    ``SliceMetadata.from_arguments`` reaches its own ``isinstance`` gate (the
+    shipped malformed-value behavior) rather than the walker pre-judging it.
+    """
+    from django_strawberry_framework.optimizer.walker import _coerce_pagination_int
+
+    assert _coerce_pagination_int("2") == 2
+    assert _coerce_pagination_int(2) == 2
+    assert _coerce_pagination_int(None) is None
+    # Non-int-castable passes through untouched (SliceMetadata's isinstance gate
+    # then skips the bound - the shipped behavior for a malformed value).
+    assert _coerce_pagination_int("oops") == "oops"
+
+
+def test_relay_max_results_from_optimizer_info_shapes():
+    """``_relay_max_results_from_info`` reads the strawberry-wrapped schema config.
+
+    The walker runs at the optimizer middleware layer where ``info.schema`` is a
+    bare graphql-core ``GraphQLSchema`` with NO ``.config``; the config lives on
+    ``schema._strawberry_schema.config``. The helper prefers that path, falls
+    back to a bare ``schema.config`` (the ``_fake_info`` test stub), then ``None``.
+    Without it ``SliceMetadata.from_arguments(max_results=None)`` would
+    dereference ``info.schema.config`` and raise ``AttributeError`` in production.
+    """
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.optimizer.walker import _relay_max_results_from_info
+
+    # Production shape: bare GraphQLSchema-like with a wrapped strawberry schema.
+    wrapped = SimpleNamespace(
+        schema=SimpleNamespace(
+            _strawberry_schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=7)),
+        ),
+    )
+    assert _relay_max_results_from_info(wrapped) == 7
+    # Test-stub shape: ``schema.config`` directly (no ``_strawberry_schema``).
+    assert _relay_max_results_from_info(_fake_info(relay_max_results=42)) == 42
+    # No config anywhere -> None (engine default applies downstream).
+    assert _relay_max_results_from_info(SimpleNamespace(schema=SimpleNamespace())) is None
+
+
+def test_window_slice_from_variables():
+    """Variable-supplied pagination resolves through the converted selection's values.
+
+    Converted selections already carry resolved variable VALUES on
+    ``sel.arguments`` (Strawberry resolves them during ``convert_selections``),
+    so the walker reads the value the same way for a literal or a variable; the
+    walker grows no second variable-resolution path (spec-033 Decision 3/4).
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        # ``arguments`` carries the RESOLVED value (5), as convert_selections produces.
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 5},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.to_attr == "_dst_books_connection"
+    finally:
+        registry.clear()
+
+
+def test_window_last_only_uses_reversed_row_number():
+    """A ``last``-only window annotates AND bounds the reversed row-number window.
+
+    The annotation alone is insufficient: ``SliceMetadata`` sets
+    ``end = sys.maxsize`` for a ``last``-only slice so ``expected is None``, and
+    the bound must come from the literal ``last`` value. Without the
+    ``_dst_row_number_reversed__lte`` filter the window would over-fetch every
+    child row per parent (spec-033 Decision 4 reversed-row-number branch).
+    """
+    from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER_REVERSED
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [_conn_sel("booksConnection", node_selections=[_sel("title")], arguments={"last": 2})],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        query = prefetch.queryset.query
+        assert WINDOW_ROW_NUMBER_REVERSED in query.annotations
+        # The reversed window MUST be bounded to ``last`` rows; assert the
+        # ``__lte`` filter is present (the annotation without the bound is the
+        # over-fetch bug this test guards against).
+        sql = str(query).upper()
+        assert WINDOW_ROW_NUMBER_REVERSED.upper() in sql
+        assert "<= 2" in sql
+    finally:
+        registry.clear()
+
+
+def test_window_respects_relay_max_results():
+    """An over-cap ``first`` (> ``relay_max_results``) leaves the selection unplanned."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        # relay_max_results=5; first=10 raises ValueError in SliceMetadata ->
+        # the malformed-slice fallback leaves it unplanned (error locality).
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 10},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(relay_max_results=5),
+            source_type=genre_type,
+        )
+        assert plan.prefetch_related == ()
+        assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def test_m2m_shared_child_partitions_per_parent():
+    """A forward/reverse M2M window partitions by the parent key, not the child pk."""
+    from apps.library.models import Book, Genre
+
+    from django_strawberry_framework.optimizer.plans import window_partition_for_prefetch
+
+    # Reverse M2M (Genre.books) partitions through the child's forward M2M field.
+    assert window_partition_for_prefetch(Genre._meta.get_field("books")) == "genres"
+    # Forward M2M (Book.genres) partitions by the reverse query name.
+    assert window_partition_for_prefetch(Book._meta.get_field("genres")) == "books"
+
+
+def test_nested_connection_two_level_recursion():
+    """A window inside a window (the cookbook shape) plans both levels."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        # Genre { booksConnection { edges { node { genresConnection { edges { node { name } } } } } } }
+        inner = _conn_sel(
+            "genresConnection",
+            node_selections=[_sel("name")],
+            arguments={"first": 2},
+        )
+        plan = plan_optimizations(
+            [_conn_sel("booksConnection", node_selections=[inner], arguments={"first": 3})],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        outer = _prefetch_entry(plan)
+        assert outer.to_attr == "_dst_books_connection"
+        # The outer window's child queryset carries the inner window prefetch.
+        inner_prefetches = list(outer.queryset._prefetch_related_lookups)
+        inner_to_attrs = [getattr(pf, "to_attr", None) for pf in inner_prefetches]
+        assert "_dst_genres_connection" in inner_to_attrs
+    finally:
+        registry.clear()
+
+
+def test_child_plan_projections_include_connector_and_ordering_columns():
+    """The windowed child ``.only()`` includes the connector column from the edge selection."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        shelf_model, shelf_type = types["Shelf"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            shelf_model,
+            info=_fake_info(),
+            source_type=shelf_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        only_clause = set(prefetch.queryset.query.deferred_loading[0])
+        # Reverse FK connector column (shelf_id) is force-included for attach.
+        assert "shelf_id" in only_clause
+    finally:
+        registry.clear()
+
+
+def test_scalar_only_pageinfo_and_total_count_are_window_planned():
+    """``totalCount``-only / ``pageInfo``-only selections ARE planned (not fallbacks)."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [_conn_sel("booksConnection", scalar_children=["totalCount"], arguments={"first": 3})],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.to_attr == "_dst_books_connection"
+        # Planned: resolver identity recorded so strictness stays silent.
+        assert len(plan.planned_resolver_keys) >= 1
+    finally:
+        registry.clear()
+
+
+def test_malformed_slice_arguments_are_left_unplanned_for_fallback_error_locality():
+    """A malformed ``after:`` cursor leaves the selection unplanned (per-parent fallback)."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3, "after": "not-a-valid-cursor"},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert plan.prefetch_related == ()
+        assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def test_fallback_not_planned_sidecar_input():
+    """A nested connection carrying ``filter:`` / ``orderBy:`` is left unplanned."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3, "filter": object()},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert plan.prefetch_related == ()
+        assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def test_fallback_not_planned_divergent_aliases():
+    """Divergent aliased pagination args fall back: NO window prefetch, NO resolver key."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 2},
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 5},
+                    alias="b",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        # Divergent aliases -> the wrong Prefetch / resolver-key entry is ABSENT.
+        assert not any(
+            getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
+        )
+        assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def test_fallback_not_planned_skip_hint():
+    """An ``OptimizerHint.SKIP`` on the relation suppresses window planning."""
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+                optimizer_hints = {"books": OptimizerHint.SKIP}
+
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            Genre,
+            info=_fake_info(),
+            source_type=GenreType,
+        )
+        assert plan.prefetch_related == ()
+        assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def test_identical_alias_args_merge_and_plan():
+    """Identical-argument aliases merge and ARE window-planned together."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                    alias="b",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.to_attr == "_dst_books_connection"
+        # Both response keys recorded as planned (one resolver identity per key).
+        assert len(plan.planned_resolver_keys) == 2
+    finally:
+        registry.clear()
+
+
+def test_planned_resolver_keys_include_connection_field():
+    """A planned connection records the field's resolver identity for strictness."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert len(plan.planned_resolver_keys) == 1
+        key = plan.planned_resolver_keys[0]
+        # The key is built on the relation field name (books), not the generated attr.
+        assert "books@" in key
+    finally:
+        registry.clear()
+
+
+def test_both_shape_connection_to_attr_coexists_with_list_and_consumer_prefetch():
+    """The list sibling, the connection window, and a consumer accessor prefetch coexist."""
+    from apps.library.models import Genre
+
+    from django_strawberry_framework.optimizer.plans import diff_plan_for_queryset
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _sel("books", selections=[_sel("title")]),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        to_attrs = {getattr(pf, "to_attr", None) for pf in plan.prefetch_related}
+        prefetch_throughs = {pf.prefetch_through for pf in plan.prefetch_related}
+        # List sibling (no to_attr) and the window (to_attr) share lookup "books"
+        # but distinct prefetch_to, so no Django duplicate-lookup error.
+        assert None in to_attrs
+        assert "_dst_books_connection" in to_attrs
+        assert prefetch_throughs == {"books"}
+        # A consumer accessor prefetch on "books" is a distinct lookup that diff
+        # reconciliation never merges with the window.
+        consumer_qs = Genre.objects.prefetch_related("books")
+        _delta, _qs = diff_plan_for_queryset(plan.finalize(), consumer_qs)
+    finally:
+        registry.clear()
+
+
+def test_visibility_target_window_flips_cacheable_false():
+    """A windowed target overriding ``get_queryset`` flips ``plan.cacheable`` False."""
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+            @classmethod
+            def get_queryset(cls, queryset, info):
+                return queryset.filter(circulation_status="available")
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            Genre,
+            info=_fake_info(),
+            source_type=GenreType,
+        )
+        assert plan.cacheable is False
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.to_attr == "_dst_books_connection"
+    finally:
+        registry.clear()
+
+
+def test_distinct_child_queryset_left_unplanned_for_correct_total_count():
+    """A ``.distinct()``-ing target ``get_queryset`` leaves the relation unplanned."""
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+            @classmethod
+            def get_queryset(cls, queryset, info):
+                # A visibility join that de-duplicates: window Count(1) OVER would
+                # over-count pre-DISTINCT rows, so the window must not be planned.
+                return queryset.distinct()
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            Genre,
+            info=_fake_info(),
+            source_type=GenreType,
+        )
+        # Distinct target -> per-parent fallback: no window prefetch, no resolver key.
+        assert not any(
+            getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
+        )
+        assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def _genre_books_connection_with_nested_relation_types(*, distinct):
+    """Register ``GenreType`` / ``BookType`` (``BookType`` exposes the ``shelf`` FK).
+
+    The node child ``shelf { id }`` is a nested RELATION, so the child plan
+    generates a ``planned_resolver_keys`` / ``fk_id_elisions`` entry. A fallback
+    connection must NOT leak that child metadata into the parent plan
+    (spec-033 Decision 6 / DoD-4). When ``distinct`` is set, ``BookType`` adds a
+    ``.distinct()``-ing ``get_queryset`` (the DISTINCT fallback); otherwise the
+    caller supplies a malformed cursor for the malformed-slice fallback.
+    """
+    from apps.library.models import Book, Genre, Shelf
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = Shelf
+            fields = ("id", "code")
+            interfaces = (relay.Node,)
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf")
+            interfaces = (relay.Node,)
+
+        if distinct:
+
+            @classmethod
+            def get_queryset(cls, queryset, info):
+                return queryset.distinct()
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name", "books")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    return Genre, GenreType
+
+
+def test_distinct_fallback_does_not_leak_child_resolver_keys_into_parent():
+    """A DISTINCT fallback with a nested-relation node child leaks NO parent metadata."""
+    registry.clear()
+    try:
+        genre_model, genre_type = _genre_books_connection_with_nested_relation_types(distinct=True)
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("shelf", selections=[_sel("id")])],
+                    arguments={"first": 3},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        # Falls back per-parent: no window prefetch and NO child metadata absorbed.
+        assert not any(
+            getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
+        )
+        assert plan.planned_resolver_keys == ()
+        assert plan.fk_id_elisions == ()
+    finally:
+        registry.clear()
+
+
+def test_malformed_slice_fallback_does_not_leak_child_resolver_keys_into_parent():
+    """A malformed-slice fallback with a nested-relation node child leaks NO parent metadata.
+
+    The malformed-slice guard now resolves before the child queryset is built,
+    so no child plan exists to leak; this pins that the parent plan is untouched.
+    """
+    registry.clear()
+    try:
+        genre_model, genre_type = _genre_books_connection_with_nested_relation_types(
+            distinct=False,
+        )
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("shelf", selections=[_sel("id")])],
+                    arguments={"first": 3, "after": "not-a-valid-cursor"},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert not any(
+            getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
+        )
+        assert plan.planned_resolver_keys == ()
+        assert plan.fk_id_elisions == ()
+    finally:
+        registry.clear()
+
+
+def test_secondary_type_relation_shapes_nested_recognition():
+    """Nested recognition reads the model's PRIMARY type's ``relation_connections``.
+
+    The primary narrows ``books`` to ``"list"`` (no synthesis), so even though a
+    secondary type synthesizes ``booksConnection``, nested recognition (which
+    routes through the primary) does not window-plan it - it falls back
+    per-parent (spec-033 Decision 3 primary-type contract).
+    """
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+        class GenrePrimary(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+                relation_shapes = {"books": "list"}
+                primary = True
+
+        class GenreSecondary(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+                relation_shapes = {"books": "connection"}
+
+        finalize_django_types()
+        # Nested recognition routes through the primary (which narrowed to list),
+        # so the connection is NOT window-planned at the nested level.
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            Genre,
+            info=_fake_info(),
+        )
+        assert not any(
+            getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
+        )
+    finally:
+        registry.clear()
+
+
+def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
+    """Window annotations compose with a child ``.only()`` and a child ``select_related``."""
+    from apps.library.models import Book, Genre, Shelf
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class ShelfType(DjangoType):
+            class Meta:
+                model = Shelf
+                fields = ("id", "code")
+                interfaces = (relay.Node,)
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title", "shelf")
+                interfaces = (relay.Node,)
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+        # booksConnection { edges { node { title shelf { code } } } } -> child
+        # plan carries select_related("shelf") + only(); window annotations ride.
+        node_children = [_sel("title"), _sel("shelf", selections=[_sel("code")])]
+        plan = plan_optimizations(
+            [_conn_sel("booksConnection", node_selections=node_children, arguments={"first": 3})],
+            Genre,
+            info=_fake_info(),
+            source_type=GenreType,
+        )
+        prefetch = _prefetch_entry(plan)
+        child_qs = prefetch.queryset
+        assert "shelf" in str(child_qs.query.select_related)
+        # Window annotations are still present alongside the only() mask.
+        from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
+
+        assert WINDOW_ROW_NUMBER in child_qs.query.annotations
+    finally:
+        registry.clear()
+
+
 # Helper-move (Decision 9) no-regression lives in test_extension.py (unmodified).

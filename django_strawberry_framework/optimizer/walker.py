@@ -8,8 +8,9 @@ from typing import Any
 from django.db import models
 from django.db.models import Prefetch
 from strawberry import relay
+from strawberry.relay.utils import SliceMetadata
 
-from ..exceptions import ConfigurationError
+from ..exceptions import ConfigurationError, OptimizerError
 from ..registry import registry
 from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
@@ -20,8 +21,11 @@ from .plans import (
     append_prefetch_unique,
     append_unique,
     append_unique_many,
+    apply_window_pagination,
+    deterministic_order,
     resolver_key,
     runtime_path_from_info,
+    window_partition_for_prefetch,
 )
 
 
@@ -197,24 +201,33 @@ def _walk_selections(
     type_cls, definition, field_map = _resolve_field_map(model, source_type=source_type)
     hints_map = _resolve_optimizer_hints(definition)
     merged = _merge_aliased_selections(_included_field_selections(selections))
+    relation_connections = getattr(definition, "relation_connections", None) or {}
     for sel in merged:
         django_name = snake_case(sel.name)
-        # TODO(spec-033 Slice 1, Decision 3/4): recognize a synthesized nested
-        # connection BEFORE the unknown-name guard below (today ``books_connection``
-        # matches no model field and silently ``continue``s -- the gap this card
-        # closes). When ``django_name`` is a key of ``definition.relation_connections``
-        # (the Phase-2.5 slot; see types/definition.py), dispatch to a new
-        # ``_plan_connection_relation(...)`` and ``continue``. Sketch: read the
-        # slot via ``getattr(definition, "relation_connections", None) or {}``;
-        # when ``django_name`` is a key, call ``_plan_connection_relation(...)``
-        # passing ``sel``, ``definition``, the underlying relation field name
-        # (the slot's value at that key), ``field_map``, ``plan``, ``prefix``,
-        # ``info``, ``runtime_prefixes``, ``type_cls`` -- then ``continue``.
-        #
-        # Must run with ``definition`` (already resolved above) -- name-pattern
-        # guessing (strip ``_connection``) is rejected (Decision 3): it misfires on
-        # consumer fields ending in ``_connection`` and on suppressed-synthesis
-        # relations. Recognition is metadata-driven only.
+        # Recognize a synthesized nested connection BEFORE the unknown-name
+        # guard below: ``books_connection`` matches no model field, so without
+        # this branch the unknown-name guard silently ``continue``s and the
+        # nested connection is never planned (the gap spec-033 closes). The
+        # ``relation_connections`` slot (Phase-2.5 synthesis metadata) maps the
+        # generated attr name to the underlying relation field name; recognition
+        # is metadata-driven, never name-pattern guessing (Decision 3). The
+        # ``definition`` resolved above is the model's PRIMARY type, so a
+        # divergent secondary type's connection is out of scope for windowed
+        # planning and falls through to per-parent (Decision 3 primary contract).
+        if django_name in relation_connections:
+            _plan_connection_relation(
+                sel,
+                definition,
+                relation_field_name=relation_connections[django_name],
+                field_map=field_map,
+                plan=plan,
+                prefix=prefix,
+                info=info,
+                runtime_prefixes=runtime_prefixes,
+                type_cls=type_cls,
+                model=model,
+            )
+            continue
         django_field = field_map.get(django_name)
         if django_field is None:
             # Decision 7 ("no avoidable lazy loads on ``resolve_id``"):
@@ -808,48 +821,67 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             if response_key not in merged._optimizer_response_keys:
                 merged._optimizer_response_keys.append(response_key)
             _merge_runtime_prefixes(merged, sel)
-            # TODO(spec-033 Slice 1, Decision 6 / Edge cases): connection
-            # planning makes ``arguments`` load-bearing -- this first-args-win
-            # merge is no longer sufficient for synthesized connection siblings.
-            # Before ``_plan_connection_relation`` runs, the walker must either
-            # (a) keep connection selections UNMERGED until pagination
-            # classification, or (b) preserve per-response-key argument payloads
-            # on the merged selection. Then:
-            #   - identical-argument aliases merge and ARE window-planned
-            #     (``a: books(first:3)`` + ``b: books(first:3)``);
-            #   - DIVERGENT aliases (``a: books(first:2)`` + ``b: books(first:5)``,
-            #     or differing filter/orderBy) fall back per-parent -- one
-            #     ``to_attr`` cannot serve two windows -- and the divergent-alias
-            #     test asserts the wrong ``Prefetch`` / ``planned_resolver_keys``
-            #     entry is ABSENT, not merely that the query still resolves.
-            # Today's walker ignores ``arguments``, so divergent arguments
-            # between aliased selections are harmless. If a future slice
-            # plans per-argument, this merge must become per-response-key
-            # instead of merging.
-            sel_arguments = getattr(sel, "arguments", None) or {}
-            if sel_arguments != merged.arguments:
-                logger.debug(
-                    "Optimizer: aliased selections of %s carry different arguments; "
-                    "merge keeps the first occurrence's values.",
-                    sel.name,
-                )
+            # Preserve per-response-key argument payloads so a synthesized
+            # connection sibling's pagination/sidecar arguments stay
+            # comparable AFTER the merge (spec-033 Decision 6): identical
+            # arguments across aliases are window-planned together, while
+            # divergent aliases (``a: books(first:2)`` + ``b: books(first:5)``,
+            # or differing filter/orderBy) must fall back per-parent because one
+            # ``to_attr`` cannot serve two windows. The first occurrence's
+            # ``arguments`` stays the merged selection's primary value (the
+            # pre-033 first-args-win contract for non-connection fields); the
+            # per-response-key map is the side-channel ``_plan_connection_relation``
+            # reads to detect divergence.
+            _record_response_key_arguments(merged, sel)
         else:
             merged = SimpleNamespace(
                 name=sel.name,
                 alias=getattr(sel, "alias", None),
-                # The walker filters directives before merging and does not
-                # inspect arguments. If future optimizer slices use arguments,
-                # this merge must become per-response-key instead of keeping
-                # only the first occurrence's values.
                 directives=getattr(sel, "directives", None) or {},
                 arguments=getattr(sel, "arguments", None) or {},
                 selections=list(getattr(sel, "selections", None) or []),
                 _optimizer_response_keys=[_response_key(sel)],
                 _optimizer_runtime_prefixes=_selection_runtime_prefixes(sel),
+                # Per-response-key argument payloads (spec-033 Decision 6); see
+                # the merge branch above and ``_aliased_arguments_diverge``.
+                _optimizer_response_key_arguments={
+                    _response_key(sel): getattr(sel, "arguments", None) or {},
+                },
             )
             seen[key] = merged
             result.append(merged)
     return result
+
+
+def _record_response_key_arguments(merged: Any, selection: Any) -> None:
+    """Record a duplicate selection's arguments under its response key.
+
+    The merged selection carries ``_optimizer_response_key_arguments``: a map
+    from response key to that occurrence's resolved argument payload. Kept off
+    the inline merge branch so ``_merge_aliased_selections`` (a control-flow
+    hotspot) does not grow another branch (spec-033 Decision 6).
+    """
+    merged._optimizer_response_key_arguments[_response_key(selection)] = (
+        getattr(selection, "arguments", None) or {}
+    )
+
+
+def _aliased_arguments_diverge(selection: Any) -> bool:
+    """Return whether a merged selection's aliases carry divergent arguments.
+
+    ``True`` when two response keys of the same field were selected with
+    different argument payloads (e.g. ``a: books(first: 2)`` +
+    ``b: books(first: 5)``). A synthesized connection with divergent aliases is
+    left unplanned (one ``to_attr`` cannot serve two windows; spec-033
+    Decision 6). Selections built outside ``_merge_aliased_selections`` (direct
+    test/helper callers) carry no per-response-key map and never diverge.
+    """
+    per_key = getattr(selection, "_optimizer_response_key_arguments", None)
+    if not per_key:
+        return False
+    payloads = list(per_key.values())
+    first = payloads[0]
+    return any(payload != first for payload in payloads[1:])
 
 
 def _response_key(selection: Any) -> str:
@@ -890,70 +922,357 @@ def _is_fragment(selection: Any) -> bool:
     return hasattr(selection, "type_condition")
 
 
-# TODO(spec-033 Slice 1, Decision 9): consolidate the ``edges { node }``
-# selection-unwrap helpers HERE so ``_plan_connection_relation`` (below) can
-# unwrap a nested connection selection with the SAME fragment-aware,
-# directive-aware, runtime-prefix-carrying semantics the root seam uses -- one
-# implementation, not two drifting ones. Move from ``optimizer/extension.py``:
-#   _named_children, _node_children_with_runtime_prefix, _with_runtime_prefix,
-#   _converted_selection_included, _is_converted_fragment, and the shared
-#   _response_key helper (extension.py's ``_response_key`` is a duplicate of the
-#   one already in this module -- collapse to one).
-# Import direction is FORCED: ``extension`` already imports from ``walker``; the
-# reverse cycles. After the move, ``extension.py`` imports them back and
-# ``_connection_node_child_selections`` (the root-seam ``selection_extractor``
-# entry point) STAYS in extension.py as a thin composition over the moved
-# helpers. Pure consolidation, no behavior change: the existing root-extraction
-# tests in ``tests/optimizer/test_extension.py`` must pass UNMODIFIED.
+# ---------------------------------------------------------------------------
+# ``edges { node }`` selection-unwrap helpers (spec-033 Decision 9)
+#
+# Consolidated HERE (from ``optimizer/extension.py``) so the root-connection
+# seam (``extension._connection_node_child_selections``) and the walker's nested
+# ``_plan_connection_relation`` unwrap an ``edges { node { ... } }`` wrapper with
+# ONE fragment-aware, directive-aware, runtime-prefix-carrying implementation.
+# ``extension`` imports these back (``extension`` already imports from ``walker``;
+# the reverse would cycle). ``_converted_selection_included`` is just
+# ``_should_include`` (same module now), and the converted-fragment predicate is
+# the existing ``_is_fragment`` above (byte-identical ``hasattr(...,
+# "type_condition")``) - both collapsed to one site here.
+# ---------------------------------------------------------------------------
 
 
-# TODO(spec-033 Slice 1, Decision 4): plan a recognized nested connection as a
-# windowed Prefetch. Dispatched from ``_walk_selections`` (see the recognition
-# branch above). Sketch:
-#
-#   def _plan_connection_relation(sel, definition, relation_field_name, field_map,
-#                                 plan, prefix, info, runtime_prefixes, type_cls):
-#       look up django_field via field_map[relation_field_name].
-#       # (a) Unwrap edges { node { ... } } via the consolidated helpers; when
-#       #     absent, recognize scalar-only pageInfo/totalCount selections
-#       #     (Decision 6: still PLANNED, with a pk/connector/ordering-only
-#       #     projection -- not a fallback).
-#       node_selections = <unwrap edges.node children, or [] for scalar-only>
-#       # (b) Fallback shapes -> leave UNPLANNED (no Prefetch, no resolver key)
-#       #     so Slice 4 strictness can see them (Decision 6):
-#       #       - sidecar input (filter:/orderBy:) on the selection
-#       #       - divergent aliases (needs the argument-aware merge above)
-#       #       - OptimizerHint.SKIP on the underlying relation
-#       if <fallback shape>: return
-#       # (c) Build the child plan over the relation target exactly like
-#       #     _build_prefetch_child_queryset: visibility hook baked when target
-#       #     overrides get_queryset (-> plan.cacheable = False); connector
-#       #     columns ensured; child-plan metadata merged; nested relations and
-#       #     DEEPER nested connections planned recursively (two-level cookbook).
-#       child_qs = <child_plan.apply(_build_child_queryset(...))>
-#       # (d) Deterministic total order: the hoisted plans.py helper (Decision
-#       #     11) -- pk appended unless the effective order ends in a unique col.
-#       # (e) Preserve the existing first+last guard ordering, then compute the
-#       #     slice window from the selection's RESOLVED first/last/before/after
-#       #     (converted selections resolve variables via info.variable_values),
-#       #     mirroring SliceMetadata.from_arguments with relay_max_results from
-#       #     the schema config.
-#       # (f) Catch SliceMetadata ValueError / malformed-cursor TypeError and
-#       #     leave the selection UNPLANNED so the shipped nested field path
-#       #     raises at the SAME error locality as today (error-locality test).
-#       # (g) window via plans.apply_window_pagination(child_qs, partition_by=
-#       #     plans.window_partition_for_prefetch(django_field), order_by=...,
-#       #     offset=..., limit=..., reverse=<last-only>).
-#       # then append_prefetch_unique(plan.prefetch_related, <prefetch>) where the
-#       # prefetch is Prefetch(f"{prefix}{instance_accessor(django_field)}",
-#       # queryset=<windowed child_qs>, to_attr=f"_dst_{relation_field_name}_connection").
-#       # (h) record resolver identities so strictness sees the field as planned:
-#       feed ``append_unique_many(plan.planned_resolver_keys, ...)`` one
-#       ``resolver_key(...)`` per runtime path.
-#
-# to_attr ISOLATION (Decision 4): never prefetch onto the accessor -- the "both"
-# shape selects the list sibling (accessor-keyed Prefetch) and the connection
-# together; two Prefetches on one accessor is Django's "lookup already seen"
-# error and a windowed result would corrupt the list field. The ``_dst_`` prefix
-# is the package-reserved namespace. Coverage: ``tests/optimizer/test_walker.py``
-# (see the spec Test plan for the full ~20-test list).
+def _named_children(selection: Any, name: str) -> list[Any]:
+    """Return included direct children named ``name``, recursing through fragments."""
+    children: list[Any] = []
+    for child in getattr(selection, "selections", None) or []:
+        if not _should_include(child):
+            continue
+        if _is_fragment(child):
+            for fragment_child in getattr(child, "selections", None) or []:
+                fragment_shell = SimpleNamespace(selections=[fragment_child])
+                children.extend(_named_children(fragment_shell, name))
+            continue
+        if getattr(child, "name", None) == name:
+            children.append(child)
+    return children
+
+
+def _node_children_with_runtime_prefix(
+    node_selection: Any,
+    *,
+    runtime_prefixes: tuple[tuple[str, ...], ...],
+) -> list[Any]:
+    """Clone node children with a connection-aware runtime prefix."""
+    children: list[Any] = []
+    for child in getattr(node_selection, "selections", None) or []:
+        if not _should_include(child):
+            continue
+        children.append(_with_runtime_prefix(child, runtime_prefixes))
+    return children
+
+
+def _with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...], ...]) -> Any:
+    """Clone a node-level selection carrying runtime prefixes for the walker."""
+    if _is_fragment(selection):
+        return SimpleNamespace(
+            name=getattr(selection, "name", None),
+            type_condition=selection.type_condition,
+            directives=getattr(selection, "directives", None) or {},
+            selections=[
+                _with_runtime_prefix(child, runtime_prefixes)
+                for child in getattr(selection, "selections", None) or []
+            ],
+        )
+    return SimpleNamespace(
+        name=selection.name,
+        alias=getattr(selection, "alias", None),
+        directives=getattr(selection, "directives", None) or {},
+        arguments=getattr(selection, "arguments", None) or {},
+        selections=list(getattr(selection, "selections", None) or []),
+        _optimizer_runtime_prefixes=list(runtime_prefixes),
+    )
+
+
+# Sidecar argument names a synthesized connection sibling may carry; their presence
+# forces a per-parent fallback (Decision 6). The pagination family
+# (``first`` / ``last`` / ``before`` / ``after``) is read positionally by
+# ``_connection_window_slice`` as explicit ``SliceMetadata.from_arguments`` kwargs,
+# so it needs no name collection here.
+_CONNECTION_SIDECAR_ARGS = ("filter", "order_by")
+
+
+def _relation_connection_to_attr(relation_field_name: str) -> str:
+    """Return the package-reserved ``to_attr`` for a relation connection window.
+
+    ``_dst_<field>_connection``, keyed on the relation FIELD NAME (not the
+    accessor). The single source for this literal across the walker (plan
+    site), the finalizer (resolver precompute, Slice 2), and the connection
+    resolver probe (Slice 2), so the ``_dst_`` namespace string is never
+    duplicated as a scattered f-string (Decision 4 / Decision 5).
+    """
+    return f"_dst_{relation_field_name}_connection"
+
+
+def _connection_node_selections(sel: Any, runtime_paths: tuple[tuple[str, ...], ...]) -> list[Any]:
+    """Unwrap a nested connection's ``edges { node { ... } }`` child selections.
+
+    Reuses the consolidated ``edges { node }`` helpers (Decision 9) so the
+    nested-connection unwrap matches the root seam's fragment-aware,
+    directive-aware, runtime-prefix-carrying semantics. Returns the node-level
+    child selections carrying the connection-aware runtime prefixes; an empty
+    list for a scalar-only (``pageInfo`` / ``totalCount``) selection with no
+    ``edges { node }`` - those are still PLANNED with a connector/ordering-only
+    projection (Decision 6), not a fallback.
+    """
+    node_children: list[Any] = []
+    for edge_selection in _named_children(sel, "edges"):
+        edge_path_prefixes = tuple((*rp, _response_key(edge_selection)) for rp in runtime_paths)
+        for node_selection in _named_children(edge_selection, "node"):
+            node_path_prefixes = tuple(
+                (*ep, _response_key(node_selection)) for ep in edge_path_prefixes
+            )
+            node_children.extend(
+                _node_children_with_runtime_prefix(
+                    node_selection,
+                    runtime_prefixes=node_path_prefixes,
+                ),
+            )
+    return node_children
+
+
+def _relay_max_results_from_info(info: Any) -> int | None:
+    """Resolve ``relay_max_results`` from the walker's (graphql-core) ``info``.
+
+    The walker runs at the optimizer extension's middleware layer, where ``info``
+    is the raw graphql-core ``GraphQLResolveInfo`` whose ``.schema`` is a bare
+    ``GraphQLSchema`` with NO ``.config`` (unlike the resolve-time Strawberry
+    ``Info`` ``SliceMetadata.from_arguments`` expects). The config lives on the
+    Strawberry schema wrapper Strawberry stashes at ``schema._strawberry_schema``
+    (the same brittle-private contract ``extension._strawberry_schema_from_info``
+    centralizes; the walker cannot import that helper without a cycle - extension
+    imports walker). Resolve the cap explicitly here and pass it to
+    ``SliceMetadata.from_arguments`` so the helper never dereferences
+    ``info.schema.config`` itself. Falls back to a ``schema.config`` shape (the
+    ``_fake_info`` test stub) and finally ``None`` (the engine default applies).
+    """
+    schema = getattr(info, "schema", None)
+    config = getattr(getattr(schema, "_strawberry_schema", None), "config", None)
+    if config is None:
+        config = getattr(schema, "config", None)
+    return getattr(config, "relay_max_results", None)
+
+
+def _coerce_pagination_int(value: Any) -> Any:
+    """Coerce a pagination ``first`` / ``last`` argument to ``int`` when int-like.
+
+    An inline Int literal arrives as the raw token string; a resolved variable is
+    already an ``int``. Coerce an ``int``-castable string to ``int`` so the slice
+    arithmetic fires; pass ``None`` and anything non-int-castable through
+    untouched so ``SliceMetadata.from_arguments`` reaches its own
+    ``isinstance(..., int)`` gate (skipping the bound, the shipped behavior for a
+    malformed value) rather than the walker pre-judging it.
+    """
+    if value is None or isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _connection_window_slice(sel: Any, info: Any) -> tuple[int, int | None, bool] | None:
+    """Resolve the window ``(offset, limit, reverse)`` from a connection selection.
+
+    Reads the RESOLVED ``first`` / ``last`` / ``before`` / ``after`` values off
+    ``sel.arguments`` (converted selections already resolved variable references
+    through ``info.variable_values``) and runs them through Strawberry's
+    ``SliceMetadata.from_arguments`` - the same engine the resolve-time pipeline
+    uses. ``max_results`` is resolved from the Strawberry schema config via
+    ``_relay_max_results_from_info`` and passed EXPLICITLY (the walker's
+    graphql-core ``info.schema`` has no ``.config`` for the helper to read), so
+    the plan-time and resolve-time caps are the same number by construction.
+
+    Returns ``None`` when the arithmetic raises ``ValueError`` (negative /
+    over-max ``first`` / ``last``) or ``TypeError`` (malformed cursor) so
+    ``_plan_connection_relation`` leaves the selection UNPLANNED and the shipped
+    nested field path raises at its own error locality (Decision 4 step f).
+    ``offset = start``. For the forward window ``limit = expected`` (``None`` =>
+    no upper bound). For the ``reverse`` (last-only backward) window
+    ``SliceMetadata`` sets ``end = sys.maxsize`` so ``expected is None``; the
+    bound is the literal ``last`` value (the reversed-row-number
+    ``__lte`` filter), mirroring upstream's ``field_kwargs.get("last")`` in that
+    branch rather than the unbounded ``expected``.
+    """
+    arguments = getattr(sel, "arguments", None) or {}
+    # ``first`` / ``last`` from an inline GraphQL Int LITERAL arrive as the raw
+    # token STRING (``convert_value`` returns ``node.value`` and graphql-core
+    # stores an ``IntValueNode.value`` as ``"2"``); a variable
+    # (``first: $n``) is already coerced to ``int`` by the engine. Coerce to int
+    # so ``SliceMetadata.from_arguments`` - which gates the slice on
+    # ``isinstance(first, int)`` - applies the window bound instead of silently
+    # leaving the page uncapped at ``relay_max_results`` (the literal-vs-variable
+    # divergence the resolve-time ``ConnectionExtension`` argument coercion hides
+    # at the field boundary).
+    first = _coerce_pagination_int(arguments.get("first"))
+    last = _coerce_pagination_int(arguments.get("last"))
+    before = arguments.get("before")
+    after = arguments.get("after")
+    try:
+        slice_meta = SliceMetadata.from_arguments(
+            info,
+            before=before,
+            after=after,
+            first=first,
+            last=last,
+            max_results=_relay_max_results_from_info(info),
+        )
+    except (ValueError, TypeError):
+        return None
+    # Backward (``last``-only) pagination needs the reversed-row-number window:
+    # ``last`` is set with no ``first`` and no ``before`` bound (``before`` + ``last``
+    # resolves to a forward offset window that the forward branch already handles).
+    reverse = isinstance(last, int) and not isinstance(first, int) and before is None
+    # In the reversed case ``expected is None`` (relay sets ``end = sys.maxsize``),
+    # so the row-count bound is the literal ``last`` - exactly what upstream passes
+    # in that branch. Passing ``expected`` would never apply the ``__lte`` filter
+    # and the window would over-fetch every child row.
+    limit = last if reverse else slice_meta.expected
+    return slice_meta.start, limit, reverse
+
+
+def _plan_connection_relation(
+    sel: Any,
+    definition: Any,
+    *,
+    relation_field_name: str,
+    field_map: dict[str, Any],
+    plan: OptimizationPlan,
+    prefix: str,
+    info: Any | None,
+    runtime_prefixes: tuple[tuple[str, ...], ...],
+    type_cls: type | None,
+    model: type[models.Model],
+) -> None:
+    """Plan one recognized nested connection as a windowed ``Prefetch``.
+
+    Orchestrates the windowed-prefetch plan (spec-033 Decision 4); leaves the
+    selection UNPLANNED (no ``Prefetch``, no ``planned_resolver_keys`` entry) for
+    each Decision-6 fallback shape so Slice 4's strictness contract still sees
+    the per-parent access. Delegates child-queryset construction to the same
+    helpers the list path uses (``_build_prefetch_child_queryset`` /
+    ``_build_child_queryset``); the only addition is the window applied after
+    ``child_plan.apply``.
+    """
+    django_field = field_map.get(relation_field_name)
+    if django_field is None:
+        return
+    # (b) Fallback shapes detectable before any queryset is built -> UNPLANNED.
+    arguments = getattr(sel, "arguments", None) or {}
+    if any(arguments.get(name) is not None for name in _CONNECTION_SIDECAR_ARGS):
+        return  # sidecar input (filter:/orderBy:) - per-parent fallback.
+    if _aliased_arguments_diverge(sel):
+        return  # divergent aliased pagination/sidecar args - one to_attr cannot serve two.
+    hints_map = _resolve_optimizer_hints(definition)
+    if hint_is_skip(hints_map.get(relation_field_name)):
+        return  # OptimizerHint.SKIP extends to the connection sibling.
+
+    target_type = _resolve_relation_target(definition, relation_field_name, django_field)
+    has_custom_get_queryset = _target_has_custom_get_queryset(target_type)
+
+    selection_runtime_prefixes = (
+        tuple(sel._optimizer_runtime_prefixes)
+        if getattr(sel, "_optimizer_runtime_prefixes", None) is not None
+        else runtime_prefixes
+    )
+    runtime_paths = tuple(
+        (*runtime_prefix, response_key)
+        for runtime_prefix in selection_runtime_prefixes
+        for response_key in _response_keys(sel)
+    )
+    resolver_identities = tuple(
+        resolver_key(type_cls, relation_field_name, runtime_path) for runtime_path in runtime_paths
+    )
+
+    if django_field.related_model is None:
+        return
+
+    # (e/f) Slice window from the selection's resolved pagination arguments. Pure
+    # (mutates nothing), so resolve it BEFORE the child build - a malformed slice
+    # must not leave child resolver keys / cacheable flips on the parent plan.
+    window = _connection_window_slice(sel, info)
+    if window is None:
+        return  # malformed slice arguments - per-parent fallback (error locality).
+    offset, limit, reverse = window
+
+    # (g, partition) also pure; resolve the parent partition before the child build
+    # so an unsupported relation kind falls back without leaking child metadata.
+    try:
+        partition_by = window_partition_for_prefetch(
+            _raw_relation_field(model, relation_field_name),
+        )
+    except OptimizerError:
+        return
+
+    # (a) Unwrap edges { node }; scalar-only selections plan with [] node children.
+    node_selections = _connection_node_selections(sel, runtime_paths)
+    node_sel = SimpleNamespace(selections=node_selections)
+
+    # (c) Build the child plan/queryset exactly like the list prefetch path, but
+    # against a THROWAWAY sub-plan so the DISTINCT guard below can fall back
+    # without leaking the child's resolver keys / fk-id elisions / cacheable flip
+    # into the parent (Decision 6 / DoD-4 "no planned_resolver_keys entry"). The
+    # parent plan absorbs the child metadata only on the success path.
+    sub_plan = OptimizationPlan()
+    if has_custom_get_queryset:
+        sub_plan.cacheable = False
+    child_queryset = _build_prefetch_child_queryset(
+        node_sel,
+        django_field,
+        target_type,
+        sub_plan,
+        info,
+        runtime_paths,
+        has_custom_get_queryset=has_custom_get_queryset,
+    )
+    # (c, DISTINCT guard) the window's Count(1) OVER would over-count pre-DISTINCT
+    # rows (SQL evaluates windows before DISTINCT), so a distinct child queryset
+    # falls back per-parent (Decision 4 / Decision 6 shape 4).
+    if child_queryset.query.distinct:
+        return
+
+    # Success path: merge the child metadata the sub-plan absorbed into the parent.
+    _merge_child_plan_metadata(plan, sub_plan)
+    if not sub_plan.cacheable:
+        plan.cacheable = False
+
+    # (d) Deterministic total order shared with the resolve-time pipeline.
+    effective = tuple(child_queryset.query.order_by) or tuple(
+        django_field.related_model._meta.ordering,
+    )
+    order_by = list(deterministic_order(effective, django_field.related_model))
+
+    windowed_queryset = apply_window_pagination(
+        child_queryset,
+        partition_by=partition_by,
+        order_by=order_by,
+        offset=offset,
+        limit=limit,
+        reverse=reverse,
+    )
+    append_prefetch_unique(
+        plan.prefetch_related,
+        Prefetch(
+            f"{prefix}{instance_accessor(django_field)}",
+            queryset=windowed_queryset,
+            to_attr=_relation_connection_to_attr(relation_field_name),
+        ),
+    )
+    # (h) Record resolver identities so strictness (Slice 4) sees the field as planned.
+    append_unique_many(plan.planned_resolver_keys, resolver_identities)
+
+
+def _raw_relation_field(model: type[models.Model], relation_field_name: str) -> Any:
+    """Return the raw Django relation field for ``relation_field_name`` on ``model``.
+
+    The window partition derivation needs the raw descriptor's
+    ``remote_field`` (the forward-M2M reverse query name lives only there and is
+    not carried on ``FieldMeta``); ``field_map`` holds ``FieldMeta``, so resolve
+    the live field from ``_meta`` (spec-033 Decision 4 partition derivation).
+    """
+    return model._meta.get_field(relation_field_name)

@@ -32,11 +32,17 @@ in a single pass once the walk completes.
 from __future__ import annotations
 
 import contextlib
+import sys
 from collections.abc import Iterable, MutableSequence, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from django.db.models import Prefetch
+from django.core.exceptions import FieldDoesNotExist
+from django.db.models import Count, Prefetch, Window
+from django.db.models.functions import RowNumber
+
+from ..exceptions import OptimizerError
+from ..utils.relations import relation_kind
 
 
 def _identity(value: Any) -> Any:
@@ -462,54 +468,210 @@ def _optimizer_can_absorb(
     return all(path in opt_covered for path in consumer_paths)
 
 
-# TODO(spec-033 Slice 1, Decision 4): the windowed-prefetch window helpers live
-# here (``plans.py`` is the plan-application module and the window IS plan
-# application -- Decision 11 rejects a separate ``optimizer/window.py``). Port
-# the mechanism from the sibling checkout
-# ``strawberry-django-main/strawberry_django/pagination.py::apply_window_pagination``
-# (itself based on Django's https://github.com/django/django/pull/15957),
-# namespacing the annotations ``_dst_*`` (NOT upstream's ``_strawberry_*`` -- a
-# consumer running both libraries in one process must never collide; see the
-# spec's "Explicitly do not borrow").
-#
-# ``window_partition_for_prefetch(field) -> str`` returns the PARENT-side
-# partition expression Django's prefetch attach uses (NOT the child-pk connector
-# helper ``_ensure_connector_only_fields``). By relation kind: reverse FK /
-# reverse-one-to-one partition by ``field.field.attname`` (child-table FK
-# attname); reverse M2M partitions through the child's forward M2M field name
-# (Genre.books -> Book.genres -> through genre_id); forward M2M partitions
-# through the target's reverse query name, which is NOT always the accessor when
-# ``related_name`` is absent -- resolve via ``field.remote_field`` / the through
-# model. Unsupported kinds raise a package-internal planning error so the caller
-# leaves the selection unplanned rather than guessing.
-#
-# ``apply_window_pagination(qs, *, partition_by, order_by, offset, limit,
-# reverse=False)`` annotates ``_dst_row_number`` as ``Window(RowNumber(),
-# partition_by=partition_by, order_by=order_by)`` and ``_dst_total_count`` as
-# ``Window(Count(1), partition_by=partition_by)``; then, when ``offset`` is set,
-# filters ``_dst_row_number__gt=offset``. For ``reverse`` (last-only backward
-# pagination) it annotates ``_dst_row_number_reversed`` with the REVERSED
-# order_by and returns ``filter(_dst_row_number_reversed__lte=limit)``. Otherwise,
-# when ``limit`` is a non-negative finite value (guard ``!= sys.maxsize``), it
-# filters ``_dst_row_number__lte=offset + limit``.
-#
-# offset/limit come from Strawberry's ``SliceMetadata.from_arguments(info,
-# before=, after=, first=, last=, max_results=relay_max_results)`` -> (start,
-# end, expected): offset=start, limit=expected. Annotations COMPOSE with .only()
-# (they are annotations, not deferred columns); the partition + ORDER BY columns
-# must be force-included in the child plan's only() mask (Slice-1 test
-# ``test_window_subquery_wrap_preserves_only_mask_and_child_select_related``).
-# Cover with ``tests/optimizer/test_plans.py::test_apply_window_pagination_unit``.
+# Package-reserved annotation names for the windowed-prefetch mechanism. The
+# ``_dst_*`` namespace (NOT upstream's ``_strawberry_*``) keeps a consumer running
+# both django-strawberry-framework and strawberry-graphql-django in one process
+# from colliding (spec-033 "Explicitly do not borrow"). ``_dst_row_number`` /
+# ``_dst_total_count`` are read by the connection-class fast path in Slice 2.
+WINDOW_ROW_NUMBER = "_dst_row_number"
+WINDOW_TOTAL_COUNT = "_dst_total_count"
+WINDOW_ROW_NUMBER_REVERSED = "_dst_row_number_reversed"
 
-# TODO(spec-033 Slice 1, Decision 11): hoist the deterministic-total-order rule
-# here so the plan-time window and the resolve-time pipeline can NEVER disagree
-# (a disagreement makes window row numbers inconsistent with fallback cursors).
-# Move ``_ends_in_unique_column`` + the pk-append rule out of
-# ``connection.py::_finalize_queryset`` into a shared helper in this module;
-# ``connection.py`` then imports it back (plan vocabulary lives in ``plans.py``,
-# and the walker must NOT import from ``connection.py``). Pin parity with the
-# previous connection.py implementation via
-# ``tests/optimizer/test_plans.py::test_deterministic_order_helper_hoist_parity``.
+
+def ends_in_unique_column(effective: tuple, model: type) -> bool:
+    """Return whether the effective ordering's terminal entry is a unique total order.
+
+    Hoisted from ``connection.py`` (spec-033 Decision 11) so the plan-time
+    window order and the resolve-time pipeline order share ONE implementation -
+    the cursor-parity invariant: window row numbers must agree with the
+    fallback path's offset cursors. ``connection.py`` imports this back.
+
+    A connection's positional offset cursors are only stable across separate
+    requests when the SQL ``ORDER BY`` is a deterministic TOTAL order. An
+    ordering whose terminal column is unique (the pk, or a ``unique=True`` model
+    field) already is one; otherwise ``deterministic_order`` appends the pk as a
+    terminal tiebreaker.
+
+    Handles both string order refs (``"name"``, ``"-name"``, ``"shelf__code"``,
+    ``"pk"``) and ``OrderBy`` / ``F`` expressions (the NULLS-positioning and the
+    to-many-aggregate paths). A relation path, an aggregate-annotation alias, or
+    any non-``F`` expression is treated as non-unique (so the pk is appended).
+    """
+    if not effective:
+        return False
+    terminal = effective[-1]
+    if isinstance(terminal, str):
+        ref: str | None = terminal.lstrip("-")
+    else:
+        ref = getattr(getattr(terminal, "expression", None), "name", None)
+    if not ref:
+        return False
+    pk = model._meta.pk
+    if ref in ("pk", pk.name, pk.attname):
+        return True
+    if "__" in ref:
+        # A relation traversal (e.g. ``shelf__code``) is not the model's own
+        # unique column; the related column's uniqueness does not make the
+        # parent ordering a total order.
+        return False
+    try:
+        field_obj = model._meta.get_field(ref)
+    except FieldDoesNotExist:
+        # Annotation alias (e.g. a to-many aggregate) or a transform - not a
+        # model column we can call unique.
+        return False
+    return bool(getattr(field_obj, "unique", False) or getattr(field_obj, "primary_key", False))
+
+
+def deterministic_order(effective: tuple, model: type) -> tuple:
+    """Return the deterministic TOTAL ordering tuple for a connection queryset.
+
+    The effective ordering with the model pk appended as a terminal tiebreaker
+    UNLESS it already ends in a unique column (``ends_in_unique_column``). One
+    source for both the plan-time window ``order_by`` (the walker's
+    ``_plan_connection_relation``) and the resolve-time pipeline
+    (``connection.py::_finalize_queryset``) so window row numbers can never drift
+    from fallback-path cursors (spec-033 Decision 11, the cursor-parity
+    invariant).
+    """
+    if ends_in_unique_column(effective, model):
+        return effective
+    return (*effective, model._meta.pk.attname)
+
+
+def window_partition_for_prefetch(field: Any) -> str:
+    """Return the parent-side partition expression for a windowed prefetch.
+
+    The expression Django's prefetch attach uses to map each child row back to
+    its parent - ``remote_field.attname or remote_field.name`` on the relation
+    field, exactly what upstream's ``_optimize_prefetch_queryset`` partitions by
+    (spec-033 Decision 4). By relation kind (the ``_ensure_connector_only_fields``
+    dispatch structure, but the PARENT-side partition, not the child ``.only()``
+    connector):
+
+    - reverse FK / reverse one-to-one -> the child-table FK attname
+      (``"shelf_id"`` / ``"patron_id"``);
+    - reverse M2M -> the child's forward M2M field name (``Genre.books`` ->
+      ``"genres"``);
+    - forward M2M -> the target's reverse query name, which is NOT the accessor
+      when ``related_name`` is absent (``Book.genres`` -> ``"books"``).
+
+    Takes the RAW Django relation field (not a ``FieldMeta``): the forward-M2M
+    reverse query name lives only on ``field.remote_field`` and is not carried on
+    ``FieldMeta``. Raises ``OptimizerError`` for a single-valued forward relation
+    or any kind without a windowable partition, so ``_plan_connection_relation``
+    leaves the selection unplanned and falls back per-parent rather than guessing.
+    """
+    kind = relation_kind(field)
+    if kind not in ("many", "reverse_many_to_one", "reverse_one_to_one"):
+        raise OptimizerError(
+            f"window_partition_for_prefetch: relation {getattr(field, 'name', field)!r} "
+            f"has kind {kind!r}, which has no windowable parent partition; "
+            "the nested connection falls back to per-parent resolution.",
+        )
+    remote_field = getattr(field, "remote_field", None)
+    partition = getattr(remote_field, "attname", None) or getattr(remote_field, "name", None)
+    if partition is None:
+        raise OptimizerError(
+            f"window_partition_for_prefetch: could not resolve a parent partition for "
+            f"relation {getattr(field, 'name', field)!r}; falling back to per-parent.",
+        )
+    return partition
+
+
+def apply_window_pagination(
+    queryset: Any,
+    *,
+    partition_by: str,
+    order_by: Sequence[Any],
+    offset: int = 0,
+    limit: int | None = None,
+    reverse: bool = False,
+) -> Any:
+    """Annotate row-number / total-count windows and filter to the requested slice.
+
+    The mechanism port of
+    ``strawberry-django-main/strawberry_django/pagination.py::apply_window_pagination``
+    (itself based on Django's https://github.com/django/django/pull/15957),
+    namespaced ``_dst_*`` (spec-033 Decision 4). Diverges from upstream's
+    signature by taking ``partition_by`` and ``order_by`` EXPLICITLY (rather than
+    a ``related_field_id`` plus a compiler-derived order) so ``plans.py`` stays
+    free of queryset-compiler coupling and the deterministic order comes from the
+    shared ``deterministic_order`` helper (the cursor-parity invariant).
+
+    Annotates ``_dst_row_number`` (``RowNumber()`` partitioned by ``partition_by``,
+    ordered by ``order_by``) and ``_dst_total_count`` (``Count(1)`` partitioned the
+    same way), then filters to the requested row-number range. The annotations
+    compose with ``.only()`` (they are annotations, not deferred columns).
+
+    ``offset`` / ``limit`` come from Strawberry's ``SliceMetadata.from_arguments``
+    (offset = ``start``, limit = ``expected``). For ``reverse`` (last-only backward
+    pagination) the row numbers count from the partition end, so a separate
+    ``_dst_row_number_reversed`` window with the reversed order filters
+    ``__lte=limit``. ``limit is None`` (or ``sys.maxsize``) means "no upper bound"
+    - the offset filter still applies.
+    """
+    queryset = queryset.annotate(
+        **{
+            WINDOW_ROW_NUMBER: Window(
+                RowNumber(),
+                partition_by=partition_by,
+                order_by=order_by,
+            ),
+            WINDOW_TOTAL_COUNT: Window(Count(1), partition_by=partition_by),
+        },
+    )
+    if offset:
+        queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER}__gt": offset})
+    if reverse:
+        queryset = queryset.annotate(
+            **{
+                WINDOW_ROW_NUMBER_REVERSED: Window(
+                    RowNumber(),
+                    partition_by=partition_by,
+                    order_by=_reverse_order_by(order_by),
+                ),
+            },
+        )
+        if limit is not None and limit != sys.maxsize:
+            queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER_REVERSED}__lte": limit})
+        return queryset
+    # ``limit is None`` / ``sys.maxsize`` => no upper bound (relay's last-only
+    # forward shape sets ``end = sys.maxsize``; the offset filter alone applies).
+    if limit is not None and limit >= 0 and limit != sys.maxsize:
+        queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER}__lte": offset + limit})
+    return queryset
+
+
+def _reverse_order_by(order_by: Sequence[Any]) -> list[Any]:
+    """Return ``order_by`` with each entry's direction (and NULLS) flipped.
+
+    Backward (``last``-only) pagination counts row numbers from the partition
+    end, which needs the reversed ordering. Mirrors Django's
+    ``queryset.reverse()`` for the string and ``OrderBy`` / expression shapes
+    ``deterministic_order`` produces, without re-running the queryset compiler:
+    the direction flips, and any explicit ``nulls_first`` / ``nulls_last``
+    positioning swaps too (Django inverts NULLS placement on reversal), so a
+    consumer ordering with explicit NULLS positioning reverses the same way the
+    resolve-time ``.reverse()`` pipeline does.
+    """
+    reversed_order: list[Any] = []
+    for entry in order_by:
+        if isinstance(entry, str):
+            reversed_order.append(entry[1:] if entry.startswith("-") else f"-{entry}")
+        else:
+            descending = getattr(entry, "descending", None)
+            if descending is None:
+                reversed_order.append(entry)
+            else:
+                clone = entry.copy() if hasattr(entry, "copy") else entry
+                clone.descending = not descending
+                nulls_first = getattr(clone, "nulls_first", None)
+                nulls_last = getattr(clone, "nulls_last", None)
+                if nulls_first or nulls_last:
+                    clone.nulls_first, clone.nulls_last = nulls_last, nulls_first
+                reversed_order.append(clone)
+    return reversed_order
 
 
 def diff_plan_for_queryset(plan: OptimizationPlan, queryset: Any) -> tuple[OptimizationPlan, Any]:

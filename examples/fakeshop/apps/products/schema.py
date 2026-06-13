@@ -1,17 +1,19 @@
 """GraphQL schema for the fakeshop products app.
 
-A bidirectional list-based graph over `Category` / `Item` / `Property` /
-`Entry` using the shipped `DjangoType` surface. Each root field returns a
-Django `QuerySet`, so `DjangoOptimizerExtension` (wired in
+A bidirectional graph over `Category` / `Item` / `Property` / `Entry`
+using the shipped `DjangoType` surface, with connections-only root fields
+(the `django-graphene-filters` cookbook mirror). Each root field is a
+`DjangoConnectionField`, so `DjangoOptimizerExtension` (wired in
 `config.schema`) plans `select_related` / `prefetch_related` / `only()`
-across nested selections without per-resolver boilerplate.
+across nested selections - and windowed `Prefetch`es for nested
+relation-connection siblings - without per-resolver boilerplate.
 
 The eventual `1.0.0` shape - Relay-node types with the cookbook-shaped
 filter / order / aggregate / fields / search / permissions surface, a
 1-to-1 port of the `django-graphene-filters` cookbook recipe - is
 tracked in `KANBAN.md` under the Layer-3 cards (`DONE-027-0.0.8`
-filters, `DONE-028-0.0.8` orders, `TODO-ALPHA-024-0.0.9` `DjangoConnectionField`,
-`TODO-ALPHA-027-0.0.10` permissions, `TODO-BETA-038-0.1.1` fieldsets,
+filters, `DONE-028-0.0.8` orders, `DONE-030-0.0.9` `DjangoConnectionField`,
+`TODO-ALPHA-034-0.0.10` permissions, `TODO-BETA-038-0.1.1` fieldsets,
 `TODO-BETA-039-0.1.2` search, `TODO-BETA-040-0.1.3` aggregates). The
 shipped `filterset_class` + `orderset_class` surface is wired below;
 each `*Type` class still carries commented-out future-shape Meta keys
@@ -25,17 +27,18 @@ present `filters.py` / `orders.py` modules; `aggregate_class` /
 
 # Future imports (uncomment as Layer-3 subsystems ship):
 #
-# from django_strawberry_framework import DjangoConnectionField      # TODO-ALPHA-024-0.0.9
-# from django_strawberry_framework import apply_cascade_permissions  # TODO-ALPHA-027-0.0.10
+# from django_strawberry_framework import apply_cascade_permissions  # TODO-ALPHA-034-0.0.10
 # from apps.products import aggregates                               # TODO-BETA-040-0.1.3 (aggregates)
 # from apps.products import fields as fieldsets                      # TODO-BETA-038-0.1.1
 
 import strawberry
 from strawberry import relay
 
-from django_strawberry_framework import DjangoType
-from django_strawberry_framework.filters import filter_input_type
-from django_strawberry_framework.orders import order_input_type
+from django_strawberry_framework import (
+    DjangoConnection,
+    DjangoConnectionField,
+    DjangoType,
+)
 
 from . import filters, models, orders
 
@@ -61,7 +64,7 @@ class CategoryType(DjangoType):
         # aggregate_class = aggregates.CategoryAggregate    # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.CategoryFieldSet         # needs TODO-BETA-038-0.1.1 + fields.py
 
-    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-027-0.0.10 ships:
+    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-034-0.0.10 ships:
     #
     # @classmethod
     # def get_queryset(cls, queryset, info):
@@ -95,7 +98,7 @@ class ItemType(DjangoType):
         # aggregate_class = aggregates.ItemAggregate     # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.ItemFieldSet          # needs TODO-BETA-038-0.1.1 + fields.py
 
-    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-027-0.0.10 ships:
+    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-034-0.0.10 ships:
     #
     # @classmethod
     # def get_queryset(cls, queryset, info):
@@ -129,7 +132,7 @@ class PropertyType(DjangoType):
         # aggregate_class = aggregates.PropertyAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.PropertyFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py
 
-    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-027-0.0.10 ships:
+    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-034-0.0.10 ships:
     #
     # @classmethod
     # def get_queryset(cls, queryset, info):
@@ -148,7 +151,7 @@ class EntryType(DjangoType):
         fields = (
             "id",
             "value",
-            "description",  # Future: drop this entry to exercise field-level permission gating (TODO-ALPHA-027-0.0.10)
+            "description",  # Future: drop this entry to exercise field-level permission gating (TODO-ALPHA-034-0.0.10)
             "property",
             "item",
             "is_private",
@@ -163,7 +166,7 @@ class EntryType(DjangoType):
         # aggregate_class = aggregates.EntryAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.EntryFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py
 
-    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-027-0.0.10 ships:
+    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-034-0.0.10 ships:
     #
     # @classmethod
     # def get_queryset(cls, queryset, info):
@@ -178,105 +181,30 @@ class EntryType(DjangoType):
 
 @strawberry.type
 class Query:
-    """Fakeshop products app root fields."""
+    """Fakeshop products app root fields - connections-only (the cookbook mirror).
 
-    # Future shape - once TODO-ALPHA-024-0.0.9 (`DjangoConnectionField` + Relay
-    # `node()` root helpers) ships, the four `@strawberry.field` resolvers
-    # below collapse into eight class-level attributes:
-    #
-    #     category: CategoryType = relay.node()
-    #     all_categories: relay.ListConnection[CategoryType] = DjangoConnectionField(CategoryType)
-    #
-    #     item: ItemType = relay.node()
-    #     all_items: relay.ListConnection[ItemType] = DjangoConnectionField(ItemType)
-    #
-    #     property: PropertyType = relay.node()
-    #     all_properties: relay.ListConnection[PropertyType] = DjangoConnectionField(PropertyType)
-    #
-    #     entry: EntryType = relay.node()
-    #     all_entries: relay.ListConnection[EntryType] = DjangoConnectionField(EntryType)
-    #
-    # The per-type `interfaces = (relay.Node,)` declarations in each
-    # `*Type` class's Meta block above are what make `relay.node()` work
-    # - uncomment those first.
+    Each root field is a `DjangoConnectionField`, the 1-to-1 mirror of the
+    `django-graphene-filters` cookbook Query
+    (`all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)`,
+    no list resolvers). `DjangoConnectionField` synthesizes the `filter:` /
+    `orderBy:` arguments from each type's `Meta.filterset_class` /
+    `Meta.orderset_class` sidecars and runs the same
+    `visibility -> filter -> order -> deterministic-order -> optimizer`
+    composition the hand-written resolvers used to spell out, capping the
+    default page at `relay_max_results` and appending the deterministic
+    `ORDER BY pk`. The four types are Relay-Node-shaped, so their relation
+    siblings (`itemsConnection`, `entriesConnection`, ...) already exist live
+    and plan through windowed `Prefetch`es.
 
-    # TODO(spec-033 Slice 6, Decision 10): replace the four @strawberry.field
-    # list resolvers below with four DjangoConnectionField class attributes -- the
-    # connections-only cookbook mirror (django-graphene-filters: a single
-    # AdvancedDjangoFilterConnectionField, no list resolvers):
-    #
-    #   from django_strawberry_framework import DjangoConnection, DjangoConnectionField
-    #
-    #   all_categories: DjangoConnection[CategoryType] = DjangoConnectionField(CategoryType)
-    #   all_items: DjangoConnection[ItemType] = DjangoConnectionField(ItemType)
-    #   all_properties: DjangoConnection[PropertyType] = DjangoConnectionField(PropertyType)
-    #   all_entries: DjangoConnection[EntryType] = DjangoConnectionField(EntryType)
-    #
-    # The hand-written filter:/orderBy: parameters (and the filter_input_type /
-    # order_input_type imports, now unused) disappear; DjangoConnectionField
-    # synthesizes the SAME arguments from the SAME Meta.filterset_class /
-    # Meta.orderset_class sidecars and the pipeline applies the same
-    # visibility -> filter -> order -> deterministic-order -> optimizer composition.
-    # NO Meta.connection opt-in (no totalCount), NO root node(id:)/nodes(ids:)
-    # fields -- those stay TODO-BETA-051-0.1.5. The four types are already
-    # Relay-Node-shaped, so their relation siblings (itemsConnection,
-    # entriesConnection, ...) already exist live and now plan through Slices 1-2.
-    # test_products_api.py re-pins the whole suite through edges { node } (Slice 6).
-    @strawberry.field
-    def all_categories(
-        self,
-        info: strawberry.Info,
-        filter: filter_input_type(filters.CategoryFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.CategoryOrder)] | None = None,
-    ) -> list[CategoryType]:
-        queryset = CategoryType.get_queryset(models.Category.objects.order_by("id"), info)
-        if filter is not None:
-            queryset = filters.CategoryFilter.apply_sync(filter, queryset, info)
-        if order_by is not None:
-            queryset = orders.CategoryOrder.apply_sync(order_by, queryset, info)
-        return queryset
+    Still deferred to `TODO-BETA-051-0.1.5` (the fakeshop-activation card): the
+    root `node(id:)` / `nodes(ids:)` Relay entry points and any `Meta.connection`
+    (`totalCount`) opt-ins. This conversion intentionally adds neither.
+    """
 
-    @strawberry.field
-    def all_items(
-        self,
-        info: strawberry.Info,
-        filter: filter_input_type(filters.ItemFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.ItemOrder)] | None = None,
-    ) -> list[ItemType]:
-        queryset = ItemType.get_queryset(models.Item.objects.order_by("id"), info)
-        if filter is not None:
-            queryset = filters.ItemFilter.apply_sync(filter, queryset, info)
-        if order_by is not None:
-            queryset = orders.ItemOrder.apply_sync(order_by, queryset, info)
-        return queryset
-
-    @strawberry.field
-    def all_properties(
-        self,
-        info: strawberry.Info,
-        filter: filter_input_type(filters.PropertyFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.PropertyOrder)] | None = None,
-    ) -> list[PropertyType]:
-        queryset = PropertyType.get_queryset(models.Property.objects.order_by("id"), info)
-        if filter is not None:
-            queryset = filters.PropertyFilter.apply_sync(filter, queryset, info)
-        if order_by is not None:
-            queryset = orders.PropertyOrder.apply_sync(order_by, queryset, info)
-        return queryset
-
-    @strawberry.field
-    def all_entries(
-        self,
-        info: strawberry.Info,
-        filter: filter_input_type(filters.EntryFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.EntryOrder)] | None = None,
-    ) -> list[EntryType]:
-        queryset = EntryType.get_queryset(models.Entry.objects.order_by("id"), info)
-        if filter is not None:
-            queryset = filters.EntryFilter.apply_sync(filter, queryset, info)
-        if order_by is not None:
-            queryset = orders.EntryOrder.apply_sync(order_by, queryset, info)
-        return queryset
+    all_categories: DjangoConnection[CategoryType] = DjangoConnectionField(CategoryType)
+    all_items: DjangoConnection[ItemType] = DjangoConnectionField(ItemType)
+    all_properties: DjangoConnection[PropertyType] = DjangoConnectionField(PropertyType)
+    all_entries: DjangoConnection[EntryType] = DjangoConnectionField(EntryType)
 
 
 __all__ = ("Query",)

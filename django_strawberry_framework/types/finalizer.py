@@ -279,6 +279,24 @@ def _suppress_relation_list_form(type_cls: type, name: str) -> None:
         delattr(type_cls, name)
 
 
+def _record_relation_connection(
+    definition: DjangoTypeDefinition,
+    generated: str,
+    name: str,
+) -> None:
+    """Record the walker-readable ``generated -> relation field name`` mapping.
+
+    Lazily initializes ``definition.relation_connections`` to ``{}`` and sets
+    the entry. Idempotent (a plain dict assignment), so the re-entrancy
+    ``continue`` branch (a prior partial finalize re-running Phase 2.5) records
+    the slot just as the first-attach branch does - the walker reads the same
+    mapping either way (spec-033 Decision 3).
+    """
+    if definition.relation_connections is None:
+        definition.relation_connections = {}
+    definition.relation_connections[generated] = name
+
+
 def _synthesize_relation_connections() -> None:
     """Synthesize ``<field>_connection`` siblings for eligible many-side relations.
 
@@ -386,6 +404,12 @@ def _synthesize_relation_connections() -> None:
                 # than misread our own field as a collision.
                 if shape == "connection":
                     _suppress_relation_list_form(type_cls, name)
+                # Re-record the walker-readable slot on rerun: a fresh
+                # definition object may have been created after a
+                # ``registry.clear()``, so the early-``continue`` must not skip
+                # the slot write the first-attach branch performs below
+                # (spec-033 Decision 3, re-entrancy path).
+                _record_relation_connection(definition, generated, name)
                 continue
             existing = (
                 set(type_cls.__annotations__)
@@ -412,36 +436,32 @@ def _synthesize_relation_connections() -> None:
                 resolver=_build_relation_connection_resolver(
                     target_type,
                     instance_accessor(field),
-                    # TODO(spec-033 Slice 2, Decision 5): thread the relation
-                    # FIELD NAME (``name``) through here as a third argument so
-                    # the resolver can build its fast-path probe attribute
-                    # ``f"_dst_{name}_connection"``.
-                    # The walker plans the window under ``_dst_<field>_connection``
-                    # keyed on the FIELD NAME (Decision 4), but this resolver is
-                    # currently handed only the ACCESSOR, which DIVERGES from the
-                    # field name for a reverse relation without ``related_name``
-                    # (accessor ``book_set`` vs field ``book``). Without the
-                    # field name the resolver would probe the wrong attribute and
-                    # silently never consume the window. Pass ``name`` (or the
-                    # precomputed ``_dst_<name>_connection`` string).
+                    # The relation FIELD NAME (``name``) - the key the walker
+                    # builds the window ``to_attr`` ``_dst_<field>_connection``
+                    # from (Decision 4) and the resolver's fast-path probe
+                    # (Decision 5). It DIVERGES from the accessor for a reverse
+                    # relation without ``related_name`` (field ``book`` vs
+                    # accessor ``book_set``), so the resolver needs both: the
+                    # accessor to read rows, the field name to probe the window.
+                    name,
+                    # The DECLARING type - the ``parent_type`` the walker keyed
+                    # the planned connection's ``resolver_key`` under
+                    # (spec-033 Decision 8). Passing the iterated ``type_cls``
+                    # (not ``registry.get(model)``) keeps a divergent secondary
+                    # type's strictness key honest: its connection is never
+                    # window-planned (Decision 3) and stays correctly flagged.
+                    type_cls,
                 ),
             )
             setattr(field_obj, _SYNTHESIZED_RELATION_CONNECTION_MARKER, True)
             setattr(type_cls, generated, field_obj)
-            # TODO(spec-033 Slice 1, Decision 3): record the walker-readable
-            # synthesis mapping on the declaring definition -- lazily init
-            # ``definition.relation_connections`` to ``{}`` if ``None``, then set
-            # entry ``definition.relation_connections[generated] = name``.
-            # ``generated`` is the Python attr ("books_connection"); ``name`` is
-            # the relation field name ("books"). This is the ONLY write site, and
-            # it runs exactly when a sibling is attached -- so suppressed shapes
-            # ("list"/non-Node/consumer-authored, which ``continue`` above before
-            # reaching here) correctly record nothing. The walker reads this slot
-            # to plan the windowed Prefetch; see ``types/definition.py``. NOTE the
-            # re-entrancy path: the ``_SYNTHESIZED_RELATION_CONNECTION_MARKER``
-            # early-``continue`` above (a prior partial finalize) skips this write,
-            # so the slot write must be idempotent OR also run on that branch --
-            # pin which in the Slice-1 test ``test_relation_connections_slot_recorded``.
+            # Record the walker-readable synthesis mapping on the declaring
+            # definition (spec-033 Decision 3). This runs exactly when a sibling
+            # is attached, so suppressed shapes ("list" / non-Node /
+            # consumer-authored, which ``continue`` above before reaching here)
+            # correctly record nothing. The walker reads this slot to recognize
+            # and window-plan the nested connection (see ``types/definition.py``).
+            _record_relation_connection(definition, generated, name)
             if shape == "connection":
                 # Remove the generated list form before Phase 3 freezes the
                 # annotation set (spec-032 Edge cases): the Phase-1 resolved

@@ -6,21 +6,31 @@ in ``test_walker.py`` exercise construction; these tests verify that the
 plan's own methods work correctly in isolation.
 """
 
+import sys
 from types import SimpleNamespace
 
 import pytest
 from apps.products.models import Category, Entry, Item, Property
 from django.db.models import Prefetch
 
+from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.optimizer.plans import (
     _MAX_PATH_DEPTH,
+    WINDOW_ROW_NUMBER,
+    WINDOW_ROW_NUMBER_REVERSED,
+    WINDOW_TOTAL_COUNT,
     OptimizationPlan,
     _consumer_only_fields,
     _flatten_select_related,
+    _reverse_order_by,
+    apply_window_pagination,
+    deterministic_order,
     diff_plan_for_queryset,
+    ends_in_unique_column,
     lookup_paths,
     resolver_key,
     runtime_path_from_path,
+    window_partition_for_prefetch,
 )
 
 
@@ -655,10 +665,213 @@ class TestRuntimePathFromPath:
             runtime_path_from_path(node)
 
 
-# TODO(spec-033 Slice 1): window-helper + order-hoist coverage (Test plan).
-#   test_apply_window_pagination_unit  (annotation names _dst_row_number/_dst_total_count,
-#       partition_by, range filters, reversed-row-number branch)
-#   test_window_partition_for_reverse_fk_forward_m2m_reverse_m2m  (window_partition_for_prefetch
-#       returns the parent-side attach key per relation kind; unsupported kinds raise)
-#   test_deterministic_order_helper_hoist_parity  (the hoisted _ends_in_unique_column + pk-append
-#       rule answers identically to the previous connection.py implementation)
+class TestApplyWindowPagination:
+    """``apply_window_pagination`` annotation + range-filter mechanism (spec-033 Decision 4)."""
+
+    def _windowed(self, **kwargs):
+        return apply_window_pagination(
+            Item.objects.all(),
+            partition_by="category_id",
+            order_by=["name", "pk"],
+            **kwargs,
+        )
+
+    def test_annotates_row_number_and_total_count(self):
+        """Both window annotations land under the ``_dst_*`` reserved names."""
+        qs = self._windowed(offset=0, limit=3)
+        annotations = qs.query.annotations
+        assert WINDOW_ROW_NUMBER in annotations
+        assert WINDOW_TOTAL_COUNT in annotations
+        sql = str(qs.query).upper()
+        assert "ROW_NUMBER()" in sql
+        assert "COUNT(" in sql
+
+    def test_forward_window_filters_offset_and_upper_bound(self):
+        """A forward window with offset+limit filters ``__gt`` offset and ``__lte`` offset+limit."""
+        qs = self._windowed(offset=2, limit=3)
+        where = str(qs.query).upper()
+        # Window-function filters wrap the queryset in a subquery with the
+        # row-number predicates; both bounds must appear.
+        assert WINDOW_ROW_NUMBER.upper() in where
+        # offset filter (> 2) and upper-bound filter (<= 5) both present.
+        assert ">" in where
+        assert "<=" in where
+
+    def test_no_offset_skips_lower_filter(self):
+        """``offset == 0`` applies only the upper-bound filter."""
+        qs = self._windowed(offset=0, limit=3)
+        # The annotations are present; only the upper-bound filter applies.
+        assert WINDOW_ROW_NUMBER in qs.query.annotations
+
+    def test_reverse_branch_uses_reversed_row_number(self):
+        """The reverse (last-only) branch annotates ``_dst_row_number_reversed`` and bounds it."""
+        qs = self._windowed(offset=0, limit=2, reverse=True)
+        annotations = qs.query.annotations
+        assert WINDOW_ROW_NUMBER_REVERSED in annotations
+        # The reversed window still annotates the forward row number + total count.
+        assert WINDOW_ROW_NUMBER in annotations
+        assert WINDOW_TOTAL_COUNT in annotations
+        # The reversed window MUST be bounded to ``limit`` rows (annotation alone
+        # over-fetches every child row - the spec-033 last-only over-fetch bug).
+        sql = str(qs.query).upper()
+        assert WINDOW_ROW_NUMBER_REVERSED.upper() in sql
+        assert "<= 2" in sql
+
+    def test_reverse_branch_with_none_limit_adds_no_upper_filter(self):
+        """``reverse=True, limit=None`` annotates the reversed window but adds no bound.
+
+        Guards that the limit-vs-``None`` decision lives in the caller
+        (``_connection_window_slice`` passes the literal ``last`` for the reverse
+        branch); ``apply_window_pagination`` itself still no-ops on ``None``.
+        """
+        qs = self._windowed(offset=0, limit=None, reverse=True)
+        assert WINDOW_ROW_NUMBER_REVERSED in qs.query.annotations
+        assert "<=" not in str(qs.query).upper()
+
+    def test_unbounded_limit_skips_upper_filter(self):
+        """``limit is None`` (no upper bound) annotates but adds no ``__lte`` row filter."""
+        qs = self._windowed(offset=1, limit=None)
+        # Annotation present; offset filter applies, but no finite upper bound.
+        assert WINDOW_ROW_NUMBER in qs.query.annotations
+
+    def test_maxsize_limit_skips_upper_filter(self):
+        """``sys.maxsize`` (relay's no-limit sentinel) adds no upper-bound filter."""
+        qs = self._windowed(offset=0, limit=sys.maxsize)
+        assert WINDOW_ROW_NUMBER in qs.query.annotations
+
+    def test_annotations_compose_with_only(self):
+        """Window annotations survive a ``.only()`` projection (annotations, not columns)."""
+        qs = apply_window_pagination(
+            Item.objects.only("name", "category_id"),
+            partition_by="category_id",
+            order_by=["name", "pk"],
+            offset=0,
+            limit=3,
+        )
+        assert WINDOW_ROW_NUMBER in qs.query.annotations
+        assert WINDOW_TOTAL_COUNT in qs.query.annotations
+
+
+class TestWindowPartitionForPrefetch:
+    """``window_partition_for_prefetch`` returns the parent-side attach key per kind."""
+
+    def test_reverse_fk_partitions_by_child_fk_attname(self):
+        """A reverse FK (``Category.items``) partitions by the child FK column."""
+        field = Category._meta.get_field("items")
+        assert window_partition_for_prefetch(field) == "category_id"
+
+    def test_forward_m2m_partitions_by_reverse_query_name(self):
+        """A forward M2M partitions by the target's reverse query name, not the accessor.
+
+        ``Book.genres`` has reverse query name ``"books"`` (the ``related_name``);
+        partitioning the Genre child rows by ``"books"`` follows the reverse M2M
+        back to each Book parent.
+        """
+        from apps.library.models import Book
+
+        field = Book._meta.get_field("genres")
+        assert window_partition_for_prefetch(field) == "books"
+
+    def test_reverse_m2m_partitions_through_forward_field_name(self):
+        """A reverse M2M (``Genre.books``) partitions through the child's forward M2M field."""
+        from apps.library.models import Genre
+
+        field = Genre._meta.get_field("books")
+        assert window_partition_for_prefetch(field) == "genres"
+
+    def test_forward_m2m_partition_diverges_from_accessor(self):
+        """The forward-M2M partition is the reverse query name, NOT the accessor.
+
+        ``Book.genres``'s instance accessor is ``"genres"`` but its windowable
+        partition is the reverse query name ``"books"`` - the divergence the
+        helper must resolve off ``remote_field`` rather than the accessor
+        (spec-033 Decision 4; the reverse-no-``related_name`` shape the package
+        special-cases everywhere).
+        """
+        from apps.library.models import Book
+
+        field = Book._meta.get_field("genres")
+        assert window_partition_for_prefetch(field) == "books"
+        assert field.remote_field.name == "books"
+
+    def test_forward_single_relation_raises(self):
+        """A single-valued forward FK has no windowable partition - raises ``OptimizerError``."""
+        field = Item._meta.get_field("category")
+        with pytest.raises(OptimizerError, match="no windowable parent partition"):
+            window_partition_for_prefetch(field)
+
+
+class TestDeterministicOrderHoistParity:
+    """The hoisted order rule answers identically to the previous connection.py code."""
+
+    def test_ends_in_unique_column_string_refs(self):
+        """String order refs: pk / attname / unique field are unique; non-unique are not."""
+        assert ends_in_unique_column(("id",), Category) is True
+        assert ends_in_unique_column(("pk",), Category) is True
+        assert ends_in_unique_column(("name",), Category) is True  # Category.name unique=True
+        assert ends_in_unique_column(("-name",), Category) is True  # leading '-' stripped
+        assert ends_in_unique_column(("name",), Item) is False  # Item.name unique=False
+        assert ends_in_unique_column(("category__name",), Item) is False  # relation path
+        assert ends_in_unique_column(("_dst_order_alias",), Category) is False  # annotation alias
+        assert ends_in_unique_column((), Category) is False  # unordered
+
+    def test_ends_in_unique_column_expression_refs(self):
+        """``F`` expression terminals read the wrapped column name."""
+        from django.db.models import F
+
+        assert ends_in_unique_column((F("name").asc(),), Category) is True  # unique
+        assert ends_in_unique_column((F("name").asc(),), Item) is False  # non-unique
+
+    def test_ends_in_unique_column_unnameable_terminal(self):
+        """A transform terminal (no readable column name) is treated as non-unique."""
+        from django.db.models.functions import Lower
+
+        assert ends_in_unique_column((Lower("name"),), Category) is False
+
+    def test_deterministic_order_appends_pk_when_not_unique(self):
+        """A non-unique terminal gets the pk appended; a unique one is returned unchanged."""
+        assert deterministic_order(("name",), Item) == ("name", "id")
+        # Already ends in a unique column -> unchanged.
+        assert deterministic_order(("name",), Category) == ("name",)
+        assert deterministic_order(("id",), Item) == ("id",)
+
+    def test_deterministic_order_matches_connection_reexport(self):
+        """``connection.py`` re-exports the same ``ends_in_unique_column`` (one source)."""
+        from django_strawberry_framework.connection import _ends_in_unique_column
+
+        assert _ends_in_unique_column is ends_in_unique_column
+
+
+class TestReverseOrderBy:
+    """``_reverse_order_by`` mirrors Django's ``queryset.reverse()`` (spec-033 Decision 4)."""
+
+    def test_flips_string_direction(self):
+        """String refs toggle the leading ``-``; the pk terminal stays total."""
+        assert _reverse_order_by(["name", "id"]) == ["-name", "-id"]
+        assert _reverse_order_by(["-name", "id"]) == ["name", "-id"]
+
+    def test_flips_orderby_descending(self):
+        """``OrderBy`` expressions flip ``.descending`` without re-running the compiler."""
+        from django.db.models import F
+
+        reversed_order = _reverse_order_by([F("name").asc()])
+        assert reversed_order[0].descending is True
+
+    def test_swaps_explicit_nulls_positioning(self):
+        """Explicit ``nulls_first`` / ``nulls_last`` swap on reversal, like ``.reverse()``.
+
+        Django inverts NULLS placement when reversing an ordering; mirror that so
+        a consumer ``OrderSet`` with explicit NULLS positioning produces a reversed
+        window matching the resolve-time ``.reverse()`` pipeline.
+        """
+        from django.db.models import F
+
+        nulls_first = _reverse_order_by([F("name").asc(nulls_first=True)])[0]
+        assert nulls_first.descending is True
+        assert nulls_first.nulls_first is None
+        assert nulls_first.nulls_last is True
+
+        nulls_last = _reverse_order_by([F("name").desc(nulls_last=True)])[0]
+        assert nulls_last.descending is False
+        assert nulls_last.nulls_first is True
+        assert nulls_last.nulls_last is None

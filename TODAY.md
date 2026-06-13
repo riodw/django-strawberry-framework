@@ -8,28 +8,26 @@
 
 ## What products demonstrates today
 
-`examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.8` it exercises, end to end, the package capabilities a real consumer reaches for:
+`examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.9` it exercises, end to end, the package capabilities a real consumer reaches for:
 
-- **`DjangoType` schema** — four types configured entirely through `class Meta` (`model` + `fields`), with forward-FK + reverse-FK traversal and four root list resolvers (`allCategories` / `allItems` / `allProperties` / `allEntries`).
+- **`DjangoType` schema** — four types configured entirely through `class Meta` (`model` + `fields`), with forward-FK + reverse-FK traversal and four root Relay connection fields (`allCategories` / `allItems` / `allProperties` / `allEntries`, each a `DjangoConnectionField` as of `0.0.9`).
 - **Relay nodes** — every type declares `Meta.interfaces = (relay.Node,)`, so each `id` is a Relay `GlobalID` (own-PK GlobalID filtering, `node(id:)` refetch shape). As of `0.0.9` the default `GlobalID` payload is the Django model label (`products.item:<pk>`) rather than the GraphQL type name, so a `CategoryType` → `ProductCategoryType` rename no longer invalidates cached IDs; `Meta.globalid_strategy` / `RELAY_GLOBALID_STRATEGY` select `model` (default) / `type` (legacy opt-out) / `type+model` (transitional) / callable.
-- **Filtering** — `Meta.filterset_class` on every type (declared in `apps/products/filters.py`), surfaced on each root resolver via a `filter:` argument from `filter_input_type(...)`. Includes a per-field `check_name_permission` denial gate on `CategoryFilter` (active-input-only).
-- **Ordering** — `Meta.orderset_class` on every type (declared in `apps/products/orders.py`), surfaced via an `orderBy:` argument from `order_input_type(...)`. Includes the matching `check_name_permission` gate on `CategoryOrder`.
-- **Optimizer cooperation** — root resolvers return `QuerySet`s, so `DjangoOptimizerExtension` plans `select_related` / `prefetch_related` / `only()` across nested selections without per-resolver boilerplate.
-- **Filter + order composition** — each resolver chains `<Type>.get_queryset(queryset, info)` → `<Type>Filter.apply_sync(filter, queryset, info)` → `<Type>Order.apply_sync(order_by, queryset, info)` (visibility scopes, filter narrows, order arranges).
+- **Filtering** — `Meta.filterset_class` on every type (declared in `apps/products/filters.py`), surfaced on each connection field via a synthesized `filter:` argument. Includes a per-field `check_name_permission` denial gate on `CategoryFilter` (active-input-only).
+- **Ordering** — `Meta.orderset_class` on every type (declared in `apps/products/orders.py`), surfaced via a synthesized `orderBy:` argument. Includes the matching `check_name_permission` gate on `CategoryOrder`.
+- **Optimizer cooperation** — `DjangoConnectionField` hands its pre-slice `QuerySet` to `DjangoOptimizerExtension`, which plans `select_related` / `prefetch_related` / `only()` across the connection's `edges { node }` selection (and any nested `<field>Connection`s) without per-resolver boilerplate.
+- **Filter + order composition** — each connection runs the same `get_queryset` visibility → `filter` → `orderBy` → deterministic pk-order → optimizer-plan → cursor-slice pipeline the hand-written resolvers used to spell (visibility scopes, filter narrows, order arranges).
 
 The live `/graphql/` HTTP suite at `examples/fakeshop/test_query/test_products_api.py` pins all of the above end to end.
 
 ## What's in `products/schema.py` today
 
-A representative slice — one type and its resolver. The full file declares all four types and all four resolvers the same way:
+One representative type (`ItemType` / `PropertyType` / `EntryType` follow the same `class Meta` shape), plus the full connections-only `Query`. As of `0.0.9` the four root fields are `DjangoConnectionField` class attributes — the `django-graphene-filters` cookbook mirror — and the hand-written `filter:` / `orderBy:` resolver signatures are gone: `DjangoConnectionField` synthesizes those arguments from the same `Meta.filterset_class` / `Meta.orderset_class` sidecars and runs the same `get_queryset` → `filter` → `orderBy` → deterministic-order → optimizer composition the resolvers spelled by hand.
 
 ```python
 import strawberry
 from strawberry import relay
 
-from django_strawberry_framework import DjangoType
-from django_strawberry_framework.filters import filter_input_type
-from django_strawberry_framework.orders import order_input_type
+from django_strawberry_framework import DjangoConnection, DjangoConnectionField, DjangoType
 
 from . import filters, models, orders
 
@@ -58,19 +56,10 @@ class CategoryType(DjangoType):
 
 @strawberry.type
 class Query:
-    @strawberry.field
-    def all_categories(
-        self,
-        info: strawberry.Info,
-        filter: filter_input_type(filters.CategoryFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.CategoryOrder)] | None = None,
-    ) -> list[CategoryType]:
-        queryset = CategoryType.get_queryset(models.Category.objects.order_by("id"), info)
-        if filter is not None:
-            queryset = filters.CategoryFilter.apply_sync(filter, queryset, info)
-        if order_by is not None:
-            queryset = orders.CategoryOrder.apply_sync(order_by, queryset, info)
-        return queryset
+    all_categories: DjangoConnection[CategoryType] = DjangoConnectionField(CategoryType)
+    all_items: DjangoConnection[ItemType] = DjangoConnectionField(ItemType)
+    all_properties: DjangoConnection[PropertyType] = DjangoConnectionField(PropertyType)
+    all_entries: DjangoConnection[EntryType] = DjangoConnectionField(EntryType)
 ```
 
 ## What to put in `config/schema.py` today
@@ -139,14 +128,18 @@ Products' graph is FK-only; `OneToOneField` and `ManyToManyField` conversions ar
 
 ## Optimized products queries that work today
 
-Root resolvers return `QuerySet`s and `config/schema.py` adds `DjangoOptimizerExtension`, so nested selections are planned into one ORM query.
+The connection fields hand their pre-slice `QuerySet`s to `DjangoOptimizerExtension` (added in `config/schema.py`), so the `edges { node }` selection is planned into one ORM query.
 
 ```graphql
 {
   allItems {
-    name
-    category {
-      name
+    edges {
+      node {
+        name
+        category {
+          name
+        }
+      }
     }
   }
 }
@@ -157,28 +150,32 @@ Expected: `select_related("category")`.
 ```graphql
 {
   allEntries {
-    value
-    item {
-      name
-      category {
-        name
-      }
-    }
-    property {
-      name
-      category {
-        name
+    edges {
+      node {
+        value
+        item {
+          name
+          category {
+            name
+          }
+        }
+        property {
+          name
+          category {
+            name
+          }
+        }
       }
     }
   }
 }
 ```
 
-Expected: nested `select_related` paths and `only()` projections.
+Expected: nested `select_related` paths and `only()` projections. (A connection with no `first` / `last` caps the default page at `relay_max_results` and appends a deterministic `ORDER BY pk`.)
 
 ## Filtering and ordering on products today
 
-Both ship in `0.0.8` and are wired on every products resolver. `filter:` narrows, `orderBy:` arranges, and they compose:
+Both ship in `0.0.8`; as of `0.0.9` the `filter:` / `orderBy:` arguments are synthesized onto every products connection field from the type's `Meta.filterset_class` / `Meta.orderset_class` sidecars (no hand-written `filter_input_type(...)` / `order_input_type(...)` signatures). `filter:` narrows, `orderBy:` arranges, and they compose:
 
 ```graphql
 {
@@ -196,9 +193,13 @@ Both ship in `0.0.8` and are wired on every products resolver. `filter:` narrows
       }
     ]
   ) {
-    name
-    category {
-      name
+    edges {
+      node {
+        name
+        category {
+          name
+        }
+      }
     }
   }
 }
@@ -216,7 +217,7 @@ Both ship in `0.0.8` and are wired on every products resolver. `filter:` narrows
 
 ## Visibility filtering via `get_queryset`
 
-Automatic connection/query fields do not exist yet, so root resolvers are manual — which means a root list applies visibility rules by calling the type's `get_queryset` hook itself (already part of the filter/order chain above):
+A `DjangoConnectionField` applies the type's `get_queryset` visibility hook automatically as the first step of its composition pipeline (already part of the filter/order chain above), so a root connection respects the same rules a type declares:
 
 ```python
 class ItemType(DjangoType):
@@ -242,7 +243,7 @@ Relation traversal into a type with a custom `get_queryset` is handled by the op
 
 ## What products is still waiting for
 
-Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today. `DjangoConnectionField` (Relay connections) is **not** on this list either — it shipped in `0.0.9`; products lights it up at fakeshop activation (`TODO-BETA-051-0.1.5`).
+Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today. `DjangoConnectionField` (Relay connections) is **not** on this list either — it shipped in `0.0.9` and products' four root fields are now connections (the cookbook-mirror conversion). Still deferred to the fakeshop-activation card (`TODO-BETA-051-0.1.5`): the root `node(id:)` / `nodes(ids:)` Relay entry points and any `Meta.connection` (`totalCount`) opt-ins.
 
 - permissions / `apply_cascade_permissions` (`0.0.10`: `TODO-ALPHA-033-0.0.10`) — activates the commented cascade `get_queryset` hooks in `products/schema.py`
 - `Meta.fields_class` — `FieldSet` (`0.1.1`)

@@ -2871,17 +2871,310 @@ def test_node_hidden_row_null_live():
     assert staff_payload["data"]["node"] == {"title": "Withdrawn"}
 
 
-# TODO(spec-033 Slice 5): live nested-connection SQL-shape coverage (Test plan).
-# The spec-032 Slice-6 behavior pins (test_genre_books_connection_behavior,
-# test_book_genres_connection_sidecars_and_total_count) deferred SQL-shape
-# assertions to THIS card -- add them now, live over /graphql/, riding the
-# _reload_project_schema_for_acceptance_tests fixture:
-#   test_nested_books_connection_fixed_query_count  (two-level
-#       allLibraryGenresConnection { edges { node { booksConnection(first: N)
-#       { edges { node } totalCount } } } } executes in a FIXED query count with
-#       3 genres AND with 10 genres -- per-parent independence)
-#   test_nested_total_count_no_per_parent_count  (selecting nested totalCount adds
-#       ZERO queries over the same selection without it)
-#   test_nested_window_respects_book_visibility  (circulation_status="repair" books
-#       excluded from non-staff nested pages AND nested totalCount; staff sees them)
-# The shipped behavior pins above stay GREEN unmodified -- wire results must not change.
+# ---------------------------------------------------------------------------
+# Slice 5 (spec-033) - live nested-connection SQL-shape coverage.
+#
+# The spec-032 Slice-6 behavior pins above (test_genre_books_connection_behavior,
+# test_book_genres_connection_sidecars_and_total_count) asserted BEHAVIOR ONLY and
+# named THIS card as the owner of the deferred SQL-shape pins. The three tests
+# below add them, live over /graphql/, riding the
+# _reload_project_schema_for_acceptance_tests autouse fixture. No source change.
+#
+# ``totalCount`` siting (the line-79 reconciliation): ``booksConnection``'s target
+# ``BookType`` does NOT declare ``Meta.connection = {"total_count": True}`` (only
+# ``GenreType`` does), so the nested-``totalCount``-no-per-parent-COUNT pin rides
+# ``allLibraryBooks { genresConnection(first: N) { totalCount ... } }`` (target
+# ``GenreType``, ``total_count`` on). The ``booksConnection`` shape (target
+# ``BookType``, ``get_queryset`` ``circulation_status="repair"`` filter) carries the
+# fixed-query-count and visibility pins.
+# ---------------------------------------------------------------------------
+
+
+def _seed_genre_with_books(name: str, shelf: models.Shelf, titles: tuple[str, ...]) -> None:
+    """Create one genre and attach a fresh book per title via the M2M.
+
+    Each genre gets its OWN books (unique titles per genre keep the
+    ``(shelf, title)`` unique constraint satisfied) so the windowed
+    ``booksConnection`` page is per-parent, not a shared slice.
+    """
+    genre = models.Genre.objects.create(name=name)
+    for title in titles:
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+
+
+# One query string shared across the 3-genre and 10-genre runs of the
+# fixed-query-count test (the DRY pin: the two parent-count runs differ only in
+# seeding, never in the query). ``totalCount`` is NOT selected on
+# ``booksConnection`` - ``BookType`` has no ``Meta.connection`` opt-in, so that
+# field does not exist on the type (selecting it is a validation error).
+_NESTED_BOOKS_CONNECTION_QUERY = """
+query {
+  allLibraryGenresConnection {
+    edges {
+      node {
+        booksConnection(first: 2) {
+          edges { node { title } }
+          pageInfo { hasNextPage }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_nested_books_connection_fixed_query_count():
+    """The two-level genres->books window costs the same for 3 vs 10 parents.
+
+    The literal N+1 disproof: the captured query count for the nested
+    ``booksConnection`` window is INDEPENDENT of the number of parent genres
+    (spec-033 Slice 5 / Goal 5 / DoD item 8). The window is one prefetch over
+    all parents, not one query per parent. ``totalCount`` is not selected -
+    ``BookType`` has no ``Meta.connection`` opt-in, so the field does not exist.
+    """
+
+    def _run(genre_count: int) -> tuple[int, dict]:
+        shelf = _seed_shelf()
+        for index in range(genre_count):
+            # Per-genre unique titles keep the (shelf, title) unique
+            # constraint satisfied while every genre carries >2 books so
+            # ``first: 2`` leaves a meaningful ``hasNextPage``.
+            _seed_genre_with_books(
+                f"Genre-{index}",
+                shelf,
+                (f"Book-{index}-a", f"Book-{index}-b", f"Book-{index}-c"),
+            )
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(_NESTED_BOOKS_CONNECTION_QUERY)
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        return len(captured), payload
+
+    three_count, three_payload = _run(3)
+
+    # Wire assertion: every parent genre returns its OWN windowed page of 2
+    # books with hasNextPage True (3 books seeded per genre), proving the
+    # window is per-parent-correct, not a single shared slice.
+    three_edges = three_payload["data"]["allLibraryGenresConnection"]["edges"]
+    assert len(three_edges) == 3
+    for index, edge in enumerate(three_edges):
+        books_conn = edge["node"]["booksConnection"]
+        titles = [book_edge["node"]["title"] for book_edge in books_conn["edges"]]
+        assert titles == [f"Book-{index}-a", f"Book-{index}-b"]
+        assert books_conn["pageInfo"]["hasNextPage"] is True
+
+    # Reset the graph so the 10-genre run starts from an empty library, then
+    # re-run the identical query under a fresh capture.
+    models.Book.objects.all().delete()
+    models.Genre.objects.all().delete()
+    models.Shelf.objects.all().delete()
+    models.Branch.objects.all().delete()
+
+    ten_count, ten_payload = _run(10)
+    assert len(ten_payload["data"]["allLibraryGenresConnection"]["edges"]) == 10
+
+    # The load-bearing pin: equal query count across the two parent counts -
+    # the per-parent independence that disproves N+1. The absolute count is a
+    # small fixed N pinned empirically (one root genres-connection query + one
+    # windowed ``booksConnection`` prefetch query), NOT 1 + parent_count.
+    assert three_count == ten_count
+    assert three_count == 2
+
+
+@pytest.mark.django_db
+def test_nested_total_count_no_per_parent_count():
+    """Selecting nested ``totalCount`` adds zero queries over the same shape.
+
+    Rides ``genresConnection`` (target ``GenreType``, ``total_count`` on) under
+    the optimizer-rooted ``allLibraryBooks`` list resolver - the forward-M2M
+    shape ``test_book_genres_connection_sidecars_and_total_count`` established.
+    The count comes from the window's ``_dst_total_count`` annotation, NOT a
+    per-book ``COUNT``, so adding ``totalCount`` to the selection costs nothing
+    extra even with multiple parent books (spec-033 Slice 5 / Edge case;
+    DoD item 8).
+    """
+    shelf = _seed_shelf()
+    # Multiple parent books, each with the SAME set of >2 genres, strengthens
+    # the "no per-parent COUNT" claim: a per-book COUNT would scale with the
+    # number of books; the window annotation does not.
+    genres = [
+        models.Genre.objects.create(name=name)
+        for name in (
+            "Alpha",
+            "Beta",
+            "Gamma",
+            "Echo",
+        )
+    ]
+    for title in ("Kindred", "Dawn", "Wild Seed"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        for genre in genres:
+            book.genres.add(genre)
+
+    without_query = """
+        query {
+          allLibraryBooks {
+            genresConnection(first: 2) {
+              edges { node { name } }
+            }
+          }
+        }
+        """
+    with_query = """
+        query {
+          allLibraryBooks {
+            genresConnection(first: 2) {
+              totalCount
+              edges { node { name } }
+            }
+          }
+        }
+        """
+
+    with CaptureQueriesContext(connection) as without_captured:
+        without_response = _post_graphql(without_query)
+    assert without_response.status_code == 200
+    without_payload = without_response.json()
+    assert "errors" not in without_payload, without_payload
+
+    with CaptureQueriesContext(connection) as with_captured:
+        with_response = _post_graphql(with_query)
+    assert with_response.status_code == 200
+    with_payload = with_response.json()
+    assert "errors" not in with_payload, with_payload
+
+    # Selecting nested ``totalCount`` adds ZERO queries - the window already
+    # carries ``_dst_total_count``.
+    assert len(with_captured) == len(without_captured)
+
+    # The ``totalCount`` value is the full genre count per book (4), distinct
+    # from the page size (first: 2) - and identical across every parent book.
+    books = with_payload["data"]["allLibraryBooks"]
+    assert len(books) == 3
+    for book in books:
+        assert book["genresConnection"]["totalCount"] == 4
+        assert len(book["genresConnection"]["edges"]) == 2
+
+
+@pytest.mark.django_db
+def test_nested_window_respects_book_visibility():
+    """``circulation_status="repair"`` books are windowed post-visibility.
+
+    The target ``BookType.get_queryset`` runs INSIDE the nested windowed
+    ``booksConnection`` (post-visibility row numbering, spec-033 Edge case
+    "visibility-filtered targets"): an anonymous client never sees the repair
+    book in any parent genre's nested page, while a staff client does.
+
+    No ``orderBy:`` sidecar is selected - that matters: a nested connection
+    carrying ``filter:`` / ``orderBy:`` input is left UNPLANNED and falls back
+    per-parent (Decision 6), which would exercise the fallback pipeline, NOT
+    the window. The plain selection IS window-planned, so this test pins the
+    windowed-visibility branch. Two assertions enforce that:
+
+    1. the captured query count is FLAT (parent-count-independent) - it would
+       scale ~1-per-parent if the selection silently fell back per-parent; and
+    2. the visible / hidden split is correct (post-``get_queryset`` row set).
+
+    The window appends a deterministic pk-terminal order (Decision 4), so the
+    books come back in seeded insertion order with no ``orderBy`` needed.
+
+    ``booksConnection``'s target ``BookType`` has no ``totalCount`` field (no
+    ``Meta.connection`` opt-in), so the "nested ``totalCount``" half of the spec
+    line is proven through the VISIBLE-edge set - the post-visibility window row
+    count IS the visible count. The ``GenreType`` connection that DOES carry
+    ``totalCount`` has no visibility filter, so a visibility-filtered
+    ``totalCount`` field is unavailable live; the ``booksConnection`` edge set
+    is the correct live surface for ``BookType`` visibility (spec-033 Slice 5 /
+    Edge case "visibility-filtered targets" / DoD item 8).
+    """
+    # No ``orderBy:`` - the plain selection is window-planned (the deterministic
+    # pk-terminal order the window appends yields seeded insertion order for
+    # free). An ``orderBy:`` sidecar would divert to the per-parent fallback.
+    query = """
+        query {
+          allLibraryGenresConnection {
+            edges {
+              node {
+                booksConnection {
+                  edges { node { title } }
+                }
+              }
+            }
+          }
+        }
+        """
+
+    def _seed_genres(genre_count: int, shelf: models.Shelf) -> None:
+        """Each genre carries 3 visible books + 1 repair book via the M2M.
+
+        Per-genre unique titles satisfy the ``(shelf, title)`` constraint.
+        Every genre carrying its own repair book is what lets the flat
+        query-count assertion below distinguish the window (one prefetch over
+        all parents) from a per-parent fallback (one query per parent).
+        """
+        for index in range(genre_count):
+            genre = models.Genre.objects.create(name=f"Genre-{index}")
+            for title in (f"Aurora-{index}", f"Binti-{index}", f"Circe-{index}"):
+                book = models.Book.objects.create(title=title, shelf=shelf)
+                book.genres.add(genre)
+            repair = models.Book.objects.create(
+                title=f"Withdrawn-{index}",
+                circulation_status=models.Book.CirculationStatus.REPAIR,
+                shelf=shelf,
+            )
+            repair.genres.add(genre)
+
+    def _nested_titles_by_genre(payload: dict) -> list[list[str]]:
+        edges = payload["data"]["allLibraryGenresConnection"]["edges"]
+        return [
+            [book_edge["node"]["title"] for book_edge in edge["node"]["booksConnection"]["edges"]]
+            for edge in edges
+        ]
+
+    shelf = _seed_shelf()
+    _seed_genres(2, shelf)
+
+    # Anonymous: the window is planned and runs ``BookType.get_queryset`` inside
+    # it, so every parent genre's nested page excludes its repair book. The
+    # captured query count is FLAT - one root genres-connection query plus one
+    # windowed ``booksConnection`` prefetch - and would scale per-parent under a
+    # silent fallback (the active window-vs-fallback pin).
+    with CaptureQueriesContext(connection) as captured:
+        anonymous = _post_graphql(query)
+    assert anonymous.status_code == 200
+    anonymous_payload = anonymous.json()
+    assert "errors" not in anonymous_payload, anonymous_payload
+    anonymous_titles = _nested_titles_by_genre(anonymous_payload)
+    assert anonymous_titles == [
+        ["Aurora-0", "Binti-0", "Circe-0"],
+        ["Aurora-1", "Binti-1", "Circe-1"],
+    ]
+    # The flat count proves the visibility filter rides the WINDOW (Decision 5
+    # fast path), not the per-parent fallback: 1 root query + 1 window prefetch,
+    # independent of the 2 parent genres. A per-parent fallback would emit
+    # ~1 query per genre, failing this pin.
+    assert len(captured) == 2
+
+    # Staff: the same windowed selection includes every repair book (visibility
+    # bypass), in the same deterministic pk-terminal order after the visible set.
+    staff = _post_graphql_as_staff(query)
+    assert staff.status_code == 200
+    staff_payload = staff.json()
+    assert "errors" not in staff_payload, staff_payload
+    assert _nested_titles_by_genre(staff_payload) == [
+        [
+            "Aurora-0",
+            "Binti-0",
+            "Circe-0",
+            "Withdrawn-0",
+        ],
+        [
+            "Aurora-1",
+            "Binti-1",
+            "Circe-1",
+            "Withdrawn-1",
+        ],
+    ]

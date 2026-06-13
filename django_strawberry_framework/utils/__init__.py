@@ -12,6 +12,12 @@ concern rather than a single 500-line `utils.py`. Includes, among others:
 - ``connections`` - the connection window-bounds / sidecar-kwarg contracts.
 - ``inputs`` / ``permissions`` - the generated-input and active-input
   permission substrates shared by the filter / order families.
+- ``input_values`` - the neutral set-input traversal substrate
+  (``iter_active_fields`` / ``is_inactive_value`` / ``iter_input_items``)
+  the filter / order normalizers and the permission walkers all consume. It
+  landed in the 0.0.9 DRY pass (``docs/feedback.md`` Major 1), single-siting the
+  dict-vs-dataclass walk, the ``None`` / ``UNSET`` active-input rule, and the
+  leaf / related / logic classification each surface previously spelled inline.
 - ``querysets`` - the query-source + ``DjangoType.get_queryset`` visibility
   contract (``initial_queryset`` / ``normalize_query_source`` /
   ``apply_type_visibility_*`` / ``SyncMisuseError``). It landed in the 0.0.9

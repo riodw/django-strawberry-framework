@@ -21,13 +21,13 @@ spec-028 Decision 9 line 775.
 from __future__ import annotations
 
 import enum
-from collections import OrderedDict
 from typing import TYPE_CHECKING, Annotated, Any
 
 import strawberry
 from django.db.models import F
 from django.db.models.expressions import OrderBy
 
+from ..utils.input_values import RELATED, SetInputTraversal, iter_active_fields
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
@@ -282,43 +282,40 @@ def normalize_input_value(
     ``BaseCSVFilter`` / ``RangeFilter`` / ``ChoiceFilter`` /
     ``ListFilter`` branches -- ordering has no leaf-shape divergence
     per Spec Decision 5).
+
+    The dataclass-vs-dict walk, the top-level ``list[<T>]`` flattening, the
+    ``None`` active-input skip, the ``_field_specs`` lookup, and the
+    leaf-vs-related classification are the shared traversal mechanics owned by
+    ``utils/input_values.py::iter_active_fields`` (the 0.0.9 DRY pass,
+    ``docs/feedback.md`` Major 1). This function keeps only the order-side leaf
+    semantics: a ``RelatedOrder`` branch recurses into the target orderset with
+    the django source path as a prefix (e.g. ``shelf`` -> ``shelf__code``); a
+    leaf appends ``(django_source_path, Ordering | None)``. ``handle_top_level_list``
+    is set because the resolver-facing order argument shape is
+    ``list[<T>OrderInputType] | None``.
     """
-    if input_value is None:
-        return []
-    if isinstance(input_value, list):
-        result: list[tuple[str, Ordering | None]] = []
-        for element in input_value:
-            result.extend(normalize_input_value(orderset_cls, element))
-        return result
-    # Single dataclass element. Walk its fields against the orderset's
-    # ``_field_specs`` map.
-    related_orders = getattr(orderset_cls, "related_orders", OrderedDict())
-    dataclass_fields = getattr(input_value, "__dataclass_fields__", None)
-    if dataclass_fields is None:
-        return []
-    result = []
-    for python_attr in dataclass_fields:
-        value = getattr(input_value, python_attr, None)
-        if value is None:
-            continue
-        spec = _field_specs.get((orderset_cls, python_attr))
-        if spec is None:
+    config = SetInputTraversal(
+        field_specs=_field_specs,
+        related_attr="related_orders",
+        handle_top_level_list=True,
+    )
+    result: list[tuple[str, Ordering | None]] = []
+    for field in iter_active_fields(orderset_cls, input_value, config):
+        if field.spec is None:
             continue  # Defensive -- should be impossible after a finalize.
-        # ``RelatedOrder`` branches recurse into the target orderset.
-        # The python-attr <-> related-orders key match uses ``top_name``
-        # rules: ``RelatedOrder`` keys never contain ``__`` (their python
-        # attr equals the top name), so a plain ``in`` check suffices.
-        if python_attr in related_orders:
-            child_orderset = related_orders[python_attr].orderset
+        if field.kind == RELATED:
+            # ``RelatedOrder`` branch -- recurse into the target orderset and
+            # prefix every child path with this branch's django source path.
+            child_orderset = field.related_obj.orderset
             if child_orderset is None:
                 continue
-            prefix = spec.django_source_path
-            for child_path, child_dir in normalize_input_value(child_orderset, value):
+            prefix = field.spec.django_source_path
+            for child_path, child_dir in normalize_input_value(child_orderset, field.raw_value):
                 result.append((f"{prefix}__{child_path}", child_dir))
         else:
-            # Leaf -- value is an ``Ordering`` member (or None, already
-            # short-circuited above).
-            result.append((spec.django_source_path, value))
+            # Leaf -- ``raw_value`` is an ``Ordering`` member (``None`` was
+            # already skipped as inactive by the classifier).
+            result.append((field.spec.django_source_path, field.raw_value))
     return result
 
 

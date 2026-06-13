@@ -356,7 +356,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             cls,
             input_value,
             field_specs=_field_specs,
-            related_keys=set(getattr(cls, "related_orders", {}) or {}),
+            related_attr="related_orders",
             logic_keys=frozenset(),
             fallback_path=lambda python_attr: python_attr,
             handle_top_level_list=True,

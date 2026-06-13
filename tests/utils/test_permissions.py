@@ -181,10 +181,11 @@ def test_active_permission_field_paths_excludes_logic_and_related_keys():
         _Set,
         {"title": "asc", "shelf": {"code": "x"}, "and_": [{"title": "x"}]},
         field_specs={},
-        related_keys={"shelf"},
+        related_attr="related_orders",
         logic_keys=frozenset({"and_"}),
         fallback_path=lambda attr: attr,
     )
-    # ``shelf`` (related) and ``and_`` (logic) excluded; ``title`` falls back to
-    # the python-attr token since ``field_specs`` has no entry.
+    # ``shelf`` (related, recognized off ``_Set.related_orders``) and ``and_``
+    # (logic) excluded; ``title`` falls back to the python-attr token since
+    # ``field_specs`` has no entry.
     assert paths == ["title"]

@@ -1177,26 +1177,27 @@ def test_collect_directive_var_names_ignores_non_directive_vars():
     assert names == frozenset()
 
 
-def test_walk_directives_ignores_non_directive_objects():
+def test_walk_cache_relevant_vars_ignores_non_directive_objects():
     """B1: directive collection skips defensive non-DirectiveNode entries."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _walk_directives
+    from django_strawberry_framework.optimizer.extension import _walk_cache_relevant_vars
 
     operation = parse("query Q($v: Boolean!) { items @skip(if: $v) { name } }").definitions[0]
     field = operation.selection_set.selections[0]
 
-    names: set[str] = set()
+    directive_names: set[str] = set()
+    pagination_names: set[str] = set()
     node = SimpleNamespace(directives=[object(), *field.directives], selection_set=None)
-    _walk_directives(node, names, fragments={}, visited_fragments=set())
-    assert names == {"v"}
+    _walk_cache_relevant_vars(node, {}, set(), 0, directive_names, pagination_names)
+    assert directive_names == {"v"}
 
 
-def test_walk_directives_visits_each_fragment_once_across_sibling_spreads():
+def test_walk_cache_relevant_vars_visits_each_fragment_once_across_sibling_spreads():
     """Sibling spreads of the same fragment do not re-walk the fragment subtree."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _walk_directives
+    from django_strawberry_framework.optimizer.extension import _walk_cache_relevant_vars
 
     doc = parse(
         "query Q($v: Boolean!) { "
@@ -1207,26 +1208,28 @@ def test_walk_directives_visits_each_fragment_once_across_sibling_spreads():
     )
     operation = doc.definitions[0]
     fragments = {d.name.value: d for d in doc.definitions[1:]}
-    names: set[str] = set()
+    directive_names: set[str] = set()
+    pagination_names: set[str] = set()
     visited: set[str] = set()
-    _walk_directives(operation, names, fragments, visited)
-    assert names == {"v"}
+    _walk_cache_relevant_vars(operation, fragments, visited, 0, directive_names, pagination_names)
+    assert directive_names == {"v"}
     # Fragment F was descended exactly once even though it was spread twice.
     assert visited == {"F"}
 
 
-def test_walk_directives_handles_unresolved_fragment_name():
+def test_walk_cache_relevant_vars_handles_unresolved_fragment_name():
     """A spread referencing an unknown fragment name is skipped silently."""
     from graphql import parse
 
-    from django_strawberry_framework.optimizer.extension import _walk_directives
+    from django_strawberry_framework.optimizer.extension import _walk_cache_relevant_vars
 
     doc = parse("query Q { items { ...Missing } }")
     operation = doc.definitions[0]
-    names: set[str] = set()
+    directive_names: set[str] = set()
+    pagination_names: set[str] = set()
     visited: set[str] = set()
-    _walk_directives(operation, names, fragments={}, visited_fragments=visited)
-    assert names == set()
+    _walk_cache_relevant_vars(operation, {}, visited, 0, directive_names, pagination_names)
+    assert directive_names == set()
     assert visited == set()
 
 
@@ -1600,26 +1603,28 @@ def test_root_pagination_variable_one_plan_through_schema():
 
 @pytest.mark.django_db
 def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(monkeypatch):
-    """The combined var-name AST walk runs once per operation, not per ``_build_cache_key``.
+    """The unified var-name AST walk runs once per operation, not per ``_build_cache_key``.
 
-    Decision 7 line 348: nested fallback connections call ``_build_cache_key``
-    once per parent row, so the full-operation pagination walk must be memoized
-    per ``id(operation)`` within one ``on_execute`` lifecycle. Wrap the
-    pagination collector with a call counter and assert repeated
-    ``_build_cache_key`` calls on the SAME operation walk it only once.
+    Decision 7: nested fallback connections call ``_build_cache_key`` once per
+    parent row, so the full-operation cache-relevant-variable walk must be
+    memoized per ``id(operation)`` within one ``on_execute`` lifecycle. Wrap the
+    unified collector (``_collect_cache_relevant_var_names`` -- which now folds
+    both the directive and nested-pagination families into one traversal) with a
+    call counter and assert repeated ``_build_cache_key`` calls on the SAME
+    operation walk it only once.
     """
     from graphql import parse
 
     import django_strawberry_framework.optimizer.extension as extension_module
 
     calls = {"count": 0}
-    real = extension_module._collect_nested_pagination_var_names
+    real = extension_module._collect_cache_relevant_var_names
 
-    def _counting(operation, fragments=None):
+    def _counting(operation, fragments):
         calls["count"] += 1
-        return real(operation, fragments=fragments)
+        return real(operation, fragments)
 
-    monkeypatch.setattr(extension_module, "_collect_nested_pagination_var_names", _counting)
+    monkeypatch.setattr(extension_module, "_collect_cache_relevant_var_names", _counting)
 
     operation = parse(
         "query Q($n: Int!) { parents { booksConnection(first: $n) "
@@ -1644,6 +1649,31 @@ def test_cache_key_variable_name_collection_memoized_for_nested_fallbacks(monkey
             next(gen)  # exit the lifecycle: resets the memo
 
     assert calls["count"] == 1
+
+
+def test_collect_cache_relevant_var_names_unifies_both_families_through_fragment():
+    """B1: one traversal returns BOTH a directive var and a nested-pagination var.
+
+    The unified ``_collect_cache_relevant_var_names`` walk collects the
+    ``@skip``/``@include`` family and the non-root pagination family in a single
+    descent, including through a fragment spread. ``$skip`` (a directive variable
+    on a nested field) and ``$n`` (a ``first:`` pagination variable on a nested
+    field) both reach the cache key from one walk; the root field ``parents``
+    contributes neither.
+    """
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import _collect_cache_relevant_var_names
+
+    doc = parse(
+        "query Q($skip: Boolean!, $n: Int!) { parents { ...F } } "
+        "fragment F on Parent { booksConnection(first: $n) @skip(if: $skip) "
+        "{ edges { node { title } } } }",
+    )
+    operation = doc.definitions[0]
+    fragments = {d.name.value: d for d in doc.definitions[1:]}
+    names = _collect_cache_relevant_var_names(operation, fragments)
+    assert names == frozenset({"skip", "n"})
 
 
 # ---------------------------------------------------------------------------

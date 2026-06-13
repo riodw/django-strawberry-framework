@@ -102,46 +102,44 @@ __all__ = (
 )
 
 
-def _collect_directive_var_names(
+def _walk_cache_relevant_vars(
     node: Any,
-    fragments: dict[str, Any] | None = None,
-) -> frozenset[str]:
-    """Walk an AST node tree and return variable names used in ``@skip``/``@include``.
-
-    Only variables referenced inside the ``if`` argument of ``@skip`` or
-    ``@include`` directives matter for plan caching. All other variables
-    (e.g., filter arguments) do not affect the selection tree and must be
-    excluded from the cache key to avoid cardinality explosion.
-
-    ``fragments`` is the document's fragment definitions map
-    (``info.fragments``). When provided, ``FragmentSpreadNode``
-    references are followed into their definitions so directives inside
-    named fragments are included in the cache key.
-    """
-    names: set[str] = set()
-    _walk_directives(node, names, fragments or {}, set())
-    return frozenset(names)
-
-
-def _walk_directives(
-    node: Any,
-    names: set[str],
     fragments: dict[str, Any],
     visited_fragments: set[str],
+    depth: int,
+    directive_names: set[str],
+    pagination_names: set[str],
 ) -> None:
-    """Recursive helper: descend into selections and collect directive var names.
+    """The single AST traversal collecting BOTH cache-relevant variable families.
 
-    Handles four AST shapes:
-    1. **Directives on the current node** - collect ``@skip``/``@include``
-       variable references.
-    2. **Selection-set children** - recurse so directives on inner fields
-       are collected.
-    3. **FragmentSpreadNode children** - also recurse into the named
-       fragment's definition (looked up in ``fragments``) so directives
-       inside the spread fragment are included in the cache key.
-    4. **InlineFragmentNode / regular field children** - handled by the
-       same selection-set recursion in shape 2.
+    One descent collects two families on different axes:
+
+    * **Directive variables** - ``@skip`` / ``@include`` variable references on
+      EVERY node, independent of depth.
+    * **Nested pagination variables** - ``first`` / ``last`` / ``before`` /
+      ``after`` variable references only when the current node is a ``FieldNode``
+      at response-path depth >= 1 (root-field pagination stays out: a root
+      connection's slicing happens post-plan in ``ConnectionExtension`` and plan
+      content is invariant in those, so hashing them would fragment the cache
+      across every page of a pagination loop).
+
+    Depth increments only when descending into a **field** node's selection set;
+    descending into a resolved fragment definition keeps the SPREAD-SITE depth (a
+    fragment is a transparent wrapper at its spread site -- Decision 7's "depth at
+    the spread SITE, not raw fragment-definition nesting"), so a spread at the
+    root contributes root-depth fields and a spread inside a nested node
+    contributes nested-depth fields. The visited-fragment cycle guard
+    (``_unvisited_fragment_definition``) is shared across the descent, so a
+    fragment spread twice is walked once and contributes both families from that
+    single descent.
+
+    Replaces the previously separate ``_walk_directives`` / ``_walk_pagination_vars``
+    walkers: the two collection RULES differ but the child-traversal,
+    fragment-spread descent, and cycle-guard plumbing were identical, and keeping
+    them apart risked a future fragment-depth or cycle fix landing on only one
+    path.
     """
+    # Directive variables: collected on every node, depth-independent.
     for directive in getattr(node, "directives", ()) or ():
         if not isinstance(directive, DirectiveNode):
             continue
@@ -150,16 +148,67 @@ def _walk_directives(
             continue
         for arg in directive.arguments or ():
             if isinstance(arg.value, VariableNode):
-                names.add(arg.value.name.value)
-    # Recurse into child selections.
+                directive_names.add(arg.value.name.value)
+    # Nested pagination variables: only on a field node at depth >= 1.
+    if depth >= 1 and isinstance(node, FieldNode):
+        for arg in node.arguments or ():
+            if arg.name.value in _PAGINATION_ARG_NAMES and isinstance(arg.value, VariableNode):
+                pagination_names.add(arg.value.name.value)
+    # A field node deepens the response path for its children; a fragment
+    # wrapper does not, so its body inherits the field node's depth here.
+    child_depth = depth + 1 if isinstance(node, FieldNode) else depth
     for child in _child_selections(node):
-        # Always recurse into the child first so directives attached
-        # to the child itself are collected (FragmentSpreadNode has
-        # no ``selection_set`` so this is just the directive sweep).
-        _walk_directives(child, names, fragments, visited_fragments)
+        # Recurse into the child first so directives attached to the child
+        # itself are collected (a FragmentSpreadNode has no ``selection_set``,
+        # so this tail is just the directive sweep for spread-node directives).
+        _walk_cache_relevant_vars(
+            child,
+            fragments,
+            visited_fragments,
+            child_depth,
+            directive_names,
+            pagination_names,
+        )
         frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
         if frag_def is not None:
-            _walk_directives(frag_def, names, fragments, visited_fragments)
+            _walk_cache_relevant_vars(
+                frag_def,
+                fragments,
+                visited_fragments,
+                child_depth,
+                directive_names,
+                pagination_names,
+            )
+
+
+def _collect_cache_var_families(node: Any, fragments: dict[str, Any]) -> tuple[set[str], set[str]]:
+    """Run the unified traversal and return ``(directive_names, pagination_names)``.
+
+    The single entry the thin family wrappers and the union collector share, so
+    the AST is walked once per call regardless of which family the caller wants.
+    """
+    directive_names: set[str] = set()
+    pagination_names: set[str] = set()
+    _walk_cache_relevant_vars(node, fragments, set(), 0, directive_names, pagination_names)
+    return directive_names, pagination_names
+
+
+def _collect_directive_var_names(
+    node: Any,
+    fragments: dict[str, Any] | None = None,
+) -> frozenset[str]:
+    """Return variable names used in ``@skip`` / ``@include`` directives.
+
+    Thin wrapper over the unified ``_collect_cache_var_families`` traversal,
+    returning only the directive family. Only variables referenced inside the
+    ``if`` argument of ``@skip`` / ``@include`` matter for plan caching; all
+    other variables do not affect the selection tree and must be excluded from
+    the cache key to avoid cardinality explosion. ``fragments`` follows
+    ``FragmentSpreadNode`` references into their definitions so directives inside
+    named fragments are included in the cache key.
+    """
+    directive_names, _ = _collect_cache_var_families(node, fragments or {})
+    return frozenset(directive_names)
 
 
 def _collect_nested_pagination_var_names(
@@ -168,89 +217,39 @@ def _collect_nested_pagination_var_names(
 ) -> frozenset[str]:
     """Return variable names used in pagination args on **non-root** field nodes.
 
-    Walks the operation (and reachable fragments) for ``first`` / ``last`` /
-    ``before`` / ``after`` arguments whose value is a variable reference on a
-    field node at response-path depth >= 1 (nested). Slice 1 bakes those
-    resolved pagination values into windowed prefetch querysets, so two requests
-    sharing a printed AST (``booksConnection(first: $n)``) but differing in
-    ``$n`` must NOT share a cached plan -- a correctness rule (Decision 7).
-
-    Root-field pagination variables stay OUT: a root connection's slicing
-    happens post-plan in Strawberry's ``ConnectionExtension`` and plan content
-    is invariant in them, so hashing them would fragment the cache across every
-    page of a consumer's pagination loop.
-
-    The collection is a syntactic **superset** by design: any non-root field's
-    pagination-named variable is collected, including on fields that are not
-    synthesized connections. Over-collection costs cheap duplicate cache entries
-    (bounded by the LRU); under-collection would serve wrong data -- the same
-    asymmetry ``_collect_directive_var_names`` already encodes.
-
-    ``fragments`` is the document's fragment definitions map. Fragment spreads
-    are followed with response-path depth preserved at the **spread site**, not
-    raised by the fragment-definition wrapper, so a fragment spread at the root
-    contributes root-depth fields and a fragment spread inside a nested node
-    contributes nested-depth fields.
+    Thin wrapper over the unified ``_collect_cache_var_families`` traversal,
+    returning only the pagination family (``first`` / ``last`` / ``before`` /
+    ``after`` variables on a field node at response-path depth >= 1). Slice 1
+    bakes those resolved pagination values into windowed prefetch querysets, so
+    two requests sharing a printed AST (``booksConnection(first: $n)``) but
+    differing in ``$n`` must NOT share a cached plan -- a correctness rule
+    (Decision 7). The collection is a syntactic SUPERSET by design: any non-root
+    field's pagination-named variable is collected; over-collection costs cheap
+    duplicate cache entries, under-collection would serve wrong data.
     """
-    names: set[str] = set()
-    _walk_pagination_vars(node, names, fragments or {}, set(), 0)
-    return frozenset(names)
-
-
-def _walk_pagination_vars(
-    node: Any,
-    names: set[str],
-    fragments: dict[str, Any],
-    visited_fragments: set[str],
-    depth: int,
-) -> None:
-    """Recursive workhorse for ``_collect_nested_pagination_var_names``.
-
-    The depth-tracking twin of ``_walk_directives``: it collects pagination
-    variable names only when the current node is a field node at response-path
-    depth >= 1 (nested), where ``_walk_directives`` collects directive variables
-    unconditionally. Depth increments only when descending into a **field**
-    node's selection set; descending into a resolved fragment definition keeps
-    the spread-site depth (a fragment is a transparent wrapper at its spread
-    site -- Decision 7's "depth at the spread SITE, not raw fragment-definition
-    nesting"). Kept deliberately separate from ``_walk_directives`` (which is
-    already a control-flow hotspot) because the two walks collect on different
-    axes -- directives everywhere vs pagination on non-root only.
-    """
-    # Collect on the current node only when it is a nested field node.
-    if depth >= 1 and isinstance(node, FieldNode):
-        for arg in node.arguments or ():
-            if arg.name.value in _PAGINATION_ARG_NAMES and isinstance(arg.value, VariableNode):
-                names.add(arg.value.name.value)
-    # A field node deepens the response path for its children; a fragment
-    # wrapper does not, so its body inherits the field node's depth here.
-    child_depth = depth + 1 if isinstance(node, FieldNode) else depth
-    for child in _child_selections(node):
-        _walk_pagination_vars(child, names, fragments, visited_fragments, child_depth)
-        frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
-        if frag_def is not None:
-            _walk_pagination_vars(frag_def, names, fragments, visited_fragments, child_depth)
+    _, pagination_names = _collect_cache_var_families(node, fragments or {})
+    return frozenset(pagination_names)
 
 
 def _collect_cache_relevant_var_names(operation: Any, fragments: dict[str, Any]) -> frozenset[str]:
     """Union of the cache-relevant variable names for one operation.
 
-    Combines the ``@skip``/``@include`` directive variable names with the
-    non-root pagination variable names so ``_build_cache_key`` folds one
-    name set through its single ``(name, value)`` comprehension. The result
-    is what ``_pagination_var_names_cache`` memoizes per ``id(operation)``.
+    Combines the ``@skip`` / ``@include`` directive variable names with the
+    non-root pagination variable names -- in ONE AST traversal
+    (``_collect_cache_var_families``) -- so ``_build_cache_key`` folds one name
+    set through its single ``(name, value)`` comprehension. The result is what
+    ``_pagination_var_names_cache`` memoizes per ``id(operation)``.
     """
-    directive_names = _collect_directive_var_names(operation, fragments=fragments)
-    pagination_names = _collect_nested_pagination_var_names(operation, fragments=fragments)
-    return directive_names | pagination_names
+    directive_names, pagination_names = _collect_cache_var_families(operation, fragments)
+    return frozenset(directive_names | pagination_names)
 
 
 def _child_selections(node: Any) -> tuple[Any, ...]:
     """Return the AST node's selection-set children as a tuple, or ``()``.
 
     Centralizes the ``getattr(node, "selection_set", None)`` plus
-    ``selections or ()`` shape so the three AST walkers in this module
-    (``_walk_directives``, ``_walk_reachable_fragment_definitions``,
+    ``selections or ()`` shape so the AST walkers in this module
+    (``_walk_cache_relevant_vars``, ``_walk_reachable_fragment_definitions``,
     and by extension ``_collect_reachable_fragment_definitions``) share
     one "iterate children" implementation. ``FragmentSpreadNode`` has
     no ``selection_set``, so this returns ``()`` and the caller's
@@ -278,7 +277,7 @@ def _unvisited_fragment_definition(
     validation would normally reject the operation before the optimizer
     sees it). Mutates ``visited_fragments`` on success so callers share
     the same cycle-detection set across recursive descents in both the
-    directive-variable walk and the reachable-fragment walk.
+    cache-relevant-variable walk and the reachable-fragment walk.
     """
     if not isinstance(node, FragmentSpreadNode):
         return None

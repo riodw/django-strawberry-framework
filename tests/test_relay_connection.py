@@ -902,6 +902,41 @@ def _genres_filterable_book_schema(*, strictness="raise"):
     )
 
 
+def _genres_distinct_book_schema(*, optimizer=True, strictness="off"):
+    """M2M genres list root whose ``BookType`` target ``get_queryset`` ``.distinct()``s.
+
+    A ``.distinct()``-ing target is a Decision-6 DISTINCT fallback: the window's
+    ``Count(1) OVER`` would over-count the pre-DISTINCT fan-out rows, so the
+    walker leaves the nested ``booksConnection`` unplanned and the per-parent
+    pipeline runs - which counts ``totalCount`` correctly via ``.distinct().count()``.
+    ``BookType`` opts into ``Meta.connection`` so ``totalCount`` exists; the
+    ``genres__isnull=False`` join is what fans rows out so DISTINCT is load-bearing.
+    """
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            interfaces = (relay.Node,)
+            connection = {"total_count": True}
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.filter(genres__isnull=False).distinct()
+
+    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {"__annotations__": {"objs": list[genre_type]}, "objs": DjangoListField(genre_type)},
+        ),
+    )
+    extensions = [lambda: DjangoOptimizerExtension(strictness=strictness)] if optimizer else []
+    return strawberry.Schema(query=query_cls, config=strawberry_config(), extensions=extensions)
+
+
 def _exec(schema, query):
     """Execute and return the first parent's ``booksConnection`` dict (no errors)."""
     result = schema.execute_sync(query)
@@ -955,6 +990,37 @@ def test_fast_path_through_schema_connection_extension(django_assert_num_queries
         )
     titles = [e["node"]["title"] for e in result.data["objs"][0]["booksConnection"]["edges"]]
     assert titles == ["a", "b"]
+
+
+@pytest.mark.django_db
+def test_distinct_target_fallback_reports_correct_total_count():
+    """A ``.distinct()`` target falls back per-parent AND reports the right ``totalCount``.
+
+    Earns the executed second clause of the walker's plan-shape pin
+    ``test_distinct_child_queryset_left_unplanned_for_correct_total_count``: the
+    ``genres__isnull=False`` join fans each multi-genre book into several rows, so
+    a window ``Count(1) OVER`` would report the inflated pre-DISTINCT total; the
+    per-parent fallback instead counts ``.distinct()`` and reports the true book
+    count. Run with the optimizer ON so the DISTINCT guard is what routes the
+    selection to the counting fallback.
+    """
+    branch = Branch.objects.create(name="central")
+    shelf = Shelf.objects.create(code="A1", branch=branch)
+    fiction = Genre.objects.create(name="fiction")
+    scifi = Genre.objects.create(name="scifi")
+    # fiction holds {a, b, c} = 3 distinct books; a and c are ALSO in scifi, so the
+    # genres-join fans fiction's rows out to a(2) + b(1) + c(2) = 5 pre-DISTINCT.
+    for title, extra in (("a", scifi), ("b", None), ("c", scifi)):
+        book = Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(fiction)
+        if extra is not None:
+            book.genres.add(extra)
+
+    schema = _genres_distinct_book_schema(optimizer=True)
+    result = _exec(schema, "{ objs { name booksConnection { totalCount } } }")
+    by_name = {g["name"]: g["booksConnection"]["totalCount"] for g in result.data["objs"]}
+    # True distinct count (3), NOT the inflated 5 a pre-DISTINCT Count(1) OVER reports.
+    assert by_name["fiction"] == 3
 
 
 @pytest.mark.django_db

@@ -1396,6 +1396,46 @@ def test_fast_path_ambiguous_empty_falls_back_for_total_count_and_pageinfo(args)
     assert fast.data["objs"][0]["booksConnection"]["totalCount"] == 3
 
 
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("args", ["first: 0", 'after: "YXJyYXljb25uZWN0aW9uOjk5"'])
+async def test_async_fast_path_ambiguous_empty_falls_back_for_total_count_and_pageinfo(
+    args,
+    monkeypatch,
+):
+    """The async mirror: an ambiguous-empty window falls back UNDER ASYNC execution.
+
+    Same ``first: 0`` (``limit == 0``) / overshot ``after:`` (``offset > 0``)
+    shapes as ``test_fast_path_ambiguous_empty_falls_back_for_total_count_and_pageinfo``,
+    but driven by ``await schema.execute(...)`` instead of ``execute_sync``. Under
+    async execution the recovered per-parent queryset resolves through
+    ``ListConnection`` asynchronously, so ``_consume_fallback``'s
+    ``super().resolve_connection`` returns a coroutine - exercising the async
+    ``_attach_count_async`` fallback branch (``connection.py::_consume_fallback
+    #"return _attach_count_async("``). The sync test above covers the
+    ``_attach_count_sync`` sibling branch. ``totalCount`` must still report the
+    true 3, never a spurious 0 inferred from the empty window.
+    """
+    from asgiref.sync import sync_to_async
+
+    # The optimizer extension runs the parent (genre) prefetch with sync ORM on
+    # the event-loop thread; unblock Django's async-safety guard for it. The
+    # nested booksConnection fallback still resolves through ListConnection
+    # ASYNC (strawberry's async execution), so this does not collapse the
+    # awaitable branch into the sync one.
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(_seed_library_books)(["a", "b", "c"])
+    schema = await sync_to_async(_genres_list_schema)(optimizer=True, book_total_count=True)
+    selection = (
+        f"booksConnection({args}) {{ edges {{ node {{ title }} }} totalCount "
+        f"pageInfo {{ hasNextPage hasPreviousPage }} }}"
+    )
+    result = await schema.execute(f"{{ objs {{ {selection} }} }}")
+    assert result.errors is None, result.errors
+    # The ambiguous-empty window still reports the true totalCount (3), never a
+    # spurious 0 from inferring "the window is empty so the parent is empty".
+    assert result.data["objs"][0]["booksConnection"]["totalCount"] == 3
+
+
 @pytest.mark.django_db
 def test_fast_path_genuinely_empty_parent_serves_zero(django_assert_num_queries):
     """A parent with no related rows is fast-pathed: totalCount 0, no fallback query.

@@ -2869,3 +2869,19 @@ def test_node_hidden_row_null_live():
     staff_payload = staff.json()
     assert "errors" not in staff_payload, staff_payload
     assert staff_payload["data"]["node"] == {"title": "Withdrawn"}
+
+
+# TODO(spec-033 Slice 5): live nested-connection SQL-shape coverage (Test plan).
+# The spec-032 Slice-6 behavior pins (test_genre_books_connection_behavior,
+# test_book_genres_connection_sidecars_and_total_count) deferred SQL-shape
+# assertions to THIS card -- add them now, live over /graphql/, riding the
+# _reload_project_schema_for_acceptance_tests fixture:
+#   test_nested_books_connection_fixed_query_count  (two-level
+#       allLibraryGenresConnection { edges { node { booksConnection(first: N)
+#       { edges { node } totalCount } } } } executes in a FIXED query count with
+#       3 genres AND with 10 genres -- per-parent independence)
+#   test_nested_total_count_no_per_parent_count  (selecting nested totalCount adds
+#       ZERO queries over the same selection without it)
+#   test_nested_window_respects_book_visibility  (circulation_status="repair" books
+#       excluded from non-staff nested pages AND nested totalCount; staff sees them)
+# The shipped behavior pins above stay GREEN unmodified -- wire results must not change.

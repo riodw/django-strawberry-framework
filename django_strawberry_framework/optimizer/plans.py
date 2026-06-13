@@ -462,6 +462,56 @@ def _optimizer_can_absorb(
     return all(path in opt_covered for path in consumer_paths)
 
 
+# TODO(spec-033 Slice 1, Decision 4): the windowed-prefetch window helpers live
+# here (``plans.py`` is the plan-application module and the window IS plan
+# application -- Decision 11 rejects a separate ``optimizer/window.py``). Port
+# the mechanism from the sibling checkout
+# ``strawberry-django-main/strawberry_django/pagination.py::apply_window_pagination``
+# (itself based on Django's https://github.com/django/django/pull/15957),
+# namespacing the annotations ``_dst_*`` (NOT upstream's ``_strawberry_*`` -- a
+# consumer running both libraries in one process must never collide; see the
+# spec's "Explicitly do not borrow").
+#
+# ``window_partition_for_prefetch(field) -> str`` returns the PARENT-side
+# partition expression Django's prefetch attach uses (NOT the child-pk connector
+# helper ``_ensure_connector_only_fields``). By relation kind: reverse FK /
+# reverse-one-to-one partition by ``field.field.attname`` (child-table FK
+# attname); reverse M2M partitions through the child's forward M2M field name
+# (Genre.books -> Book.genres -> through genre_id); forward M2M partitions
+# through the target's reverse query name, which is NOT always the accessor when
+# ``related_name`` is absent -- resolve via ``field.remote_field`` / the through
+# model. Unsupported kinds raise a package-internal planning error so the caller
+# leaves the selection unplanned rather than guessing.
+#
+# ``apply_window_pagination(qs, *, partition_by, order_by, offset, limit,
+# reverse=False)`` annotates ``_dst_row_number`` as ``Window(RowNumber(),
+# partition_by=partition_by, order_by=order_by)`` and ``_dst_total_count`` as
+# ``Window(Count(1), partition_by=partition_by)``; then, when ``offset`` is set,
+# filters ``_dst_row_number__gt=offset``. For ``reverse`` (last-only backward
+# pagination) it annotates ``_dst_row_number_reversed`` with the REVERSED
+# order_by and returns ``filter(_dst_row_number_reversed__lte=limit)``. Otherwise,
+# when ``limit`` is a non-negative finite value (guard ``!= sys.maxsize``), it
+# filters ``_dst_row_number__lte=offset + limit``.
+#
+# offset/limit come from Strawberry's ``SliceMetadata.from_arguments(info,
+# before=, after=, first=, last=, max_results=relay_max_results)`` -> (start,
+# end, expected): offset=start, limit=expected. Annotations COMPOSE with .only()
+# (they are annotations, not deferred columns); the partition + ORDER BY columns
+# must be force-included in the child plan's only() mask (Slice-1 test
+# ``test_window_subquery_wrap_preserves_only_mask_and_child_select_related``).
+# Cover with ``tests/optimizer/test_plans.py::test_apply_window_pagination_unit``.
+
+# TODO(spec-033 Slice 1, Decision 11): hoist the deterministic-total-order rule
+# here so the plan-time window and the resolve-time pipeline can NEVER disagree
+# (a disagreement makes window row numbers inconsistent with fallback cursors).
+# Move ``_ends_in_unique_column`` + the pk-append rule out of
+# ``connection.py::_finalize_queryset`` into a shared helper in this module;
+# ``connection.py`` then imports it back (plan vocabulary lives in ``plans.py``,
+# and the walker must NOT import from ``connection.py``). Pin parity with the
+# previous connection.py implementation via
+# ``tests/optimizer/test_plans.py::test_deterministic_order_helper_hoist_parity``.
+
+
 def diff_plan_for_queryset(plan: OptimizationPlan, queryset: Any) -> tuple[OptimizationPlan, Any]:
     """Reconcile ``plan`` against optimizations already on ``queryset``.
 

@@ -653,3 +653,12 @@ class TestRuntimePathFromPath:
         node.prev = node  # never bottoms out
         with pytest.raises(RuntimeError, match="cyclic or corrupt"):
             runtime_path_from_path(node)
+
+
+# TODO(spec-033 Slice 1): window-helper + order-hoist coverage (Test plan).
+#   test_apply_window_pagination_unit  (annotation names _dst_row_number/_dst_total_count,
+#       partition_by, range filters, reversed-row-number branch)
+#   test_window_partition_for_reverse_fk_forward_m2m_reverse_m2m  (window_partition_for_prefetch
+#       returns the parent-side attach key per relation kind; unsupported kinds raise)
+#   test_deterministic_order_helper_hoist_parity  (the hoisted _ends_in_unique_column + pk-append
+#       rule answers identically to the previous connection.py implementation)

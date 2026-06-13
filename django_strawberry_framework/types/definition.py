@@ -143,6 +143,27 @@ class DjangoTypeDefinition:
     # {"list", "connection", "both"} (spec-032 Decision 7). See the
     # invariants docstring above.
     relation_shapes: dict[str, str] | None = None
+    # TODO(spec-033 Slice 1, Decision 3): add a walker-readable synthesis slot --
+    # a new optional field ``relation_connections: dict[str, str] | None = None``.
+    # Maps each synthesized connection's GENERATED Python attribute name ->
+    # the UNDERLYING relation field name, e.g. {"books_connection": "books"}.
+    # Written once at Phase-2.5 by
+    # ``types/finalizer.py::_synthesize_relation_connections`` (one entry per
+    # sibling it actually attaches; the suppressed shapes -- ``"list"``,
+    # non-Node target, consumer-authored -- record NOTHING, so the slot's keys
+    # are exactly the connections that genuinely exist).
+    #
+    # Read by ``optimizer/walker.py::_walk_selections`` to recognize a nested
+    # ``<field>Connection`` selection through definition metadata -- the same
+    # channel it already uses for ``field_map`` / ``optimizer_hints`` -- WITHOUT
+    # reaching into ``connection.py`` internals or the
+    # ``_dst_synthesized_relation_connection`` field marker (card DoD: "without
+    # reaching into DjangoConnectionField internals"). Lookup normalizes via the
+    # SAME ``snake_case(sel.name)`` the field_map lookup uses (Decision 3:
+    # connection recognition must not grow a second name-normalization path).
+    #
+    # When this lands, add a matching bullet to the invariants docstring above
+    # (between the ``relation_shapes`` and ``globalid_strategy`` entries).
     globalid_strategy: str | Callable[..., str] | None = None
     # Finalization-set encode/decode classification (spec-031 Decision 10).
     # Unlike the raw ``globalid_strategy`` slot above (populated at class

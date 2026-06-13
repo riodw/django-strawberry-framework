@@ -147,6 +147,26 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
     ) -> AwaitableOrValue[Any]:
         """Apply the ``first`` + ``last`` guard, then delegate to ``ListConnection``."""
         _guard_first_and_last(first, last)
+        # TODO(spec-033 Slice 2, Decision 5): after the first+last guard and
+        # BEFORE delegating to Strawberry's list slicing, detect the internal
+        # ``_WindowedConnectionRows`` wrapper (see ``_build_relation_connection_resolver``)
+        # and build the Relay object straight from the window annotations,
+        # skipping the per-parent pipeline. When ``nodes`` is a
+        # ``_WindowedConnectionRows`` instance, hand off to a ``_resolve_from_window``
+        # helper instead of delegating to super. That helper:
+        #   - builds edges through the generated edge class's ``resolve_edge(node,
+        #     cursor=<zero_based_offset>)`` -- forward windows use cursor
+        #     ``_dst_row_number - 1``; reversed (last-only) windows use
+        #     ``_dst_total_count - _dst_row_number`` (row numbers count from the end).
+        #   - derives pageInfo from the edge rows + wrapper slice metadata (forward
+        #     compares first/last row numbers vs ``_dst_total_count``; reversed inverts).
+        #   - an EMPTY wrapper is fast-pathable ONLY when offset == 0 and limit > 0
+        #     (proves the parent truly has no rows -> totalCount 0, no cursors,
+        #     both flags False). limit == 0 (first: 0) or offset > 0 (overshot
+        #     after:) are AMBIGUOUS -> fall back to the per-parent pipeline.
+        # Correctness never depends on the plan having fired: wrapper absent ->
+        # delegate to super (today's behavior). Through-schema test mandatory --
+        # Strawberry's ConnectionExtension.resolve wraps relay.connection fields.
         return super().resolve_connection(
             nodes,
             info=info,
@@ -249,6 +269,18 @@ def _build_total_count_connection(target_type: type) -> type:
         # single-sited in ``_guard_first_and_last``, and running super first
         # preserves the guard-before-anything-else ordering). ``want_count`` is
         # computed only after the guard has passed.
+        # TODO(spec-033 Slice 2, Decision 5): the totalCount variant must branch
+        # on the ``_WindowedConnectionRows`` wrapper BEFORE ``_guard_total_count_countable``
+        # / ``.count()`` run -- the wrapper is NOT a queryset, so the inherited
+        # ``DjangoConnection.resolve_connection`` (called via super below) builds
+        # the Relay object from the window, and totalCount is read from
+        # ``_dst_total_count`` on any annotated row rather than counted. Treat the
+        # marker as an annotated optimized source, not an uncountable non-queryset
+        # iterable. Ambiguous empty wrappers (limit == 0 / offset > 0) fall back
+        # to the per-parent pipeline here too, preserving the shipped
+        # totalCount/pageInfo contract. Pins:
+        # ``test_fast_path_total_count_marker_bypasses_non_queryset_guard`` /
+        # ``test_fast_path_first_zero_falls_back_for_total_count_and_pageinfo``.
         conn = super(generated, cls).resolve_connection(
             nodes,
             info=info,
@@ -383,6 +415,14 @@ def _guard_sidecar_input_against_non_queryset(source: Any, *, has_sidecar_input:
         )
 
 
+# TODO(spec-033 Slice 1, Decision 11): MOVE ``_ends_in_unique_column`` + the
+# pk-append rule (in ``_finalize_queryset`` below) to ``optimizer/plans.py`` and
+# import them BACK here. The plan-time window (walker) and the resolve-time
+# pipeline (here) must apply the SAME deterministic total order or window row
+# numbers will be inconsistent with fallback-path cursors. Plan vocabulary lives
+# in ``plans.py`` and the walker must not import from ``connection.py``, so
+# ``plans.py`` is the shared home; this module imports it back. Pin parity with
+# the current implementation: ``test_deterministic_order_helper_hoist_parity``.
 def _ends_in_unique_column(effective: tuple, model: type) -> bool:
     """Return whether the effective ordering's terminal entry is a unique total-order column.
 
@@ -674,9 +714,50 @@ def _build_relation_connection_resolver(target_type: type, accessor_name: str) -
     ``<field>Connection``; ``relation_shapes = {"<field>": "list"}`` is the
     recourse until an async connection pipeline rides the ``033`` work. The
     fail-loud ``SyncMisuseError`` is inherited from the pipeline, not new here.
+
+    TODO(spec-033 Slice 2/4): this resolver needs the relation FIELD NAME (to
+    build ``to_attr = f"_dst_{field_name}_connection"``) -- add it as a third
+    parameter (the finalizer call site is flagged). The accessor and field name
+    DIVERGE for a reverse relation without ``related_name`` (``book_set`` vs
+    ``book``), so the accessor alone cannot derive the to_attr.
     """
+    # TODO(spec-033 Slice 2, Decision 5): define the internal wrapper (module
+    # scope, not exported) used to hand windowed rows to the generated connection
+    # class WITHOUT constructing a connection object here -- a small
+    # ``_WindowedConnectionRows`` class storing the rows plus the resolved
+    # ``offset`` / ``limit`` / ``reverse`` slice metadata the planner used.
+    # Returning a prebuilt connection would feed it back through
+    # ``resolve_connection`` as if it were the node iterable -- the resolver only
+    # HANDS OFF; ConnectionExtension still calls the generated class's
+    # resolve_connection (which detects the wrapper -- see above).
 
     def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
+        # TODO(spec-033 Slice 2, Decision 5): fast-path handoff. Probe the
+        # package-reserved to_attr the walker planned -- ``window`` is
+        # ``getattr(root, f"_dst_{field_name}_connection", None)`` -- and consume
+        # it ONLY when safe: the window is present, the resolver's OWN
+        # ``filter`` / ``order_by`` kwargs are absent (a sidecar present -> ignore
+        # the window and run the pipeline, so a planner/argument desync can never
+        # serve unfiltered wrong data), and every row carries the
+        # ``_dst_row_number`` / ``_dst_total_count`` annotations (annotation-presence
+        # check -- upstream's own integrity probe). When safe, return a
+        # ``_WindowedConnectionRows`` wrapping the rows + resolved offset/limit/reverse.
+        # When the attr is absent / unannotated / sidecar kwargs present, fall
+        # through to the shipped per-parent pipeline below (correctness never
+        # depends on the plan having fired). The sidecar guard is a belt against a
+        # future planner/argument desync serving unfiltered wrong data.
+        #
+        # TODO(spec-033 Slice 4, Decision 8): consult the strictness sentinels
+        # BEFORE running the per-parent pipeline, reusing the parameterized
+        # ``types/resolvers.py::_check_n1`` (kind="connection_to_attr", the
+        # to_attr probe, the generated field name, and a fallback reason). Fires
+        # OptimizerError under "raise" / a logged warning under "warn" when: an
+        # optimizer ran with strictness active (DST_OPTIMIZER_PLANNED stashed),
+        # this field's resolver key is absent from it, AND the fast-path to_attr
+        # is absent on ``root`` (the access will truly query). The union-publish
+        # foundation (Slice 1) means a nested plan can't clobber the parent's
+        # planned set. REMOVE the "Deliberately ABSENT" sentence from the
+        # docstring above in the same change.
         return _pipeline_sync(
             target_type,
             getattr(root, accessor_name).all(),

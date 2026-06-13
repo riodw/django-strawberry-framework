@@ -546,3 +546,23 @@ def test_products_items_filter_and_order_compose():
         "orderBy: [{ name: ASC }]) { name } }",
         {"allItems": expected},
     )
+
+
+# TODO(spec-033 Slice 6): products connections-only conversion re-pin (Test plan).
+# After apps/products/schema.py becomes connections-only (the cookbook mirror):
+#   - Rewrite EVERY root-field assertion list-shape -> edges { node }; semantic
+#     expectations (rows, ordering, filter/order narrowing, the
+#     check_name_permission denial gates on the synthesized filter:/orderBy:) carry
+#     over one-to-one. This is the LARGEST live suite -- mechanical shape rewrites,
+#     not semantic changes.
+#   - Re-pin the three SQL-shape dogfooding tests THROUGH the connection wrapper,
+#     query-count assertions INTACT (the card's regression fence):
+#       test_products_optimizer_merges_duplicate_root_field_nodes_over_http
+#       test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http
+#       test_products_optimizer_selects_nested_forward_fk_depth_2_over_http
+#   - NEW: one nested relation-connection fixed-query-count pin on the products
+#     graph (allCategories { edges { node { itemsConnection(first: N) { edges
+#     { node } } } } }) -- the reverse-FK windowed shape the M2M-only library
+#     graph cannot express live.
+# No Meta.connection opt-in on the four products types (no totalCount; minimal
+# conversion). No root node(id:)/nodes(ids:) fields (those stay TODO-BETA-051-0.1.5).

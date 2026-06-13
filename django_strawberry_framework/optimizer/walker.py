@@ -199,6 +199,22 @@ def _walk_selections(
     merged = _merge_aliased_selections(_included_field_selections(selections))
     for sel in merged:
         django_name = snake_case(sel.name)
+        # TODO(spec-033 Slice 1, Decision 3/4): recognize a synthesized nested
+        # connection BEFORE the unknown-name guard below (today ``books_connection``
+        # matches no model field and silently ``continue``s -- the gap this card
+        # closes). When ``django_name`` is a key of ``definition.relation_connections``
+        # (the Phase-2.5 slot; see types/definition.py), dispatch to a new
+        # ``_plan_connection_relation(...)`` and ``continue``. Sketch: read the
+        # slot via ``getattr(definition, "relation_connections", None) or {}``;
+        # when ``django_name`` is a key, call ``_plan_connection_relation(...)``
+        # passing ``sel``, ``definition``, the underlying relation field name
+        # (the slot's value at that key), ``field_map``, ``plan``, ``prefix``,
+        # ``info``, ``runtime_prefixes``, ``type_cls`` -- then ``continue``.
+        #
+        # Must run with ``definition`` (already resolved above) -- name-pattern
+        # guessing (strip ``_connection``) is rejected (Decision 3): it misfires on
+        # consumer fields ending in ``_connection`` and on suppressed-synthesis
+        # relations. Recognition is metadata-driven only.
         django_field = field_map.get(django_name)
         if django_field is None:
             # Decision 7 ("no avoidable lazy loads on ``resolve_id``"):
@@ -792,6 +808,20 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             if response_key not in merged._optimizer_response_keys:
                 merged._optimizer_response_keys.append(response_key)
             _merge_runtime_prefixes(merged, sel)
+            # TODO(spec-033 Slice 1, Decision 6 / Edge cases): connection
+            # planning makes ``arguments`` load-bearing -- this first-args-win
+            # merge is no longer sufficient for synthesized connection siblings.
+            # Before ``_plan_connection_relation`` runs, the walker must either
+            # (a) keep connection selections UNMERGED until pagination
+            # classification, or (b) preserve per-response-key argument payloads
+            # on the merged selection. Then:
+            #   - identical-argument aliases merge and ARE window-planned
+            #     (``a: books(first:3)`` + ``b: books(first:3)``);
+            #   - DIVERGENT aliases (``a: books(first:2)`` + ``b: books(first:5)``,
+            #     or differing filter/orderBy) fall back per-parent -- one
+            #     ``to_attr`` cannot serve two windows -- and the divergent-alias
+            #     test asserts the wrong ``Prefetch`` / ``planned_resolver_keys``
+            #     entry is ABSENT, not merely that the query still resolves.
             # Today's walker ignores ``arguments``, so divergent arguments
             # between aliased selections are harmless. If a future slice
             # plans per-argument, this merge must become per-response-key
@@ -858,3 +888,72 @@ def _merge_runtime_prefixes(merged: Any, selection: Any) -> None:
 def _is_fragment(selection: Any) -> bool:
     """Return ``True`` if the selection is a fragment spread or inline fragment."""
     return hasattr(selection, "type_condition")
+
+
+# TODO(spec-033 Slice 1, Decision 9): consolidate the ``edges { node }``
+# selection-unwrap helpers HERE so ``_plan_connection_relation`` (below) can
+# unwrap a nested connection selection with the SAME fragment-aware,
+# directive-aware, runtime-prefix-carrying semantics the root seam uses -- one
+# implementation, not two drifting ones. Move from ``optimizer/extension.py``:
+#   _named_children, _node_children_with_runtime_prefix, _with_runtime_prefix,
+#   _converted_selection_included, _is_converted_fragment, and the shared
+#   _response_key helper (extension.py's ``_response_key`` is a duplicate of the
+#   one already in this module -- collapse to one).
+# Import direction is FORCED: ``extension`` already imports from ``walker``; the
+# reverse cycles. After the move, ``extension.py`` imports them back and
+# ``_connection_node_child_selections`` (the root-seam ``selection_extractor``
+# entry point) STAYS in extension.py as a thin composition over the moved
+# helpers. Pure consolidation, no behavior change: the existing root-extraction
+# tests in ``tests/optimizer/test_extension.py`` must pass UNMODIFIED.
+
+
+# TODO(spec-033 Slice 1, Decision 4): plan a recognized nested connection as a
+# windowed Prefetch. Dispatched from ``_walk_selections`` (see the recognition
+# branch above). Sketch:
+#
+#   def _plan_connection_relation(sel, definition, relation_field_name, field_map,
+#                                 plan, prefix, info, runtime_prefixes, type_cls):
+#       look up django_field via field_map[relation_field_name].
+#       # (a) Unwrap edges { node { ... } } via the consolidated helpers; when
+#       #     absent, recognize scalar-only pageInfo/totalCount selections
+#       #     (Decision 6: still PLANNED, with a pk/connector/ordering-only
+#       #     projection -- not a fallback).
+#       node_selections = <unwrap edges.node children, or [] for scalar-only>
+#       # (b) Fallback shapes -> leave UNPLANNED (no Prefetch, no resolver key)
+#       #     so Slice 4 strictness can see them (Decision 6):
+#       #       - sidecar input (filter:/orderBy:) on the selection
+#       #       - divergent aliases (needs the argument-aware merge above)
+#       #       - OptimizerHint.SKIP on the underlying relation
+#       if <fallback shape>: return
+#       # (c) Build the child plan over the relation target exactly like
+#       #     _build_prefetch_child_queryset: visibility hook baked when target
+#       #     overrides get_queryset (-> plan.cacheable = False); connector
+#       #     columns ensured; child-plan metadata merged; nested relations and
+#       #     DEEPER nested connections planned recursively (two-level cookbook).
+#       child_qs = <child_plan.apply(_build_child_queryset(...))>
+#       # (d) Deterministic total order: the hoisted plans.py helper (Decision
+#       #     11) -- pk appended unless the effective order ends in a unique col.
+#       # (e) Preserve the existing first+last guard ordering, then compute the
+#       #     slice window from the selection's RESOLVED first/last/before/after
+#       #     (converted selections resolve variables via info.variable_values),
+#       #     mirroring SliceMetadata.from_arguments with relay_max_results from
+#       #     the schema config.
+#       # (f) Catch SliceMetadata ValueError / malformed-cursor TypeError and
+#       #     leave the selection UNPLANNED so the shipped nested field path
+#       #     raises at the SAME error locality as today (error-locality test).
+#       # (g) window via plans.apply_window_pagination(child_qs, partition_by=
+#       #     plans.window_partition_for_prefetch(django_field), order_by=...,
+#       #     offset=..., limit=..., reverse=<last-only>).
+#       # then append_prefetch_unique(plan.prefetch_related, <prefetch>) where the
+#       # prefetch is Prefetch(f"{prefix}{instance_accessor(django_field)}",
+#       # queryset=<windowed child_qs>, to_attr=f"_dst_{relation_field_name}_connection").
+#       # (h) record resolver identities so strictness sees the field as planned:
+#       feed ``append_unique_many(plan.planned_resolver_keys, ...)`` one
+#       ``resolver_key(...)`` per runtime path.
+#
+# to_attr ISOLATION (Decision 4): never prefetch onto the accessor -- the "both"
+# shape selects the list sibling (accessor-keyed Prefetch) and the connection
+# together; two Prefetches on one accessor is Django's "lookup already seen"
+# error and a windowed result would corrupt the list field. The ``_dst_`` prefix
+# is the package-reserved namespace. Coverage: ``tests/optimizer/test_walker.py``
+# (see the spec Test plan for the full ~20-test list).

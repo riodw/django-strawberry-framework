@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
 
@@ -730,25 +731,101 @@ def _has_custom_id_resolver(target_type: type | None, target_pk_name: str | None
     return origin_has_custom_id_resolver(target_type, target_pk_name)
 
 
-def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> None:
-    """Inject columns Django needs to attach prefetched rows to parents."""
-    if not plan.only_fields:
-        return
+def _connector_only_field(parent_field: Any) -> str | None:
+    """Return the column Django needs to attach prefetched rows to parents.
+
+    The relation-kind-specific connector: the child FK attname for a reverse FK /
+    reverse one-to-one, the target field's attname for a forward single-valued
+    relation, and the related model's pk attname for an M2M (the join table owns
+    the attach, so the child only needs its pk). Returns ``None`` when no column
+    resolves. Shared by ``_ensure_connector_only_fields`` (the list-prefetch
+    projection) and the scalar-only connection-window projection.
+    """
     kind = relation_kind(parent_field)
     if parent_field.one_to_many or kind == "reverse_one_to_one":
-        attname = getattr(getattr(parent_field, "field", None), "attname", None) or getattr(
+        return getattr(getattr(parent_field, "field", None), "attname", None) or getattr(
             parent_field,
             "reverse_connector_attname",
             None,
         )
-    elif not parent_field.many_to_many:
-        attname = getattr(getattr(parent_field, "target_field", None), "attname", None) or getattr(
+    if not parent_field.many_to_many:
+        return getattr(getattr(parent_field, "target_field", None), "attname", None) or getattr(
             parent_field,
             "target_field_attname",
             None,
         )
-    else:
-        attname = parent_field.related_model._meta.pk.attname
+    return parent_field.related_model._meta.pk.attname
+
+
+def _order_entry_field_name(entry: Any) -> str | None:
+    """Return the field name an ``order_by`` entry references, or ``None``.
+
+    Handles the two shapes ``deterministic_order`` produces: a string
+    (optionally ``-``-prefixed for descending) and an ``OrderBy`` wrapping an
+    ``F``-like expression with a ``.name``. Anything else (a raw expression with
+    no resolvable name) returns ``None``.
+    """
+    if isinstance(entry, str):
+        return entry[1:] if entry.startswith("-") else entry
+    expression = getattr(entry, "expression", None)
+    return getattr(expression, "name", None)
+
+
+def _concrete_order_columns(order_by: Sequence[Any], model: type[models.Model]) -> list[str]:
+    """Return the LOCAL concrete column attnames referenced by ``order_by``.
+
+    Related-span lookups (``author__name``) and unresolvable expressions are
+    skipped: the window's ``OVER (ORDER BY ...)`` and the queryset ``ORDER BY``
+    reference those columns in SQL regardless of the ``.only()`` projection, so a
+    skipped column only forgoes loading an attribute a scalar-only selection
+    never reads. Used to keep the scalar-only window projection minimal yet
+    order-complete (spec line 63: "pk/connector/order-only child projection").
+    """
+    by_name = {field.name: field.attname for field in model._meta.concrete_fields}
+    attnames = set(by_name.values())
+    columns: list[str] = []
+    for entry in order_by:
+        name = _order_entry_field_name(entry)
+        if name is None or "__" in name:
+            continue
+        if name in by_name:
+            append_unique(columns, by_name[name])
+        elif name in attnames:
+            append_unique(columns, name)
+    return columns
+
+
+def _project_scalar_only_window(
+    child_queryset: Any,
+    django_field: Any,
+    order_by: Sequence[Any],
+) -> Any:
+    """Restrict a scalar-only connection window to pk / connector / order columns.
+
+    A ``pageInfo``-only or ``totalCount``-only selection unwraps to ``[]`` node
+    children, so the child plan adds no ``.only()`` and the window would fetch
+    full model rows even though the page needs only the target pk (Relay edge
+    identity), the relation connector column (Django's prefetch attach), and the
+    concrete ordering columns the deterministic window order references
+    (spec-033 Decision 6 / spec line 63). The ``_dst_*`` window annotations
+    compose with ``.only()`` (annotations, not deferred columns).
+    """
+    related_model = django_field.related_model
+    fields: list[str] = []
+    append_unique(fields, related_model._meta.pk.attname)
+    connector = _connector_only_field(django_field)
+    if connector is not None:
+        append_unique(fields, connector)
+    for column in _concrete_order_columns(order_by, related_model):
+        append_unique(fields, column)
+    return child_queryset.only(*fields)
+
+
+def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> None:
+    """Inject columns Django needs to attach prefetched rows to parents."""
+    if not plan.only_fields:
+        return
+    attname = _connector_only_field(parent_field)
     if attname is not None:
         append_unique(plan.only_fields, attname)
         return
@@ -1197,7 +1274,17 @@ def _plan_connection_relation(
     # must not leave child resolver keys / cacheable flips on the parent plan.
     window = _connection_window_slice(sel, info)
     if window is None:
-        return  # malformed slice arguments - per-parent fallback (error locality).
+        # Malformed pagination (Decision 4 step f): emit NO window prefetch so the
+        # connection pipeline runs per-parent and raises its OWN cursor/pagination
+        # validation error at the field. But RECORD the resolver identities so the
+        # Slice-4 strictness contract treats the field as accounted-for and does
+        # NOT preempt that error with a spurious "Unplanned N+1" OptimizerError
+        # under `"raise"` (spec-033 Decision 8 - error locality wins here). The
+        # other Decision-6 fallback shapes (sidecar, divergent alias, hint SKIP,
+        # distinct, unwindowable partition) stay fully unplanned on purpose so
+        # strictness CAN see them as real per-parent accesses.
+        append_unique_many(plan.planned_resolver_keys, resolver_identities)
+        return
     offset, limit, reverse = window
 
     # (g, partition) also pure; resolve the parent partition before the child build
@@ -1211,6 +1298,7 @@ def _plan_connection_relation(
 
     # (a) Unwrap edges { node }; scalar-only selections plan with [] node children.
     node_selections = _connection_node_selections(sel, runtime_paths)
+    scalar_only = not node_selections
     node_sel = SimpleNamespace(selections=node_selections)
 
     # (c) Build the child plan/queryset exactly like the list prefetch path, but
@@ -1246,6 +1334,13 @@ def _plan_connection_relation(
         django_field.related_model._meta.ordering,
     )
     order_by = list(deterministic_order(effective, django_field.related_model))
+
+    # A scalar-only (pageInfo/totalCount) selection unwrapped to [] node children,
+    # so the child plan added no `.only()` projection; restrict it to the minimal
+    # pk/connector/order columns now that the deterministic order is known
+    # (Decision 6 / spec line 63) rather than fetching full child rows.
+    if scalar_only:
+        child_queryset = _project_scalar_only_window(child_queryset, django_field, order_by)
 
     windowed_queryset = apply_window_pagination(
         child_queryset,

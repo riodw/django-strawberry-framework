@@ -176,7 +176,7 @@ def test_plan_skips_unknown_selections():
 
 
 def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
-    """Regression for ``docs/feedback.md`` section custom-pk Relay projection.
+    """Regression: custom-pk Relay projection (the model pk attname is not ``"id"``).
 
     When a Relay-declared ``DjangoType`` is backed by a model whose pk
     attname is not ``"id"``, ``snake_case("id")`` does not match the
@@ -219,7 +219,7 @@ def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):
 
 
 def test_plan_relay_id_projects_attname_when_pk_is_relation():
-    """Regression for ``docs/feedback.md`` section walker ``id_attr in field_map`` mismatch.
+    """Regression: walker ``id_attr in field_map`` mismatch when the pk is a relation.
 
     When a Relay-declared ``DjangoType`` is backed by a model whose
     primary key is a relation (e.g. ``OneToOneField(primary_key=True)``
@@ -2356,13 +2356,15 @@ def test_window_last_only_uses_reversed_row_number():
 
 
 def test_window_respects_relay_max_results():
-    """An over-cap ``first`` (> ``relay_max_results``) leaves the selection unplanned."""
+    """An over-cap ``first`` (> ``relay_max_results``) emits no window but records the key."""
     registry.clear()
     try:
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
         # relay_max_results=5; first=10 raises ValueError in SliceMetadata ->
-        # the malformed-slice fallback leaves it unplanned (error locality).
+        # the malformed-slice fallback emits no window (error locality: the
+        # pipeline raises the cap error) but records the resolver key so
+        # strictness does not preempt it with a spurious "Unplanned N+1".
         plan = plan_optimizations(
             [
                 _conn_sel(
@@ -2376,7 +2378,7 @@ def test_window_respects_relay_max_results():
             source_type=genre_type,
         )
         assert plan.prefetch_related == ()
-        assert plan.planned_resolver_keys == ()
+        assert len(plan.planned_resolver_keys) >= 1
     finally:
         registry.clear()
 
@@ -2467,8 +2469,77 @@ def test_scalar_only_pageinfo_and_total_count_are_window_planned():
         registry.clear()
 
 
-def test_malformed_slice_arguments_are_left_unplanned_for_fallback_error_locality():
-    """A malformed ``after:`` cursor leaves the selection unplanned (per-parent fallback)."""
+def test_scalar_only_window_projects_pk_connector_and_order_columns():
+    """A scalar-only window applies a minimal ``.only()`` instead of fetching full rows.
+
+    Regression for the scalar-only over-fetch: ``pageInfo``/``totalCount``-only
+    selections unwrap to ``[]`` node children, so historically no ``.only()`` was
+    applied and the window fetched every model column. The page needs only the
+    target pk, the relation connector column (here the reverse-FK ``shelf_id``),
+    and the concrete ordering columns (spec line 63 / Decision 6).
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        shelf_model, shelf_type = types["Shelf"]
+        plan = plan_optimizations(
+            [_conn_sel("booksConnection", scalar_children=["totalCount"], arguments={"first": 3})],
+            shelf_model,
+            info=_fake_info(),
+            source_type=shelf_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        only_fields, defer = prefetch.queryset.query.deferred_loading
+        # An `.only()` projection (defer=False), not full-row loading or `.defer()`.
+        assert defer is False
+        # pk + reverse-FK connector both projected; Book is pk-ordered ("id").
+        assert {"id", "shelf_id"} <= set(only_fields)
+    finally:
+        registry.clear()
+
+
+def test_windowed_prefetch_queryset_carries_deterministic_order():
+    """The generated ``Prefetch.queryset`` applies the deterministic ORDER BY.
+
+    Regression for the windowed-ordering bug: the window expression alone orders
+    only the row-number VALUES, so the queryset's own ``ORDER BY`` must carry the
+    same deterministic tuple or the prefetched rows arrive in DB-natural order and
+    the fast path diverges from the pipeline (spec-033 Decision 11, cursor-parity).
+    ``Book`` has no ``Meta.ordering``, so the deterministic order is the pk alone.
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        shelf_model, shelf_type = types["Shelf"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            shelf_model,
+            info=_fake_info(),
+            source_type=shelf_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert tuple(prefetch.queryset.query.order_by) == ("id",)
+    finally:
+        registry.clear()
+
+
+def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key():
+    """A malformed ``after:`` cursor emits NO window but RECORDS the resolver key.
+
+    Error-locality contract (spec-033 Decision 4 step f / Decision 8): the
+    selection must NOT get a window prefetch (so the connection pipeline runs
+    per-parent and raises its own cursor/pagination validation error), but the
+    resolver identity IS recorded so the Slice-4 strictness check does not preempt
+    that error with a spurious "Unplanned N+1" under ``"raise"``. This is the
+    distinction from the other Decision-6 fallbacks (sidecar / distinct / hint),
+    which stay fully unplanned so strictness CAN flag them.
+    """
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -2486,7 +2557,8 @@ def test_malformed_slice_arguments_are_left_unplanned_for_fallback_error_localit
             source_type=genre_type,
         )
         assert plan.prefetch_related == ()
-        assert plan.planned_resolver_keys == ()
+        # Recorded so strictness stays silent and the pipeline owns the error.
+        assert len(plan.planned_resolver_keys) >= 1
     finally:
         registry.clear()
 
@@ -2855,10 +2927,13 @@ def test_distinct_fallback_does_not_leak_child_resolver_keys_into_parent():
 
 
 def test_malformed_slice_fallback_does_not_leak_child_resolver_keys_into_parent():
-    """A malformed-slice fallback with a nested-relation node child leaks NO parent metadata.
+    """A malformed-slice fallback with a nested-relation node child leaks NO CHILD metadata.
 
-    The malformed-slice guard now resolves before the child queryset is built,
-    so no child plan exists to leak; this pins that the parent plan is untouched.
+    The malformed-slice guard resolves before the child queryset is built, so no
+    child plan exists to leak. The connection's OWN resolver key IS recorded (so
+    strictness lets the pipeline raise the real cursor error - error locality),
+    but the nested ``shelf`` child's resolver key and fk-id elisions must NOT
+    appear on the parent plan.
     """
     registry.clear()
     try:
@@ -2880,7 +2955,10 @@ def test_malformed_slice_fallback_does_not_leak_child_resolver_keys_into_parent(
         assert not any(
             getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
         )
-        assert plan.planned_resolver_keys == ()
+        # The connection's own key is recorded (error-locality), but no CHILD
+        # (``shelf``) key or fk-id elision leaked from a child build that never ran.
+        assert plan.planned_resolver_keys == ("GenreType.books@booksConnection",)
+        assert not any("shelf" in key for key in plan.planned_resolver_keys)
         assert plan.fk_id_elisions == ()
     finally:
         registry.clear()
